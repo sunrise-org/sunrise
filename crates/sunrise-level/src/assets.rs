@@ -142,30 +142,25 @@ impl Assets {
         }
         let built =
             definitions.bind(|name, _| registry.default_state(name).map(|_| name.to_owned()));
-        if !built.missing.is_empty() {
-            return Err(invalid("unresolved block tags").into());
+        // TagLoader.build reports and omits only the tag that could not bind.
+        for (tag, entries) in built.missing {
+            log::warn!(
+                "block tag {tag} has missing required entries: {}",
+                entries
+                    .iter()
+                    .map(|entry| format!("{} ({})", entry.entry.display(), entry.source))
+                    .collect::<Vec<_>>()
+                    .join(", ")
+            );
         }
-        let motion: BTreeSet<_> = built
-            .tags
-            .get("minecraft:blocks_motion_in_heightmap")
-            .ok_or_else(|| invalid("missing motion tag"))?
-            .iter()
+        let members = |tag: &str| built.tags.get(tag).into_iter().flatten();
+        let motion: BTreeSet<_> = members("minecraft:blocks_motion_in_heightmap")
             .map(String::as_str)
             .collect();
-        let no_leaves: BTreeSet<_> = built
-            .tags
-            .get("minecraft:blocks_motion_in_heightmap_no_leaves")
-            .ok_or_else(|| invalid("missing no-leaves motion tag"))?
-            .iter()
+        let no_leaves: BTreeSet<_> = members("minecraft:blocks_motion_in_heightmap_no_leaves")
             .map(String::as_str)
             .collect();
-        let blocks_fluid_flow = built
-            .tags
-            .get("minecraft:blocks_fluid_flow")
-            .ok_or_else(|| invalid("missing fluid flow tag"))?
-            .iter()
-            .cloned()
-            .collect();
+        let blocks_fluid_flow = members("minecraft:blocks_fluid_flow").cloned().collect();
         let properties = Properties(Arc::new(
             flags
                 .iter()

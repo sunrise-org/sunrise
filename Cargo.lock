@@ -5866,6 +5866,7 @@ dependencies = [
  "sunrise-mod-vocab",
  "sunrise-threads",
  "tar",
+ "tempfile",
  "ureq",
  "xxhash-rust",
 ]
