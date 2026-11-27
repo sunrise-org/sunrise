@@ -390,15 +390,6 @@ pub struct PipelineShaderReport {
     pub early_depth_test: Vec<String>,
 }
 
-/// Like [`check_pipeline_shaders`], returning `(checked, refused)`.
-pub fn pipeline_shaders(
-    files: &BTreeMap<String, Vec<u8>>,
-    resources: Option<&Path>,
-) -> (usize, Vec<String>) {
-    let report = check_pipeline_shaders(files, resources);
-    (report.checked, report.refused)
-}
-
 /// Translates and validates every GLSL core shader program in `files`, returning counts,
 /// refusals, and programs requiring optional runtime capabilities (`shader_early_depth_test`).
 pub fn check_pipeline_shaders(
@@ -430,7 +421,7 @@ pub fn check_pipeline_shaders(
 const STAND_IN_FRAGMENT: &str =
     "#version 330\nout vec4 fragColor;\nvoid main() { fragColor = vec4(1.0); }\n";
 
-/// One program [`pipeline_shaders`] checks: the two stage files of a `shaders/core` stem and the
+/// One program [`check_pipeline_shaders`] checks: the two stage files of a `shaders/core` stem and the
 /// folders their quoted includes are relative to.
 struct Program {
     vertex_file: String,
@@ -533,7 +524,7 @@ impl Assets<'_> {
     }
 }
 
-/// Reads, translates and validates one program, as [`pipeline_shaders`] documents: every refusal
+/// Reads, translates and validates one program, as [`check_pipeline_shaders`] documents: every refusal
 /// as `<file>[:<line>:<column>]: [<stage> shader: ]<message>` when its position and stage
 /// are known.
 ///
@@ -682,7 +673,11 @@ mod tests {
         ]
         .map(|(name, text)| (name.to_owned(), text.as_bytes().to_vec()))
         .into();
-        let (count, refused) = pipeline_shaders(&files, None);
+        let PipelineShaderReport {
+            checked: count,
+            refused,
+            ..
+        } = check_pipeline_shaders(&files, None);
         assert_eq!(count, 3);
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert!(
@@ -714,7 +709,11 @@ mod tests {
         ]
         .map(|(name, text)| (name.to_owned(), text.as_bytes().to_vec()))
         .into();
-        let (count, refused) = pipeline_shaders(&files, None);
+        let PipelineShaderReport {
+            checked: count,
+            refused,
+            ..
+        } = check_pipeline_shaders(&files, None);
         assert_eq!((count, refused), (1, Vec::<String>::new()));
     }
 
@@ -748,10 +747,18 @@ mod tests {
                 void main() {{ fragColor = vertexColor * Strength * texture(Noise, texCoord0){statement_end} }}\n"
             )
         };
-        let (count, refused) = pipeline_shaders(&blur_program(&fsh(";")), None);
+        let PipelineShaderReport {
+            checked: count,
+            refused,
+            ..
+        } = check_pipeline_shaders(&blur_program(&fsh(";")), None);
         assert_eq!((count, refused), (1, Vec::<String>::new()));
 
-        let (count, refused) = pipeline_shaders(&blur_program(&fsh("")), None);
+        let PipelineShaderReport {
+            checked: count,
+            refused,
+            ..
+        } = check_pipeline_shaders(&blur_program(&fsh("")), None);
         assert_eq!(count, 1);
         assert!(!refused.is_empty(), "a syntax error must be refused");
         assert!(
@@ -797,7 +804,11 @@ mod tests {
                 "#version 330\n{declarations}\nin vec2 texCoord0;\nin vec4 vertexColor;\n\
                 out vec4 fragColor;\nvoid main() {{ fragColor = vertexColor * {colour}; }}\n"
             );
-            let (count, refused) = pipeline_shaders(&blur_program(&fsh), None);
+            let PipelineShaderReport {
+                checked: count,
+                refused,
+                ..
+            } = check_pipeline_shaders(&blur_program(&fsh), None);
             assert_eq!((count, refused), (1, Vec::<String>::new()), "{what}");
         }
     }
@@ -833,7 +844,11 @@ mod tests {
                     shared.as_bytes().to_vec(),
                 ),
             ]);
-            let (count, refused) = pipeline_shaders(&files, None);
+            let PipelineShaderReport {
+                checked: count,
+                refused,
+                ..
+            } = check_pipeline_shaders(&files, None);
             assert_eq!((count, refused.len()), (1, 1), "{refused:?}");
             let prefix =
                 format!("assets/m/shaders/include/shared.glsl:3:12: {failing_stage} shader: ");
@@ -857,7 +872,11 @@ mod tests {
                 vec4 tintedSprite(vec2 uv) { return sampleSprite(uv) * 0.5; }\n"
                 .to_vec(),
         );
-        let (count, refused) = pipeline_shaders(&files, None);
+        let PipelineShaderReport {
+            checked: count,
+            refused,
+            ..
+        } = check_pipeline_shaders(&files, None);
         assert_eq!((count, refused), (1, Vec::<String>::new()));
     }
 
@@ -881,7 +900,11 @@ mod tests {
         ]
         .map(|(name, text)| (name.to_owned(), text.as_bytes().to_vec()))
         .into();
-        let (count, refused) = pipeline_shaders(&files, None);
+        let PipelineShaderReport {
+            checked: count,
+            refused,
+            ..
+        } = check_pipeline_shaders(&files, None);
         assert_eq!((count, refused), (1, Vec::<String>::new()));
     }
 
@@ -911,12 +934,19 @@ mod tests {
     #[test]
     fn a_program_declaring_one_default_input_is_checked_against_that_input() {
         let body = "gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0);";
-        let (count, refused) = pipeline_shaders(&vertex_program("in vec3 Position;\n", body), None);
+        let PipelineShaderReport {
+            checked: count,
+            refused,
+            ..
+        } = check_pipeline_shaders(&vertex_program("in vec3 Position;\n", body), None);
         assert_eq!((count, refused), (1, Vec::<String>::new()));
 
         let reads_uv0 = format!("{body} texCoord0 = UV0;");
-        let (count, refused) =
-            pipeline_shaders(&vertex_program("in vec3 Position;\n", &reads_uv0), None);
+        let PipelineShaderReport {
+            checked: count,
+            refused,
+            ..
+        } = check_pipeline_shaders(&vertex_program("in vec3 Position;\n", &reads_uv0), None);
         assert_eq!(count, 1);
         assert!(
             refused
@@ -941,7 +971,11 @@ mod tests {
                 "gl_Position = ProjMat * ModelViewMat * vec4(Position + Tangent.xyz, 1.0);",
             ),
         ] {
-            let (count, refused) = pipeline_shaders(&vertex_program(inputs, body), None);
+            let PipelineShaderReport {
+                checked: count,
+                refused,
+                ..
+            } = check_pipeline_shaders(&vertex_program(inputs, body), None);
             assert_eq!((count, refused), (1, Vec::<String>::new()), "{inputs}");
         }
     }
@@ -951,7 +985,11 @@ mod tests {
     fn a_vertex_input_no_attribute_format_supplies_is_refused() {
         let body = "gl_Position = ProjMat * ModelViewMat * vec4(Position, 1.0) * Bones;";
         let inputs = "in vec3 Position;\nin mat4 Bones;\n";
-        let (count, refused) = pipeline_shaders(&vertex_program(inputs, body), None);
+        let PipelineShaderReport {
+            checked: count,
+            refused,
+            ..
+        } = check_pipeline_shaders(&vertex_program(inputs, body), None);
         assert_eq!(count, 1);
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert!(
@@ -975,7 +1013,11 @@ mod tests {
             "assets/m/shaders/include/wrapped.glsl".to_owned(),
             b"#include <minecraft:oit.glsl>\n".to_vec(),
         );
-        let (count, refused) = pipeline_shaders(&files, None);
+        let PipelineShaderReport {
+            checked: count,
+            refused,
+            ..
+        } = check_pipeline_shaders(&files, None);
         assert_eq!(count, 1);
         assert!(
             refused
@@ -1141,7 +1183,7 @@ void main() { fragColor = Tint * texture(SsaoTex, texCoord0); }
                 "assets/example/shaders/include/scene.glsl".to_owned(),
                 DECLARE.as_bytes().to_vec(),
             );
-            pipeline_shaders(&files, None)
+            check_pipeline_shaders(&files, None)
         };
         for fsh in [
             format!(
@@ -1159,7 +1201,11 @@ void main() { fragColor = Tint * texture(SsaoTex, texCoord0); }
 {BODY}"
             ),
         ] {
-            let (count, refused) = check(fsh.clone());
+            let PipelineShaderReport {
+                checked: count,
+                refused,
+                ..
+            } = check(fsh.clone());
             assert_eq!((count, refused), (1, Vec::<String>::new()), "{fsh}");
         }
         let broken = format!(
@@ -1167,7 +1213,7 @@ void main() { fragColor = Tint * texture(SsaoTex, texCoord0); }
 {DECLARE}{}",
             BODY.replace("Tint *", "Tint * *")
         );
-        let (_, refused) = check(broken);
+        let PipelineShaderReport { refused, .. } = check(broken);
         assert_eq!(refused.len(), 1, "{refused:?}");
         assert!(
             refused[0].starts_with("assets/example/shaders/core/ssao.fsh:")
@@ -1204,7 +1250,11 @@ void main() {
 "
             .to_vec(),
         );
-        let (count, refused) = pipeline_shaders(&files, None);
+        let PipelineShaderReport {
+            checked: count,
+            refused,
+            ..
+        } = check_pipeline_shaders(&files, None);
         assert_eq!(count, 1);
         assert!(
             refused.is_empty(),
@@ -1228,7 +1278,11 @@ void main() {
 "
             .to_vec(),
         );
-        let (count, refused) = pipeline_shaders(&files, None);
+        let PipelineShaderReport {
+            checked: count,
+            refused,
+            ..
+        } = check_pipeline_shaders(&files, None);
         assert_eq!(count, 2);
         assert!(
             refused
