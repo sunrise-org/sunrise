@@ -187,15 +187,14 @@ impl NoResources {
 
     pub fn click(&self, atlas: &HudAtlas, frame: GuiFrame, cursor: (f32, f32)) -> Option<Action> {
         let (w, h) = frame.size();
-        let pixels = frame.gui_to_target([w, h]);
+        let scale = frame.scale();
+        let pixels = [w * scale, h * scale];
         let density = Ui::density_of(pixels);
         let [w, h] = pixels.map(|axis| axis / density);
-        let [x, y] = frame
-            .gui_to_target([cursor.0, cursor.1])
-            .map(|axis| axis / density);
+        let (x, y) = (cursor.0 * scale / density, cursor.1 * scale / density);
         let action = self
             .layout((w, h), |face, size, text| {
-                Ui::measure_at(atlas, frame.scale(), density, face, size, text)
+                Ui::measure_at(atlas, scale, density, face, size, text)
             })
             .buttons
             .iter()
@@ -430,6 +429,37 @@ mod tests {
                 Some(Action::Open(GET.address))
             );
         }
+    }
+
+    #[test]
+    fn a_button_drawn_inside_uneven_insets_receives_the_projected_click() {
+        let screen = screen(Some(GET));
+        with_ui([1280, 720], (0.0, 0.0), |scratch| {
+            let atlas = scratch.atlas;
+            let frame = GuiFrame::from_insets([1281, 721], 2, false, Some([127, 53, 21, 13]));
+            let mut batch = HudBatch::for_frame(&frame);
+            let mut ui = Ui::new(atlas, &mut batch, (0.0, 0.0));
+            let layout = screen.layout((ui.w, ui.h), |face, size, text| {
+                ui.measure(face, size, text)
+            });
+            let button = &layout.buttons[0];
+            let local = [button.x + 1.0, button.y + control() / 2.0]
+                .map(|axis| axis * ui.density / frame.scale());
+            screen.draw(&mut ui);
+            assert!(batch.visible_quads().skip(1).flatten().any(|[l, t, r, b]| {
+                l <= local[0] && local[0] < r && t <= local[1] && local[1] < b
+            }));
+
+            let space = crate::window::PointerSpace::new(frame.target, 1.0);
+            let frame = frame.with_pointer_space(space);
+            let [x, y] = frame.gui_to_target(local).map(f64::from);
+            let click = frame
+                .pointer_to_gui(space.physical_sample(winit::dpi::PhysicalPosition::new(x, y)));
+            assert_eq!(
+                screen.click(atlas, frame, click.subpixel()),
+                Some(Action::Open(GET.address))
+            );
+        });
     }
 
     #[test]
