@@ -47,7 +47,6 @@ pub(in crate::gfx) fn frame(hud: &HudBatch) -> Frame<'_> {
         outline: Vec::new(),
         outline_after_terrain: false,
         outline_high_contrast: false,
-        pvp: Default::default(),
         debug_lines: &[],
         debug_lines_on_top: &[],
         debug_crosshair: &[],

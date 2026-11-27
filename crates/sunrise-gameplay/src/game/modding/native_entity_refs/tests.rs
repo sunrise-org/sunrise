@@ -121,7 +121,6 @@ pub fn bind_acting_guest(game: &mut crate::game::ServerGame<'_>) {
         NetConfig {
             listen: false,
             announce: false,
-            lod_distance: 0,
             ..NetConfig::lan(0, String::new(), 2)
         },
         HubConfig {

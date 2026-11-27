@@ -54,7 +54,6 @@ pub fn open_fixture_hub(game: &mut crate::game::ServerGame<'_>) {
     let net = NetConfig {
         listen: false,
         announce: false,
-        lod_distance: 0,
         ..NetConfig::lan(0, String::new(), 2)
     };
     let config = HubConfig {

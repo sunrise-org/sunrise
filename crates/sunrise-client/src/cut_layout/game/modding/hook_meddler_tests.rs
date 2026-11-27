@@ -94,7 +94,6 @@ pub(crate) fn with_meddler(
                 sunrise_sim::lan::NetConfig {
                     listen: false,
                     announce: false,
-                    lod_distance: 0,
                     ..sunrise_sim::lan::NetConfig::lan(0, String::new(), 2)
                 },
                 sunrise_sim::lan::hub::HubConfig {

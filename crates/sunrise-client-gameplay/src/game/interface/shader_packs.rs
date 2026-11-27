@@ -216,8 +216,7 @@ fn loaded_properties(
 }
 
 /// The shader pack key (Sunrise Settings' Shaders page), by identity: the translated key's
-/// vanilla name against the bound one, so a rebind never becomes another mapping's default
-/// (Replay Studio's camera-keyframe shortcut stays physical K's).
+/// vanilla name against the bound one, so a rebind never becomes another mapping's default.
 impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn shader_pack_key_press(&mut self, name: &str) -> bool {
         if self.client.screen != Screen::Playing

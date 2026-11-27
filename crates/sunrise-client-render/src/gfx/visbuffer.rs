@@ -1,5 +1,5 @@
 //! A visibility buffer for solid terrain, opt-in with `SUNRISE_VISBUFFER=1` (read once, at
-//! startup): pass 1 rasterises the solid flat draws (near sections and far tiles, phase 1 and,
+//! startup): pass 1 rasterises the solid flat draws (phase 1 and,
 //! with occlusion culling, phase 2) writing only depth and the ID of the quad each pixel shows
 //! (`visbuffer.wgsl`'s `vis_id`: arena page and quad); cutout and fading
 //! quads keep their alpha test and dither there, the rest never discard. Pass 2 is one

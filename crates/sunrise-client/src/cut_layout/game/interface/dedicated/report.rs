@@ -100,7 +100,7 @@ mod tests {
         let dir = std::env::temp_dir().join(format!("hz-privacy-{}", std::process::id()));
         let _ = std::fs::remove_dir_all(&dir);
         let mut perf = sunrise_sim::server_perf::ServerPerf::new(0.0, 250.0);
-        let sunrise = sunrise_sim::server_perf::sunrise_options(0);
+        let sunrise = sunrise_sim::server_perf::sunrise_options();
         let plan = Plan {
             seconds: 2,
             samples: true,

@@ -398,7 +398,7 @@ mod tests {
 
     #[test]
     fn primary_renderable_sections_include_compiled_air_and_apply_canonical_culling() {
-        use crate::fast_hash::{FxHashMap, FxHashSet};
+        use crate::fast_hash::FxHashMap;
         use crate::section_mask::SectionMask;
 
         let mut detail_columns: FxHashMap<(i32, i32), SectionMask> = FxHashMap::default();
@@ -407,9 +407,8 @@ mod tests {
         // (0, 0, -1): compiled air section in front of camera -> included with empty = true.
         // (0, 0, -2): non-empty resident section in front -> included with empty = false.
         // (0, 0, 2): behind the primary camera -> excluded by primary frustum.
-        // (0, 0, -3): in front, within detail radius, but unreachable under cave culling -> excluded.
-        // (0, 0, -6): past detail radius (radius = 3), not in lod_cutout -> excluded.
-        // (0, 0, -7): past detail radius, in lod_cutout -> included.
+        // (0, 0, -3): inside the render distance but unreachable under cave culling.
+        // (0, 0, -6): beyond the render distance.
         let mut mask = SectionMask::EMPTY;
         mask.insert(0);
         detail_columns.insert((0, -1), mask);
@@ -417,19 +416,14 @@ mod tests {
         detail_columns.insert((0, 2), mask);
         detail_columns.insert((0, -3), mask);
         detail_columns.insert((0, -6), mask);
-        detail_columns.insert((0, -7), mask);
 
         let mut sections = super::super::resident::Resident::<bool>::default();
         sections.set_min_y(0);
-        // Only (0, 0, -2) and (0, 0, -7) have non-empty meshes (`false` means non-empty here).
+        // Non-empty meshes are represented by `false`.
         sections.insert((0, 0, -2), false);
         sections.insert((0, 0, 2), false);
         sections.insert((0, 0, -3), false);
         sections.insert((0, 0, -6), false);
-        sections.insert((0, 0, -7), false);
-
-        let mut lod_cutout: FxHashSet<(i32, i32)> = FxHashSet::default();
-        lod_cutout.insert((0, -7));
 
         let camera = DVec3::new(8.0, 8.0, 8.0);
         let view = View::screen(180.0, 0.0, 70.0, 16.0 / 9.0, 512.0);
@@ -444,7 +438,6 @@ mod tests {
             3,
             &frustum,
             |key| key != (0, 0, -3),
-            |x, z| lod_cutout.contains(&(x, z)),
             true,
             &mut draws,
             Some(super::super::resident::PrimarySelection {
@@ -458,12 +451,9 @@ mod tests {
                 .iter()
                 .map(|&(_, key, slot)| (key, slot.is_none()))
                 .collect::<Vec<_>>(),
-            [((0, 0, -1), true), ((0, 0, -2), false), ((0, 0, -7), false)]
+            [((0, 0, -1), true), ((0, 0, -2), false)]
         );
-        assert_eq!(
-            draws.iter().map(|v| v.key).collect::<Vec<_>>(),
-            [(0, 0, -7)]
-        );
+        assert!(draws.is_empty());
     }
 
     #[test]
@@ -626,7 +616,6 @@ mod tests {
                     8,
                     &transforms.cull_frustum,
                     |_| true,
-                    |_, _| false,
                     &mut visible_unposed,
                 );
                 let mut visible_bobbed = Vec::new();
@@ -635,7 +624,6 @@ mod tests {
                     8,
                     &bobbed_frustum,
                     |_| true,
-                    |_, _| false,
                     &mut visible_bobbed,
                 );
                 let mut visible_narrow = Vec::new();
@@ -644,7 +632,6 @@ mod tests {
                     8,
                     &raw_fov_frustum,
                     |_| true,
-                    |_, _| false,
                     &mut visible_narrow,
                 );
                 assert_eq!(

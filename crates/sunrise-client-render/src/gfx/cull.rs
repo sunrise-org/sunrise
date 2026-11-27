@@ -19,10 +19,6 @@
 //! the results only sorts sections between the phases: a stale result draws
 //! a hidden section in phase 1, or tests a section that is in sight.
 //!
-//! Far terrain tiles are tested the same way, with their meshes' own
-//! bounds for a box (grown by a block too, which keeps their faces off the
-//! box's), and resident slots of their own (`TILE`).
-//!
 //! Every solid draw is an entry of one of the two lists, so the CPU records
 //! as many draws as without culling: drivers that unroll an indirect
 //! multi-draw on the CPU (Mesa's on Intel Gen9) pay per entry. Phase 2's
@@ -63,9 +59,6 @@ pub fn section_box(bounds: Option<[glam::Vec3; 2]>) -> [[f32; 3]; 2] {
 }
 /// A section with no test over its translucent quads (`Renderer::translucent_tests`).
 pub const NO_TEST: u32 = u32::MAX;
-/// The bit that marks a far tile's slot (`Renderer::tile_cull_slot`): tiles
-/// count their slots apart from the sections' resident ones.
-pub const TILE: u32 = 1 << 31;
 /// Phase 1's sections are each tested every `RETEST` frames.
 const RETEST: u32 = 8;
 /// Culling runs while the last result read back hid at least this share of
@@ -189,10 +182,8 @@ pub struct Cull {
     readbacks: Vec<Readback>,
     next: usize,
     current: Option<usize>,
-    /// Per resident slot: whether the last result read back saw it; and per
-    /// far tile's slot (`TILE`).
+    /// Whether the last result read back saw each resident slot.
     seen: Vec<bool>,
-    seen_tiles: Vec<bool>,
     stamp: u32,
     /// Of the boxes the last test read back drew, how many it did not see
     /// and how many it drew, and the share of solid indices hidden.
@@ -428,7 +419,6 @@ impl Cull {
             next: 0,
             current: None,
             seen: Vec::new(),
-            seen_tiles: Vec::new(),
             stamp: 0,
             hidden: ([0; 2], 1.0),
             always: false,
@@ -460,15 +450,11 @@ impl Cull {
                 let share = indices as f32 / r.total.max(1) as f32;
                 self.hidden = ([hidden, results.len()], share);
                 for (&slot, &result) in r.slots.iter().zip(&results) {
-                    let (seen, slot) = if slot & TILE != 0 {
-                        (&mut self.seen_tiles, (slot & !TILE) as usize)
-                    } else {
-                        (&mut self.seen, slot as usize)
-                    };
-                    if slot >= seen.len() {
-                        seen.resize(slot + 1, false);
+                    let slot = slot as usize;
+                    if slot >= self.seen.len() {
+                        self.seen.resize(slot + 1, false);
                     }
-                    seen[slot] = result == r.stamp;
+                    self.seen[slot] = result == r.stamp;
                 }
             }
             r.buffer.unmap();
@@ -487,16 +473,8 @@ impl Cull {
         culls
     }
 
-    /// Whether phase 1 draws the section in resident `slot` (or the far tile
-    /// in its `TILE` slot).
+    /// Whether phase 1 draws the section in resident `slot`.
     pub fn first(&self, slot: u32) -> bool {
-        if slot & TILE != 0 {
-            return self
-                .seen_tiles
-                .get((slot & !TILE) as usize)
-                .copied()
-                .unwrap_or(false);
-        }
         self.seen.get(slot as usize).copied().unwrap_or(false)
     }
 

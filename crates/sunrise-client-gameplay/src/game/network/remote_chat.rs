@@ -329,11 +329,10 @@ impl crate::game::ClientGame<'_> {
             return Ok((Some(outcome), false));
         }
         let sent = match kind {
-            PendingClientCommandKind::Signed if !self.studio_command(command) => {
+            PendingClientCommandKind::Signed => {
                 self.send_server_command(command)?;
                 true
             }
-            PendingClientCommandKind::Signed => false,
             PendingClientCommandKind::Unattended => self.send_server_unattended_command(command),
         };
         Ok((None, sent))

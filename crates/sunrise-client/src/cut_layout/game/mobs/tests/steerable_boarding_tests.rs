@@ -174,7 +174,6 @@ pub(crate) fn run_interact_with_a_pig_or_strider() {
                 NetConfig {
                     listen: false,
                     announce: false,
-                    lod_distance: 0,
                     ..NetConfig::lan(0, String::new(), 16)
                 },
                 HubConfig {

@@ -197,8 +197,6 @@ pub struct FogInputs<'a> {
     pub water_fog_color: [f32; 3],
     pub biome: u16,
     pub render_distance_chunks: i32,
-    /// Extend ordinary Overworld atmosphere for terrain beyond vanilla's range (Sunrise Extras).
-    pub distant_terrain: bool,
     /// The Cloud Distance option, in chunks.
     pub cloud_range_chunks: i32,
     pub camera_y: f64,
@@ -219,10 +217,9 @@ pub struct FogInputs<'a> {
     pub boss_world_fog: bool,
     /// The camera entity is a spectator (`LavaFogEnvironment`).
     pub spectator: bool,
-    /// The camera entity has Fire Resistance (`LavaFogEnvironment`), or PvP & HUD's clear lava
-    /// asks for its fog.
+    /// The camera entity has Fire Resistance (`LavaFogEnvironment`).
     pub fire_resistance: bool,
-    /// PvP & HUD's clear water: the water vision `FogState` reaches after 600 ticks under water.
+    /// A camera following another entity uses full water vision instead of the local player's ramp.
     pub full_water_vision: bool,
     /// `GameRenderer.nightVisionScale` while Night Vision is on without
     /// Darkness, else 0 (`FogRenderer.computeFogColor`'s brightenFactor).
@@ -419,17 +416,6 @@ pub fn setup_fog(tables: &FogTables, state: &FogState, input: &FogInputs) -> Fog
     let span = (rd / 10.0).clamp(4.0, 64.0);
     fog.render_distance_start = rd - span;
     fog.render_distance_end = rd;
-    if input.distant_terrain
-        && input.fog_type == FogType::Atmospheric
-        && input.blindness.is_none()
-        && input.darkness.is_none()
-        && !input.boss_world_fog
-        && sky.fog_end >= 1024.0
-    {
-        let scale = (rd / 1024.0).max(1.0);
-        fog.environmental_start *= scale;
-        fog.environmental_end *= scale;
-    }
     fog
 }
 /// Sunrise's Fog option turned off (`sunrise-graphics.txt` `fog:false`):
@@ -503,7 +489,6 @@ mod tests {
             water_fog_color: [0.0, 0.0, 0.2],
             biome: 0,
             render_distance_chunks: 12,
-            distant_terrain: false,
             cloud_range_chunks: 128,
             camera_y: 70.0,
             min_y: -64,
@@ -795,7 +780,7 @@ mod tests {
         assert_eq!(fog.sky_end, 192.0);
     }
     #[test]
-    fn distant_atmosphere_extends_without_extending_environmental_overrides() {
+    fn long_render_distance_keeps_environmental_fog_overrides() {
         let sky = Sky {
             fog_end: 1024.,
             ..Sky::default()
@@ -805,9 +790,6 @@ mod tests {
         };
         let mut input = inputs(&sky);
         input.render_distance_chunks = 1024;
-        input.distant_terrain = true;
-        let fog = setup_fog(&tables, &FogState::default(), &input);
-        assert_eq!(fog.environmental_end, 16384.);
         input.fog_type = FogType::Water;
         assert_eq!(
             setup_fog(&tables, &FogState::default(), &input).environmental_end,
@@ -863,7 +845,7 @@ mod tests {
         assert_eq!(s.water_vision(false), 0.0);
     }
     #[test]
-    fn clear_water_sees_as_far_as_after_thirty_seconds_under_water() {
+    fn nonlocal_camera_uses_full_water_vision() {
         let sky = Sky::default();
         let tables = FogTables {
             water_fog_end: vec![1.0],

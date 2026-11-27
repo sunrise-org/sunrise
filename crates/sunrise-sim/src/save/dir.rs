@@ -25,11 +25,6 @@ pub struct SaveDir {
     pub(super) server_owned: bool,
     /// The dimension's skylight and height, from its folder name.
     pub shape: LevelShape,
-    /// The region file headers kept for far readers (`far_record`).
-    pub(super) far_regions: far_regions::FarRegions,
-    /// Saved chunks decoded for far terrain, shared by its sampling threads
-    /// (`lod_surfaces_shared`), oldest first.
-    lod_decoded: Mutex<LodDecoded>,
     /// What older chunks are upgraded with, found on the first one read.
     datafix_context: OnceLock<Option<DatafixContext>>,
     /// The Overworld's old-world blending cache, read when a save is requested
@@ -211,8 +206,6 @@ impl SaveDir {
             professions: Default::default(),
             server_owned: false,
             shape,
-            far_regions: Default::default(),
-            lod_decoded: Default::default(),
             datafix_context: OnceLock::new(),
             blending_lookup: OnceLock::new(),
         }
@@ -897,57 +890,5 @@ impl SaveDir {
                 ((x, z), record)
             })
             .collect()
-    }
-}
-
-impl SaveDir {
-    /// `lod_surfaces`, decoded once for all far sampling threads: each saved
-    /// chunk lies under far tiles of several levels, sampled on any thread.
-    pub(super) fn lod_surfaces_shared(
-        &self,
-        x: i32,
-        z: i32,
-        assets: &crate::assets::Assets,
-        biomes: &Biomes,
-    ) -> Option<LodSurfaces> {
-        if let Some((at, columns)) = self.lod_decoded.lock().unwrap().chunks.get(&(x, z))
-            && at.elapsed() < LOD_DECODED_TTL
-        {
-            return Some(columns.clone());
-        }
-        let columns = self.lod_surfaces(x, z, assets, biomes)?;
-        let mut decoded = self.lod_decoded.lock().unwrap();
-        let fresh = (std::time::Instant::now(), columns.clone());
-        if decoded.chunks.insert((x, z), fresh).is_none() {
-            decoded.order.push_back((x, z));
-            while decoded.order.len() > LOD_DECODED {
-                if let Some(old) = decoded.order.pop_front() {
-                    decoded.chunks.remove(&old);
-                }
-            }
-        }
-        Some(columns)
-    }
-    pub(super) fn lod_surfaces(
-        &self,
-        x: i32,
-        z: i32,
-        assets: &crate::assets::Assets,
-        biomes: &Biomes,
-    ) -> Option<LodSurfaces> {
-        let root = self.far_record(x, z)?;
-        // Proto saves may still be missing decoration from their neighbors.
-        if text(root.tag.get("Status"))
-            .is_some_and(|status| status != "minecraft:full" && status != "full")
-        {
-            return None;
-        }
-        decode_lod_surfaces(
-            &root,
-            assets,
-            biomes,
-            self.shape.column(),
-            self.shape.sky_light,
-        )
     }
 }

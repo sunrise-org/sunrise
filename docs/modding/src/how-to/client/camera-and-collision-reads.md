@@ -106,9 +106,9 @@ Three separate client hooks match vanilla's and NeoForge's distinct camera stage
   `Camera.setRotation`, third-person front mirroring (`yaw + 180`, `-pitch`, `-roll`), detached
   back-off along the rotated look vector, and sleeping bed rotation. Edit the event's `yaw`, `pitch`,
   and `roll` fields directly in degrees, without filtering. Like NeoForge, the hook skips the interpolating minecart rider
-  branch; it also skips the studio's custom camera, which does not align to an entity.
+  branch.
 - `camera_position(partial, position)` sees the final world-space position (`Camera.setPosition`),
-  including the interpolating rider's placement or the studio's selected camera. Read the current
+  including the interpolating rider's placement. Read the current
   coordinates with `event.position.coordinates()` and pin X with `event.position.set([Some(x), None, None])`.
   A non-finite position edit returns `false` without changing any axis. The overridden position and
   effective angles drive the view and directional audio, without changing the entity's eye and look or
@@ -232,7 +232,7 @@ keeps its epoch. Unlike `view_hit` and `raycast`, this does not return a block
 behind a targeted entity.
 
 `ClientHost::view_hit()` and `raycast(distance)` cast their own ray along the view
-across loaded chunks only: far terrain is never hit. `raycast` stops at `distance`
+across loaded chunks only. `raycast` stops at `distance`
 (returning `None` for nonpositive or non-finite values), while `view_hit` traverses the
 full loaded-chunk extent. `view_hit` clips each candidate using that block's geometry,
 so loading an unrelated chunk does not move an inside-block hit. Both return `None` on a miss.

@@ -25,20 +25,18 @@ fn vis_id(page: u32, s: SectionCorner) -> u32 {
 // texel alone, where it has fully, RGSS alone, and its upper mip level only where it blends one
 // in. A blend of 0 or 1 gives exactly the one side, so the result is `sprite_at`'s; near
 // faces take one tap instead of nine.
-fn vis_sprite(tiled: vec2<f32>, layer: u32, du: vec2<f32>, dv: vec2<f32>) -> vec4<f32> {
-    let uv = tile_uv(tiled);
-    let tiled_face = any(tiled - uv >= vec2(0.5));
+fn vis_sprite(uv: vec2<f32>, layer: u32, du: vec2<f32>, dv: vec2<f32>) -> vec4<f32> {
     let pixel = vec2(1.0 / globals.filtering.y);
     let texel_screen = sqrt(du * du + dv * dv);
     if u32(globals.filtering.x) != 1u {
-        return sample_nearest(uv, layer, pixel, du, dv, texel_screen, tiled_face);
+        return sample_nearest(uv, layer, pixel, du, dv, texel_screen);
     }
     let max_texel = max(texel_screen.x, texel_screen.y);
     let min_pixel = min(pixel.x, pixel.y);
     let blend = smoothstep(min_pixel, min_pixel * 2.0, max_texel);
     var nearest = vec4(0.0);
     if blend < 1.0 {
-        nearest = sample_nearest(uv, layer, pixel, du, dv, texel_screen, tiled_face);
+        nearest = sample_nearest(uv, layer, pixel, du, dv, texel_screen);
     }
     if blend <= 0.0 {
         return nearest;
@@ -79,12 +77,12 @@ struct VisIdOut {
     var out: VisIdOut;
     let s = section_corner(vertex);
     let origin = slot_origins[block_slots[s.slot >> 8u]];
-    if !opaque_quad(corner_layer(s.c), origin.w) {
+    if !opaque_quad(corner_layer(s.c)) {
         out.clip = vec4(2.0, 2.0, 2.0, 1.0);
         return out;
     }
     let position = bitcast<vec3<f32>>(s.c.p);
-    out.clip = fade_depth(globals.view_proj * vec4(position + origin.xyz, 1.0), origin.w);
+    out.clip = globals.view_proj * vec4(position + origin.xyz, 1.0);
     out.id = vis_id(page, s);
     return out;
 }
@@ -99,10 +97,8 @@ struct VisCutoutOut {
     @location(2) @interpolate(flat) layer: u32,
     // The vertex colour's alpha (`terrain_vertex`'s `color.a`: the lightmap's).
     @location(3) alpha: f32,
-    @location(4) @interpolate(flat) fade: u32,
-    @location(5) local: vec3<f32>,
 }
-// The other quads: `solid_color`'s fade dither and alpha cutout, with no shading.
+// The other quads: `solid_color`'s alpha cutout, with no shading.
 @vertex fn vs_vis_cutout(
     @builtin(vertex_index) vertex: u32, @builtin(instance_index) page: u32
 ) -> VisCutoutOut {
@@ -110,7 +106,7 @@ struct VisCutoutOut {
     let s = section_corner(vertex);
     let origin = slot_origins[block_slots[s.slot >> 8u]];
     let layer = corner_layer(s.c);
-    if opaque_quad(layer, origin.w) {
+    if opaque_quad(layer) {
         out.clip = vec4(2.0, 2.0, 2.0, 1.0);
         return out;
     }
@@ -118,20 +114,15 @@ struct VisCutoutOut {
     let uv = vec2(s.c.r.x & 0xffffu, s.c.r.x >> 16u);
     let light = vec2((s.c.r.y >> 16u) & 0xffu, s.c.r.y >> 24u);
     let pos = position + origin.xyz;
-    out.clip = fade_depth(globals.view_proj * vec4(pos, 1.0), origin.w);
+    out.clip = globals.view_proj * vec4(pos, 1.0);
     out.id = vis_id(page, s);
     out.uv = terrain_uv(uv, origin.w);
     out.layer = layer;
     let block = max(f32(light.y), dynamic_block_light(pos));
     out.alpha = sample_lightmap(f32(light.x) / 16.0, block / 16.0).a;
-    out.fade = fade_code(origin.w);
-    out.local = position;
     return out;
 }
 @fragment fn fs_vis_cutout(in: VisCutoutOut) -> @location(0) u32 {
-    let dx = dpdx(in.local);
-    let dy = dpdy(in.local);
-    if faded(in.fade, in.local, dx, dy) { discard; }
     let alpha = vis_sprite(in.uv, in.layer & 0x7fffu, dpdx(in.uv), dpdy(in.uv)).a * in.alpha;
     if alpha < 0.5 && (in.layer & 0x8000u) == 0u { discard; }
     return in.id;

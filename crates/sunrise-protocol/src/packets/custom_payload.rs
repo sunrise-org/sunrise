@@ -79,7 +79,6 @@ fn uses_registered_payload_codec(channel: &str, play: bool, clientbound: bool) -
                 clientbound
             }
         }
-        "sunrise:lod" => play || clientbound,
         crate::attachment_sync::CHANNEL
         | crate::collider_sync::CHANNEL
         | crate::connection_groups::CHANNEL
@@ -249,7 +248,6 @@ mod tests {
             ("sunrise:passage_sync", [false, false, false, true]),
             ("sunrise:passage_cross", [false, false, true, false]),
             ("sunrise:carry_age", [false, false, true, false]),
-            ("sunrise:lod", [false, true, true, true]),
             ("sunrise:block_registry", [true, true, false, false]),
             ("sunrise:recipe_content", [false, false, false, true]),
             ("sunrise:recipe_transfer", [false, false, true, true]),

@@ -168,7 +168,4 @@ sunrise-sim save::biome_tests::vanilla_biome_palettes_are_byte_identical_after_r
 sunrise-sim save::loot_tests::generated_structure_chest_stays_pending_after_save_and_reload lib daily resources
 sunrise-sim save::tests::a_chunk_from_before_1_17_loads_the_entities_it_keeps lib daily resources
 sunrise-sim save::tests::loaded_chunk_uses_saved_monument_from_its_referenced_start_chunk lib daily resources
-sunrise-sim vanillagen::lod::tests::decorated_lod_refines_real_seed_canopies_and_all_dimensions lib daily resources
-sunrise-sim vanillagen::lod::tests::end_far_columns_keep_real_chorus_plants lib daily resources
-sunrise-sim vanillagen::lod::tests::end_small_islands_from_decoration_survive_far_columns lib daily resources
 sunrise-sim vanillagen::saved_biome_tests::restored_proto_keeps_saved_biomes_when_saved_again_and_finished lib daily resources

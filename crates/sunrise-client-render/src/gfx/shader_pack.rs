@@ -102,8 +102,7 @@ impl Renderer {
             // The normal stream holds each quad's id under the ids it was uploaded with: the
             // game meshes every section again for this pack's.
             if runs && self.arena.has_normals() {
-                self.sections_dropped |=
-                    self.sections.len() > 0 || !self.lods.is_empty() || self.lod_pending.is_some();
+                self.sections_dropped |= self.sections.len() > 0;
                 self.clear_sections(self.layout);
             }
             self.pack_block_ids =

@@ -1036,7 +1036,7 @@ impl FrameUniforms {
                 "viewHeight" => Value::f(&[size[1] as f32]),
                 "aspectRatio" => Value::f(&[aspect]),
                 "near" => Value::f(&[0.05]),
-                // The chunk render distance, not the distant terrain's reach.
+                // The chunk render distance.
                 "far" => Value::f(&[frame.detail_distance]),
                 "rainStrength" => Value::f(&[inputs.rain]),
                 "wetness" => Value::f(&[self.wetness]),

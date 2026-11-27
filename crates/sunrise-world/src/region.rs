@@ -527,50 +527,6 @@ impl RegionFile {
 }
 type BTreeChanges<'a> = std::collections::BTreeMap<usize, Option<&'a ChunkRecord>>;
 
-/// A region file's header kept without the file open: which chunks the file
-/// holds and where, as of when it was read. For a reader of many chunks that
-/// must not keep every file open (far terrain: a region file for each 32
-/// chunks of the view), so that the header is read once and not once a chunk.
-///
-/// It goes stale when the file is written: `RegionFile::write` moves the
-/// chunk, and frees its old sectors for the next chunk written. Whoever keeps
-/// a header must know when that happens.
-pub struct RegionHeader {
-    path: PathBuf,
-    position: ChunkPos,
-    offsets: [u32; 1024],
-    timestamps: [u32; 1024],
-}
-impl RegionHeader {
-    pub fn read(path: impl AsRef<Path>) -> io::Result<Self> {
-        let path = path.as_ref().to_owned();
-        let position = position_from_path(&path)?;
-        let (offsets, timestamps) = read_header(&mut File::open(&path)?)?;
-        Ok(Self {
-            path,
-            position,
-            offsets,
-            timestamps,
-        })
-    }
-    /// `RegionFile::read` at the place this header gives the chunk, with the
-    /// file opened for this one record.
-    pub fn read_chunk(&self, chunk: ChunkPos) -> io::Result<Option<ChunkRecord>> {
-        let i = slot(self.position, chunk)?;
-        if self.offsets[i] == 0 {
-            return Ok(None);
-        }
-        let directory = self.path.parent().unwrap_or(Path::new("."));
-        read_record(
-            &mut File::open(&self.path)?,
-            directory,
-            chunk,
-            self.offsets[i],
-            self.timestamps[i],
-        )
-    }
-}
-
 static NEXT_TEMP: AtomicU32 = AtomicU32::new(0);
 
 /// Writes a complete new region to a temporary sibling, then publishes it with
@@ -793,37 +749,6 @@ mod tests {
             assert_eq!(region.used, naive);
             assert_eq!(region.first_free, naive_first_fit(&naive, 1));
         }
-        let _ = std::fs::remove_dir_all(&dir);
-    }
-
-    #[test]
-    fn a_kept_header_reads_the_chunks_of_its_file() {
-        let dir =
-            std::env::temp_dir().join(format!("sunrise-region-header-{}", std::process::id()));
-        std::fs::create_dir_all(&dir).unwrap();
-        let path = dir.join("r.-1.2.mca");
-        let record = |fill: u8, len: usize| ChunkRecord {
-            compression: Compression::None,
-            compressed: vec![fill; len],
-            timestamp: u32::from(fill),
-        };
-        let (first, last) = (ChunkPos::new(-32, 64), ChunkPos::new(-1, 95));
-        let missing = ChunkPos::new(-31, 64);
-        let mut region = RegionFile::open_writable(&path, true).unwrap();
-        region.write(first, &record(7, 100)).unwrap();
-        // Two sectors, after the first chunk's one.
-        region.write(last, &record(9, 5000)).unwrap();
-
-        let header = RegionHeader::read(&path).unwrap();
-        for (chunk, fill, len) in [(first, 7, 100), (last, 9, 5000)] {
-            let read = header.read_chunk(chunk).unwrap().unwrap();
-            assert_eq!(read.compressed, vec![fill; len]);
-            assert_eq!(read.timestamp, u32::from(fill));
-        }
-        assert!(header.read_chunk(missing).unwrap().is_none());
-        // The next region's chunk.
-        assert!(header.read_chunk(ChunkPos::new(0, 64)).is_err());
-        assert!(RegionHeader::read(dir.join("r.5.5.mca")).is_err());
         let _ = std::fs::remove_dir_all(&dir);
     }
 

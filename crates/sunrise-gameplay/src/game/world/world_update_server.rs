@@ -1,7 +1,6 @@
 use super::*;
 
 impl crate::game::ServerGame<'_> {
-    pub(in crate::game) fn server_clear_lod(&mut self) {}
     pub fn server_update_world(&mut self) {
         if let Err(error) = self.server_update_world_with_eviction(false) {
             log::warn!("Sunrise: failed to save unloaded chunks or entities: {error}");

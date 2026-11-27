@@ -1695,7 +1695,7 @@ impl crate::game::ClientGame<'_> {
             fov_degrees: self.client.settings.fov,
             near: 0.05,
             far: sunrise_client::camera::depth_far(
-                self.terrain_distance(),
+                self.effective_render_distance(),
                 self.client.settings.cloud_range,
             ),
             view: view.to_cols_array(),

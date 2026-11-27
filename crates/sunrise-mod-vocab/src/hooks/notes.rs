@@ -1165,7 +1165,7 @@ game runs, for seasons (a golden autumn, a pale winter) or a world that greens a
   `dry_foliage` (leaf litter) and `water`, 0xRRGGBB, starting from the biome file and the colormaps. The dark forest's
   modifier still darkens the grass set here; the swamp's noise colours replace it.
 - It is asked for every biome when a mod calls `native_refresh_biome_colors()`. When the colours differ from those in use,
-  every loaded section and the far terrain are rebuilt with them, as changing Biome Blend does. Call it when your colours
+  every loaded section is rebuilt with them, as changing Biome Blend does. Call it when your colours
   change and once when the player joins, not every tick: a rebuild takes the workers a few seconds. A slow fade is a
   call a day, not a frame.
 - Block-breaking and falling-leaf particles keep the biome's own colours.

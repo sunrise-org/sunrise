@@ -179,7 +179,7 @@ The world generator's fluid picker (the sea and the lava below it) has two targe
 
 **Replace the two together.** The terrain fill skips `compute` above the height `level_bound` gives, and writes air
 there. A `compute` that raises the fluid in some columns, with the vanilla `level_bound` left in place, has its
-fluid dropped above the sea: the water you asked for is missing from the chunk and from far terrain. Make
+fluid dropped above the sea: the water you asked for is missing from the chunk. Make
 `level_bound` return at least the highest level your `compute` can return over the columns it is given. A higher
 value is allowed and only costs a `compute` call per block; `None` makes every block ask `compute`. Neither
 replacement is given coordinates beyond the columns of the chunk or tile being generated.

@@ -113,8 +113,6 @@ pub struct HudBatch {
     pub end_portal: EndPortalFill,
     /// `options.glintStrength` for the glint pass (`GlintAlpha`).
     pub glint_alpha: f32,
-    /// PvP & HUD's glint colour (`pvp::Tweaks::glint_texel`), 0 for vanilla's.
-    pub glint_colour: u32,
     /// A resource pack text shader's `GameTime`: the day's fraction
     /// (`gameTime % 24000` and the partial tick, over 24000).
     pub game_time: f32,
@@ -264,7 +262,6 @@ impl HudBatch {
             scissors: SmallVec::new(),
             end_portal: EndPortalFill::default(),
             glint_alpha: 0.75,
-            glint_colour: 0,
             game_time: 0.0,
             blur_at: 0,
             inline_profiles: Vec::new(),
@@ -1011,19 +1008,13 @@ pub(super) struct HudUniform {
     end_portal: [[f32; 4]; 3],
 }
 impl HudUniform {
-    pub(super) fn new(size: [f32; 4], fill: EndPortalFill, glint_colour: u32) -> Self {
-        let [r, g, b, _] = glint_colour.to_le_bytes().map(|c| f32::from(c) / 255.0);
-        let tint = if glint_colour == 0 {
-            [-1.0, 0.0, 0.0]
-        } else {
-            [r, g, b]
-        };
+    pub(super) fn new(size: [f32; 4], fill: EndPortalFill) -> Self {
         Self {
             size,
             end_portal: [
                 fill.sprites[0],
                 fill.sprites[1],
-                [fill.game_time, tint[0], tint[1], tint[2]],
+                [fill.game_time, 0.0, 0.0, 0.0],
             ],
         }
     }

@@ -26,8 +26,7 @@ pub(super) const MAX_PENDING: usize = 96 << 20;
 const SWEEP: Duration = Duration::from_millis(100);
 /// Framed bytes a connection may hold unwritten before its thread stops
 /// taking more from its outbox: the rest wait there, counted in `pending`, so
-/// that a client which reads slowly has the hub hold its far chunks back
-/// (`lan_far`'s backlog) and, past [`MAX_PENDING`], is disconnected.
+/// that a client which reads slowly has the hub hold its chunks back and, past [`MAX_PENDING`], is disconnected.
 const AHEAD: usize = 256 << 10;
 /// How long a disconnect's last bytes are given before the socket closes.
 const LINGER: Duration = Duration::from_millis(50);

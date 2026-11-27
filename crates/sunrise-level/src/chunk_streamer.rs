@@ -63,25 +63,6 @@ pub trait ChunkGenerator: Send + Sync + 'static {
         _source: Arc<sunrise_world::worldgen::generator::SavedStructureStarts>,
     ) {
     }
-    fn lod_sampler(self: Arc<Self>) -> Box<dyn LodSampler>
-    where
-        Self: Sized,
-    {
-        let worker = self.worker();
-        Box::new(GeneratorSampler {
-            generator: self,
-            worker,
-        })
-    }
-    /// An undecorated far-terrain column, without allocating gameplay chunks.
-    fn lod_surface(
-        &self,
-        _worker: &mut Self::Worker,
-        _x: i32,
-        _z: i32,
-    ) -> Option<crate::columns::Surface> {
-        None
-    }
     /// A previously saved final chunk, bypassing generation.
     fn load(&self, _x: i32, _z: i32) -> Option<Chunk> {
         None
@@ -200,77 +181,8 @@ pub trait ChunkGenerator: Send + Sync + 'static {
     /// neighbours' decoration is done, so it can't be generated again.
     fn save_finished(&self, _chunk: Chunk) {}
 }
-pub type LodDetail = ((i32, i32), Arc<[crate::lod_data::Column; 256]>);
-
-/// Independent, thread-owned far-terrain sampling state.
-pub trait LodSampler: Send {
-    /// Independent sampling state; native detail generation stays with the owner.
-    fn fork(&self) -> Option<Box<dyn LodSampler>> {
-        None
-    }
-    fn request_detail(&mut self, _chunks: &[(i32, i32)], _center: [i32; 2]) {}
-    fn drain_details(&mut self) -> Vec<LodDetail> {
-        Vec::new()
-    }
-    /// A loaded chunk's summary, made on the far-terrain worker.
-    fn observed(&mut self, _key: (i32, i32), _columns: &Arc<[crate::lod_data::Column; 256]>) {}
-    /// Reduced far detail (`graphics::FarDetail::Reduced`): `grid` may then
-    /// approximate wide cells.
-    fn set_approximate(&mut self, _approximate: bool) {}
-    fn sample(&mut self, x: i32, z: i32) -> Option<crate::columns::Surface>;
-    fn column(&mut self, x: i32, z: i32) -> crate::lod_data::Column {
-        crate::lod_data::Column::from_surface(self.sample(x, z))
-    }
-    fn reduced_column(&mut self, x: i32, z: i32, _width: i32) -> crate::lod_data::Column {
-        self.column(x, z)
-    }
-    /// Whether a column since the last call was left empty because its data
-    /// is still on its way (a BlueMap tile downloading, nothing coarser to
-    /// stand in): that sample isn't drawn, what it would replace is
-    /// (`Lod::finish_any_sample`), and it is taken again later.
-    fn waited(&mut self) -> bool {
-        false
-    }
-    /// `side` x `side` columns from (`x`, `z`), `stride` blocks apart; none
-    /// when sampling failed and should be tried again later.
-    fn grid(&mut self, x: i32, z: i32, stride: i32, side: usize) -> Vec<crate::lod_data::Column> {
-        let mut columns = Vec::with_capacity(side * side);
-        for dz in 0..side {
-            for dx in 0..side {
-                columns.push(self.reduced_column(
-                    x + dx as i32 * stride,
-                    z + dz as i32 * stride,
-                    stride,
-                ));
-            }
-        }
-        columns
-    }
-}
-pub trait LodSource: Send + Sync {
-    fn sampler(self: Arc<Self>) -> Box<dyn LodSampler>;
-    /// Whether its samplers' `observed` chunks become its own (a server's
-    /// kept terrain): tiles sampled without one are sampled again.
-    fn keeps_observed(&self) -> bool {
-        false
-    }
-}
-struct GeneratorSampler<G: ChunkGenerator> {
-    generator: Arc<G>,
-    worker: G::Worker,
-}
-impl<G: ChunkGenerator> LodSampler for GeneratorSampler<G> {
-    fn sample(&mut self, x: i32, z: i32) -> Option<crate::columns::Surface> {
-        self.generator.lod_surface(&mut self.worker, x, z)
-    }
-}
-impl<G: ChunkGenerator> LodSource for G {
-    fn sampler(self: Arc<Self>) -> Box<dyn LodSampler> {
-        ChunkGenerator::lod_sampler(self)
-    }
-}
 /// The generator's saving, for the streamer (which doesn't know its type).
-trait Saves: LodSource {
+trait Saves: Send + Sync {
     fn accept_loaded_chunk(&self, chunk: &mut Chunk);
     fn accept_loaded_proto(&self, proto: &mut Proto, saved: crate::chunk::SavedProto) -> bool;
     fn save_protos_on_owner(&self) -> bool;
@@ -1302,10 +1214,6 @@ use dynamic_emission::light_region_ready;
 use forced_cover::ForcedCover;
 
 impl ChunkState {
-    /// Shares generation resources, but gives distant work its own worker state.
-    pub fn lod_source(&self) -> Arc<dyn LodSource> {
-        self.saves.clone()
-    }
     /// Collect existing resident columns in the `FEATURES` `STRUCTURE_STARTS`
     /// dependency ring (Chebyshev distance `2..=8` around `(center_x, center_z)`).
     fn outer_decoration_columns(

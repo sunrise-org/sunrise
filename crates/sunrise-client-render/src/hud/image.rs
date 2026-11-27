@@ -9,8 +9,8 @@ pub fn decode(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
 ///
 /// The game's own resources are PNG throughout, and so are a resource pack's
 /// (vanilla's `NativeImage.read` takes PNG only), so [`decode_bytes`] stays
-/// PNG-only. WebP and JPEG are for images fetched from the network (Modrinth
-/// project icons in the resource pack browser), which are commonly either.
+/// PNG-only. WebP and JPEG are for images that arrive from outside the game's
+/// own resources, which are commonly either.
 pub(super) enum ImageFormat {
     Png,
     /// `RIFF....WEBP`.

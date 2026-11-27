@@ -198,13 +198,6 @@ pub(crate) mod camera_type_tests {
                     let placed = game.test_visual_camera_position().unwrap();
                     assert_ne!(placed[0], 12.0);
                     assert_eq!(placed[2], 0.0);
-
-                    let custom = glam::DVec3::new(2.0, 31.0, 5.0);
-                    game.test_activate_studio_camera(custom, 180.0, 0.0, 70.0, 90.0);
-                    let (position, yaw, pitch, roll) = game.test_frame_camera(1.0).unwrap();
-                    assert_eq!(position.to_array(), [12.0, 31.0, 5.0]);
-                    assert_eq!((yaw, pitch, roll), (180.0, 0.0, -90.0));
-                    assert_eq!(game.test_studio_camera_position(), custom);
                     assert_eq!(game.player.as_ref().unwrap().position, Vec3::ZERO);
                 });
             },

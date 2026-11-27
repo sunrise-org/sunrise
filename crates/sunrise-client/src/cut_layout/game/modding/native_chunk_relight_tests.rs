@@ -194,7 +194,7 @@ fn parked_chunk_resend_checks_sent_watchers_on_owning_dimension() {
             .unwrap();
         assert!(world.block_log.is_some());
         assert!(world.chunk_resends.is_empty());
-        assert!(world.bulk_log.is_empty(), "no far-terrain handoff queued");
+        assert!(world.bulk_log.is_empty(), "no bulk edit logged");
 
         game.server.lan.as_mut().unwrap().hub.guests.update(0, |g| {
             g.sent_chunks.insert((100, 100));

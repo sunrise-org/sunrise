@@ -1,5 +1,4 @@
-//! HUD boxes in the corners: Sunrise's internal extras/PvP panels stacked per corner
-//! (`docs/extras.md`), and the layers crates above the engine register (`sunrise_hooks::hud`).
+//! HUD layers that crates above the engine register (`sunrise_hooks::hud`).
 use crate::{
     extras::Corner,
     hud::{HudAtlas, HudBatch, rgba},
@@ -10,7 +9,7 @@ use sunrise_hooks::hud;
 const MARGIN: f32 = 2.0;
 
 // no wire: the stacking cursor is local to a render pass.
-/// Corner-stacking cursor for Sunrise's internal extras and PvP HUD boxes.
+/// Corner-stacking cursor for registered HUD layers.
 pub struct Corners {
     width: f32,
     height: f32,
@@ -74,9 +73,8 @@ pub fn draw_lines(
     }
 }
 
-/// Draws the HUD layers crates registered with the HUD ([`hud::Stage::Hud`]), after the extras'
-/// and mods' boxes, which they stack with. `shown`: whether each corner of `Corner::ALL` shows
-/// (the debug screen covers some).
+/// Draws registered HUD layers ([`hud::Stage::Hud`]). `shown` indicates which corners of
+/// `Corner::ALL` are available (the debug screen covers some).
 pub fn draw_layers(
     layers: &[&dyn hud::Layer],
     batch: &mut HudBatch,

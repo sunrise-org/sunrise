@@ -15,7 +15,7 @@ use sunrise_client::{
     hud::HudBatch,
     screen_draw::Measure,
 };
-use sunrise_command::{ArgType, Dispatcher, MOD_COMMAND};
+use sunrise_command::{Dispatcher, MOD_COMMAND};
 use sunrise_game_data::text::{ClickEvent, Style, Text};
 use sunrise_gameplay_common::game::chat_common::{block_properties, command_export, resource_ids};
 use sunrise_gameplay_common::game::native_server;
@@ -44,107 +44,6 @@ pub(in crate::game::client_side) fn sunrise_profiler_args<'a>(
         .then_some(args)
 }
 use winit::keyboard::KeyCode;
-
-/// `base` with extra client-local commands added: each a literal taking the
-/// rest of the line as typed (`Dispatcher::with_mod_commands`), so the chat
-/// box colours and completes them as it does the game's own.
-pub(in crate::game::client_side) fn with_native_commands(
-    base: &sunrise_command::Dispatcher,
-    names: &[&str],
-) -> sunrise_command::Dispatcher {
-    // A name the tree already has keeps that command (colour, completion).
-    base.with_mod_commands(
-        names
-            .iter()
-            .copied()
-            .filter(|name| base.find(name).is_none()),
-    )
-}
-
-/// Add Studio's local command grammar to the suggestion tree. Commands are
-/// still dispatched by `studio_command`; this tree supplies coloring,
-/// completion, and Tab acceptance in chat.
-pub(in crate::game::client_side) fn with_studio_commands(base: &Dispatcher) -> Dispatcher {
-    fn literal(d: &mut Dispatcher, parent: usize, name: &str) -> usize {
-        let node = d.literal(parent, name);
-        d.executes(node, MOD_COMMAND);
-        node
-    }
-    fn argument(d: &mut Dispatcher, parent: usize, name: &str, ty: ArgType) -> usize {
-        let node = d.argument(parent, name, ty);
-        d.executes(node, MOD_COMMAND);
-        node
-    }
-
-    let mut d = base.clone();
-    let root = d.find("studio").unwrap_or_else(|| d.literal(0, "studio"));
-    d.executes(root, MOD_COMMAND);
-
-    let record = literal(&mut d, root, "record");
-    let start = literal(&mut d, record, "start");
-    argument(&mut d, start, "name", ArgType::Word);
-    literal(&mut d, record, "stop");
-    literal(&mut d, record, "status");
-
-    let replay = literal(&mut d, root, "replay");
-    let open = literal(&mut d, replay, "open");
-    argument(&mut d, open, "path", ArgType::Greedy);
-    literal(&mut d, replay, "pause");
-    literal(&mut d, replay, "resume");
-    let speed = literal(&mut d, replay, "speed");
-    argument(
-        &mut d,
-        speed,
-        "multiplier",
-        ArgType::Double {
-            min: 0.01,
-            max: 20.0,
-        },
-    );
-    let seek = literal(&mut d, replay, "seek");
-    argument(
-        &mut d,
-        seek,
-        "milliseconds",
-        ArgType::Integer {
-            min: 0,
-            max: i32::MAX,
-        },
-    );
-    literal(&mut d, replay, "status");
-    literal(&mut d, replay, "close");
-
-    let freecam = literal(&mut d, root, "freecam");
-    argument(
-        &mut d,
-        freecam,
-        "state",
-        ArgType::StrEnum(&["on", "off"], "argument.enum.invalid"),
-    );
-
-    let keyframe = literal(&mut d, root, "keyframe");
-    literal(&mut d, keyframe, "add");
-    let remove = literal(&mut d, keyframe, "remove");
-    argument(
-        &mut d,
-        remove,
-        "index",
-        ArgType::Integer {
-            min: 0,
-            max: i32::MAX,
-        },
-    );
-    literal(&mut d, keyframe, "clear");
-
-    let path = literal(&mut d, root, "path");
-    argument(
-        &mut d,
-        path,
-        "state",
-        ArgType::StrEnum(&["lock", "unlock"], "argument.enum.invalid"),
-    );
-    d
-}
 
 #[cfg(feature = "client")]
 impl crate::game::ClientGame<'_> {
@@ -205,7 +104,7 @@ impl crate::game::ClientGame<'_> {
             .install(client_dispatcher, executors);
         let mut tree_with_mods = base.clone_with_unmerged_redirects();
         native_server::register_dispatcher(&mut tree_with_mods, &tree, MOD_COMMAND, &arguments);
-        with_studio_commands(&with_native_commands(&tree_with_mods, &["studio"])).with_profiler()
+        tree_with_mods.with_profiler()
     }
 }
 
@@ -238,6 +137,8 @@ pub struct ChatUiState {
     pub chat_screen: Option<ChatScreen>,
     /// `ChatComponent.latestDraft`.
     pub chat_draft: Option<ChatDraft>,
+    /// Message text and draft state put aside while Ctrl+F is active.
+    chat_search_aside: Option<(String, bool)>,
     /// When the chat screen opened (its input took the focus: the cursor blink).
     pub chat_opened: Option<std::time::Instant>,
     /// The chat screen is `InBedChatScreen`: the sleeper's, with a Leave Bed button.
@@ -570,9 +471,9 @@ impl crate::game::ClientGame<'_> {
     /// sent); blank text discards the draft. A draft still shown unchanged
     /// stays as it is.
     fn keep_chat_draft(&mut self, text: &str, is_draft: bool, reason: ChatExit) {
-        // During PvP & HUD's chat search the box holds the query: the draft is the text the
+        // During chat search the box holds the query: the draft is the text the
         // search put aside, whichever way the chat closed.
-        let aside = self.client.pvp.chat_search_aside.take();
+        let aside = self.client.chat_ui.chat_search_aside.take();
         let (text, is_draft) = aside.as_ref().map_or((text, is_draft), |(text, is_draft)| {
             (text.as_str(), *is_draft)
         });
@@ -605,7 +506,7 @@ impl crate::game::ClientGame<'_> {
             let typed = self.client.chat_ui.chat_screen.as_ref().and_then(|screen| {
                 let (text, is_draft) = self
                     .client
-                    .pvp
+                    .chat_ui
                     .chat_search_aside
                     .as_ref()
                     .map_or((screen.value(), screen.is_draft()), |(text, is_draft)| {
@@ -762,12 +663,12 @@ impl crate::game::ClientGame<'_> {
         // while a screen is open.
         let ctrl = self.has_control_down_with_quirk();
         let shift = self.has_shift_down();
-        // PvP & HUD's chat search: Ctrl+F starts and stops it, Enter stops it (sends nothing).
-        if self.pvp_chat().search
+        // chat search: Ctrl+F starts and stops it, Enter stops it (sends nothing).
+        if self.client.settings.extras.chat.search
             && match key {
                 KeyCode::KeyF => ctrl,
                 KeyCode::Enter | KeyCode::NumpadEnter => {
-                    self.client.pvp.chat_search_aside.is_some()
+                    self.client.chat_ui.chat_search_aside.is_some()
                 }
                 _ => false,
             }
@@ -1008,8 +909,8 @@ impl crate::game::ClientGame<'_> {
                     cursor.1 as f64,
                 )
             });
-        // PvP & HUD's copy on click: a message where the click has nothing else to do.
-        if self.pvp_chat().copy
+        // copy on click: a message where the click has nothing else to do.
+        if self.client.settings.extras.chat.copy
             && !self.has_shift_down()
             && style.as_ref().is_none_or(|s| s.click.is_none())
             && let Some(message) =
@@ -1243,16 +1144,16 @@ impl crate::game::ClientGame<'_> {
             self.run_client_native_command(command);
         }
     }
-    /// PvP & HUD's chat search on or off. The box holds the query: what was typed is put aside
+    /// chat search on or off. The box holds the query: what was typed is put aside
     /// when the search starts and comes back when it stops.
     fn toggle_chat_search(&mut self) {
         let Some(screen) = self.client.chat_ui.chat_screen.as_mut() else {
             return;
         };
-        let next = if let Some((text, _)) = self.client.pvp.chat_search_aside.take() {
+        let next = if let Some((text, _)) = self.client.chat_ui.chat_search_aside.take() {
             text
         } else {
-            self.client.pvp.chat_search_aside =
+            self.client.chat_ui.chat_search_aside =
                 Some((screen.value().to_owned(), screen.is_draft()));
             String::new()
         };
@@ -1266,7 +1167,7 @@ impl crate::game::ClientGame<'_> {
     /// Chat lines over the HUD (focused while the chat screen is open).
     pub(in crate::game) fn draw_chat(&mut self, batch: &mut HudBatch) {
         let focused = self.client.screen == Screen::Chat;
-        let options = self.pvp_chat();
+        let options = self.client.settings.extras.chat;
         self.client
             .chat_ui
             .chat
@@ -1274,11 +1175,11 @@ impl crate::game::ClientGame<'_> {
         // A search ends with its option; a chat closed some other way ends it in keep_chat_draft.
         if self.client.chat_ui.chat_screen.is_none() {
             // The chat went without closing (leaving the world): nothing to give back.
-            self.client.pvp.chat_search_aside = None;
-        } else if self.client.pvp.chat_search_aside.is_some() && !options.search {
+            self.client.chat_ui.chat_search_aside = None;
+        } else if self.client.chat_ui.chat_search_aside.is_some() && !options.search {
             self.toggle_chat_search();
         }
-        let searching = focused && self.client.pvp.chat_search_aside.is_some();
+        let searching = focused && self.client.chat_ui.chat_search_aside.is_some();
         let query = self
             .client
             .chat_ui
@@ -2037,93 +1938,6 @@ pub(in crate::game) mod tests {
         assert!(!run_suggestions.iter().any(|s| s == "clientonly"));
         let usage = display.smart_usage(0, 0);
         assert!(usage.iter().any(|(_, line)| line == "run ..."), "{usage:?}");
-    }
-
-    #[test]
-    #[ignore = "daily"]
-    fn studio_is_in_the_client_chat_tree_without_a_mod_registering_it() {
-        super::super::native_entity_refs::tests::with_client_game(|game| {
-            let tree = game.chat_tree_for(None);
-            let reg = Registries::default();
-            assert!(tree.find("studio").is_some());
-            assert_eq!(
-                tree.parse("studio start", &reg).executable().unwrap().1,
-                sunrise_command::MOD_COMMAND
-            );
-            let parse = tree.parse("stu", &reg);
-            let offered = tree.client_suggestions(&parse, 3, &reg).1;
-            assert!(offered.iter().any(|s| s.text == "studio"));
-        });
-    }
-
-    /// A native mod's command is in the tree the chat box uses (#456): known
-    /// rather than red, and offered as it types. With no mod claiming one the
-    /// tree is the game's own, as it was before the mods were asked.
-    #[test]
-    fn native_mod_commands_join_the_chat_tree() {
-        let reg = Registries::default();
-        let vanilla = sunrise_command::vanilla::game_dispatcher();
-        let plain = with_native_commands(vanilla, &[]);
-        assert_eq!(plain.nodes.len(), vanilla.nodes.len());
-        assert!(plain.find("flyspeed").is_none());
-        let tree = with_native_commands(vanilla, &["flyspeed"]);
-        assert!(tree.find("flyspeed").is_some());
-        // The rest of the line is parsed as a greedy argument in the chat tree.
-        let parse = tree.parse("flyspeed 4", &reg);
-        assert_eq!(parse.executable().unwrap().1, sunrise_command::MOD_COMMAND);
-        let parse = tree.parse("fly", &reg);
-        let offered: Vec<String> = tree
-            .client_suggestions(&parse, 3, &reg)
-            .1
-            .into_iter()
-            .map(|s| s.text)
-            .collect();
-        assert!(offered.contains(&"flyspeed".to_owned()), "{offered:?}");
-        // A name the game has keeps that command: the chat still knows it.
-        let shared = with_native_commands(vanilla, &["help"]);
-        assert!(shared.find("help").is_some());
-        assert_eq!(
-            shared.parse("help", &reg).executable().map(|e| e.1),
-            vanilla.parse("help", &reg).executable().map(|e| e.1)
-        );
-        assert_eq!(shared.nodes.len(), vanilla.nodes.len());
-    }
-
-    #[test]
-    fn studio_command_tree_suggests_subcommands_and_arguments() {
-        let reg = Registries::default();
-        let base = sunrise_command::vanilla::game_dispatcher();
-        let tree = with_studio_commands(base);
-        let suggestions = |input: &str| {
-            let parse = tree.parse(input, &reg);
-            tree.client_suggestions(&parse, input.len(), &reg)
-                .1
-                .into_iter()
-                .map(|suggestion| suggestion.text)
-                .collect::<Vec<_>>()
-        };
-
-        assert_eq!(
-            suggestions("studio "),
-            ["freecam", "keyframe", "path", "record", "replay"]
-        );
-        assert_eq!(suggestions("studio record "), ["start", "status", "stop"]);
-        assert_eq!(
-            suggestions("studio replay "),
-            [
-                "close", "open", "pause", "resume", "seek", "speed", "status"
-            ]
-        );
-        assert_eq!(suggestions("studio freecam "), ["off", "on"]);
-        assert_eq!(suggestions("studio keyframe "), ["add", "clear", "remove"]);
-        assert_eq!(suggestions("studio path "), ["lock", "unlock"]);
-        assert_eq!(
-            tree.parse("studio replay open some-recording.mcpr", &reg)
-                .executable()
-                .unwrap()
-                .1,
-            MOD_COMMAND
-        );
     }
 
     /// When `entity_types` is empty (no `entity-types.json`), fallback includes

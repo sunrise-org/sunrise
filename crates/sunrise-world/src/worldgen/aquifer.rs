@@ -93,7 +93,7 @@ impl GlobalFluidPicker {
     /// A replacement of [`Self::compute`] that raises the level in some columns must replace this
     /// too, returning at least the highest level `compute` gives for the columns `min..=max`
     /// (`[x, z]`) or `None`; otherwise the fill drops the raised fluid above the vanilla bound.
-    /// Called once per chunk and per far-terrain tile, never per block.
+    /// Called once per chunk, never per block.
     #[sunrise_mod_api_macros::replaceable]
     pub fn level_bound(&self, _min: [i32; 2], _max: [i32; 2]) -> Option<i32> {
         Some(if self.disabled {

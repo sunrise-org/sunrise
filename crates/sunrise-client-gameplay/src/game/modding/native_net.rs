@@ -567,7 +567,7 @@ mod tests {
 
                     // Ctrl+F borrows the input. Wake must classify the original input, not
                     // the nonempty query that cleared the widget's draft flag.
-                    game.client.settings.extras.pvp.chat.search = true;
+                    game.client.settings.extras.chat.search = true;
                     for edited in [false, true] {
                         game.set_screen(Screen::Playing);
                         game.client.chat_ui.chat_draft = Some(ChatDraft {

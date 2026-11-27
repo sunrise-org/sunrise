@@ -113,21 +113,3 @@ fn config_dir_is_config_in_the_game_folder() {
     assert_eq!(config_dir(&root).unwrap(), dir);
     let _ = std::fs::remove_dir_all(&root);
 }
-
-/// Vanilla's F3 draws a column in each top corner (`extractLines`, left
-/// and right aligned), and its charts along the bottom.
-#[test]
-fn the_debug_screen_takes_both_top_corners_and_its_charts_corners() {
-    use crate::game::client_side::native_hooks_client::debug_takes;
-    use sunrise_client::extras::Corner;
-    for corner in Corner::ALL {
-        assert!(!debug_takes(corner, false, [true, true]), "{corner:?}");
-    }
-    assert!(debug_takes(Corner::TopLeft, true, [false, false]));
-    assert!(debug_takes(Corner::TopRight, true, [false, false]));
-    assert!(!debug_takes(Corner::BottomLeft, true, [false, false]));
-    assert!(!debug_takes(Corner::BottomRight, true, [false, false]));
-    assert!(debug_takes(Corner::BottomLeft, true, [true, false]));
-    assert!(!debug_takes(Corner::BottomRight, true, [true, false]));
-    assert!(debug_takes(Corner::BottomRight, true, [false, true]));
-}
