@@ -926,7 +926,7 @@ impl crate::game::ClientGame<'_> {
     }
     pub(in crate::game) fn observe_view(&self, view: ScreenView<'_>) -> ObservedScreen {
         let screen_size = if self.client.renderer.0.is_some() {
-            self.gui_frame_now().1.size.map(|size| size as f32)
+            self.gui_frame().gui.size.map(|size| size as f32)
         } else {
             [view.rect[2], view.rect[3]]
         };

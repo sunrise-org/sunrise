@@ -604,7 +604,8 @@ impl crate::game::ClientGame<'_> {
     }
 
     /// Framebuffer size and GUI projection, including before the renderer is initialized.
-    pub fn gui_frame_now(&self) -> ([u32; 2], GuiSize) {
+    #[inline(always)]
+    pub fn gui_frame(&self) -> sunrise_client::window::GuiFrame {
         let framebuffer = self.client.renderer.0.as_ref().map_or_else(
             || {
                 self.client.window.0.as_ref().map_or([1280, 720], |window| {
@@ -614,16 +615,12 @@ impl crate::game::ClientGame<'_> {
             },
             |renderer| [renderer.config.width, renderer.config.height],
         );
-        let inputs = self.client.settings.gui_scale_inputs();
-        (
-            framebuffer,
-            GuiSize::new(framebuffer, inputs.requested, inputs.unicode),
-        )
+        self.gui_frame_for(framebuffer)
     }
 
     /// `Screen.init`/`Screen.resize` builds the open screen, and drops it when it closes.
     pub fn build_screen(&mut self) {
-        self.build_screen_at(self.gui_frame_now().0);
+        self.build_screen_at(self.gui_frame().target);
     }
 
     pub fn build_screen_at(&mut self, framebuffer: [u32; 2]) {

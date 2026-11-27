@@ -440,15 +440,14 @@ impl crate::game::ClientGame<'_> {
             .0
             .as_ref()
             .map_or([1, 1], |r| [r.config.width, r.config.height]);
-        let b = HudBatch::new(size, self.client.settings.gui_scale_inputs());
+        let (w, h) = self.gui_frame_for(size).size();
         let cursor = self.client.cursor;
         let shift = self.has_shift_down();
         let alt = self.client.keys.raw(&KeyCode::AltLeft);
         let atlas_click = |game: &crate::game::ClientGame<'_>, edit: &mut EditBox| {
             edit.click(&game.client.gui.atlas, cursor.0, false, false);
         };
-        let Some(items) = self.with_block_editor(|s, e| s.editor.items(e, b.width, b.height))
-        else {
+        let Some(items) = self.with_block_editor(|s, e| s.editor.items(e, w, h)) else {
             return false;
         };
         // The widgets in the order they were added: the last on top.
@@ -538,7 +537,7 @@ impl crate::game::ClientGame<'_> {
             .0
             .as_ref()
             .map_or([1, 1], |r| [r.config.width, r.config.height]);
-        let b = HudBatch::new(size, self.client.settings.gui_scale_inputs());
+        let (w, h) = self.gui_frame_for(size).size();
         match key {
             KeyCode::Escape => {
                 let outcome = self
@@ -573,7 +572,7 @@ impl crate::game::ClientGame<'_> {
                     // The boxes on screen, in the order they were added.
                     let shown: Vec<usize> = s
                         .editor
-                        .items(e, b.width, b.height)
+                        .items(e, w, h)
                         .iter()
                         .filter_map(|i| match i {
                             Item::Edit { index, .. } => Some(*index),

@@ -328,12 +328,12 @@ impl crate::game::ClientGame<'_> {
             .0
             .as_ref()
             .map_or([1, 1], |r| [r.config.width, r.config.height]);
-        let b = HudBatch::new(size, self.client.settings.gui_scale_inputs());
+        let (w, h) = self.gui_frame_for(size).size();
         let fallback;
-        let buttons = match self.built_command_block(b.width, b.height) {
+        let buttons = match self.built_command_block(w, h) {
             Some(layout) => &layout.buttons,
             None => {
-                fallback = CommandBlockScreen::buttons(b.width, b.height, s.cart.is_some());
+                fallback = CommandBlockScreen::buttons(w, h, s.cart.is_some());
                 &fallback
             }
         };

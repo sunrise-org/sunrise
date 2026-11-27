@@ -245,11 +245,15 @@ pub(in crate::game) fn gui_options_snapshot(
 }
 
 /// `Window.getGuiScale` for a framebuffer (`None` without a window): the
-/// window's own `GuiSize` resolution, the same one it draws with.
+/// window's own GUI scale resolution, the same one it draws with.
 pub(in crate::game) fn resolved_gui_scale(
     framebuffer: Option<[u32; 2]>,
     gui_scale: u32,
     unicode: bool,
 ) -> Option<u32> {
-    framebuffer.map(|size| sunrise_client::window::GuiSize::new(size, gui_scale, unicode).scale)
+    framebuffer.map(|size| {
+        sunrise_client::window::GuiFrame::new(size, gui_scale, unicode)
+            .gui
+            .scale
+    })
 }

@@ -378,7 +378,7 @@ impl crate::game::ClientGame<'_> {
         if self.client.screen != Screen::Paused || !self.client.pause_menu {
             return Vec::new();
         }
-        let [w, h] = self.gui_frame_now().1.size.map(|axis| axis as f32);
+        let [w, h] = self.gui_frame().gui.size.map(|axis| axis as f32);
         let Some(layout) = self.built_pause(w, h) else {
             return Vec::new();
         };
@@ -589,8 +589,7 @@ impl crate::game::ClientGame<'_> {
                 .0
                 .as_ref()
                 .map_or([1, 1], |r| [r.config.width, r.config.height]);
-            let b = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-            (b.width, b.height)
+            self.gui_frame_for(size).size()
         };
         let fallback;
         let layout = match self.built_pause(w, h) {
@@ -648,8 +647,7 @@ impl crate::game::ClientGame<'_> {
                 .0
                 .as_ref()
                 .map_or([1, 1], |r| [r.config.width, r.config.height]);
-            let b = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-            (b.width, b.height)
+            self.gui_frame_for(size).size()
         };
         let fallback;
         let layout = match self.built_pause(w, h) {
@@ -958,8 +956,8 @@ impl crate::game::ClientGame<'_> {
             .0
             .as_ref()
             .map_or([1, 1], |r| [r.config.width, r.config.height]);
-        let b = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        let hit = death_buttons(b.width, b.height, self.common.level.hardcore)
+        let (w, h) = self.gui_frame_for(size).size();
+        let hit = death_buttons(w, h, self.common.level.hardcore)
             .into_iter()
             .find(|d| ui::hovered(self.client.cursor, d.0, d.1, 200.0, 20.0))
             .map(|d| d.3);

@@ -571,18 +571,17 @@ impl crate::game::ClientGame<'_> {
             && button == winit::event::MouseButton::Right
         {
             if let Some(renderer) = &self.client.renderer.0 {
-                let batch = super::HudBatch::new(
-                    [renderer.config.width, renderer.config.height],
-                    self.client.settings.gui_scale_inputs(),
-                );
+                let (w, h) = self
+                    .gui_frame_for([renderer.config.width, renderer.config.height])
+                    .size();
                 if self.client.studio.timeline.visible
-                    && self.client.cursor.1 >= batch.height - self.client.studio.timeline.height()
+                    && self.client.cursor.1 >= h - self.client.studio.timeline.height()
                 {
                     if pressed
                         && let Some(index) = self.client.studio.timeline.keyframe_at_cursor(
                             self.client.cursor,
-                            batch.width,
-                            batch.height,
+                            w,
+                            h,
                             &self.client.studio.freecam,
                         )
                     {
@@ -618,13 +617,13 @@ impl crate::game::ClientGame<'_> {
                 .as_ref()
                 .map(|renderer| [renderer.config.width, renderer.config.height])
                 .unwrap_or([1, 1]);
-            let batch = super::HudBatch::new(size, self.client.settings.gui_scale_inputs());
+            let (w, h) = self.gui_frame_for(size).size();
             let had_open_menu = self.client.studio.topbar.open_menu.is_some();
-            let topbar_action = self.client.studio.topbar.handle_mouse_click(
-                self.client.cursor,
-                batch.width,
-                batch.height,
-            );
+            let topbar_action =
+                self.client
+                    .studio
+                    .topbar
+                    .handle_mouse_click(self.client.cursor, w, h);
             if !matches!(topbar_action, sunrise_client::studio::TopBarAction::None) {
                 self.handle_studio_topbar_action(topbar_action);
                 return true;
@@ -635,15 +634,15 @@ impl crate::game::ClientGame<'_> {
             if self.client.studio.timeline.visible {
                 let action = self.client.studio.timeline.handle_mouse_down(
                     self.client.cursor,
-                    batch.width,
-                    batch.height,
+                    w,
+                    h,
                     &self.client.studio.freecam,
                 );
                 if !matches!(action, TimelineAction::None) {
                     self.handle_studio_timeline_action(action);
                     return true;
                 }
-                if self.client.cursor.1 >= batch.height - self.client.studio.timeline.height() {
+                if self.client.cursor.1 >= h - self.client.studio.timeline.height() {
                     return true;
                 }
             }

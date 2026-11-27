@@ -1044,8 +1044,7 @@ impl crate::game::ClientGame<'_> {
             self.client.adv_ui.0.scrolling = false;
             return false;
         }
-        let b = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        let (w, h) = (b.width, b.height);
+        let (w, h) = self.gui_frame_for(size).size();
         if ui::hovered(
             self.client.cursor,
             (w / 2.0 - 100.0).floor(),

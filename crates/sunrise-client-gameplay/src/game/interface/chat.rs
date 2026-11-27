@@ -506,7 +506,7 @@ impl crate::game::ClientGame<'_> {
                 .0
                 .as_ref()
                 .map_or([1280, 720], |r| [r.config.width, r.config.height]);
-            let b = HudBatch::new(size, game.client.settings.gui_scale_inputs());
+            let (w, h) = game.gui_frame_for(size).size();
             let m = Measure(&game.client.gui.atlas.font);
             let c = Commands {
                 dispatcher: chat_tree(&game.client.remote),
@@ -518,8 +518,8 @@ impl crate::game::ClientGame<'_> {
                 initial,
                 is_draft,
                 game.client.chat_ui.chat.recent.len(),
-                b.width as i32,
-                b.height as i32,
+                w as i32,
+                h as i32,
                 game.chat_abilities(),
             );
             screen.auto_suggestions = game.client.settings.auto_suggestions;
@@ -953,11 +953,9 @@ impl crate::game::ClientGame<'_> {
     pub fn chat_click(&mut self) -> bool {
         let cursor = self.client.cursor;
         let height = self.client.renderer.0.as_ref().map_or(720.0, |r| {
-            HudBatch::new(
-                [r.config.width, r.config.height],
-                self.client.settings.gui_scale_inputs(),
-            )
-            .height
+            self.gui_frame_for([r.config.width, r.config.height])
+                .size()
+                .1
         });
         let m = Measure(&self.client.gui.atlas.font);
         let c = Commands {
@@ -966,11 +964,9 @@ impl crate::game::ClientGame<'_> {
         };
         if self.client.chat_ui.in_bed_chat && self.common.sleeping.is_some() {
             let width = self.client.renderer.0.as_ref().map_or(1280.0, |r| {
-                HudBatch::new(
-                    [r.config.width, r.config.height],
-                    self.client.settings.gui_scale_inputs(),
-                )
-                .width
+                self.gui_frame_for([r.config.width, r.config.height])
+                    .size()
+                    .0
             });
             let (x, y, w, h) = self
                 .built_chat(width, height)

@@ -777,8 +777,7 @@ impl crate::game::ClientGame<'_> {
         if self.stats_press_scrollbar(size) {
             return true;
         }
-        let b = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        let (w, h) = (b.width, b.height);
+        let (w, h) = self.gui_frame_for(size).size();
         let (x0, tw) = tabs(w);
         for i in 0..3 {
             if ui::hovered(self.client.cursor, x0 + tw * i as f32, 0.0, tw, TAB_H)
@@ -838,8 +837,7 @@ impl crate::game::ClientGame<'_> {
     /// A press on the statistics list's scrollbar holds it
     /// (`AbstractSelectionList.updateScrolling`).
     pub(in crate::game::client_side) fn stats_press_scrollbar(&mut self, size: [u32; 2]) -> bool {
-        let b = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        let (w, h) = (b.width, b.height);
+        let (w, h) = self.gui_frame_for(size).size();
         let content = self.stats_content();
         self.client.stats_ui.scroll.press(
             self.client.cursor,

@@ -468,7 +468,7 @@ impl crate::game::ClientGame<'_> {
         let native = match (view.id, self.client.title.0.as_ref()) {
             ("paused", _) => self.pause_init_children(),
             ("title", Some(title)) => {
-                let [w, h] = self.gui_frame_now().1.size.map(|axis| axis as f32);
+                let [w, h] = self.gui_frame().gui.size.map(|axis| axis as f32);
                 title
                     .init_children(&self.client.gui.atlas, w, h)
                     .into_iter()

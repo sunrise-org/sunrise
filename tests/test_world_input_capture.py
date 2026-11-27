@@ -120,9 +120,12 @@ mod window {
         pub fn from_window(window: &Window) -> Self { Self::new(window.inner_size().into(), 1.0) }
     }
 }
-struct GuiScale { requested: u32, unicode: bool }
 struct Settings;
-impl Settings { fn gui_scale_inputs(&self) -> GuiScale { GuiScale { requested: 2, unicode: false } } }
+impl Settings {
+    fn gui_frame_for(&self, target: [u32; 2]) -> window::GuiFrame {
+        window::GuiFrame::new(target, 2, false)
+    }
+}
 struct Config { width: u32, height: u32 }
 struct Renderer { config: Config }
 #[derive(Default)]
@@ -553,6 +556,7 @@ fn main() {
                                   method(source, "capture") + "\n" +
                                   method(source, "pointer_space") + "\n" +
                                   method(source, "pointer_projection") + "\n" +
+                                  method(source, "gui_frame_for") + "\n" +
                                   method(source, "set_window_cursor") + "\n" +
                                   method(source, "capture_loaded_world") + "\n" +
                                   method(source, "regrab_on_refocus") + "\n" +

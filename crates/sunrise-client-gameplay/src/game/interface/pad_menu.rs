@@ -2872,7 +2872,7 @@ impl crate::game::ClientGame<'_> {
             Some(title)
                 if self.client.screen == Screen::Playing && title.has_removed_children() =>
             {
-                let [w, h] = self.gui_frame_now().1.size.map(|axis| axis as f32);
+                let [w, h] = self.gui_frame().gui.size.map(|axis| axis as f32);
                 title
                     .init_children(&self.client.gui.atlas, w, h)
                     .into_iter()

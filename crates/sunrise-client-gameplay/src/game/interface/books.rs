@@ -944,8 +944,8 @@ impl ClientGame<'_> {
         }
     }
     pub(in crate::game::client_side) fn book_click(&mut self, size: [u32; 2]) -> bool {
-        let b = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        let (w, left) = (b.width, ((b.width - 192.0) / 2.0).floor());
+        let (w, _) = self.gui_frame_for(size).size();
+        let left = ((w - 192.0) / 2.0).floor();
         let (mx, my) = self.client.cursor;
         // MouseHandler: a click within 250 ms of the last one on this screen is a double click.
         let now = std::time::Instant::now();

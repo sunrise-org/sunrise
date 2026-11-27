@@ -867,6 +867,11 @@ impl Settings {
         }
     }
 
+    pub fn gui_frame_for(&self, target: [u32; 2]) -> sunrise_client_input::window::GuiFrame {
+        let inputs = self.gui_scale_inputs();
+        sunrise_client_input::window::GuiFrame::new(target, inputs.requested, inputs.unicode)
+    }
+
     pub fn sim_settings(&self) -> SimSettings {
         SimSettings {
             render_distance: self.render_distance,

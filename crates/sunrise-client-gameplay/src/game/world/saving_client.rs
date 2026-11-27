@@ -221,9 +221,11 @@ impl crate::game::ClientGame<'_> {
         let Some(renderer) = &mut self.client.renderer.0 else {
             return Ok(());
         };
-        let mut hud = HudBatch::new(
-            [renderer.config.width, renderer.config.height],
-            self.client.settings.gui_scale_inputs(),
+        let mut hud = HudBatch::for_frame(
+            &self
+                .client
+                .settings
+                .gui_frame_for([renderer.config.width, renderer.config.height]),
         );
         let progress = match self.client.pending_save.0.as_ref().map(|save| &save.stage) {
             Some(Stage::Chunks(_)) => 0.25,

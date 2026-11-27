@@ -322,16 +322,19 @@ impl crate::game::ClientGame<'_> {
             }
         }
     }
+    #[inline(always)]
+    pub fn gui_frame_for(&self, framebuffer: [u32; 2]) -> sunrise_client::window::GuiFrame {
+        self.client.settings.gui_frame_for(framebuffer)
+    }
     pub fn pointer_projection(
         &self,
         framebuffer: [u32; 2],
     ) -> sunrise_client::window::PointerProjection {
-        use sunrise_client::window::{GuiSize, PointerProjection};
-        let inputs = self.client.settings.gui_scale_inputs();
-        PointerProjection {
-            gui: GuiSize::new(framebuffer, inputs.requested, inputs.unicode),
-            window: self.pointer_space(framebuffer),
-        }
+        use sunrise_client::window::PointerProjection;
+        PointerProjection::new(
+            self.gui_frame_for(framebuffer)
+                .with_pointer_space(self.pointer_space(framebuffer)),
+        )
     }
     pub(in crate::game) fn render_frame(&mut self) -> Result<bool> {
         self.render_with_hooks(|renderer, frame, hooks| {
@@ -1635,11 +1638,11 @@ impl crate::game::ClientGame<'_> {
                             .as_ref()
                             .map(|w| w.inner_size())
                             .unwrap_or_default();
-                        let batch = HudBatch::new(
-                            [size.width, size.height],
-                            self.client.settings.gui_scale_inputs(),
-                        );
-                        let gui = (batch.width, batch.height);
+                        let gui = self
+                            .client
+                            .settings
+                            .gui_frame_for([size.width, size.height])
+                            .size();
                         if step_scroll {
                             title.step_scroll(d, self.client.cursor, gui);
                         } else if stick_scroll {
@@ -2250,7 +2253,7 @@ impl crate::game::ClientGame<'_> {
         self.client.hud_status_heights_set.set(None);
         self.input_hud_begin();
         self.client.subtitles.deferred.set(false);
-        let mut batch = HudBatch::new(size, self.client.settings.gui_scale_inputs());
+        let mut batch = HudBatch::for_frame(&self.gui_frame_for(size));
         batch.glint_colour = self.pvp_glint_texel();
         // GlobalSettingsUniform's GameTime, for a resource pack's text shader.
         batch.game_time = ((self.common.world.game_time.rem_euclid(24000)) as f32
@@ -2818,8 +2821,9 @@ impl crate::game::ClientGame<'_> {
         }
         // Off a world (title, options, Win, a prompt before joining) the HUD shows nothing to
         // keep clear of; `hud_layers` fills it in once the world's HUD draws.
-        let gui = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        self.client.chat_ui.room = sunrise_client::hud_kit::room::Room::new(gui.width, gui.height);
+        let frame = self.gui_frame_for(size);
+        let (w, h) = frame.size();
+        self.client.chat_ui.room = sunrise_client::hud_kit::room::Room::new(w, h);
         // The pack prompt replaces the connecting screen (setScreen), but
         // in game it opens over the world.
         self.settle_title_toasts();
@@ -2828,7 +2832,7 @@ impl crate::game::ClientGame<'_> {
             || self.dialog_open())
             && self.common.player.is_none()
         {
-            gui
+            HudBatch::for_frame(&frame)
         } else {
             self.hud_layers(size)
         };
@@ -4005,7 +4009,7 @@ impl crate::game::ClientGame<'_> {
                     .map_or(self.client.cursor, |p| p.pixel());
                 if let Some(renderer) = &mut self.client.renderer.0 {
                     let size = [renderer.config.width, renderer.config.height];
-                    let mut hud = HudBatch::new(size, self.client.settings.gui_scale_inputs());
+                    let mut hud = HudBatch::for_frame(&self.client.settings.gui_frame_for(size));
                     sunrise_client::level_loading::draw_file_fixer(
                         &mut hud,
                         &self.client.gui.atlas,
@@ -4026,9 +4030,11 @@ impl crate::game::ClientGame<'_> {
                 screen_info::level_loading(progress, &screen_info::tr)
             });
             if let Some(renderer) = &mut self.client.renderer.0 {
-                let mut hud = HudBatch::new(
-                    [renderer.config.width, renderer.config.height],
-                    self.client.settings.gui_scale_inputs(),
+                let mut hud = HudBatch::for_frame(
+                    &self
+                        .client
+                        .settings
+                        .gui_frame_for([renderer.config.width, renderer.config.height]),
                 );
                 let (w, h) = (hud.width, hud.height);
                 sunrise_client::ui::menu_background(
@@ -4070,9 +4076,11 @@ impl crate::game::ClientGame<'_> {
                 sunrise_client::widgets::begin_screen(|| {
                     screen_info::level_loading(Some(loader.progress.fraction()), &screen_info::tr)
                 });
-                let mut hud = HudBatch::new(
-                    [renderer.config.width, renderer.config.height],
-                    self.client.settings.gui_scale_inputs(),
+                let mut hud = HudBatch::for_frame(
+                    &self
+                        .client
+                        .settings
+                        .gui_frame_for([renderer.config.width, renderer.config.height]),
                 );
                 sunrise_client::level_loading::draw_progress(
                     &mut hud,
@@ -4099,7 +4107,7 @@ impl crate::game::ClientGame<'_> {
         // ToastManager still draws in front of it.
         let reload_overlay = self.reload_overlay_frame();
         if let Some((bar, fade)) = reload_overlay.filter(|(_, fade)| fade.opaque()) {
-            let mut hud = HudBatch::new(size, self.client.settings.gui_scale_inputs());
+            let mut hud = HudBatch::for_frame(&self.gui_frame_for(size));
             self.draw_reload_overlay(&mut hud, bar, fade);
             self.draw_every_toast(&mut hud);
             self.client.client_pack.item_renderer.end_gui_frame();
@@ -4378,7 +4386,7 @@ impl crate::game::ClientGame<'_> {
             self.shows_panorama(),
             self.overlay_holds_view(),
         ) {
-            let scale = HudBatch::new(size, self.client.settings.gui_scale_inputs()).scale;
+            let scale = self.gui_frame_for(size).scale();
             crosshair.debug_crosshair(at, view_pitch, view_yaw, scale);
         }
         let debug_lines = sunrise_client::gizmos::camera_relative(&lines, at, view);
@@ -5138,16 +5146,12 @@ impl crate::game::ClientGame<'_> {
                 .0
                 .as_ref()
                 .map_or([1, 1], |r| [r.config.width, r.config.height]);
-            let b = HudBatch::new(size, self.client.settings.gui_scale_inputs());
+            let gui = self.gui_frame_for(size).size();
             if button == MouseButton::Middle {
                 // The world list takes any button; middle selects without joining.
                 return Ok(self.preset_editor_mouse_clicked(code, double_click)
                     || self.client.title.0.as_mut().is_some_and(|title| {
-                        title.select_world_at(
-                            self.client.cursor.0,
-                            self.client.cursor.1,
-                            (b.width, b.height),
-                        )
+                        title.select_world_at(self.client.cursor.0, self.client.cursor.1, gui)
                     }));
             }
             let atlas = &self.client.gui.atlas;
@@ -5161,19 +5165,11 @@ impl crate::game::ClientGame<'_> {
                         let (action, sound, widget) = title.click_with_outcome(
                             self.client.cursor.0,
                             self.client.cursor.1,
-                            (b.width, b.height),
+                            gui,
                         );
-                        let field = title.press_field(
-                            atlas,
-                            self.client.cursor,
-                            (b.width, b.height),
-                            shift,
-                        );
-                        let (rule_sound, rules) = title.press_rules_with_outcome(
-                            atlas,
-                            self.client.cursor,
-                            (b.width, b.height),
-                        );
+                        let field = title.press_field(atlas, self.client.cursor, gui, shift);
+                        let (rule_sound, rules) =
+                            title.press_rules_with_outcome(atlas, self.client.cursor, gui);
                         (action, sound || rule_sound, widget || field || rules)
                     });
             // Done/Cancel are the bound editor's normal widgets. They take the click even

@@ -122,8 +122,7 @@ impl crate::game::ClientGame<'_> {
             .0
             .as_ref()
             .map_or([1280, 720], |r| [r.config.width, r.config.height]);
-        let b = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        (b.width, b.height)
+        self.gui_frame_for(size).size()
     }
     /// Close the options screens (`OptionsScreen.onClose`) back to where they
     /// were opened: the recipe book's settings, World Options, the title or
@@ -785,12 +784,7 @@ impl crate::game::ClientGame<'_> {
             });
         ResizeState {
             size,
-            gui_size: sunrise_client::window::GuiSize::new(
-                viewport,
-                self.client.settings.gui_scale,
-                self.client.settings.force_unicode,
-            )
-            .size,
+            gui_size: self.gui_frame_for(viewport).gui.size,
         }
     }
     /// Fires `window_resize` once when the physical or GUI-scaled dimensions change.
