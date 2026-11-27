@@ -116,6 +116,7 @@ pub struct ChunkEncoder {
     cache: std::sync::Mutex<FxHashMap<usize, Encoded>>,
     /// Each column's heightmaps, with the sections they were made from.
     heights: std::sync::Mutex<HashMap<(i32, i32), Heights>>,
+    cache_sweep: usize,
     /// The level's sections among a column's: all of them in the Overworld,
     /// y 0 to 255 in the Nether and the End (`DimensionType` min_y and height).
     sections: std::ops::Range<usize>,
@@ -171,10 +172,11 @@ fn keep_heights(
     key: (i32, i32),
     sections: &[Arc<Section>],
     maps: &ColumnHeightmaps,
+    cache_sweep: usize,
 ) {
-    if heights.len() >= CACHE_SWEEP / 4 {
+    if heights.len() >= cache_sweep / 4 {
         heights.retain(|_, h| h.sections.iter().all(|w| w.strong_count() > 0));
-        if heights.len() >= CACHE_SWEEP / 8 {
+        if heights.len() >= cache_sweep / 8 {
             heights.clear();
         }
     }
@@ -361,17 +363,22 @@ impl SectionCoder {
 /// Sections kept before the ones no longer resident are dropped.
 const CACHE_SWEEP: usize = 1 << 15;
 
-fn sweep_cache(cache: &mut FxHashMap<usize, Encoded>) {
-    if cache.len() >= CACHE_SWEEP {
+fn sweep_cache(cache: &mut FxHashMap<usize, Encoded>, cache_sweep: usize) {
+    if cache.len() >= cache_sweep {
         cache.retain(|_, e| e.section.strong_count() > 0);
-        if cache.len() >= CACHE_SWEEP / 2 {
+        if cache.len() >= cache_sweep / 2 {
             cache.clear();
         }
     }
 }
 
-fn insert_non_air(cache: &mut FxHashMap<usize, Encoded>, section: &Arc<Section>, non_air: bool) {
-    sweep_cache(cache);
+fn insert_non_air(
+    cache: &mut FxHashMap<usize, Encoded>,
+    section: &Arc<Section>,
+    non_air: bool,
+    cache_sweep: usize,
+) {
+    sweep_cache(cache, cache_sweep);
     cache
         .entry(Arc::as_ptr(section) as usize)
         .or_insert_with(|| Encoded {
@@ -386,8 +393,9 @@ fn insert_wire(
     section: &Arc<Section>,
     non_air: bool,
     wire: &(Arc<[u8]>, Entities),
+    cache_sweep: usize,
 ) {
-    sweep_cache(cache);
+    sweep_cache(cache, cache_sweep);
     let entry = cache
         .entry(Arc::as_ptr(section) as usize)
         .or_insert_with(|| Encoded {
@@ -1009,6 +1017,7 @@ impl ChunkEncoder {
             tables: None,
             cache: Default::default(),
             heights: Default::default(),
+            cache_sweep: CACHE_SWEEP,
             sections: 0..ColumnLayout::VANILLA.sections(),
             column: ColumnLayout::VANILLA,
             sky: true,
@@ -1040,7 +1049,13 @@ impl ChunkEncoder {
             min_y,
             height,
         ));
-        keep_heights(&mut heights, (chunk.x, chunk.z), &chunk.sections, &maps);
+        keep_heights(
+            &mut heights,
+            (chunk.x, chunk.z),
+            &chunk.sections,
+            &maps,
+            self.cache_sweep,
+        );
         maps
     }
 
@@ -1098,7 +1113,7 @@ impl ChunkEncoder {
         cache: &'a mut FxHashMap<usize, Encoded>,
         section: &Arc<Section>,
     ) -> &'a mut Encoded {
-        sweep_cache(cache);
+        sweep_cache(cache, self.cache_sweep);
         cache
             .entry(Arc::as_ptr(section) as usize)
             .or_insert_with(|| Encoded {
@@ -1117,7 +1132,7 @@ impl ChunkEncoder {
     fn section_wire(&self, section: &Arc<Section>) -> (Arc<[u8]>, Entities) {
         {
             let mut cache = self.cache.lock().unwrap();
-            sweep_cache(&mut cache);
+            sweep_cache(&mut cache, self.cache_sweep);
             if let Some(wire) = cache
                 .get(&(Arc::as_ptr(section) as usize))
                 .and_then(|e| e.wire.clone())
@@ -1127,7 +1142,13 @@ impl ChunkEncoder {
         }
         let warmed = self.coder.wire_with_non_air(section);
         let mut cache = self.cache.lock().unwrap();
-        insert_wire(&mut cache, section, warmed.non_air, &warmed.wire);
+        insert_wire(
+            &mut cache,
+            section,
+            warmed.non_air,
+            &warmed.wire,
+            self.cache_sweep,
+        );
         warmed.wire
     }
     /// Encode for a level of `shape`: its chunks hold `shape.column()`, of
@@ -1317,6 +1338,7 @@ impl ChunkEncoder {
             tables: self.tables.clone(),
             cache: Default::default(),
             heights: Default::default(),
+            cache_sweep: self.cache_sweep,
             sections: self.sections.clone(),
             column: self.column,
             sky: self.sky,
@@ -1398,14 +1420,20 @@ impl ChunkEncoder {
             let mut heights = self.heights.lock().unwrap();
             for ((key, sections), done) in job.columns.iter().zip(&job.heights) {
                 if let Some(maps) = done.get() {
-                    keep_heights(&mut heights, *key, sections, maps);
+                    keep_heights(&mut heights, *key, sections, maps, self.cache_sweep);
                 }
             }
         }
         let mut cache = self.cache.lock().unwrap();
         for (s, done) in job.sections.iter().zip(&job.done) {
             if let Some(warmed) = done.get() {
-                insert_wire(&mut cache, s, warmed.non_air, &warmed.wire);
+                insert_wire(
+                    &mut cache,
+                    s,
+                    warmed.non_air,
+                    &warmed.wire,
+                    self.cache_sweep,
+                );
             }
         }
     }
@@ -1459,17 +1487,13 @@ impl ChunkEncoder {
             let Some(entity) = block_entities.get(&pos) else {
                 continue;
             };
-            let Ok(sec_i) = usize::try_from((pos.1 - chunk.min_y()) >> 4) else {
+            let Some(sec_i) = chunk.section_index(pos.1) else {
                 continue;
             };
             if !self.sections.contains(&sec_i) {
                 continue;
             }
-            let state = chunk.sections[sec_i].get(crate::chunk::index(
-                pos.0 & 15,
-                (pos.1 - chunk.min_y()) & 15,
-                pos.2 & 15,
-            ));
+            let state = chunk.sections[sec_i].get(crate::chunk::index(pos.0, pos.1, pos.2));
             if self.entity_type(state).is_none() {
                 continue;
             }
@@ -1492,12 +1516,10 @@ impl ChunkEncoder {
                 let Some(entity) = block_entities.get(&pos) else {
                     continue;
                 };
-                let sec_i = ((pos.1 - chunk.min_y()) >> 4) as usize;
-                let state = chunk.sections[sec_i].get(crate::chunk::index(
-                    pos.0 & 15,
-                    (pos.1 - chunk.min_y()) & 15,
-                    pos.2 & 15,
-                ));
+                let Some(sec_i) = chunk.section_index(pos.1) else {
+                    continue;
+                };
+                let state = chunk.sections[sec_i].get(crate::chunk::index(pos.0, pos.1, pos.2));
                 if self.entity_matches(state, Some(entity)) {
                     let tag = self.update_tag(pos, state, entity);
                     out.insert(pos, ColumnEntity::Matched(tag));
@@ -1667,7 +1689,13 @@ impl ChunkEncoder {
                 if cached_heights(&heights, chunk).is_none()
                     && let Some(maps) = computed.as_ref().or(work.cached_heightmaps.as_ref())
                 {
-                    keep_heights(&mut heights, (chunk.x, chunk.z), &chunk.sections, maps);
+                    keep_heights(
+                        &mut heights,
+                        (chunk.x, chunk.z),
+                        &chunk.sections,
+                        maps,
+                        self.cache_sweep,
+                    );
                 }
             }
         }
@@ -1678,7 +1706,7 @@ impl ChunkEncoder {
                 .iter()
                 .map(|&ni| job.neighbours[ni].pending.len())
                 .sum::<usize>();
-        if cache.len() + max_new < CACHE_SWEEP {
+        if cache.len() + max_new < self.cache_sweep {
             for &ni in &job.pending_neighbours {
                 let n = &job.neighbours[ni];
                 let occupied = n.resolve(&self.coder, &self.sections);
@@ -1714,7 +1742,12 @@ impl ChunkEncoder {
                         let occupied = n.resolve(&self.coder, &self.sections);
                         for (i, s) in n.chunk.sections[self.sections.clone()].iter().enumerate() {
                             if s.blocks.bits() != 0 {
-                                insert_non_air(&mut cache, s, occupied.contains(i));
+                                insert_non_air(
+                                    &mut cache,
+                                    s,
+                                    occupied.contains(i),
+                                    self.cache_sweep,
+                                );
                             }
                         }
                     }
@@ -1728,7 +1761,7 @@ impl ChunkEncoder {
                             (&w.wire, w.non_air)
                         }
                     };
-                    insert_wire(&mut cache, s, non_air, wire);
+                    insert_wire(&mut cache, s, non_air, wire, self.cache_sweep);
                 }
             }
         }
@@ -3927,6 +3960,176 @@ mod tests {
                 .collect();
             assert_eq!(got_cached, expected);
             assert_caches_match(&serial, &pooled, "cached");
+        }
+    }
+
+    #[test]
+    fn cache_eviction_and_replay_match_serial_reference() {
+        use sunrise_world::registry::BlockStateId;
+
+        let tables = Arc::new(crate::save::SaveTables::for_heightmaps(
+            crate::assets::Properties::for_tests(&[
+                (true, false, false, false),
+                (false, false, true, true),
+                (false, true, true, true),
+            ]),
+        ));
+        let make_encoder = |sweep: usize| {
+            let mut enc = encoder();
+            enc.tables = Some(tables.clone());
+            enc.cache_sweep = sweep;
+            enc
+        };
+
+        let mut world = crate::world::World::new(BlockStateId(0), 0);
+        // Six columns with three distinct non-uniform sections each (18 distinct sections).
+        for cx in 0..6 {
+            let mut chunk = Chunk::empty(cx, 0);
+            chunk.lit = true;
+            for sy in 0..3 {
+                chunk.set(cx, MIN_Y + sy * 16 + 1, sy, 1);
+                chunk.set(cx + 1, MIN_Y + sy * 16 + 2, sy, 2);
+            }
+            world.chunks.insert((cx, 0), Arc::new(chunk));
+        }
+        let keys: Vec<(i32, i32)> = (0..6).map(|cx| (cx, 0)).collect();
+        let chunks: Vec<&Chunk> = keys
+            .iter()
+            .map(|k| &**world.chunks.get(k).unwrap())
+            .collect();
+        let no_protos = |_, _| None;
+
+        let assert_caches_match = |lhs: &ChunkEncoder, rhs: &ChunkEncoder, label: &str| {
+            let lc = lhs.cache.lock().unwrap();
+            let rc = rhs.cache.lock().unwrap();
+            assert_eq!(lc.len(), rc.len(), "{label}: section cache len");
+            for (ptr, le) in lc.iter() {
+                let re = rc.get(ptr).expect("matching section cache key");
+                assert_eq!(le.non_air, re.non_air, "{label}: section non_air");
+                assert_eq!(
+                    le.wire.as_ref().map(|(b, e)| (&**b, &**e)),
+                    re.wire.as_ref().map(|(b, e)| (&**b, &**e)),
+                    "{label}: section wire"
+                );
+            }
+            let lh = lhs.heights.lock().unwrap();
+            let rh = rhs.heights.lock().unwrap();
+            assert_eq!(lh.len(), rh.len(), "{label}: heights cache len");
+            for (k, lv) in lh.iter() {
+                let rv = rh.get(k).expect("matching heights key");
+                assert_eq!(*lv.maps, *rv.maps, "{label}: heights maps for {k:?}");
+            }
+        };
+
+        // Scenario 1: live-entry clear mid-batch for both `cache` and `heights`, with column 0
+        // and column 4 pre-cached before the batch so column 4 must be re-inserted after clear.
+        {
+            let sweep = 16;
+            let mut serial = make_encoder(sweep);
+            let mut pooled = make_encoder(sweep);
+            let mut reversed = make_encoder(sweep);
+            for enc in [&mut serial, &mut pooled, &mut reversed] {
+                let _ = enc.body_in(chunks[0], &world).unwrap();
+                let _ = enc.body_in(chunks[4], &world).unwrap();
+            }
+
+            let expected: Vec<Vec<u8>> = serial
+                .bodies_with_serial(&chunks, &world, &no_protos, None)
+                .into_iter()
+                .map(|(r, _)| r.unwrap())
+                .collect();
+            let got_pool: Vec<Vec<u8>> = pooled
+                .bodies_with(&chunks, &world, &no_protos)
+                .into_iter()
+                .map(Result::unwrap)
+                .collect();
+            let got_rev: Vec<Vec<u8>> =
+                with_bodies_test_mode(BodiesTestMode::ReverseWorkerOrder, || {
+                    reversed
+                        .bodies_with(&chunks, &world, &no_protos)
+                        .into_iter()
+                        .map(Result::unwrap)
+                        .collect()
+                });
+
+            assert_eq!(got_pool, expected);
+            assert_eq!(got_rev, expected);
+            assert!(
+                serial.cache.lock().unwrap().len() < sweep,
+                "section sweep must have cleared"
+            );
+            let serial_heights: Vec<(i32, i32)> =
+                serial.heights.lock().unwrap().keys().copied().collect();
+            assert!(
+                serial_heights.len() < chunks.len(),
+                "heightmap sweep must have cleared"
+            );
+            assert!(
+                serial_heights.contains(&(4, 0)),
+                "pre-cached column 4 must be re-inserted after mid-batch heights clear"
+            );
+            assert_caches_match(&serial, &pooled, "live clear pool");
+            assert_caches_match(&serial, &reversed, "live clear reversed");
+        }
+
+        // Scenario 2: dead-entry retain (no clear) for both `cache` and `heights`.
+        {
+            let sweep = 32;
+            let mut serial = make_encoder(sweep);
+            let mut pooled = make_encoder(sweep);
+            let mut reversed = make_encoder(sweep);
+            let mut dead_world = crate::world::World::new(BlockStateId(0), 0);
+            for dx in 0..6 {
+                let mut dead = Chunk::empty(100 + dx, 0);
+                for sy in 0..3 {
+                    dead.set(dx, MIN_Y + sy * 16 + 3, sy, 1);
+                }
+                dead_world.chunks.insert((100 + dx, 0), Arc::new(dead));
+            }
+            for enc in [&mut serial, &mut pooled, &mut reversed] {
+                for dx in 0..6 {
+                    let _ = enc
+                        .body_in(&dead_world.chunks[&(100 + dx, 0)], &dead_world)
+                        .unwrap();
+                }
+                let _ = enc.body_in(chunks[0], &world).unwrap();
+            }
+            drop(dead_world);
+
+            let expected: Vec<Vec<u8>> = serial
+                .bodies_with_serial(&chunks, &world, &no_protos, None)
+                .into_iter()
+                .map(|(r, _)| r.unwrap())
+                .collect();
+            let got_pool: Vec<Vec<u8>> = pooled
+                .bodies_with(&chunks, &world, &no_protos)
+                .into_iter()
+                .map(Result::unwrap)
+                .collect();
+            let got_rev: Vec<Vec<u8>> =
+                with_bodies_test_mode(BodiesTestMode::ReverseWorkerOrder, || {
+                    reversed
+                        .bodies_with(&chunks, &world, &no_protos)
+                        .into_iter()
+                        .map(Result::unwrap)
+                        .collect()
+                });
+
+            assert_eq!(got_pool, expected);
+            assert_eq!(got_rev, expected);
+            assert_eq!(serial.cache.lock().unwrap().len(), 19);
+            assert_eq!(serial.heights.lock().unwrap().len(), chunks.len());
+            assert!(
+                serial
+                    .cache
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .all(|e| e.section.strong_count() > 0),
+                "dead section entries must be retained away"
+            );
+            assert_caches_match(&serial, &pooled, "dead retain pool");
+            assert_caches_match(&serial, &reversed, "dead retain reversed");
         }
     }
 }
