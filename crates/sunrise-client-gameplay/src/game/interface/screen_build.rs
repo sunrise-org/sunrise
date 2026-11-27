@@ -1343,9 +1343,10 @@ mod tests {
                             None,
                         );
                     };
+                    let event_projection = game.pointer_projection(target);
                     let moved = |x, y| WindowEvent::CursorMoved {
                         device_id: DeviceId::dummy(),
-                        position: PhysicalPosition::new(x, y),
+                        position: event_projection.window_pointer((x, y)),
                     };
                     let button = |state| WindowEvent::MouseInput {
                         device_id: DeviceId::dummy(),
@@ -1358,20 +1359,20 @@ mod tests {
                         phase: TouchPhase::Moved,
                     };
 
-                    event(game, moved(20.0, 40.0));
+                    event(game, moved(-15.0, 29.0));
                     assert!(game.pointer_in_gui_margin());
                     let presses = game.client.physical_presses;
                     event(game, button(ElementState::Pressed));
                     event(game, wheel());
                     assert_eq!(game.client.physical_presses, presses);
                     assert_eq!(*safe_area_input::WHEELS.lock().unwrap(), 0);
-                    event(game, moved(60.0, 40.0));
+                    event(game, moved(25.0, 29.0));
                     event(game, button(ElementState::Released));
                     assert_eq!(game.client.drag_button, None);
                     assert!(safe_area_input::DRAGS.lock().unwrap().is_empty());
 
                     event(game, button(ElementState::Pressed));
-                    event(game, moved(20.0, 40.0));
+                    event(game, moved(-15.0, 29.0));
                     let drags = safe_area_input::DRAGS.lock().unwrap();
                     assert_eq!(drags.len(), 1);
                     assert!((drags[0][0] + 40.0).abs() < 0.05);
