@@ -1035,6 +1035,7 @@ impl ServerEntity {
 
 /// An entity a client tracks, as the mods hear of it.
 #[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct Tracked {
     pub uuid: u128,
     /// Its type's registry id (`minecraft:zombie`).
@@ -1044,6 +1045,7 @@ pub struct Tracked {
 /// A client started or stopped tracking an entity (`ServerEntity.addPairing`
 /// and `removePairing`).
 #[derive(Debug)]
+#[cfg_attr(test, derive(PartialEq, Eq))]
 pub struct TrackEvent {
     pub start: bool,
     pub entity: i32,
@@ -1267,6 +1269,7 @@ pub struct Entities {
     /// that moved checks only the chunks within its view distance.
     chunk_members: Vec<Vec<u32>>,
     flags: Vec<Vec<u8>>,
+    starts: Vec<Vec<usize>>,
     /// Whether a client starts tracking each entity this tick.
     pairs: Vec<bool>,
     /// The entities that appeared or moved to another section this tick
@@ -1282,13 +1285,14 @@ pub struct Entities {
     /// One entity's packets and their bodies, kept between entities.
     packets: Vec<play::Clientbound>,
     bodies: Bodies,
+    active: Vec<usize>,
+    made: Vec<Made>,
     /// Tests: force the send strategy.
     #[cfg(test)]
     send_apart_always: Option<bool>,
 }
 
-/// The isolated send benchmark regresses at 120 viewers, but consistently improves
-/// 400-viewer crowds on two and four cores (docs/performance/tracker-send.md).
+// See docs/performance/tracker-send.md for the send strategy crossover measurements.
 const SEND_APART_VIEWERS: usize = 400;
 const SEND_APART_ENTITIES: usize = 400;
 
@@ -1335,6 +1339,43 @@ struct Bodies {
     all: Vec<super::Body>,
     /// What other clients get instead, when a native mod's particle is among them.
     vanilla: Option<Vec<super::Body>>,
+}
+
+type ViewerWork<'row, 'view> = (
+    &'row mut Viewer<'view>,
+    &'row mut Vec<u8>,
+    &'row mut Vec<usize>,
+);
+
+fn viewer_work<'row, 'view>(
+    viewers: &'row mut [Viewer<'view>],
+    flags: &'row mut [Vec<u8>],
+    starts: &'row mut [Vec<usize>],
+) -> Vec<ViewerWork<'row, 'view>> {
+    viewers
+        .iter_mut()
+        .zip(flags)
+        .zip(starts)
+        .map(|((viewer, flags), starts)| (viewer, flags, starts))
+        .collect()
+}
+
+fn owner_pairs(viewer: &Viewer<'_>, starts: &[usize]) -> bool {
+    viewer.attachment_sender.is_some() && !starts.is_empty()
+}
+
+#[derive(Default)]
+struct Made {
+    index: usize,
+    changes: Bodies,
+    pairing: Option<MadePairing>,
+    synced: bool,
+}
+
+struct MadePairing {
+    kind: Kind,
+    tracked: Arc<Tracked>,
+    bodies: PairingBodies,
 }
 
 impl Bodies {
@@ -1860,13 +1901,9 @@ impl Entities {
         // player's packets keep their order, as vanilla's do.
         let mut flags = std::mem::take(&mut self.flags);
         flags.resize_with(viewers.len(), Vec::new);
-        let mut starts: Vec<Vec<usize>> = vec![Vec::new(); viewers.len()];
-        let mut players: Vec<(&mut Viewer, &mut Vec<u8>, &mut Vec<usize>)> = viewers
-            .iter_mut()
-            .zip(&mut flags)
-            .zip(&mut starts)
-            .map(|((viewer, flags), starts)| (viewer, flags, starts))
-            .collect();
+        let mut starts = std::mem::take(&mut self.starts);
+        starts.resize_with(viewers.len(), Vec::new);
+        let mut players = viewer_work(viewers, &mut flags, &mut starts);
         {
             let (probes, chunks, members, states, is_moved, moved) = (
                 &self.probes,
@@ -1879,6 +1916,7 @@ impl Entities {
             crate::parallel::par_chunks_mut(&mut players, 16, |players| {
                 for (v, flags, starts) in players {
                     flags.clear();
+                    starts.clear();
                     let mut held = vec![0; chunks.len()];
                     let (chunks, held) = (&**chunks, &mut held);
                     let mut kept = 0;
@@ -2015,22 +2053,26 @@ impl Entities {
                 }
             });
         }
-        self.flags = flags;
-        for starts in &starts {
-            for &index in starts {
+        for (_, _, starts) in &players {
+            for &index in starts.iter() {
                 self.pairs[index] = true;
             }
         }
-        // The entities with something to send or someone to pair with: an unchanged leash
-        // is all the pass below would do with the rest, which is nothing.
-        let active: Vec<usize> = (0..self.probes.len())
-            .filter(|&index| !self.quiet[index] || self.pairs[index])
-            .collect();
-        if self.send_apart(viewers.len(), active.len()) {
-            self.send_on_threads(entities, riding, viewers, &active, attachments);
+        // The entities with something to send or someone to pair with.
+        let mut active = std::mem::take(&mut self.active);
+        active.clear();
+        active.extend(
+            (0..self.probes.len()).filter(|&index| !self.quiet[index] || self.pairs[index]),
+        );
+        if self.send_apart(players.len(), active.len()) {
+            self.send_on_threads(entities, riding, &mut players, &active, attachments);
         } else {
-            self.send_in_order(entities, riding, viewers, &active, attachments);
+            self.send_in_order(entities, riding, &mut players, &active, attachments);
         }
+        self.active = active;
+        drop(players);
+        self.flags = flags;
+        self.starts = starts;
         // ChunkMap.removeEntity for the ones no longer in the level.
         if self.states.len() > stamped {
             self.states.retain(|s| s.seen == now);
@@ -2053,7 +2095,7 @@ impl Entities {
         &mut self,
         entities: &[&EntityState],
         riding: &Riding,
-        viewers: &mut [Viewer],
+        players: &mut [ViewerWork<'_, '_>],
         active: &[usize],
         attachments: Option<&InitialAttachmentLookup<'_>>,
     ) {
@@ -2090,7 +2132,7 @@ impl Entities {
             }
             let mut encoded = false;
             let mut pairing: Option<Option<PairingBodies>> = None;
-            for (v, flags) in viewers.iter_mut().zip(&self.flags) {
+            for (v, flags, _) in &mut *players {
                 let f = flags[index];
                 if f & TRACKS != 0 {
                     if self.packets.is_empty() {
@@ -2142,136 +2184,150 @@ impl Entities {
         }
     }
 
-    /// [`Self::send_in_order`] in two steps on several threads, the same bytes in the same
-    /// order for each client: each entity's packets made and encoded once (an entity's state
-    /// is its own), then each client's packets, entity by entity (a client's list and tracker
-    /// are its own).
+    /// Compute each entity's packets once, then assemble each viewer's output in entity order.
     fn send_on_threads(
         &mut self,
         entities: &[&EntityState],
         riding: &Riding,
-        viewers: &mut [Viewer],
+        players: &mut [ViewerWork<'_, '_>],
         active: &[usize],
         attachments: Option<&InitialAttachmentLookup<'_>>,
     ) {
-        /// One entity's part of the tick: its changes and its pairing, encoded.
-        struct Made<'s> {
-            index: usize,
-            state: &'s mut ServerEntity,
-            changes: Bodies,
-            pairing: Option<PairingBodies>,
-            synced: bool,
-        }
         let Self {
             states,
             pairs,
             is_moved,
             synced: synced_ranges,
-            flags,
             probes,
+            made,
             ..
         } = self;
-        let mut made: Vec<Made> = states
-            .of_indices_mut(active)
-            .into_iter()
-            .zip(active)
-            .map(|(state, &index)| Made {
-                index,
-                state,
-                changes: Bodies::default(),
-                pairing: None,
-                synced: false,
-            })
-            .collect();
-        let (pairs, is_moved, synced_ranges) = (&*pairs, &*is_moved, &*synced_ranges);
-        sunrise_threads::par_chunks_mut(&mut made, 64, |part| {
+        made.resize_with(active.len(), Made::default);
+        for (m, &index) in made.iter_mut().zip(active) {
+            m.index = index;
+        }
+        let mut states = states.of_indices_mut(active);
+        let mut jobs: Vec<_> = states.chunks_mut(64).zip(made.chunks_mut(64)).collect();
+        let (pairs, is_moved, synced_ranges, probes, players_read) =
+            (&*pairs, &*is_moved, &*synced_ranges, &*probes, &*players);
+        crate::parallel::par_chunks_mut(&mut jobs, 1, |jobs| {
             let mut packets = Vec::new();
-            for m in part {
-                let (s, e) = (&mut *m.state, entities[probes[m.index].input as usize]);
-                packets.clear();
-                // As in `send_in_order`: paired as it joined, its first changes go out with
-                // the pairing; an idle one sends only its leash.
-                m.synced = s.added
-                    && e.kind != "minecraft:player"
-                    && !s.arrow
-                    && synced_ranges
-                        .iter()
-                        .any(|&(after, through)| e.id > after && e.id <= through);
-                if !s.added || m.synced {
-                    if e.idle && !is_moved[m.index] && !e.needs_sync {
-                        s.send_leash(e, &mut packets);
-                    } else {
-                        s.send_changes(e, riding, &mut packets);
-                    }
-                }
-                s.added = false;
-                m.changes.encode(&packets);
-                if pairs[m.index]
-                    && !e.bare
-                    && let Some(kind) = s.kind
-                {
+            for (states, made) in jobs {
+                for (s, m) in states.iter_mut().zip(made.iter_mut()) {
+                    let index = m.index;
+                    let e = entities[probes[index].input as usize];
                     packets.clear();
-                    m.pairing = s
-                        .pairing(e, kind, riding, &mut packets)
-                        .then(|| PairingBodies::of(&packets));
+                    m.synced = s.added
+                        && e.kind != "minecraft:player"
+                        && !s.arrow
+                        && synced_ranges
+                            .iter()
+                            .any(|&(after, through)| e.id > after && e.id <= through);
+                    if !s.added || m.synced {
+                        if e.idle && !is_moved[index] && !e.needs_sync {
+                            s.send_leash(e, &mut packets);
+                        } else {
+                            s.send_changes(e, riding, &mut packets);
+                        }
+                    }
+                    s.added = false;
+                    let changes_len = packets.len();
+                    if pairs[index]
+                        && !e.bare
+                        && let Some(kind) = s.kind
+                        && s.pairing(e, kind, riding, &mut packets)
+                    {
+                        m.pairing = Some(MadePairing {
+                            kind,
+                            tracked: Arc::clone(&s.tracked),
+                            bodies: PairingBodies::of(&packets[changes_len..]),
+                        });
+                    }
+                    // send_changes advances the baseline even when no viewer needs the bytes.
+                    if changes_len != 0
+                        && players_read.iter().any(|(viewer, flags, _)| {
+                            let f = flags[index];
+                            f & TRACKS != 0
+                                || (m.synced
+                                    && f & SEES != 0
+                                    && m.pairing
+                                        .as_ref()
+                                        .is_some_and(|p| viewer.pairs_with(p.kind)))
+                        })
+                    {
+                        m.changes.encode(&packets[..changes_len]);
+                    }
                 }
             }
         });
-        // Nothing to send and nobody to pair with.
+        drop(jobs);
         made.retain(|m| !m.changes.all.is_empty() || m.pairing.is_some());
-        // Only a new, eligible negotiated tracker causes an encode. Mod codecs
-        // run on the server owner; parallel packet assembly consumes only bytes.
-        if attachments.is_some() && viewers.iter().any(|v| v.attachment_sender.is_some()) {
+
+        // Mod codecs, outbox admission and backpressure handling belong to the owner thread.
+        if players.iter().any(|(v, _, starts)| owner_pairs(v, starts)) {
             let project = capture_attachment_projection();
-            for m in &made {
-                if let (Some(pairing), Some(kind)) = (&m.pairing, m.state.kind)
-                    && viewers.iter().zip(&*flags).any(|(v, flags)| {
-                        flags[m.index] & (TRACKS | SEES) == SEES
-                            && v.attachment_sender.is_some()
-                            && v.pairs_with(kind)
-                    })
-                {
-                    let entity = entities[probes[m.index].input as usize];
-                    pairing.prepare_attachments(entity, attachments, &project);
+            for m in &*made {
+                for (v, flags, starts) in &mut *players {
+                    if !owner_pairs(v, starts) {
+                        continue;
+                    }
+                    let f = flags[m.index];
+                    if attachments.is_some()
+                        && f & (TRACKS | SEES) == SEES
+                        && let Some(p) = &m.pairing
+                        && v.pairs_with(p.kind)
+                    {
+                        let entity = entities[probes[m.index].input as usize];
+                        p.bodies.prepare_attachments(entity, attachments, &project);
+                    }
+                    m.write_to(v, f, probes[m.index].id);
                 }
             }
         }
-        let made = &made;
-        let mut clients: Vec<(&mut Viewer, &Vec<u8>)> = viewers.iter_mut().zip(&*flags).collect();
-        sunrise_threads::par_chunks_mut(&mut clients, 4, |part| {
-            for (v, flags) in part {
-                for m in made {
-                    let f = flags[m.index];
-                    if f & TRACKS != 0 {
-                        v.out.extend(m.changes.to(v).iter().cloned());
-                    } else if f & SEES != 0
-                        && let Some(pairing) = &m.pairing
-                        && m.state.kind.is_some_and(|kind| v.pairs_with(kind))
-                    {
-                        let attachment_sync_from = pairing.write_to(v);
-                        // As `send_in_order`: the bundle ends before its changes.
-                        let at = v.out.len();
-                        if m.synced {
-                            v.out.extend(m.changes.to(v).iter().cloned());
-                        }
-                        let id = probes[m.index].id;
-                        if v.tracker
-                            .seen
-                            .insert(id, Arc::clone(&m.state.tracked))
-                            .is_none()
-                        {
-                            v.tracker.events.push(TrackEvent {
-                                start: true,
-                                entity: id,
-                                tracked: Arc::clone(&m.state.tracked),
-                                at: Some(at),
-                                attachment_sync_from,
-                            });
-                        }
+        crate::parallel::par_chunks_mut(players, 4, |part| {
+            for (v, flags, starts) in part {
+                if !owner_pairs(v, starts) {
+                    for m in &*made {
+                        m.write_to(v, flags[m.index], probes[m.index].id);
                     }
                 }
             }
         });
+        for m in made {
+            m.changes.all.clear();
+            m.changes.vanilla = None;
+            m.pairing = None;
+        }
+    }
+}
+
+impl Made {
+    fn write_to(&self, v: &mut Viewer, flags: u8, id: i32) {
+        if flags & TRACKS != 0 {
+            v.out.extend(self.changes.to(v).iter().cloned());
+        } else if flags & SEES != 0
+            && let Some(pairing) = &self.pairing
+            && v.pairs_with(pairing.kind)
+        {
+            let attachment_sync_from = pairing.bodies.write_to(v);
+            let at = v.out.len();
+            if self.synced {
+                v.out.extend(self.changes.to(v).iter().cloned());
+            }
+            if v.tracker
+                .seen
+                .insert(id, Arc::clone(&pairing.tracked))
+                .is_none()
+            {
+                v.tracker.events.push(TrackEvent {
+                    start: true,
+                    entity: id,
+                    tracked: Arc::clone(&pairing.tracked),
+                    at: Some(at),
+                    attachment_sync_from,
+                });
+            }
+        }
     }
 }
 
@@ -2489,16 +2545,8 @@ mod tests {
                         .collect();
                     level_side.tick(&refs, &Riding::default(), &mut viewers, None, |_| Some(5));
                 }
-                let events = |trackers: &mut Vec<Tracker>| -> Vec<Vec<(bool, i32)>> {
-                    trackers
-                        .iter_mut()
-                        .map(|t| {
-                            t.take_events()
-                                .iter()
-                                .map(|e| (e.start, e.entity))
-                                .collect()
-                        })
-                        .collect()
+                let events = |trackers: &mut Vec<Tracker>| -> Vec<Vec<TrackEvent>> {
+                    trackers.iter_mut().map(Tracker::take_events).collect()
                 };
                 let [first, second] = &mut trackers;
                 assert_eq!(events(first), events(second), "level {level}, tick {tick}");
