@@ -21,6 +21,14 @@ binary run as a black box (--exe); its Bedrock listeners, LAN broadcast and tele
 config this script writes (--pumpkin-config adds a TOML file of your own on top if a release names a key
 differently). `--pre-generated DIR` copies a finished world into every run's scratch folder as `world`, so runs
 repeat on the same terrain. Build the bots first: cargo build --release -p sunrise-bots
+
+`--spread BLOCKS` puts every bot at its own spot in a square of that side around the origin (the spots follow from
+--seed, so every server gets the same ones): once all bots are in, the console teleports each one high above its
+spot and then down onto the ground there, and the bots (run with --rehome) take that as home; the bots stay until
+the window ends, however long the teleports took. With
+`--behaviour random` each bot then keeps switching between wandering, flying off, standing, hotbar switching,
+attacking mobs and placing and breaking blocks. A spread run loads view distance around every bot, so give it a
+longer --warmup: the window should start after the terrain around the bots is generated.
 """
 
 import argparse
@@ -29,6 +37,7 @@ import json
 import os
 from pathlib import Path
 import platform
+import random
 import re
 import shutil
 import socket
@@ -105,6 +114,11 @@ DONE = re.compile(r'Done|listening|Server started', re.IGNORECASE)
 TICK_AVERAGE = re.compile(r'Average time per tick: ([0-9.]+) ?ms')
 TICK_PERCENTILES = re.compile(r'P50: ([0-9.]+) ?ms P95: ([0-9.]+) ?ms P99: ([0-9.]+) ?ms')
 GAMETIME = re.compile(r'The game time is (-?\d+) tick\(s\)')
+TELEPORTED = re.compile(r'Teleported (\w+) to')
+# Above every terrain height, so the drop onto the ground is always a long one.
+SPREAD_HEIGHT = 320
+# How long spread bots stay at most; the bench stops them when its window ends.
+SPREAD_CAP = 1800
 
 
 def free_port():
@@ -277,7 +291,48 @@ class Server:
 def bots_command(args, port, total):
     return [str(args.bots_bin), '--server', f'127.0.0.1:{port}', '--bots', str(args.bots),
             '--behaviour', args.behaviour, '--join-every', str(args.join_every), '--seconds', str(int(total)),
-            '--seed', str(args.seed), '--view-distance', str(args.view_distance), '--report', '-']
+            '--seed', str(args.seed), '--view-distance', str(args.view_distance), '--report', '-',
+            *(['--rehome'] if args.spread else [])]
+
+
+def spread_spots(bots, side, seed):
+    """Every bot's block column in a square of `side` blocks around the origin, the same for a seed."""
+    source = random.Random(seed)
+    half = side // 2
+    return [(source.randint(-half, half), source.randint(-half, half)) for _ in range(bots)]
+
+
+def wait_for_port(port, process, timeout):
+    """Returns once the server accepts connections: its "done" line can come before the listener is up."""
+    deadline = time.time() + timeout
+    while time.time() < deadline:
+        if process.poll() is not None:
+            raise RuntimeError('the server exited before it listened')
+        try:
+            socket.create_connection(('127.0.0.1', port), timeout=1).close()
+            return
+        except OSError:
+            time.sleep(0.2)
+    raise RuntimeError(f'the server did not listen on {port} within {timeout} s')
+
+
+def teleported(name):
+    def parse(lines):
+        return True if any((m := TELEPORTED.search(line)) and m.group(1) == name for line in lines) else None
+    return parse
+
+
+def spread(server, args, settle=10):
+    """Teleports each bot above its spot, waits for the chunks there, then drops each onto the ground."""
+    spots = spread_spots(args.bots, args.spread, args.seed)
+    names = [f'Bot{i}' for i in range(args.bots)]
+    for name, (x, z) in zip(names, spots):
+        server.ask(f'tp {name} {x} {SPREAD_HEIGHT} {z}', teleported(name), timeout=30)
+    time.sleep(settle)
+    for name in names:
+        server.ask(f'execute at {name} positioned over motion_blocking run tp {name} ~ ~ ~', teleported(name),
+                   timeout=30)
+    return spots
 
 
 def split_bot_output(lines):
@@ -290,6 +345,8 @@ def split_bot_output(lines):
             sample = None
         if isinstance(sample, dict) and 't' in sample:
             samples.append(sample)
+        elif isinstance(sample, dict) and 'spawn' in sample:
+            pass  # the first bot's spawn position, for a client that comes to watch
         else:
             rest.append(line)
     text = ''.join(rest)
@@ -341,13 +398,21 @@ def run_once(kind, args, out):
         started = time.time()
         server = Server(command, scratch, out / f'{kind}-{args.bots}.log')
         server.wait_for(DONE, args.start_timeout)
+        wait_for_port(port, server.process, 60)
         start_seconds = round(time.time() - started, 2)
         total = args.bots * args.join_every + args.warmup + args.seconds
-        bot_process = subprocess.Popen(bots_command(args, port, total), stdout=subprocess.PIPE,
+        # A spread's teleports take as long as the server needs, so its bots run until they are told to stop.
+        bots_started = time.time()
+        bot_process = subprocess.Popen(bots_command(args, port, total + SPREAD_CAP if args.spread else total),
+                                       stdin=subprocess.PIPE if args.spread else None, stdout=subprocess.PIPE,
                                        stderr=subprocess.PIPE, text=True)
         bot_lines = []
         threading.Thread(target=lambda: bot_lines.extend(bot_process.stdout), daemon=True).start()
-        time.sleep(args.bots * args.join_every + args.warmup)
+        time.sleep(args.bots * args.join_every)
+        if args.spread:
+            time.sleep(5)
+            spread(server, args)
+        time.sleep(args.warmup)
         supports = SERVERS[kind]
         first_time = server.ask('time query gametime', parse_gametime) if supports['gametime'] else None
         began = time.time()
@@ -368,6 +433,10 @@ def run_once(kind, args, out):
                 next_query = now + 5
         window = time.time() - began
         last = server.ask('time query gametime', parse_gametime) if supports['gametime'] else None
+        if args.spread:
+            bot_process.stdin.write('stop\n')
+            bot_process.stdin.flush()
+            total = time.time() - bots_started
         bot_process.wait(timeout=total + 120)
         time.sleep(0.5)
         _, summary = split_bot_output(list(bot_lines))
@@ -433,6 +502,8 @@ def main(argv=None):
     parser.add_argument('--bots', type=int, default=50)
     parser.add_argument('--behaviour', default='mixed')
     parser.add_argument('--join-every', type=float, default=0.5)
+    parser.add_argument('--spread', type=int, default=0, metavar='BLOCKS',
+                        help='spread the bots over a square of this side (0: they stay at the world spawn)')
     parser.add_argument('--warmup', type=int, default=30)
     parser.add_argument('--seconds', type=int, default=60)
     parser.add_argument('--seed', type=int, default=12345)

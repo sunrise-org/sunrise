@@ -856,6 +856,13 @@ reproducible by anyone, and show the same gameplay on both sides.
   - `fight`: survival bots (`gamemode=survival`, `force-gamemode=true`, `allow-flight=true`) that track the entities the server
     sends, walk to the nearest living one and attack it every 5 ticks, vanilla's bare-hand cooldown; with `--pvp true` (the
     default) they attack each other too, which needs `pvp=true` on the server. The report counts `attacks`.
+  - `random`: every 4 to 16 seconds each bot picks one of wandering, flying off in a new direction, standing, switching
+    hotbar slots, attacking the nearest mob within 48 blocks, or placing and breaking stone below itself.
+
+  `--rehome` makes a server teleport of more than 32 blocks the bot's new home (where it walks, how high it flies).
+  `tools/bench.py --spread BLOCKS` uses it: once the bots are in, the console teleports each one above its own spot in
+  a square of that side (the spots follow from the seed) and then down onto the ground there, so the players are spread
+  over the map instead of gathered at the world spawn.
 
   For controlled chunk-pacing tests, use `--behaviour explore --ack-mode 64`: the bot sends exactly
   one acknowledgement per completed chunk batch, requesting 64 chunks per tick. The default

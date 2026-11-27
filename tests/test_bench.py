@@ -10,7 +10,7 @@ from tools import bench
 
 def args(**kw):
     base = dict(seed=777, view_distance=8, pre_generated=None, pumpkin_config=None, exe='pumpkin', jar='server.jar',
-                heap='2g', bots=5, behaviour='mixed', warmup=1, join_every=0.5)
+                heap='2g', bots=5, behaviour='mixed', warmup=1, join_every=0.5, spread=0, bots_bin='sunrise-bots')
     base.update(kw)
     return types.SimpleNamespace(**base)
 
@@ -85,6 +85,35 @@ class ParserTests(unittest.TestCase):
         samples, summary = bench.split_bot_output(['{"t": 1, "online": 2}\n', '{\n', '  "joined": 2\n', '}\n'])
         self.assertEqual(samples, [{'t': 1, 'online': 2}])
         self.assertEqual(summary, {'joined': 2})
+
+    def test_the_first_bots_spawn_line_is_not_part_of_the_summary(self):
+        lines = ['{"spawn":[96.5,145.0,-32.5]}\n', '{"t": 1, "online": 1}\n', '{\n', '  "joined": 1\n', '}\n']
+        self.assertEqual(bench.split_bot_output(lines), ([{'t': 1, 'online': 1}], {'joined': 1}))
+
+    def test_spread_spots_repeat_for_a_seed_and_stay_in_the_square(self):
+        spots = bench.spread_spots(50, 10000, 12345)
+        self.assertEqual(spots, bench.spread_spots(50, 10000, 12345))
+        self.assertNotEqual(spots, bench.spread_spots(50, 10000, 12346))
+        self.assertEqual(len(set(spots)), 50)
+        self.assertTrue(all(abs(x) <= 5000 and abs(z) <= 5000 for x, z in spots))
+
+    def test_a_spread_teleports_every_bot_up_and_then_onto_the_ground(self):
+        sent, parsed = [], []
+        class Console:
+            def ask(self, command, parse, timeout=5):
+                sent.append(command)
+                name = command.split()[1 if command.startswith('tp ') else 2]
+                parsed.append((parse([f'[Server thread/INFO]: Teleported {name} to 1.5, 320.0, 2.5']),
+                               parse([f'Teleported {name}0 to 1.5, 320.0, 2.5'])))
+        spots = bench.spread(Console(), args(bots=2, spread=1000, seed=7), settle=0)
+        self.assertEqual(sent, [f'tp Bot0 {spots[0][0]} 320 {spots[0][1]}', f'tp Bot1 {spots[1][0]} 320 {spots[1][1]}',
+                                'execute at Bot0 positioned over motion_blocking run tp Bot0 ~ ~ ~',
+                                'execute at Bot1 positioned over motion_blocking run tp Bot1 ~ ~ ~'])
+        self.assertEqual(parsed, [(True, None)] * 4)
+
+    def test_spread_bots_take_the_teleport_as_home(self):
+        self.assertNotIn('--rehome', bench.bots_command(args(), 25565, 60))
+        self.assertEqual(bench.bots_command(args(spread=10000), 25565, 60)[-1], '--rehome')
 
     def test_bandwidth_divides_by_each_bots_time_online(self):
         # Bot 0 is on for 100 s, bot 1 for 90 s (it joined 10 s later), bot 2 failed and counts for nothing.

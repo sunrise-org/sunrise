@@ -56,7 +56,9 @@ sunrise-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
 
   --server HOST:PORT     default 127.0.0.1:25565
   --bots N               default 10
-  --behaviour B          idle, hotbar, walk, explore, fight or mixed (60 % walk, 20 % explore, 20 % idle); default mixed.
+  --behaviour B          idle, hotbar, walk, explore, fight, random or mixed (60 % walk, 20 % explore, 20 % idle); default mixed.
+                         random: every 4 to 16 s each bot picks one of wandering, flying off in a new direction, standing,
+                         switching hotbar slots, attacking the nearest mob, or placing and breaking stone around itself.
                          fight needs gamemode=survival, force-gamemode=true and allow-flight=true.
                          stand: stays on the ground where the server puts it (/tp), for a survival test.
                          One abusive client, to test a server's limits (run it beside a normal crowd):
@@ -89,6 +91,7 @@ sunrise-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
                          server's replies pile up)
   --join-every SECONDS   default 1
   --seconds N            how long to run after the first bot joins; default 60
+                         (a `stop` line on stdin ends the run sooner, with the report)
   --view-distance N      what the bots ask for; default 10
   --seed N               default 12345
   --explore-speed B      blocks a second an explore bot flies; default 22 (as fast as chunks come)
@@ -101,6 +104,8 @@ sunrise-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
   --brand B              the client brand sent in configuration (minecraft:brand); default none; with
                          sunrise, the bot also echoes a Sunrise server's mod list and content digest
   --height H             blocks above spawn the bots fly at (walk, explore, idle); default 24
+  --rehome               a server teleport of more than 32 blocks moves the bot's home there (where it walks,
+                         how high it flies), so a server can spread the bots (tools/bench.py --spread)
   --ground               claim the ground in every move (with --height 0 on a flat world: walking
                          on it; higher, or over water: a no-fall or jesus cheat, to test an anticheat)
   --give SLOT:ID:COUNT,...  creative-slot packets sent once joined (inventory menu slot, item
@@ -122,6 +127,7 @@ enum Behaviour {
     Walk,
     Explore,
     Fight,
+    Random,
     FloodMove,
     FloodAcks,
     FloodPackets,
@@ -143,6 +149,7 @@ impl Behaviour {
             Self::Walk => "walk",
             Self::Explore => "explore",
             Self::Fight => "fight",
+            Self::Random => "random",
             Self::FloodMove => "flood-move",
             Self::FloodAcks => "flood-acks",
             Self::FloodPackets => "flood-packets",
@@ -184,6 +191,8 @@ struct Options {
     no_loaded: bool,
     height: f64,
     ground: bool,
+    /// --rehome: a server teleport of more than `REHOME_BLOCKS` moves the bot's home there.
+    rehome: bool,
     /// --raw: (tick after joining, packet id, body).
     raw: Vec<(u64, i32, Vec<u8>)>,
     /// ServerboundSetCreativeModeSlotPackets to send once joined: (slot, item id, count).
@@ -222,6 +231,7 @@ fn options() -> Result<Options, String> {
         no_loaded: false,
         height: 24.0,
         ground: false,
+        rehome: false,
         raw: Vec::new(),
         give: Vec::new(),
         click: None,
@@ -250,6 +260,10 @@ fn options() -> Result<Options, String> {
         }
         if arg == "--no-loaded" {
             o.no_loaded = true;
+            continue;
+        }
+        if arg == "--rehome" {
+            o.rehome = true;
             continue;
         }
         if arg == "--ground" {
@@ -346,11 +360,12 @@ fn options() -> Result<Options, String> {
             _ => return Err(format!("unknown option {arg}; --help lists them")),
         }
     }
-    const BEHAVIOURS: [&str; 17] = [
+    const BEHAVIOURS: [&str; 18] = [
         "idle",
         "walk",
         "explore",
         "fight",
+        "random",
         "mixed",
         "stand",
         "hotbar",
@@ -646,6 +661,45 @@ fn fight_step(pos: &mut [f64; 3], at: [f64; 3]) {
         pos[2] += dz / horizontal * step;
     }
 }
+
+/// A server teleport farther than this from where the bot was moves its home (--rehome).
+const REHOME_BLOCKS: f64 = 32.0;
+
+/// Whether a teleport from `from` to `to` moved the bot far enough to count as a new home.
+fn rehomed(from: [f64; 3], to: [f64; 3]) -> bool {
+    distance(from, to) > REHOME_BLOCKS
+}
+
+/// What a `random` bot is doing right now.
+#[derive(Clone, Copy, Debug, PartialEq)]
+enum Activity {
+    Wander,
+    Travel,
+    Stand,
+    Hotbar,
+    Hunt,
+    Build,
+}
+
+impl Activity {
+    /// The next activity and how many ticks it lasts (4 to 16 s), from the bot's own random source.
+    fn pick(random: &mut Random) -> (Self, u64) {
+        let activity = match (random.unit() * 100.0) as u32 {
+            0..30 => Self::Wander,
+            30..50 => Self::Travel,
+            50..60 => Self::Stand,
+            60..70 => Self::Hotbar,
+            70..85 => Self::Hunt,
+            _ => Self::Build,
+        };
+        (activity, 80 + (random.unit() * 240.0) as u64)
+    }
+}
+
+/// How many stone blocks a building bot keeps placed before it breaks the oldest.
+const BUILD_KEEP: usize = 6;
+/// How far a hunting bot goes for a mob.
+const HUNT_RANGE: f64 = 48.0;
 
 /// One tick of walking to random points around the spawn, at sprint speed (5.6 blocks a second).
 fn walk_step(
@@ -1206,7 +1260,7 @@ fn run_bot(
     bot.online.store(true, Ordering::SeqCst);
     {
         let (writer, bot) = (writer.clone(), bot.clone());
-        let track = behaviour == Behaviour::Fight;
+        let track = matches!(behaviour, Behaviour::Fight | Behaviour::Random);
         let capture = (index == 0)
             .then(|| o.capture.as_deref().and_then(Capture::create))
             .flatten();
@@ -1215,7 +1269,7 @@ fn run_bot(
     }
     use ids::play::serverbound as sb;
     // Wait for the spawn position.
-    let spawn = loop {
+    let mut spawn = loop {
         if let Some(at) = *lock(&bot.teleport) {
             break at;
         }
@@ -1240,7 +1294,7 @@ fn run_bot(
     bot.deaf.store(o.no_read, Ordering::Relaxed);
     // What the costly floods need in hand (creative: the server takes the bot's word for it).
     let tool = match behaviour {
-        Behaviour::FloodUse => Some(Stack::new(STONE, 64)),
+        Behaviour::FloodUse | Behaviour::Random => Some(Stack::new(STONE, 64)),
         Behaviour::FloodBook => Some(Stack::new(WRITABLE_BOOK, 1)),
         _ => None,
     };
@@ -1268,14 +1322,16 @@ fn run_bot(
     let mut random = Random(o.seed ^ (index as u64).wrapping_mul(0x2545_F491_4F6C_DD1D));
     let mut pos = spawn;
     // Fight bots stay at their spawn height; the others climb to fly above the terrain.
-    let cruise = if behaviour == Behaviour::Fight {
+    let mut cruise = if behaviour == Behaviour::Fight {
         spawn[1]
     } else {
         spawn[1] + o.height
     };
     let mut since_attack = ATTACK_COOLDOWN_TICKS;
     let mut crits = Crits::default();
-    let heading = random.unit() * std::f64::consts::TAU;
+    let mut heading = random.unit() * std::f64::consts::TAU;
+    let (mut activity, mut activity_until) = (Activity::Stand, 0u64);
+    let mut placed: std::collections::VecDeque<[i32; 3]> = std::collections::VecDeque::new();
     let mut explored = 0.0_f64;
     let mut target = pos;
     let (mut hotbar_deadline, mut hotbar_step) = (None, 0usize);
@@ -1287,6 +1343,13 @@ fn run_bot(
         }
         // A teleport from the server wins over where the bot thought it was.
         if let Some(at) = lock(&bot.teleport).take() {
+            if o.rehome && rehomed(pos, at) {
+                spawn = at;
+                target = at;
+                if behaviour != Behaviour::Fight {
+                    cruise = at[1] + o.height;
+                }
+            }
             pos = at;
         }
         let here = ((pos[0].floor() as i32) >> 4, (pos[2].floor() as i32) >> 4);
@@ -1340,11 +1403,112 @@ fn run_bot(
             }
         } else if !lock(&bot.held).contains(&here) {
             bot.waited.fetch_add(1, Ordering::Relaxed);
-        } else if pos[1] < cruise {
+        } else if pos[1] < cruise && !(behaviour == Behaviour::Random && activity == Activity::Hunt)
+        {
             pos[1] = (pos[1] + 0.5).min(cruise);
         } else {
             match behaviour {
                 Behaviour::Idle | Behaviour::Stand | Behaviour::Hotbar => {}
+                Behaviour::Random => {
+                    if tick >= activity_until {
+                        let (next, ticks) = Activity::pick(&mut random);
+                        (activity, activity_until) = (next, tick + ticks);
+                        if activity == Activity::Travel {
+                            heading = random.unit() * std::f64::consts::TAU;
+                        }
+                        if activity == Activity::Build {
+                            // The stone is in the first hotbar slot.
+                            send(
+                                play::Serverbound::SetCarriedItem(play::SetCarriedItem { slot: 0 })
+                                    .encode(),
+                            );
+                        }
+                    }
+                    match activity {
+                        Activity::Stand => {}
+                        Activity::Wander => {
+                            walk_step(&mut pos, &mut target, spawn, cruise, &mut random);
+                        }
+                        Activity::Travel => {
+                            pos[0] += heading.cos() * o.explore_speed / 20.0;
+                            pos[2] += heading.sin() * o.explore_speed / 20.0;
+                        }
+                        Activity::Hotbar => {
+                            if tick.is_multiple_of(10) {
+                                let slot = (random.unit() * 9.0) as _;
+                                send(
+                                    play::Serverbound::SetCarriedItem(play::SetCarriedItem {
+                                        slot,
+                                    })
+                                    .encode(),
+                                );
+                            }
+                        }
+                        Activity::Hunt => {
+                            let near = lock(&bot.entities)
+                                .nearest(pos, false, &bots)
+                                .filter(|near| distance(pos, near.1) <= HUNT_RANGE);
+                            if let Some(near) = near {
+                                // Down (or up) to the mob, then hit it as a fight bot does.
+                                pos[1] += (near.1[1] - pos[1]).clamp(-0.5, 0.5);
+                                let hit = fight_tick(
+                                    &mut pos,
+                                    near,
+                                    &mut since_attack,
+                                    ATTACK_COOLDOWN_TICKS,
+                                );
+                                if let Some(victim) = hit {
+                                    let sent = send(
+                                        play::Serverbound::Attack(play::Attack { id: victim })
+                                            .encode(),
+                                    ) && send(play::Serverbound::Punch(Empty).encode());
+                                    if sent {
+                                        bot.attacks.fetch_add(1, Ordering::Relaxed);
+                                    }
+                                }
+                            } else {
+                                since_attack = since_attack.saturating_add(1);
+                                if pos[1] < cruise {
+                                    pos[1] = (pos[1] + 0.5).min(cruise);
+                                } else {
+                                    walk_step(&mut pos, &mut target, spawn, cruise, &mut random);
+                                }
+                            }
+                        }
+                        Activity::Build => {
+                            if tick.is_multiple_of(4) {
+                                sequence += 1;
+                                let packet = if placed.len() >= BUILD_KEEP {
+                                    // Creative: starting to dig breaks the block at once.
+                                    play::Serverbound::PlayerAction(play::PlayerAction {
+                                        action: 0,
+                                        pos: placed.pop_front().unwrap_or_default(),
+                                        direction: 1,
+                                        sequence,
+                                    })
+                                } else {
+                                    // Below the bot, so the block never lands inside it.
+                                    let at = [
+                                        pos[0].floor() as i32 + (random.unit() * 7.0) as i32 - 3,
+                                        pos[1].floor() as i32 - 1 - (random.unit() * 3.0) as i32,
+                                        pos[2].floor() as i32 + (random.unit() * 7.0) as i32 - 3,
+                                    ];
+                                    placed.push_back(at);
+                                    play::Serverbound::UseItemOn(play::UseItemOn {
+                                        hand: 0,
+                                        pos: at,
+                                        face: 1,
+                                        cursor: [0.5, 1.0, 0.5],
+                                        inside: false,
+                                        world_border: false,
+                                        sequence,
+                                    })
+                                };
+                                send(packet.encode());
+                            }
+                        }
+                    }
+                }
                 Behaviour::Walk => walk_step(&mut pos, &mut target, spawn, cruise, &mut random),
                 Behaviour::Fight => {
                     let near = lock(&bot.entities).nearest(pos, o.pvp, &bots);
@@ -1509,6 +1673,7 @@ fn behaviour_of(mode: &str, index: usize) -> Behaviour {
         "walk" => Behaviour::Walk,
         "explore" => Behaviour::Explore,
         "fight" => Behaviour::Fight,
+        "random" => Behaviour::Random,
         "flood-move" => Behaviour::FloodMove,
         "flood-acks" => Behaviour::FloodAcks,
         "flood-packets" => Behaviour::FloodPackets,
@@ -1561,6 +1726,19 @@ fn main() {
             handles
         })
     };
+    // A driver that cannot know the run's length in advance ends it with a `stop` line on stdin.
+    let stopped = Arc::new(AtomicBool::new(false));
+    {
+        let stopped = stopped.clone();
+        thread::spawn(move || {
+            for line in std::io::stdin().lines().map_while(Result::ok) {
+                if line.trim() == "stop" {
+                    stopped.store(true, Ordering::SeqCst);
+                    break;
+                }
+            }
+        });
+    }
     // The run lasts --seconds after the first bot is in.
     let mut previous_chunks = 0;
     let mut first = None;
@@ -1596,7 +1774,8 @@ fn main() {
             })
         );
         previous_chunks = chunks;
-        let over = lock(&until).is_some_and(|u| Instant::now() >= u);
+        let over =
+            lock(&until).is_some_and(|u| Instant::now() >= u) || stopped.load(Ordering::SeqCst);
         let all_failed = failed == o.bots;
         if over || all_failed || (first.is_none() && start.elapsed() > Duration::from_secs(120)) {
             *lock(&until) = Some(Instant::now());
@@ -2129,5 +2308,40 @@ mod tests {
         counters.bytes_out.store(56, Ordering::Relaxed);
         let _ = bot.counters.set(counters);
         assert_eq!((bot.bytes_in(), bot.bytes_out()), (1234, 56));
+    }
+
+    #[test]
+    fn a_far_teleport_is_a_new_home_and_a_pull_back_is_not() {
+        let at = [10.0, 80.0, 10.0];
+        assert!(rehomed(at, [4000.0, 320.0, -2500.0]));
+        // The second step of a spread: straight down onto the ground.
+        assert!(rehomed([4000.0, 320.0, -2500.0], [4000.0, 71.0, -2500.0]));
+        // "Moved too quickly": back to a spot a few blocks away.
+        assert!(!rehomed(at, [14.0, 80.0, 7.0]));
+    }
+
+    #[test]
+    fn random_bots_do_every_activity_and_repeat_for_a_seed() {
+        let picks = |seed| {
+            let mut random = Random(seed);
+            (0..400)
+                .map(|_| Activity::pick(&mut random))
+                .collect::<Vec<_>>()
+        };
+        let first = picks(12345);
+        assert_eq!(first, picks(12345));
+        assert_ne!(first, picks(12346));
+        for activity in [
+            Activity::Wander,
+            Activity::Travel,
+            Activity::Stand,
+            Activity::Hotbar,
+            Activity::Hunt,
+            Activity::Build,
+        ] {
+            assert!(first.iter().any(|p| p.0 == activity), "{activity:?}");
+        }
+        assert!(first.iter().all(|p| (80..320).contains(&p.1)));
+        assert_eq!(behaviour_of("random", 3), Behaviour::Random);
     }
 }
