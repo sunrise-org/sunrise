@@ -691,6 +691,24 @@ impl Workers {
             count = self.done.wait(count).unwrap();
         }
     }
+
+    #[cfg(test)]
+    fn wait_all_timeout(&self, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut count = self.count.lock().unwrap();
+        while *count > 0 {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let (next, result) = self.done.wait_timeout(count, remaining).unwrap();
+            count = next;
+            if result.timed_out() && *count > 0 {
+                return false;
+            }
+        }
+        true
+    }
 }
 
 struct WorkerGuard(Option<Arc<Workers>>);
@@ -4478,6 +4496,9 @@ mod tests {
 
         let saved_chunk = |cx: i32, last: &Arc<Section>, extra: Option<&Arc<Section>>| {
             let mut chunk = Chunk::empty(cx, 0);
+            let saved: Vec<(Option<[u8; 2048]>, Option<[u8; 2048]>)> =
+                vec![(None, None); SECTIONS + 2];
+            crate::light::light_from_saved_layers(&mut chunk, &saved, true);
             for s in &mut chunk.sections {
                 *s = s0.clone();
             }
@@ -4490,9 +4511,7 @@ mod tests {
             } else {
                 chunk.sections[SECTIONS - 1] = last.clone();
             }
-            let saved: Vec<(Option<[u8; 2048]>, Option<[u8; 2048]>)> =
-                vec![(None, None); SECTIONS + 2];
-            crate::light::light_from_saved_layers(&mut chunk, &saved, true);
+            assert!(chunk.stored_light().is_some());
             Arc::new(chunk)
         };
 
@@ -4641,7 +4660,10 @@ mod tests {
     #[test]
     fn worker_releases_neighbour_snapshots_before_bodies_returns() {
         use std::sync::{Condvar, Mutex};
+        use std::time::{Duration, Instant};
         use sunrise_world::registry::BlockStateId;
+
+        const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
 
         let pool = WarmPool::start(1).expect("local worker thread");
         let mut world = crate::world::World::new(BlockStateId(0), 0);
@@ -4657,6 +4679,7 @@ mod tests {
             world.chunks.insert((cx, 0), Arc::new(chunk));
         }
         let nbr_ptr = Arc::as_ptr(&world.chunks[&(-1, 0)].sections[1]) as usize;
+        let weak_chunk = Arc::downgrade(&world.chunks[&(-1, 0)]);
         let weak_nbr = Arc::downgrade(&world.chunks[&(-1, 0)].sections[1]);
 
         let keys = [(0, 0), (1, 0), (2, 0), (3, 0)];
@@ -4677,11 +4700,22 @@ mod tests {
         let worker_gate = gate.clone();
         job.after_worker_run = Some(Arc::new(move || {
             let (lock, cv) = &*worker_gate;
+            let deadline = Instant::now() + WAIT_TIMEOUT;
             let mut state = lock.lock().unwrap();
             state.0 = true;
             cv.notify_all();
             while !state.1 {
-                state = cv.wait(state).unwrap();
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    drop(state);
+                    panic!("timed out waiting for releaser to release paused worker gate");
+                }
+                let (next, result) = cv.wait_timeout(state, remaining).unwrap();
+                state = next;
+                if result.timed_out() && !state.1 {
+                    drop(state);
+                    panic!("timed out waiting for releaser to release paused worker gate");
+                }
             }
         }));
 
@@ -4691,30 +4725,63 @@ mod tests {
         // Wait until the worker finished `job.run()` and is paused holding `Arc<Bodies>`.
         {
             let (lock, cv) = &*gate;
+            let deadline = Instant::now() + WAIT_TIMEOUT;
             let mut state = lock.lock().unwrap();
             while !state.0 {
-                state = cv.wait(state).unwrap();
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                assert!(
+                    !remaining.is_zero(),
+                    "timed out waiting for worker to pause in after_worker_run"
+                );
+                let (next, result) = cv.wait_timeout(state, remaining).unwrap();
+                state = next;
+                assert!(
+                    !result.timed_out() || state.0,
+                    "timed out waiting for worker to pause in after_worker_run"
+                );
             }
         }
         pool.clear(Arc::as_ptr(&job).cast());
         let _ = enc.finish_bodies(&job);
         drop(job);
 
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
         let releaser_gate = gate.clone();
-        let releaser_weak = weak_nbr.clone();
-        let releaser = std::thread::spawn(move || {
-            std::thread::sleep(std::time::Duration::from_millis(10));
-            assert_eq!(releaser_weak.strong_count(), 2);
-            let (lock, cv) = &*releaser_gate;
-            let mut state = lock.lock().unwrap();
-            state.1 = true;
-            cv.notify_all();
+        let releaser_chunk = weak_chunk.clone();
+        let releaser_section = weak_nbr.clone();
+        std::thread::spawn(move || {
+            struct Release<'a>(&'a (Mutex<(bool, bool)>, Condvar));
+            impl Drop for Release<'_> {
+                fn drop(&mut self) {
+                    let (lock, cv) = self.0;
+                    let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    state.1 = true;
+                    cv.notify_all();
+                }
+            }
+            let _release = Release(&releaser_gate);
+            std::thread::sleep(Duration::from_millis(10));
+            let counts = (
+                releaser_chunk.strong_count(),
+                releaser_section.strong_count(),
+            );
+            drop(_release);
+            let _ = done_tx.send(counts);
         });
-        workers.wait_all();
-        releaser.join().unwrap();
+        assert!(
+            workers.wait_all_timeout(WAIT_TIMEOUT),
+            "timed out waiting for WarmPool worker to finish and release snapshots"
+        );
+        let (chunk_refs_while_paused, section_refs_while_paused) = done_rx
+            .recv_timeout(WAIT_TIMEOUT)
+            .expect("timed out waiting for releaser thread to report strong counts");
+        assert_eq!(chunk_refs_while_paused, 2);
+        assert_eq!(section_refs_while_paused, 1);
+        assert_eq!(weak_chunk.strong_count(), 1);
 
         assert!(enc.cache.lock().unwrap().contains_key(&nbr_ptr));
         world.unload_chunk((-1, 0)).unwrap();
+        assert_eq!(weak_chunk.strong_count(), 0);
         assert_eq!(weak_nbr.strong_count(), 0);
 
         // Next sweep must retain live entries and drop the 4 unloaded neighbour-only sections.
