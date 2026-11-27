@@ -44,7 +44,7 @@ pub struct ThrownTrident {
     pub no_gravity: bool,
     /// `Entity.onGround`: moved by `setPos`, it keeps the one it was loaded with.
     pub ground: sunrise_world::ground_support::GroundState,
-    /// `Entity.remainingFireTicks`; on clients, the synchronized on-fire flag.
+    /// `Entity.remainingFireTicks`, not the synchronized on-fire flag.
     pub fire_ticks: i32,
     pub random: sunrise_core::random::LegacyRandom,
     /// `Entity.fallDistance`: kept as loaded; water resets it.

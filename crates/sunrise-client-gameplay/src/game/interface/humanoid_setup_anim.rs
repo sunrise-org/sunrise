@@ -10,6 +10,13 @@ impl render::RenderDataSource for crate::game::ClientGame<'_> {
         }
     }
 
+    fn synced_flags(&self, id: u32) -> sunrise_client::mobs::cem_anim::SyncedFlags {
+        sunrise_client::mobs::cem_anim::SyncedFlags {
+            on_fire: self.tracked_entity_on_fire(id),
+            glowing: self.remote_glowing(id),
+        }
+    }
+
     fn equipment_layers(&self, mob: &Mob) -> Vec<render::Layer> {
         self.mob_equipment_layers(
             mob,
@@ -69,6 +76,10 @@ pub(in crate::game) struct HiddenLayersData<'a, 'game> {
 impl render::RenderDataSource for HiddenLayersData<'_, '_> {
     fn mob_tables(&self) -> sunrise_client::mobs_render::ClientMobRender<'_> {
         render::RenderDataSource::mob_tables(self.game)
+    }
+
+    fn synced_flags(&self, id: u32) -> sunrise_client::mobs::cem_anim::SyncedFlags {
+        render::RenderDataSource::synced_flags(self.game, id)
     }
 
     fn equipment_layers(&self, mob: &Mob) -> Vec<render::Layer> {

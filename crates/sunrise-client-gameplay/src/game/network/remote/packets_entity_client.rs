@@ -331,23 +331,31 @@ impl crate::game::ClientGame<'_> {
         let single = std::slice::from_ref(entry);
         let size_key = self.synched_size_key(id as u32);
         if let Some(r) = self.client.remote.as_mut() {
-            if let (0, Value::Byte(flags)) = (index, value) {
-                if let Some(t) = r.entities.get_mut(&id) {
-                    t.on_fire = flags & 1 != 0;
+            match (index, value) {
+                (0, Value::Byte(flags)) => {
+                    if let Some(t) = r.entities.get_mut(&id) {
+                        t.on_fire = flags & 1 != 0;
+                    }
+                    if flags & 0x40 != 0 {
+                        r.glowing.insert(id);
+                    } else {
+                        r.glowing.remove(&id);
+                    }
                 }
-                if flags & 0x40 != 0 {
-                    r.glowing.insert(id);
-                } else {
-                    r.glowing.remove(&id);
+                (4, Value::Bool(silent)) => {
+                    if id == r.entity_id {
+                        r.local_entity_silent = *silent;
+                    }
+                    if let Some(t) = r.entities.get_mut(&id) {
+                        t.silent = *silent;
+                    }
                 }
-            }
-            if let (4, Value::Bool(silent)) = (index, value) {
-                if id == r.entity_id {
-                    r.local_entity_silent = *silent;
+                (5, Value::Bool(no_gravity)) => {
+                    if let Some(t) = r.entities.get_mut(&id) {
+                        t.no_gravity = *no_gravity;
+                    }
                 }
-                if let Some(t) = r.entities.get_mut(&id) {
-                    t.silent = *silent;
-                }
+                _ => {}
             }
             // Entity.DATA_CUSTOM_NAME and DATA_CUSTOM_NAME_VISIBLE of a general row.
             if let Some(row) = r.general.rows.get_mut(&id) {
@@ -355,54 +363,20 @@ impl crate::game::ClientGame<'_> {
                     (2, Value::OptText(name)) => {
                         row.custom_name = name.as_ref().map(sunrise_client::entity_nbt::name_text);
                     }
+                    (2, Value::Text(name)) => {
+                        row.custom_name = Some(sunrise_client::entity_nbt::name_text(name));
+                    }
                     (3, Value::Bool(visible)) => row.custom_name_visible = *visible,
                     (5, Value::Bool(no_gravity)) => row.no_gravity = *no_gravity,
                     _ => {}
                 }
             }
         }
-        // Entity.DATA_SHARED_FLAGS_ID, DATA_CUSTOM_NAME and
-        // DATA_CUSTOM_NAME_VISIBLE: server NPCs and holograms rely on
-        // these instead of saved NBT.
-        if let Some(m) = self
-            .common
-            .mob_index
-            .get_mut(&mut self.common.mobs, id as u32)
+        // An item body may not exist until DATA_ITEM arrives; the tracker already has the flag.
+        if let (5, Value::Bool(no_gravity)) = (index, value)
+            && let Some(item) = self.common.dropped.iter_mut().find(|d| d.id == id as u32)
         {
-            match (index, value) {
-                (0, Value::Byte(flags)) => {
-                    m.invisible = flags & 0x20 != 0;
-                    m.glowing = flags & 0x40 != 0;
-                }
-                (2, Value::OptText(name)) => {
-                    let text = name.as_ref().map(sunrise_sim::entity_nbt::name_text);
-                    m.custom_name = text.as_ref().map(sunrise_game_data::text::Text::plain);
-                    m.custom_name_text = text;
-                }
-                (2, Value::Text(name)) => {
-                    let text = sunrise_sim::entity_nbt::name_text(name);
-                    m.custom_name = Some(text.plain());
-                    m.custom_name_text = Some(text);
-                }
-                (3, Value::Bool(visible)) => m.name_visible = *visible,
-                // Entity.DATA_NO_GRAVITY: `isNoGravity` in the client's own travel.
-                (5, Value::Bool(no_gravity)) => m.no_gravity = *no_gravity,
-                _ => {}
-            }
-        }
-        // Entity.DATA_NO_GRAVITY of an item, which may come before its stack
-        // (`DATA_ITEM`, 8) and so before the item is made.
-        if let (5, Value::Bool(no_gravity)) = (index, value) {
-            if let Some(item) = self.common.dropped.iter_mut().find(|d| d.id == id as u32) {
-                item.no_gravity = *no_gravity;
-            } else if let Some(pending) = self
-                .client
-                .remote
-                .as_mut()
-                .and_then(|r| r.pending_items.get_mut(&id))
-            {
-                pending.no_gravity = *no_gravity;
-            }
+            item.no_gravity = *no_gravity;
         }
         self.remote_mob_data(id, single);
         if let Some(m) = self
@@ -425,8 +399,6 @@ impl crate::game::ClientGame<'_> {
             .get_mut(&mut self.common.mobs, id as u32)
         {
             match (index, value) {
-                // Entity.DATA_TICKS_FROZEN: isFullyFrozen shakes it.
-                (7, Value::Int(ticks)) => m.ticks_frozen = *ticks,
                 // Strider.DATA_SUFFOCATING (after AgeableMob's two
                 // and DATA_BOOST_TIME): a cold strider shakes.
                 (19, Value::Bool(cold)) if m.species() == sunrise_sim::mobs::Species::Strider => {
@@ -649,12 +621,16 @@ impl crate::game::ClientGame<'_> {
         {
             self.remote_item_data(id, stack);
         }
-        // ExperienceOrb.DATA_VALUE (the icon's size).
-        if *index == 8
-            && let Value::Int(v) = value
-            && let Some(o) = self.common.orbs.iter_mut().find(|o| o.id == id as u32)
+        if matches!(*index, 1 | 5 | 8)
+            && let Some(orb) = self.common.orbs.iter_mut().find(|orb| orb.id == id as u32)
         {
-            o.value = *v;
+            match (index, value) {
+                (1, Value::Int(air)) => orb.air = *air,
+                (5, Value::Bool(no_gravity)) => orb.no_gravity = *no_gravity,
+                // ExperienceOrb.DATA_VALUE (the icon's size).
+                (8, Value::Int(value)) => orb.value = *value,
+                _ => {}
+            }
         }
         self.remote_object_data(id, single);
         self.remote_projectile_data(id, single);
@@ -805,3 +781,72 @@ use sunrise_gameplay_common::game::side_ops::player::PlayerSideGameExt as _;
 use sunrise_gameplay_common::game::block_props::BlockPropsGameExt1 as _;
 
 use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
+
+#[cfg(all(test, feature = "client"))]
+mod inherited_data_tests {
+    use super::*;
+    use crate::game::client_side::{remote_mob_data, remote_objects::apply_stand_data};
+    use sunrise_core::nbt::Tag;
+    use sunrise_protocol::{entity_data::serializer as s, registry::Builtin};
+    use sunrise_sim::{entities::ArmorStand, entity_nbt};
+
+    fn inherited_values(air: i32) -> [(u8, i32, Value); 5] {
+        [
+            (0, s::BYTE, Value::Byte(0x61)), // On fire, invisible and glowing.
+            (1, s::INT, Value::Int(air)),
+            (
+                2,
+                s::OPTIONAL_COMPONENT,
+                Value::OptText(Some(Tag::String("Replica".into()))),
+            ),
+            (3, s::BOOLEAN, Value::Bool(true)),
+            (5, s::BOOLEAN, Value::Bool(true)),
+        ]
+    }
+
+    #[test]
+    fn stand_metadata_saves_inherited_values_but_not_render_flags() {
+        let mut stand = ArmorStand::new(15, Vec3::ZERO, 0.0);
+        for (index, _, value) in inherited_values(150) {
+            apply_stand_data(&mut stand, index, &value);
+        }
+        let saved = entity_nbt::armor_stand_to_nbt(&stand, [0; 4], None, &Default::default());
+        assert_eq!(saved.get("NoGravity"), Some(&Tag::Byte(1)));
+        assert_eq!(saved.get("Air"), Some(&Tag::Short(150)));
+        assert_eq!(
+            entity_nbt::name_text(saved.get("CustomName").unwrap()).plain(),
+            "Replica"
+        );
+        assert_eq!(saved.get("CustomNameVisible"), Some(&Tag::Byte(1)));
+        assert_eq!(saved.get("Invisible"), Some(&Tag::Byte(1)));
+        assert_eq!(saved.get("Fire"), Some(&Tag::Short(0)));
+        assert!(saved.get("Glowing").is_none());
+        assert!(stand.is_on_fire_with_synced(true));
+        assert!(!stand.is_on_fire_with_synced(false));
+    }
+
+    #[test]
+    fn mob_metadata_saves_inherited_values_but_not_render_flags() {
+        let mut mob = remote_mob_data::tests::fixture_mob("minecraft:zombie");
+        let mut values = Vec::from(inherited_values(120));
+        values.extend([
+            (4, s::BOOLEAN, Value::Bool(true)),
+            (7, s::INT, Value::Int(25)),
+        ]);
+        remote_mob_data::apply(&mut mob, &values, &Builtin::default(), 99);
+        let saved = entity_nbt::mob_to_nbt(&mob, [0; 4], None, None, |_| None, &Default::default());
+        assert_eq!(saved.get("Air"), Some(&Tag::Short(120)));
+        assert_eq!(
+            entity_nbt::name_text(saved.get("CustomName").unwrap()).plain(),
+            "Replica"
+        );
+        assert_eq!(saved.get("CustomNameVisible"), Some(&Tag::Byte(1)));
+        assert_eq!(saved.get("Silent"), Some(&Tag::Byte(1)));
+        assert_eq!(saved.get("NoGravity"), Some(&Tag::Byte(1)));
+        assert_eq!(saved.get("TicksFrozen"), Some(&Tag::Int(25)));
+        assert_eq!(saved.get("Fire"), Some(&Tag::Short(0)));
+        assert!(saved.get("Glowing").is_none());
+        assert!(mob.is_on_fire_with_synced(true));
+        assert!(!mob.is_on_fire_with_synced(false));
+    }
+}
