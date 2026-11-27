@@ -9,6 +9,7 @@ const GLUE: Glue = Glue {
     finish: "",
     vertex_id: "int(gl_VertexIndex)",
     fragment_finish: None,
+    fragment_rewrite: FragmentRewrite::NONE,
     interface: LIMITS,
 };
 

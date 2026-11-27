@@ -581,6 +581,7 @@ fn program(vsh: &str, files: &[(&str, &str)]) -> Result<Translated, Vec<Error>> 
         finish: "",
         vertex_id: "int(gl_VertexIndex)",
         fragment_finish: None,
+        fragment_rewrite: FragmentRewrite::NONE,
         interface: InterfaceLimits::WGPU_DEFAULT,
     };
     let read = |id: &str| -> Result<Option<String>, String> {

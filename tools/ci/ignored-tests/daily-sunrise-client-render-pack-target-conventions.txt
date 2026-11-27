@@ -1,0 +1,4 @@
+sunrise-client-render gfx::pack_post::mod_stage_tests::pack_target_culled_mesh_keeps_same_visible_faces_and_front_facing lib daily gpu
+sunrise-client-render gfx::pack_post::mod_stage_tests::pack_target_frag_coord_and_derivative_normal_match_plain_route lib daily gpu
+sunrise-client-render gfx::pack_post::mod_stage_tests::pack_target_fullscreen_composite_frag_depth_occludes_entities_equally lib daily gpu
+sunrise-client-render gfx::pack_post::mod_stage_tests::pack_target_shader_without_frag_depth_skips_depth_write_finish lib daily gpu

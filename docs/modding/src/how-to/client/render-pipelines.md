@@ -361,7 +361,14 @@ Fill the levels from the CPU with `update_dynamic_texture_region(id, mip_level, 
 
 When an Iris/OptiFine shader pack is active and owns terrain rendering, a mod pipeline without a
 pack override draws its own GLSL program into the pack's world targets before the pack's
-composite chain runs, so composite and `final` passes shade it alongside the world.
+composite chain runs, so composite and `final` passes shade it alongside the world. Author those
+shaders in Sunrise's one world convention (screen rows, reversed-Z `[1..0]`, CCW front faces,
+unmodified `ProjMat`): when drawing into a pack's standard-Z, GL-rows targets, the engine adapts
+clip position (`gl_Position`), winding (`FrontFace::Cw`, keeping `gl_FrontFacing` unchanged),
+`gl_FragDepth` (only when the shader writes it, leaving early depth tests intact when it does
+not), `gl_FragCoord`, and `dFdy`/`dFdyFine`/`dFdyCoarse` automatically. Pack-linked preludes
+running inside a pack's own shaders are not rewritten and keep the pack's standard-Z, GL-rows
+conventions (see below).
 
 To let an active Iris/OptiFine shader pack shade a pipeline's geometry with its own program, declare
 its `PipelineGeometryClass` on registration via `.geometry_class(...)`:
