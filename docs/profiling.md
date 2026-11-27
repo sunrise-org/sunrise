@@ -1,5 +1,30 @@
 # Find the next bottleneck
 
+## Sunrise startup and frame timing
+
+Run a benchmark capture to measure resource loading, world opening, and the first rendered frames in one file:
+
+```sh
+sunrise-client --benchmark village --profile --profile-startup --profile-threads all
+sunrise-perf query marks FILE
+sunrise-perf query frames FILE --side client --worst 5
+```
+
+The frame rows give `start_t` and `t` in seconds since capture start (`t` is the end), and `wall_ms` for the full frame interval. Work before the first frame shows in the startup marks and call samples. On Linux, `--profile-threads all` includes `Render submit` when the renderer uses its submit thread.
+
+Use a frame's interval or the load's marks to select function samples. The query rounds out to the sampler's one-second blocks for a benchmark capture and reports the actual bounds in `selection`.
+
+```sh
+sunrise-perf query frames '/translate/' FILE --side client --total \
+    --from mark:benchmark.world.begin --to mark:benchmark.world.loaded
+sunrise-perf query frames '/submit/' FILE --side client --thread 'Render submit' --total \
+    --from 5 --to 10
+```
+
+See [Benchmark](benchmark.md) for report metrics and [Control command reference](sunrise-ctl-commands.md) for captures started in a running game.
+
+## Java comparison runs
+
 For Java comparison runs, a private Java Flight Recorder capture helps identify
 the code doing work or allocating objects. Use
 native Java 25, with `jcmd` and `java` from a JDK. Keep normal benchmark runs separate

@@ -516,7 +516,7 @@ Notes on fields:
 | Field | Dedicated `sunrise-report` | Client `profile client` / `/profiler` | Single player, both sides | Remote server via `profile server` | `--benchmark --profile` |
 |---|---|---|---|---|---|
 | start, history, slow, health, counters, marks, warnings, stop | server | client | both | server (on the server and in the client's file) | client |
-| span_blocks, spans | server | client | both | server | client |
+| span_blocks, spans | server | client, with individual frame timings | both | server | client, with individual frame timings |
 | samples | by default where the sampler exists (Linux today); `--no-samples` | by default | both | by default | with `--profile` |
 | gpu | — | with `--gpu` (on when F3 pass timing is on) | client | — | yes |
 | net | yes | its own bytes | server | server | — |
@@ -592,6 +592,13 @@ sunrise-ctl profile mark NAME
   alive together under one name get `#2`, `#3`). The process has one timeline: a second capture asking for it
   records without. A thread keeps at most 262144 spans between two drains (one second); a thread busier than that drops
   the rest silently, so a very dense second can be incomplete. A cap warning carries `[seconds recorded, bytes written]`.
+- **Benchmark:** `--benchmark SCENE --profile` starts a client capture once the benchmark world loads and
+  embeds the report when it stops. Add `--profile-startup` to open the same capture before loading resources.
+  The startup capture marks resource loading and world open. Both modes mark benchmark phases and record
+  client frame intervals in `span_blocks[].frames`. Time before the first rendered frame is part of the
+  capture clock and sample data. `--profile-threads main|all` defaults to `main` (the render thread).
+  On Linux, `all` also samples opted-in threads that start later, including `Render submit` when enabled.
+  The capture's 600-second cap is measured from its own start.
 - **Dedicated console:** `sunrise-report [SECONDS|stop|status] [--no-samples]` and `sunrise-server report` capture the
   server side.
 - The `profile` row in `sunrise-ctl` stays a trigger; it has no reading subcommands.
@@ -784,7 +791,8 @@ sunrise-perf mcp                                                       §8
 | `callees` | `ID`, `--depth N` | children of a function, merged | `s1_children.py` |
 | `split` | `ID`, `--by span\|entity\|block\|chunk\|dim\|thread\|state\|slow` | that node's or span's weight split by one context | the viewer's detail panel |
 | `group` | `--by span\|entity\|block\|chunk\|dim\|thread` | total sampled weight per context value | group tables, mob costs |
-| `frames` | `NAME…` (id, exact short name or `/regex/`) | inclusive and self per name; one column per capture | `s1_breakdown.py`, `s1_table.py`, `s3_table.py` |
+| `frames` | no names; `--side client`, `--worst N`, `--over MS` | individual client frame intervals and durations from one capture; chronological unless ranked | |
+| `frames` | `NAME…` (id, exact short name or `/regex/`), `--total` | inclusive and self per name; one column per capture; total sample weight with `--total` | `s1_breakdown.py`, `s1_table.py`, `s3_table.py` |
 | `spans` | `--names a,b`, `--slow` | per span: ms/tick, cpu, waited, seen; one column per capture | `slowticks.py`, `spikes.py`, `s1a_spans.py` |
 | `ticks` | `--worst N`, `--over MS` | worst ticks/frames with span trees, from `spans.worst`, `slow_history` and `slow` | worst-ticks lines |
 | `tick` | `k:ID` | one tick's span tree, and `hot`: the top 30 functions of the samples in the 1 s blocks overlapping the tick (slow samples only when the tick is slow), with `samples_from`/`samples_to` for the window used; a second's worth, not the tick's own samples | |
@@ -793,6 +801,16 @@ sunrise-perf mcp                                                       §8
 | `memory` | `--diff [LABEL_A LABEL_B]`, `--min-mb X` | a snapshot, or spec D's diff of two (`grew_mb`, `shrank_mb`, `counts`, `only_in_a/b`) | spec D's `memory-diff` |
 | `memory_labels` (`memory-labels`) | | every snapshot as `{label, t, side, rows}` in time order | |
 | `counters` | | every counter as `{id, name, unit, kind, labels, side, samples}` | |
+
+Without function names, `frames` defaults to the client side and lists each frame by `k:` id,
+`start_t` and `t` (start and end in seconds since capture start), and `wall_ms`. `--from` and
+`--to` filter on the end time, and `--limit` controls the number of rows when `--worst` is omitted.
+Older captures lack `span_blocks[].frames` and remain readable. For those captures, `query ticks --side client`
+shows the retained worst and slow frames.
+
+With function names, `frames --total` gives estimated inclusive and self milliseconds (bytes for
+allocation samples) over the selected sample blocks. Benchmark captures use one-second blocks.
+The reply's `selection.from` and `selection.to` show the bounds used.
 
 Filters, common to the sample-based ops:
 
@@ -828,7 +846,9 @@ Row shapes:
 | `hot` | `{"id": "f:2n7xq4ka", "name": "Waypoints::tick_level", "full": "sunrise_client_lib::lan::waypoints::Waypoints::tick_level", "file": "waypoints.rs", "line": 211, "self": 6.10, "total": 12.2, "self_pct": 5.9, "total_pct": 11.7, "samples": 3513}` |
 | `tree`, `callers`, `callees` | `{"id": "p:…", "function": "f:…", "name": "…", "total": 1.2, "self": 0.1, "pct": 1.1, "samples": 690, "children": [ … ], "folded": {"rows": 17, "total": 0.08}}` |
 | `split`, `group` | `{"by": "entity", "key": "e:zombie", "label": "zombie", "value": 3.1, "pct": 21.0, "samples": 1786}` |
-| `frames`, `spans` | `{"id": "s:tick_lan", "name": "tick_lan", "values": [41.3, 54.1], "cpu": [40.0, 52.2], "waited": [1.3, 1.9]}`, one value per capture |
+| `frames` | `{"id": "k:12", "start_t": 1.625, "t": 2.875, "wall_ms": 1250.0}` |
+| `frames NAME…` | `{"id": "f:2n7xq4ka", "name": "Waypoints::tick_level", "full": "waypoints::Waypoints::tick_level", "values": [41.3, 54.1], "self": [1.2, 1.7], "samples": [25, 30]}`, one value per capture |
+| `spans` | `{"id": "s:tick_lan", "name": "tick_lan", "values": [41.3, 54.1], "cpu": [40.0, 52.2], "waited": [1.3, 1.9]}`, one value per capture |
 | `ticks` | `{"id": "k:48812", "t": 71.35, "wall_ms": 312.4, "cpu_ms": 290.1, "spans": [["tick", 0, 312.4, 290.1]]}` |
 | `series` | `{"field": "h:mspt_p95", "step_s": 30, "t": [0, 30, 60, 90], "values": [130.2, 141.0, 152.3, 140.8]}` |
 | `diff` rows | `{"id": "s:tick_lan", "a": 54.1, "b": 41.3, "diff": -12.8, "diff_pct": -23.7, "ci95": [-14.0, -11.6], "confidence": 0.95, "blocks": [24, 24], "verdict": "faster"}` |
