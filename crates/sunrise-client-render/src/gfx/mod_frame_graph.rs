@@ -831,6 +831,23 @@ impl FrameGraphRunner {
             .is_some_and(|v| !v.is_empty())
     }
 
+    /// Whether any kept pass scheduled after world drawing starts declares a read of
+    /// [`FrameTarget::MainDepth`], so world render passes before it must store depth instead
+    /// of discarding it.
+    pub fn reads_world_depth(&self) -> bool {
+        self.compiled.by_slot.iter().any(|(slot, positions)| {
+            matches!(
+                slot,
+                FrameGraphSlot::AfterStage(stage) if *stage != RenderLevelStage::AfterSky
+            ) && positions.iter().any(|&order_pos| {
+                let pass_idx = self.compiled.order[order_pos];
+                self.recorded.passes[pass_idx]
+                    .reads
+                    .contains(&FrameTarget::MainDepth)
+            })
+        })
+    }
+
     /// Execute all kept passes scheduled for `slot` in topological order.
     #[allow(clippy::too_many_arguments)]
     pub fn execute_slot(
@@ -1212,6 +1229,84 @@ mod tests {
             graph.validate_new_pass(&builtin_write, false),
             Err(FrameGraphError::UnsupportedTarget(FrameTarget::MainColor))
         );
+    }
+
+    #[test]
+    fn only_kept_readers_after_world_drawing_keep_depth() {
+        let prepare = |graph: RecordedFrameGraph| {
+            let mut warned = std::collections::HashSet::new();
+            FrameGraphRunner::prepare(graph, false, &mut warned)
+        };
+
+        // An unrelated pass after opaque blocks does not read depth.
+        let mut graph = RecordedFrameGraph::default();
+        push(
+            &mut graph,
+            FramePassDescriptor::new("after_opaque_no_depth", FrameTarget::Mod(rt(1, 0)))
+                .after_stage(RenderLevelStage::AfterOpaqueBlocks),
+        );
+        assert!(!prepare(graph).unwrap().reads_world_depth());
+
+        // A culled pass after opaque blocks that reads depth does not force a store.
+        let mut graph = RecordedFrameGraph::default();
+        let dead = graph.add_transient(rgba8_desc([16, 16]));
+        push(
+            &mut graph,
+            FramePassDescriptor::new("culled_reader", FrameTarget::Transient(dead))
+                .after_stage(RenderLevelStage::AfterOpaqueBlocks)
+                .reads(FrameTarget::MainDepth),
+        );
+        assert!(prepare(graph).is_none());
+
+        // Kept readers before world drawing starts (BeforeWorld and AfterSky) do not keep
+        // the world pass's depth.
+        let mut graph = RecordedFrameGraph::default();
+        push(
+            &mut graph,
+            FramePassDescriptor::new("before_world_reader", FrameTarget::Mod(rt(1, 0)))
+                .reads(FrameTarget::MainDepth),
+        );
+        push(
+            &mut graph,
+            FramePassDescriptor::new("after_sky_reader", FrameTarget::Mod(rt(2, 1)))
+                .after_stage(RenderLevelStage::AfterSky)
+                .reads(FrameTarget::MainDepth),
+        );
+        assert!(!prepare(graph).unwrap().reads_world_depth());
+
+        // A kept render pass after opaque blocks that declares `MainDepth` keeps depth.
+        let mut graph = RecordedFrameGraph::default();
+        push(
+            &mut graph,
+            FramePassDescriptor::new("after_opaque_reader", FrameTarget::Mod(rt(1, 0)))
+                .after_stage(RenderLevelStage::AfterOpaqueBlocks)
+                .reads(FrameTarget::MainDepth),
+        );
+        assert!(prepare(graph).unwrap().reads_world_depth());
+
+        // A kept compute pass after AfterLevel that declares `MainDepth` keeps depth.
+        let mut graph = RecordedFrameGraph::default();
+        let compute = mod_api::ComputePassDescriptor::new("after_level_compute")
+            .after_stage(RenderLevelStage::AfterLevel)
+            .reads(FrameTarget::MainDepth);
+        graph.validate_new_compute_pass(&compute, false).unwrap();
+        graph.push_pass(RecordedFramePass::from_compute_descriptor(compute, None));
+        assert!(prepare(graph).unwrap().reads_world_depth());
+
+        // A reader ordered after world drawing transitively via another pass keeps depth.
+        let mut graph = RecordedFrameGraph::default();
+        let anchor = push(
+            &mut graph,
+            FramePassDescriptor::new("after_opaque", FrameTarget::Mod(rt(1, 0)))
+                .after_stage(RenderLevelStage::AfterOpaqueBlocks),
+        );
+        push(
+            &mut graph,
+            FramePassDescriptor::new("transitive_reader", FrameTarget::Mod(rt(2, 1)))
+                .after_pass(anchor)
+                .reads(FrameTarget::MainDepth),
+        );
+        assert!(prepare(graph).unwrap().reads_world_depth());
     }
 
     /// The first texel of mip `level` of `texture`, read back after `enc`'s commands.

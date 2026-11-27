@@ -5433,6 +5433,243 @@ void main() {
         });
     }
 
+    struct DepthRetentionProbe(std::sync::Arc<Mutex<Option<mod_api::RenderTargetRef>>>);
+
+    #[mod_api::__subscriptions]
+    impl Hooks for DepthRetentionProbe {
+        fn register_render_pipelines(
+            &self,
+            _: &mod_api::RegistrationContext,
+            event: &mut mod_api::RegisterRenderPipelinesEvent<'_>,
+        ) {
+            let shader = Identifier::parse("depth_retention:sample").unwrap();
+            let layout = mod_api::BindGroupLayout::builder()
+                .entry(mod_api::BindEntry::new(
+                    "OutImage",
+                    mod_api::BindingKind::StorageImage {
+                        access: mod_api::StorageImageAccess::WriteOnly,
+                    },
+                ))
+                .sampler(
+                    "DepthTex",
+                    mod_api::Sampler::new(
+                        mod_api::SamplerFilter::Nearest,
+                        mod_api::SamplerAddress::ClampToEdge,
+                    ),
+                )
+                .build()
+                .unwrap();
+            event.compute_pipeline(
+                mod_api::ComputePipeline::builder(shader.clone(), shader)
+                    .bind_group_layout(layout)
+                    .build(),
+            );
+        }
+
+        fn frame_graph_setup(
+            &self,
+            host: &dyn ClientHost,
+            event: &mut mod_api::FrameGraphSetupEvent<'_>,
+        ) {
+            let target = *self.0.lock().unwrap().get_or_insert_with(|| {
+                host.create_render_target(
+                    &mod_api::RenderTargetDescriptor::rgba8(
+                        [1, 1],
+                        mod_api::RenderTargetDepth::None,
+                    )
+                    .storage(mod_api::StorageImageAccess::WriteOnly),
+                )
+                .unwrap()
+            });
+            let pipeline = host
+                .render_assets()
+                .compute_pipeline(&Identifier::parse("depth_retention:sample").unwrap())
+                .unwrap();
+            event
+                .graph
+                .add_compute_pass(
+                    mod_api::ComputePassDescriptor::new("sample opaque terrain depth")
+                        .after_stage(RenderLevelStage::AfterOpaqueBlocks)
+                        .reads(mod_api::FrameTarget::MainDepth)
+                        .writes(mod_api::FrameTarget::Mod(target)),
+                    &mut |node| {
+                        let bindings = mod_api::DrawBindings::default()
+                            .storage_image(
+                                "OutImage",
+                                mod_api::StorageImageBinding::new(target, 0, 0),
+                            )
+                            .texture("DepthTex", mod_api::TextureSource::WorldDepth);
+                        node.dispatch(pipeline, &bindings, [1, 1, 1]).unwrap();
+                    },
+                )
+                .unwrap();
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn frame_graph_compute_reads_rendered_opaque_depth() {
+        use super::super::native_entity_refs::tests::{test_window, with_client_game};
+        use crate::game::loading_window::{loading_frame, loading_renderer};
+        use mod_api::__private::{game::RegistrationContextNew, take_hook_panics};
+        use std::sync::Arc;
+        use sunrise_client::mesher::{SectionMesh, TerrainVertex};
+        use sunrise_client_render::{assets::RenderAssets, graphics::GraphicsApi};
+        use sunrise_gameplay_common::game::{Screen, test_fixtures::run_fresh_cases_with_env};
+
+        // One fresh mod registry and no cull/visibility pass that could force a store first.
+        if run_fresh_cases_with_env(
+            "game::client_side::native_custom_geometry::tests::frame_graph_compute_reads_rendered_opaque_depth",
+            "SUNRISE_FRAME_GRAPH_DEPTH_STORE_CHILD",
+            &["run"],
+            1,
+            &[("SUNRISE_GPU_CULL", "0"), ("SUNRISE_VISBUFFER", "0")],
+        ) {
+            return;
+        }
+        with_client_game(|game| {
+            let (_event_loop, window) = test_window([64, 64]);
+            // Default graphics, a white terrain sprite, no pack, and native resolution.
+            let mut renderer =
+                loading_renderer(window, true, None, None, None, GraphicsApi::Vulkan).unwrap();
+            renderer.set_section_cull(false).unwrap();
+            eprintln!("adapter: {:?}", renderer.info);
+            game.set_renderer(Box::new(renderer));
+            game.client.title.0 = None;
+            game.client.screen = Screen::Playing;
+            assert!(!sunrise_client_render::render_slots::needs().world_depth);
+
+            let probe = Arc::new(Mutex::new(None));
+            mod_platform::__private::install(
+                vec![ModEntry::new(
+                    "depth_retention",
+                    Box::new(DepthRetentionProbe(probe.clone())),
+                )]
+                .into(),
+            );
+            let _ = take_hook_panics();
+            let mut compute = Vec::new();
+            sunrise_gameplay_common::game::native_hooks::native_register_render_pipelines(
+                &mod_api::RegistrationContext::new(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut compute,
+            );
+            sunrise_client_render::mod_compute::register(compute).unwrap();
+            let shaders = tempfile::tempdir().unwrap();
+            let folder = shaders
+                .path()
+                .join("assets/depth_retention/shaders/compute");
+            std::fs::create_dir_all(&folder).unwrap();
+            std::fs::write(
+                folder.join("sample.csh"),
+                "#version 450
+layout(local_size_x = 1) in;
+layout(rgba8) writeonly uniform image2D OutImage;
+uniform sampler2D DepthTex;
+void main() {
+    float depth = textureLod(DepthTex, vec2(0.5), 0.0).r;
+    imageStore(OutImage, ivec2(0), vec4(depth, 0.0, 0.0, 1.0));
+}
+",
+            )
+            .unwrap();
+            let mut assets = RenderAssets::unpublished();
+            assets.mod_pipelines = sunrise_client_render::mod_pipelines::Pipelines::load(
+                &sunrise_assets::resource_source::ResourceSource::directory(
+                    shaders.path().to_owned(),
+                ),
+                7,
+            )
+            .unwrap();
+            let mut renderer = game.client.renderer.0.take().unwrap();
+            renderer
+                .build_mod_pipelines(&assets.mod_pipelines, &|_| None)
+                .unwrap();
+            game.client.client_pack.render = Arc::new(assets);
+
+            // Face -Z toward the camera. A white opaque wall fills the center of the frame at
+            // view-space z = -2 (distance 2 blocks ahead of the camera looking along +Z).
+            let mut wall = SectionMesh::default();
+            for (pos, uv) in [[0., 0., 4.], [0., 16., 4.], [16., 16., 4.], [16., 0., 4.]]
+                .into_iter()
+                .zip([[0., 1.], [0., 0.], [1., 0.], [1., 1.]])
+            {
+                wall.solid
+                    .push(TerrainVertex::new(pos, uv, 0, u32::MAX, 0xf0f0));
+            }
+            wall.sort_solid();
+            renderer.upload((0, 10, 0), &wall); // Section starts at y = -64 + 10 * 16 = 96.
+            let hud = sunrise_client::hud::HudBatch::scratch([
+                renderer.config.width,
+                renderer.config.height,
+            ]);
+            let mut frame = loading_frame(&hud);
+            frame.title = false;
+            frame.camera = DVec3::new(8.0, 104.0, 2.0);
+            frame.eye = frame.camera;
+            frame.pitch = 0.0;
+            frame.eye_rotation = [0.0, 0.0];
+            let camera = test_camera(
+                frame.camera.to_array(),
+                sunrise_client::camera::view_rotation_matrix(0.0, 0.0).0,
+            );
+            let mut draw = WorldGeometry::default();
+            draw.reset(
+                camera.position,
+                Mat4::from_cols_array(&camera.view),
+                [0.0; 2],
+            );
+            let mut hooks = GameWorldStageDriver::new(game, &camera, 0.0, &mut draw);
+            assert!(renderer.render(&frame, Some(&mut hooks)).unwrap());
+            drop(hooks);
+            renderer.wait_submissions();
+            let panics = take_hook_panics();
+            assert!(panics.is_empty(), "{panics:?}");
+
+            let target = probe.lock().unwrap().expect("the live frame hook ran");
+            let (_, view, _) = renderer
+                .mod_gpu()
+                .resolve_mod_render_target_color(Some("depth_retention"), target, 0)
+                .unwrap();
+            let readback = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("sampled opaque depth readback"),
+                size: 256,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = renderer.device.create_command_encoder(&Default::default());
+            encoder.copy_texture_to_buffer(
+                view.texture().as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(256),
+                        rows_per_image: None,
+                    },
+                },
+                wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+            );
+            renderer.queue.submit([encoder.finish()]);
+            let slice = readback.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |result| result.unwrap());
+            renderer
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            // Reversed-Z at 2 blocks with near 0.05 and far 1000 is ~0.02495: red = 6 in RGBA8.
+            // Discard gives red = 0 even though the compute dispatch still writes alpha = 255.
+            assert_eq!(&slice.get_mapped_range().unwrap()[..4], &[6, 0, 0, 255]);
+            drop(game.client.mod_gpu.take());
+            drop(renderer);
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn a_sampled_transient_the_pass_does_not_declare_in_its_reads_is_refused() {

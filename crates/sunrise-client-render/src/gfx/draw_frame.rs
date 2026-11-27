@@ -2167,6 +2167,9 @@ impl Renderer {
             || (taa && self.world_post.taa)
             || oit_on
             || native_render::needs().world_depth
+            || frame_graph
+                .as_ref()
+                .is_some_and(mod_frame_graph::FrameGraphRunner::reads_world_depth)
             || fg;
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
