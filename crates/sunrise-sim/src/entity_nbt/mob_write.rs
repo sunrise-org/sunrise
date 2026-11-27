@@ -207,27 +207,15 @@ pub fn write_mob(
         map.remove(&sunrise_core::nbt::JavaString::from("active_effects"));
     } else {
         let effects = m.extra.effects.iter().map(|effect| {
-            let show_icon = effect.show_icon;
-            let (effect, duration, amplifier) = (effect.id, effect.duration, effect.amplifier);
-            let shown = !m.extra.hidden_effects.contains(&effect);
-            let ambient = m.extra.ambient_effects.contains(&effect);
-            let mut e = vec![("id", string(crate::brewing::namespaced(effect)))];
-            // The codec leaves out an amplifier of 0 (its default).
-            if amplifier != 0 {
-                e.push(("amplifier", Tag::Byte(amplifier.clamp(0, 255) as u8 as i8)));
-            }
-            e.push(("duration", Tag::Int(duration)));
-            if ambient {
-                e.push(("ambient", Tag::Byte(1)));
-            }
-            if !shown {
-                e.push(("show_particles", Tag::Byte(0)));
-            }
-            e.push(("show_icon", Tag::Byte(i8::from(show_icon))));
-            if let Some(hidden) = m.extra.effect_chains.iter().find(|e| e.id == effect) {
-                e.push(("hidden_effect", hidden_effect_nbt(hidden)));
-            }
-            Tag::compound(e)
+            let mut instance = m.active_effect_instance(effect);
+            instance.hidden = m
+                .extra
+                .effect_chains
+                .iter()
+                .find(|e| e.id == effect.id)
+                .cloned()
+                .map(Box::new);
+            instance.to_nbt()
         });
         map.insert("active_effects".into(), Tag::List(effects.collect()));
     }

@@ -213,8 +213,12 @@ fn hurt_gossip_belongs_to_the_hits_own_player() {
         bind_local_player(game, 302, 2);
         game.cloud_affect(
             sunrise_gameplay_common::game::potions_common::Victim::Mob(91),
-            &[("instant_damage", 1, 0)],
-            (&[], &[], 1.0),
+            &[sunrise_level::effects::EffectInstance::new(
+                "instant_damage",
+                1,
+                0,
+            )],
+            1.0,
             [at.x, at.y, at.z],
             &sunrise_game_data::text::Text::literal("Cloud"),
             (Some(Who::Player), Some(7)),
