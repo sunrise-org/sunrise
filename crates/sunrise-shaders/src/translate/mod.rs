@@ -366,10 +366,8 @@ fn translate(
     } else {
         GBUFFERS_MATRICES.to_owned()
     };
-    let (vertex_flat, fragment_flat) = (
-        reachability::prepare(vertex),
-        reachability::prepare(fragment),
-    );
+    let vertex_flat = reachability::prepare(vertex).map_err(|e| vec![e])?;
+    let fragment_flat = reachability::prepare(fragment).map_err(|e| vec![e])?;
     let vertex = vertex_flat.as_ref().unwrap_or(vertex);
     let fragment = fragment_flat.as_ref().unwrap_or(fragment);
     // A `bool` member of a storage buffer travels as a `uint` (`buffer_bools`).
@@ -1003,7 +1001,7 @@ pub(crate) fn translate_compute_with(
 ) -> Result<ComputeProgram, Vec<Error>> {
     let named = anonymous_structs::name(compute.code()).map(|code| compute.with_code(code));
     let compute = named.as_ref().unwrap_or(compute);
-    let split = atomic_vectors::rewrite(compute);
+    let split = atomic_vectors::rewrite(compute).map_err(|e| vec![e])?;
     let compute = split.as_ref().unwrap_or(compute);
     let (bools, bool_errors) = buffer_bools::rewrite(compute);
     let compute = bools.as_ref().unwrap_or(compute);

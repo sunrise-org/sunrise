@@ -15,7 +15,9 @@ use super::expression_blocks::{VANILLA_OFFSETS, VANILLA_SIZES, block_entry};
 use super::mod_meshes::{ResolvedMeshDraw, wgpu_index_format};
 use super::mod_render_targets::{TargetMips, TargetUse};
 use super::world_primitives::{Upload, VertexPages};
-use crate::mod_pipelines::{Built, BuiltTexture, ModifierStacks, Pipelines, wgpu_compare};
+use crate::mod_pipelines::{
+    Built, BuiltTexture, ModifierStacks, Pipelines, wgpu_compare, wgpu_depth_bias,
+};
 use glam::Mat4;
 use mod_api::{
     BindingKind, BlendFactor, BlendOp, ColorTargetState, ColorWrite, DrawRange, Identifier,
@@ -1530,24 +1532,12 @@ impl ModPipelines {
                 } else {
                     ds.compare
                 };
-                let (constant, slope_scale) = if target.standard_z {
-                    (
-                        ds.depth_bias_constant.saturating_neg(),
-                        -ds.depth_bias_slope_scale,
-                    )
-                } else {
-                    (ds.depth_bias_constant, ds.depth_bias_slope_scale)
-                };
                 Some(wgpu::DepthStencilState {
                     format,
                     depth_write_enabled: Some(ds.write),
                     depth_compare: Some(wgpu_compare(compare)),
                     stencil: Default::default(),
-                    bias: wgpu::DepthBiasState {
-                        constant,
-                        slope_scale,
-                        clamp: 0.0,
-                    },
+                    bias: wgpu_depth_bias(ds, target.standard_z),
                 })
             }
             (Some(format), None) if target.force_depth_attachment => {
@@ -1621,14 +1611,7 @@ impl ModPipelines {
         }
         let targets = super::oit::stage_targets(stage);
         let (depth_compare, bias) = match state.depth_stencil {
-            Some(ds) => (
-                wgpu_compare(ds.compare),
-                wgpu::DepthBiasState {
-                    constant: ds.depth_bias_constant,
-                    slope_scale: ds.depth_bias_slope_scale,
-                    clamp: 0.0,
-                },
-            ),
+            Some(ds) => (wgpu_compare(ds.compare), wgpu_depth_bias(ds, false)),
             None => (wgpu::CompareFunction::GreaterEqual, Default::default()),
         };
         let buffers = wgpu_buffer_layouts(vertex_layouts);

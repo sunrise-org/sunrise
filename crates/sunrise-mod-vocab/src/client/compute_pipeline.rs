@@ -261,7 +261,8 @@ pub enum ComputeDispatchError {
 /// wgpu orders a dispatch's writes before later passes that read them.
 pub trait ComputeDispatchContext {
     /// Dispatch `workgroups` of `pipeline` with `bindings`. A zero on any axis is a legal no-op.
-    /// Each axis must be at most `max_compute_workgroups_per_dimension`.
+    /// Each axis must be at most `max_compute_workgroups_per_dimension`
+    /// ([`crate::RenderLimits::max_compute_workgroups_per_dimension`]).
     fn dispatch(
         &mut self,
         pipeline: ComputePipelineRef,

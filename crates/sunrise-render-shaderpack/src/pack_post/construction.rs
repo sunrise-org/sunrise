@@ -617,6 +617,8 @@ pub struct Resources<'a> {
     pub mod_depth_target: std::cell::Cell<Option<usize>>,
     /// Depth comparison function for the pass currently being built.
     pub depth_compare: std::cell::Cell<wgpu::CompareFunction>,
+    /// The linked mod pass's declared depth bias; `None` leaves the pack program's own bias.
+    pub mod_depth_bias: std::cell::Cell<Option<wgpu::DepthBiasState>>,
     /// The mod's own vertex stage for the pass about to be built, which `build_pass` takes and
     /// links to that pass's fragment stage ([`ModProgramMode::ModVertexPackFragment`]).
     pub mod_vertex: std::cell::RefCell<Option<ModVertexStage>>,
@@ -1498,11 +1500,13 @@ pub fn build_pass(
                 depth_write_enabled: Some(g.depth_write),
                 depth_compare: Some(pack.depth_compare.get()),
                 stencil: Default::default(),
-                bias: if p.name == "gbuffers_damagedblock" {
-                    POLYGON_OFFSET
-                } else {
-                    Default::default()
-                },
+                bias: pack.mod_depth_bias.get().unwrap_or_else(|| {
+                    if p.name == "gbuffers_damagedblock" {
+                        POLYGON_OFFSET
+                    } else {
+                        Default::default()
+                    }
+                }),
             }),
             targets: targets.to_vec(),
         };
@@ -2354,6 +2358,7 @@ impl PackPost {
             mod_uniform_mismatches: &mod_uniform_mismatches,
             mod_depth_target: std::cell::Cell::new(None),
             depth_compare: std::cell::Cell::new(wgpu::CompareFunction::LessEqual),
+            mod_depth_bias: Default::default(),
             mod_vertex: Default::default(),
         };
         // Flat terrain resolves each quad's source state against the current pack; terrain that
@@ -2860,10 +2865,12 @@ impl PackPost {
                 };
                 pack.mod_depth_target.set(active_depth);
                 pack.depth_compare.set(spec.depth_compare);
+                pack.mod_depth_bias.set(spec.depth_bias);
                 *pack.mod_vertex.borrow_mut() = own_stage.cloned();
                 let built_pass = build(program, Some(&mod_geometry));
                 pack.mod_vertex.borrow_mut().take();
                 pack.mod_depth_target.set(None);
+                pack.mod_depth_bias.set(None);
                 pack.depth_compare.set(wgpu::CompareFunction::LessEqual);
                 if let Some(pass) = built_pass {
                     mod_passes.push(ModPackPass {

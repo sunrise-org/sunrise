@@ -278,11 +278,15 @@ mod tests {
                     .env(CHILD, "1")
                     .output()
                     .unwrap();
-            assert!(
-                output.status.success(),
-                "test=structure_blocks::tests::declared_structure_entities_keep_template_payload_not_template_type exit_code={:?} category=fixture-child-failed",
-                output.status.code()
+            let report = format!(
+                "{}{}",
+                String::from_utf8_lossy(&output.stdout),
+                String::from_utf8_lossy(&output.stderr)
             );
+            if !(output.status.success() && report.contains("test result: ok. 1 passed;")) {
+                eprint!("{report}");
+                panic!("fixture child process failed");
+            }
             return;
         }
         use crate::block_entity_types::{self, BlockEntityTypes};

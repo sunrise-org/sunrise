@@ -669,6 +669,23 @@ pub(super) fn probe_render_capabilities(
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE),
         multi_draw_indirect_count(&adapter.get_info(), device.features()),
+        render_limits(&device.limits()),
+    )
+}
+
+/// The numbers mod GPU calls are checked against, as `ModGpuResources::mod_binding_limits` caps
+/// the binding sizes: never past `max_buffer_size`.
+pub(super) fn render_limits(limits: &wgpu::Limits) -> mod_api::RenderLimits {
+    mod_api::__private::built::render_limits(
+        limits.max_buffer_size,
+        limits
+            .max_storage_buffer_binding_size
+            .min(limits.max_buffer_size),
+        limits
+            .max_uniform_buffer_binding_size
+            .min(limits.max_buffer_size),
+        limits.max_compute_workgroups_per_dimension,
+        limits.max_texture_dimension_2d,
     )
 }
 
@@ -971,6 +988,26 @@ impl super::Renderer {
 mod tests {
     use super::*;
     use mod_api::RenderTargetMipView as View;
+
+    /// The limits mods read are the device's own, with each binding size capped at the largest
+    /// buffer as `mod_binding_limits` caps what a draw binds (#6484).
+    #[test]
+    fn mods_read_the_devices_limits_with_bindings_capped_at_the_largest_buffer() {
+        let limits = wgpu::Limits {
+            max_buffer_size: 1 << 20,
+            max_storage_buffer_binding_size: 1 << 24,
+            max_uniform_buffer_binding_size: 1 << 16,
+            max_compute_workgroups_per_dimension: 65_535,
+            max_texture_dimension_2d: 16_384,
+            ..wgpu::Limits::default()
+        };
+        let read = super::render_limits(&limits);
+        assert_eq!(read.max_buffer_size, 1 << 20);
+        assert_eq!(read.max_storage_buffer_binding_size, 1 << 20);
+        assert_eq!(read.max_uniform_buffer_binding_size, 1 << 16);
+        assert_eq!(read.max_compute_workgroups_per_dimension, 65_535);
+        assert_eq!(read.max_texture_dimension_2d, 16_384);
+    }
 
     /// Clear mip `mip` of the first colour attachment to `value` and read its first texel back.
     fn clear_and_read_first_texel(

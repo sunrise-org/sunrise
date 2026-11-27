@@ -40,6 +40,8 @@ pub mod paletted;
 pub mod position;
 pub mod prepared_files;
 pub mod prepared_profile;
+#[cfg(any(test, feature = "test-support"))]
+pub mod prepared_test_support;
 pub mod profile;
 pub mod random;
 pub mod release;

@@ -56,6 +56,7 @@ expose bounded compiler headings.
 """
 
 import argparse
+import ctypes
 import json
 import os
 import errno
@@ -66,9 +67,11 @@ import re
 import shlex
 import shutil
 import signal
+import struct
 import subprocess
 import sys
 import tempfile
+import threading
 import time
 import zlib
 from pathlib import Path
@@ -199,9 +202,180 @@ def panic_source(location, kind="panic"):
 
 def has_vulkan():
     """Whether this machine has a Vulkan driver for wgpu to find."""
-    return bool(os.environ.get("VK_ICD_FILENAMES")) or any(
+    return bool(os.environ.get("VK_DRIVER_FILES") or os.environ.get("VK_ICD_FILENAMES")) or any(
         Path(d).is_dir() and any(Path(d).glob("*.json")) for d in ICD_DIRS
     )
+
+
+# The system Vulkan loader, by platform: the adapter line below reads it directly, with no `vulkaninfo`.
+VULKAN_LOADERS = ("vulkan-1.dll",) if os.name == "nt" else (
+    ("libvulkan.1.dylib", "libMoltenVK.dylib") if sys.platform == "darwin" else ("libvulkan.so.1",))
+VULKAN_DEVICE_TYPES = ("other", "integrated-gpu", "discrete-gpu", "virtual-gpu", "cpu")
+VULKAN_MAX_ADAPTERS = 4
+# The probe runs in a child process: a driver that crashes or hangs in vkCreateInstance must not take this runner with it,
+# and one that floods stdout is killed once it has written more than VULKAN_PROBE_MAX_BYTES, never buffered whole.
+VULKAN_PROBE_TIMEOUT = 10
+VULKAN_PROBE_MAX_BYTES = 64 * 1024
+# The path comes through argv, so no quoting of it (a Windows backslash) can break the `-c` text.
+VULKAN_PROBE_SCRIPT = "import sys; sys.path.insert(0, sys.argv[1]); from tools.ci import ignored_tests; print('\\n'.join(ignored_tests._probe_vulkan_adapters()))"
+VULKAN_UNAVAILABLE_TAGS = frozenset({"loader-missing", "instance-init-failed", "no-physical-devices", "query-failed",
+                                     "probe-timed-out", "probe-crashed", "probe-output-capped"})
+# What vulkan_adapter_line prints; anything else a driver writes to the child's stdout is dropped.
+VULKAN_ADAPTER_LINE = re.compile(r"^vulkan adapter\[[0-3]\]: name=[\x20-\x7e]{1,80} type=[a-z-]+ api=\d+\.\d+\.\d+ max_storage_buffer_binding_size=\d+ \(\d+ MiB\) max_storage_buffers_per_shader_stage=\d+ max_texture_dimension_2d=\d+$")
+
+
+def vulkan_adapter_line(index, properties):
+    """One adapter's line from its `VkPhysicalDeviceProperties` bytes (Vulkan 1.0 layout, 64-bit): the device name
+    reduced to printable ASCII, its type and API version, and the limits wgpu reads as
+    `max_storage_buffer_binding_size`, `max_storage_buffers_per_shader_stage` and `max_texture_dimension_2d`."""
+    api = struct.unpack_from("<I", properties, 0)[0]
+    kind = struct.unpack_from("<I", properties, 16)[0]
+    raw = properties[20:276].split(b"\0", 1)[0]
+    name = " ".join(bytes(b if 0x20 <= b <= 0x7e else 0x20 for b in raw).decode("ascii").split())[:80] or "unknown"
+    max_tex_2d = struct.unpack_from("<I", properties, 300)[0]
+    storage_bytes = struct.unpack_from("<I", properties, 324)[0]
+    per_stage_storage = struct.unpack_from("<I", properties, 372)[0]
+    return (f"vulkan adapter[{index}]: name={name} "
+            f"type={VULKAN_DEVICE_TYPES[kind] if kind < len(VULKAN_DEVICE_TYPES) else 'unknown'} "
+            f"api={(api >> 22) & 0x7f}.{(api >> 12) & 0x3ff}.{api & 0xfff} "
+            f"max_storage_buffer_binding_size={storage_bytes} ({storage_bytes // (1024 * 1024)} MiB) "
+            f"max_storage_buffers_per_shader_stage={per_stage_storage} max_texture_dimension_2d={max_tex_2d}")
+
+
+def _probe_vulkan_adapters():
+    """In this process: one line per Vulkan adapter (at most VULKAN_MAX_ADAPTERS), or one `unavailable (reason)` line.
+    Only fixed tags are reported on failure, never an exception's text or a host path; it never raises. A driver
+    can still crash or hang it: vulkan_adapter_summaries runs it in a child process."""
+    for name in VULKAN_LOADERS:
+        try:
+            loader = ctypes.CDLL(name)
+            break
+        except OSError:
+            pass
+    else:
+        return ["vulkan adapter: unavailable (loader-missing)"]
+
+    class ApplicationInfo(ctypes.Structure):
+        _fields_ = [("sType", ctypes.c_uint32), ("pNext", ctypes.c_void_p), ("pApplicationName", ctypes.c_char_p),
+                    ("applicationVersion", ctypes.c_uint32), ("pEngineName", ctypes.c_char_p),
+                    ("engineVersion", ctypes.c_uint32), ("apiVersion", ctypes.c_uint32)]
+
+    class InstanceCreateInfo(ctypes.Structure):
+        _fields_ = [("sType", ctypes.c_uint32), ("pNext", ctypes.c_void_p), ("flags", ctypes.c_uint32),
+                    ("pApplicationInfo", ctypes.c_void_p), ("enabledLayerCount", ctypes.c_uint32),
+                    ("ppEnabledLayerNames", ctypes.c_void_p), ("enabledExtensionCount", ctypes.c_uint32),
+                    ("ppEnabledExtensionNames", ctypes.c_void_p)]
+
+    instance = ctypes.c_void_p()
+    created = False
+    try:
+        for function, arguments, result in (
+                ("vkCreateInstance", 3, ctypes.c_int32), ("vkDestroyInstance", 2, None),
+                ("vkEnumeratePhysicalDevices", 3, ctypes.c_int32), ("vkGetPhysicalDeviceProperties", 2, None)):
+            getattr(loader, function).argtypes = [ctypes.c_void_p] * arguments
+            getattr(loader, function).restype = result
+        application = ApplicationInfo(sType=0, apiVersion=1 << 22)
+        info = InstanceCreateInfo(sType=1, pApplicationInfo=ctypes.addressof(application))
+        if loader.vkCreateInstance(ctypes.byref(info), None, ctypes.byref(instance)) != 0:
+            return ["vulkan adapter: unavailable (instance-init-failed)"]
+        created = True
+        count = ctypes.c_uint32(0)
+        if loader.vkEnumeratePhysicalDevices(instance, ctypes.byref(count), None) < 0:
+            return ["vulkan adapter: unavailable (query-failed)"]
+        if count.value == 0:
+            return ["vulkan adapter: unavailable (no-physical-devices)"]
+        count.value = min(count.value, VULKAN_MAX_ADAPTERS)
+        devices = (ctypes.c_void_p * VULKAN_MAX_ADAPTERS)()
+        # A result above zero (VK_INCOMPLETE: more adapters than the bound) still filled the array.
+        if loader.vkEnumeratePhysicalDevices(instance, ctypes.byref(count), devices) < 0:
+            return ["vulkan adapter: unavailable (query-failed)"]
+        lines = []
+        for index in range(min(count.value, VULKAN_MAX_ADAPTERS)):
+            properties = ctypes.create_string_buffer(1024)
+            loader.vkGetPhysicalDeviceProperties(devices[index], properties)
+            lines.append(vulkan_adapter_line(index, properties.raw))
+        return lines
+    except Exception:
+        return ["vulkan adapter: unavailable (query-failed)"]
+    finally:
+        if created:
+            try:
+                loader.vkDestroyInstance(instance, None)
+            except Exception:
+                pass
+
+
+def vulkan_adapter_summaries():
+    """_probe_vulkan_adapters in a child process, bounded in time by VULKAN_PROBE_TIMEOUT and in memory by
+    VULKAN_PROBE_MAX_BYTES of its stdout: its adapter lines, or one `unavailable (tag)` line. The child's stderr,
+    stray stdout and exceptions are never shown; it never raises. A reader thread (not `select`, which cannot watch
+    a pipe on Windows) keeps the wait bounded, and the child is killed and reaped when it times out or hits the cap."""
+    process = reader = None
+    chunks = []
+    capped = False
+
+    def read_output():
+        nonlocal capped
+        total = 0
+        try:
+            while chunk := process.stdout.read(4096):
+                if total + len(chunk) > VULKAN_PROBE_MAX_BYTES:
+                    capped = True
+                    process.kill()
+                    break
+                chunks.append(chunk)
+                total += len(chunk)
+        except Exception:
+            pass
+
+    def reap():
+        try:
+            process.kill()
+            process.wait(timeout=1)
+        except Exception:
+            pass
+
+    try:
+        process = subprocess.Popen([sys.executable, "-c", VULKAN_PROBE_SCRIPT, str(ROOT)], stdin=subprocess.DEVNULL,
+                                   stdout=subprocess.PIPE, stderr=subprocess.DEVNULL)
+        deadline = time.monotonic() + VULKAN_PROBE_TIMEOUT
+        reader = threading.Thread(target=read_output, daemon=True)
+        reader.start()
+        reader.join(max(0.0, deadline - time.monotonic()))
+        if reader.is_alive():
+            reap()
+            reader.join(timeout=1)
+            return ["vulkan adapter: unavailable (probe-timed-out)"]
+        if capped:
+            reap()
+            return ["vulkan adapter: unavailable (probe-output-capped)"]
+        process.wait(timeout=max(0.0, deadline - time.monotonic()))
+    except subprocess.TimeoutExpired:
+        reap()
+        return ["vulkan adapter: unavailable (probe-timed-out)"]
+    except Exception:
+        if process is not None:
+            reap()
+        return ["vulkan adapter: unavailable (query-failed)"]
+    finally:
+        # Closing the pipe under a reader still inside read() would race it.
+        if process is not None and not (reader is not None and reader.is_alive()):
+            try:
+                process.stdout.close()
+            except Exception:
+                pass
+    if process.returncode != 0:
+        return ["vulkan adapter: unavailable (probe-crashed)"]
+    adapters = []
+    for line in b"".join(chunks).decode("utf-8", errors="replace").splitlines():
+        if VULKAN_ADAPTER_LINE.match(line):
+            adapters.append(line)
+            if len(adapters) == VULKAN_MAX_ADAPTERS:
+                break
+        elif (unavailable := re.fullmatch(r"vulkan adapter: unavailable \(([a-z-]+)\)", line)) \
+                and unavailable[1] in VULKAN_UNAVAILABLE_TAGS:
+            return [line]
+    return adapters or ["vulkan adapter: unavailable (query-failed)"]
 
 
 def parse_shard(shard):
@@ -577,6 +751,13 @@ def failure_diagnostics(output, remaining=None):
     block = 0
     capture = None
     kept_block = {}
+    # A test that reruns its own executable prints the child's libtest report inside its own capture: its `running N
+    # tests` after a capture began, then a failed result and capture header for that same name. `child_parent` is the
+    # capture active at that `running`, `child_failed` the name the child reported failed, and `nested_block` the block
+    # of its nested capture, whose panic replaces the wrapper's. A summary or a new target ends the child run.
+    child_parent = None
+    child_failed = None
+    nested_block = None
     # The tracked (path, line) of the current panic, and whether its `left:`/`right:` operand lines may follow.
     where = None
     operands_pending = False
@@ -604,6 +785,10 @@ def failure_diagnostics(output, remaining=None):
         if RESULT.match(line) or SUMMARY.match(line) or TARGET.match(line) or panic:
             panic_reason_pending = operands_pending = False
             pending_codes = None
+        if COUNT.match(line) and capture is not None:
+            child_parent, child_failed, nested_block = capture, None, None
+        elif SUMMARY.match(line) or TARGET.match(line):
+            child_parent, child_failed, nested_block = None, None, None
         if pending_codes is not None and len(pending_codes) < 3 and (code := RUSTC_ERROR.match(line)):
             if code[1] not in pending_codes:
                 pending_codes.append(code[1])
@@ -656,18 +841,27 @@ def failure_diagnostics(output, remaining=None):
             continue
         if found := RESULT.match(line):
             if found[2] == "FAILED":
-                failures.append(found[1])
+                if child_parent is not None and found[1] == child_parent:
+                    child_failed = found[1]
+                else:
+                    failures.append(found[1])
         header = CAPTURE.match(line)
-        if header or RESULT.match(line):
+        # A summary or a new target ends the capture it follows: a child run's summary locks the panic kept for it.
+        if header or RESULT.match(line) or SUMMARY.match(line) or TARGET.match(line):
             block += 1
             capture = header[1] if header else None
+            if header:
+                nested_block = block if child_parent is not None and header[1] == child_parent == child_failed else None
         if panic:
             context = []
             thread_name = panic[1]
-            if thread_name in contexts and kept_block[thread_name] == block and capture == thread_name:
+            if (thread_name in contexts and capture == thread_name
+                    and block in (kept_block[thread_name], nested_block)):
                 # A test that catches a panic it raises on purpose (a listener's) fails on its last one: a later
-                # panic in the same failed-test capture replaces the earlier.
+                # panic in the same failed-test capture replaces the earlier. So does a panic in a child's own
+                # report embedded in the capture: it is the real failure, the wrapper only names it.
                 contexts[thread_name] = context
+                kept_block[thread_name] = block
                 compiler_codes.pop(thread_name, None)
             elif thread_name not in contexts:
                 if len(contexts) < DIAGNOSTIC_CONTEXTS:
@@ -1242,6 +1436,9 @@ def main(shards, report=None):
     skipped = {"harness", "manual"} if has_vulkan() else {"harness", "manual", "gpu"}
     if "gpu" in skipped:
         print("no Vulkan driver on this runner: the tests marked `gpu` are skipped")
+    else:
+        for line in vulkan_adapter_summaries():
+            print(line)
     problems = []
     accepted_unshown = 0
     # Reuse the hash selection in two consecutive processes on the same runner.

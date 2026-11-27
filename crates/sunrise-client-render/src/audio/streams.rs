@@ -811,6 +811,7 @@ mod tests {
     }
     impl Rig {
         fn new() -> Self {
+            mod_platform::testing::initialize_platform();
             let mixer = Mixer {
                 stream_gain: [1.0; 11],
                 ..Mixer::default()
@@ -1263,6 +1264,7 @@ mod tests {
 
     #[test]
     fn a_dimension_change_stops_all_streams() {
+        mod_platform::testing::initialize_platform();
         let mut audio = Audio::silent(&sunrise_assets::resource_source::ResourceSource::directory(
             std::path::PathBuf::from("/nonexistent/sunrise-test-audio"),
         ));
@@ -1324,6 +1326,7 @@ mod tests {
 
     #[test]
     fn leaving_a_level_stops_all_streams() {
+        mod_platform::testing::initialize_platform();
         let mut audio = Audio::silent(&sunrise_assets::resource_source::ResourceSource::directory(
             std::path::PathBuf::from("/nonexistent/sunrise-test-audio"),
         ));
@@ -1354,6 +1357,7 @@ mod tests {
 
     #[test]
     fn losing_a_tracked_entity_while_muted_stops_the_stream_without_unmuting() {
+        mod_platform::testing::initialize_platform();
         let mut audio = Audio::silent(&sunrise_assets::resource_source::ResourceSource::directory(
             std::path::PathBuf::from("/nonexistent/sunrise-test-audio"),
         ));
@@ -1534,6 +1538,7 @@ mod tests {
 
     #[test]
     fn churning_one_owners_streams_while_worker_is_held_never_starves_another_owner() {
+        mod_platform::testing::initialize_platform();
         let mixer = Mutex::new(Mixer {
             stream_gain: [1.0; 11],
             ..Mixer::default()
@@ -1585,6 +1590,7 @@ mod tests {
 
     #[test]
     fn an_owners_high_rate_pcm_budget_includes_unretired_jobs_and_leaves_room_for_others() {
+        mod_platform::testing::initialize_platform();
         let pool = StreamPool::default();
         let mixer = Mutex::new(Mixer::default());
         let (worker, receiver) = Worker::test_pair();
@@ -1619,6 +1625,7 @@ mod tests {
 
     #[test]
     fn aggregate_pcm_budget_bounds_live_and_pending_jobs_and_ring_allocation_is_fallible() {
+        mod_platform::testing::initialize_platform();
         let max_stereo_ring_bytes = MAX_RING_FRAMES as usize * 2 * std::mem::size_of::<AtomicU32>();
         // Enough for two maximum-size stereo rings plus a small ring, but not a third maximum.
         let budget = 8 * 1024 * 1024;

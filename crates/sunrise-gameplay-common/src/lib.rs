@@ -48,3 +48,5 @@ pub mod worn_boots;
 
 extern crate self as sunrise_gameplay_common;
 pub mod game;
+#[cfg(test)]
+mod test_game_dir;

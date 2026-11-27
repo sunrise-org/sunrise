@@ -654,7 +654,8 @@ impl ClientGame<'_> {
             .ok_or(mod_api::RenderTargetError::Unavailable)?;
         gpu.render_target_size(mod_api::content::crash::current_native_mod(), target)
     }
-    /// The optional device features of the active device; all off without one.
+    /// The optional device features and limits of the active device; all off (and zero)
+    /// without one.
     pub(in crate::game) fn render_capabilities(&self) -> mod_api::RenderCapabilities {
         self.mod_gpu().map_or_else(
             || {
@@ -664,6 +665,7 @@ impl ClientGame<'_> {
                     false,
                     false,
                     false,
+                    mod_api::RenderLimits::default(),
                 )
             },
             |gpu| gpu.render_capabilities(),

@@ -1,0 +1,6 @@
+ids = [
+    "type:RenderCapabilities.limits",
+    "type:RenderLimits",
+]
+why = "#6484: mods can read the device limits their GPU calls are checked against. RenderCapabilities::limits carries max_buffer_size, max_storage_buffer_binding_size, max_uniform_buffer_binding_size (both capped at max_buffer_size, as the engine checks them), max_compute_workgroups_per_dimension and max_texture_dimension_2d, as the adapter reports them (vanilla's GpuDevice.getDeviceInfo().limits()); all zero without a GPU renderer. RenderCapabilities and RenderLimits are non_exhaustive, so this adds a field without breaking callers."
+migrate = "Nothing to change."
