@@ -2,7 +2,7 @@
 //! and the `cfg`s they are compiled under, following `mod` declarations, `#[path]`s and inline
 //! modules.
 
-use mod_source::modules::{ModuleFile, test_only, walk_module_files};
+use mod_source::modules::{ModuleFile, ModuleWalk, test_only, walk_module_files};
 use quote::ToTokens;
 use std::{
     fs,
@@ -31,25 +31,69 @@ impl GameDomain {
     }
 
     pub(crate) fn files(self, root: &Path, every_build: bool) -> Result<Vec<ModuleFile>, String> {
+        let mut files = Vec::new();
+        self.visit_files(
+            root,
+            every_build,
+            |_| true,
+            |file, _| {
+                files.push(file.clone());
+            },
+        )?;
+        files.sort_by(|a, b| a.path.cmp(&b.path));
+        Ok(files)
+    }
+
+    pub(crate) fn visit_files(
+        self,
+        root: &Path,
+        every_build: bool,
+        mut descend: impl FnMut(&str) -> bool,
+        mut visit: impl FnMut(&ModuleFile, syn::File),
+    ) -> Result<(), String> {
         let lib = self.library(root)?;
         let src = lib.parent().expect("a source file has a folder");
         if crate::GameplayPackage::from_library(self.key).is_some() {
             let game = format!("{}::game", self.key);
             let prefix = format!("{game}::");
             let dir = src.to_owned();
-            let mut files = module_files(root, self.key.into(), lib, dir, every_build)?;
-            files.retain(|file| file.module == game || file.module.starts_with(&prefix));
-            if files.is_empty() {
+            let mut found = false;
+            ModuleWalk {
+                every_build,
+                include_tests: false,
+            }
+            .visit_files(
+                self.key.into(),
+                lib,
+                dir,
+                |path, source| crate::game_modules::parse(root, path, source),
+                |module| {
+                    (module == self.key || module == game || module.starts_with(&prefix))
+                        && descend(module)
+                },
+                |file, parsed| {
+                    if file.module == game || file.module.starts_with(&prefix) {
+                        found = true;
+                        visit(file, parsed);
+                    }
+                },
+            )?;
+            if !found && descend(&game) {
                 return Err(format!("{game}: no mounted gameplay source files"));
             }
-            return Ok(files);
+            return Ok(());
         }
-        module_files(
-            root,
+        ModuleWalk {
+            every_build,
+            include_tests: false,
+        }
+        .visit_files(
             format!("{}::game", self.key),
             src.join("game.rs"),
             src.join("game"),
-            every_build,
+            |path, source| crate::game_modules::parse(root, path, source),
+            descend,
+            visit,
         )
     }
 }
@@ -128,6 +172,20 @@ impl SourceLayout {
             files.extend(domain.files(root, every_build)?);
         }
         Ok(files)
+    }
+
+    #[cfg(test)]
+    pub(crate) fn visit_files(
+        self,
+        root: &Path,
+        every_build: bool,
+        mut descend: impl FnMut(&str) -> bool,
+        mut visit: impl FnMut(&ModuleFile, syn::File),
+    ) -> Result<(), String> {
+        for domain in self.domains {
+            domain.visit_files(root, every_build, &mut descend, &mut visit)?;
+        }
+        Ok(())
     }
 }
 

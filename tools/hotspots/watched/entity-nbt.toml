@@ -1,0 +1,5 @@
+# entity_nbt.rs was split in #5841; the crate split moved it to sunrise-sim.
+path = "crates/sunrise-sim/src/entity_nbt.rs"
+landing_path = "crates/sunrise-client/src/entity_nbt.rs"
+split = "#5841"
+landing = "0cf6748af5504f986aa1e5b41392794f242a488c"

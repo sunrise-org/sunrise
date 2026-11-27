@@ -54,6 +54,50 @@ fn section_read_backend_refuses_reads_outside_its_snapshot() {
 }
 
 #[test]
+fn live_section_host_refuses_registry_reads_instead_of_panicking() {
+    use mod_api::prelude::KeysHost;
+
+    let host = LiveSectionHost::new(None);
+    let mut visited = 0;
+    assert_eq!(
+        host.visit_registry_entries("minecraft:item", &mut |_| {
+            visited += 1;
+            core::ops::ControlFlow::Continue(())
+        }),
+        Err(mod_api::RegistryReadError::Unavailable)
+    );
+    assert_eq!(visited, 0);
+    let entry = mod_api::RegistryEntry::new(
+        mod_api::Identifier::parse("minecraft:item").unwrap(),
+        mod_api::Identifier::parse("minecraft:stone").unwrap(),
+    );
+    assert_eq!(host.registry_entry_in_tag(&entry, "minecraft:logs"), None);
+    assert!(matches!(
+        host.biome("minecraft:plains"),
+        Err(mod_api::BiomeKeyError::Unavailable)
+    ));
+    assert!(host.game_event_key("minecraft:step").is_none());
+    assert!(host.block_key("minecraft:stone").is_none());
+    assert!(host.effect_key("minecraft:speed").is_none());
+    assert!(
+        host.registry_entry("minecraft:item", "minecraft:stone")
+            .is_none()
+    );
+    assert_eq!(
+        host.registry_protocol_id(
+            &mod_api::Identifier::parse("minecraft:item").unwrap(),
+            &mod_api::Identifier::parse("minecraft:stone").unwrap(),
+        ),
+        None
+    );
+    assert!(host.block_keys().is_empty());
+    assert!(host.item_keys().is_empty());
+    assert!(host.entity_type_keys().is_empty());
+    assert!(host.menu_keys().is_empty());
+    assert!(host.enchantment_keys().is_empty());
+}
+
+#[test]
 fn live_section_host_reports_moved_entity_residency_in_callback() {
     type Observed = Arc<Mutex<Vec<(bool, EntityResidency, EntityResidency)>>>;
     struct ResidencyListener(Observed, EntityRef);
