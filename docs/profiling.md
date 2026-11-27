@@ -23,6 +23,20 @@ sunrise-perf query frames '/submit/' FILE --side client --thread 'Render submit'
 
 See [Benchmark](benchmark.md) for report metrics and [Control command reference](sunrise-ctl-commands.md) for captures started in a running game.
 
+## Compare the work behind a server timing
+
+Run `sunrise-perf diff A.hzperf B.hzperf` or `sunrise-perf summary B.hzperf --baseline A.hzperf`.
+Read the workload lines before the deltas. A run with more entities or loaded chunks can have a
+higher MSPT even when the cost per unit of load is similar. The report shows tick time per
+1,000 entities and chunks where counts are available.
+
+A dedicated capture also shows active chunk streaming between ticks. Read that wall and CPU time
+alongside the level phases. It measures work the tick thread does outside MSPT.
+
+`sunrise-perf query spans FILE` labels timed laps in captures that store their metadata. For example,
+the sample filter for `creature_loop` is its enclosing span, `--where span=tick_creature_entities`.
+Use the lap's timing row for the interval itself.
+
 ## Java comparison runs
 
 For Java comparison runs, a private Java Flight Recorder capture helps identify

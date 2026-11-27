@@ -781,6 +781,17 @@ sunrise-perf mcp                                                       §8
 `FILE` defaults to `latest`: the newest finished `.hzperf` in `--dir DIR`, else in `$SUNRISE_HOME/reports`, else in
 `./reports`. A bare `benchmarks/*.json` is accepted wherever a capture is.
 
+### Capture comparison workload
+
+`diff A B` and `summary --baseline A B` lead with each capture's workload on the selected side. Players,
+loaded chunks and entities use the mean of the live health samples. Without live health, the server's start record
+supplies player count and the latest populated world snapshot supplies chunk and entity counts. Client render distance
+comes from the capture's settings or embedded benchmark report. Window resolution comes from the benchmark report.
+A warning lists recorded values whose difference exceeds 10% of A, using pixel count for resolution. Server
+comparisons also show mean MSPT scaled per 1,000 loaded chunks and per 1,000 entities when those counts are positive.
+These ratios describe the workload and timing together, including work such as networking and terrain that has a
+different cost per object. JSON puts the workload under each entry in `captures`.
+
 ### 6.2 Operations
 
 | OP | Arguments | Answers | Replaces |
@@ -793,7 +804,7 @@ sunrise-perf mcp                                                       §8
 | `group` | `--by span\|entity\|block\|chunk\|dim\|thread` | total sampled weight per context value | group tables, mob costs |
 | `frames` | no names; `--side client`, `--worst N`, `--over MS` | individual client frame intervals and durations from one capture; chronological unless ranked | |
 | `frames` | `NAME…` (id, exact short name or `/regex/`), `--total` | inclusive and self per name; one column per capture; total sample weight with `--total` | `s1_breakdown.py`, `s1_table.py`, `s3_table.py` |
-| `spans` | `--names a,b`, `--slow` | per span: ms/tick, cpu, waited, seen; one column per capture | `slowticks.py`, `spikes.py`, `s1a_spans.py` |
+| `spans` | `--names a,b`, `--slow` | per span or lap: ms/tick, cpu, waited, seen; one column per capture | `slowticks.py`, `spikes.py`, `s1a_spans.py` |
 | `ticks` | `--worst N`, `--over MS` | worst ticks/frames with span trees, from `spans.worst`, `slow_history` and `slow` | worst-ticks lines |
 | `tick` | `k:ID` | one tick's span tree, and `hot`: the top 30 functions of the samples in the 1 s blocks overlapping the tick (slow samples only when the tick is slow), with `samples_from`/`samples_to` for the window used; a second's worth, not the tick's own samples | |
 | `series` | `FIELD…` (`h:` fields, `span:NAME`, `x:` counters), `--every S` | time series, resampled; `--from` before 0 reaches into `history`; the web UI and MCP can add `stats` (min, mean over the window, median, p95, max, last) to each series | `s3_windows.py`, `s3_counters.py` |
@@ -811,6 +822,16 @@ shows the retained worst and slow frames.
 With function names, `frames --total` gives estimated inclusive and self milliseconds (bytes for
 allocation samples) over the selected sample blocks. Benchmark captures use one-second blocks.
 The reply's `selection.from` and `selection.to` show the bounds used.
+
+Completed captures with lap metadata label `query spans` rows with `kind: "span"` or `kind: "lap"`.
+The sampler records the active named span. A lap gets its label when its interval ends, so a
+`--where span=…` filter on a lap reports the enclosing span to use. Captures made before lap
+metadata was stored omit the row kind.
+
+Dedicated captures also record the chunk pump's wall and CPU work between ticks in
+`spans[].between_tick_chunk_streaming`. The summary prints it alongside the tick phases. Worker
+waits and sleep are outside that phase. MSPT, tick histograms and slow-tick spans cover the tick
+itself.
 
 Filters, common to the sample-based ops:
 

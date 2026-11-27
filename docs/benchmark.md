@@ -52,6 +52,8 @@ It starts at the title screen, creates the world `sunrise-benchmark` (seed 1234,
 
 `sunrise-perf query frames FILE --side client --worst 10` lists the longest recorded frame intervals. Use `--from` and `--to` to select the load you want to measure. `sunrise-perf query bench FILE` lists the embedded report's metrics and measured phases. `sunrise-perf summary` and `diff` take a bare `benchmarks/*.json` wherever they take a capture ([perf-platform.md](perf-platform.md)).
 
+When comparing two captures with `sunrise-perf diff` or `summary --baseline`, read their workload first. The comparison shows players, loaded chunks and entities, plus the client render distance and window resolution when recorded. Bare benchmark reports provide benchmark conditions and metrics.
+
 ### Compare a setting
 
 `sunrise-client --benchmark ab:SWITCH` tells whether one renderer setting changes the frame time, or only the noise of the machine. It runs the trip of `travel` with the switch's B value set before the world opens, then measures 8 pairs of 4-second blocks in the order B A A B B A A B..., each after 2 seconds at that arm that are discarded and with the time reset to noon before each pair. Neighbouring blocks are in different arms and the order alternates, so drift (heat, streaming finishing, other programs) cancels. Afterwards each arm's render passes are timed once (`gpu_pass.ab_a.<pass>_ms`, `gpu_pass.ab_b.<pass>_ms`), and the setting is put back to what it was before the run, also when the run fails. It takes about 3 minutes.
