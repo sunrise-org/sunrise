@@ -497,13 +497,23 @@ def sunrise_settings(status, options):
             "fov": (values.get("fov") or {}).get("value")}
 
 
+# What the render thread logs when the teleport's feedback reaches the chat: vanilla's
+# commands.teleport.success.location.single ("Teleported %s to %s, %s, %s", assets/minecraft/lang/en_us.json) after
+# Sunrise's `[CHAT] ` (crates/sunrise-client-render/src/chat.rs). The server sends it after the teleport, so the
+# client has applied the move (its dimension change among it) when it logs the line.
+MOVE_MARK = "[CHAT] Teleported "
+
+
 def pack_events(log_text, name):
-    """The pack loads Sunrise logged, in order: ("programs", N) for `shader pack <name>: N programs ...`, or
-    ("off", why) for `shader pack <name>: turned off: why`. It loads a pack when the world opens and again at each
-    dimension change."""
+    """What the log shows of the pack, in order: ("move",) for each teleport's feedback line (MOVE_MARK),
+    ("programs", N) for `shader pack <name>: N programs ...` and ("off", why) for `shader pack <name>: turned off:
+    why`. Sunrise loads a pack when the world opens and again at each dimension change."""
     prefix = f"shader pack {name}: "
     out = []
     for line in log_text.splitlines():
+        if MOVE_MARK in line:
+            out.append(("move",))
+            continue
         at = line.find(prefix)
         if at < 0:
             continue
@@ -517,64 +527,85 @@ def pack_events(log_text, name):
 
 
 class PackWatch:
-    """Active-pack evidence for each capture interval, from the loads Sunrise logs. Sunrise loads the pack when the
-    world opens and again at each change of dimension, and logs each load that finishes or fails, once. Each
-    dimension change adds a load the run waits for; a load stays awaited until the log shows it, across views, so
-    a load that timed out is still missing at the next capture in that dimension. The log is read before the camera
-    moves: a load there that no awaited load explains came at a time the log can't place, so the capture before it
-    (the line may have been written late) and the next one are invalid, and it can't stand in for the load the
-    move asks for. Before a capture every awaited load must have come and the last must be running; a load between
-    a capture's start and its reply makes that capture invalid."""
+    """Active-pack evidence for each capture interval, bound to the move that asked for it. The log is read in
+    order: each view's teleport shows as its feedback line (a "move"), and the pack loads that finish or fail come
+    between them. A view that changes dimension awaits one load logged after its own move line: the client logged
+    that line after applying the move, so a load logged before it (a reload in the dimension before, however late
+    it ran) can never stand in for it. An awaited load stays awaited across views of the same dimension, so a load
+    that timed out is still missing at the next capture there; a move to another dimension while one is still
+    awaited leaves the loads after it impossible to tell apart, and every capture in that dimension is invalid. A
+    load that nothing awaits came at a time the log can't place: the capture before it (the line may have been
+    written late) and the next one are invalid. Before a capture its move line must be there, every awaited load
+    must have come and the last must be running; a load between a capture's start and its reply makes that capture
+    invalid."""
 
     def __init__(self, read_events, now=time.time, sleep=time.sleep):
         self.read, self.now, self.sleep = read_events, now, sleep
-        self.seen, self.pending = 0, 0
+        self.seen = 0  # events taken
+        self.moves_seen, self.moves_sent = 0, 0
+        self.pending = 0  # loads the current dimension awaits
+        self.ambiguous = False  # the current dimension's loads can't be told from an earlier one's
+        self.changes = {}  # move number -> whether that move changes dimension
+        self.stray = 0  # loads nothing awaited, since the last capture
 
-    def _account(self, events):
-        """Takes the loads the log shows since the last read: each fills an awaited load; returns how many are left
-        that nothing asked for."""
-        new = len(events) - self.seen
-        used = min(new, self.pending)
-        self.seen, self.pending = len(events), self.pending - used
-        return new - used
-
-    @staticmethod
-    def _unasked(extra):
-        text = f"{extra} pack load(s) came without a dimension change"
-        return [text], [f"{text} after this capture; it may have run during it"]
-
-    def before_move(self):
-        """Read before the camera moves (and before dimension_changed for that move): returns (problems of the
-        next capture, problems of the capture before it)."""
-        extra = self._account(self.read())
-        return self._unasked(extra) if extra else ([], [])
-
-    def dimension_changed(self):
-        """The game is to load the pack again: the captures from now on wait for it."""
+    def world_opened(self):
+        """The world opens in the saved dimension and loads the pack: the first captures await that load."""
         self.pending += 1
+
+    def move_sent(self, new_dimension):
+        """The next teleport is about to be sent; `new_dimension`: it changes dimension (a load is to follow)."""
+        self.moves_sent += 1
+        self.changes[self.moves_sent] = new_dimension
+
+    def _take(self, events):
+        for event in events[self.seen:]:
+            self.seen += 1
+            if event[0] == "move":
+                self.moves_seen += 1
+                if self.changes.get(self.moves_seen):
+                    self.ambiguous = self.pending > 0
+                    self.pending = 1
+            elif self.pending:
+                self.pending -= 1
+            else:
+                self.stray += 1
+
+    def _stray_problems(self):
+        if not self.stray:
+            return [], []
+        text = f"{self.stray} pack load(s) came that no dimension change asked for"
+        self.stray = 0
+        return [text], [f"{text} after this capture; it may have run during it"]
 
     def before_capture(self, timeout):
         """Returns (problems of this capture, problems of the capture before it)."""
-        want = self.seen + self.pending
         deadline = self.now() + timeout
         events = self.read()
-        while len(events) < want and self.now() < deadline:
+        self._take(events)
+        while (self.moves_seen < self.moves_sent or self.pending) and self.now() < deadline:
             self.sleep(0.5)
             events = self.read()
-        extra = self._account(events)
-        mine, previous = self._unasked(extra) if extra else ([], [])
-        if self.pending:
+            self._take(events)
+        mine, previous = self._stray_problems()
+        if self.moves_seen < self.moves_sent:
+            mine.insert(0, "the teleport's feedback never showed in the log")
+        elif self.pending:
             mine.insert(0, "the pack never finished loading in this dimension")
-        if events and events[-1][0] == "off":
-            mine.append(f"the pack was turned off: {events[-1][1]}")
+        if self.ambiguous:
+            mine.append("a load of the dimension before was still awaited at the move here: the loads after it "
+                        "can't be told apart")
+        loads = [e for e in events[:self.seen] if e[0] != "move"]
+        if loads and loads[-1][0] == "off":
+            mine.append(f"the pack was turned off: {loads[-1][1]}")
         return mine, previous
 
     def after_capture(self):
-        """Problems of the capture that just replied."""
+        """Problems of the capture that just replied: a load (or move) the log shows since its start."""
         events = self.read()
         moved = len(events) - self.seen
-        self._account(events)
-        return [f"{moved} pack load(s) came during the capture"] if moved else []
+        self._take(events)
+        self.stray = 0
+        return [f"{moved} pack event(s) came during the capture"] if moved else []
 
 
 def wait_loaded(game, view, limit, moved=True):
@@ -686,22 +717,26 @@ def capture_view(game, scenes, view, previous, folder, watch, staged_name, expec
     """Places, loads, settles, checks and captures one view; returns (its record, the problems of the view before
     it, whether it loaded). `new_dimension`: the move changes dimension, so the game loads the pack again."""
     limit = scenes["load_timeout_seconds"]
-    early, early_before = watch.before_move()
-    if new_dimension:
-        watch.dimension_changed()
+    watch.move_sent(new_dimension)
     for line in view_commands(view):
         game.command(line)
     ready = wait_loaded(game, view, limit, moved=not same_place(view, previous))
-    failed = [c for c in setup_commands(view) if not game.command(c)]
-    if view["setup"]:
-        # Setup changes blocks: wait until they are drawn.
-        ready = wait_loaded(game, view, limit, moved=False) and ready
+    # Setup runs only in a loaded view: in a late teleport or a half-loaded region it would act on other blocks on
+    # each side. A setup that didn't run, or ran in part, leaves the world unlike the other side's for the views
+    # after it too (run_views).
+    failed, skipped = [], []
+    if ready:
+        failed = [c for c in setup_commands(view) if not game.command(c)]
+        if view["setup"]:
+            # Setup changes blocks: wait until they are drawn.
+            ready = wait_loaded(game, view, limit, moved=False)
+    else:
+        skipped = setup_commands(view)
     sleep(settle_time(scenes, view, previous))
     camera = sunrise_camera(game("state"))
     camera["frozen"] = sunrise_frozen(game("command", "tick query", check=False))
     camera["settings"] = sunrise_settings(game("status"), game("options-get", "simulationDistance", "fov"))
     mine, before = watch.before_capture(limit)
-    mine, before = early + mine, early_before + before
     name = f"{view['name']}.png"
     reply, attempts = capture(game, scenes, Path(folder) / name, limit, view)
     # Hashed as soon as the reply says the file is written, before anything else can touch it.
@@ -711,16 +746,41 @@ def capture_view(game, scenes, view, previous, folder, watch, staged_name, expec
     after = sunrise_camera(game("state"))
     problems = (camera_problems(view, camera) + settings_problems(expected, camera["settings"])
                 + [f"command failed: {c}" for c in failed]
+                + [f"setup not run (the view never loaded): {c}" for c in skipped]
                 + ([] if ready else ["the view never finished loading"]) + mine
                 + capture_problems(reply, scenes, staged_name))
     if after.get("day_time") != camera.get("day_time"):
         problems.append(f"the time moved during the capture: {camera.get('day_time')} to {after.get('day_time')}")
     if digest is None and not any(p.startswith("screenshot-sequence") for p in problems):
         problems.append(f"{name} was not written")
-    record = {"camera": camera, "failed_commands": failed, "ready": ready, "attempts": attempts,
+    record = {"camera": camera, "failed_commands": failed, "skipped_commands": skipped,
+              "setup_complete": not failed and not skipped, "ready": ready, "attempts": attempts,
               "reply": {k: reply.get(k) for k in ("pack", "frame", "frames", "step_ms", "size", "error")},
               "picture": name if digest else None, "sha256": digest, "problems": problems}
     return record, before, ready
+
+
+def run_views(game, scenes, folder, watch, staged_name, expected, dimension, side="", key=""):
+    """Captures every view in order in one game (opened in `dimension`); returns {view: record}. A view whose
+    problems the next view's evidence found gets them too; once a view's setup did not run fully, every later view
+    is invalid, since the world it draws may differ from the other side's."""
+    views, previous, last, broken = {}, None, None, None
+    for view in scenes["views"]:
+        moved = bool(staged_name) and view["dimension"] != dimension
+        dimension = view["dimension"]
+        entry, before, ready = capture_view(game, scenes, view, previous, folder, watch, staged_name, expected,
+                                            new_dimension=moved)
+        if before and last is not None:
+            views[last]["problems"] += before
+        if broken is not None:
+            entry["problems"].append(f"the setup of view {broken} did not run fully: the world may differ from the "
+                                     "other side's")
+        elif not entry["setup_complete"]:
+            broken = view["name"]
+        views[view["name"]] = entry
+        previous, last = (view if ready else None), view["name"]
+        print(f"{side} {key} {view['name']}: {entry['problems'] or 'ok'}", flush=True)
+    return views
 
 
 def display_command(args, scenes, command):
@@ -936,35 +996,28 @@ def run_capture(args, scenes, side, bin_dir, extra_env, pack):
               "start_problems": ["the start checks never ran"], **generation}
     expected = settings_expected(scenes)
     game = Game(args, scenes, folder, bin_dir, env, [])
-    watch = PackWatch(lambda: pack_events(game.log.read_text(errors="replace"), staged_name)
-                      if staged_name and game.log.exists() else [])
+    # Read for `none` too: its moves must show in the log as well.
+    watch = PackWatch(lambda: pack_events(game.log.read_text(errors="replace"), staged_name or "")
+                      if game.log.exists() else [])
     try:
         with game as ctl:
             # The world opens where the player was saved (the first view's dimension): its load is expected.
             dimension = (ctl("state").get("dimension") or "").removeprefix("minecraft:")
             if staged_name:
-                watch.dimension_changed()
+                watch.world_opened()
             results = {}
             for line in start_commands(scenes):
                 reply = ctl("command", line, check=False)
                 results[line] = reply.get("result") if reply.get("success") else None
             record["start_problems"] = start_problems(scenes, results)
             ctl("key", "f1", "tap")
-            previous, last = None, None
-            for view in scenes["views"]:
-                moved = bool(staged_name) and view["dimension"] != dimension
-                dimension = view["dimension"]
-                entry, before, ready = capture_view(ctl, scenes, view, previous, folder, watch, staged_name, expected,
-                                                    new_dimension=moved)
-                if before and last is not None:
-                    record["views"][last]["problems"] += before
-                record["views"][view["name"]] = entry
-                previous, last = (view if ready else None), view["name"]
-                print(f"{side} {pack_key(pack)} {view['name']}: {entry['problems'] or 'ok'}", flush=True)
+            record["views"] = run_views(ctl, scenes, folder, watch, staged_name, expected, dimension, side,
+                                        pack_key(pack))
             # A load the log shows only now may have run during the last capture.
             time.sleep(1.0)
-            late, _ = watch.before_capture(0)
-            if late and last is not None:
+            late = watch.after_capture()
+            if late and record["views"]:
+                last = scenes["views"][len(record["views"]) - 1]["name"]
                 record["views"][last]["problems"] += [f"after the last capture: {p}" for p in late]
     except (RuntimeError, OSError, subprocess.TimeoutExpired) as error:
         # The game died or stopped answering: the views not taken stay without a record; the next pack still runs.

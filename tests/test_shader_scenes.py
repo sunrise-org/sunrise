@@ -311,48 +311,41 @@ class PackLogTests(unittest.TestCase):
                          [("programs", 41), ("off", "no gbuffers program compiled"), ("programs", 39)])
         self.assertEqual(ss.pack_events(log, "BSL"), [])
 
-    def watch(self, *counts_and_events):
-        """A PackWatch over a scripted log: each read returns the next list (the last one repeats)."""
-        reads = list(counts_and_events)
-        clock = FakeClock()
-        return ss.PackWatch(lambda: reads.pop(0) if len(reads) > 1 else reads[0], clock.time, clock.sleep)
+    def test_moves_are_read_in_order_with_the_loads(self):
+        log = "\n".join(["[1] [Render thread/INFO]: [CHAT] Teleported Player1 to 1.5, 64.0, -2.5",
+                         "[2] [Server thread/INFO]: System chat: [Player1: Teleported Player1 to 1.5, 64.0, -2.5]",
+                         "[3] INFO shader pack BSL.zip: 41 programs (x) in 9 ms"])
+        self.assertEqual(ss.pack_events(log, "BSL.zip"), [("move",), ("programs", 41)])
+        self.assertEqual(ss.pack_events(log, ""), [("move",)])
 
-    def test_each_dimension_change_waits_for_its_load(self):
-        one, two = [("programs", 41)], [("programs", 41), ("programs", 40)]
-        watch = self.watch([], one, one, one, one, two, two)
-        watch.dimension_changed()  # the world opens
-        self.assertEqual(watch.before_capture(10), ([], []))  # waited for the first load
-        self.assertEqual(watch.after_capture(), [])
-        self.assertEqual(watch.before_capture(10), ([], []))  # same dimension: nothing new is expected
-        self.assertEqual(watch.after_capture(), [])
-        watch.dimension_changed()
-        self.assertEqual(watch.before_capture(10), ([], []))
-        self.assertEqual(watch.after_capture(), [])
+    def watch(self, log):
+        clock = FakeClock()
+        return ss.PackWatch(lambda: list(log), clock.time, clock.sleep)
 
     def test_a_load_that_never_comes_or_was_turned_off(self):
-        watch = self.watch([])
-        watch.dimension_changed()
+        log = [("move",)]
+        watch = self.watch(log)
+        watch.world_opened()
+        watch.move_sent(False)
         self.assertEqual(watch.before_capture(10)[0], ["the pack never finished loading in this dimension"])
-        watch = self.watch([("off", "no gbuffers program")])
-        watch.dimension_changed()
+        log += [("off", "no gbuffers program")]
+        watch.move_sent(False)
+        log += [("move",)]
         self.assertEqual(watch.before_capture(10)[0], ["the pack was turned off: no gbuffers program"])
 
-    def test_an_unasked_load_invalidates_both_captures_around_it(self):
-        one, two = [("programs", 41)], [("programs", 41), ("programs", 41)]
-        watch = self.watch(one, one, two)
-        watch.dimension_changed()
-        self.assertEqual(watch.before_capture(10), ([], []))
-        self.assertEqual(watch.after_capture(), [])
-        mine, previous = watch.before_capture(10)
-        self.assertEqual(mine, ["1 pack load(s) came without a dimension change"])
-        self.assertEqual(previous, ["1 pack load(s) came without a dimension change after this capture; it may have "
-                                    "run during it"])
+    def test_a_move_line_that_never_comes(self):
+        watch = self.watch([])
+        watch.move_sent(False)
+        self.assertEqual(watch.before_capture(10)[0], ["the teleport's feedback never showed in the log"])
 
     def test_a_load_during_the_capture(self):
-        watch = self.watch([("programs", 41)], [("programs", 41)] * 2)
-        watch.dimension_changed()
+        log = [("programs", 41), ("move",)]
+        watch = self.watch(log)
+        watch.world_opened()
+        watch.move_sent(False)
         self.assertEqual(watch.before_capture(10), ([], []))
-        self.assertEqual(watch.after_capture(), ["1 pack load(s) came during the capture"])
+        log.append(("programs", 41))
+        self.assertEqual(watch.after_capture(), ["1 pack event(s) came during the capture"])
 
     def test_the_reply_must_name_the_staged_pack(self):
         reply = {"pack": {"kind": "shaders", "name": "/run/game/shaderpacks/BSL.zip"}}
@@ -404,24 +397,32 @@ class FakeGame:
     (or replies with the next of `refusals` first)."""
 
     def __init__(self, view, picture, refusals=(), pack=None, day_after=None, writes=True, clock=None, log=None,
-                 loads_on_teleport=()):
+                 loads_on_teleport=(), loads_before_move=(), loaded=True, failing=()):
         self.view, self.picture, self.refusals, self.writes = view, picture, list(refusals), writes
         self.clock = clock or {}
-        # The pack loads the game logs: `loads_on_teleport` are added to `log` when the camera is teleported.
-        self.log, self.loads_on_teleport = log, list(loads_on_teleport)
+        # What the game logs (pack_events' events): a teleport logs `loads_before_move` (a load finishing while the
+        # move is on its way), then its move line, then `loads_on_teleport`.
+        self.log = [] if log is None else log
+        self.loads_on_teleport, self.loads_before_move = list(loads_on_teleport), list(loads_before_move)
+        # loaded: the status shows the camera at the view (else 100 blocks off, so it never counts as loaded);
+        # failing: commands that fail.
+        self.loaded, self.failing = loaded, set(failing)
         self.pack = pack or {"kind": "none", "name": None}
         self.day, self.day_after, self.sent, self.sequences = view["time"] or 0, day_after, [], 0
 
     def __call__(self, *words, check=True, timeout=600):
         self.sent.append(words)
         if words[0] == "command":
-            if " run tp @a " in words[1] and self.log is not None:
-                self.log += self.loads_on_teleport
+            if " run tp @a " in words[1]:
+                self.log += self.loads_before_move + [("move",)] + self.loads_on_teleport
+            if words[1] in self.failing:
+                return {"success": False}
             if words[1] == "tick query":
                 return {"success": True, "chat": ["The game is frozen"]}
             return {"success": True, "result": 1}
         if words[0] == "status":
-            return ReadinessTests.status(12, pos=self.view["pos"],
+            x, y, z = self.view["pos"]
+            return ReadinessTests.status(12, pos=(x, y, z) if self.loaded else (x + 100, y, z),
                                          dimension=f"minecraft:{self.view['dimension']}")
         if words[0] == "options-get":
             return {"options": {"simulationDistance": {"value": 8}, "fov": {"value": 70}}}
@@ -457,7 +458,7 @@ class CaptureViewTests(unittest.TestCase):
 
     def capture(self, game, staged=None):
         clock = FakeClock()
-        watch = ss.PackWatch(lambda: [], clock.time, clock.sleep)
+        watch = ss.PackWatch(lambda: list(game.log), clock.time, clock.sleep)
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(perf_bench, "time", clock), \
                 mock.patch.object(ss, "time", clock):
             record, before, ready = ss.capture_view(game, self.scenes, self.view, None, tmp, watch, staged,
@@ -523,7 +524,8 @@ class CaptureViewTests(unittest.TestCase):
 
 
 class PackEvidenceThroughCaptureTests(unittest.TestCase):
-    """The pack-load evidence of a sequence of views, through capture_view with one PackWatch over the game's log."""
+    """The pack-load evidence of a sequence of views, through run_views and capture_view with one PackWatch over the
+    game's log."""
     scenes = ss.parse_scenes(scene(settle_seconds=0, frames=8, options={"renderDistance": "2"},
                                    views=[{"name": "a", "dimension": "overworld", "pos": [1.5, 64.0, -2.5]},
                                           {"name": "b", "dimension": "the_nether", "pos": [0.0, 70.0, 3.0]},
@@ -533,43 +535,74 @@ class PackEvidenceThroughCaptureTests(unittest.TestCase):
     pack = {"kind": "shaders", "name": "/g/shaderpacks/BSL.zip"}
     load = ("programs", 41)
 
-    def views(self, log, loads):
-        """Captures a, b and c in turn; `loads[name]` are the loads the game logs when that view's camera moves, and
-        `loads["stray"]` adds one load after a's capture. Returns each view's problems."""
+    def views(self, games, scenes=None, staged="BSL.zip"):
+        """Captures every view in turn, view n with the FakeGame `games[name]` gives (its keyword arguments), all
+        logging to one log that starts with the world's load. Returns each view's problems."""
+        scenes = scenes or self.scenes
+        log = [self.load] if staged else []
         clock = FakeClock()
         watch = ss.PackWatch(lambda: list(log), clock.time, clock.sleep)
-        watch.dimension_changed()  # the world opens in a's dimension; its load is in the log already
-        problems, previous, dimension = {}, None, "overworld"
+        if staged:
+            watch.world_opened()
+        current = {}
+
+        def game(*words, **kwargs):
+            return current["game"](*words, **kwargs)
+        game.command = lambda line: current["game"].command(line)
+        real = ss.capture_view
+
+        def capture_view(g, scenes_, view, *args, **kwargs):
+            current["game"] = FakeGame(view, self.picture, pack=self.pack if staged else None, log=log,
+                                       **games.get(view["name"], {}))
+            return real(current["game"], scenes_, view, *args, **kwargs, sleep=clock.sleep)
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(perf_bench, "time", clock), \
-                mock.patch.object(ss, "time", clock):
-            for view in self.scenes["views"]:
-                game = FakeGame(view, self.picture, pack=self.pack, log=log,
-                                loads_on_teleport=loads.get(view["name"], []))
-                record, before, _ = ss.capture_view(game, self.scenes, view, previous, tmp, watch, "BSL.zip",
-                                                    ss.settings_expected(self.scenes),
-                                                    new_dimension=view["dimension"] != dimension, sleep=clock.sleep)
-                if previous is not None:
-                    problems[previous["name"]] += before
-                problems[view["name"]] = record["problems"]
-                previous, dimension = view, view["dimension"]
-                if view["name"] == "a" and "stray" in loads:
-                    log.append(self.load)  # logged after a's reply, before b's teleport
-        return problems
+                mock.patch.object(ss, "time", clock), mock.patch.object(ss, "capture_view", capture_view), \
+                contextlib.redirect_stdout(io.StringIO()):
+            views = ss.run_views(game, scenes, tmp, watch, staged, ss.settings_expected(scenes), "overworld")
+        return {name: record["problems"] for name, record in views.items()}
 
     def test_each_load_where_it_belongs(self):
-        self.assertEqual(self.views([self.load], {"b": [self.load]}), {"a": [], "b": [], "c": []})
+        self.assertEqual(self.views({"b": {"loads_on_teleport": [self.load]}}), {"a": [], "b": [], "c": []})
+        self.assertEqual(self.views({}, staged=None), {"a": [], "b": [], "c": []})
 
-    def test_a_stray_load_before_a_move_never_stands_in_for_the_moves_load(self):
-        problems = self.views([self.load], {"stray": True})
-        unasked = "1 pack load(s) came without a dimension change"
+    def test_a_load_logged_before_the_moves_line_never_stands_in_for_its_load(self):
+        # A reload of the overworld, logged after a's capture but before the client applied the move to the Nether.
+        problems = self.views({"b": {"loads_before_move": [self.load]}})
+        unasked = "1 pack load(s) came that no dimension change asked for"
         self.assertEqual(problems["a"], [f"{unasked} after this capture; it may have run during it"])
-        self.assertEqual(problems["b"], [unasked, "the pack never finished loading in this dimension"])
+        self.assertEqual(problems["b"], ["the pack never finished loading in this dimension", unasked])
         self.assertEqual(problems["c"], ["the pack never finished loading in this dimension"])
 
     def test_a_load_that_timed_out_is_still_awaited_in_that_dimension(self):
-        problems = self.views([self.load], {})
-        self.assertEqual(problems, {"a": [], "b": ["the pack never finished loading in this dimension"],
-                                    "c": ["the pack never finished loading in this dimension"]})
+        self.assertEqual(self.views({}), {"a": [], "b": ["the pack never finished loading in this dimension"],
+                                          "c": ["the pack never finished loading in this dimension"]})
+
+    def test_a_move_while_a_load_is_awaited_leaves_the_next_loads_unplaceable(self):
+        scenes = ss.parse_scenes(scene(settle_seconds=0, frames=8, options={"renderDistance": "2"},
+                                       views=[{"name": "a", "dimension": "overworld", "pos": [1.5, 64.0, -2.5]},
+                                              {"name": "b", "dimension": "the_nether", "pos": [0.0, 70.0, 3.0]},
+                                              {"name": "c", "dimension": "overworld", "pos": [1.5, 64.0, -2.5]}]))
+        problems = self.views({"c": {"loads_on_teleport": [self.load]}}, scenes)
+        self.assertEqual(problems["b"], ["the pack never finished loading in this dimension"])
+        self.assertEqual(problems["c"], ["a load of the dimension before was still awaited at the move here: the "
+                                         "loads after it can't be told apart"])
+
+    def test_setup_runs_only_in_a_loaded_view_and_a_missing_setup_breaks_the_views_after(self):
+        scenes = ss.parse_scenes(scene(settle_seconds=0, frames=8, options={"renderDistance": "2"},
+                                       views=[{"name": "a", "dimension": "overworld", "pos": [1.5, 64.0, -2.5],
+                                               "setup": ["setblock 1 64 1 minecraft:torch"]},
+                                              {"name": "b", "dimension": "overworld", "pos": [9.5, 64.0, -2.5]}]))
+        problems = self.views({"a": {"loaded": False}}, scenes, staged=None)
+        setup = "execute in minecraft:overworld run setblock 1 64 1 minecraft:torch"
+        self.assertEqual(problems["a"], [f"setup not run (the view never loaded): {setup}",
+                                         "the view never finished loading"])
+        self.assertEqual(problems["b"], ["the setup of view a did not run fully: the world may differ from the other "
+                                         "side's"])
+        problems = self.views({"a": {"failing": [setup]}}, scenes, staged=None)
+        self.assertEqual(problems["a"], [f"command failed: {setup}"])
+        self.assertEqual(problems["b"], ["the setup of view a did not run fully: the world may differ from the other "
+                                         "side's"])
+        self.assertEqual(self.views({}, scenes, staged=None), {"a": [], "b": []})
 
 
 class PngTests(unittest.TestCase):
