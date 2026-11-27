@@ -360,17 +360,15 @@ impl crate::game::ClientGame<'_> {
         {
             return;
         }
-        let mut rockets = self.common.rockets.lift();
-        #[cfg(test)]
-        nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::OwnRocket);
-        for r in rockets.iter_mut().filter(|r| r.attached_to == Some(me)) {
-            self.follow_own_player(r);
-            self.pick_section_move(r.id, r.position.components());
-            self.rocket_spark(r);
-        }
-        self.common
-            .rockets
-            .restore(rockets, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+        self.with_lifted_rockets(|game, rockets| {
+            #[cfg(test)]
+            nested_spawn_tests::after_lift(game, nested_spawn_tests::Point::OwnRocket);
+            for r in rockets.iter_mut().filter(|r| r.attached_to == Some(me)) {
+                game.follow_own_player(r);
+                game.pick_section_move(r.id, r.position.components());
+                game.rocket_spark(r);
+            }
+        });
     }
 
     /// One tick of interpolation, as `tick_remote_objects`.
