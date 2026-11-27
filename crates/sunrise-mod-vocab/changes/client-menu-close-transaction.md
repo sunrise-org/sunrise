@@ -1,0 +1,1 @@
+`MenuRef::close` now defers the close packet and local menu teardown until the client transaction commits. A payload queued before the close is published first when no play packet hold is active. Aborting discards both effects, and a deferred close never applies to a replacement menu.
