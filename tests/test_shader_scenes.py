@@ -11,6 +11,7 @@ import json
 import os
 from pathlib import Path
 import struct
+import subprocess
 import tempfile
 import unittest
 from unittest import mock
@@ -32,6 +33,7 @@ def scene(**changes):
     return data
 
 
+MOVE = ("move", "Player1", (1.5, 64.0, -2.5))
 RENDERER = {"gpu": "AMD Radeon RX 7900 XTX (RADV NAVI31)", "vendor": "AMD", "driver": "radv Mesa 25.2.4",
             "device_type": "discrete", "backend": "Vulkan"}
 
@@ -301,7 +303,26 @@ class PackTests(unittest.TestCase):
             (plain / "assets" / "minecraft").mkdir(parents=True)
             (plain / "sunrise-resources.json").write_text("{}")
             (plain / "assets" / "minecraft" / "facts.json").write_text("2")
+            (plain / "assets" / "minecraft" / "loop").symlink_to(plain / "assets")
             self.assertEqual(second, ss.resources_digest(plain))
+
+    def test_every_path_to_a_linked_folder_is_in_the_digest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            shared = tmp / "shared"
+            shared.mkdir()
+            (shared / "facts.json").write_text("1")
+            resources = tmp / "res"
+            resources.mkdir()
+            (resources / "aaa-mirror").symlink_to(shared)  # walked before assets/
+            (resources / "assets").symlink_to(shared)
+            both = ss.resources_digest(resources)
+            (resources / "assets").unlink()
+            self.assertNotEqual(ss.resources_digest(resources), both)
+            (resources / "assets").symlink_to(shared)
+            self.assertEqual(ss.resources_digest(resources), both)
+            (resources / "aaa-mirror").unlink()
+            self.assertNotEqual(ss.resources_digest(resources), both)
 
     def test_a_folder_pack_is_hashed_with_what_its_links_point_at(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -343,34 +364,39 @@ class PackLogTests(unittest.TestCase):
         log = "\n".join(["[1] [Render thread/INFO]: [CHAT] Teleported Player1 to 1.5, 64.0, -2.5",
                          "[2] [Server thread/INFO]: System chat: [Player1: Teleported Player1 to 1.5, 64.0, -2.5]",
                          "[3] INFO shader pack BSL.zip: 41 programs (x) in 9 ms"])
-        self.assertEqual(ss.pack_events(log, "BSL.zip"), [("move",), ("programs", 41)])
-        self.assertEqual(ss.pack_events(log, ""), [("move",)])
+        moved = ("move", "Player1", (1.5, 64.0, -2.5))
+        self.assertEqual(ss.pack_events(log, "BSL.zip"), [moved, ("programs", 41)])
+        self.assertEqual(ss.pack_events(log, ""), [moved])
+        # Another entity's teleport has its own name; a line of another form is no move.
+        log = "\n".join(["[1] [Render thread/INFO]: [CHAT] Teleported Armor Stand to 3.000000, 64.000000, -1.500000",
+                         "[2] [Render thread/INFO]: [CHAT] Teleported Player1 to Armor Stand"])
+        self.assertEqual(ss.pack_events(log, ""), [("move", "Armor Stand", (3.0, 64.0, -1.5))])
 
     def watch(self, log):
         clock = FakeClock()
         return ss.PackWatch(lambda: list(log), clock.time, clock.sleep)
 
     def test_a_load_that_never_comes_or_was_turned_off(self):
-        log = [("move",)]
+        log = [MOVE]
         watch = self.watch(log)
         watch.world_opened()
-        watch.move_sent(False)
+        watch.move_sent(False, MOVE[2])
         self.assertEqual(watch.before_capture(10)[0], ["the pack never finished loading in this dimension"])
         log += [("off", "no gbuffers program")]
-        watch.move_sent(False)
-        log += [("move",)]
+        watch.move_sent(False, MOVE[2])
+        log += [MOVE]
         self.assertEqual(watch.before_capture(10)[0], ["the pack was turned off: no gbuffers program"])
 
     def test_a_move_line_that_never_comes(self):
         watch = self.watch([])
-        watch.move_sent(False)
+        watch.move_sent(False, MOVE[2])
         self.assertEqual(watch.before_capture(10)[0], ["the teleport's feedback never showed in the log"])
 
     def test_a_load_during_the_capture(self):
-        log = [("programs", 41), ("move",)]
+        log = [("programs", 41), MOVE]
         watch = self.watch(log)
         watch.world_opened()
-        watch.move_sent(False)
+        watch.move_sent(False, MOVE[2])
         self.assertEqual(watch.before_capture(10), ([], []))
         log.append(("programs", 41))
         self.assertEqual(watch.after_capture(), ["1 pack event(s) came during the capture"])
@@ -426,7 +452,7 @@ class FakeGame:
 
     def __init__(self, view, picture, refusals=(), pack=None, day_after=None, writes=True, clock=None, log=None,
                  loads_on_teleport=(), loads_before_move=(), loaded=True, failing=(), move_line=True,
-                 loads_during_capture=(), stops_after_capture=False):
+                 loads_during_capture=(), stops_after_capture=False, stops_at_capture=False):
         self.view, self.picture, self.refusals, self.writes = view, picture, list(refusals), writes
         self.clock = clock or {}
         # What the game logs (pack_events' events): a teleport logs `loads_before_move` (a load finishing while the
@@ -437,6 +463,7 @@ class FakeGame:
         # stops_after_capture: the game stops answering after this view's picture.
         self.move_line, self.loads_during_capture = move_line, list(loads_during_capture)
         self.stops_after_capture, self.captured = stops_after_capture, False
+        self.stops_at_capture = stops_at_capture
         # loaded: the status shows the camera at the view (else 100 blocks off, so it never counts as loaded);
         # failing: commands that fail.
         self.loaded, self.failing = loaded, set(failing)
@@ -449,7 +476,8 @@ class FakeGame:
             raise RuntimeError("sunrise-ctl state: cannot connect")
         if words[0] == "command":
             if " run tp @a " in words[1]:
-                self.log += self.loads_before_move + [("move",)] * self.move_line + self.loads_on_teleport
+                self.log += (self.loads_before_move + [("move", "Player1", tuple(self.view["pos"]))] * self.move_line
+                             + self.loads_on_teleport)
             if words[1] in self.failing:
                 return {"success": False}
             if words[1] == "tick query":
@@ -470,6 +498,8 @@ class FakeGame:
             return state
         if words[0] == "screenshot-sequence":
             self.sequences += 1
+            if self.stops_at_capture:
+                raise subprocess.TimeoutExpired("sunrise-ctl", 600)
             if self.refusals:
                 return {"error": self.refusals.pop(0)}
             if self.writes:
@@ -679,9 +709,9 @@ class PackEvidenceThroughCaptureTests(unittest.TestCase):
         problems = self.views({"b": {"loads_on_teleport": [self.load]}, "c": {"move_line": False}}, self.four)
         self.assertEqual(problems, {"a": [], "b": [], "c": [missing], "d": []})
         # The line comes late, with d's own: the extra line invalidates d and c.
-        late = "1 teleport feedback line(s) came that no teleport of this view sent"
+        late = "1 teleport feedback line(s) of the camera came that no teleport of this view sent"
         problems = self.views({"b": {"loads_on_teleport": [self.load]}, "c": {"move_line": False},
-                               "d": {"loads_before_move": [("move",)]}}, self.four)
+                               "d": {"loads_before_move": [("move", "Player1", (0.0, 70.0, 3.0))]}}, self.four)
         self.assertEqual(problems["c"], [missing, f"{late} after this capture; it may have run during it"])
         self.assertEqual(problems["d"], [late])
         # A move to another dimension without its line: that dimension's loads can't be placed.
@@ -690,6 +720,36 @@ class PackEvidenceThroughCaptureTests(unittest.TestCase):
         never = "the pack never finished loading in this dimension"
         unplaced = "the move into this dimension showed no feedback line: its loads can't be placed"
         self.assertEqual((problems["c"], problems["d"]), ([never, unplaced], [never, unplaced]))
+
+    def test_another_entitys_teleport_is_not_the_cameras(self):
+        stand = ("move", "Armor Stand", (3.0, 64.0, -1.5))
+        problems = self.views({"a": {"loads_before_move": [stand], "loads_on_teleport": [stand]},
+                               "b": {"loads_on_teleport": [stand, self.load, stand]}})
+        self.assertEqual(problems, {"a": [], "b": [], "c": []})
+        # The camera's own line at a position no teleport of the view sent is one no teleport explains.
+        problems = self.views({"b": {"loads_on_teleport": [self.load, ("move", "Player1", (5.0, 5.0, 5.0))]}})
+        late = "1 teleport feedback line(s) of the camera came that no teleport of this view sent"
+        self.assertEqual((problems["a"], problems["b"]),
+                         ([f"{late} after this capture; it may have run during it"], [late]))
+
+    def test_a_camera_line_at_another_position_never_stands_in_for_the_moves_line(self):
+        # Before b's own line: the camera's line at a position b didn't send, and a load. Neither is b's move, so
+        # the load can't be the Nether's.
+        wrong = ("move", "Player1", (5.0, 5.0, 5.0))
+        problems = self.views({"b": {"loads_before_move": [wrong, self.load]}})
+        self.assertEqual(problems["b"], ["the pack never finished loading in this dimension",
+                                         "1 pack load(s) came that no dimension change asked for",
+                                         "1 teleport feedback line(s) of the camera came that no teleport of this "
+                                         "view sent"])
+
+    def test_evidence_against_the_view_before_survives_a_capture_that_stops(self):
+        # b's read of the log finds a load nothing asked for, then b's capture times out: a keeps that evidence.
+        views = {}
+        with self.assertRaises(subprocess.TimeoutExpired):
+            self.views({"b": {"loads_before_move": [self.load], "loads_on_teleport": [self.load],
+                              "stops_at_capture": True}}, views=views)
+        self.assertEqual(views["a"]["problems"], ["1 pack load(s) came that no dimension change asked for after this "
+                                                  "capture; it may have run during it"])
 
     def test_the_views_taken_before_the_game_stops_keep_their_records(self):
         views = {}

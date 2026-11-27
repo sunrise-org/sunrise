@@ -381,36 +381,47 @@ def pack_key(pack):
     return key
 
 
-def _tree_files(root):
-    """Every file under `root` as (its relative path, its path), following symbolic links to folders as the game's
-    reads do (a folder reached twice through links, a loop among them, is walked once)."""
+def _tree_entries(root):
+    """What a folder holds, as the game's reads see it, in a fixed order: ("file", its relative path, its path) for
+    each file, following symbolic links to folders, and ("alias", a folder's relative path, the relative path it
+    was first walked at) for a folder reached again through a link (a mirror, or a loop): its files count once, but
+    each path to them is in the entries, so adding or removing a link changes them."""
     root = os.path.realpath(root)
-    files, walked = [], set()
+    entries, walked = [], {root: "."}
     for folder, subfolders, names in os.walk(root, followlinks=True):
-        real = os.path.realpath(folder)
-        if real in walked:
-            subfolders[:] = []
-            continue
-        walked.add(real)
-        for name in names:
+        relative = Path(folder).relative_to(root).as_posix()
+        subfolders.sort()
+        for sub in list(subfolders):
+            real = os.path.realpath(os.path.join(folder, sub))
+            path = sub if relative == "." else f"{relative}/{sub}"
+            if real in walked:
+                entries.append(("alias", path, walked[real]))
+                subfolders.remove(sub)
+            else:
+                walked[real] = path
+        for name in sorted(names):
             path = os.path.join(folder, name)
             if os.path.isfile(path):
-                files.append((Path(path).relative_to(root).as_posix(), path))
-    return sorted(files)
+                entries.append(("file", Path(path).relative_to(root).as_posix(), path))
+    return sorted(entries)
 
 
 def staged_digest(staged):
-    """The identity of a file or folder as it is now: the sha256 of a file, or of a folder's relative file names and
-    their sha256 in sorted order, through the symbolic links in it (_tree_files). A staged pack is read from the
-    copy the game loads, never from the source, which can change between the copy and the hash."""
+    """The identity of a file or folder as it is now: the sha256 of a file, or of a folder's entries in order
+    (_tree_entries: each file's relative path and sha256, and each linked alias of a folder with the path it
+    stands for). A staged pack is read from the copy the game loads, never from the source, which can change
+    between the copy and the hash."""
     staged = Path(staged)
     if staged.is_file():
         return sha256_file(staged)
     import hashlib
     digest = hashlib.sha256()
-    for relative, path in _tree_files(staged):
-        digest.update(relative.encode() + b"\0")
-        digest.update(bytes.fromhex(sha256_file(path)))
+    for kind, relative, target in _tree_entries(staged):
+        if kind == "file":
+            digest.update(b"file\0" + relative.encode() + b"\0")
+            digest.update(bytes.fromhex(sha256_file(target)))
+        else:
+            digest.update(b"alias\0" + relative.encode() + b"\0" + target.encode() + b"\0")
     return digest.hexdigest()
 
 
@@ -564,19 +575,26 @@ def sunrise_settings(status, options):
 # What the render thread logs when the teleport's feedback reaches the chat: vanilla's
 # commands.teleport.success.location.single ("Teleported %s to %s, %s, %s", assets/minecraft/lang/en_us.json) after
 # Sunrise's `[CHAT] ` (crates/sunrise-client-render/src/chat.rs). The server sends it after the teleport, so the
-# client has applied the move (its dimension change among it) when it logs the line.
+# client has applied the move (its dimension change among it) when it logs the line. The position is three %f
+# numbers (six decimals); a setup that teleports another entity logs the same line with that entity's name.
 MOVE_MARK = "[CHAT] Teleported "
+MOVE_LINE = re.compile(r"\[CHAT\] Teleported (?P<who>.+) to (?P<x>-?\d+\.\d+), (?P<y>-?\d+\.\d+), (?P<z>-?\d+\.\d+)\s*\Z")
+# How far a feedback line's position may be from the one sent: half its last decimal (%f's rounding).
+MOVE_EPSILON = 5e-7
 
 
 def pack_events(log_text, name):
-    """What the log shows of the pack, in order: ("move",) for each teleport's feedback line (MOVE_MARK),
+    """What the log shows of the pack, in order: ("move", who, (x, y, z)) for each teleport's feedback line
+    (MOVE_LINE: whom it teleported, and where),
     ("programs", N) for `shader pack <name>: N programs ...` and ("off", why) for `shader pack <name>: turned off:
     why`. Sunrise loads a pack when the world opens and again at each dimension change."""
     prefix = f"shader pack {name}: "
     out = []
     for line in log_text.splitlines():
         if MOVE_MARK in line:
-            out.append(("move",))
+            moved = MOVE_LINE.search(line)
+            if moved:
+                out.append(("move", moved["who"], tuple(float(moved[k]) for k in "xyz")))
             continue
         at = line.find(prefix)
         if at < 0:
@@ -629,21 +647,43 @@ class PackWatch:
         self.changes = {}  # move number -> whether that move changes dimension
         self.stray = 0  # loads nothing awaited, since the last capture
         self.extra_moves = 0  # move lines no teleport sent explains, since the last capture
+        self.targets = {}  # move number -> the position it sends the camera to
+        self.player = None  # the camera player's name, from its first move line
 
     def world_opened(self):
         """The world opens in the saved dimension and loads the pack: the first captures await that load."""
         self.pending += 1
 
-    def move_sent(self, new_dimension):
-        """The next teleport is about to be sent; `new_dimension`: it changes dimension (a load is to follow)."""
+    def move_sent(self, new_dimension, pos):
+        """The next teleport, of the camera player to `pos`, is about to be sent; `new_dimension`: it changes
+        dimension (a load is to follow)."""
         self.moves_sent += 1
         self.changes[self.moves_sent] = new_dimension
+        self.targets[self.moves_sent] = tuple(pos)
+
+    def _ours(self, event):
+        """Whether a move line is the camera player's: its name once known (the first line at the first move's
+        position gives it), else the position of the move awaited. Another entity's teleport (a setup's) is not."""
+        _, who, pos = event
+        if self.player is not None:
+            return who == self.player
+        target = self.targets.get(self.moves_seen + 1)
+        if target is None or max(abs(a - b) for a, b in zip(pos, target)) > MOVE_EPSILON:
+            return False
+        self.player = who
+        return True
+
+    def _at_target(self, event):
+        target = self.targets.get(self.moves_seen + 1)
+        return target is not None and max(abs(a - b) for a, b in zip(event[2], target)) <= MOVE_EPSILON
 
     def _take(self, events):
         for event in events[self.seen:]:
             self.seen += 1
             if event[0] == "move":
-                if self.moves_seen == self.moves_sent:
+                if not self._ours(event):
+                    continue
+                if self.moves_seen == self.moves_sent or not self._at_target(event):
                     self.extra_moves += 1
                     continue
                 self.moves_seen += 1
@@ -660,7 +700,8 @@ class PackWatch:
         if self.stray:
             texts.append(f"{self.stray} pack load(s) came that no dimension change asked for")
         if self.extra_moves:
-            texts.append(f"{self.extra_moves} teleport feedback line(s) came that no teleport of this view sent")
+            texts.append(f"{self.extra_moves} teleport feedback line(s) of the camera came that no teleport of this "
+                         "view sent")
         self.stray = self.extra_moves = 0
         return texts, [f"{text} after this capture; it may have run during it" for text in texts]
 
@@ -805,11 +846,13 @@ def capture_problems(reply, scenes, staged_name):
 
 
 def capture_view(game, scenes, view, previous, folder, watch, staged_name, expected, new_dimension=False,
-                 sleep=time.sleep):
+                 sleep=time.sleep, flag_previous=None):
     """Places, loads, settles, checks and captures one view; returns (its record, the problems of the view before
-    it, whether it loaded). `new_dimension`: the move changes dimension, so the game loads the pack again."""
+    it, whether it loaded). `new_dimension`: the move changes dimension, so the game loads the pack again.
+    `flag_previous` gets the problems of the view before it as soon as the evidence is read, before the capture,
+    so a game that stops answering during the capture can't drop them."""
     limit = scenes["load_timeout_seconds"]
-    watch.move_sent(new_dimension)
+    watch.move_sent(new_dimension, view["pos"])
     for line in view_commands(view):
         game.command(line)
     ready = wait_loaded(game, view, limit, moved=not same_place(view, previous))
@@ -829,6 +872,8 @@ def capture_view(game, scenes, view, previous, folder, watch, staged_name, expec
     camera["frozen"] = sunrise_frozen(game("command", "tick query", check=False))
     camera["settings"] = sunrise_settings(game("status"), game("options-get", "simulationDistance", "fov"))
     mine, before = watch.before_capture(limit)
+    if flag_previous is not None and before:
+        flag_previous(before)
     name = f"{view['name']}.png"
     reply, attempts = capture(game, scenes, Path(folder) / name, limit, view)
     # Hashed as soon as the reply says the file is written, before anything else can touch it.
@@ -861,10 +906,14 @@ def run_views(game, scenes, folder, watch, staged_name, expected, dimension, vie
     for view in scenes["views"]:
         moved = bool(staged_name) and view["dimension"] != dimension
         dimension = view["dimension"]
-        entry, before, ready = capture_view(game, scenes, view, previous, folder, watch, staged_name, expected,
-                                            new_dimension=moved)
-        if before and last is not None:
-            views[last]["problems"] += before
+        if last is not None:
+            def flag_previous(problems, last=last):
+                views[last]["problems"] += problems
+        else:
+            def flag_previous(problems):
+                pass
+        entry, _, ready = capture_view(game, scenes, view, previous, folder, watch, staged_name, expected,
+                                       new_dimension=moved, flag_previous=flag_previous)
         if broken is not None:
             entry["problems"].append(f"the setup of view {broken} did not run fully: the world may differ from the "
                                      "other side's")

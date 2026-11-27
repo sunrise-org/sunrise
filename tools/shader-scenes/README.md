@@ -91,14 +91,16 @@ first view in the End and any view after an End view in another dimension: End v
   frame count and step, and its last frame's clock must be the one `screenshot-sequence` gives frame FRAMES: counter
   FRAMES, elapsed (FRAMES - 1) x STEP_MS and delta STEP_MS, in seconds, compared exactly as f32s. The
   gamerules are queried after they are set.
-- A view's record goes into the run as soon as it is taken: a game that stops answering later keeps the views
-  before it.
+- A view's record goes into the run as soon as it is taken, and what the next view's read of the log finds
+  against it goes in before that view's capture: a game that stops answering later keeps both.
 - A view whose setup did not run fully (skipped, or a command failed) leaves the world unlike the other side's:
   every view after it is invalid.
 - The pack, for each capture: Sunrise loads a pack when the world opens and again at each change of dimension, and
   logs each load that finishes (`shader pack <name>: N programs`) or fails (`... turned off: why`). The log is read
-  in order with each teleport's feedback line (`[CHAT] Teleported ...`), which the client logs after applying the
-  move. A view that changes dimension awaits one load logged after its own move line, so a load logged before it
+  in order with each teleport's feedback line (`[CHAT] Teleported <who> to x, y, z`), which the client logs after
+  applying the move. Only the camera player's lines count: the name of the first line at the first view's position,
+  and each at the position its view sent (a setup that teleports another entity logs one under that entity's
+  name, which is not a move). A view that changes dimension awaits one load logged after its own move line, so a load logged before it
   (a reload of the dimension before, however late) never stands in for it. An awaited load stays awaited across
   views of that dimension, so a load that timed out is still missing at the next capture there; a move to another
   dimension while one is still awaited leaves the loads after it impossible to tell apart, and every capture in
@@ -116,7 +118,8 @@ first view in the End and any view after an End view in another dimension: End v
 - A capture's picture is hashed (sha256) as soon as its reply says it is written, and recorded in `run.json` with
   the view's checks. Each run records the world generation and its save's digest, the scene hash, the sha256 of the
   staged pack (hashed from the copy the game loads) and of the `sunrise-client` it ran, a digest of the prepared
-  resources (every file's relative name and sha256, through linked folders, taken again for each game), the
+  resources (every file's relative name and sha256, through linked folders, and each further path a linked folder
+  is reached by, taken again for each game), the
   renderer the game picked (GPU, vendor, driver, device type
   and graphics backend, from `sunrise-ctl status`) and the environment its `--env` set.
 - `compare` takes a view only from a record that carries the view's checks (its `problems`, a list) with none,
