@@ -7,7 +7,8 @@
 //! custom item textures, which the client matches against its stacks; `emissive`: emissive
 //! overlays; `blink`: ETF's blinking textures; [`fusion`]: the Fusion mod's connected
 //! textures, whose layouts read [`ctm`]'s neighbour masks; [`color`]: `color.properties`' custom
-//! colours; [`sky`]: custom sky layers and the sun and moon they replace).
+//! colours; [`lightmap`]: custom lightmaps; [`sky`]: custom sky layers and the sun and moon they
+//! replace).
 //!
 //! Written from OptiFine's public documentation of the file formats (and ETF's, for its additions
 //! to random entities and emissive textures); `cit` also from CIT Resewn's wiki and the conditions of its MIT-licensed
@@ -21,6 +22,7 @@ pub mod color;
 pub mod ctm;
 pub mod emissive;
 pub mod fusion;
+pub mod lightmap;
 pub mod matchers;
 pub mod paths;
 pub mod properties;

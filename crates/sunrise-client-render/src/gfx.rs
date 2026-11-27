@@ -648,6 +648,25 @@ impl Renderer {
     pub fn custom_sky_draws(&mut self) -> &mut Vec<crate::custom_sky::Draw> {
         &mut self.custom_sky_draws
     }
+    /// The pack's custom lightmaps (`crate::custom_lightmap::load`): a world with one takes its
+    /// light texture from them in place of the default one. A pack without any costs a frame
+    /// nothing.
+    pub fn set_custom_lightmap(
+        &mut self,
+        pack: std::sync::Arc<dyn crate::custom_lightmap::Lightmaps>,
+    ) {
+        self.custom_lightmap = (!pack.is_empty()).then_some(pack);
+        self.lightmap_uploaded = false;
+    }
+    /// Whether the pack has custom lightmaps: only then does the game hand over the weather.
+    pub fn has_custom_lightmap(&self) -> bool {
+        self.custom_lightmap.is_some()
+    }
+    /// The world and weather of the next frame's light texture (custom lightmaps read them). Only
+    /// that frame reads them: a frame the game sets none for has no custom lightmap.
+    pub fn set_lightmap_weather(&mut self, weather: crate::custom_lightmap::Weather) {
+        self.lightmap_weather = Some(weather);
+    }
     fn quad_indices(device: &wgpu::Device, quads: u32) -> wgpu::Buffer {
         surface_setup::ray_query::quad_indices(device, quads)
     }

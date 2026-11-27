@@ -331,6 +331,11 @@ impl ClientPackResources {
             clouds: Arc::new(clouds),
             forcefield: Arc::new(forcefield),
             custom_sky,
+            custom_lightmap: if draws {
+                sunrise_client::custom_lightmap::load(root.source())
+            } else {
+                sunrise_client::custom_lightmap::empty()
+            },
             environments,
             polytone_particles,
             polytone_post,
@@ -479,6 +484,8 @@ pub struct ClientPackResources {
     pub(in crate::game) forcefield: Arc<(u32, u32, Vec<u8>)>,
     /// Custom sky layers (OptiFine's `optifine/sky`) with their textures; none without them.
     pub(in crate::game) custom_sky: Arc<dyn sunrise_client::custom_sky::SkyLayers>,
+    /// Custom lightmaps (OptiFine's `optifine/lightmap`); none without them.
+    pub(in crate::game) custom_lightmap: Arc<dyn sunrise_client::custom_lightmap::Lightmaps>,
     /// The overworld's, Nether's and End's attribute stacks with the packs' Polytone biome and
     /// dimension modifiers (#11486), when a pack has some: what the frame draws.
     pub environments: Option<Arc<[Environment; 3]>>,

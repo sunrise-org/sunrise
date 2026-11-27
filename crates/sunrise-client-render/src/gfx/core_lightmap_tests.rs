@@ -168,7 +168,7 @@ fn a_pack_lightmap_with_an_older_larger_info_block_draws() {
         &|b| b == INFO_BLOCK,
     )
     .expect("the shaders translate");
-    let mut core = lightmap_for(&device, Some(&program), &[])
+    let mut core = lightmap_for(&device, Some(&program), &[], ShaderOrigin::Pack)
         .unwrap_or_else(|e| panic!("{e}"))
         .expect("the lightmap pipeline");
     core.set_readback(&device, true);
@@ -600,7 +600,7 @@ fn a_lightmap_shaders_blocks_count_for_the_stages_that_read_them() {
     let made = |vertex, fragment| {
         let (program, expressions) = expression_lightmap(vertex, fragment);
         let past = program.past_device_limit(&device.limits(), &[wgpu::TextureFormat::Rgba8Unorm]);
-        let made = lightmap_for(&device, Some(&program), &expressions)
+        let made = lightmap_for(&device, Some(&program), &expressions, ShaderOrigin::Pack)
             .unwrap_or_else(|e| panic!("{e}"))
             .is_some();
         (made, past)
@@ -710,4 +710,123 @@ fn copies_from_before_fullbright_are_never_read() {
 #[test]
 fn the_not_gamma_scale_multiplies_in_the_shaders_order() {
     assert_eq!(max_scaled(0.0015).to_bits(), 1_002_711_808);
+}
+
+/// A pack's custom lightmaps for the selection tests: the Overworld's, 32 rows (no night vision
+/// rows), every sky level 200 and every block level 0.
+struct Overworld(sunrise_optifine::lightmap::Lightmaps);
+
+impl crate::custom_lightmap::Lightmaps for Overworld {
+    fn is_empty(&self) -> bool {
+        self.0.is_empty()
+    }
+    fn has(&self, world: i32) -> bool {
+        self.0.has(world)
+    }
+    fn pixels(
+        &self,
+        world: i32,
+        input: &crate::custom_lightmap::Input,
+    ) -> Option<crate::custom_lightmap::Pixels> {
+        self.0.pixels(
+            world,
+            &sunrise_optifine::lightmap::Input {
+                sky: input.sky,
+                lightning: input.weather.lightning,
+                flicker: input.flicker,
+                gamma: input.gamma,
+                night_vision: input.night_vision,
+                darkness: input.darkness,
+                rain: input.weather.rain,
+                thunder: input.weather.thunder,
+            },
+        )
+    }
+}
+
+fn overworld() -> Overworld {
+    use sunrise_optifine::lightmap::{Lightmaps, Picture, WorldLightmap};
+    let mut rgba = Vec::new();
+    for y in 0..32 {
+        let v = if y < 16 { 200 } else { 0 };
+        for _ in 0..16 {
+            rgba.extend([v, v, v, 255]);
+        }
+    }
+    let base = Picture::from_rgba(16, 32, &rgba).unwrap();
+    let world = WorldLightmap {
+        base,
+        rain: None,
+        thunder: None,
+    };
+    Overworld(Lightmaps {
+        worlds: [(0, world)].into(),
+    })
+}
+
+fn input(night_vision: bool) -> crate::custom_lightmap::Input {
+    crate::custom_lightmap::Input {
+        sky: 1.0,
+        flicker: 0.0,
+        gamma: 0.0,
+        night_vision,
+        darkness: 0.0,
+        weather: Default::default(),
+    }
+}
+
+fn weather(world: i32) -> Option<crate::custom_lightmap::Weather> {
+    Some(crate::custom_lightmap::Weather {
+        world: Some(world),
+        ..Default::default()
+    })
+}
+
+/// The renderer's selection with a real pack lightmap behind it: fullbright, then a pack's own
+/// shader, then the world's palette when it serves the frame, then the default (vanilla's shader
+/// where one is installed).
+#[test]
+fn the_light_texture_source_is_fullbright_then_pack_shader_then_palette_then_default() {
+    let maps = overworld();
+    let maps = &maps;
+    let palette = |w, nv| move || palette_pixels(maps, w, input(nv));
+    let is_palette = |s: Source| matches!(s, Source::Palette(p) if p[0] == 200);
+    // The default shader installed: an eligible palette replaces it.
+    assert!(is_palette(Source::select(
+        false,
+        Some(ShaderOrigin::Vanilla),
+        palette(weather(0), false)
+    )));
+    assert!(is_palette(Source::select(
+        false,
+        None,
+        palette(weather(0), false)
+    )));
+    // A pack's override draws over the palette, and fullbright over everything; neither asks
+    // for the palette.
+    let never = || -> Option<[u8; 16 * 16 * 4]> { panic!("the palette is not asked for") };
+    assert_eq!(
+        Source::select(false, Some(ShaderOrigin::Pack), never),
+        Source::PackShader
+    );
+    assert_eq!(
+        Source::select(true, Some(ShaderOrigin::Pack), never),
+        Source::White
+    );
+    assert_eq!(Source::select(true, None, never), Source::White);
+    // No palette for the world, no weather set for the frame, or night vision without the
+    // palette's rows: the default.
+    for (shader, w, nv) in [
+        (Some(ShaderOrigin::Vanilla), weather(-1), false),
+        (None, weather(1), false),
+        (None, None, false),
+        (Some(ShaderOrigin::Vanilla), weather(0), true),
+        (None, weather(0), true),
+    ] {
+        assert_eq!(
+            Source::select(false, shader, palette(w, nv)),
+            Source::Default,
+            "{shader:?} {w:?} {nv}"
+        );
+    }
 }

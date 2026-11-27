@@ -136,6 +136,7 @@ pub(in crate::game) fn build_renderer(
         .into_iter()
         .collect::<std::result::Result<(), String>>();
     renderer.set_custom_sky(&*client_pack.custom_sky);
+    renderer.set_custom_lightmap(client_pack.custom_lightmap.clone());
     renderer.set_shared_material_maps(&atlas.material_maps);
     let cit_glints = client_pack
         .item_renderer

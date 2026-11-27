@@ -34,6 +34,14 @@ pub trait PackFormats: Send + Sync {
         None
     }
 
+    /// The lightmaps the overlay replaces the computed light texture with, if it has any.
+    fn lightmaps(
+        &self,
+        _root: &ResourceSource,
+    ) -> Option<Arc<dyn crate::custom_lightmap::Lightmaps>> {
+        None
+    }
+
     /// The durability bar colours the overlay sets by item, if any.
     fn item_bars(&self, _root: &ResourceSource) -> Option<Arc<dyn crate::pack_palette::ItemBars>> {
         None

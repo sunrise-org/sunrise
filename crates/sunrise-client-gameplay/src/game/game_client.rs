@@ -4340,7 +4340,9 @@ impl crate::game::ClientGame<'_> {
             &sample_clock,
         );
         self.end_flash_sky(&mut sky, alpha);
-        if self.common.flash > 0 && !self.client.settings.file.bool("hideLightningFlashes") {
+        let lightning =
+            self.common.flash > 0 && !self.client.settings.file.bool("hideLightningFlashes");
+        if lightning {
             // ClientLevel's flash layer while skyFlashTime > 0: the sky colour
             // moves 22% of the way to (0.8, 0.8, 1.0).
             let flash = [0.8, 0.8, 1.0];
@@ -4664,7 +4666,13 @@ impl crate::game::ClientGame<'_> {
         } else {
             (Vec::new(), Vec::new(), None)
         };
-        self.custom_sky_frame([camera.x, camera.y, camera.z], &sky, (rain, thunder), title);
+        self.custom_sky_frame(
+            [camera.x, camera.y, camera.z],
+            &sky,
+            (rain, thunder),
+            lightning,
+            title,
+        );
         pr.lap("pr_celestial");
         let (mut hand, hand_items) = if title || self.scoping() {
             Default::default()
