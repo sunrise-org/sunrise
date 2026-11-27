@@ -779,7 +779,7 @@ pub(crate) mod tests {
                         let renderer = game.test_renderer().unwrap();
                         [renderer.config.width, renderer.config.height]
                     };
-                    let _ = game.hud_layers(size);
+                    let _ = game.hud_layers(game.gui_frame_for(size));
                     sunrise_client::widgets::end_frame(2);
                     let (w, h) = game.gui_size();
                     let done = (w / 2.0 - 80.0, h - 18.0);

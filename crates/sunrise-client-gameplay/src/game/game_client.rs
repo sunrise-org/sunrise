@@ -2246,14 +2246,14 @@ impl crate::game::ClientGame<'_> {
         }
         title_settled
     }
-    pub fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
+    pub fn hud_layers(&mut self, frame: sunrise_client::window::GuiFrame) -> HudBatch {
         use sunrise_client::gui_layers::VanillaGuiLayer;
 
         self.client.hud_status_heights = Default::default();
         self.client.hud_status_heights_set.set(None);
         self.input_hud_begin();
         self.client.subtitles.deferred.set(false);
-        let mut batch = HudBatch::for_frame(&self.gui_frame_for(size));
+        let mut batch = HudBatch::for_frame(&frame);
         batch.glint_colour = self.pvp_glint_texel();
         // GlobalSettingsUniform's GameTime, for a resource pack's text shader.
         batch.game_time = ((self.common.world.game_time.rem_euclid(24000)) as f32
@@ -2815,13 +2815,13 @@ impl crate::game::ClientGame<'_> {
     ) -> HudBatch {
         // Gui.extractRenderState passes integer coordinates to the HUD and screen. Keep
         // the projected fractions for input, but draw and hit-test hover at the frame's pixel.
-        let pointer = self.project_window_cursor(size);
+        let frame = self.gui_frame_for(size);
+        let pointer = self.project_window_cursor(frame);
         if let Some(pointer) = pointer {
             self.client.cursor = pointer.pixel();
         }
         // Off a world (title, options, Win, a prompt before joining) the HUD shows nothing to
         // keep clear of; `hud_layers` fills it in once the world's HUD draws.
-        let frame = self.gui_frame_for(size);
         let (w, h) = frame.size();
         self.client.chat_ui.room = sunrise_client::hud_kit::room::Room::new(w, h);
         // The pack prompt replaces the connecting screen (setScreen), but
@@ -2834,7 +2834,7 @@ impl crate::game::ClientGame<'_> {
         {
             HudBatch::for_frame(&frame)
         } else {
-            self.hud_layers(size)
+            self.hud_layers(frame)
         };
         // Vanilla's confirmation replaces the dialog as the screen.
         if self.client.command_prompt.0.is_none() {
@@ -3788,11 +3788,12 @@ impl crate::game::ClientGame<'_> {
     }
     pub(in crate::game::client_side) fn project_window_cursor(
         &self,
-        framebuffer: [u32; 2],
+        frame: sunrise_client::window::GuiFrame,
     ) -> Option<sunrise_client::window::GuiPointer> {
         self.client.window_cursor.map(|position| {
-            self.pointer_projection(framebuffer)
-                .project_pointer(position)
+            frame
+                .with_pointer_space(self.pointer_space(frame.target))
+                .pointer_to_gui(position)
         })
     }
     /// Rebuild GPU-owned state after the backend reports device loss.
@@ -4000,16 +4001,12 @@ impl crate::game::ClientGame<'_> {
                         screen_info::tr("upgradeWorld.title", &[]),
                     )
                 });
-                let cursor = self
-                    .client
-                    .renderer
-                    .0
-                    .as_ref()
-                    .and_then(|r| self.project_window_cursor([r.config.width, r.config.height]))
+                let frame = self.renderer_gui_frame();
+                let cursor = frame
+                    .and_then(|frame| self.project_window_cursor(frame))
                     .map_or(self.client.cursor, |p| p.pixel());
-                if let Some(renderer) = &mut self.client.renderer.0 {
-                    let size = [renderer.config.width, renderer.config.height];
-                    let mut hud = HudBatch::for_frame(&self.client.settings.gui_frame_for(size));
+                if let (Some(frame), Some(renderer)) = (frame, &mut self.client.renderer.0) {
+                    let mut hud = HudBatch::for_frame(&frame);
                     sunrise_client::level_loading::draw_file_fixer(
                         &mut hud,
                         &self.client.gui.atlas,

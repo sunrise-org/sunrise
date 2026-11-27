@@ -569,7 +569,7 @@ pub(crate) mod tests {
                 game.level.recipe_book.open[crafting] = false;
 
                 let render = |game: &mut sunrise_client_gameplay::game::ClientGame<'_>, size| {
-                    game.hud_layers(size);
+                    game.hud_layers(game.gui_frame_for(size));
                     let mut posts = observer.posts.lock().unwrap();
                     assert_eq!(posts.len(), 1, "one Render.Post per draw");
                     posts.pop().unwrap()

@@ -80,7 +80,7 @@ fn chest(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) -> (u32, u32)
 fn frame(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) -> Vec<u8> {
     // Exercise the actual Game dispatch, including its Pre/Post orchestration,
     // rather than manufacturing an equivalent sequence of render operations.
-    let batch = game.hud_layers(SIZE);
+    let batch = game.hud_layers(game.gui_frame_for(SIZE));
     render_hud(&batch, &game.client.gui.atlas, SIZE).expect("software Vulkan screen draw")
 }
 

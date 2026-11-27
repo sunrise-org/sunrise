@@ -122,7 +122,7 @@ fn a_layer_reads_the_status_heights_the_vanilla_rows_before_it_left() {
         game.player = Some(player);
         assert_eq!(game.gui_status_heights(), None);
         assert!(!game.set_gui_status_heights([1, 1]));
-        game.hud_layers([640, 480]);
+        game.hud_layers(game.gui_frame_for([640, 480]));
         let after_armor = if replace_armor { [49, 39] } else { [59, 39] };
         let mut expected = vec![
             ("heights:before_health", Some([39, 39])),

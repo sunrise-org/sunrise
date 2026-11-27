@@ -382,7 +382,7 @@ fn health_extraction_runs_only_in_the_vanilla_layer_body() {
                     cancel_air,
                     ..HealthTrace::default()
                 };
-                let batch = game.hud_layers([640, 480]);
+                let batch = game.hud_layers(game.gui_frame_for([640, 480]));
                 let calls = std::mem::take(&mut trace.lock().unwrap().calls);
                 let mut expected = vec!["health pre"];
                 if !cancel_health {
@@ -454,7 +454,7 @@ fn health_extraction_runs_only_in_the_vanilla_layer_body() {
             cancel_gui: true,
             ..HealthTrace::default()
         };
-        let batch = game.hud_layers([640, 480]);
+        let batch = game.hud_layers(game.gui_frame_for([640, 480]));
         assert!(trace.lock().unwrap().calls.is_empty());
         assert!(!batch.vertices.iter().any(|v| v.color == HEALTH_MARKER));
     });
@@ -1247,7 +1247,7 @@ fn hotbar_attack_indicator_progress_edits_only_stock_hotbar_paint() {
                 calls: Vec::new(),
             };
 
-            let batch = game.hud_layers([640, 480]);
+            let batch = game.hud_layers(game.gui_frame_for([640, 480]));
             let stock = !cancel
                 && matches!(body, Body::Stock | Body::Delegate)
                 && matches!(
@@ -1444,7 +1444,7 @@ fn f1_hides_vanilla_paint_without_skipping_the_hud_walk() {
             let saves = tempfile::tempdir().unwrap();
             game.client.title.0 = Some(game.new_title(saves.path().to_path_buf()));
             game.open_options(true);
-            game.hud_layers(size);
+            game.hud_layers(game.gui_frame_for(size));
             assert_eq!(take(), screen_events, "title Options has no HUD walk");
 
             enter_test_world(game);
@@ -1533,7 +1533,7 @@ fn f1_hides_vanilla_paint_without_skipping_the_hud_walk() {
                     .collect();
                 for hidden in [false, true] {
                     game.client.chat_ui.hide_gui = hidden;
-                    let frame = game.hud_layers(size);
+                    let frame = game.hud_layers(game.gui_frame_for(size));
                     assert_eq!(take(), expected, "{screen:?}, F1 hidden: {hidden}");
                     assert_eq!(has_hotbar(&frame), !hidden);
                     assert!(has_indicator(&frame));
@@ -1541,7 +1541,7 @@ fn f1_hides_vanilla_paint_without_skipping_the_hud_walk() {
                 }
             }
             CANCEL_HUD.store(true, Ordering::Relaxed);
-            let frame = game.hud_layers(size);
+            let frame = game.hud_layers(game.gui_frame_for(size));
             assert_eq!(
                 take(),
                 ["hud pre", "screen pre", "screen background", "screen post"]
@@ -2039,7 +2039,7 @@ fn replacement_status_rows_reserve_only_visible_paint() {
                 .enumerate()
                 {
                     case.store(index, Ordering::Relaxed);
-                    let batch = game.hud_layers([320, 240]);
+                    let batch = game.hud_layers(game.gui_frame_for([320, 240]));
                     assert_eq!(
                         batch
                             .vertices
