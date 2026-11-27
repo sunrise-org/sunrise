@@ -8,7 +8,7 @@ blended, each counted down through zero), ticks run by vanilla's own ClientLevel
 frozen level, and this client's player mounting and leaving the entity. After each
 step the oracle reads the values at each partial tick. It writes the witness and meta.json into
 .local/witness/<version>/camera_effects/, then runs the sunrise-client fixture
-game::remote::camera_view_tests::the_camera_entitys_effects_match_vanilla_frame_by_frame against it
+cut_layout::game::remote::camera_view_tests::the_camera_entitys_effects_match_vanilla_frame_by_frame against it
 (SUNRISE_CAMERA_EFFECTS_WITNESS), which replays every step through Sunrise's packet handlers and entity tick and
 compares each frame's float bits exactly.
 
@@ -29,7 +29,7 @@ sys.path.insert(0, str(ROOT))
 from tools import lab, oracle_harness as harness, test_rust_parity as base, test_model_baking_parity as baking
 
 ORACLE = 'VanillaCameraEffectsOracle'
-TEST = 'game::remote::camera_view_tests::the_camera_entitys_effects_match_vanilla_frame_by_frame'
+TEST = 'cut_layout::game::remote::camera_view_tests::the_camera_entitys_effects_match_vanilla_frame_by_frame'
 WITNESS_ENV = 'SUNRISE_CAMERA_EFFECTS_WITNESS'
 
 BLINDNESS, NIGHT_VISION, DARKNESS = 'minecraft:blindness', 'minecraft:night_vision', 'minecraft:darkness'
