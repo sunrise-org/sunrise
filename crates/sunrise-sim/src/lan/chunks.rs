@@ -4403,16 +4403,19 @@ mod tests {
             .iter()
             .map(|k| &**world.chunks.get(k).unwrap())
             .collect();
-        let no_protos = |_, _| None;
+        let no_protos = |_: i32, _: i32| -> Option<SectionMask> { None };
 
-        let run_trace = |enc: &Arc<ChunkEncoder>, run: impl FnOnce() -> Vec<Vec<u8>>| {
+        fn run_trace(
+            enc: &Arc<ChunkEncoder>,
+            run: impl FnOnce() -> Vec<Vec<u8>>,
+        ) -> (Vec<Vec<u8>>, Trace) {
             ACTIVE_ENC.with(|s| *s.borrow_mut() = Some(enc.clone()));
             TRACE.with(|t| t.borrow_mut().clear());
             let bodies = run();
             let trace = TRACE.with(|t| t.borrow().clone());
             ACTIVE_ENC.with(|s| *s.borrow_mut() = None);
             (bodies, trace)
-        };
+        }
 
         let serial = make_encoder();
         let (expected, expected_trace) = run_trace(&serial, || {
@@ -4487,7 +4490,8 @@ mod tests {
             } else {
                 chunk.sections[SECTIONS - 1] = last.clone();
             }
-            let saved = vec![(None, None); SECTIONS + 2];
+            let saved: Vec<(Option<[u8; 2048]>, Option<[u8; 2048]>)> =
+                vec![(None, None); SECTIONS + 2];
             crate::light::light_from_saved_layers(&mut chunk, &saved, true);
             Arc::new(chunk)
         };
@@ -4520,7 +4524,7 @@ mod tests {
                 .iter()
                 .map(|k| &**world.chunks.get(k).unwrap())
                 .collect();
-            let no_protos = |_, _| None;
+            let no_protos = |_: i32, _: i32| -> Option<SectionMask> { None };
 
             let serial = make_encoder(4);
             let pooled = make_encoder(4);
@@ -4580,24 +4584,26 @@ mod tests {
         let mut tall = SectionMask::EMPTY;
         tall.insert(10);
 
-        let run_with_cell =
-            |f: impl FnOnce(&dyn Fn(i32, i32) -> Option<SectionMask>) -> Vec<Vec<u8>>| {
-                let calls = Cell::new(0usize);
-                let protos = |x: i32, z: i32| {
-                    if (x, z) == (2, 1) {
-                        let n = calls.get();
-                        calls.set(n + 1);
-                        (n > 0).then_some(tall)
-                    } else {
-                        None
-                    }
-                };
-                let out = f(&protos);
-                (out, calls.get())
+        fn run_with_cell(
+            tall: SectionMask,
+            f: impl FnOnce(&dyn Fn(i32, i32) -> Option<SectionMask>) -> Vec<Vec<u8>>,
+        ) -> (Vec<Vec<u8>>, usize) {
+            let calls = Cell::new(0usize);
+            let protos = |x: i32, z: i32| {
+                if (x, z) == (2, 1) {
+                    let n = calls.get();
+                    calls.set(n + 1);
+                    (n > 0).then_some(tall)
+                } else {
+                    None
+                }
             };
+            let out = f(&protos);
+            (out, calls.get())
+        }
 
         let serial = encoder();
-        let (expected, serial_calls) = run_with_cell(|protos| {
+        let (expected, serial_calls) = run_with_cell(tall, |protos| {
             serial
                 .bodies_with_serial(&chunks, &world, protos, false)
                 .into_iter()
@@ -4608,7 +4614,7 @@ mod tests {
         assert_ne!(expected[1], expected[2]);
 
         let pooled = encoder();
-        let (got_pool, pool_calls) = run_with_cell(|protos| {
+        let (got_pool, pool_calls) = run_with_cell(tall, |protos| {
             pooled
                 .bodies_with(&chunks, &world, protos)
                 .into_iter()
@@ -4619,7 +4625,7 @@ mod tests {
         assert_eq!(got_pool, expected);
 
         let reversed = encoder();
-        let (got_rev, rev_calls) = run_with_cell(|protos| {
+        let (got_rev, rev_calls) = run_with_cell(tall, |protos| {
             with_bodies_test_mode(BodiesTestMode::ReverseWorkerOrder, || {
                 reversed
                     .bodies_with(&chunks, &world, protos)
@@ -4639,10 +4645,15 @@ mod tests {
 
         let pool = WarmPool::start(1).expect("local worker thread");
         let mut world = crate::world::World::new(BlockStateId(0), 0);
-        for cx in -1..4 {
+        let mut nbr = Chunk::empty(-1, 0);
+        nbr.lit = true;
+        for sy in 1..=4 {
+            nbr.set(1, MIN_Y + sy * 16, 1, 1);
+        }
+        world.chunks.insert((-1, 0), Arc::new(nbr));
+        for cx in 0..4 {
             let mut chunk = Chunk::empty(cx, 0);
             chunk.lit = true;
-            chunk.set(cx.rem_euclid(16), MIN_Y + 16, 1, 1);
             world.chunks.insert((cx, 0), Arc::new(chunk));
         }
         let nbr_ptr = Arc::as_ptr(&world.chunks[&(-1, 0)].sections[1]) as usize;
@@ -4653,7 +4664,7 @@ mod tests {
             .iter()
             .map(|k| &**world.chunks.get(k).unwrap())
             .collect();
-        let no_protos = |_, _| None;
+        let no_protos = |_: i32, _: i32| -> Option<SectionMask> { None };
 
         let mut serial = encoder();
         let mut enc = encoder();
@@ -4702,13 +4713,15 @@ mod tests {
         workers.wait_all();
         releaser.join().unwrap();
 
+        assert!(enc.cache.lock().unwrap().contains_key(&nbr_ptr));
         world.unload_chunk((-1, 0)).unwrap();
         assert_eq!(weak_nbr.strong_count(), 0);
 
-        // Next sweep must drop the unloaded neighbour-only section in both paths.
+        // Next sweep must retain live entries and drop the 4 unloaded neighbour-only sections.
         let mut extra = Chunk::empty(10, 0);
         extra.lit = true;
         extra.set(2, MIN_Y + 32, 2, 1);
+        extra.set(3, MIN_Y + 48, 3, 1);
         world.chunks.insert((10, 0), Arc::new(extra));
         let next_keys = [(0, 0), (1, 0), (2, 0), (10, 0)];
         let next_chunks: Vec<&Chunk> = next_keys
@@ -4720,6 +4733,7 @@ mod tests {
         let _ = enc.run_bodies_on_pool(&pool, next_job);
         assert!(!serial.cache.lock().unwrap().contains_key(&nbr_ptr));
         assert!(!enc.cache.lock().unwrap().contains_key(&nbr_ptr));
+        assert_eq!(enc.cache.lock().unwrap().len(), 3);
         assert_eq!(
             enc.cache.lock().unwrap().len(),
             serial.cache.lock().unwrap().len()
@@ -4759,7 +4773,7 @@ mod tests {
             .iter()
             .map(|k| &**world.chunks.get(k).unwrap())
             .collect();
-        let no_protos = |_, _| None;
+        let no_protos = |_: i32, _: i32| -> Option<SectionMask> { None };
 
         let assert_caches_match = |lhs: &ChunkEncoder, rhs: &ChunkEncoder, label: &str| {
             let lc = lhs.cache.lock().unwrap();
@@ -4786,10 +4800,10 @@ mod tests {
         // Live-entry mid-batch clear for `cache` and `heights`, with column 4 re-inserted after.
         {
             let sweep = 16;
-            let mut serial = make_encoder(sweep);
-            let mut pooled = make_encoder(sweep);
-            let mut reversed = make_encoder(sweep);
-            for enc in [&mut serial, &mut pooled, &mut reversed] {
+            let serial = make_encoder(sweep);
+            let pooled = make_encoder(sweep);
+            let reversed = make_encoder(sweep);
+            for enc in [&serial, &pooled, &reversed] {
                 let _ = enc.body_in(chunks[0], &world).unwrap();
                 let _ = enc.body_in(chunks[4], &world).unwrap();
             }
@@ -4827,9 +4841,9 @@ mod tests {
         // Dead-entry retain (no clear) for both `cache` and `heights`.
         {
             let sweep = 32;
-            let mut serial = make_encoder(sweep);
-            let mut pooled = make_encoder(sweep);
-            let mut reversed = make_encoder(sweep);
+            let serial = make_encoder(sweep);
+            let pooled = make_encoder(sweep);
+            let reversed = make_encoder(sweep);
             let mut dead_world = crate::world::World::new(BlockStateId(0), 0);
             for dx in 0..6 {
                 let mut dead = Chunk::empty(100 + dx, 0);
@@ -4838,7 +4852,7 @@ mod tests {
                 }
                 dead_world.chunks.insert((100 + dx, 0), Arc::new(dead));
             }
-            for enc in [&mut serial, &mut pooled, &mut reversed] {
+            for enc in [&serial, &pooled, &reversed] {
                 for dx in 0..6 {
                     let _ = enc
                         .body_in(&dead_world.chunks[&(100 + dx, 0)], &dead_world)
