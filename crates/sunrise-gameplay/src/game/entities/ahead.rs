@@ -8,7 +8,6 @@
 //! drawn on the tick thread. A merge before its turn can change its count, age and pickup delay:
 //! such an item moves at its turn instead. With a native mod loaded (its hooks see every item) or
 //! a mod listening to the round, every item moves at its turn.
-use super::*;
 use super::{entity::Entity as _, native_ticks};
 use sunrise_core::geometry::{Aabb, Vec3, border::BorderGeometry};
 use sunrise_items::blocks::BlockFacts;
@@ -694,7 +693,7 @@ mod tests {
         },
         nbt::Tag,
         position::BlockPos,
-        random::LegacyRandom,
+        random::{LegacyRandom, RandomSource},
     };
     use sunrise_items::{
         blocks::{Fluid, RenderShape, StateFacts},
