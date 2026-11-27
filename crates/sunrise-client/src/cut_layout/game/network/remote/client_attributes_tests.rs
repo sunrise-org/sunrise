@@ -9,6 +9,7 @@ fn update_attributes_answers_the_local_players_living_reads() {
     use crate::game::server_side::native_entity_refs::tests::with_client_game;
     use mod_api::{AttributeOperation, EntityReadError};
     use std::ops::ControlFlow;
+    use sunrise_client_gameplay::game::client_side::remote_client::session_state::Tracked;
     use sunrise_core::geometry::Vec3;
     use sunrise_protocol::{
         buf::Reader,
@@ -34,22 +35,7 @@ fn update_attributes_answers_the_local_players_living_reads() {
         remote.logged_in = true;
         remote.entities.insert(
             60,
-            sunrise_client_gameplay::game::client_side::remote_client::session_state::Tracked {
-                kind: "minecraft:zombie".into(),
-                position: [0.0; 3],
-                previous: [0.0; 3],
-                yaw: 0.0,
-                pitch: 0.0,
-                previous_yaw: 0.0,
-                previous_pitch: 0.0,
-                codec_base: [0.0; 3],
-                on_fire: false,
-                mod_fire_immune: false,
-                silent: false,
-                vehicle: None,
-                tick_count: 0,
-                size_answer: None,
-            },
+            Tracked::new("minecraft:zombie".into(), [0.0; 3], 0.0, 0.0),
         );
 
         let health = "minecraft:max_health";

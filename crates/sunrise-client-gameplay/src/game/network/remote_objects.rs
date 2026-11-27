@@ -11,6 +11,35 @@ use sunrise_protocol::entity_data::{PaintingHolder, Value};
 use sunrise_sim::entities::{ArmorStand, Cushion, ItemFrame, Painting};
 use sunrise_sim::mobs::leash::Holder;
 
+pub(in crate::game) fn apply_stand_data(a: &mut ArmorStand, index: u8, value: &Value) {
+    match (index, value) {
+        (0, Value::Byte(flags)) => a.invisible = flags & 0x20 != 0,
+        (1, Value::Int(air)) => a.air = *air,
+        // Entity.DATA_CUSTOM_NAME and DATA_CUSTOM_NAME_VISIBLE.
+        (2, Value::OptText(name)) => {
+            a.custom_name = name.as_ref().map(sunrise_sim::entity_nbt::name_text);
+        }
+        (2, Value::Text(name)) => {
+            a.custom_name = Some(sunrise_sim::entity_nbt::name_text(name));
+        }
+        (3, Value::Bool(visible)) => a.name_visible = *visible,
+        (5, Value::Bool(no_gravity)) => a.no_gravity = *no_gravity,
+        (9, Value::Float(health)) => a.health = *health,
+        // ArmorStand.DATA_HEAD_POSE to DATA_RIGHT_LEG_POSE.
+        (16..=21, Value::Floats(r)) if r.len() == 3 => {
+            a.pose[usize::from(index - 16)] = [r[0], r[1], r[2]];
+        }
+        // ArmorStand.DATA_CLIENT_FLAGS.
+        (15, Value::Byte(flags)) => {
+            a.small = flags & 1 != 0;
+            a.show_arms = flags & 4 != 0;
+            a.no_base_plate = flags & 8 != 0;
+            a.marker = flags & 16 != 0;
+        }
+        _ => {}
+    }
+}
+
 /// `Mth.rotLerp(alpha, from, to)`: `from` turned `alpha` of the way to `to` by
 /// the shorter arc (`wrapDegrees` of the difference).
 pub(in crate::game::client_side) fn rot_lerp(alpha: f32, from: f32, to: f32) -> f32 {
@@ -270,41 +299,9 @@ impl ClientGame<'_> {
                     p.height = v.height;
                 }
             } else if let Some(a) = self.common.armor_stands.iter_mut().find(|a| a.id == id) {
-                match (index, value) {
-                    // Entity.DATA_SHARED_FLAGS_ID: FLAG_ONFIRE (`Entity.isOnFire` on a client, which
-                    // draws the flames; the client never counts it down) and FLAG_INVISIBLE.
-                    (0, Value::Byte(flags)) => {
-                        a.fire_ticks = i32::from(flags & 1);
-                        a.invisible = flags & 0x20 != 0;
-                    }
-                    // Entity.DATA_CUSTOM_NAME and DATA_CUSTOM_NAME_VISIBLE.
-                    (2, Value::OptText(name)) => {
-                        a.custom_name = name.as_ref().map(sunrise_sim::entity_nbt::name_text);
-                    }
-                    (2, Value::Text(name)) => {
-                        a.custom_name = Some(sunrise_sim::entity_nbt::name_text(name));
-                    }
-                    (3, Value::Bool(visible)) => a.name_visible = *visible,
-                    (9, Value::Float(health)) => a.health = *health,
-                    // ArmorStand.DATA_HEAD_POSE to DATA_RIGHT_LEG_POSE.
-                    (16..=21, Value::Floats(r)) if r.len() == 3 => {
-                        a.pose[usize::from(index - 16)] = [r[0], r[1], r[2]];
-                    }
-                    // ArmorStand.DATA_CLIENT_FLAGS.
-                    (15, Value::Byte(flags)) => {
-                        a.small = flags & 1 != 0;
-                        a.show_arms = flags & 4 != 0;
-                        a.no_base_plate = flags & 8 != 0;
-                        a.marker = flags & 16 != 0;
-                    }
-                    _ => {}
-                }
+                apply_stand_data(a, *index, value);
             } else if let Some(i) = self.common.bolts.iter().position(|b| b.id == id) {
                 self.common.bolts.update(i, |b| match (index, value) {
-                    (0, Value::Byte(flags)) => {
-                        b.fire_ticks = i32::from(flags & 1);
-                        b.glowing = (*flags as u8 & 0x40) != 0;
-                    }
                     (1, Value::Int(air)) => b.air = *air,
                     (2, Value::OptText(name)) => b.custom_name = name.clone(),
                     (2, Value::Text(name)) => b.custom_name = Some(name.clone()),
@@ -324,6 +321,8 @@ impl ClientGame<'_> {
                     // VehicleEntity's hurt, direction and damage; the paddles and
                     // the bubble time.
                     match (index, value) {
+                        (5, Value::Bool(v)) => b.no_gravity = *v,
+                        (7, Value::Int(v)) => b.ticks_frozen = *v,
                         (8, Value::Int(v)) => b.hurt_time = *v,
                         (9, Value::Int(v)) => b.hurt_dir = *v,
                         (10, Value::Float(v)) => b.damage = *v,
@@ -336,6 +335,8 @@ impl ClientGame<'_> {
                 });
             } else if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
                 self.common.carts.update(i, |c| match (index, value) {
+                    (5, Value::Bool(v)) => c.no_gravity = *v,
+                    (7, Value::Int(v)) => c.ticks_frozen = *v,
                     (8, Value::Int(v)) => c.hurt_time = *v,
                     (9, Value::Int(v)) => c.hurt_dir = *v,
                     (10, Value::Float(v)) => c.damage = *v,

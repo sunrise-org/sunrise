@@ -1294,6 +1294,7 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                     game.yaw = yaw;
                     game.pitch = pitch;
                 };
+                use sunrise_client_gameplay::game::client_side::remote_client::session_state::Tracked;
                 let track = |game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
                              id: i32,
                              kind: &str,
@@ -1301,21 +1302,9 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                              vehicle: Option<u32>| {
                     game.client.remote.as_mut().unwrap().entities.insert(
                         id,
-                        sunrise_client_gameplay::game::client_side::remote_client::session_state::Tracked {
-                            kind: kind.into(),
-                            position,
-                            previous: position,
-                            yaw: 0.0,
-                            pitch: 0.0,
-                            previous_yaw: 0.0,
-                            previous_pitch: 0.0,
-                            codec_base: position,
-                            on_fire: false,
-                            mod_fire_immune: false,
-                            silent: false,
+                        Tracked {
                             vehicle,
-                            tick_count: 0,
-                            size_answer: None,
+                            ..Tracked::new(kind.into(), position, 0.0, 0.0)
                         },
                     );
                 };

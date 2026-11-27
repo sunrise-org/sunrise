@@ -2,6 +2,7 @@
 //! appear glowing, in which team colour, and their silhouettes for the renderer's entity
 //! outline (`OutlineBufferSource`).
 use super::Vertex;
+use crate::game::client_side::entity_client::RenderEntity;
 use sunrise_game_data::scoreboard as sb;
 use sunrise_sim::mobs::Mob;
 
@@ -13,8 +14,7 @@ pub(in crate::game::client_side) fn team_color(team: Option<&sb::Team>) -> u32 {
 }
 
 impl crate::game::ClientGame<'_> {
-    /// `Entity.isCurrentlyGlowing` of an entity that is not living (an item, a projectile):
-    /// shared flag 6 as a server sent it.
+    /// The render-only part of `Entity.isCurrentlyGlowing`: shared flag 6 as the server sent it.
     pub(in crate::game) fn tracked_entity_glowing(&self, id: u32) -> bool {
         self.remote_glowing(id).unwrap_or(false)
     }
@@ -43,7 +43,7 @@ impl crate::game::ClientGame<'_> {
     /// `Minecraft.shouldEntityAppearGlowing` of a mob or another player, with its outline
     /// colour (`getTeamColor`; another player's team goes by name).
     pub(in crate::game::client_side) fn mob_outline(&self, m: &Mob) -> Option<u32> {
-        let vanilla = m.is_currently_glowing().then(|| {
+        let vanilla = m.render_glowing(self).then(|| {
             let team = if &*m.kind.id == "minecraft:player" {
                 let names = self.remote_player_names();
                 let name = names.into_iter().find(|(id, _)| *id == m.id);

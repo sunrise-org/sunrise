@@ -182,7 +182,8 @@ pub trait NativeEntityStateCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         if kind.is_some_and(BuiltinKind::is_on_fire_overridden_false) {
             return Some(false);
         }
-        let synced = !self.is_logical_server() && self.side_client_entity_on_fire(entity)?;
+        let synced =
+            !self.is_logical_server() && self.side_client_entity_on_fire(entity).unwrap_or(false);
         Some(!immune && (ticks > 0 || synced))
     }
 

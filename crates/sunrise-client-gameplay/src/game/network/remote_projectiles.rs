@@ -202,17 +202,22 @@ impl crate::game::ClientGame<'_> {
         }
         for (index, _, value) in values {
             if let Some(t) = self.common.tnts.iter_mut().find(|t| t.id == id) {
-                // PrimedTnt.DATA_FUSE_ID.
-                if let (8, Value::Int(fuse)) = (index, value) {
-                    t.fuse = *fuse;
+                match (index, value) {
+                    (5, Value::Bool(no_gravity)) => t.no_gravity = *no_gravity,
+                    (8, Value::Int(fuse)) => t.fuse = *fuse,
+                    _ => {}
                 }
             } else if let Some(i) = self.common.falling.iter().position(|f| f.id == id) {
                 // FallingBlockEntity.DATA_START_POS (the model's seed).
-                if let (8, Value::Pos(p)) = (index, value) {
-                    self.common
-                        .falling
-                        .update(i, |f| f.start_pos = BlockPos::new(p[0], p[1], p[2]));
-                }
+                match (index, value) {
+                    (5, Value::Bool(no_gravity)) => self.common.falling.update(i, |f| {
+                        f.no_gravity = *no_gravity;
+                    }),
+                    (8, Value::Pos(p)) => self.common.falling.update(i, |f| {
+                        f.start_pos = BlockPos::new(p[0], p[1], p[2]);
+                    }),
+                    _ => {}
+                };
             } else if let Some(c) = self.common.crystals.iter_mut().find(|c| c.id == id) {
                 // EndCrystal.DATA_BEAM_TARGET and DATA_SHOW_BOTTOM.
                 match (index, value) {
@@ -224,8 +229,7 @@ impl crate::game::ClientGame<'_> {
                 // AbstractArrow.ID_FLAGS (no physics) and IN_GROUND, and
                 // ThrownTrident.ID_LOYALTY.
                 match (index, value) {
-                    // Clients retain the server's fire flag until the next update.
-                    (0, Value::Byte(flags)) => t.fire_ticks = i32::from(flags & 1),
+                    (5, Value::Bool(no_gravity)) => t.no_gravity = *no_gravity,
                     (8, Value::Byte(flags)) => t.no_physics = flags & 2 != 0,
                     (10, Value::Bool(in_ground)) => t.in_ground = *in_ground,
                     (11, Value::Byte(loyalty)) => t.loyalty = u32::from(*loyalty as u8),
@@ -258,7 +262,7 @@ impl crate::game::ClientGame<'_> {
                                 a.no_physics = flags & 2 != 0;
                             }
                         }
-                        (ProjectileKind::Arrow { .. }, 5, Value::Bool(no_gravity)) => {
+                        (_, 5, Value::Bool(no_gravity)) => {
                             p.no_gravity = *no_gravity;
                         }
                         (ProjectileKind::Arrow { .. }, 10, Value::Bool(in_ground)) => {

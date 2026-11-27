@@ -482,8 +482,12 @@ impl ItemEntity {
     /// `isOnFire`. `light` is the level's packed light (sky high, block low);
     /// `environment_tick` clears the fire ticks of a fire-immune stack, as
     /// `ItemEntity.fireImmune` makes it never on fire.
-    pub fn render_light(&self, light: u8) -> u32 {
-        let block = if self.fire_ticks > 0 { 15 } else { light & 15 };
+    pub fn render_light(&self, light: u8, synced_on_fire: bool) -> u32 {
+        let block = if self.fire_ticks > 0 || synced_on_fire {
+            15
+        } else {
+            light & 15
+        };
         (u32::from(light >> 4) * 16) | ((u32::from(block) * 16) << 8)
     }
     pub fn bounds(&self) -> Aabb {
@@ -2095,13 +2099,21 @@ impl ArmorStand {
     }
     /// `Entity.isOnFire`: an immune stand does not count as burning.
     pub fn is_on_fire(&self) -> bool {
-        !self.mod_fire_immune && self.fire_ticks > 0
+        self.is_on_fire_with_synced(false)
+    }
+    /// `Entity.isOnFire` on a client, where the shared flag can show flames without a countdown.
+    pub fn is_on_fire_with_synced(&self, synced_on_fire: bool) -> bool {
+        !self.mod_fire_immune && (self.fire_ticks > 0 || synced_on_fire)
     }
     /// `EntityRenderer.getPackedLightCoords` for the cell `light_probe` chose:
     /// the level's sky light over the cell's block light, at 15 block light
     /// while the stand `isOnFire`. `light` is the level's packed light.
-    pub fn render_light(&self, light: u8) -> u32 {
-        let block = if self.is_on_fire() { 15 } else { light & 15 };
+    pub fn render_light(&self, light: u8, synced_on_fire: bool) -> u32 {
+        let block = if self.is_on_fire_with_synced(synced_on_fire) {
+            15
+        } else {
+            light & 15
+        };
         (u32::from(light >> 4) * 16) | ((u32::from(block) * 16) << 8)
     }
     /// The body's yaw `alpha` of the way through the tick
@@ -3314,17 +3326,23 @@ mod armor_stand_light_tests {
     fn a_burning_stand_is_drawn_at_full_block_light() {
         let light = |sky: u8, block: u8| (sky << 4) | block;
         let cold = stand(0.5, 64.0, 0.5);
-        assert_eq!(cold.render_light(light(15, 0)), (15 * 16) as u32);
-        assert_eq!(cold.render_light(light(0, 9)), ((9 * 16) << 8) as u32);
+        assert_eq!(cold.render_light(light(15, 0), false), (15 * 16) as u32);
+        assert_eq!(
+            cold.render_light(light(0, 9), false),
+            ((9 * 16) << 8) as u32
+        );
         let burning = ArmorStand {
             fire_ticks: 100,
             ..stand(0.5, 64.0, 0.5)
         };
         assert_eq!(
-            burning.render_light(light(15, 0)),
+            burning.render_light(light(15, 0), false),
             ((15 * 16) | ((15 * 16) << 8)) as u32
         );
-        assert_eq!(burning.render_light(light(0, 0)), ((15 * 16) << 8) as u32);
+        assert_eq!(
+            burning.render_light(light(0, 0), false),
+            ((15 * 16) << 8) as u32
+        );
     }
 }
 #[cfg(test)]
@@ -5250,8 +5268,11 @@ mod dropped_item_light_tests {
     fn a_burning_item_is_drawn_at_full_block_light() {
         let light = |sky: u8, block: u8| (sky << 4) | block;
         let cold = item(64.0, 64.0);
-        assert_eq!(cold.render_light(light(15, 0)), (15 * 16) as u32);
-        assert_eq!(cold.render_light(light(0, 9)), ((9 * 16) << 8) as u32);
+        assert_eq!(cold.render_light(light(15, 0), false), (15 * 16) as u32);
+        assert_eq!(
+            cold.render_light(light(0, 9), false),
+            ((9 * 16) << 8) as u32
+        );
         let burning = ItemEntity {
             random: sunrise_core::random::LegacyRandom::new(0),
             fire_ticks: 160,
@@ -5259,11 +5280,14 @@ mod dropped_item_light_tests {
         };
         // Daylight, dark block: the block light goes to 15, the sky stays.
         assert_eq!(
-            burning.render_light(light(15, 0)),
+            burning.render_light(light(15, 0), false),
             ((15 * 16) | ((15 * 16) << 8)) as u32
         );
         // A dark cave: 15 block light, still no invented sky light.
-        assert_eq!(burning.render_light(light(0, 0)), ((15 * 16) << 8) as u32);
+        assert_eq!(
+            burning.render_light(light(0, 0), false),
+            ((15 * 16) << 8) as u32
+        );
     }
 }
 crate::impl_joined!(

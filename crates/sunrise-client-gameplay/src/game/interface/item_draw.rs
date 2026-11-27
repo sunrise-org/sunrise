@@ -1096,11 +1096,12 @@ impl crate::game::ClientGame<'_> {
                     at[1] + sunrise_sim::entities::ItemEntity::EYE_HEIGHT,
                     at[2],
                 ];
-                item.render_light(self.common.world.light(
+                let light = self.common.world.light(
                     probe[0].floor() as i32,
                     probe[1].floor() as i32,
                     probe[2].floor() as i32,
-                ))
+                );
+                item.render_light(light, self.tracked_entity_on_fire(item.id))
             } else {
                 vertex_light(self.common.world.light(
                     q.x.floor() as i32,
