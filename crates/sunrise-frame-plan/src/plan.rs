@@ -232,7 +232,7 @@ fn whole(graph: &Graph, region: &Region) -> bool {
 }
 
 /// R2, first version: a resource no rule excludes and no observer reads, which every retained event touching it
-/// only clears, with a clear that touches no mipmapped resource. A resource another one aliases is dead only when
+/// only clears (a clear event, or a draw's clear-only attachment), with a clear that touches no mipmapped resource. A resource another one aliases is dead only when
 /// that one is too.
 fn dead_resources(graph: &Graph, plan: &Plan, excluded: &[bool]) -> Vec<ResourceId> {
     let mut candidate: Vec<bool> = excluded.iter().map(|&e| !e).collect();
@@ -245,7 +245,16 @@ fn dead_resources(graph: &Graph, plan: &Plan, excluded: &[bool]) -> Vec<Resource
         if dropped_clear || plan.is_removed(id) {
             return;
         }
-        for access in accesses(event) {
+        // A draw's clear-only attachments are clears too, under the same mipmap exclusion.
+        let clears_only = !touches_mipmapped(graph, event);
+        let uses = event.reads.iter().chain(
+            event
+                .writes
+                .iter()
+                .filter(|w| !(w.clear && clears_only))
+                .map(|w| &w.access),
+        );
+        for access in uses {
             match access {
                 Access::Resolved(region) => candidate[region.resource.0 as usize] = false,
                 Access::Unresolved(set) => {
@@ -274,13 +283,12 @@ fn dead_resources(graph: &Graph, plan: &Plan, excluded: &[bool]) -> Vec<Resource
 fn savings(graph: &Graph, plan: &Plan) -> Savings {
     let mut clears_dropped = 0;
     for_each_event(graph, |_, event| {
-        if event.kind == EventKind::Clear {
-            clears_dropped += event
-                .writes
-                .iter()
-                .filter(|w| plan.dead.iter().any(|&d| reaches(&w.access, d)))
-                .count() as u32;
-        }
+        clears_dropped += event
+            .writes
+            .iter()
+            .filter(|w| event.kind == EventKind::Clear || w.clear)
+            .filter(|w| plan.dead.iter().any(|&d| reaches(&w.access, d)))
+            .count() as u32;
     });
     Savings {
         events: plan.removed.len() as u32,

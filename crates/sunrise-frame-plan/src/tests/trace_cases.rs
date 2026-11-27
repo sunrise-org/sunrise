@@ -528,3 +528,48 @@ fn a_clear_step_with_effects_stays_when_its_clears_go() {
     with.steps[0].effects = true;
     assert_eq!(check_edits(&reference, &with, &edits), Ok(()));
 }
+
+#[test]
+fn a_draw_loses_its_clear_only_attachment_of_a_dead_texture_and_keeps_the_rest() {
+    // Unit 1 is a blit: it draws into texture 0 and clears texture 1 as it begins; 1 is dead.
+    let blit = |clears_one: bool| {
+        let mut touches = vec![t(0, 0, Use::Attach(Load::Clear(NONE)))];
+        if clears_one {
+            touches.push(t(1, 1, Use::Clear(BLACK)));
+        }
+        op(1, EventKind::Work, false, touches)
+    };
+    let reference = project(&TraceFrame {
+        textures: textures(2),
+        ops: vec![blit(true)],
+    })
+    .expect("valid");
+    let edits = Edits {
+        dead: vec![TextureId(1)],
+        ..Edits::default()
+    };
+    let one = || textures(1);
+    let without = project(&TraceFrame {
+        textures: one(),
+        ops: vec![blit(false)],
+    })
+    .expect("valid");
+    assert_eq!(check_edits(&reference, &without, &edits), Ok(()));
+    // A planned frame whose blit still clears it differs.
+    let mut still = without.clone();
+    still.steps[0].touches.push(t(1, 1, Use::Clear(BLACK)));
+    assert_eq!(
+        check_edits(&reference, &still, &edits),
+        Err(TraceError::Differs(0))
+    );
+    // As a graph, the clear-only attachment is a `clear` write and the draw's own is not.
+    let graph = reference.to_graph();
+    let writes = &graph.states[0].events[0].writes;
+    assert_eq!(
+        writes
+            .iter()
+            .map(|w| (w.cover, w.clear))
+            .collect::<Vec<_>>(),
+        [(Cover::Full, false), (Cover::Full, true)]
+    );
+}

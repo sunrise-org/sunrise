@@ -2089,6 +2089,9 @@ pub struct PackPost {
     pub mod_opaque_depth_used: Vec<bool>,
     /// Mod-declared per-frame uniforms with automatic previous-frame tracking.
     pub mod_uniforms: ModUniformTable,
+    /// The frame trace (`plan_trace`), while `SUNRISE_PLAN_TRACE` names a folder.
+    #[cfg(feature = "plan-trace")]
+    pub plan_trace: Option<Box<std::sync::Mutex<super::plan_trace::Recorder>>>,
 }
 
 impl PackPost {
@@ -3543,6 +3546,9 @@ impl PackPost {
             mod_depth_used,
             mod_opaque_depth_used,
             mod_uniforms: ModUniformTable::new(mods.uniforms),
+            #[cfg(feature = "plan-trace")]
+            plan_trace: super::plan_trace::Recorder::from_env()
+                .map(|r| Box::new(std::sync::Mutex::new(r))),
         };
         Ok((built, jobs))
     }

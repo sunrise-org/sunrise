@@ -197,6 +197,14 @@ fn execute(
     let mut full = Vec::new();
     let mut partial = Vec::new();
     for write in &event.writes {
+        // A draw's clear-only attachment of a dead resource leaves the draw's attachments.
+        if let Some(plan) = plan
+            && write.clear
+            && let Access::Resolved(region) = &write.access
+            && plan.dead.contains(&region.resource)
+        {
+            continue;
+        }
         if let Some(plan) = plan
             && event.kind == EventKind::Clear
         {

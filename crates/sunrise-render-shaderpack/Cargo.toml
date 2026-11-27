@@ -16,6 +16,8 @@ pollster = "0.4"
 serde_json = "1.0"
 smallvec = { version = "1", features = ["const_new"] }
 sunrise-core = { path = "../sunrise-core" }
+# The frame trace's format (`plan-trace`).
+sunrise-frame-plan = { path = "../sunrise-frame-plan", optional = true }
 sunrise-render-core = { path = "../sunrise-render-core" }
 sunrise-shaders = { path = "../sunrise-shaders" }
 wgpu = { version = "30.0.1", default-features = false, features = ["std", "parking_lot", "vulkan", "metal", "wgsl", "naga-ir"] }
@@ -25,6 +27,11 @@ wgpu = { version = "30.0.1", default-features = false, features = ["std", "parki
 naga = { version = "30.0.1", features = ["wgsl-in", "glsl-in", "hlsl-out", "spv-out"] }
 sha2 = "0.10.9"
 tempfile = "3"
+
+[features]
+# Records the frames `run_frame` draws for the frame planner's measure (#6552), when `SUNRISE_PLAN_TRACE` names a
+# folder (`pack_post::plan_trace`). Off by default: without it nothing of the trace is compiled.
+plan-trace = ["dep:sunrise-frame-plan"]
 
 [lints]
 workspace = true

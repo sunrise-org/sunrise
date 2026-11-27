@@ -82,6 +82,7 @@ fn copy(from: u32, to: u32, removable: bool) -> Event {
             access: whole(to),
             cover: Cover::Full,
             attachment: false,
+            clear: false,
         }],
         effects: false,
         removable,
@@ -218,6 +219,7 @@ fn r1_keeps_a_draw_with_an_unresolved_write() {
         access: Access::Unresolved(vec![ResourceId(A)]),
         cover: Cover::Partial,
         attachment: false,
+        clear: false,
     });
     let graph = looped(
         resources(3),
@@ -364,6 +366,7 @@ fn r1_keeps_a_draw_an_opaque_block_writes_over() {
         access: whole(A),
         cover: Cover::Full,
         attachment: false,
+        clear: false,
     });
     let graph = looped(
         resources(3),
@@ -441,6 +444,7 @@ fn r4b_refuses_a_clear_of_part_of_the_resource() {
         }),
         cover: Cover::Full,
         attachment: false,
+        clear: false,
     });
     let graph = looped(resources(1), vec![part, kept(&[], &[A])], &[A]);
     check(&graph, NOTHING);
@@ -474,6 +478,7 @@ fn r4b_refuses_a_clear_that_touches_a_mipmapped_resource() {
         }),
         cover: Cover::Full,
         attachment: false,
+        clear: false,
     });
     let graph = looped(resources(2), vec![both, kept(&[], &[A])], &[A]);
     check(&graph, NOTHING);
@@ -587,6 +592,52 @@ fn r2_finds_a_side_that_is_only_cleared() {
     );
 }
 
+/// A kept draw onto `targets` that also clears `cleared` as it begins, drawing nothing into them (a world blit).
+fn blit(targets: &[u32], cleared: &[u32]) -> Event {
+    let mut event = kept(&[], targets);
+    event.writes.extend(cleared.iter().map(|&r| Write {
+        access: whole(r),
+        cover: Cover::Full,
+        attachment: false,
+        clear: true,
+    }));
+    event
+}
+
+#[test]
+fn r2_drops_a_draw_s_clear_only_attachment_with_its_side() {
+    // a's only use is the clear the blit makes of it as it begins: a is dead, and that clear goes. c, which the blit
+    // also clears, is read: it stays, and so does the blit's draw into b.
+    let graph = looped(
+        resources(4),
+        vec![blit(&[B], &[A, C]), kept(&[C], &[B])],
+        &[B],
+    );
+    check(
+        &graph,
+        Expect {
+            dead: &[A],
+            clears_dropped: 1,
+            bytes: 100,
+            ..NOTHING
+        },
+    );
+}
+
+#[test]
+fn r2_keeps_a_side_a_draw_draws_into_as_it_clears_it() {
+    // An attachment that loads as a clear and is drawn into is the draw's output, not a clear: a stays.
+    let mut drawn = kept(&[], &[B]);
+    drawn.writes.push(Write {
+        access: whole(A),
+        cover: Cover::Full,
+        attachment: false,
+        clear: false,
+    });
+    let graph = looped(resources(3), vec![drawn], &[B]);
+    check(&graph, NOTHING);
+}
+
 #[test]
 fn r2_counts_after_r1() {
     // The only reader of a is a removed draw, whose own target c nothing reads before the next frame's clear.
@@ -619,6 +670,7 @@ fn r2_keeps_a_side_a_mipmapped_clear_also_clears() {
         }),
         cover: Cover::Full,
         attachment: false,
+        clear: false,
     });
     let graph = looped(resources(3), vec![shared, kept(&[], &[B])], &[B]);
     check(&graph, NOTHING);

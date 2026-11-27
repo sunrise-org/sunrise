@@ -8,14 +8,14 @@ use wgpu::TextureFormat as T;
 const VERTEX: &str = "#version 120\nvarying vec2 uv;\nvoid main() { uv=gl_MultiTexCoord0.xy; gl_Position=ftransform(); }\n";
 
 #[derive(Clone, Copy, Debug)]
-enum Coverage {
+pub(super) enum Coverage {
     Full,
     Discard,
     Vertex,
     Scale,
 }
 
-fn pack(
+pub(super) fn pack(
     coverage: Coverage,
     mrt: bool,
     keep_main: bool,

@@ -111,10 +111,13 @@ fn event(rng: &mut Rng, resources: &[Resource], guards: Guards, guarded: &mut bo
                 let attachment = matches!(access, Access::Resolved(_))
                     && cover == Cover::Partial
                     && rng.chance(70);
+                let clear =
+                    matches!(access, Access::Resolved(_)) && cover == Cover::Full && rng.chance(50);
                 Write {
                     access,
                     cover,
                     attachment,
+                    clear,
                 }
             })
             .collect();
@@ -137,6 +140,7 @@ fn event(rng: &mut Rng, resources: &[Resource], guards: Guards, guarded: &mut bo
                     access: Access::Resolved(region(rng, resources)),
                     cover: Cover::Full,
                     attachment: false,
+                    clear: false,
                 })
                 .collect(),
             effects: false,
@@ -151,6 +155,7 @@ fn event(rng: &mut Rng, resources: &[Resource], guards: Guards, guarded: &mut bo
                 access: Access::Resolved(region(rng, resources)),
                 cover: Cover::Full,
                 attachment: false,
+                clear: false,
             }],
             effects: false,
             removable: rng.chance(30),
@@ -172,6 +177,7 @@ fn event(rng: &mut Rng, resources: &[Resource], guards: Guards, guarded: &mut bo
                         Cover::Partial
                     },
                     attachment: false,
+                    clear: false,
                 })
                 .collect(),
             effects: rng.chance(50),

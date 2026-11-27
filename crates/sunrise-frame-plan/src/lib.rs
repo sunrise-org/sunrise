@@ -9,13 +9,18 @@
 //!   remaining uses are clears. Every rule leaves alone pinned and mipmapped resources, events touching a mipmapped
 //!   one, and every resource an unresolved access may reach.
 //! - [`trace`]: a frame as the runtime ran it, its projection onto the model, and the checks on it.
+//! - [`record`]: a traced frame with the notes a runtime adds (pinned textures, labels, declared block sets) and
+//!   the line format that carries it out of the runtime.
+//! - [`measure`]: what the plan would save on a run of recorded frames, with each frame's checks.
 //!
 //! The crate knows no shader-pack format and no GPU library: the adapter that builds a [`model::Graph`] from a
 //! loaded pack lives with the pack runtime.
 
 pub mod live;
+pub mod measure;
 pub mod model;
 pub mod plan;
+pub mod record;
 pub mod trace;
 
 pub use live::{Liveness, liveness};

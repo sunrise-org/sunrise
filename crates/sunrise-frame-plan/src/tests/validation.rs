@@ -124,6 +124,22 @@ fn only_resolved_partial_writes_of_work_are_attachments() {
 }
 
 #[test]
+fn only_full_resolved_non_attachment_writes_of_work_are_clear_only() {
+    let mut graph = base();
+    graph.states[0].events[0].writes[0].clear = true;
+    assert_eq!(refused(&graph), InputError::ClearWrite(id(0, 0)));
+    let mut graph = base();
+    graph.states[0].events[1].writes[0].clear = true;
+    assert_eq!(refused(&graph), InputError::ClearWrite(id(0, 1)));
+    let mut graph = base();
+    let write = &mut graph.states[0].events[1].writes[0];
+    (write.cover, write.attachment, write.clear) = (Cover::Full, false, true);
+    assert_eq!(graph.validate(), Ok(()));
+    graph.states[0].events[1].writes[0].access = Access::Unresolved(vec![ResourceId(1)]);
+    assert_eq!(refused(&graph), InputError::ClearWrite(id(0, 1)));
+}
+
+#[test]
 fn edges_and_observers_name_known_states_and_positions() {
     let mut graph = base();
     graph.edges[0].to = StateId(1);

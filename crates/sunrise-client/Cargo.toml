@@ -133,6 +133,8 @@ sunrise-extras = ["client", "friends", "sunrise-client-gameplay/sunrise-extras"]
 friends = ["sunrise-client-gameplay?/friends"]
 # Records the call sites of mob random draws (`mob_ai_probe` traces).
 rng-trace = ["sunrise-core/rng-trace", "sunrise-client-gameplay?/rng-trace", "sunrise-client-lib?/rng-trace"]
+# The shader pack's frame trace for the frame planner's measure (`SUNRISE_PLAN_TRACE`, #6552).
+plan-trace = ["sunrise-client-render?/plan-trace"]
 # Rust's allocations go to the system heap instead of mimalloc, where heap profilers that replace
 # malloc (heaptrack, valgrind's massif) see them. Also the Windows and macOS prebuilt archives' allocator
 # (tools/prebuilt_game.py, #2394, #3877): there std's shared library keeps its own allocator. Otherwise mimalloc is faster.

@@ -5,7 +5,9 @@
 mod cases;
 mod interp;
 mod liveness_exhaustive;
+mod measure_cases;
 mod property;
+mod record_cases;
 mod trace_cases;
 mod validation;
 
@@ -57,6 +59,7 @@ fn draw(reads: &[u32], targets: &[u32]) -> Event {
                 access: whole(r),
                 cover: Cover::Partial,
                 attachment: true,
+                clear: false,
             })
             .collect(),
         effects: false,
@@ -84,6 +87,7 @@ fn clear(targets: &[u32]) -> Event {
                 access: whole(r),
                 cover: Cover::Full,
                 attachment: false,
+                clear: false,
             })
             .collect(),
         effects: false,
@@ -103,6 +107,7 @@ fn opaque(set: &[u32], effects: bool) -> Event {
                 access: whole(r),
                 cover: Cover::Partial,
                 attachment: false,
+                clear: false,
             })
             .collect(),
         effects,

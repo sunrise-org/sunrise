@@ -280,58 +280,83 @@ impl ShadowTargets {
 
     /// Clears what no pass has cleared this frame: all of it when no shadow program drew, the
     /// cleared shadowcolor buffers the first one did not write.
-    pub fn clear_rest(&mut self, encoder: &mut wgpu::CommandEncoder) {
+    /// Returns the buffers and whether the shadow map were passed to the clear.
+    pub fn clear_rest(&mut self, encoder: &mut wgpu::CommandEncoder) -> (u8, bool) {
         let depth = std::mem::take(&mut self.fresh);
         let cleared = std::mem::replace(&mut self.cleared, u8::MAX);
         self.clear(encoder, !cleared, depth);
+        (!cleared, depth)
     }
 
     /// Clears the shadowcolor buffers `images` (bit n: shadowcolor n) not cleared yet this
     /// frame, before a shadow program binds them as images: the first pass clears only what it
     /// draws into, and `clear_rest` after it would wipe its stores.
-    pub fn clear_images(&mut self, encoder: &mut wgpu::CommandEncoder, images: u16) {
+    /// Returns the buffers passed to the clear.
+    pub fn clear_images(&mut self, encoder: &mut wgpu::CommandEncoder, images: u16) -> u8 {
         let buffers = images as u8 & !self.cleared;
         self.cleared |= buffers;
         self.clear(encoder, buffers, false);
+        buffers
+    }
+
+    /// The shadowcolor buffers of `buffers` that are cleared every frame: each one's side that clears write and
+    /// its clear colour.
+    pub fn clear_targets(
+        &self,
+        buffers: u8,
+    ) -> impl Iterator<Item = (&wgpu::TextureView, [f32; 4])> {
+        (0..SHADOW_COLORS)
+            .filter(move |n| buffers & 1 << n != 0)
+            .filter_map(|n| Some((self.color(n, false)?, self.clears[n]?)))
     }
 
     /// Clears the shadowcolor buffers `buffers` cleared every frame, and the shadow map with
     /// `depth`. One buffer a pass: eight wide formats together would pass the device's
     /// bytes-per-sample limit.
-    fn clear(&self, encoder: &mut wgpu::CommandEncoder, buffers: u8, mut depth: bool) {
-        let attachments = (0..SHADOW_COLORS)
-            .filter(|n| buffers & 1 << n != 0)
-            .filter_map(|n| {
-                Some(Some(wgpu::RenderPassColorAttachment {
-                    view: self.color(n, false)?,
+    fn clear(&self, encoder: &mut wgpu::CommandEncoder, buffers: u8, depth: bool) {
+        for (colour, depth) in self.clear_passes(buffers, depth) {
+            let attachments = colour.map(|(view, colour)| {
+                Some(wgpu::RenderPassColorAttachment {
+                    view,
                     depth_slice: None,
                     resolve_target: None,
-                    ops: clear(self.clears[n]?),
-                }))
+                    ops: clear(colour),
+                })
             });
-        let passes: Vec<Vec<_>> = attachments.map(|a| vec![a]).collect();
-        let passes = if passes.is_empty() && depth {
-            vec![Vec::new()]
-        } else {
-            passes
-        };
-        for attachments in &passes {
             encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shader pack shadow clear"),
-                color_attachments: attachments,
-                depth_stencil_attachment: std::mem::take(&mut depth).then_some(
-                    wgpu::RenderPassDepthStencilAttachment {
-                        view: &self.depth.1,
-                        depth_ops: Some(wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(1.0),
-                            store: wgpu::StoreOp::Store,
-                        }),
-                        stencil_ops: None,
-                    },
-                ),
+                color_attachments: attachments.as_slice(),
+                depth_stencil_attachment: depth.then_some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &self.depth.1,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(1.0),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
                 ..Default::default()
             });
         }
+    }
+
+    /// The render passes `clear` encodes for `buffers` and, with `depth`, the shadow map: one per cleared buffer
+    /// (eight wide formats together would pass the device's bytes-per-sample limit), the first one also clearing
+    /// the map; the map alone when no buffer is cleared; none when there is nothing to clear.
+    pub fn clear_passes(
+        &self,
+        buffers: u8,
+        depth: bool,
+    ) -> Vec<(Option<(&wgpu::TextureView, [f32; 4])>, bool)> {
+        let mut passes: Vec<_> = self
+            .clear_targets(buffers)
+            .map(|c| (Some(c), false))
+            .collect();
+        match passes.first_mut() {
+            Some(first) => first.1 = depth,
+            None if depth => passes.push((None, true)),
+            None => {}
+        }
+        passes
     }
 
     /// `shadowtex1`: the shadow map as it is now (before translucent geometry).

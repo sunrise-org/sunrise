@@ -136,19 +136,17 @@ impl CenterDepth {
 
     /// Loads the centre texel of `depth` (a `Depth32Float` texture that can be bound) and
     /// copies it into a free slot; with none free (the GPU is behind), this frame is skipped.
+    /// Returns the texel it drew into when it encoded the draw and the copy.
     pub fn copy(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
         depth: &wgpu::Texture,
-    ) {
-        let Some(slot) = self
+    ) -> Option<&wgpu::TextureView> {
+        let slot = self
             .slots
             .iter()
-            .find(|s| s.state.load(Ordering::Acquire) == FREE)
-        else {
-            return;
-        };
+            .find(|s| s.state.load(Ordering::Acquire) == FREE)?;
         if self.group.as_ref().is_none_or(|(t, _)| t != depth) {
             let view = depth.create_view(&Default::default());
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -161,9 +159,7 @@ impl CenterDepth {
             });
             self.group = Some((depth.clone(), group));
         }
-        let Some((_, group)) = &self.group else {
-            return;
-        };
+        let (_, group) = self.group.as_ref()?;
         {
             let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 label: Some("Shader pack centre depth"),
@@ -195,6 +191,7 @@ impl CenterDepth {
             self.texel.size(),
         );
         slot.state.store(COPIED, Ordering::Release);
+        Some(&self.texel_view)
     }
 
     /// The readback of what the frame copied, to start by calling it right after the frame's

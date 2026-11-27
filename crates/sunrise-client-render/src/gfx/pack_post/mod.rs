@@ -281,6 +281,9 @@ impl PackPostExt for PackPost {
 #[cfg(test)]
 mod history_reset_tests;
 
+#[cfg(all(test, feature = "plan-trace"))]
+mod plan_trace_tests;
+
 #[cfg(test)]
 mod world_target_tests;
 

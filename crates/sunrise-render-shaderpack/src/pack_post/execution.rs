@@ -110,6 +110,7 @@ impl PackPost {
     /// again at their sizes when next drawn), the frame uniforms' history, the custom uniforms
     /// and the centre depth too. Compiled programs and the pack's textures stay.
     pub fn reset_history(&mut self, device: &wgpu::Device) {
+        plan_trace!(self, |r| r.reset());
         self.uniforms.reset_history();
         self.mod_uniforms.reset_history();
         // A parsed pack's custom uniforms start at tick 0's seed, before any frame of the world.
@@ -301,6 +302,25 @@ impl PackPost {
         })
     }
 
+    /// The after-level callback, recorded as a block: it runs mod and frame-graph work the pack can't see.
+    fn after_level(
+        &mut self,
+        encoder: &mut wgpu::CommandEncoder,
+        _boundaries: WorldBoundaries,
+        boundary: &mut impl FnMut(&mut wgpu::CommandEncoder, WorldBoundary<'_>) -> bool,
+    ) {
+        plan_trace!(self, |r| {
+            use super::plan_trace::AFTER_LEVEL;
+            let (declared, unresolved) = self.declared(AFTER_LEVEL, _boundaries);
+            r.block_start(AFTER_LEVEL, "after level", declared, unresolved);
+        });
+        let _drew = boundary(encoder, WorldBoundary::AfterLevel);
+        plan_trace!(self, |r| {
+            r.guard(super::plan_trace::CALLBACK_DREW, _drew);
+            r.block_end(super::plan_trace::AFTER_LEVEL);
+        });
+    }
+
     fn target_boundary(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -309,7 +329,29 @@ impl PackPost {
     ) {
         let targets = self.targets.as_ref().expect("resized");
         let color = &targets.color[0].as_ref().expect("colortex0")[usize::from(self.main & 1 != 0)];
-        if boundary(encoder, make(color, &targets.depth)) {
+        plan_trace!(self, |r| {
+            use sunrise_frame_plan::trace::{Load, Use};
+            let what = "world callback";
+            let touches = [
+                r.touch(color, 0, Use::Attach(Load::Keep), what),
+                r.touch(
+                    &targets.depth,
+                    super::plan_trace::DEPTH_SLOT,
+                    Use::Attach(Load::Keep),
+                    what,
+                ),
+            ];
+            r.run(
+                what,
+                sunrise_frame_plan::model::EventKind::Work,
+                true,
+                false,
+                touches,
+            );
+        });
+        let drew = boundary(encoder, make(color, &targets.depth));
+        plan_trace!(self, |r| r.guard(super::plan_trace::CALLBACK_DREW, drew));
+        if drew {
             self.mips_valid &= !1;
         }
     }
@@ -447,6 +489,11 @@ impl PackPost {
         poll: PollLive,
     ) -> Result<(), String> {
         self.resize(device, size, lost, poll)?;
+        plan_trace!(self, |r| {
+            r.begin(size, shadow_cache);
+            r.guard(super::plan_trace::MOD_DRAWS, !self.mod_draws.is_empty());
+            super::plan_trace::list(r, self, world, world_depth, screen);
+        });
         // Last frame's water patches (or a new texture's zeros) out: depth 1 is no patch.
         if self.water_mask_dirty
             && let Some((_, view)) = self.targets.as_ref().and_then(|t| t.water_mask.as_ref())
@@ -463,6 +510,10 @@ impl PackPost {
                 }),
                 ..Default::default()
             });
+            plan_trace!(self, |r| r.clears(
+                "water patches clear",
+                [(view, super::plan_trace::depth(1.0))]
+            ));
             self.water_mask_dirty = false;
         }
         // Clear any allocated mod auxiliary depth targets to 1.0 before the frame's draws.
@@ -485,6 +536,8 @@ impl PackPost {
                         }),
                         ..Default::default()
                     });
+                    plan_trace!(self, |r| r
+                        .clears(label, [(view, super::plan_trace::depth(1.0))]));
                 }
             }
         }
@@ -517,6 +570,13 @@ impl PackPost {
             self.final_target = None;
             None
         };
+        plan_trace!(self, |r| super::plan_trace::list(
+            r,
+            self,
+            world,
+            world_depth,
+            screen
+        ));
         if let Some((layout, ids, rects)) = &self.block_ids {
             // A page that grew has a new buffer.
             self.page_groups
@@ -563,7 +623,22 @@ impl PackPost {
         // Images start the frame cleared, before the shadow pass writes them.
         if let Some(dump) = &mut self.dump {
             dump.read(device, lost, poll)?;
-            dump.copy(device, encoder, &self.images);
+            let _dumped = dump.copy(device, encoder, &self.images);
+            plan_trace!(self, |r| if let Some(view) = _dumped {
+                let read = r.touch(
+                    view,
+                    0,
+                    sunrise_frame_plan::trace::Use::CopyFrom,
+                    "image dump",
+                );
+                r.run(
+                    "image dump",
+                    sunrise_frame_plan::model::EventKind::Copy,
+                    true,
+                    false,
+                    [read],
+                );
+            });
         }
         pack_images::clear(
             device,
@@ -572,6 +647,22 @@ impl PackPost {
             self.gpu.clear,
             &mut self.zeros,
         );
+        plan_trace!(self, |r| {
+            let zero = sunrise_frame_plan::trace::Use::Clear(super::plan_trace::colour4([0.0; 4]));
+            let cleared: Vec<_> = pack_images::cleared(&self.images)
+                .enumerate()
+                .map(|(slot, view)| r.touch(view, slot as u32, zero, "image clears"))
+                .collect();
+            if !cleared.is_empty() {
+                r.run(
+                    "image clears",
+                    sunrise_frame_plan::model::EventKind::Work,
+                    true,
+                    false,
+                    cleared,
+                );
+            }
+        });
         let Some(targets) = &self.targets else {
             return Ok(());
         };
@@ -586,6 +677,12 @@ impl PackPost {
                     a.texture().as_image_copy(),
                     a.texture().size(),
                 );
+                plan_trace!(self, |r| r.copy(
+                    &format!("frame-start copy colortex{b}"),
+                    b_side.texture(),
+                    a.texture(),
+                    false
+                ));
             }
         }
         self.main = 0;
@@ -610,6 +707,10 @@ impl PackPost {
                 }),
                 ..Default::default()
             });
+            plan_trace!(self, |r| r.clears(
+                "shadow stand-in clear",
+                [(&self.shadow.0, super::plan_trace::depth(1.0))]
+            ));
         }
         // Three-channel buffers start out with alpha 1 on both sides: a pass writes the side the
         // frame's clear didn't touch.
@@ -630,6 +731,10 @@ impl PackPost {
                             color_attachments: &[attach(v, start)],
                             ..Default::default()
                         });
+                        plan_trace!(self, |r| r.clears(
+                            "three-channel start",
+                            [(v, super::plan_trace::colour(wgpu::Color::BLACK))]
+                        ));
                     }
                 }
             }
@@ -691,6 +796,13 @@ impl PackPost {
                 timestamp_writes: self.timing.as_mut().and_then(|t| t.writes("clear")),
                 ..Default::default()
             });
+            plan_trace!(self, |r| r.clears(
+                "clear",
+                chunk.iter().map(|&(b, alt)| (
+                    view(self.main, b, alt).expect("used buffer"),
+                    super::plan_trace::colour4(self.clears[b].unwrap_or_default())
+                ))
+            ));
         }
 
         // The world into colortex0 and depthtex0, flipped to GL's rows, and the clears.
@@ -756,6 +868,38 @@ impl PackPost {
             pass.set_pipeline(&blit.0);
             pass.set_bind_group(0, self.blit_group.as_ref().map(|g| &g.1), &[]);
             pass.draw(0..3, 0..1);
+            plan_trace!(self, |r| {
+                use sunrise_frame_plan::trace::Use;
+                let what = "world blit";
+                // It draws the world into colortex0 (location 0) and nothing into the buffers it only clears as it
+                // begins (`blit_clears`, the locations after it): those are clear-only attachments.
+                let mut touches = super::plan_trace::attachments(r, &attachments[..1], what);
+                for (slot, a) in attachments.iter().enumerate().skip(1) {
+                    if let Some(a) = a
+                        && let wgpu::LoadOp::Clear(c) = a.ops.load
+                    {
+                        let clear = Use::Clear(super::plan_trace::colour(c));
+                        touches.push(r.touch(a.view, slot as u32, clear, what));
+                    }
+                }
+                touches.push(r.touch(world, 0, Use::Sample, what));
+                touches.push(r.touch(world_depth, 1, Use::Sample, what));
+                if self.blit_depth {
+                    touches.push(super::plan_trace::depth_attachment(
+                        r,
+                        &targets.depth,
+                        wgpu::LoadOp::Clear(1.0),
+                        what,
+                    ));
+                }
+                r.run(
+                    what,
+                    sunrise_frame_plan::model::EventKind::Work,
+                    false,
+                    false,
+                    touches,
+                );
+            });
         }
 
         // The world and the clears just rewrote the buffers' first levels.
@@ -830,6 +974,9 @@ impl PackPost {
                     &mut boundary,
                 );
             }
+            plan_trace!(self, |r| if pass.group == Group::Deferred {
+                r.deferred(self.sizes_differ(pass));
+            });
             // As if the pack didn't have it: no compute stages, flips or stage changes.
             if self.sizes_differ(pass) {
                 continue;
@@ -847,7 +994,7 @@ impl PackPost {
                         &mut boundary,
                     );
                 }
-                boundary(encoder, WorldBoundary::AfterLevel);
+                self.after_level(encoder, boundaries, &mut boundary);
                 world_finished = true;
             }
             if pass.group == Group::Deferred && !seen.0 {
@@ -936,6 +1083,25 @@ impl PackPost {
                 }
                 rp.draw(0..6, 0..1);
             }
+            plan_trace!(self, |r| {
+                let touches = super::plan_trace::attachments(r, &attachments, &pass.name);
+                let effects = pass.buffers || pass.sink || !pass.images.is_empty();
+                // What step 2a's R1 may remove: a plain draw into buffers, which the screen doesn't read.
+                let removable = !final_pass
+                    && !effects
+                    && pass.mipmaps == 0
+                    && pass.image_copies == 0
+                    && pass.copies == 0
+                    && pass.shadow_copies == 0;
+                r.run(
+                    &pass.name,
+                    sunrise_frame_plan::model::EventKind::Work,
+                    effects,
+                    removable,
+                    touches,
+                );
+                r.bound(&group, &pass.name);
+            });
             self.main ^= pass.flip;
             self.mips_valid &= !pass.written;
         }
@@ -980,12 +1146,34 @@ impl PackPost {
             );
         }
         if !world_finished {
-            boundary(encoder, WorldBoundary::AfterLevel);
+            self.after_level(encoder, boundaries, &mut boundary);
         }
         let targets = self.targets.as_ref().expect("resized");
         // depthtex0 as the frame leaves it, for next frames' `centerDepthSmooth`.
         if let Some(center) = &mut self.center_depth {
-            center.copy(device, encoder, &targets.depth_texture);
+            let _texel = center.copy(device, encoder, &targets.depth_texture);
+            plan_trace!(self, |r| if let Some(texel) = _texel {
+                use sunrise_frame_plan::model::{EventKind, Levels};
+                use sunrise_frame_plan::trace::{Load, Use};
+                // A draw that loads depth's centre into a texel, then the texel's copy to a readback buffer.
+                let what = "centre depth";
+                r.texture(texel.texture(), "centre depth texel", true, None);
+                let white = super::plan_trace::colour(wgpu::Color::WHITE);
+                let touches = [
+                    r.touch_texture(
+                        &targets.depth_texture,
+                        Some(Levels::BASE),
+                        0,
+                        Use::Sample,
+                        what,
+                    ),
+                    r.touch(texel, 0, Use::Attach(Load::Clear(white)), what),
+                ];
+                r.run(what, EventKind::Work, false, false, touches);
+                let what = "centre depth readback";
+                let read = r.touch(texel, 0, Use::CopyFrom, what);
+                r.run(what, EventKind::Copy, true, false, [read]);
+            });
         }
         // Export the pack's final GL depth (`targets.depth`) back to Sunrise's screen-rows,
         // reversed-Z `world_depth` whenever the pack wrote depth, so post-pack consumers
@@ -1022,6 +1210,30 @@ impl PackPost {
             rp.set_pipeline(&self.export_depth.0);
             rp.set_bind_group(0, self.export_depth_group.as_ref().map(|g| &g.1), &[]);
             rp.draw(0..3, 0..1);
+            plan_trace!(self, |r| {
+                let what = "depth export";
+                let touches = [
+                    r.touch(
+                        &targets.depth,
+                        1,
+                        sunrise_frame_plan::trace::Use::Sample,
+                        what,
+                    ),
+                    super::plan_trace::depth_attachment(
+                        r,
+                        world_depth,
+                        wgpu::LoadOp::Clear(0.0),
+                        what,
+                    ),
+                ];
+                r.run(
+                    what,
+                    sunrise_frame_plan::model::EventKind::Work,
+                    false,
+                    false,
+                    touches,
+                );
+            });
         }
         let view = |m: u16, i: usize, alt: bool| {
             targets.color[i]
@@ -1054,6 +1266,29 @@ impl PackPost {
             rp.set_pipeline(&self.copy.0);
             rp.set_bind_group(0, &group, &[]);
             rp.draw(0..3, 0..1);
+            plan_trace!(self, |r| {
+                use sunrise_frame_plan::trace::{Load, Use};
+                let what = "colortex0 to the screen";
+                let clear = Use::Attach(Load::Clear(super::plan_trace::colour(
+                    wgpu::Color::TRANSPARENT,
+                )));
+                let touches = [
+                    r.touch(
+                        view(self.main, 0, false).expect("colortex0"),
+                        0,
+                        Use::Sample,
+                        what,
+                    ),
+                    r.touch(screen, 0, clear, what),
+                ];
+                r.run(
+                    what,
+                    sunrise_frame_plan::model::EventKind::Work,
+                    false,
+                    false,
+                    touches,
+                );
+            });
         } else if let Some(picture) = &final_view {
             // The picture at the world's size onto the window: one upscale, smoothly.
             let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
@@ -1079,8 +1314,27 @@ impl PackPost {
             rp.set_pipeline(&self.upscale.0);
             rp.set_bind_group(0, &group, &[]);
             rp.draw(0..3, 0..1);
+            plan_trace!(self, |r| {
+                use sunrise_frame_plan::trace::{Load, Use};
+                let what = "final upscale";
+                let clear = Use::Attach(Load::Clear(super::plan_trace::colour(
+                    wgpu::Color::TRANSPARENT,
+                )));
+                let touches = [
+                    r.touch(picture, 0, Use::Sample, what),
+                    r.touch(screen, 0, clear, what),
+                ];
+                r.run(
+                    what,
+                    sunrise_frame_plan::model::EventKind::Work,
+                    false,
+                    false,
+                    touches,
+                );
+            });
         }
         self.mod_draws.clear();
+        plan_trace!(self, |r| r.end());
         Ok(())
     }
 }
@@ -1098,11 +1352,34 @@ impl PackPost {
         out: [u32; 2],
     ) -> wgpu::BindGroup {
         pack_images::copy(encoder, &self.images, pass.image_copies);
+        plan_trace!(self, |r| for (view, copy) in
+            pack_images::copies(&self.images, pass.image_copies)
+        {
+            r.copy(
+                &format!("{}: image copy", pass.name),
+                view.texture(),
+                copy.texture(),
+                true,
+            );
+        });
         for &(_, image) in &pass.images {
             if let Image::StandIn(format, dimension) = image
                 && let Some(s) = pack_images::stand_in(&self.stand_ins, format, dimension)
             {
                 s.clear(encoder);
+                plan_trace!(self, |r| {
+                    let what = format!("{}: stand-in clear", pass.name);
+                    let zero =
+                        sunrise_frame_plan::trace::Use::Clear(super::plan_trace::colour4([0.0; 4]));
+                    let clear = r.touch(&s.view, 0, zero, &what);
+                    r.run(
+                        &what,
+                        sunrise_frame_plan::model::EventKind::Work,
+                        true,
+                        false,
+                        [clear],
+                    );
+                });
             }
         }
         if let Some(targets) = &self.targets {
@@ -1114,6 +1391,12 @@ impl PackPost {
                         copy.texture().as_image_copy(),
                         t[side].texture().size(),
                     );
+                    plan_trace!(self, |r| r.copy(
+                        &format!("{}: colortex{i} copy", pass.name),
+                        t[side].texture(),
+                        copy.texture(),
+                        false
+                    ));
                 }
             }
         }
@@ -1125,6 +1408,12 @@ impl PackPost {
                         copy.texture().as_image_copy(),
                         main.texture().size(),
                     );
+                    plan_trace!(self, |r| r.copy(
+                        &format!("{}: shadowcolor{n} copy", pass.name),
+                        main.texture(),
+                        copy.texture(),
+                        false
+                    ));
                 }
             }
         }
@@ -1386,11 +1675,22 @@ impl PackPost {
                     resource: wgpu::BindingResource::TextureView(view),
                 });
             }
-            device.create_bind_group(&wgpu::BindGroupDescriptor {
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
                 label: Some(&pass.name),
                 layout: &pass.layout,
                 entries: &entries,
-            })
+            });
+            plan_trace!(self, |r| {
+                let views = entries.iter().filter_map(|e| match e.resource {
+                    wgpu::BindingResource::TextureView(view) => {
+                        let image = pass.images.iter().any(|&(b, _)| b == e.binding);
+                        Some((e.binding, view, image))
+                    }
+                    _ => None,
+                });
+                r.group_made(&group, views);
+            });
+            group
         });
         group.clone()
     }
@@ -1438,6 +1738,16 @@ impl PackPost {
         };
         for image in (0..self.images.len()).filter(|k| pass.snapshots & 1 << k != 0) {
             pack_images::snapshot(encoder, &self.images[image]);
+            plan_trace!(self, |r| if let (Some(view), Some(before)) =
+                (&self.images[image].view, &self.images[image].before)
+            {
+                r.copy(
+                    &format!("{}: image snapshot", pass.name),
+                    view.texture(),
+                    before.texture(),
+                    true,
+                );
+            });
         }
         let group = self.bind(device, queue, encoder, pass, size);
         let mut cp = encoder.begin_compute_pass(&wgpu::ComputePassDescriptor {
@@ -1459,6 +1769,16 @@ impl PackPost {
             Run::Counts(counts) => cp.dispatch_workgroups_indirect(counts, 0),
         }
         drop(cp);
+        plan_trace!(self, |r| {
+            r.run(
+                &pass.name,
+                sunrise_frame_plan::model::EventKind::Work,
+                true,
+                false,
+                [],
+            );
+            r.bound(&group, &pass.name);
+        });
         self.mips_valid &= !pass.written;
     }
 
@@ -1527,6 +1847,23 @@ impl PackPost {
         } else {
             &targets.depth
         };
+        plan_trace!(self, |r| {
+            let mut touches = super::plan_trace::attachments(r, &attachments, &pass.name);
+            touches.push(super::plan_trace::depth_attachment(
+                r,
+                depth_view,
+                depth_ops.load,
+                &pass.name,
+            ));
+            let effects = pass.buffers || !pass.images.is_empty();
+            r.run(
+                &pass.name,
+                sunrise_frame_plan::model::EventKind::Work,
+                effects,
+                false,
+                touches,
+            );
+        });
         let timestamp_writes = self.timing.as_mut().and_then(|t| t.writes(&pass.name));
         encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: Some(&pass.name),
@@ -1569,6 +1906,7 @@ impl PackPost {
                 let mut rp = self.begin_with_depth(encoder, &m.pass, false, m.depth_target);
                 rp.set_pipeline(m.pass.render());
                 rp.set_bind_group(0, &group, &[]);
+                plan_trace!(self, |r| r.bound(&group, &m.pass.name));
                 if m.pass.buffers
                     && let Some(g) = &self.buffers.group
                 {
@@ -1700,6 +2038,7 @@ impl PackPost {
             let mut rp = self.begin(encoder, &pass);
             rp.set_pipeline(pass.render());
             rp.set_bind_group(0, &group, &[]);
+            plan_trace!(self, |r| r.bound(&group, &pass.name));
             if pass.buffers
                 && let Some(g) = &self.buffers.group
             {
@@ -1794,6 +2133,7 @@ impl PackPost {
                 let rp = &mut open.as_mut().expect("open").0;
                 rp.set_pipeline(pass.render());
                 rp.set_bind_group(0, group, &[]);
+                plan_trace!(self, |r| r.bound(group, &pass.name));
                 // A sky program that reads the pack's SSBOs (Noble's `gbuffers_textured`, the
                 // sun's fallback) binds them, as the other passes do.
                 if pass.buffers
@@ -1879,6 +2219,7 @@ impl PackPost {
                 let mut rp = self.begin(encoder, pass);
                 rp.set_pipeline(pass.render());
                 rp.set_bind_group(0, &group, &[]);
+                plan_trace!(self, |r| r.bound(&group, &pass.name));
                 if pass.buffers
                     && let Some(g) = &self.buffers.group
                 {
@@ -1894,7 +2235,10 @@ impl PackPost {
                 let offset = pass.polygon_offset.as_ref().and_then(|p| p.get());
                 let mut on_offset = false;
                 for d in draws {
-                    bind_atlas(&mut rp, d, groups, &dynamic, &mut bound);
+                    let _switched = bind_atlas(&mut rp, d, groups, &dynamic, &mut bound);
+                    plan_trace!(self, |r| if let Some(group) = _switched {
+                        r.bound(group, &pass.name);
+                    });
                     if let Some(offset) = offset
                         && d.polygon_offset != on_offset
                     {
@@ -1923,6 +2267,7 @@ impl PackPost {
                 let mut rp = self.begin_with(encoder, pass, true);
                 rp.set_pipeline(mask);
                 rp.set_bind_group(0, &group, &[]);
+                plan_trace!(self, |r| r.bound(&group, &pass.name));
                 if pass.buffers
                     && let Some(g) = &self.buffers.group
                 {
@@ -1970,6 +2315,24 @@ impl PackPost {
                 atlas.texture(),
                 self.portal_rect,
             );
+            plan_trace!(self, |r| {
+                pass.portal_groups.values().for_each(|g| r.forget_group(g));
+                // The End portal's sprite, copied out of the atlas: a texture of its own.
+                r.texture(view.texture(), "End portal sprite", true, None);
+                let copied = r.touch(
+                    &view,
+                    1,
+                    sunrise_frame_plan::trace::Use::CopyTo,
+                    "End portal sprite copy",
+                );
+                r.run(
+                    "End portal sprite copy",
+                    sunrise_frame_plan::model::EventKind::Copy,
+                    false,
+                    false,
+                    [copied],
+                );
+            });
             self.portal_texture = Some((self.portal_rect, view));
             pass.portal_groups.clear();
         }
@@ -2002,6 +2365,15 @@ impl PackPost {
             .collect();
         handles.sort_unstable();
         handles.dedup();
+        plan_trace!(self, |r| {
+            let dropped = pass
+                .dynamic_groups
+                .iter()
+                .filter(|(handle, _)| handles.binary_search(handle).is_err());
+            for (_, (_, cache)) in dropped {
+                cache.values().for_each(|g| r.forget_group(g));
+            }
+        });
         pass.dynamic_groups
             .retain(|handle, _| handles.binary_search(handle).is_ok());
         let mut out = Vec::with_capacity(handles.len());
@@ -2013,7 +2385,12 @@ impl PackPost {
             // cache of their own, swapped in with the texture.
             let mut cache = match pass.dynamic_groups.remove(&handle) {
                 Some((held, cache)) if held == *revision => cache,
-                _ => std::collections::HashMap::new(),
+                _stale => {
+                    plan_trace!(self, |r| if let Some((_, cache)) = &_stale {
+                        cache.values().for_each(|g| r.forget_group(g));
+                    });
+                    std::collections::HashMap::new()
+                }
             };
             let saved = (
                 pass.atlas.replace(view.clone()),
@@ -2110,6 +2487,7 @@ impl PackPost {
             let mut rp = self.begin(encoder, pass);
             rp.set_pipeline(pass.render());
             rp.set_bind_group(0, &group, &[]);
+            plan_trace!(self, |r| r.bound(&group, &pass.name));
             if pass.buffers
                 && let Some(g) = &self.buffers.group
             {
@@ -2152,11 +2530,17 @@ impl PackPost {
         boundaries: WorldBoundaries,
         boundary: &mut impl FnMut(&mut wgpu::CommandEncoder, WorldBoundary<'_>) -> bool,
     ) {
+        plan_trace!(self, |r| {
+            use super::plan_trace::OPAQUE;
+            let (declared, unresolved) = self.declared(OPAQUE, boundaries);
+            r.block_start(OPAQUE, "opaque gbuffers", declared, unresolved);
+        });
         if sky.visible || sky.end_fog_sky {
             self.draw_sky(device, queue, encoder, size, view, sky);
         }
         if boundaries.sky {
-            boundary(encoder, WorldBoundary::AfterSky);
+            let _drew = boundary(encoder, WorldBoundary::AfterSky);
+            plan_trace!(self, |r| r.guard(super::plan_trace::CALLBACK_DREW, _drew));
         }
         self.draw_mod_slot(device, queue, encoder, size, ModPassSlot::AfterSky);
         self.draw_terrain(device, queue, encoder, size, TerrainList::Solid, terrain);
@@ -2184,6 +2568,7 @@ impl PackPost {
                 copy.as_image_copy(),
                 t.depth_texture.size(),
             );
+            plan_trace!(self, |r| r.copy("depthtex2", &t.depth_texture, copy, false));
         }
         self.draw_hand(device, queue, encoder, size, view, hand);
         // Depth1 includes that hand, but still precedes translucent terrain.
@@ -2195,6 +2580,7 @@ impl PackPost {
                 copy.as_image_copy(),
                 t.depth_texture.size(),
             );
+            plan_trace!(self, |r| r.copy("depthtex1", &t.depth_texture, copy, false));
         }
         self.draw_mod_slot(
             device,
@@ -2213,9 +2599,16 @@ impl PackPost {
                         dst_tex.as_image_copy(),
                         src_tex.size(),
                     );
+                    plan_trace!(self, |r| r.copy(
+                        "mod opaque depth",
+                        src_tex,
+                        dst_tex,
+                        false
+                    ));
                 }
             }
         }
+        plan_trace!(self, |r| r.block_end(super::plan_trace::OPAQUE));
     }
 
     /// The first-person hand and held items, with `gbuffers_hand` at the hand's projection.
@@ -2246,6 +2639,7 @@ impl PackPost {
                 let mut rp = self.begin(encoder, &pass);
                 rp.set_pipeline(pass.render());
                 rp.set_bind_group(0, &group, &[]);
+                plan_trace!(self, |r| r.bound(&group, &pass.name));
                 if pass.buffers
                     && let Some(g) = &self.buffers.group
                 {
@@ -2293,6 +2687,7 @@ impl PackPost {
             let mut rp = self.begin(encoder, &pass);
             rp.set_pipeline(pass.render());
             rp.set_bind_group(0, &group, &[]);
+            plan_trace!(self, |r| r.bound(&group, &pass.name));
             if pass.buffers
                 && let Some(g) = &self.buffers.group
             {
@@ -2330,6 +2725,7 @@ impl PackPost {
             let mut rp = self.begin(encoder, &pass);
             rp.set_pipeline(pass.render());
             rp.set_bind_group(0, &group, &[]);
+            plan_trace!(self, |r| r.bound(&group, &pass.name));
             if pass.buffers
                 && let Some(g) = &self.buffers.group
             {
@@ -2370,6 +2766,11 @@ impl PackPost {
         boundaries: WorldBoundaries,
         boundary: &mut impl FnMut(&mut wgpu::CommandEncoder, WorldBoundary<'_>) -> bool,
     ) {
+        plan_trace!(self, |r| {
+            use super::plan_trace::TRANSLUCENT;
+            let (declared, unresolved) = self.declared(TRANSLUCENT, boundaries);
+            r.block_start(TRANSLUCENT, "translucent gbuffers", declared, unresolved);
+        });
         self.draw_terrain(
             device,
             queue,
@@ -2415,6 +2816,7 @@ impl PackPost {
                 WorldBoundary::CustomGeometry { color, depth }
             });
         }
+        plan_trace!(self, |r| r.block_end(super::plan_trace::TRANSLUCENT));
     }
 
     /// The hand's translucent quads (uploaded by `draw_hand` this frame), with
@@ -2439,6 +2841,7 @@ impl PackPost {
                 let mut rp = self.begin(encoder, &pass);
                 rp.set_pipeline(pass.render());
                 rp.set_bind_group(0, &group, &[]);
+                plan_trace!(self, |r| r.bound(&group, &pass.name));
                 if pass.buffers
                     && let Some(g) = &self.buffers.group
                 {
@@ -2491,6 +2894,7 @@ impl PackPost {
                 let mut rp = self.begin(encoder, pass);
                 rp.set_pipeline(pass.render());
                 rp.set_bind_group(0, &group, &[]);
+                plan_trace!(self, |r| r.bound(&group, &pass.name));
                 if pass.buffers
                     && let Some(g) = &self.buffers.group
                 {
@@ -2540,6 +2944,30 @@ impl PackPost {
             rp.set_pipeline(pipeline);
             rp.set_bind_group(0, group, &[]);
             rp.draw(0..3, 0..1);
+            drop(rp);
+            plan_trace!(self, |r| {
+                use sunrise_frame_plan::trace::{Load, Use};
+                let clear = Use::Attach(Load::Clear(super::plan_trace::colour(
+                    wgpu::Color::TRANSPARENT,
+                )));
+                let written = r.touch(attachment, 0, clear, &label);
+                // The level above the one written.
+                let read = written.and_then(|w| {
+                    let above = sunrise_frame_plan::model::Levels {
+                        first: w.levels.first.checked_sub(1)?,
+                        count: 1,
+                    };
+                    r.touch_texture(attachment.texture(), Some(above), 0, Use::Sample, &label)
+                });
+                let touches = [read, written];
+                r.run(
+                    &label,
+                    sunrise_frame_plan::model::EventKind::Work,
+                    false,
+                    false,
+                    touches,
+                );
+            });
         }
     }
 
@@ -2569,6 +2997,7 @@ impl PackPost {
     /// Drops every pass's cached bind groups, compute stages included: they name views that
     /// were made again.
     pub fn forget_groups(&mut self) {
+        plan_trace!(self, |r| r.forget_groups());
         self.export_depth_group = None;
         let sky = self
             .sky
@@ -2863,6 +3292,8 @@ impl PackPost {
     ) {
         // Opt-in only (`sunrise-graphics.txt` shadowCache). Off: always redraw, drop any cache.
         if !shadow_cache {
+            plan_trace!(self, |r| r
+                .guard(super::plan_trace::SHADOW_CACHE_HIT, false));
             self.shadow_cache = ShadowCache::default();
             self.draw_shadow_pass(device, queue, encoder, terrain);
             return;
@@ -2901,6 +3332,8 @@ impl PackPost {
                 .shadow_targets
                 .as_ref()
                 .is_some_and(|t| self.shadow_writes & t.kept() == 0);
+        plan_trace!(self, |r| r
+            .guard(super::plan_trace::SHADOW_CACHE_HIT, cache_hit));
         if cache_hit {
             // The targets still hold this map (and `main`, the A/B side
             // `shadowcomp` left current).
@@ -2918,12 +3351,19 @@ impl PackPost {
         encoder: &mut wgpu::CommandEncoder,
         terrain: &mut TerrainDraw<'_>,
     ) {
-        let Some(t) = &mut self.shadow_targets else {
+        if self.shadow_targets.is_none() {
             return;
-        };
+        }
+        plan_trace!(self, |r| {
+            use super::plan_trace::SHADOW;
+            let (declared, unresolved) = self.declared(SHADOW, WorldBoundaries::default());
+            r.block_start(SHADOW, "shadow pass", declared, unresolved);
+        });
+        let t = self.shadow_targets.as_mut().expect("shadow pass");
         t.begin_frame();
-        t.clear_images(encoder, self.shadow_pass_images);
+        let _cleared = t.clear_images(encoder, self.shadow_pass_images);
         let size = [t.size; 2];
+        plan_trace!(self, |r| self.trace_shadow_clears(r, _cleared, false));
         self.draw_terrain(
             device,
             queue,
@@ -2934,8 +3374,17 @@ impl PackPost {
         );
         self.draw_shadow_entities(device, queue, encoder, size);
         let t = self.shadow_targets.as_mut().expect("shadow pass");
-        t.clear_rest(encoder);
+        let _rest = t.clear_rest(encoder);
         t.copy_depth1(encoder);
+        plan_trace!(self, |r| {
+            let (buffers, depth) = _rest;
+            self.trace_shadow_clears(r, buffers, depth);
+            if let Some(s) = &self.shadow_targets
+                && let Some((copy, _)) = &s.depth1
+            {
+                r.copy("shadowtex1", &s.depth.0, copy, false);
+            }
+        });
         self.draw_terrain(
             device,
             queue,
@@ -3002,12 +3451,25 @@ impl PackPost {
                 }
                 rp.draw(0..6, 0..1);
             }
+            plan_trace!(self, |r| {
+                let touches = super::plan_trace::attachments(r, &attachments, &pass.name);
+                let effects = pass.buffers || pass.sink || !pass.images.is_empty();
+                r.run(
+                    &pass.name,
+                    sunrise_frame_plan::model::EventKind::Work,
+                    effects,
+                    false,
+                    touches,
+                );
+                r.bound(&group, &pass.name);
+            });
             drop(attachments);
             if let Some(t) = &mut self.shadow_targets {
                 t.main ^= pass.flip;
             }
         }
         self.shadow_comp = comp;
+        plan_trace!(self, |r| r.block_end(super::plan_trace::SHADOW));
     }
 
     /// Computes the cache key for the current frame.
@@ -3122,14 +3584,14 @@ impl PackPost {
 /// Set 0 for draw `d` of an entity pass: of `groups` (plain, End portal, block atlas) and
 /// `dynamic` (a group for each dynamic texture), the one of the atlas it samples (`Draw::portal`,
 /// `Draw::block_atlas`, `Draw::texture`), the plain one when that atlas's is missing. `bound`: the
-/// index now set (`groups`, then `dynamic` after them).
-fn bind_atlas(
+/// index now set (`groups`, then `dynamic` after them). Returns the group it set, if it set one.
+fn bind_atlas<'g>(
     rp: &mut wgpu::RenderPass<'_>,
     d: &crate::pack_entities::Draw,
-    groups: [Option<&wgpu::BindGroup>; 3],
-    dynamic: &[(u64, wgpu::BindGroup)],
+    groups: [Option<&'g wgpu::BindGroup>; 3],
+    dynamic: &'g [(u64, wgpu::BindGroup)],
     bound: &mut usize,
-) {
+) -> Option<&'g wgpu::BindGroup> {
     let (wanted, group) = match d
         .texture
         .and_then(|handle| dynamic.iter().position(|(h, _)| *h == handle))
@@ -3152,7 +3614,9 @@ fn bind_atlas(
     {
         rp.set_bind_group(0, group, &[]);
         *bound = wanted;
+        return Some(group);
     }
+    None
 }
 
 /// What a compute pass dispatches this frame: its own counts, or the buffer holding them.

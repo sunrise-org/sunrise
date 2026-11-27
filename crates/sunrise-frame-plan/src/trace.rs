@@ -49,7 +49,8 @@ pub enum Use {
     CopyFrom,
     /// A copy's destination levels.
     CopyTo,
-    /// An attachment clear, with its value.
+    /// An attachment clear, with its value: a clear unit's, or an attachment a draw only clears as it begins and
+    /// draws nothing into.
     Clear(ClearValue),
 }
 
@@ -346,10 +347,10 @@ pub fn check_edits(
             texture,
         }))?;
     }
+    // A dead texture's clears go, a draw's clear-only attachments of it included.
     for step in &mut expected {
-        if step.kind == EventKind::Clear {
-            step.touches.retain(|t| !edits.dead.contains(&t.texture));
-        }
+        step.touches
+            .retain(|t| !(matches!(t.how, Use::Clear(_)) && edits.dead.contains(&t.texture)));
     }
     expected.retain(|s| s.kind != EventKind::Clear || s.effects || !s.touches.is_empty());
     if let Some(index) = expected
@@ -412,7 +413,7 @@ impl Projection {
     /// The projection as a one-state graph with no edges: each allocated texture a resource, each step an
     /// unguarded event. A block reads and writes everything it touched. A kept attachment is a partial write that
     /// may take a folded clear; an attachment that loads as a clear, a copy's destination and a clear are full
-    /// writes, which take none.
+    /// writes, which take none. A draw's clear-only attachment is a `clear` write.
     pub fn to_graph(&self) -> Graph {
         let resources = self
             .textures
@@ -450,6 +451,12 @@ impl Projection {
                 access: region.clone(),
                 cover,
                 attachment,
+                clear: false,
+            };
+            // A draw's attachment it only clears as it begins: a clear R2 may drop with its side.
+            let clear_only = Write {
+                clear: step.kind == EventKind::Work,
+                ..write(Cover::Full, false)
             };
             if step.kind == EventKind::Opaque {
                 reads.push(region.clone());
@@ -465,9 +472,8 @@ impl Projection {
                 Use::Attach(Load::Keep) => {
                     writes.push(write(Cover::Partial, step.kind == EventKind::Work))
                 }
-                Use::Attach(Load::Clear(_)) | Use::CopyTo | Use::Clear(_) => {
-                    writes.push(write(Cover::Full, false))
-                }
+                Use::Attach(Load::Clear(_)) | Use::CopyTo => writes.push(write(Cover::Full, false)),
+                Use::Clear(_) => writes.push(clear_only),
             }
         }
         Event {

@@ -88,6 +88,9 @@ pub struct Write {
     /// clear: only such a write can take a folded clear (R4b). Only on `Work` events, with a resolved access and
     /// `Partial` cover; an attachment that already loads as a clear is a `Full` write without this flag.
     pub attachment: bool,
+    /// An attachment a draw only clears as it begins and draws nothing into (a world blit's extra targets): a
+    /// `Full`, resolved write of a `Work` event that R2 counts as a clear, not a use, and R4b never folds.
+    pub clear: bool,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
@@ -200,6 +203,8 @@ pub enum InputError {
     Clear(EventId),
     /// `attachment` on a write of an event that isn't `Work`, or on an unresolved or `Full` write.
     Attachment(EventId),
+    /// `clear` on a write of an event that isn't `Work`, or on an unresolved, `Partial` or attachment write.
+    ClearWrite(EventId),
     /// An observer past the end of its state's events.
     ObserverPosition(usize),
 }
@@ -293,6 +298,14 @@ impl Graph {
             return Err(InputError::Clear(id));
         }
         for write in &event.writes {
+            if write.clear
+                && (event.kind != EventKind::Work
+                    || write.cover != Cover::Full
+                    || write.attachment
+                    || matches!(write.access, Access::Unresolved(_)))
+            {
+                return Err(InputError::ClearWrite(id));
+            }
             if write.attachment
                 && (event.kind != EventKind::Work
                     || write.cover == Cover::Full

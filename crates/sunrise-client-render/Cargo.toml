@@ -97,6 +97,8 @@ wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 audio = ["dep:cpal", "dep:alsa", "dep:libc", "dep:sunrise-audio-input"]
 # Helpers sunrise-client's tests build their fixtures with.
 test-support = ["sunrise-level/test-support"]
+# The shader pack's frame trace for the frame planner's measure (`SUNRISE_PLAN_TRACE`, #6552).
+plan-trace = ["sunrise-render-shaderpack/plan-trace"]
 
 [lints]
 workspace = true
@@ -119,6 +121,8 @@ name = "standard_pack_gpu_entities"
 path = "examples/standard_pack_gpu_entities.rs"
 
 [dev-dependencies]
+# The frame trace's test reads the recorded frames (`plan-trace`).
+sunrise-frame-plan = { path = "../sunrise-frame-plan" }
 tempfile = "3"
 mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["testing"] }
 sunrise-perf = { path = "../sunrise-perf" }

@@ -211,19 +211,33 @@ pub fn snapshot(encoder: &mut wgpu::CommandEncoder, image: &PackImage) {
 /// Copies the images of `mask` (bit n: image n), which a pass samples and stores, for that pass
 /// to sample.
 pub fn copy(encoder: &mut wgpu::CommandEncoder, images: &[PackImage], mask: u64) {
-    for (_, image) in images
+    for (view, copy) in copies(images, mask) {
+        encoder.copy_texture_to_texture(
+            view.texture().as_image_copy(),
+            copy.texture().as_image_copy(),
+            view.texture().size(),
+        );
+    }
+}
+
+/// What `copy` copies: each image of `mask` that has a copy, and its copy.
+pub fn copies(
+    images: &[PackImage],
+    mask: u64,
+) -> impl Iterator<Item = (&wgpu::TextureView, &wgpu::TextureView)> {
+    images
         .iter()
         .enumerate()
-        .filter(|(k, _)| mask & 1 << k != 0)
-    {
-        if let (Some(view), Some(copy)) = (&image.view, &image.copy) {
-            encoder.copy_texture_to_texture(
-                view.texture().as_image_copy(),
-                copy.texture().as_image_copy(),
-                view.texture().size(),
-            );
-        }
-    }
+        .filter(move |(k, _)| mask & 1 << k != 0)
+        .filter_map(|(_, image)| Some((image.view.as_ref()?, image.copy.as_ref()?)))
+}
+
+/// The images `clear` clears.
+pub fn cleared(images: &[PackImage]) -> impl Iterator<Item = &wgpu::TextureView> {
+    images
+        .iter()
+        .filter(|i| i.def.clear)
+        .filter_map(|i| i.view.as_ref())
 }
 
 /// Clears the images the pack clears before each frame: with `clear_texture` where the device
@@ -235,11 +249,7 @@ pub fn clear(
     clear: bool,
     zeros: &mut Option<wgpu::Buffer>,
 ) {
-    for view in images
-        .iter()
-        .filter(|i| i.def.clear)
-        .filter_map(|i| i.view.as_ref())
-    {
+    for view in cleared(images) {
         let texture = view.texture();
         if clear {
             encoder.clear_texture(texture, &Default::default());
@@ -593,21 +603,19 @@ impl Dump {
         Ok(())
     }
 
-    /// Copies the image for `read` every 60 frames.
-    pub fn copy(
+    /// Copies the image for `read` every 60 frames; returns the image's view when it copied it.
+    pub fn copy<'i>(
         &mut self,
         device: &wgpu::Device,
         encoder: &mut wgpu::CommandEncoder,
-        images: &[PackImage],
-    ) {
+        images: &'i [PackImage],
+    ) -> Option<&'i wgpu::TextureView> {
         self.frame += 1;
         if !self.frame.is_multiple_of(60) {
-            return;
+            return None;
         }
-        let Some(image) = images.iter().find(|i| i.def.name == self.name) else {
-            return;
-        };
-        let Some(view) = &image.view else { return };
+        let image = images.iter().find(|i| i.def.name == self.name)?;
+        let view = image.view.as_ref()?;
         let size = view.texture().size();
         let texel = image.format.block_copy_size(None).unwrap_or(4) as usize;
         let row = (size.width as usize * texel).next_multiple_of(256) as u32;
@@ -631,6 +639,7 @@ impl Dump {
         );
         let dims = [size.width, size.height, size.depth_or_array_layers];
         self.pending = Some((buffer, texel, dims, row));
+        Some(view)
     }
 }
 

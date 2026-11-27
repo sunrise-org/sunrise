@@ -1,0 +1,5 @@
+# The daily tests of sunrise-frame-plan: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+sunrise-frame-plan a_run_is_measured_and_its_removals_named test:measure_cli daily child-process
+sunrise-frame-plan an_empty_run_or_an_unreadable_frame_fails test:measure_cli daily child-process
+sunrise-frame-plan no_folder_is_a_usage_error test:measure_cli daily child-process
