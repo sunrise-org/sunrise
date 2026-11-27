@@ -4,8 +4,210 @@
 //! vehicle's interaction checks. Mobs keep theirs in `extra.boarding_cooldown`
 //! (`boat_passengers::BOARDING_COOLDOWN`).
 use crate::game::ServerGame;
+use sunrise_gameplay_common::game::commands_common::Target;
 use sunrise_gameplay_common::game::entity_memory::OffLevel;
+use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt2 as _;
 use sunrise_sim::{lan::guest::Guest, mobs::Mob};
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(in crate::game) struct SeatedPassenger {
+    pub order: i64,
+    pub id: u32,
+    pub player: bool,
+}
+
+struct SeatIterators<'a, G, RM, OM, GP, B> {
+    acting: Option<u32>,
+    riding: Option<u32>,
+    has_player: bool,
+    riding_player: Option<(u32, i64)>,
+    placed_guests: G,
+    resident_mobs: RM,
+    lent_mobs: &'a [Mob],
+    off_level_mobs: OM,
+    general_passengers: GP,
+    bolts: B,
+}
+
+fn visit_player_seat_sources<'a>(
+    vehicle: u32,
+    acting: Option<u32>,
+    riding: Option<u32>,
+    has_player: bool,
+    riding_player: Option<(u32, i64)>,
+    placed_guests: impl Iterator<Item = &'a Guest>,
+    mut matches: impl FnMut(i64, u32) -> bool,
+) -> bool {
+    let mut acting_listed = false;
+    for g in placed_guests {
+        let rides = if acting == Some(g.conn) {
+            acting_listed = true;
+            riding
+        } else {
+            g.vehicle
+        };
+        if rides == Some(vehicle) && matches(g.vehicle_order, g.entity_id as u32) {
+            return true;
+        }
+    }
+    // An unlisted acting guest goes first. This game's own player keeps its seat order.
+    riding_player.is_some_and(|(me, place)| {
+        !acting_listed && has_player && riding == Some(vehicle) && matches(place, me)
+    })
+}
+
+fn visit_seat_sources<'a, G, RM, OM, GP, B>(
+    vehicle: u32,
+    sources: SeatIterators<'a, G, RM, OM, GP, B>,
+    mut matches: impl FnMut(SeatedPassenger) -> bool,
+) -> bool
+where
+    G: Iterator<Item = &'a Guest>,
+    RM: Iterator<Item = &'a Mob>,
+    OM: Iterator<Item = &'a Mob>,
+    GP: Iterator<Item = (i64, u32)>,
+    B: Iterator<Item = (Option<u32>, i64, u32)>,
+{
+    if visit_player_seat_sources(
+        vehicle,
+        sources.acting,
+        sources.riding,
+        sources.has_player,
+        sources.riding_player,
+        sources.placed_guests,
+        |order, id| {
+            matches(SeatedPassenger {
+                order,
+                id,
+                player: true,
+            })
+        },
+    ) {
+        return true;
+    }
+    let other_mobs = sources
+        .lent_mobs
+        .iter()
+        .chain(sources.off_level_mobs)
+        .filter(|m| m.extra.mount == Some(vehicle));
+    sources
+        .resident_mobs
+        .chain(other_mobs)
+        .filter(|m| !m.removed)
+        .any(|m| {
+            matches(SeatedPassenger {
+                order: m.extra.vehicle_order,
+                id: m.id,
+                player: false,
+            })
+        })
+        || sources.general_passengers.any(|(order, id)| {
+            matches(SeatedPassenger {
+                order,
+                id,
+                player: false,
+            })
+        })
+        || sources
+            .bolts
+            .filter(|&(mount, ..)| mount == Some(vehicle))
+            .any(|(_, order, id)| {
+                matches(SeatedPassenger {
+                    order,
+                    id,
+                    player: false,
+                })
+            })
+}
+
+fn collect_ordered_seats(
+    visit: impl FnOnce(&mut dyn FnMut(SeatedPassenger) -> bool),
+) -> Vec<SeatedPassenger> {
+    let mut seats = Vec::new();
+    visit(&mut |seat| {
+        seats.push(seat);
+        false
+    });
+    seats.sort_by_key(|seat| seat.order);
+    seats
+}
+
+fn visit_game_passenger_seats(
+    game: &ServerGame<'_>,
+    vehicle: u32,
+    lent_mobs: &[Mob],
+    matches: impl FnMut(SeatedPassenger) -> bool,
+) -> bool {
+    visit_seat_sources(
+        vehicle,
+        SeatIterators {
+            acting: game
+                .server
+                .lan_acting
+                .filter(|_| game.common.player.is_some()),
+            riding: game.common.riding,
+            has_player: game.common.player.is_some(),
+            riding_player: game.riding_player(),
+            placed_guests: game.placed_seat_guests(),
+            resident_mobs: game.resident_mob_riders(vehicle).map(|(_, m)| m),
+            lent_mobs,
+            off_level_mobs: game
+                .common
+                .persist
+                .off_level
+                .values()
+                .filter_map(OffLevel::as_mob),
+            general_passengers: game
+                .common
+                .general_passengers(vehicle)
+                .map(|row| (row.vehicle_order, row.id)),
+            bolts: game
+                .common
+                .bolts
+                .iter()
+                .map(|b| (b.mount, b.vehicle_order, b.id)),
+        },
+        matches,
+    )
+}
+
+/// The passengers of `vehicle` in `Entity.passengers` order across all server
+/// seat sources, preserving source encounter order when places tie.
+pub(in crate::game) fn ordered_passengers(
+    game: &ServerGame<'_>,
+    vehicle: u32,
+) -> Vec<SeatedPassenger> {
+    collect_ordered_seats(|visit| {
+        visit_game_passenger_seats(game, vehicle, &[], visit);
+    })
+}
+
+/// The vehicle `rider` directly sits in across server seat sources.
+pub(in crate::game) fn vehicle_of_entity(game: &ServerGame<'_>, rider: u32) -> Option<u32> {
+    if game.common.player.is_some() && game.riding_player().is_some_and(|(id, _)| id == rider) {
+        return game.common.riding;
+    }
+    let acting = game
+        .server
+        .lan_acting
+        .filter(|_| game.common.player.is_some());
+    if let Some(guest) = game
+        .placed_seat_guests()
+        .find(|g| g.entity_id as u32 == rider)
+    {
+        return if acting == Some(guest.conn) {
+            game.common.riding
+        } else {
+            guest.vehicle
+        };
+    }
+    match game.player_vehicle(rider) {
+        Some(player) => game.native_vehicle_id(player),
+        None => game
+            .native_vehicle_id(Target::Mob(rider))
+            .or_else(|| game.native_vehicle_id(Target::General(rider))),
+    }
+}
 
 pub(super) fn next_boarded_rider(
     after: Option<u32>,
@@ -63,13 +265,10 @@ impl ServerGame<'_> {
     /// it is a player. Places tie only for those that never boarded through `addPassenger` (a
     /// load keeps its list order), players ahead.
     pub fn seated_passengers(&self, vehicle: u32) -> Vec<(i64, u32, bool)> {
-        let mut seats = Vec::new();
-        self.any_passenger_seat(vehicle, &[], |seat| {
-            seats.push(seat);
-            false
-        });
-        seats.sort_by_key(|&(place, ..)| place);
-        seats
+        ordered_passengers(self, vehicle)
+            .into_iter()
+            .map(|seat| (seat.order, seat.id, seat.player))
+            .collect()
     }
 
     /// `Entity.isVehicle`: any kind of rider makes this a vehicle.
@@ -94,65 +293,28 @@ impl ServerGame<'_> {
         lent_mobs: &[Mob],
         mut matches: impl FnMut((i64, u32, bool)) -> bool,
     ) -> bool {
-        if self.any_player_passenger_seat(vehicle, |place, id| matches((place, id, true))) {
-            return true;
-        }
-        let other_mobs = lent_mobs
-            .iter()
-            .chain(
-                self.common
-                    .persist
-                    .off_level
-                    .values()
-                    .filter_map(OffLevel::as_mob),
-            )
-            .filter(|m| m.extra.mount == Some(vehicle));
-        self.resident_mob_riders(vehicle)
-            .map(|(_, m)| m)
-            .chain(other_mobs)
-            .filter(|m| !m.removed)
-            .any(|m| matches((m.extra.vehicle_order, m.id, false)))
-            || self
-                .common
-                .general_passengers(vehicle)
-                .any(|row| matches((row.vehicle_order, row.id, false)))
-            || self
-                .common
-                .bolts
-                .iter()
-                .filter(|b| b.mount == Some(vehicle))
-                .any(|b| matches((b.vehicle_order, b.id, false)))
+        visit_game_passenger_seats(self, vehicle, lent_mobs, |seat| {
+            matches((seat.order, seat.id, seat.player))
+        })
     }
 
     /// Player seats in source encounter order, shared with the mob tick's live loan.
     pub(super) fn any_player_passenger_seat(
         &self,
         vehicle: u32,
-        mut matches: impl FnMut(i64, u32) -> bool,
+        matches: impl FnMut(i64, u32) -> bool,
     ) -> bool {
-        let acting = self
-            .server
-            .lan_acting
-            .filter(|_| self.common.player.is_some());
-        let mut acting_listed = false;
-        for g in self.placed_seat_guests() {
-            let rides = if acting == Some(g.conn) {
-                acting_listed = true;
-                self.riding
-            } else {
-                g.vehicle
-            };
-            if rides == Some(vehicle) && matches(g.vehicle_order, g.entity_id as u32) {
-                return true;
-            }
-        }
-        // An unlisted acting guest goes first. This game's own player keeps its seat order.
-        self.riding_player().is_some_and(|(me, place)| {
-            !acting_listed
-                && self.player.is_some()
-                && self.riding == Some(vehicle)
-                && matches(place, me)
-        })
+        visit_player_seat_sources(
+            vehicle,
+            self.server
+                .lan_acting
+                .filter(|_| self.common.player.is_some()),
+            self.common.riding,
+            self.common.player.is_some(),
+            self.riding_player(),
+            self.placed_seat_guests(),
+            matches,
+        )
     }
 
     fn placed_seat_guests(&self) -> impl Iterator<Item = &Guest> {
@@ -166,16 +328,7 @@ impl ServerGame<'_> {
     /// The parent behind a boarded seat. A displaced player's handle can be hidden during a
     /// nested guest turn, but the player's seat still has a parent in the hub.
     pub(super) fn seated_passenger_vehicle(&self, rider: u32) -> Option<u32> {
-        if self.player.is_some() && self.riding_player().is_some_and(|(id, _)| id == rider) {
-            return self.riding;
-        }
-        if let Some(guest) = self
-            .placed_seat_guests()
-            .find(|g| g.entity_id as u32 == rider)
-        {
-            return guest.vehicle;
-        }
-        self.vehicle_of_any(rider)
+        vehicle_of_entity(self, rider)
     }
 
     /// The first actual rider, or the rider directly after `after`, even off-level.
@@ -222,11 +375,11 @@ impl ServerGame<'_> {
     /// `Entity.addPassenger`: the place of `rider` getting on `vehicle`. On a server a player
     /// goes ahead of a first passenger that is no player; everything else goes last.
     pub fn boarding_order(&self, vehicle: u32, rider: u32, player: bool) -> i64 {
-        let mut aboard = self.seated_passengers(vehicle);
-        aboard.retain(|&(_, id, _)| id != rider);
+        let mut aboard = ordered_passengers(self, vehicle);
+        aboard.retain(|seat| seat.id != rider);
         match (aboard.first(), aboard.last()) {
-            (Some(&(first, _, false)), _) if player => first - 1,
-            (_, Some(&(last, ..))) => last + 1,
+            (Some(first), _) if player && !first.player => first.order - 1,
+            (_, Some(last)) => last.order + 1,
             _ => 0,
         }
     }
