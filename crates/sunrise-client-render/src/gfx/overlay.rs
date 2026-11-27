@@ -92,7 +92,7 @@ impl Renderer {
             pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
             let hand_kind = |layer: u32| match layer & 0xffff {
                 BANNER_PATTERN_OVERLAY => 1u8,
-                GLINT_ONLY_OVERLAY => 2u8,
+                GLINT_ONLY_OVERLAY | CIT_GLINT_OVERLAY => 2u8,
                 _ => 0u8,
             };
             let mut at = 0;
@@ -100,12 +100,20 @@ impl Renderer {
                 .chunk_by(|a, b| hand_kind(a[0].layer) == hand_kind(b[0].layer))
             {
                 let end = at + run.len() as u32;
-                pass.set_pipeline(match hand_kind(run[0][0].layer) {
-                    1 => banner_hand,
-                    2 => glint_hand,
-                    _ => base_hand,
-                });
-                pass.draw_indexed(at * 6..end * 6, overlay.first_hand_vertex, 0..1);
+                match hand_kind(run[0][0].layer) {
+                    2 => cit_world::CitWorldPass::draw_glint_only(
+                        self.cit_world.as_ref(),
+                        &mut pass,
+                        glint_hand,
+                        run.as_flattened(),
+                        (at, overlay.first_hand_vertex),
+                        true,
+                    ),
+                    kind => {
+                        pass.set_pipeline(if kind == 1 { banner_hand } else { base_hand });
+                        pass.draw_indexed(at * 6..end * 6, overlay.first_hand_vertex, 0..1);
+                    }
+                }
                 at = end;
             }
             drop(pass);

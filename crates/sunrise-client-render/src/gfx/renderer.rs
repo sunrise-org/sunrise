@@ -139,6 +139,9 @@ pub struct Renderer {
     pub(crate) banner_pattern_pipeline: wgpu::RenderPipeline,
     /// `RenderPipelines.GLINT` (`RenderTypes.patternedShieldGlint`): equal-depth glint-only pass.
     pub(crate) glint_only_pipeline: wgpu::RenderPipeline,
+    /// OptiFine CIT enchantment glint layers over world items (`gfx::cit_world`); `None`
+    /// without enchantment rules.
+    pub(super) cit_world: Option<cit_world::CitWorldPass>,
     pub(super) particle_pipelines: particle_draws::ParticlePipelines,
     pub(super) explicit_opaque_particles: particle_draws::ParticleDraws,
     pub(super) explicit_translucent_particles: particle_draws::ParticleDraws,

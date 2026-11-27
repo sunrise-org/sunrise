@@ -142,9 +142,7 @@ pub(in crate::game) fn build_renderer(
         .cit
         .as_ref()
         .map(|c| &c.glint_textures);
-    renderer
-        .hud
-        .set_cit_glints(&renderer.device, &renderer.queue, cit_glints);
+    renderer.set_cit_glints(cit_glints);
     // Last, so a renderer that fails before this marks none of the pack's pipelines invalid.
     // Textured pipelines' sprites are looked up in the atlas the renderer was built with.
     renderer.build_mod_pipelines(&client_pack.render.mod_pipelines, &|name| {

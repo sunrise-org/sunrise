@@ -24,7 +24,10 @@ mod tint_tests;
 
 use crate::{
     block_entity_render::{ModelPart, diffuse},
-    hud::Rect,
+    hud::{
+        Rect,
+        cit_glint::{LayerDraw, layer_uv},
+    },
     mesher::{CULL_BACK, Vertex},
 };
 use glam::{Mat3, Mat4, Vec3};
@@ -342,7 +345,8 @@ pub struct ItemRenderState {
     pub layers: Vec<LayerRender>,
     pub oversized_in_gui: bool,
     pub animated: bool,
-    /// The OptiFine CIT glint layers the stack draws in the GUI (`cit_glint`).
+    /// The OptiFine CIT glint layers the stack draws (`cit_glint`): over the GUI's item, and in
+    /// the world over its own ([`CitWorld`]).
     pub cit_glint: Option<Arc<crate::cit_glint::StackGlint>>,
     /// HDR output's tier of an item that glows (`dynamic_light::Luminance::hdr_tier`).
     pub hdr_tier: u8,
@@ -488,8 +492,8 @@ impl ItemRenderState {
     /// [`Self::submit`] into a [`WorldSink`] of `light`, `lights` and `tier`,
     /// posed on the GPU (`gfx::entity_skin`): the same vertices in the same
     /// order. False, with nothing drawn, when a layer cannot take that path: a
-    /// special model, a glint, or a quad that glows or is translucent (another
-    /// material).
+    /// special model, a glint (the pack's too, [`CitWorld`]), or a quad that
+    /// glows or is translucent (another material).
     pub fn submit_skinned(
         &self,
         renderer: &ItemRenderer,
@@ -508,6 +512,9 @@ impl ItemRenderState {
             Direction::Down,
             Direction::North,
         ];
+        if self.cit_glint.is_some() {
+            return false;
+        }
         for layer in &self.layers {
             let LayerGeometry::Quads(baked) = &layer.geometry else {
                 return false;
@@ -1979,6 +1986,71 @@ impl ItemSink for WorldSink<'_> {
     }
 }
 
+/// A stack's OptiFine CIT glint layers over an item in the world this frame (`type=enchantment`;
+/// [`gui`] draws them over the GUI's). Each layer is the item's quads again, over them: tagged
+/// [`crate::gfx::CIT_GLINT_OVERLAY`], coloured with the layer's slot and strength, and
+/// textured by the layer's own coordinates (`layer_uv`), which the entity pass blends as the
+/// rule says. The pack's layers take vanilla's glint's place unless one keeps it.
+#[derive(Clone, Debug, PartialEq)]
+pub struct CitWorld {
+    /// Bottom first, as `GlintTextures::layers` gives them; none when they all draw at
+    /// strength 0.
+    pub layers: Vec<LayerDraw>,
+    /// `GlintFrame::millis`: the clock the layers' textures run on.
+    pub millis: i64,
+    /// Whether vanilla's glint still draws under the layers (`StackGlint::vanilla`).
+    pub vanilla: bool,
+}
+
+impl CitWorld {
+    /// `state`'s layers this frame; `None` when its stack has none (`ItemRenderState::cit_glint`).
+    pub fn new(
+        state: &ItemRenderState,
+        renderer: &ItemRenderer,
+        frame: GlintFrame,
+    ) -> Option<Self> {
+        let glint = state.cit_glint.as_deref()?;
+        let cit = renderer.cit.as_ref()?;
+        Some(Self {
+            layers: cit
+                .glint_textures
+                .layers(glint, &cit.rules.rules, frame.millis, frame.alpha),
+            millis: frame.millis,
+            vanilla: glint.vanilla,
+        })
+    }
+
+    /// Appends every layer's copy of `quads`, bottom first. Layers go over what draws opaque
+    /// with the item's own depth: not over glint-only quads, banner patterns, or quads with
+    /// translucent pixels, which the layers' equal-depth test could not meet.
+    pub fn push(&self, quads: &[ItemQuad], out: &mut Vec<Vertex>) {
+        let covered = |q: &&ItemQuad| {
+            q.foil != Foil::GlintOnly && !q.banner_pattern && !q.translucent && !q.oit
+        };
+        for layer in &self.layers {
+            for q in quads.iter().filter(covered) {
+                for (i, (p, uv)) in q.pos.iter().zip(q.uv).enumerate() {
+                    out.push(Vertex {
+                        normal: [0; 4],
+                        pos: p.to_array(),
+                        uv,
+                        layer: crate::gfx::CIT_GLINT_OVERLAY,
+                        color: layer.color,
+                        light: 0,
+                        glint_uv: layer_uv(
+                            q.foil_uv[i],
+                            self.millis as f32,
+                            layer.speed,
+                            layer.rotation,
+                            Glint::ITEM_SCALE,
+                        ),
+                    });
+                }
+            }
+        }
+    }
+}
+
 /// `ItemEntity.getSpin`.
 pub fn item_spin(age_in_ticks: f32, bob_offset: f32) -> f32 {
     age_in_ticks / 20.0 + bob_offset
@@ -2891,5 +2963,87 @@ mod tests {
             }
             assert_eq!(got, transform_normal(m, direction_vector(d)), "{d:?}");
         }
+    }
+
+    fn cit_quad(foil: Foil) -> ItemQuad {
+        ItemQuad {
+            pos: [
+                Vec3::new(0.0, 0.0, 0.0),
+                Vec3::new(0.0, 1.0, 0.0),
+                Vec3::new(1.0, 1.0, 0.0),
+                Vec3::new(1.0, 0.0, 0.0),
+            ],
+            uv: [[0.0, 0.0], [0.0, 0.5], [0.5, 0.5], [0.5, 0.0]],
+            foil_uv: [[0.0, 0.0], [0.0, 1.0], [1.0, 1.0], [1.0, 0.0]],
+            gui_glint_uv: None,
+            normal: Vec3::Z,
+            color: u32::MAX,
+            foil,
+            entity_glint: false,
+            light_emission: 0,
+            cull_back: false,
+            translucent: false,
+            oit: false,
+            banner_pattern: false,
+            packed_light: None,
+            lightmap_only: false,
+            explicit_alpha_cutoff: false,
+        }
+    }
+
+    #[test]
+    fn cit_layers_copy_the_opaque_quads_one_layer_after_the_other() {
+        let layer = |slot: u8, blend, speed| LayerDraw {
+            color: crate::hud::cit_glint::vertex_color(slot, 1.0),
+            blend,
+            speed,
+            rotation: 0.0,
+        };
+        let cit = CitWorld {
+            layers: vec![layer(3, 0, 0.0), layer(4, 1, 0.0)],
+            millis: 1234,
+            vanilla: false,
+        };
+        let plain = cit_quad(Foil::Standard);
+        let translucent = ItemQuad {
+            translucent: true,
+            ..cit_quad(Foil::None)
+        };
+        let pattern = ItemQuad {
+            banner_pattern: true,
+            ..cit_quad(Foil::None)
+        };
+        let quads = [
+            plain,
+            cit_quad(Foil::GlintOnly),
+            translucent,
+            pattern,
+            plain,
+        ];
+        let mut out = Vec::new();
+        cit.push(&quads, &mut out);
+        // Two layers over the two opaque quads: the first layer's two, then the second's.
+        assert_eq!(out.len(), 16);
+        let slots: Vec<u8> = out.iter().map(|v| v.color as u8).collect();
+        assert_eq!(slots, [[3; 8], [4; 8]].concat());
+        for v in &out {
+            assert_eq!(v.layer, crate::gfx::CIT_GLINT_OVERLAY);
+            assert_eq!(v.normal, [0; 4]);
+        }
+        // The surface's own coordinates mask the layer, and the model's scaled by 8 (as the
+        // GUI's) texture it, still at speed 0 whatever the clock.
+        for (i, v) in out[..4].iter().enumerate() {
+            assert_eq!(v.uv, plain.uv[i]);
+            assert_eq!(v.pos, plain.pos[i].to_array());
+            assert_eq!(v.glint_uv, plain.foil_uv[i].map(|c| c * 8.0));
+        }
+        // A world without layers draws no copies.
+        let none = CitWorld {
+            layers: Vec::new(),
+            ..cit
+        };
+        let mut out = Vec::new();
+        none.push(&quads, &mut out);
+        assert!(out.is_empty());
     }
 }

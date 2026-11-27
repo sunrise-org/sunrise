@@ -315,8 +315,8 @@ fn translucent(layer: u32) -> bool {
 /// 12), shadows and energy swirls.
 fn writes_depth(layer: u32) -> bool {
     use super::super::entity_batch::{
-        ARMOR_GLINT_ONLY_OVERLAY, BANNER_PATTERN_OVERLAY, ENERGY_SWIRL_OVERLAY, GLINT_ONLY_OVERLAY,
-        SHADOW_OVERLAY,
+        ARMOR_GLINT_ONLY_OVERLAY, BANNER_PATTERN_OVERLAY, CIT_GLINT_OVERLAY, ENERGY_SWIRL_OVERLAY,
+        GLINT_ONLY_OVERLAY, SHADOW_OVERLAY,
     };
     !matches!(
         layer & 0xffff,
@@ -326,6 +326,7 @@ fn writes_depth(layer: u32) -> bool {
             | GLINT_ONLY_OVERLAY
             | BANNER_PATTERN_OVERLAY
             | ARMOR_GLINT_ONLY_OVERLAY
+            | CIT_GLINT_OVERLAY
     )
 }
 

@@ -2809,11 +2809,24 @@ impl Renderer {
                 pass.set_pipeline(&self.glint_only_pipeline);
                 pass.set_bind_group(0, &self.entity_group, &[]);
                 pass.set_vertex_buffer(0, self.entity_buffer.slice(..));
-                pass.draw_indexed(
-                    0..glint_only_quads * 6,
-                    ((text_end - text_solid_quads - glint_only_quads) * 4) as i32,
-                    0..1,
-                );
+                let first = text_end - text_solid_quads - glint_only_quads;
+                // The CIT layers among them, which each take the pipeline of their blend,
+                // are told apart by the quads in the batch (the posed ones come before it).
+                let stored = (first - posed / 4) as usize * 4;
+                let quads = &self.entity_batch.combined;
+                match quads.get(stored..stored + glint_only_quads as usize * 4) {
+                    Some(quads) if self.cit_world.is_some() => {
+                        cit_world::CitWorldPass::draw_glint_only(
+                            self.cit_world.as_ref(),
+                            &mut pass,
+                            &self.glint_only_pipeline,
+                            quads,
+                            (0, (first * 4) as i32),
+                            false,
+                        );
+                    }
+                    _ => pass.draw_indexed(0..glint_only_quads * 6, (first * 4) as i32, 0..1),
+                }
                 pass.set_bind_group(0, &self.group, &[]);
             }
             if text_solid_quads + name_tag_solid_quads > 0 {

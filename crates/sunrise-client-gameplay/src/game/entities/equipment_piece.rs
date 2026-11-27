@@ -88,7 +88,15 @@ impl crate::game::ClientGame<'_> {
             .props
             .get(&base.item)
             .and_then(|p| p.glint);
-        let overlay = if stack.has_foil(glint) {
+        // The pack's `useGlint=false` (OptiFine CIT) removes vanilla's glint from worn armour too.
+        let pack_keeps = self
+            .client
+            .client_pack
+            .item_renderer
+            .cit
+            .as_ref()
+            .is_none_or(|cit| cit.rules.global.use_glint);
+        let overlay = if pack_keeps && stack.has_foil(glint) {
             sunrise_client::mobs::render::ARMOR_GLINT
         } else {
             0

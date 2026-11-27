@@ -2370,6 +2370,7 @@ impl Renderer {
             entity_pipeline,
             banner_pattern_pipeline,
             glint_only_pipeline,
+            cit_world: None,
             particle_pipelines,
             explicit_opaque_particles: Default::default(),
             explicit_translucent_particles: Default::default(),

@@ -384,6 +384,13 @@ impl HudRenderer {
             cit_glint::CitGlintPass::new(device, queue, self.format, &self.layout, t, self.coverage)
         });
     }
+    /// The bind group layout and group of the CIT glint textures, which the entity pass binds
+    /// to draw the layers in the world; `None` without glint textures.
+    pub(crate) fn cit_glint_bindings(&self) -> Option<(&wgpu::BindGroupLayout, &wgpu::BindGroup)> {
+        self.cit_glint
+            .as_ref()
+            .map(cit_glint::CitGlintPass::bindings)
+    }
     /// Draw the GUI's text with `shader` (`HudAtlas::text_shaders`' `gui`, with the Polytone
     /// expression uniforms its stages read, `shader_modifiers`), or natively; or the device's
     /// refusal of `GUI_TEXT`, a pipeline vanilla requires, which fails the pack reload.

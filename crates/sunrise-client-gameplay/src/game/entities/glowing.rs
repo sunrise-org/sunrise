@@ -64,7 +64,11 @@ impl crate::game::ClientGame<'_> {
             vertices
                 .iter()
                 .filter(|v| {
-                    v.layer & 0xffff != sunrise_client_render::gfx::ARMOR_GLINT_ONLY_OVERLAY
+                    !matches!(
+                        v.layer & 0xffff,
+                        sunrise_client_render::gfx::ARMOR_GLINT_ONLY_OVERLAY
+                            | sunrise_client_render::gfx::CIT_GLINT_OVERLAY
+                    )
                 })
                 .map(|v| Vertex {
                     color,

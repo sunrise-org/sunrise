@@ -439,7 +439,11 @@ impl ClientGame<'_> {
 fn seen_quads<const SHADE: bool>(verts: &[Vertex], gui: Mat4, quads: &mut Vec<SeenQuad>) {
     quads.clear();
     for q in verts.as_chunks::<4>().0 {
-        if (q[0].layer & 0xffff) == sunrise_client_render::gfx::ARMOR_GLINT_ONLY_OVERLAY {
+        if matches!(
+            q[0].layer & 0xffff,
+            sunrise_client_render::gfx::ARMOR_GLINT_ONLY_OVERLAY
+                | sunrise_client_render::gfx::CIT_GLINT_OVERLAY
+        ) {
             continue;
         }
         let p: [Vec3; 4] =

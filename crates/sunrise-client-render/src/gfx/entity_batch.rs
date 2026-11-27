@@ -4,8 +4,8 @@ use sunrise_render_core::entity::QuadSort;
 #[cfg(test)]
 use sunrise_render_core::entity::quad_distance_sq;
 pub use sunrise_render_core::entity::{
-    ARMOR_GLINT_ONLY_OVERLAY, DYNAMIC_TEXTURE_CUTOUT_OVERLAY, DYNAMIC_TEXTURE_SOLID_OVERLAY,
-    DYNAMIC_TEXTURE_TRANSLUCENT_OVERLAY, TEXT_NORMAL_SOLID_OVERLAY,
+    ARMOR_GLINT_ONLY_OVERLAY, CIT_GLINT_OVERLAY, DYNAMIC_TEXTURE_CUTOUT_OVERLAY,
+    DYNAMIC_TEXTURE_SOLID_OVERLAY, DYNAMIC_TEXTURE_TRANSLUCENT_OVERLAY, TEXT_NORMAL_SOLID_OVERLAY,
     TEXT_POLYGON_OFFSET_SOLID_OVERLAY, dynamic_texture_bits,
 };
 pub use sunrise_render_core::entity::{NAME_TAG_OVERLAY, NAME_TAG_SOLID_OVERLAY};
@@ -278,6 +278,7 @@ const _: () = assert!(distinct(&[
     DYNAMIC_TEXTURE_CUTOUT_OVERLAY,
     DYNAMIC_TEXTURE_TRANSLUCENT_OVERLAY,
     ARMOR_GLINT_ONLY_OVERLAY,
+    CIT_GLINT_OVERLAY,
     NAME_TAG_OVERLAY,
     NAME_TAG_SOLID_OVERLAY,
 ]));
@@ -419,7 +420,8 @@ fn material(layer: u32, oit: bool) -> usize {
         TERRAIN_MODEL_CUTOUT_MIPPED_OVERLAY => return 15,
         TERRAIN_MODEL_TRANSLUCENT_OVERLAY => return 16,
         BANNER_PATTERN_OVERLAY => return 17,
-        GLINT_ONLY_OVERLAY => return 18,
+        // OptiFine CIT glint layers are stored, and drawn, with the glint-only quads.
+        GLINT_ONLY_OVERLAY | CIT_GLINT_OVERLAY => return 18,
         TEXT_POLYGON_OFFSET_SOLID_OVERLAY => return 19,
         TEXT_NORMAL_SOLID_OVERLAY => return 20,
         DYNAMIC_TEXTURE_SOLID_OVERLAY => return DYNAMIC_MATERIALS.start,

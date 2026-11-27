@@ -15,10 +15,11 @@ use sunrise_render_core::entity::{
 use sunrise_shaders::render_stage;
 
 use sunrise_render_core::{
-    ARMOR_GLINT_ONLY_OVERLAY, EntitySpan, EntityVertex as Vertex, FLUID_OVERLAY, OIT_ENTITY,
-    TERRAIN_MODEL_CUTOUT_MIPPED_OVERLAY, TERRAIN_MODEL_CUTOUT_OVERLAY, TERRAIN_MODEL_SOLID_OVERLAY,
-    TERRAIN_MODEL_TRANSLUCENT_OVERLAY, TRANSLUCENT_GLINT_ITEM_OVERLAY, TRANSLUCENT_ITEM_OVERLAY,
-    TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY, is_native_terrain, skin_runs,
+    ARMOR_GLINT_ONLY_OVERLAY, CIT_GLINT_OVERLAY, EntitySpan, EntityVertex as Vertex, FLUID_OVERLAY,
+    OIT_ENTITY, TERRAIN_MODEL_CUTOUT_MIPPED_OVERLAY, TERRAIN_MODEL_CUTOUT_OVERLAY,
+    TERRAIN_MODEL_SOLID_OVERLAY, TERRAIN_MODEL_TRANSLUCENT_OVERLAY, TRANSLUCENT_GLINT_ITEM_OVERLAY,
+    TRANSLUCENT_ITEM_OVERLAY, TRANSLUCENT_PARTICLE_OVERLAY, WATER_MASK_OVERLAY, is_native_terrain,
+    skin_runs,
 };
 
 /// `HzDraw`'s size (pack_draw.rs).
@@ -573,9 +574,12 @@ impl PackEntities {
             // the block atlas holds is placed in that atlas below; any other goes to Sunrise,
             // even when a shader pack draws the model in the same run. Do not corrupt either UV
             // space. Standalone armor glint also needs its native material: exposing it to
-            // gbuffers would draw the hidden armor texture.
-            let native_material =
-                |layer| is_native_terrain(layer) || (layer & 0xffff) == ARMOR_GLINT_ONLY_OVERLAY;
+            // gbuffers would draw the hidden armor texture, and a CIT glint layer's quads (a
+            // copy of the surface they glint over) the surface twice.
+            let native_material = |layer| {
+                is_native_terrain(layer)
+                    || matches!(layer & 0xffff, ARMOR_GLINT_ONLY_OVERLAY | CIT_GLINT_OVERLAY)
+            };
             let whole: &[Vertex] =
                 if !block_atlas && whole.chunks(4).any(|q| native_material(q[0].layer)) {
                     without_fluids.clear();

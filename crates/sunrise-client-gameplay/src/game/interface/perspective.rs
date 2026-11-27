@@ -1692,7 +1692,9 @@ pub(in crate::game::client_side) fn player_preview_quads_no_cull(
     for (index, q) in verts.as_chunks::<4>().0.iter().enumerate() {
         if matches!(
             q[0].layer & 0xffff,
-            sunrise_client::gfx::GLINT_ONLY_OVERLAY | sunrise_client::gfx::ARMOR_GLINT_ONLY_OVERLAY
+            sunrise_client::gfx::GLINT_ONLY_OVERLAY
+                | sunrise_client::gfx::ARMOR_GLINT_ONLY_OVERLAY
+                | sunrise_client::gfx::CIT_GLINT_OVERLAY
         ) {
             continue;
         }
