@@ -345,6 +345,14 @@ impl SpriteAnimator {
             .unwrap_or(false)
     }
 
+    pub(super) fn animated_layers(&self) -> impl Iterator<Item = u32> + '_ {
+        self.is_animated
+            .iter()
+            .enumerate()
+            .filter(|(_, animated)| **animated)
+            .map(|(layer, _)| layer as u32)
+    }
+
     /// Number of words needed to mark the animated layers visible this frame.
     pub fn active_layer_words(&self) -> usize {
         self.is_animated.len().div_ceil(u64::BITS as usize)

@@ -618,6 +618,34 @@ impl Renderer {
         )
     }
 
+    pub fn refresh_prepared_shader_pack_atlases(&self, prepared: &PreparedShaderPack) {
+        let Some(PackAtlases {
+            color: Some(color),
+            materials,
+        }) = &prepared.atlases
+        else {
+            return;
+        };
+        let layers: Vec<_> = self.animations.animated_layers().collect();
+        if layers.is_empty() {
+            return;
+        }
+        let mut encoder = self.device.create_command_encoder(&Default::default());
+        color.copy(
+            &self.device,
+            &mut encoder,
+            &self.sprite_textures,
+            layers.iter().copied(),
+        );
+        if let (Some(atlases), Some(arrays)) = (materials, &self.pbr_maps) {
+            for (kind, atlas) in atlases.iter().enumerate() {
+                let arrays: Vec<_> = arrays.iter().map(|pair| pair[kind].clone()).collect();
+                atlas.copy(&self.device, &mut encoder, &arrays, layers.iter().copied());
+            }
+        }
+        self.queue.submit([encoder.finish()]);
+    }
+
     pub fn apply_prepared_shader_pack(&mut self, prepared: PreparedShaderPack) {
         if let Some(atlases) = prepared.atlases {
             self.pack_atlas = atlases.color;
