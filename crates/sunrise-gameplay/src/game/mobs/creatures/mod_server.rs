@@ -1984,14 +1984,8 @@ impl crate::game::ServerGame<'_> {
                         self.server.combat.0.charged_exploders.push(mob);
                     }
                 }
-                MobEvent::LingeringCloud {
-                    at,
-                    effects,
-                    hidden,
-                    ambient,
-                    color,
-                } => {
-                    self.spawn_creeper_cloud(at, effects, hidden, ambient, color);
+                MobEvent::LingeringCloud { at, effects } => {
+                    self.spawn_creeper_cloud(at, effects);
                 }
                 MobEvent::Explode(at, radius, species, silent) => {
                     // The exploding mob causes the damage (Creeper.explodeCreeper).
