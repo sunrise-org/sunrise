@@ -33,7 +33,7 @@ impl Column {
 
 /// Vertex arena bytes and the separately counted animation data of a resident mesh.
 /// Neither may change in place; remeshing replaces the value.
-pub(crate) trait ResidentSize {
+pub trait ResidentSize {
     fn census_bytes(&self) -> (u64, usize);
 }
 

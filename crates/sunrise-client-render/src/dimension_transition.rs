@@ -255,60 +255,62 @@ mod tests {
 
     #[test]
     fn selected_screen_follows_existing_progress_readiness_and_cleanup_then_falls_back() {
-        let screens = TransitionScreens::new([entry(
-            DimensionTransition::Conditional {
-                to: "test:b".into(),
-                from: "test:a".into(),
-            },
-            0xFF102030,
-        )]);
-        let player = PlayerCheck {
-            outside_build_height: false,
-            spectator: false,
-            alive: true,
-        };
-        let mut tracker = LevelLoadTracker::new(500);
-        tracker.start_client_load(0, Reason::Other);
-        let registration = screens.select(key("test:b"), key("test:a")).unwrap();
-        tracker.set_transition_screen(ActiveTransitionScreen::new(
-            registration.draw_owner.clone(),
-            registration.factory.create(&Client, tracker.reason.into()),
-        ));
-        let progress = ServerLoadView::default();
-        progress.start(Stage::LoadInitialChunks, 0);
-        progress.finish(Stage::LoadInitialChunks);
-        progress.start(Stage::LoadPlayerChunks, 49);
-        progress.update(Stage::LoadPlayerChunks, 20, 49);
-        assert_eq!(progress.server_progress(), 30.0 / 59.0);
-        let mut canvas = Canvas::default();
-        assert!(tracker.transition_screen().unwrap().draw(
-            &Client,
-            tracker.reason.into(),
-            Some(progress.server_progress()),
-            &mut canvas,
-        ));
-        assert_eq!(canvas.0, Some(0xFF102030));
-        tracker.tick_client_load(100, player);
-        assert!(!tracker.is_level_ready(100));
-        tracker.loading_packets_received();
-        tracker.tick_client_load(150, player);
-        assert!(!tracker.is_level_ready(150));
-        tracker.player_section_ready();
-        tracker.tick_client_load(200, player);
-        assert!(!tracker.is_level_ready(699));
-        assert!(tracker.is_level_ready(700));
-        assert!(tracker.transition_screen().is_some());
-        tracker.finish();
-        assert!(tracker.transition_screen().is_none());
-        assert!(!tracker.is_active());
-        tracker.start_client_load(1000, Reason::Other);
-        assert!(screens.select(key("test:c"), key("test:b")).is_none());
-        assert!(tracker.transition_screen().is_none());
-        tracker.loading_packets_received();
-        tracker.player_section_ready();
-        tracker.tick_client_load(1100, player);
-        assert!(!tracker.is_level_ready(1599));
-        assert!(tracker.is_level_ready(1600));
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            let screens = TransitionScreens::new([entry(
+                DimensionTransition::Conditional {
+                    to: "test:b".into(),
+                    from: "test:a".into(),
+                },
+                0xFF102030,
+            )]);
+            let player = PlayerCheck {
+                outside_build_height: false,
+                spectator: false,
+                alive: true,
+            };
+            let mut tracker = LevelLoadTracker::new(500);
+            tracker.start_client_load(0, Reason::Other);
+            let registration = screens.select(key("test:b"), key("test:a")).unwrap();
+            tracker.set_transition_screen(ActiveTransitionScreen::new(
+                registration.draw_owner.clone(),
+                registration.factory.create(&Client, tracker.reason.into()),
+            ));
+            let progress = ServerLoadView::default();
+            progress.start(Stage::LoadInitialChunks, 0);
+            progress.finish(Stage::LoadInitialChunks);
+            progress.start(Stage::LoadPlayerChunks, 49);
+            progress.update(Stage::LoadPlayerChunks, 20, 49);
+            assert_eq!(progress.server_progress(), 30.0 / 59.0);
+            let mut canvas = Canvas::default();
+            assert!(tracker.transition_screen().unwrap().draw(
+                &Client,
+                tracker.reason.into(),
+                Some(progress.server_progress()),
+                &mut canvas,
+            ));
+            assert_eq!(canvas.0, Some(0xFF102030));
+            tracker.tick_client_load(100, player);
+            assert!(!tracker.is_level_ready(100));
+            tracker.loading_packets_received();
+            tracker.tick_client_load(150, player);
+            assert!(!tracker.is_level_ready(150));
+            tracker.player_section_ready();
+            tracker.tick_client_load(200, player);
+            assert!(!tracker.is_level_ready(699));
+            assert!(tracker.is_level_ready(700));
+            assert!(tracker.transition_screen().is_some());
+            tracker.finish();
+            assert!(tracker.transition_screen().is_none());
+            assert!(!tracker.is_active());
+            tracker.start_client_load(1000, Reason::Other);
+            assert!(screens.select(key("test:c"), key("test:b")).is_none());
+            assert!(tracker.transition_screen().is_none());
+            tracker.loading_packets_received();
+            tracker.player_section_ready();
+            tracker.tick_client_load(1100, player);
+            assert!(!tracker.is_level_ready(1599));
+            assert!(tracker.is_level_ready(1600));
+        });
     }
 
     #[test]
@@ -334,7 +336,7 @@ mod tests {
             }
         }
 
-        mod_api::testing::with_dispatch(Vec::new().into(), || {
+        mod_platform::testing::with_mods(Vec::new().into(), || {
             let screens = TransitionScreens::new([(
                 "broken_presentation",
                 DimensionTransitionScreen::new(
@@ -400,36 +402,38 @@ mod tests {
 
     #[test]
     fn restart_keeps_the_presentation_until_abort_or_timeout_finish() {
-        for time_out in [false, true] {
-            let mut tracker = LevelLoadTracker::new(0);
-            tracker.start_client_load(0, Reason::NetherPortal);
-            let token = Arc::new(());
-            let lifetime = Arc::downgrade(&token);
-            tracker.set_transition_screen(ActiveTransitionScreen::new(
-                CallbackOwner::for_mod("registrant"),
-                Box::new(move |_: &dyn ClientHost, _, _, _: &mut dyn DrawContext| {
-                    assert_eq!(Arc::strong_count(&token), 1);
-                }),
-            ));
-            tracker.start_client_load(100, Reason::EndPortal);
-            assert_eq!(tracker.reason, Reason::EndPortal);
-            assert!(lifetime.upgrade().is_some());
-            if time_out {
-                let player = PlayerCheck {
-                    outside_build_height: false,
-                    spectator: false,
-                    alive: true,
-                };
-                tracker.loading_packets_received();
-                tracker.tick_client_load(30_100, player);
-                assert!(!tracker.is_level_ready(30_100));
-                tracker.tick_client_load(30_101, player);
-                assert!(tracker.is_level_ready(30_101));
+        mod_platform::testing::with_mods(Vec::new().into(), || {
+            for time_out in [false, true] {
+                let mut tracker = LevelLoadTracker::new(0);
+                tracker.start_client_load(0, Reason::NetherPortal);
+                let token = Arc::new(());
+                let lifetime = Arc::downgrade(&token);
+                tracker.set_transition_screen(ActiveTransitionScreen::new(
+                    CallbackOwner::for_mod("registrant"),
+                    Box::new(move |_: &dyn ClientHost, _, _, _: &mut dyn DrawContext| {
+                        assert_eq!(Arc::strong_count(&token), 1);
+                    }),
+                ));
+                tracker.start_client_load(100, Reason::EndPortal);
+                assert_eq!(tracker.reason, Reason::EndPortal);
                 assert!(lifetime.upgrade().is_some());
+                if time_out {
+                    let player = PlayerCheck {
+                        outside_build_height: false,
+                        spectator: false,
+                        alive: true,
+                    };
+                    tracker.loading_packets_received();
+                    tracker.tick_client_load(30_100, player);
+                    assert!(!tracker.is_level_ready(30_100));
+                    tracker.tick_client_load(30_101, player);
+                    assert!(tracker.is_level_ready(30_101));
+                    assert!(lifetime.upgrade().is_some());
+                }
+                tracker.finish();
+                assert!(tracker.transition_screen().is_none());
+                assert!(lifetime.upgrade().is_none());
             }
-            tracker.finish();
-            assert!(tracker.transition_screen().is_none());
-            assert!(lifetime.upgrade().is_none());
-        }
+        });
     }
 }

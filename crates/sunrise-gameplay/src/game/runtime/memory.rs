@@ -7,12 +7,20 @@ use crate::game::ServerGame;
 use std::collections::BTreeMap;
 use std::mem::size_of;
 use std::sync::Arc;
+use sunrise_gameplay_common::game::memory_common::{
+    Cached, ChunkSend, Entities, Generation, MemoryInputs, MemoryReport, Players, Queue,
+    ServerSide, TOP, TOP_PLAYERS, mb,
+};
+#[cfg(test)]
+use sunrise_gameplay_common::game::memory_common::{PendingMemory, shared, unattributed};
 use sunrise_level::chunk::Chunk;
 use sunrise_sim::lan::hub::Hub;
 #[cfg(test)]
 use sunrise_sim::server_perf::MemoryCost;
 
-pub(in crate::game) use sunrise_gameplay_common::game::memory_common::*;
+pub(in crate::game) use sunrise_gameplay_common::game::memory_common::{
+    MEMORY_EVERY_S, flatten_report,
+};
 
 pub(in crate::game::server_side) fn vec_bytes<T>(v: &Vec<T>) -> usize {
     v.capacity() * size_of::<T>()

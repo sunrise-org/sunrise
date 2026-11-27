@@ -34,7 +34,7 @@ pub trait ParticleController: Debug + Send + Sync + 'static {
     fn tick(&mut self, particle: &mut Particle, level: &ParticleLevel<'_>) -> ParticleUpdate;
 }
 
-pub(super) trait Controller: Debug + Send + Sync {
+pub trait Controller: Debug + Send + Sync {
     fn tick(&mut self, particle: &mut Particle, level: &ParticleLevel<'_>) -> ParticleUpdate;
 }
 impl<T: ParticleController> Controller for T {
@@ -63,13 +63,13 @@ pub(super) fn registered() -> &'static HashMap<ParticleKey, Arc<ParticleProvider
     REGISTERED.get().unwrap_or(&NONE)
 }
 
-pub(super) struct BoundProvider {
+pub struct BoundProvider {
     pub(super) factory: Arc<ParticleProviderFactory>,
     pub(super) provider: CallbackValue<Box<dyn BoundParticleProvider>>,
 }
 
 /// The engine's sole owner of a particle instance and its sprite orientation.
-pub(super) struct Provided {
+pub struct Provided {
     factory: Arc<ParticleProviderFactory>,
     instance: CallbackValue<Box<dyn CustomParticle>>,
     presentation: Presentation,

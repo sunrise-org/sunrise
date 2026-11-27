@@ -24,7 +24,7 @@ struct CachedSectionFrustum {
     result: SectionFrustumResult,
 }
 
-pub(super) struct ParticleSectionFrustumCache {
+pub struct ParticleSectionFrustumCache {
     entries: [Option<CachedSectionFrustum>; PARTICLE_SECTION_CACHE_SIZE],
 }
 

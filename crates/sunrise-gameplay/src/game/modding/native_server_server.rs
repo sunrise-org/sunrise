@@ -2020,7 +2020,7 @@ impl crate::game::ServerGame<'_> {
     }
 }
 
-#[expect(dead_code, reason = "dedicated settings stay engine-private")]
+#[allow(dead_code, reason = "dedicated settings stay engine-private")]
 impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn native_online_mode(&self) -> Option<bool> {
         Some(online_mode_of(&self.dedicated_lan()?.shared.config))

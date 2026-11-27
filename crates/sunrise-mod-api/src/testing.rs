@@ -1,11 +1,22 @@
 //! Test support with API-owned registration and vocabulary-owned fakes.
 pub use mod_vocab::testing::*;
 
+/// Install the platform's instrumentation for this test process, with no mods or test scope.
+///
+/// A fixture whose mod callbacks run on a thread it does not scope (a worker it starts) calls
+/// this before the first callback or worker start: [`with_mods`] scopes only the calling thread,
+/// while the instrumentation is process-wide, and a callback entered first would seal it off for
+/// every later registration test. Idempotent. Fixtures whose callbacks all run on the test
+/// thread use [`with_mods`] instead, which calls this.
+pub fn initialize_platform() {
+    crate::__private::initialize().expect("test registration requires the mod API runtime");
+}
+
 /// Run with these mods and their controller and pose registrations on this thread.
 /// The registration probe starts without frozen test Parts. The body can see explicitly
 /// installed Parts from its caller; any replacement is restored on scope exit or unwind.
 pub fn with_mods<R>(mods: crate::Mods, f: impl FnOnce() -> R) -> R {
-    crate::__private::initialize().expect("test registration requires the mod API runtime");
+    initialize_platform();
     mod_vocab::testing::with_parts_registration_probe(
         mods,
         crate::parts::registered_controllers,
