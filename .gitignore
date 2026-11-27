@@ -42,3 +42,4 @@
 
 # Visual Studio editor state.
 .vs/
+*.hzperf
