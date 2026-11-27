@@ -1123,4 +1123,7 @@ use crate::game::client_side::resource_tables_client::PackResourcesClientExt as 
 pub mod cloud_pack_fixture;
 
 #[cfg(all(test, feature = "client"))]
+mod pack_generation_rebuild_tests;
+
+#[cfg(all(test, feature = "client"))]
 mod retained_mod_gpu_tests;

@@ -1,0 +1,1 @@
+sunrise-client-gameplay game::client_side::packs::pack_generation_rebuild_tests::shader_pack_generation_continues_across_a_renderer_rebuild lib daily gpu # Prepared resources, X11 and Vulkan; three isolated child processes.
