@@ -57,19 +57,19 @@ fn visit_player_seat_sources<'a>(
 }
 
 #[inline(always)]
-fn visit_seat_sources_lazy<'a, PG, G, RP, RM, R, OM, O, GP, P, B, BI>(
+fn visit_seat_sources_lazy<'g, 'l, PG, G, RP, RM, R, OM, O, GP, P, B, BI>(
     vehicle: u32,
-    sources: LazySeatSources<'a, PG, RP, RM, OM, GP, B>,
+    sources: LazySeatSources<'l, PG, RP, RM, OM, GP, B>,
     mut matches: impl FnMut(SeatedPassenger) -> bool,
 ) -> bool
 where
     PG: FnOnce() -> G,
-    G: Iterator<Item = &'a Guest>,
+    G: Iterator<Item = &'g Guest>,
     RP: FnOnce() -> Option<(u32, i64)>,
     RM: FnOnce() -> R,
-    R: Iterator<Item = &'a Mob>,
+    R: Iterator<Item = &'g Mob>,
     OM: FnOnce() -> O,
-    O: Iterator<Item = &'a Mob>,
+    O: Iterator<Item = &'g Mob>,
     GP: FnOnce() -> P,
     P: Iterator<Item = (i64, u32)>,
     B: FnOnce() -> BI,
@@ -93,21 +93,24 @@ where
         return true;
     }
     let mob_hit = {
-        let other_mobs = sources
-            .lent_mobs
-            .iter()
-            .chain((sources.off_level_mobs)())
-            .filter(|m| m.extra.mount == Some(vehicle));
-        (sources.resident_mobs)()
-            .chain(other_mobs)
-            .filter(|m| !m.removed)
-            .any(|m| {
-                matches(SeatedPassenger {
-                    order: m.extra.vehicle_order,
-                    id: m.id,
-                    player: false,
-                })
+        let mut seat_mob = |m: &Mob| {
+            matches(SeatedPassenger {
+                order: m.extra.vehicle_order,
+                id: m.id,
+                player: false,
             })
+        };
+        (sources.resident_mobs)()
+            .filter(|m| !m.removed)
+            .any(&mut seat_mob)
+            || sources
+                .lent_mobs
+                .iter()
+                .filter(|m| m.extra.mount == Some(vehicle) && !m.removed)
+                .any(&mut seat_mob)
+            || (sources.off_level_mobs)()
+                .filter(|m| m.extra.mount == Some(vehicle) && !m.removed)
+                .any(&mut seat_mob)
     };
     if mob_hit {
         return true;
@@ -955,7 +958,7 @@ mod tests {
             (0, 0, 0, 0, 0)
         );
         assert_eq!(run(&[], true, &resident_mobs, &general), (1, 0, 0, 0, 0));
-        assert_eq!(run(&[], false, &resident_mobs, &general), (1, 1, 1, 0, 0));
+        assert_eq!(run(&[], false, &resident_mobs, &general), (1, 1, 0, 0, 0));
         assert_eq!(run(&[], false, &[], &general), (1, 1, 1, 1, 0));
         assert_eq!(run(&[], false, &[], &[]), (1, 1, 1, 1, 1));
     }
