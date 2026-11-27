@@ -14,6 +14,7 @@ use sunrise_game_data::text::Text;
 pub(in crate::game) use sunrise_gameplay_common::game::beacon_common::{EFFECTS, effect_box_hits};
 use sunrise_items::items::ItemStack;
 use sunrise_level::{containers::BlockEntity, test_instance_block::Status};
+use sunrise_optifine::gui::{Container, Detail};
 use sunrise_protocol::packets::play::{self, Serverbound as S};
 
 /// The beacon screen is 54 px wider than the 176-px menus it shares an origin with.
@@ -274,15 +275,21 @@ impl crate::game::ClientGame<'_> {
             .as_ref()
             .is_some_and(|s| s.inputs[0].is_some());
         // BeaconScreen draws no title, but has the menu's.
-        super::screen_info::name_container(|| {
-            self.remote_menu_title().map_or_else(
-                || self.translate_with_fallback("container.beacon", "Beacon"),
-                |t| t.plain(),
-            )
-        });
+        let title = self.remote_menu_title().map_or_else(
+            || self.translate_with_fallback("container.beacon", "Beacon"),
+            |t| t.plain(),
+        );
+        super::screen_info::name_container(|| title.clone());
         self.render_transparent_background("beacon", batch);
         let atlas = &self.client.gui.atlas;
-        if let Some(mut r) = atlas.sprites.get("gui/container/beacon").copied() {
+        let background = self.custom_gui_sprite(
+            "gui/container/beacon",
+            Container::Beacon,
+            self.gui_block(),
+            Some(title.as_str()),
+            Detail::Beacon { levels },
+        );
+        if let Some(mut r) = atlas.sprites.get(background).copied() {
             let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
             r.u1 = r.u0 + 230.0 * du;
             r.v1 = r.v0 + HEIGHT * dv;

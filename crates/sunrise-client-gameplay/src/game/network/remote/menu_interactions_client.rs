@@ -587,6 +587,9 @@ impl crate::game::ClientGame<'_> {
         };
         let title = menu_title(&p.title);
         self.remote_set_menu(Some((p.container, menu.clone())), Some(title));
+        if let Some(remote) = self.client.remote.as_mut() {
+            remote.menu.target = target.map(|(x, y, z)| [x, y, z]);
+        }
         self.common.craft_size = if menu == "minecraft:crafting" { 3 } else { 2 };
         self.common.container = None;
         if let Some(entity) = entity {

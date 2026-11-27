@@ -557,6 +557,8 @@ pub(in crate::game) const TICK_DECODE_WAIT: Duration = Duration::from_millis(250
 pub struct ClientMenu {
     pub(in crate::game) current: Option<(i32, String)>,
     pub generation: u64,
+    /// The block the server opened the menu from: the last one the player used.
+    pub(in crate::game) target: Option<[i32; 3]>,
 }
 
 impl ClientMenu {
@@ -566,6 +568,7 @@ impl ClientMenu {
             .checked_add(1)
             .expect("menu generation exhausted");
         self.current = current;
+        self.target = None;
     }
 
     pub fn as_ref(&self) -> Option<&(i32, String)> {

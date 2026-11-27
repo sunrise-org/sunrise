@@ -336,6 +336,8 @@ impl crate::game::ClientGame<'_> {
         ox: f32,
         oy: f32,
     ) {
+        use crate::game::custom_guis::{mob_block, mount_detail};
+        use sunrise_optifine::gui::Container;
         let Some(open) = self.client.mount_menu.open.as_ref() else {
             return;
         };
@@ -344,7 +346,16 @@ impl crate::game::ClientGame<'_> {
         let background = if nautilus::is_nautilus(open.species) {
             "gui/container/nautilus"
         } else {
-            "gui/container/horse"
+            let mount = self.common.mobs.iter().find(|m| m.id == open.mob);
+            mount.map_or("gui/container/horse", |m| {
+                self.custom_gui_sprite(
+                    "gui/container/horse",
+                    Container::Horse,
+                    mob_block(m),
+                    m.custom_name.as_deref(),
+                    mount_detail(m),
+                )
+            })
         };
         batch.sprite_region(atlas, background, [ox, oy, 176.0, 166.0], 256.0, 256.0);
         if open.columns > 0 {

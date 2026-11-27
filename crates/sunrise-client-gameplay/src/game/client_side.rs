@@ -117,6 +117,9 @@ pub(in crate::game) mod creative_hotbar;
 #[path = "mobs/creatures/mod_client.rs"]
 pub(in crate::game) mod creatures_client;
 #[cfg(feature = "client")]
+#[path = "interface/custom_guis.rs"]
+pub(in crate::game) mod custom_guis;
+#[cfg(feature = "client")]
 #[path = "interface/custom_sky.rs"]
 pub(in crate::game) mod custom_sky;
 #[path = "interface/debug_keys.rs"]

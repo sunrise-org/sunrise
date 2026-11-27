@@ -3,6 +3,7 @@ use sunrise_gameplay_common::game::inventory_slots::MOD_MENU_SLOT_BASE;
 #[cfg(test)]
 use sunrise_gameplay_common::game::inventory_slots::SLOT_POSITIONS;
 use sunrise_gameplay_common::game::inventory_slots::container_slot_index;
+use sunrise_optifine::gui::{Container, Detail};
 
 impl crate::game::ClientGame<'_> {
     pub fn craft_result(&self) -> Option<ItemStack> {
@@ -125,11 +126,6 @@ impl crate::game::ClientGame<'_> {
                             ("gui/container/smoker", "container.smoker", "Smoker")
                         }
                     };
-                    part(batch, tex, 0.0, 0.0, 176.0, 166.0, ox, oy);
-                    self.draw_screen_phase(
-                        batch,
-                        sunrise_client::screen_draw::RenderPhase::Background,
-                    );
                     // A server's furnace menu has the title it was given.
                     let title = self.remote_menu_title().unwrap_or_else(|| {
                         sunrise_game_data::text::Text::literal(
@@ -137,6 +133,23 @@ impl crate::game::ClientGame<'_> {
                         )
                         .resolve_legacy()
                     });
+                    // Custom GUIs know the furnace's screen, not the blast furnace's or the smoker's.
+                    let tex = if matches!(f.kind, sunrise_level::containers::FurnaceKind::Furnace) {
+                        self.custom_gui_sprite(
+                            tex,
+                            Container::Furnace,
+                            self.gui_block(),
+                            Some(title.plain().as_str()),
+                            Detail::None,
+                        )
+                    } else {
+                        tex
+                    };
+                    part(batch, tex, 0.0, 0.0, 176.0, 166.0, ox, oy);
+                    self.draw_screen_phase(
+                        batch,
+                        sunrise_client::screen_draw::RenderPhase::Background,
+                    );
                     screen_info::name_container(|| title.plain());
                     let tw = atlas.font.width_text(&title);
                     batch.text_styled(
@@ -216,17 +229,30 @@ impl crate::game::ClientGame<'_> {
                     .draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background),
                 None if self.mount_active() => self.draw_mount_background(batch, ox, oy),
                 None => {
-                    let texture = if self.common.craft_size == 3 {
-                        "gui/container/crafting_table"
+                    let title = self.translate_with_fallback("container.crafting", "Crafting");
+                    // The crafting table is a block's screen and shows its title; the inventory
+                    // is the player's own.
+                    let (texture, container, name) = if self.common.craft_size == 3 {
+                        (
+                            "gui/container/crafting_table",
+                            Container::Crafting,
+                            Some(title.as_str()),
+                        )
                     } else {
-                        "gui/container/inventory"
+                        ("gui/container/inventory", Container::Inventory, None)
                     };
+                    let texture = self.custom_gui_sprite(
+                        texture,
+                        container,
+                        self.gui_block(),
+                        name,
+                        Detail::None,
+                    );
                     part(batch, texture, 0.0, 0.0, 176.0, 166.0, ox, oy);
                     self.draw_screen_phase(
                         batch,
                         sunrise_client::screen_draw::RenderPhase::Background,
                     );
-                    let title = self.translate_with_fallback("container.crafting", "Crafting");
                     screen_info::name_container(|| title.clone());
                     let tx = if self.common.craft_size == 3 {
                         29.0

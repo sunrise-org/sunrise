@@ -1,4 +1,4 @@
-use crate::game::ClientGame;
+use crate::game::{ClientGame, custom_guis::mob_block};
 use sunrise_client::{
     hud::HudBatch,
     widgets::{Cursor, request_cursor},
@@ -7,6 +7,7 @@ use sunrise_game_data::text::Text;
 use sunrise_gameplay_common::game::stations_common::{INPUT, Kind, RESULT, Station};
 use sunrise_gameplay_common::game::trading_common::{MerchantState, merchant_display_name};
 use sunrise_items::items::ItemStack;
+use sunrise_optifine::gui::{Container, Detail};
 use sunrise_sim::merchant::{self, MerchantOffer, TradeContext};
 
 impl ClientGame<'_> {
@@ -22,7 +23,7 @@ impl ClientGame<'_> {
         else {
             return false;
         };
-        let (progress, custom) = (m.progress(), m.name.clone());
+        let (progress, custom, mob) = (m.progress(), m.name.clone(), m.mob);
         let (profession, level, xp, scroll, shop, future, focused, dragging) = (
             m.session
                 .profession
@@ -40,7 +41,27 @@ impl ClientGame<'_> {
         let costs: Vec<ItemStack> = offers.iter().map(|o| o.cost_a(self.items())).collect();
         self.render_transparent_background("merchant", batch);
         let atlas = &self.client.gui.atlas;
-        if let Some(mut r) = atlas.sprites.get("gui/container/villager").copied() {
+        // A villager's screen asks for its profession and level, a wandering trader's for
+        // neither; the name it asks for is the custom one the merchant was given.
+        let villager = progress.then_some(Detail::Villager {
+            profession: &profession,
+            level,
+        });
+        let custom_name = custom.as_ref().map(Text::plain);
+        let at = self
+            .common
+            .mobs
+            .iter()
+            .find(|trader| Some(trader.id) == mob)
+            .map_or_else(|| self.gui_block(), mob_block);
+        let background = self.custom_gui_sprite(
+            "gui/container/villager",
+            Container::Villager,
+            at,
+            custom_name.as_deref(),
+            villager.unwrap_or(Detail::None),
+        );
+        if let Some(mut r) = atlas.sprites.get(background).copied() {
             let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
             r.u1 = r.u0 + 276.0 * du;
             r.v1 = r.v0 + 166.0 * dv;

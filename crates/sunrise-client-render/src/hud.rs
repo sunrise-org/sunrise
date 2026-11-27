@@ -131,6 +131,8 @@ impl TextureFlags {
 }
 mod cit;
 use cit::*;
+mod custom_gui;
+use custom_gui::custom_gui_sprites;
 mod atlas_sprites;
 pub use atlas_sprites::*;
 mod atlas;
