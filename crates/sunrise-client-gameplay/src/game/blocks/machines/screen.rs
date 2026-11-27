@@ -54,7 +54,7 @@ impl crate::game::ClientGame<'_> {
             Screen::Dispenser => (Container::Dispenser, Detail::Dispenser { dropper: false }),
             Screen::Dropper => (Container::Dispenser, Detail::Dispenser { dropper: true }),
         };
-        let texture = self.gui_sprite(
+        let texture = self.custom_gui_sprite(
             texture,
             container,
             self.gui_block(),

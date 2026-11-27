@@ -157,7 +157,7 @@ impl ClientGame<'_> {
                 name.strip_prefix("minecraft:")?
                     .strip_suffix("_shulker_box")
             });
-            let background = self.gui_sprite(
+            let background = self.custom_gui_sprite(
                 "gui/container/shulker_box",
                 Container::ShulkerBox,
                 at,
@@ -175,7 +175,7 @@ impl ClientGame<'_> {
         let rows = self.chest_rows().unwrap_or(3);
         let top = rows as f32 * 18.0 + 17.0;
         let title = self.chest_title(rows);
-        let background = self.gui_sprite(
+        let background = self.custom_gui_sprite(
             "gui/container/generic_54",
             Container::Chest,
             at,

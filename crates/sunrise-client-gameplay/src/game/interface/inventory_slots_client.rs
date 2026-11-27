@@ -135,7 +135,7 @@ impl crate::game::ClientGame<'_> {
                     });
                     // Custom GUIs know the furnace's screen, not the blast furnace's or the smoker's.
                     let tex = if matches!(f.kind, sunrise_level::containers::FurnaceKind::Furnace) {
-                        self.gui_sprite(
+                        self.custom_gui_sprite(
                             tex,
                             Container::Furnace,
                             self.gui_block(),
@@ -241,8 +241,13 @@ impl crate::game::ClientGame<'_> {
                     } else {
                         ("gui/container/inventory", Container::Inventory, None)
                     };
-                    let texture =
-                        self.gui_sprite(texture, container, self.gui_block(), name, Detail::None);
+                    let texture = self.custom_gui_sprite(
+                        texture,
+                        container,
+                        self.gui_block(),
+                        name,
+                        Detail::None,
+                    );
                     part(batch, texture, 0.0, 0.0, 176.0, 166.0, ox, oy);
                     self.draw_screen_phase(
                         batch,

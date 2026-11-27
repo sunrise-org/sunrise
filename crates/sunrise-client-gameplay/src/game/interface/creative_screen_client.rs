@@ -270,7 +270,7 @@ impl crate::game::ClientGame<'_> {
         } else {
             "gui/container/creative_inventory/tab_items"
         };
-        let background = self.gui_sprite(
+        let background = self.custom_gui_sprite(
             background,
             Container::Creative,
             self.gui_block(),

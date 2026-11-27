@@ -54,7 +54,7 @@ impl ClientGame<'_> {
             .iter()
             .find(|trader| Some(trader.id) == mob)
             .map_or_else(|| self.gui_block(), mob_block);
-        let background = self.gui_sprite(
+        let background = self.custom_gui_sprite(
             "gui/container/villager",
             Container::Villager,
             at,

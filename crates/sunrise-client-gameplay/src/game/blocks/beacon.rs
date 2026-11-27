@@ -282,7 +282,7 @@ impl crate::game::ClientGame<'_> {
         super::screen_info::name_container(|| title.clone());
         self.render_transparent_background("beacon", batch);
         let atlas = &self.client.gui.atlas;
-        let background = self.gui_sprite(
+        let background = self.custom_gui_sprite(
             "gui/container/beacon",
             Container::Beacon,
             self.gui_block(),

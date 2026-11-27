@@ -348,7 +348,7 @@ impl crate::game::ClientGame<'_> {
         } else {
             let mount = self.common.mobs.iter().find(|m| m.id == open.mob);
             mount.map_or("gui/container/horse", |m| {
-                self.gui_sprite(
+                self.custom_gui_sprite(
                     "gui/container/horse",
                     Container::Horse,
                     mob_block(m),

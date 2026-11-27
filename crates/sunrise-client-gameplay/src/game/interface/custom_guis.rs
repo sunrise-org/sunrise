@@ -37,7 +37,7 @@ impl ClientGame<'_> {
     /// (`gui/container/furnace`): the picture a pack's Custom GUIs rules put there for the screen of
     /// the block at `at`, with the title or custom name it shows and what its block or entity is
     /// (`detail`); `default` itself when no rule holds.
-    pub(in crate::game) fn gui_sprite<'a>(
+    pub(in crate::game) fn custom_gui_sprite<'a>(
         &'a self,
         default: &'a str,
         container: Container,

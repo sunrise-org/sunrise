@@ -68,7 +68,7 @@ impl crate::game::ClientGame<'_> {
                     .and_then(|s| self.common.block_name_plain((s.pos[0], s.pos[1], s.pos[2])));
                 Text::literal(named.unwrap_or(default)).resolve_legacy()
             });
-            let texture = self.gui_sprite(
+            let texture = self.custom_gui_sprite(
                 "gui/container/brewing_stand",
                 Container::BrewingStand,
                 self.gui_block(),
@@ -158,7 +158,7 @@ impl crate::game::ClientGame<'_> {
                     _ => None,
                 };
                 let texture = container.map_or(kind.texture(), |container| {
-                    self.gui_sprite(
+                    self.custom_gui_sprite(
                         kind.texture(),
                         container,
                         self.gui_block(),
