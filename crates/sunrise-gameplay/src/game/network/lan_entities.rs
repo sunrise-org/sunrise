@@ -642,6 +642,17 @@ impl ServerGame<'_> {
     }
 }
 
+fn next_tracker_mob<'a>(
+    mobs: &'a [sunrise_sim::mobs::Mob],
+    cursor: &mut usize,
+    id: u32,
+) -> Option<&'a sunrise_sim::mobs::Mob> {
+    // Mob states are emitted first and filtering preserves their order.
+    let found = (*cursor..mobs.len()).find(|&i| mobs[i].id == id);
+    *cursor = found.map_or(mobs.len(), |i| i + 1);
+    found.map(|i| &mobs[i])
+}
+
 impl ServerGame<'_> {
     /// `ClientboundAddEntityPacket(Entity, ServerEntity, int)`: the entity's
     /// own UUID (`Entity.getUUID`), the one `/data`, saves and UUID
@@ -667,12 +678,7 @@ impl ServerGame<'_> {
             let id = e.id as u32;
             let mob = direct_mobs
                 .then(|| {
-                    // Mob states are emitted first and filtering preserves their order.
-                    let len = self.common.mobs.len();
-                    let found = (next_mob..len).find(|&i| self.common.mobs[i].id == id);
-                    next_mob = found.map_or(len, |i| i + 1);
-                    let found = found?;
-                    let mob = &self.common.mobs[found];
+                    let mob = next_tracker_mob(&self.common.mobs, &mut next_mob, id)?;
                     Some(Location {
                         owner: Owner {
                             dimension: dim,
@@ -1272,6 +1278,25 @@ mod tests {
     use super::*;
 
     // NBT constructors assign ids. Reinstall unbound owners to exercise delayed tracking.
+
+    #[test]
+    fn tracker_uuid_cursor_advances_across_filtered_mobs() {
+        use sunrise_core::geometry::Vec3;
+        use sunrise_sim::mobs::Mob;
+
+        let kinds = sunrise_gameplay_common::game::mods::living_mod_types();
+        let kind = &kinds["minecraft:zombie"];
+        let mobs: Vec<_> = (1..=12)
+            .map(|id| Mob::new(id, kind.clone(), Vec3::ZERO, 0.0))
+            .collect();
+        let mut cursor = 0;
+        for id in [1, 10, 12] {
+            assert_eq!(next_tracker_mob(&mobs, &mut cursor, id).unwrap().id, id);
+            assert_eq!(cursor, id as usize);
+        }
+        assert!(next_tracker_mob(&mobs, &mut cursor, 13).is_none());
+        assert_eq!(cursor, mobs.len());
+    }
 
     #[test]
     fn summoned_ids_are_unique_and_survive_the_tracking_pass() {
