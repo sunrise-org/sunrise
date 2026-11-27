@@ -14,7 +14,7 @@
 use super::expression_blocks::{VANILLA_OFFSETS, VANILLA_SIZES, block_entry};
 use super::mod_meshes::{ResolvedMeshDraw, wgpu_index_format};
 use super::mod_render_targets::{TargetMips, TargetUse};
-use super::world_primitives::{Upload, VertexPages};
+use super::world_primitives::{PreparedPass, Upload, VertexPages};
 use crate::mod_pipelines::{
     Built, BuiltTexture, ModifierStacks, Pipelines, wgpu_compare, wgpu_depth_bias,
 };
@@ -4216,48 +4216,88 @@ impl ModPipelines {
         );
     }
 
-    /// Draw prepared standard-pass pipeline runs for the given run-index ranges.
-    pub fn draw_prepared_runs(
+    fn prepared_runs(&self, range: std::ops::Range<u32>) -> &[Run] {
+        let start = (range.start as usize).min(self.runs.len());
+        let end = (range.end as usize).min(self.runs.len());
+        &self.runs[start..end]
+    }
+
+    fn prepared_draws(&self, range: std::ops::Range<u32>) -> &[PreparedDraw] {
+        let start = self
+            .draws
+            .partition_point(|cmd| cmd.submitted_index < range.start as usize);
+        let end = self
+            .draws
+            .partition_point(|cmd| cmd.submitted_index < range.end as usize);
+        &self.draws[start..end]
+    }
+
+    /// Whether the given prepared ranges have work not owned by a translated pack pass.
+    pub(super) fn has_unbound_prepared(
+        &self,
+        runs: std::ops::Range<u32>,
+        draws: std::ops::Range<u32>,
+        bound_slots: &[usize],
+    ) -> bool {
+        (!runs.is_empty()
+            && self
+                .prepared_runs(runs)
+                .iter()
+                .any(|run| !bound_slots.contains(&run.slot)))
+            || (!draws.is_empty()
+                && self
+                    .prepared_draws(draws)
+                    .iter()
+                    .any(|cmd| !bound_slots.contains(&cmd.slot)))
+    }
+
+    /// Draw prepared pipeline runs for the selected pass, omitting pack-bound slots in a pack pass.
+    pub(super) fn draw_prepared_runs(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         indices: &wgpu::Buffer,
         ranges: impl IntoIterator<Item = std::ops::Range<u32>>,
+        target: PreparedPass<'_>,
     ) {
+        if let PreparedPass::Oit(stage) = target {
+            self.draw_prepared_oit(pass, stage, indices, ranges);
+            return;
+        }
+        let skip_slots = target.skip_slots();
         self.draw_runs(
             pass,
             indices,
-            false,
-            ranges.into_iter().flat_map(|r| {
-                let start = (r.start as usize).min(self.runs.len());
-                let end = (r.end as usize).min(self.runs.len());
-                self.runs[start..end]
-                    .iter()
-                    .map(|run| (run, run.quads.clone()))
-            }),
+            matches!(target, PreparedPass::Pack { .. }),
+            ranges
+                .into_iter()
+                .flat_map(|range| self.prepared_runs(range))
+                .filter(|run| !skip_slots.contains(&run.slot))
+                .map(|run| (run, run.quads.clone())),
         );
     }
 
-    /// Draw prepared standard-pass unified pipeline draws (`draw_mesh`, `draw_vertices`,
-    /// `pipeline_quads`) for the given draw-index ranges.
-    pub fn draw_prepared_draws(
+    /// Draw prepared unified pipeline draws (`draw_mesh`, `draw_vertices`, `pipeline_quads`)
+    /// for the selected pass, omitting pack-bound slots in a pack pass.
+    pub(super) fn draw_prepared_draws(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         indices: &wgpu::Buffer,
-        ranges: &[std::ops::Range<u32>],
+        ranges: impl IntoIterator<Item = std::ops::Range<u32>>,
+        target: PreparedPass<'_>,
     ) {
+        if let PreparedPass::Oit(stage) = target {
+            self.draw_prepared_oit_draws(pass, stage, indices, ranges);
+            return;
+        }
+        let skip_slots = target.skip_slots();
         self.draw_prepared_cmds(
             pass,
             indices,
-            false,
-            ranges.iter().flat_map(|r| {
-                let start = self
-                    .draws
-                    .partition_point(|cmd| cmd.submitted_index < r.start as usize);
-                let end = self
-                    .draws
-                    .partition_point(|cmd| cmd.submitted_index < r.end as usize);
-                self.draws[start..end].iter()
-            }),
+            matches!(target, PreparedPass::Pack { .. }),
+            ranges
+                .into_iter()
+                .flat_map(|range| self.prepared_draws(range))
+                .filter(|cmd| !skip_slots.contains(&cmd.slot)),
         );
     }
 
@@ -4312,14 +4352,14 @@ impl ModPipelines {
         pass: &mut wgpu::RenderPass<'_>,
         stage: super::oit::Stage,
         indices: &wgpu::Buffer,
-        ranges: &[std::ops::Range<u32>],
+        ranges: impl IntoIterator<Item = std::ops::Range<u32>>,
     ) {
         let stage_idx = stage as usize;
         self.draw_oit_cmds(
             pass,
             stage_idx,
             indices,
-            ranges.iter().flat_map(|r| {
+            ranges.into_iter().flat_map(|r| {
                 let start = self
                     .oit_draws
                     .partition_point(|cmd| cmd.submitted_index < r.start as usize);

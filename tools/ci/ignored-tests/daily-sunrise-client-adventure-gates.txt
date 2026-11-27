@@ -1,0 +1,2 @@
+sunrise-client cut_layout::game::server_side::game_mode::adventure_gate_tests::an_adventure_click_primes_tnt_only_with_a_can_break_that_names_it lib daily child-process
+sunrise-client cut_layout::game::server_side::game_mode::adventure_gate_tests::an_adventure_placement_is_predicted_when_can_place_on_names_the_clicked_block lib daily child-process

@@ -69,6 +69,20 @@ fn load_with_mod_stages(
     runtime: &OwnedModPackRuntime,
     stages: &[Option<ModVertexStage>],
 ) -> (PackPost, wgpu::TextureView, wgpu::TextureView) {
+    let inputs = sunrise_shaders::GameInputs {
+        mod_programs: requests,
+        ..Default::default()
+    };
+    load_pack_with_mods(gpu, files, inputs, runtime, stages)
+}
+
+fn load_pack_with_mods(
+    gpu: &Gpu,
+    files: Vec<(String, String)>,
+    inputs: sunrise_shaders::GameInputs,
+    runtime: &OwnedModPackRuntime,
+    stages: &[Option<ModVertexStage>],
+) -> (PackPost, wgpu::TextureView, wgpu::TextureView) {
     use std::io::{Cursor, Write};
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     for (name, contents) in files {
@@ -86,10 +100,6 @@ fn load_with_mod_stages(
     .unwrap();
     let mut macros = sunrise_shaders::Macros::standard();
     let (props, _) = sunrise_shaders::read_properties(&pack, &mut macros);
-    let inputs = sunrise_shaders::GameInputs {
-        mod_programs: requests,
-        ..Default::default()
-    };
     let post = sunrise_shaders::load_post(&pack, "", &props, &macros, &inputs);
     let color = gpu.texture(T::Rgba8Unorm);
     let depth = gpu.texture(T::Depth32Float);
@@ -143,6 +153,10 @@ fn run_frame_and_sample(
         depth,
         shadow_cache,
         &[[SIZE[0] / 2, SIZE[1] / 2]],
+        (
+            WorldBoundaries::default(),
+            |_: &mut wgpu::CommandEncoder, _: WorldBoundary<'_>| false,
+        ),
     )[0]
 }
 
@@ -154,6 +168,10 @@ fn run_frame_and_sample_at(
     depth: &wgpu::TextureView,
     shadow_cache: bool,
     points: &[[u32; 2]],
+    (boundaries, boundary): (
+        WorldBoundaries,
+        impl FnMut(&mut wgpu::CommandEncoder, WorldBoundary<'_>) -> bool,
+    ),
 ) -> Vec<[u8; 4]> {
     let screen = gpu.texture(T::Rgba8Unorm);
     let stride = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -182,8 +200,8 @@ fn run_frame_and_sample_at(
         SIZE,
         &[],
         &mut |_, _, _, _| {},
-        WorldBoundaries::default(),
-        |_, _| false,
+        boundaries,
+        boundary,
         &std::sync::atomic::AtomicBool::new(false),
         super::super::in_flight::poll_live,
     )
@@ -224,6 +242,211 @@ fn run_frame_and_sample_at(
     drop(data);
     read.unmap();
     px
+}
+
+#[test]
+#[ignore = "daily"]
+fn pack_owned_feature_stages_draw_only_unbound_prepared_mod_pipelines() {
+    use crate::gfx::mod_pipelines::{
+        Batch as PipelineBatch, PipelineDraw, PipelineDrawSource, PipelineRun,
+    };
+    use crate::gfx::world_primitives::{self, Batch, DrawRanges, WorldPrimitives};
+    use crate::mod_pipelines::{Pipelines, pack_program_requests_of, pack_runtime_specs_of};
+    use mod_api::{
+        Identifier, MeshDraw, PackBinding, PackPassSlot, PipelineBlend, RenderPipeline, WorldDepth,
+    };
+
+    let _gpu_guard = crate::gfx::test_gpu::lock();
+    let gpu = Gpu::new().expect("graphics adapter required for prepared pack stage draws");
+    let shader = Identifier::parse("example:core/prepared").unwrap();
+    let pipeline = |name| {
+        RenderPipeline::new(
+            Identifier::parse(name).unwrap(),
+            shader.clone(),
+            PipelineBlend::Opaque,
+            WorldDepth::Tested,
+        )
+        .vertex_shader(Identifier::parse("minecraft:core/position_tex_color").unwrap())
+    };
+    let registered = [
+        pipeline("example:unbound"),
+        pipeline("example:bound").pack_binding(
+            PackBinding::new()
+                .program("mod_prepared")
+                .slot(PackPassSlot::AfterSky),
+        ),
+    ];
+    let fsh = "#version 330\nin vec4 vertexColor;\nout vec4 fragColor;\n\
+               void main() { fragColor = vertexColor; }\n";
+    let set = Pipelines::build(&registered, 1, |file| {
+        if file == "assets/example/shaders/core/prepared.fsh" {
+            return Ok(Some(fsh.to_owned()));
+        }
+        let (ns, path) = file
+            .strip_prefix("assets/")
+            .unwrap()
+            .split_once('/')
+            .unwrap();
+        Ok(sunrise_mod_pipeline::stubs::read(&format!("{ns}:{path}")).map(str::to_owned))
+    })
+    .unwrap();
+
+    let files = [
+        (
+            "gbuffers_entities.vsh",
+            "#version 120\nvoid main(){gl_Position=gl_Vertex;}",
+        ),
+        (
+            "gbuffers_entities.fsh",
+            "#version 120\n/* DRAWBUFFERS:0 */\nvoid main(){gl_FragData[0]=vec4(1.0);}",
+        ),
+        (
+            "mod_prepared.vsh",
+            "#version 120\nvoid main(){gl_Position=vec4(gl_Vertex.xy,0.0,1.0);}",
+        ),
+        (
+            "mod_prepared.fsh",
+            "#version 120\n/* DRAWBUFFERS:0 */\n\
+             void main(){gl_FragData[0]=vec4(0.0,64.0/255.0,0.0,1.0);}",
+        ),
+        ("final.vsh", VERTEX),
+        (
+            "final.fsh",
+            "#version 120\nuniform sampler2D colortex0;varying vec2 uv;\n\
+             /*\nconst int colortex0Format = RGBA8;\n*/\n\
+             void main(){gl_FragColor=vec4(texture2D(colortex0,uv).bgr,1.0);}",
+        ),
+    ]
+    .map(|(name, source)| (name.into(), source.into()))
+    .into();
+    let inputs = sunrise_shaders::GameInputs {
+        entities: Some(crate::gfx::pack_entities::inputs()),
+        mod_programs: pack_program_requests_of(&registered),
+        ..Default::default()
+    };
+    let (mut post, color, depth) = load_pack_with_mods(
+        &gpu,
+        files,
+        inputs,
+        &pack_runtime_specs_of(&registered),
+        &[],
+    );
+    assert!(post.owns_feature_stages(), "{:?}", post.notes);
+    assert_eq!(post.bound_mod_slots(), &[1], "{:?}", post.notes);
+
+    // Four nonoverlapping stripes: unbound run, bound run, unbound direct draw, bound direct draw.
+    let quad = |left, right| {
+        [[left, -1.0], [left, 1.0], [right, 1.0], [right, -1.0]].map(|[x, y]| PipelineVertex {
+            pos: [x, y, 0.75],
+            uv: [0.5, 0.5],
+            color: u32::from_le_bytes([64, 0, 0, 255]),
+        })
+    };
+    let vertices = [quad(-1.0, -0.5), quad(-0.5, 0.0)];
+    let direct_vertices = [quad(0.0, 0.5), quad(0.5, 1.0)];
+    let bytes_per_quad = std::mem::size_of::<[PipelineVertex; 4]>() as u64;
+    let runs = [0, 1].map(|slot| PipelineRun {
+        slot,
+        stage: world_primitives::STAGE_AFTER_OPAQUE_FEATURES as u32,
+        quads: 1,
+        modifier_stack: 0,
+    });
+    let direct = [0, 1].map(|slot| {
+        let start = u64::from(slot) * bytes_per_quad;
+        PipelineDraw {
+            slot,
+            stage: world_primitives::STAGE_AFTER_TRANSLUCENT_FEATURES as u32,
+            modifier_stack: 0,
+            draw: MeshDraw::vertices(0..4),
+            source: PipelineDrawSource::Transient {
+                vertex_ranges: vec![(0, start..start + bytes_per_quad)],
+                index_range: None,
+            },
+            bindings: None,
+        }
+    });
+    let batch = Batch {
+        pipelines: PipelineBatch {
+            set: Some(&set),
+            vertices: bytemuck::cast_slice(&vertices),
+            runs: &runs,
+            draws: &direct,
+            transient_vertices: bytemuck::cast_slice(&direct_vertices),
+            modifier_defs: Some(&[]),
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+    let mut primitives = WorldPrimitives::new(&gpu.device, (T::Rgba8Unorm, false));
+    primitives.pipelines.build(&gpu.device, &set, None).unwrap();
+    assert!(primitives.prepare(
+        &gpu.device,
+        &mut |buffer, bytes| gpu.queue.write_buffer(buffer, 0, bytes),
+        &batch,
+        glam::Mat4::IDENTITY,
+        SIZE,
+        &color,
+        None,
+    ));
+    primitives.prepare_pack_pass(&gpu.device, post.formats[0], post.rgb & 1 != 0, false);
+    primitives.set_bound_mod_slots(post.bound_mod_slots());
+    post.fill_mod_draws(|slots, out| primitives.pack_bound_chunks_into(slots, out));
+
+    let mut drew = [false; 2];
+    let pixels = run_frame_and_sample_at(
+        &gpu,
+        &mut post,
+        &color,
+        &depth,
+        false,
+        &[[2, 8], [6, 8], [10, 8], [14, 8]],
+        (
+            WorldBoundaries {
+                features: true,
+                ..Default::default()
+            },
+            |encoder: &mut wgpu::CommandEncoder, boundary: WorldBoundary<'_>| {
+                let WorldBoundary::Features {
+                    translucent,
+                    color,
+                    depth,
+                } = boundary
+                else {
+                    return false;
+                };
+                let ranges = |range| {
+                    if translucent {
+                        DrawRanges {
+                            pipeline_draws: range,
+                            ..Default::default()
+                        }
+                    } else {
+                        DrawRanges {
+                            pipeline_runs: range,
+                            ..Default::default()
+                        }
+                    }
+                };
+                assert!(!primitives.draw_pack_prepared(encoder, color, depth, &[ranges(1..2)]));
+                let rendered =
+                    primitives.draw_pack_prepared(encoder, color, depth, &[ranges(0..2)]);
+                drew[usize::from(translucent)] = rendered;
+                rendered
+            },
+        ),
+    );
+    // The opaque shaders write 64/255 (exactly byte 64); final swaps red and blue. Bound stripes
+    // stay green: an extra fallback draw after AfterSky would overwrite them with the mod's red.
+    assert_eq!(
+        pixels,
+        [
+            [0, 0, 64, 255],
+            [0, 64, 0, 255],
+            [0, 0, 64, 255],
+            [0, 64, 0, 255]
+        ]
+    );
+    assert_eq!(drew, [true, true]);
 }
 
 #[test]
@@ -724,6 +947,74 @@ fn mod_pack_type_mismatch_uniform_and_unbound_pipeline_never_panic() {
         "expected mismatch diagnostic in notes: {:?}",
         post.notes
     );
+}
+
+#[test]
+#[ignore = "daily"]
+fn mod_pack_frame_uniform_type_mismatch_draws_with_zero() {
+    use crate::mod_pipelines::{pack_program_requests_of, pack_runtime_specs_of};
+    use mod_api::{
+        Identifier, PackBinding, PackPassSlot, PackUniformDecl, PackUniformType, PipelineBlend,
+        RenderPipeline, WorldDepth,
+    };
+
+    let _gpu_guard = crate::gfx::test_gpu::lock();
+    let gpu = Gpu::new().expect("graphics adapter required for mod pack frame uniform draws");
+    let id = Identifier::parse("example:mod_uniform").unwrap();
+    let pipelines = [RenderPipeline::new(
+        id.clone(),
+        id,
+        PipelineBlend::Opaque,
+        WorldDepth::ThroughWalls,
+    )
+    .pack_binding(
+        PackBinding::new()
+            .program("mod_terrain")
+            .slot(PackPassSlot::AfterOpaqueGbuffers)
+            .frame_uniform(PackUniformDecl::new("modScale", PackUniformType::Int)),
+    )];
+    let runtime = pack_runtime_specs_of(&pipelines);
+
+    // Green marks a draw. Red is zero for the mismatched uniform and 1 for the exact staged int
+    // in the control (bytes 0 and 255). Neither pack default is zero: 0.25 * 255 = 63.75 and
+    // 0.75 * 255 = 191.25. The staged int's bits encode 1.0 as float, so a raw write also fails.
+    for (decl, red, expected) in [
+        ("float modScale = 0.25", "modScale", 0),
+        ("int modScale", "modScale == 1065353216 ? 1.0 : 0.0", 255),
+    ] {
+        let fragment = format!(
+            "#version 120\n/* DRAWBUFFERS:0 */\nuniform {decl};\n\
+             void main(){{gl_FragData[0]=vec4({red},1.0,0.0,1.0);}}"
+        );
+        let files = [
+            ("shaders.properties", "uniform.float.modScale = 0.75\n"),
+            (
+                "mod_terrain.vsh",
+                "#version 120\nvoid main(){gl_Position=vec4(gl_Vertex.xyz,1.0);}",
+            ),
+            ("mod_terrain.fsh", fragment.as_str()),
+            ("final.vsh", VERTEX),
+            (
+                "final.fsh",
+                "#version 120\nuniform sampler2D colortex0;varying vec2 uv;\n\
+                 /*\nconst int colortex0Format = RGBA8;\n*/\n\
+                 void main(){gl_FragColor=texture2D(colortex0,uv);}",
+            ),
+        ]
+        .map(|(name, source)| (name.into(), source.into()))
+        .into();
+        let (mut post, color, depth) =
+            load_with_mods(&gpu, files, pack_program_requests_of(&pipelines), &runtime);
+        assert!(post.is_mod_pipeline_bound(0), "{decl}: {:?}", post.notes);
+        assert!(post.set_mod_uniform("modScale", ModUniformValue::Int(0x3f80_0000)));
+        let (vertices, indices) = mod_quad_buffers(&gpu.device, -0.5);
+        post.set_mod_draws(vec![ModDrawChunk::quads(0, vertices, indices, 0..1)]);
+        assert_eq!(
+            run_frame_and_sample_center(&gpu, &mut post, &color, &depth),
+            [expected, 255, 0, 255],
+            "{decl}",
+        );
+    }
 }
 
 /// A mod pipeline bound to the pack's shadow pass draws into the shadow map, and its geometry
@@ -1330,6 +1621,10 @@ fn mod_pack_indirect_draw_with_a_count_buffer_draws_only_the_counted_commands() 
             &depth,
             false,
             &[[SIZE[0] / 4, SIZE[1] / 2], [SIZE[0] * 3 / 4, SIZE[1] / 2]],
+            (
+                WorldBoundaries::default(),
+                |_: &mut wgpu::CommandEncoder, _: WorldBoundary<'_>| false,
+            ),
         )
     };
     let both = draw(None);
