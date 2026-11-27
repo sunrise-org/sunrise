@@ -2,7 +2,9 @@
 use crate::game::ClientGame;
 use mod_api::__private::game::*;
 use mod_api::{DragKind, LevelReadError, MenuClick, MenuRef, MouseButton, PlayerRef, SwapWith};
+use sunrise_gameplay_common::game::transactions::{After, TransactionsGameExt as _};
 use sunrise_items::items::ItemStack;
+use sunrise_protocol::packets::play::{ContainerClose, Serverbound};
 use sunrise_sim::menu::Input;
 
 impl ClientGame<'_> {
@@ -67,9 +69,29 @@ impl ClientGame<'_> {
         {
             return false;
         }
-        self.close_container_client();
-        self.set_screen(super::Screen::Playing);
-        self.capture(true);
+        if !self.has_level_transaction() {
+            self.close_container_client();
+            self.set_screen(super::Screen::Playing);
+            self.capture(true);
+            return true;
+        }
+
+        // The validated handle carries the player/level identity, window (including
+        // the player's inventory at window 0), and generation of this opening.
+        let packet = Serverbound::ContainerClose(ContainerClose {
+            container: menu.fields().window,
+        });
+        let canceled = self.client_packet_send_canceled(&packet);
+        let prepared = self
+            .client
+            .remote
+            .as_ref()
+            .filter(|remote| !canceled && remote.joined && remote.reconfiguring.is_none())
+            .and_then(|remote| {
+                let (_, generation) = remote.session.hold_incarnation()?;
+                remote.session.prepare_held_play(packet, generation).ok()
+            });
+        self.after_commit(After::ClientMenuClose { menu, prepared });
         true
     }
 
