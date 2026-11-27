@@ -458,6 +458,7 @@ impl MobTypes {
                 flags.not_in_peaceful = !allowed;
             }
             flags.entity_tag_slot = entity_ids.binary_search(&id).ok();
+            flags.spawn_category = Some(spawn_selection::Category::from_name(&category));
             let passenger_attachments =
                 riders::parse_passenger_attachments(&t["passenger_attachments"]);
             let sound_overrides = entity_sounds::Sounds::load(&id, t)?;
