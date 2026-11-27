@@ -64,10 +64,24 @@ fn two_ms_more_on_one_span_is_slower_with_two_inside_the_interval_and_the_rest_u
     };
     assert!(line("s:tick_lan").ends_with("slower"), "{text}");
     assert!(line("s:streaming").ends_with("~ within noise"), "{text}");
+    let mut lines = text.lines();
     assert!(
-        text.starts_with(
-            "A a.hzperf  B b.hzperf  (12 vs 12 blocks of 5 s, server tick thread, ms/tick)\n"
-        ),
+        lines
+            .next()
+            .unwrap()
+            .starts_with("workload server A a.hzperf: "),
+        "{text}"
+    );
+    assert!(
+        lines
+            .next()
+            .unwrap()
+            .starts_with("workload server B b.hzperf: "),
+        "{text}"
+    );
+    assert_eq!(
+        lines.next(),
+        Some("A a.hzperf  B b.hzperf  (12 vs 12 blocks of 5 s, server tick thread, ms/tick)"),
         "{text}"
     );
 }
