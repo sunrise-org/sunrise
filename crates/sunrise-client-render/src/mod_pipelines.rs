@@ -239,53 +239,6 @@ pub fn register(
         .map_err(|_| RegistrationError::AlreadyPublished)
 }
 
-/// Built-in Iris/OptiFine pack GLSL sampler, image, and uniform names that mod `PackBinding`
-/// declarations may not claim. Samplers, images, and value uniforms share GLSL's `uniform`
-/// identifier namespace, so both `PackDepthTarget` samplers and `PackUniformDecl` names are
-/// checked against this full table.
-fn reserved_pack_identifier(name: &str) -> Option<&'static str> {
-    let is_color_img = name
-        .strip_prefix("colorimg")
-        .and_then(|n| n.parse::<usize>().ok())
-        .is_some_and(|n| n < sunrise_shaders::BUFFERS);
-    let is_shadow_img = name
-        .strip_prefix("shadowcolorimg")
-        .and_then(|n| n.parse::<usize>().ok())
-        .is_some_and(|n| n < 8);
-    if sunrise_shaders::buffer_index(name).is_some()
-        || sunrise_shaders::shadow_color(name).is_some()
-        || is_color_img
-        || is_shadow_img
-        || matches!(
-            name,
-            "depthtex0"
-                | "depthtex1"
-                | "depthtex2"
-                | "gdepthtex"
-                | "shadowtex0"
-                | "shadowtex1"
-                | "shadowtex0HW"
-                | "shadowtex1HW"
-                | "watershadow"
-                | "shadow"
-                | "noisetex"
-                | "texture"
-                | "gtexture"
-                | "tex"
-                | "lightmap"
-                | "normals"
-                | "specular"
-                | sunrise_shaders::WATER_MASK
-        )
-    {
-        return Some("built-in shader-pack sampler or image");
-    }
-    if sunrise_render_shaderpack::pack_uniforms::NAMES.contains(&name) {
-        return Some("built-in shader-pack uniform");
-    }
-    None
-}
-
 /// Validate GLSL syntax, reserved Iris/OptiFine names, and cross-mod uniqueness across every
 /// registered `RenderPipeline::pack_binding`. Multiple pipelines owned by the same mod may
 /// share one `PackDepthTarget.id` (with identical samplers), compatible defines, and typed
@@ -336,7 +289,7 @@ fn validate_pack_bindings(pipelines: &[RenderPipeline]) -> Result<(), String> {
                 depth_targets.insert(id, (owner, target));
             }
             for sampler in depth_samplers.iter().chain(opaque_depth_samplers.iter()) {
-                if let Some(kind) = reserved_pack_identifier(sampler) {
+                if let Some(kind) = sunrise_shaders::reserved_pack_identifier(sampler) {
                     return Err(format!(
                         "Reserved pack sampler name {:?} on render pipeline {} (registered by {}) collides with a {kind}",
                         sampler, pipeline.id, owner
@@ -377,7 +330,7 @@ fn validate_pack_bindings(pipelines: &[RenderPipeline]) -> Result<(), String> {
             let names = std::iter::once((uniform.name.as_str(), false))
                 .chain(uniform.previous_name.as_deref().map(|n| (n, true)));
             for (name, is_previous) in names {
-                if let Some(kind) = reserved_pack_identifier(name) {
+                if let Some(kind) = sunrise_shaders::reserved_pack_identifier(name) {
                     return Err(format!(
                         "Reserved pack uniform name {:?} on render pipeline {} (registered by {}) collides with a {kind}",
                         name, pipeline.id, owner

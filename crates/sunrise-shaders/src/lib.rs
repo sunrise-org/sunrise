@@ -63,6 +63,7 @@ pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
 pub use properties::{Entry, Note, Properties, Tonemap};
 pub use reserved::{
     GBUFFERS_CENTER_DEPTH, GBUFFERS_FOG_MODE, GBUFFERS_FOG_SHAPE, PACK_UNIFORM_NAMES,
+    implicit_input_type, reserved_pack_identifier,
 };
 pub use screens::{Item as ScreenItem, Screens};
 pub use textures::{

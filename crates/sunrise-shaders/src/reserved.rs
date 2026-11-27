@@ -187,3 +187,65 @@ pub const PACK_UNIFORM_NAMES: &[&str] = &[
     "isElytraFlying",
     "cloudHeight",
 ];
+
+/// Built-in Iris/OptiFine pack GLSL sampler, image, and uniform names that mod `PackBinding`
+/// declarations may not claim. Samplers, images, and value uniforms share GLSL's `uniform`
+/// identifier namespace, so both `PackDepthTarget` samplers and `PackUniformDecl` names are
+/// checked against this full table.
+pub fn reserved_pack_identifier(name: &str) -> Option<&'static str> {
+    let is_color_img = name
+        .strip_prefix("colorimg")
+        .and_then(|n| n.parse::<usize>().ok())
+        .is_some_and(|n| n < crate::BUFFERS);
+    let is_shadow_img = name
+        .strip_prefix("shadowcolorimg")
+        .and_then(|n| n.parse::<usize>().ok())
+        .is_some_and(|n| n < crate::SHADOW_COLORS);
+    if crate::buffer_index(name).is_some()
+        || crate::shadow_color(name).is_some()
+        || is_color_img
+        || is_shadow_img
+        || matches!(
+            name,
+            "depthtex0"
+                | "depthtex1"
+                | "depthtex2"
+                | "gdepthtex"
+                | "shadowtex0"
+                | "shadowtex1"
+                | "shadowtex0HW"
+                | "shadowtex1HW"
+                | "watershadow"
+                | "shadow"
+                | "noisetex"
+                | "texture"
+                | "gtexture"
+                | "tex"
+                | "lightmap"
+                | "normals"
+                | "specular"
+                | crate::WATER_MASK
+        )
+    {
+        return Some("built-in shader-pack sampler or image");
+    }
+    if PACK_UNIFORM_NAMES.contains(&name) {
+        return Some("built-in shader-pack uniform");
+    }
+    None
+}
+
+/// The type of a game input a vertex stage may read without declaring it: terrain's
+/// `mc_chunkFade`, and the core-profile vertex attributes (`vaPosition`...) that a
+/// `#version 130` line program reads as it would in a core-profile one (Complementary
+/// Reimagined r5.9.3's `gbuffers_line`).
+pub fn implicit_input_type(name: &str) -> Option<&'static str> {
+    Some(match name {
+        "mc_chunkFade" => "float",
+        "vaPosition" | "vaNormal" => "vec3",
+        "vaColor" => "vec4",
+        "vaUV0" => "vec2",
+        "vaUV1" | "vaUV2" => "ivec2",
+        _ => return None,
+    })
+}

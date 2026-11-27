@@ -312,26 +312,11 @@ const GBUFFERS_MATRICES: &str = "    hz_ModelViewMatrix = gbufferModelView;\n   
      mat4 hz_light = mat4(vec4(1.0 / 256.0, 0.0, 0.0, 0.0), vec4(0.0, 1.0 / 256.0, 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0), vec4(1.0 / 32.0, 1.0 / 32.0, 0.0, 1.0));\n    \
      hz_TextureMatrix = mat4[8](mat4(1.0), hz_light, hz_light, mat4(1.0), mat4(1.0), mat4(1.0), mat4(1.0), mat4(1.0));\n";
 
-/// The type of a game input a vertex stage may read without declaring it: terrain's
-/// `mc_chunkFade`, and the core-profile vertex attributes (`vaPosition`...) that a
-/// `#version 130` line program reads as it would in a core-profile one (Complementary
-/// Reimagined r5.9.3's `gbuffers_line`).
-fn implicit_input_type(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "mc_chunkFade" => "float",
-        "vaPosition" | "vaNormal" => "vec3",
-        "vaColor" => "vec4",
-        "vaUV0" => "vec2",
-        "vaUV1" | "vaUV2" => "ivec2",
-        _ => return None,
-    })
-}
-
 /// The game inputs `vertex` reads without declaring them, as (name, value, type): each of
-/// `given` (`GbuffersInputs::attributes`) with an `implicit_input_type` that the stage names and
-/// doesn't declare (`scanned`, the stage's scan): an attribute (`in`, `attribute`), a uniform,
-/// a constant, a variable, a struct, a block, its instance or, without one, its member of that
-/// name keeps its own.
+/// `given` (`GbuffersInputs::attributes`) with an [`crate::reserved::implicit_input_type`] that
+/// the stage names and doesn't declare (`scanned`, the stage's scan): an attribute (`in`,
+/// `attribute`), a uniform, a constant, a variable, a struct, a block, its instance or, without
+/// one, its member of that name keeps its own.
 fn implicit_inputs<'a>(
     given: &'a [(String, String)],
     vertex: &Preprocessed,
@@ -340,7 +325,11 @@ fn implicit_inputs<'a>(
     given
         .iter()
         .filter_map(|(name, value)| {
-            Some((name.as_str(), value.as_str(), implicit_input_type(name)?))
+            Some((
+                name.as_str(),
+                value.as_str(),
+                crate::reserved::implicit_input_type(name)?,
+            ))
         })
         .filter(|(name, _, _)| {
             uses_name(vertex.code(), name)
