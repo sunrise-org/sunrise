@@ -57,9 +57,6 @@ impl crate::game::ServerGame<'_> {
                 let outcome = self.apply_world_options_server(&before, &wanted);
                 let _ = done.send(outcome);
             }
-            OwnerRequest::LodSource(dim, reply) => {
-                let _ = reply.send(self.lod_source_in(dim));
-            }
             OwnerRequest::SetPregen(enabled) => self.set_pregen_commands(enabled),
             OwnerRequest::ReloadMods(reload) => self.apply_mods_reload(*reload),
             OwnerRequest::StartServerCapture(target, live, reply) => {

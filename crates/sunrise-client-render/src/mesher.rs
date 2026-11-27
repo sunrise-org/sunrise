@@ -127,9 +127,6 @@ fn round_to_u16(v: f32) -> u16 {
 pub(crate) fn baked_uv(uv: [[f32; 2]; 4]) -> [[u16; 2]; 4] {
     uv.map(|uv| uv.map(|v| round_to_u16(v * UV_STEPS)))
 }
-/// Fixed-point steps per block of distant-terrain UVs (`TerrainVertex::tiled`),
-/// which span `[0, 2048)`: merged faces repeat their sprite once per block.
-pub const TILED_UV_STEPS: f32 = 32.0;
 impl TerrainVertex {
     pub fn new(pos: [f32; 3], uv: [f32; 2], layer: u16, color: u32, light: u16) -> Self {
         Self {
@@ -152,17 +149,6 @@ impl TerrainVertex {
         Self {
             pos,
             uv,
-            layer,
-            light,
-            color,
-        }
-    }
-    /// A vertex of a merged distant-terrain face, its UV in blocks from the
-    /// face's corner. Drawn with an instance UV scale of `1 / TILED_UV_STEPS`.
-    pub fn tiled(pos: [f32; 3], uv: [f32; 2], layer: u16, color: u32, light: u16) -> Self {
-        Self {
-            pos,
-            uv: uv.map(|v| round_to_u16(v * TILED_UV_STEPS)),
             layer,
             light,
             color,
@@ -443,7 +429,7 @@ impl TerrainSource {
 pub struct SectionMesh {
     pub solid: Vec<TerrainVertex>,
     /// One source per quad when a shader pack meshes terrain; independent of its sprite
-    /// and geometry. Empty on native/default meshes and on distant terrain.
+    /// and geometry. Empty on native/default meshes.
     pub solid_sources: Vec<TerrainSource>,
     /// The buckets `solid` is sorted in by the side its quads face: empty
     /// until `sort_solid`, which the meshing workers call; `solid` is in
@@ -451,10 +437,6 @@ pub struct SectionMesh {
     pub sides: Sides,
     pub translucent: Vec<TerrainVertex>,
     pub translucent_sources: Vec<TerrainSource>,
-    /// Whether `packed` holds far tile records (`lod::packed`) rather than
-    /// section records (`mesher::packed`): the two are read apart, by the base
-    /// vertex their draws use.
-    pub packed_far: bool,
     /// `solid` in the compact layout (`packed`), when the renderer reads it and it is
     /// smaller; empty otherwise. Made by `sort_solid`.
     pub packed: Vec<[u32; 6]>,
@@ -488,7 +470,6 @@ impl Default for SectionMesh {
             translucent: Vec::new(),
             translucent_sources: Vec::new(),
             packed: Vec::new(),
-            packed_far: false,
             solid_tints: Vec::new(),
             visibility: ALL_VISIBLE,
             block_entities: Vec::new(),
@@ -525,7 +506,6 @@ impl SectionMesh {
         self.translucent.clear();
         self.translucent_sources.clear();
         self.packed.clear();
-        self.packed_far = false;
         self.solid_tints.clear();
         self.block_entities.clear();
         self.lights.clear();
@@ -566,7 +546,6 @@ impl SectionMesh {
         );
         self.bounds = self.compute_bounds();
         self.packed.clear();
-        self.packed_far = false;
         if compact && quads > 0 && self.solid_tints.len() == quads {
             packed::layout_into(&self.solid, &self.solid_tints, &mut self.packed);
         }
@@ -1246,10 +1225,6 @@ impl MeshTables {
             .copied()
             .unwrap_or(false)
     }
-    /// HDR output's tier of a state (`hdr_tier`), for what meshes it elsewhere (the LOD tiles).
-    pub fn hdr_tier(&self, state: BlockStateId) -> u8 {
-        self.info.get(state.0 as usize).map_or(0, |i| i.tier)
-    }
     pub fn facts(&self, state: BlockStateId) -> Option<MeshFacts> {
         let i = self.info.get(state.0 as usize)?;
         Some(MeshFacts {
@@ -1636,8 +1611,7 @@ fn fill_run(
         }
         // A neighbour not loaded continues this chunk's edge column. As lit
         // air, the outermost chunks' water drew a wall toward it (fluids show
-        // both sides), a light sheet in the water where far terrain carries
-        // on. Vanilla draws no chunk without its neighbours.
+        // both sides). Vanilla draws no chunk without its neighbours.
         Source::Missing => match center {
             Some(c) => {
                 let ez = z.clamp(0, 15);

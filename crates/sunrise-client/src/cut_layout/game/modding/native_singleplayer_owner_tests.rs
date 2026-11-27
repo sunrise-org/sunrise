@@ -81,7 +81,6 @@ fn open_hub(game: &mut sunrise_gameplay::game::ServerGame<'_>, role: ExecutionRo
     let net = NetConfig {
         listen: false,
         announce: false,
-        lod_distance: 0,
         singleplayer_profile,
         ..NetConfig::lan(0, String::new(), 4)
     };

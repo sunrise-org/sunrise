@@ -279,10 +279,8 @@ impl Renderer {
             },
             colored_count: [
                 frame.colored_lights.len().min(crate::dynamic_light::MAX) as u32,
-                // PvP & HUD's hit colour: entity.wgsl's hurt texel, 0 for vanilla's.
-                frame.pvp.hurt_texel,
-                // PvP & HUD's glint colour: entity.wgsl's `tinted_glint`, 0 for vanilla's.
-                frame.pvp.glint,
+                0,
+                0,
                 0,
             ],
             emissive_layers: {
@@ -433,7 +431,6 @@ impl Renderer {
             now: Instant::now(),
             fade_ms,
             uploaded: &self.section_uploaded,
-            retiring: &self.lod_retiring,
         };
         if !frame.title
             && let Some(gpu) = &mut self.gpu_culling
@@ -457,23 +454,17 @@ impl Renderer {
         }
         self.frame_serial += 1;
         let serial = self.frame_serial;
-        // GPU frames' statistics come back a frame or a few later: the near table's
-        // (`GpuCulling::collect`) and sourced geometry's, which drew only in frames the
-        // near pass drew, added to the same frame's counts. The halves land in different
-        // polls when one pass's ring held no readback free for the frame, and half a
-        // frame's counts undercount it, so they publish together (`collect_stats`).
-        if let Some(gpu) = &mut self.gpu_culling {
-            let near = gpu.collect();
-            let sourced = self.sourced.collect();
-            if let Some((frame, stats)) = self.collect_stats(near, sourced) {
-                self.show_stats(frame, stats);
-            }
+        if let Some((frame, stats)) = self
+            .gpu_culling
+            .as_mut()
+            .and_then(|gpu| gpu.collect().pop())
+        {
+            self.show_stats(frame, stats);
         }
         // The walk reads the graph GPU culling is given (checked after it).
         #[cfg(debug_assertions)]
         let graph_given = self.occlusion.generation();
-        let sourced_frame;
-        (gpu_frame, sourced_frame) = self.prepare_gpu_culling(
+        gpu_frame = self.prepare_gpu_culling(
             gpu_frame,
             camera,
             &view,
@@ -484,15 +475,7 @@ impl Renderer {
             &mut encoder,
         );
         self.gpu_frame = gpu_frame;
-        self.gpu_sourced_frame = sourced_frame;
         let reachable = &self.occlusion;
-        let cutout = &self.lod_cutout;
-        // Sections fading out (`leave_section`) are past the render distance:
-        // drawn there until they have, or they popped out at once.
-        self.lod_leaving_scratch.clear();
-        self.lod_leaving_scratch
-            .extend(self.lod_leaving.iter().map(|&((x, _, z), _)| (x, z)));
-        let leaving = &self.lod_leaving_scratch;
         let mut visible = std::mem::take(&mut self.visible);
         visible.clear();
         let lend_sections = !frame.title && hooks.is_some();
@@ -506,10 +489,6 @@ impl Renderer {
                 radius,
                 &view,
                 |k| !bounded || reachable.contains(k),
-                |x, z| {
-                    (!cutout.is_empty() && cutout.contains(&(x, z)))
-                        || (!leaving.is_empty() && leaving.contains(&(x, z)))
-                },
                 gpu_frame,
                 &mut visible,
                 lend_sections.then_some(resident::PrimarySelection {
@@ -551,45 +530,8 @@ impl Renderer {
             hooks.on_frame_graph_setup(&self.visible_renderable_sections, hook_oit);
         }
         let now = std::time::Instant::now();
-        let mut visible_lods = std::mem::take(&mut self.visible_lods);
-        visible_lods.clear();
-        // The animated layers this frame draws, marked as each list is made.
-        let mut animated = self
-            .animated_textures
-            .then_some(&mut self.active_animated_layers);
-        if let Some(active) = &mut animated {
-            active.fill(0);
-        }
         if frame.title {
             visible.clear();
-        } else {
-            // Far tiles take the frustum test a cell at a time: a cell out of
-            // view leaves every tile in it out, and one wholly in view leaves
-            // them only their distance. The sort below is the same either way.
-            // The walk's complete set drives the water's re-sort, whatever solid
-            // draws the GPU owns; a frame the sourced-geometry pass draws in has
-            // the CPU draw and instance only what it left it.
-            let lods = &self.lods;
-            let mut far = std::mem::take(&mut self.translucent_lods);
-            far.clear();
-            let mut list = |tile| far.push(tile);
-            sourced_geometry::gpu::walk_tiles(
-                &self.lod_cells,
-                lods,
-                camera,
-                &view,
-                now,
-                animated,
-                &mut list,
-            );
-            far.sort_unstable_by_key(|v| (v.distance, v.key));
-            if sourced_frame {
-                visible_lods.extend(far.iter().filter(|v| self.sourced.lists(v.key)).cloned());
-                // The filter keeps the walk's order.
-            } else {
-                visible_lods.append(&mut far);
-            }
-            self.translucent_lods = far;
         }
         let mut shadow_visible = std::mem::take(&mut self.shadow_visible);
         shadow_visible.clear();
@@ -645,7 +587,8 @@ impl Renderer {
             }
         }
         if self.animated_textures {
-            // The far tiles' layers were marked as they were listed.
+            // The animated layers this frame draws, marked as each list is walked.
+            self.active_animated_layers.fill(0);
             let lists = self.world_views.sections.sections();
             for v in visible.iter().chain(&shadow_visible).chain(lists) {
                 let s = self.sections.get(v.slot);
@@ -657,7 +600,7 @@ impl Renderer {
             // the sections GPU culling draws: every layer animates.
             self.animate(&mut encoder, frame.ticks, !frame.title && !gpu_frame);
         }
-        let listed = visible.len() + visible_lods.len();
+        let listed = visible.len();
         let viewed = listed + shadow_visible.len();
         let instances = viewed + self.world_views.sections.sections().count();
         if instances as u64 > self.instance_capacity {
@@ -673,19 +616,10 @@ impl Renderer {
         }
         self.ray_prepare(&mut encoder, camera, frame.title);
         self.origins.clear();
-        let (sections, retiring) = (&self.sections, &self.lod_retiring);
         laps.lap("r_cameras");
         // `LevelRenderer.extractSectionDrawGroups`: each section's `getVisibility`. Once
         // nothing is fading (the usual frame), every section is whole without a lookup.
         let fading_in = self.sections_fading_in(fade_ms, now);
-        let fading_over_lods = self.sections_fading_over_lods(now);
-        let fade_code = move |section: &SectionGpu, key: &SectionKey| {
-            if fading_over_lods {
-                section.fade(retiring.contains(key))
-            } else {
-                0
-            }
-        };
         let uploaded = &self.section_uploaded;
         let visibility = move |key: SectionKey| {
             if !fading_in {
@@ -696,20 +630,18 @@ impl Renderer {
         self.origins.extend(
             visible
                 .iter()
-                .map(|v| {
-                    let code = fade_code(sections.get(v.slot), &v.key);
-                    section_instance(v.origin, code, visibility(v.key))
-                })
-                .chain(visible_lods.iter().map(|v| lod::instance(v.origin, v.fade)))
+                .map(|v| section_instance(v.origin, visibility(v.key)))
                 .chain(
                     shadow_visible
                         .iter()
-                        .map(|v| section_instance(v.origin, 0, visibility(v.key))),
+                        .map(|v| section_instance(v.origin, visibility(v.key))),
                 )
-                .chain(self.world_views.sections.sections().map(|v| {
-                    let code = fade_code(sections.get(v.slot), &v.key);
-                    section_instance(v.origin, code, visibility(v.key))
-                })),
+                .chain(
+                    self.world_views
+                        .sections
+                        .sections()
+                        .map(|v| section_instance(v.origin, visibility(v.key))),
+                ),
         );
         if !self.origins.is_empty() {
             self.uploads.buffer(
@@ -747,15 +679,12 @@ impl Renderer {
         self.phase2_runs.clear();
         // On Metal, phase 1 goes the opaque quads of every list, then the cutout
         // ones (`Part`), each solid pass drawing its own: `[..opaque_draws]`,
-        // then the rest; phase 2 likewise. A fading list's quads all draw in the
-        // cutout pass.
+        // then the rest; phase 2 likewise.
         let split_solid = self.info.backend == wgpu::Backend::Metal;
-        let parts = |fading: bool| -> &'static [(u8, Quads)] {
-            match (split_solid, fading) {
-                (false, _) => &[(0, Quads::All)],
-                (true, false) => &[(0, Quads::Opaque), (1, Quads::Cutout)],
-                (true, true) => &[(1, Quads::All)],
-            }
+        let parts: &[(u8, Quads)] = if split_solid {
+            &[(0, Quads::Opaque), (1, Quads::Cutout)]
+        } else {
+            &[(0, Quads::All)]
         };
         let (mut opaque_draws, mut phase2_opaque) = (0, 0);
         debug_assert!(
@@ -764,9 +693,7 @@ impl Renderer {
         );
         // In a GPU frame the GPU draws the solid quads of the whole sections within the
         // render distance that have records (`SectionGpu::gpu_draws_solid`), and the walk
-        // listed those among them with translucent quads. Here stay those fading in or out
-        // (`gpu_fading`), those without a record and those past the distance (far terrain's
-        // cutout, and columns leaving).
+        // listed those among them with translucent quads. Here stay those fading in (`gpu_fading`) and those without a record.
         let from = resident::camera_column(camera);
         // Listed sections whose solid quads the pass draws: it counts them among the
         // sections it kept.
@@ -791,7 +718,6 @@ impl Renderer {
             };
             let instances = u32::from(first_phase);
             let mut indices = 0;
-            let parts = parts(fade_code(s, &v.key) != 0);
             // Each part's (group, first draw, draws).
             let mut runs = [(0, 0, 0); 2];
             for (run, &(group, part)) in runs.iter_mut().zip(parts) {
@@ -853,75 +779,6 @@ impl Renderer {
                 }
             }
         }
-        // Distant terrain tiles are occlusion tested as sections are, with their meshes'
-        // bounds, but for those fading or with a stand-in (`lod::Tile::cull_bounds`).
-        // The sourced-geometry pass draws the solid quads of the whole meshes it has records
-        // of; listed for their water, their instance stays.
-        let mut sourced_gpu_solid = 0;
-        for (i, v) in visible_lods.iter().enumerate() {
-            if sourced_frame && self.sourced.draws_solid(v.key) {
-                sourced_gpu_solid += 1;
-                continue;
-            }
-            let tile = &self.lods[&v.key];
-            let s = tile.drawn();
-            let index = visible.len() + i;
-            let tested = cull.as_ref().and(tile.cull_bounds(v.fade));
-            let slot = cull::TILE | tile.cull_slot;
-            let first_phase = tested.is_none() || cull.as_ref().is_some_and(|c| c.first(slot));
-            let (draws, pages) = if first_phase {
-                (&mut self.draws, &mut self.draw_pages)
-            } else {
-                (&mut self.phase2_draws, &mut self.phase2_pages)
-            };
-            let instances = u32::from(first_phase);
-            let mut indices = 0;
-            let parts = parts(v.fade != 0);
-            let mut runs = [(0, 0, 0); 2];
-            for (run, &(group, part)) in runs.iter_mut().zip(parts) {
-                let start = draws.len();
-                facing_runs_from(&s.sides, eye, v.origin, part, |first, quads| {
-                    indices += quads * 6;
-                    let base = s.solid_base() + first * 4;
-                    draws.push([quads * 6, instances, 0, base, index as u32]);
-                    pages.push((s.page, None));
-                });
-                *run = (group, start, draws.len() - start);
-            }
-            let runs = &runs[..parts.len()];
-            let (Some(bounds), Some(c)) = (tested, &mut cull) else {
-                for &(group, start, len) in runs {
-                    if group == 0 {
-                        opaque_draws += len;
-                    }
-                    self.solid_runs
-                        .push_in(group, v.distance, s.page, start, len, [0; 3]);
-                }
-                continue;
-            };
-            if first_phase {
-                for &(group, start, len) in runs {
-                    if group == 0 {
-                        opaque_draws += len;
-                    }
-                    self.solid_runs
-                        .push_in(group, v.distance, s.page, start, len, [0; 3]);
-                }
-                c.drawn(index, slot, indices, bounds);
-            } else {
-                let total: usize = runs.iter().map(|r| r.2).sum();
-                if let Some(test) = c.deferred(index, slot, total, indices, bounds) {
-                    for &(group, start, len) in runs {
-                        if group == 0 {
-                            phase2_opaque += len;
-                        }
-                        let tag = [test, u32::from(group), 0];
-                        self.phase2_runs
-                            .push_in(group, v.distance, s.page, start, len, tag);
-                    }
-                }
-            }
-        }
         // Phase 2's draws are tested where grouping left them.
         let runs = self
             .phase2_runs
@@ -959,14 +816,7 @@ impl Renderer {
             && rendered_eye.is_some()
             && !pack_terrain
             && self.world_views.sections.sections().next().is_none();
-        // The re-sort's own complete set: the near sections and every far tile in view,
-        // so its budget and rotation are the same whichever solid draws the GPU owns.
-        let far = if sourced_frame {
-            &self.translucent_lods
-        } else {
-            &visible_lods
-        };
-        let rotation = Rotation::new(visible.len(), far.len(), self.translucency_cursor);
+        let rotation = Rotation::new(visible.len(), self.translucency_cursor);
         let eye = camera + rendered_eye.map_or(DVec3::ZERO, |e| e.as_dvec3());
         for (i, v) in visible.iter().enumerate().rev() {
             let s = self.sections.get_mut(v.slot);
@@ -1014,59 +864,6 @@ impl Renderer {
                     ));
                 }
             }
-        }
-        // Sections went back to front (`visible` is sorted by distance, then
-        // key): tiles' water only needs sorting in when there is some. The walk's
-        // complete set is the rotation's; a listed tile's instance slot is its
-        // place in what the CPU draws (`visible_lods`), which the tiles whose
-        // solid quads the pass drew whole leave out of.
-        let section_translucent = self.translucent_draws.len();
-        let far_water = FarWater::new(far, &visible_lods, rotation);
-        for (i, instance, scheduled) in far_water.entries() {
-            let v = &far[i];
-            let tile = self.lods.get_mut(&v.key).expect("visible resident tile");
-            let s = tile.drawn_mut();
-            if let Some((index_page, index_start)) = s.sorted_indices {
-                if (!s.sort.is_sorted() || scheduled)
-                    && let Some(indices) = s.sort.update_lod(
-                        camera.to_array(),
-                        v.key.origin(),
-                        &mut self.translucent_sorter,
-                    )
-                {
-                    self.uploads.buffer(
-                        &mut encoder,
-                        self.sorted_indices.buffer(index_page),
-                        index_start * 4,
-                        bytemuck::cast_slice(indices),
-                    );
-                }
-                let (page, first) = s.translucent_at;
-                self.translucent_draws.push((
-                    v.distance,
-                    instance,
-                    [
-                        s.translucent * 6,
-                        1,
-                        index_start as u32,
-                        first as u32,
-                        instance as u32,
-                    ],
-                    (page, Some(index_page)),
-                ));
-            }
-        }
-        // Near water and distant water share one back-to-front draw order.
-        if self.translucent_draws.len() > section_translucent {
-            // Distant water goes after the near chunks', and replaced tiles' after all: each is a
-            // hair behind the one before, so depth leaves it only where that one has none. Back to
-            // front together, a far tile's water under a near chunk's (one fading in, or brought
-            // into view by a longer render distance) blended twice and looked opaque. The cost: far
-            // water just behind near water shows no surface of its own there.
-            self.translucent_draws
-                .sort_unstable_by_key(|&(distance, instance, ..)| {
-                    far_water.order(distance, instance)
-                });
         }
         self.translucent_marks.clear();
         for (k, &(_, instance, draw, pages)) in self.translucent_draws.iter().enumerate() {
@@ -1163,11 +960,6 @@ impl Renderer {
         if gpu_frame && let Some(gpu) = &self.gpu_culling {
             section_draw_calls += gpu.draw_calls();
         }
-        // Sourced draw calls are counted here; its kept meshes and solid draws are read back
-        // separately (`Sourced::collect`).
-        if sourced_frame {
-            section_draw_calls += self.sourced.draw_calls();
-        }
         let debug_depth = frame.debug_lines.len() as u32;
         let debug_opaque = frame
             .debug_lines
@@ -1242,13 +1034,11 @@ impl Renderer {
                     lines.push(line);
                 }
             };
-            // A custom outline (PvP & HUD) takes the bright stroke's colour, scales both widths.
-            let (custom, scale) = frame.pvp.outline.map_or((None, 1.0), |(c, s)| (Some(c), s));
             if frame.outline_high_contrast {
-                stroke(0xff00_0000, 7.0 * scale, lines);
-                stroke(custom.unwrap_or(0xff57_ffe1), width * scale, lines);
+                stroke(0xff00_0000, 7.0, lines);
+                stroke(0xff57_ffe1, width, lines);
             } else {
-                stroke(custom.unwrap_or(0x6600_0000), width * scale, lines);
+                stroke(0x6600_0000, width, lines);
             }
             self.uploads
                 .buffer(&mut encoder, &self.outline, 0, bytemuck::cast_slice(lines));
@@ -2284,7 +2074,6 @@ impl Renderer {
                 flat.page_instances =
                     self.visbuf.is_some() && !pack_terrain && shadow_view.is_none();
                 let sections = &self.sections;
-                let lods = &self.lods;
                 let (sorted, lists) = (&self.sorted_indices, &self.world_views.sections);
                 let phase2 = self.cull.as_ref().filter(|_| culling).map(|c| &c.phase2);
                 crate::spans::time("flatten", || {
@@ -2306,16 +2095,11 @@ impl Renderer {
                             .chain(lists.sections())
                             .filter_map(|v| {
                                 let section = sections.get(v.slot);
-                                let code = fade_code(section, &v.key);
                                 Some((
                                     section.flat_id?,
-                                    section_instance(v.origin, code, visibility(v.key)),
+                                    section_instance(v.origin, visibility(v.key)),
                                 ))
-                            })
-                            .chain(visible_lods.iter().filter_map(|v| {
-                                let id = lods[&v.key].drawn().flat_id?;
-                                Some((id, lod::instance(v.origin, v.fade)))
-                            })),
+                            }),
                         |page| sorted.buffer(page).clone(),
                         self.own_timing.as_mut(),
                     )
@@ -2354,24 +2138,12 @@ impl Renderer {
         }
         // The frame's statistics (`show_stats`): a CPU frame's at once; a GPU frame's when the
         // pass's counts come back, with the CPU's part of it: the sections the walk listed but
-        // those whose solid quads the pass drew (it counts them), its draws and every call. A
-        // frame the sourced-geometry pass draws in counts the far tiles with the near part out:
-        // they go with its own counts, its kept records and their solid draws (the tiles whose
-        // water the CPU still draws are its kept records too, once).
-        let cpu = [
-            (if sourced_frame { visible.len() } else { listed }) - gpu_solid,
-            section_draws,
-            section_draw_calls,
-        ];
-        let sourced_cpu = [visible_lods.len() - sourced_gpu_solid, 0, 0];
+        // those whose solid quads the pass drew (it counts them), its draws and every call.
+        let cpu = [listed - gpu_solid, section_draws, section_draw_calls];
         if gpu_frame && let Some(gpu) = &mut self.gpu_culling {
             gpu.dispatch(&mut encoder, self.own_timing.as_mut());
         } else {
             self.show_stats(serial, cpu);
-        }
-        if sourced_frame {
-            self.sourced
-                .dispatch(&mut encoder, self.own_timing.as_mut());
         }
         if let Some(timer) = Self::pass_timer(&mut self.pack_post)
             && timer.is_some() != self.pass_timing
@@ -2849,9 +2621,6 @@ impl Renderer {
                         None => {
                             let gpu = self.gpu_culling.as_ref().filter(|_| gpu_frame);
                             let occluding = gpu.is_some_and(|g| g.occluding());
-                            // The sourced-geometry pass's draws after every near one and the
-                            // CPU's: it lies past the render distance (`sourced_geometry::gpu`).
-                            let sourced = sourced_frame.then_some(&self.sourced);
                             let page_group = |page: u32| {
                                 pulled
                                     .then(|| self.flat.as_ref()?.page_group(page))
@@ -2873,10 +2642,6 @@ impl Renderer {
                                         draws.len() as u32,
                                         pulled,
                                     );
-                                    if let Some(sourced) = sourced {
-                                        sourced.draw(&mut pass, &self.arena, page_group);
-                                        pass.set_vertex_buffer(1, self.instances.slice(..));
-                                    }
                                 }
                             }
                             // As cull.rs's arm: the boxes against phase 1's depth, then
@@ -2914,9 +2679,6 @@ impl Renderer {
                                         draws.len() as u32,
                                         pulled,
                                     );
-                                    if let Some(sourced) = sourced {
-                                        sourced.draw(&mut pass, &self.arena, page_group);
-                                    }
                                 }
                             }
                         }
@@ -4213,8 +3975,6 @@ impl Renderer {
                 gpu_frame,
                 serial,
                 cpu,
-                sourced_frame,
-                sourced_cpu,
                 lifts_world,
                 frame_graph,
             },
@@ -4240,7 +4000,6 @@ impl Renderer {
                 lifts_world,
                 started,
                 visible,
-                visible_lods,
                 shadow_visible,
             },
         )
@@ -4274,10 +4033,10 @@ pub(super) fn collect_shadow_sections<T>(
     if let Some(d) = v.unculled {
         let all = ShadowCull::new(Frustum::from_planes([glam::Vec4::W; 6])).with_reach(v.distance);
         let near = radius.min((d / 16.0).ceil() as i32);
-        sections.visible(camera, near, &all, |_| true, |_, _| false, shadow_visible);
+        sections.visible(camera, near, &all, |_| true, shadow_visible);
     }
     boxed.clear();
-    sections.visible(camera, radius, &light, |_| true, |_, _| false, boxed);
+    sections.visible(camera, radius, &light, |_| true, boxed);
     seen.clear();
     seen.extend(shadow_visible.iter().map(|s| s.key));
     shadow_visible.extend(boxed.drain(..).filter(|s| !seen.contains(&s.key)));
@@ -4317,24 +4076,18 @@ pub(super) fn entity_buffer_vertices(vertices: u64, max_buffer_size: u64) -> u64
     vertices.next_power_of_two().min(most).max(vertices)
 }
 
-/// A frame's re-sort rotation over the near sections' and the far tiles' combined translucent
-/// list (`LevelRenderer`: a rotating eighth of it, at least 15, besides the nearby sections). A
-/// far tile's place is past the near sections', at its index in the walk's complete set, so the
-/// window is the same whichever solid draws the GPU owns.
+/// A frame's re-sort rotation over the visible sections (`LevelRenderer`).
 #[derive(Clone, Copy, Debug)]
 pub(super) struct Rotation {
-    near: usize,
     count: usize,
     budget: usize,
     cursor: usize,
 }
 
 impl Rotation {
-    /// The rotation over `near` sections and `far` tiles, from the last frame's `cursor`.
-    pub(super) fn new(near: usize, far: usize, cursor: usize) -> Self {
-        let count = near + far;
+    /// The rotation over `count` sections, from the last frame's `cursor`.
+    pub(super) fn new(count: usize, cursor: usize) -> Self {
         Self {
-            near,
             count,
             budget: (count / 8).max(15).min(count),
             cursor: cursor % count.max(1),
@@ -4353,64 +4106,5 @@ impl Rotation {
 
     fn window(&self, combined: usize) -> bool {
         (combined + self.count - self.cursor) % self.count < self.budget
-    }
-}
-
-/// A frame's far water: the walk's complete set (`far`) and what the CPU draws of it (`listed`,
-/// which keeps the walk's order and leaves out the tiles whose solid quads the pass drew
-/// whole), with the frame's re-sort rotation. The rotation reads a tile's place in `far`, its
-/// instance slot and its blend tier read `listed`.
-pub(super) struct FarWater<'a> {
-    far: &'a [lod::Visible],
-    listed: &'a [lod::Visible],
-    rotation: Rotation,
-}
-
-impl<'a> FarWater<'a> {
-    pub(super) fn new(
-        far: &'a [lod::Visible],
-        listed: &'a [lod::Visible],
-        rotation: Rotation,
-    ) -> Self {
-        Self {
-            far,
-            listed,
-            rotation,
-        }
-    }
-
-    /// Each listed tile, as its index in `far`, its instance slot past the near sections', and
-    /// whether the rotation re-sorts it this frame.
-    pub(super) fn entries(&self) -> impl Iterator<Item = (usize, usize, bool)> + '_ {
-        let mut slot = 0usize;
-        let near = self.rotation.near;
-        self.far.iter().enumerate().filter_map(move |(i, v)| {
-            if self.listed.get(slot).is_some_and(|l| l.key == v.key) {
-                slot += 1;
-                Some((i, near + slot - 1, self.rotation.window(near + i)))
-            } else {
-                None
-            }
-        })
-    }
-
-    /// A translucent draw's place in the one back-to-front order of near and far water: its
-    /// blend tier first (the near sections' water 0, the far tiles' 1, a tile standing in for
-    /// its replacement 2, over them), then the farthest, then the highest instance.
-    pub(super) fn order(
-        &self,
-        distance: u64,
-        instance: usize,
-    ) -> (u32, std::cmp::Reverse<u64>, std::cmp::Reverse<usize>) {
-        let tier = match instance.checked_sub(self.rotation.near) {
-            None => 0,
-            Some(slot) if self.listed[slot].old => 2,
-            Some(_) => 1,
-        };
-        (
-            tier,
-            std::cmp::Reverse(distance),
-            std::cmp::Reverse(instance),
-        )
     }
 }

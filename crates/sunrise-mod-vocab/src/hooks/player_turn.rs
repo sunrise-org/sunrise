@@ -5,7 +5,7 @@ pub trait Hooks {
     /// `Entity.turn` units where `1.0` equals `0.15` degrees (`x` is yaw, `y` is pitch).
     /// Fires on the client for every relative look source that turns the player (mouse after
     /// `calculate_player_turn`, controller stick, arrow keys and control-socket `turn`),
-    /// skipping freecam and direct `ClientHost::set_local_rotation`. Edit `x` and `y` to
+    /// skipping direct `ClientHost::set_local_rotation`. Edit `x` and `y` to
     /// scale or adjust the turn; an axis whose `(delta as f32) * 0.15` is not finite logs a
     /// warning and keeps its original delta.
     #[hook(
@@ -21,8 +21,7 @@ pub trait Hooks {
 - `player_turn(player_entity_id, player_uuid, x, y)` runs on the client immediately before the
   local player's `Entity.turn(xo, yo)` applies a relative look delta, whether it came from the
   mouse (after `calculate_player_turn` and sensitivity/cinematic smoothing), a controller stick,
-  the keyboard turn keys, or `sunrise-ctl turn`. Freecam and direct `ClientHost::set_local_rotation`
-  skip it.
+  the keyboard turn keys, or `sunrise-ctl turn`. Direct `ClientHost::set_local_rotation` skips it.
 - `x` (yaw) and `y` (pitch) are in vanilla `Entity.turn` units (`(delta as f32) * 0.15` degrees),
   matching `Entity.turn(double xo, double yo)`. Listeners run in hook order and chain changes;
   if an axis's `(delta as f32) * 0.15` is not finite after dispatch, Sunrise logs a warning and

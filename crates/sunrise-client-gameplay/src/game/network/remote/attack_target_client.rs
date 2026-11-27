@@ -40,7 +40,6 @@ impl crate::game::ClientGame<'_> {
                 self.mobs[index].kind.id.trim_start_matches("minecraft:")
             );
             self.remote_sweep_event(&kind, true);
-            self.pvp_attacked(id, distance);
             self.remote_player_attack(index);
         } else if let Some(projectile) = self
             .common

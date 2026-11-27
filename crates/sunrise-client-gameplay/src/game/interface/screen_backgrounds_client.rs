@@ -27,7 +27,7 @@ impl crate::game::ClientGame<'_> {
         }
         // Camera.depthFar, as the renderer's far plane.
         let depth_far = sunrise_client::camera::depth_far(
-            self.terrain_distance(),
+            self.effective_render_distance(),
             self.client.settings.cloud_range,
         );
         if !self.client.border_renderer.prepare(
@@ -250,34 +250,10 @@ impl crate::game::ClientGame<'_> {
         debug_assert_eq!(self.slot_count(), self.slots().len());
         Some(self.screen_view(batch, screen))
     }
-    /// Whether the screen on top asked for the panorama through
-    /// [`sunrise_client::screen_draw::Backdrop`].
-    ///
-    /// This is the opt-in path for Sunrise's own screens: a screen sets its
-    /// `backdrop` and the renderer draws the panorama behind it, instead of
-    /// every such screen needing its own branch in `shows_panorama`. Vanilla
-    /// screens leave the backdrop at `None` and so never reach this.
-    ///
-    /// Only in a menu: in a world the panorama would replace the world the
-    /// player is standing in, which is not what any of these screens want.
-    pub(in crate::game::client_side) fn screen_wants_panorama(&self) -> bool {
-        use sunrise_client::screen_draw::Backdrop;
-        if self.common.player.is_some() {
-            return false;
-        }
-        self.client
-            .chat_ui
-            .options
-            .pack_screen
-            .as_ref()
-            .is_some_and(|p| p.backdrop == Backdrop::Panorama)
-    }
     /// The frame shows the title's panorama, not a level: the title screen, or a
     /// LevelLoadingScreen (Reason.OTHER), which draws it too.
     pub fn shows_panorama(&self) -> bool {
-        // The two cases that always had one: the title screen and waiting on
-        // a server. Left exactly as they were.
-        self.client.title.0.is_some() || self.remote_loading() || self.screen_wants_panorama()
+        self.client.title.0.is_some() || self.remote_loading()
     }
     /// `GameRenderer.update`'s `requestedPostEffects`: `end_of_frame` (a resource
     /// pack's own chain), then the server's `LocalPlayer.postEffects`, then the

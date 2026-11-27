@@ -9,7 +9,7 @@ use crate::registry::Registry;
 #[non_exhaustive]
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Place {
-    /// A row on Sunrise Settings' Extras page, after PvP & HUD's, that opens the page.
+    /// A row on Sunrise Settings' Extras page that opens the page.
     SunriseSettings,
     /// A full-width button of the pause menu, above Options. The
     /// pause menu has it only when a page registered there.

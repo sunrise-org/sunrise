@@ -230,8 +230,6 @@ pub(in crate::game) mod lan_configuration_tasks;
 pub(in crate::game) mod lan_crafting;
 #[path = "network/lan_entities.rs"]
 pub(in crate::game) mod lan_entities;
-#[path = "network/lan_far.rs"]
-pub(in crate::game) mod lan_far;
 #[path = "network/lan_menus.rs"]
 pub(in crate::game) mod lan_menus;
 #[path = "network/lan_mobs.rs"]

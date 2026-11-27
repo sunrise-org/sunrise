@@ -1,12 +1,12 @@
 //! The world a renderer holds, handed to the renderer that replaces it on the same device when
 //! only the frame changes (HDR output coming or going on the float frame, docs/graphics.md):
-//! the sections and far tiles uploaded stay in their arenas, and the game meshes nothing again.
+//! the sections uploaded stay in their arenas, and the game meshes nothing again.
 //! A mesh doesn't depend on the output: its HDR tier is the block's, whatever HDR is.
 use super::Renderer;
 use std::sync::Arc;
 
 impl Renderer {
-    /// Takes over the sections and far tiles `from` holds, with everything that names where
+    /// Takes over the sections `from` holds, with everything that names where
     /// they sit: `from` draws none of them afterwards. Only a renderer just made on `from`'s
     /// device, from the same resources, takes them (`previous` of `Renderer::new`); false
     /// otherwise, with nothing moved, and the game meshes the world again.
@@ -44,23 +44,12 @@ impl Renderer {
             index_quads,
             packed_on,
             packed_quads,
-            lods,
-            lod_vertex_bytes,
-            lod_cells,
-            lod_cull_free,
-            lod_cull_next,
-            lod_cutout,
-            lod_retiring,
-            lod_leaving,
-            lod_pending,
             detail_columns,
-            detail_revision,
             block_entities,
             block_entity_section_revisions,
             block_entity_membership_revisions,
             section_uploaded,
             newest_upload,
-            newest_lod_fade,
             ray_scene,
             capture_copies,
         );

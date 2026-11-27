@@ -1,9 +1,10 @@
-//! Sunrise's optional extras (lighting, inventory tools): their
-//! settings, kept in `sunrise-extras.txt` next to `options.txt` so that file
+//! Sunrise's optional extras (dynamic lights, inventory tools, chat, sound and
+//! menu options, `/pregen`): their settings, kept in `sunrise-extras.txt`
+//! next to `options.txt` so that file
 //! stays exactly vanilla's, and the logic behind them. Every extra is off by
-//! default; see `docs/extras.md`. Sunrise's own switches outside the Gameplay page
+//! default unless its own doc says otherwise; see `docs/extras.md`. Sunrise's own switches outside the Gameplay page
 //! (No AI, Agent Control) are kept here too.
-use std::{collections::VecDeque, path::Path};
+use std::path::Path;
 
 pub const FILE: &str = "sunrise-extras.txt";
 /// The name the options screen uses while the sort key waits for a key.
@@ -11,18 +12,16 @@ pub const SORT_KEY: &str = "sunrise.sort";
 /// The name the options screen uses while the shader pack key waits for a key.
 pub const SHADER_PACK_KEY: &str = "sunrise.shader_pack_key";
 /// Sunrise's own key bindings and their captions, in the order Controls -> Key Binds lists
-/// them under its "Sunrise" category, after vanilla's: the same bindings the Extras page and
-/// the PvP page set.
-pub const KEYS: [(&str, &str); 3] = [
+/// them under its "Sunrise" category, after vanilla's: the same bindings the Gameplay page sets.
+pub const KEYS: [(&str, &str); 2] = [
     (SHADER_PACK_KEY, "sunrise.extras.shader_pack_key"),
-    (crate::pvp::HUD_EDITOR_KEY, "sunrise.pvp.hud_editor_key"),
     (SORT_KEY, "sunrise.extras.sort_key"),
 ];
 /// The caption of Sunrise's own category on Controls -> Key Binds.
 pub const KEY_CATEGORY: &str = "sunrise.key.category";
 
 // no wire: this is private to the built-in HUD layout.
-/// A screen corner for Sunrise's internal extras and PvP HUD boxes.
+/// A screen corner for Sunrise's registered HUD layers.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Corner {
     TopLeft,
@@ -37,20 +36,6 @@ impl Corner {
         Corner::BottomLeft,
         Corner::BottomRight,
     ];
-    pub fn name(self) -> &'static str {
-        match self {
-            Corner::TopLeft => "top_left",
-            Corner::TopRight => "top_right",
-            Corner::BottomLeft => "bottom_left",
-            Corner::BottomRight => "bottom_right",
-        }
-    }
-    pub fn parse(s: &str, default: Corner) -> Corner {
-        Self::ALL
-            .into_iter()
-            .find(|c| c.name() == s)
-            .unwrap_or(default)
-    }
     pub fn top(self) -> bool {
         matches!(self, Corner::TopLeft | Corner::TopRight)
     }
@@ -61,22 +46,10 @@ impl Corner {
 
 #[derive(Clone, Debug, PartialEq)]
 pub struct Extras {
-    /// The Select Resource Packs screen's Add button, which browses
-    /// Modrinth. Off by default: it is Sunrise's own and the screen is
-    /// otherwise vanilla's (tools/test_pack_screen_parity.py).
-    pub pack_browser: bool,
     /// Make /pregen available in single-player and hosted LAN worlds.
     pub pregen: bool,
-    pub fullbright: bool,
     /// Held, dropped and burning light sources light their surroundings (`dynamic_light`).
     pub dynamic_lights: bool,
-    /// Far terrain a zoom magnifies is planned finer, so a spyglass does not
-    /// show the coarse cells it was given for an unzoomed screen
-    /// (`lod::Aim`). Costs far tiles while the zoom is held and gives them
-    /// back after, and does nothing at all unless far terrain is on
-    /// (`lodDistance`) and the view is actually zoomed. Off by default until
-    /// a measurement shows the extra tiles land while the zoom is still held.
-    pub lod_zoom_detail: bool,
     /// Positional sounds leave a few static sound channels free for UI sounds
     /// and others played to the listener (`sound_engine::HEARD_RESERVE`).
     pub ui_sound_reserve: bool,
@@ -129,17 +102,14 @@ pub struct Extras {
     /// The file is there but couldn't be read whole (an I/O error, or bytes that aren't UTF-8):
     /// it is never written over, so nothing in it is lost.
     keep_file: bool,
-    /// The PvP & HUD page's options (`pvp`).
-    pub pvp: crate::pvp::Pvp,
+    /// Options for chat messages.
+    pub chat: crate::chat_options::ChatOptions,
 }
 impl Default for Extras {
     fn default() -> Self {
         Self {
-            pack_browser: false,
             pregen: false,
-            fullbright: false,
             dynamic_lights: false,
-            lod_zoom_detail: false,
             ui_sound_reserve: false,
             own_name_tag: false,
             skip_modded_splashes_if_vanilla_modified: true,
@@ -160,7 +130,7 @@ impl Default for Extras {
             music_page: false,
             unknown: Vec::new(),
             keep_file: false,
-            pvp: Default::default(),
+            chat: Default::default(),
         }
     }
 }
@@ -188,11 +158,8 @@ impl Extras {
                 _ => d,
             };
             match key.trim() {
-                "packBrowser" => e.pack_browser = flag(e.pack_browser),
                 "pregen" => e.pregen = flag(e.pregen),
-                "fullbright" => e.fullbright = flag(e.fullbright),
                 "dynamicLights" => e.dynamic_lights = flag(e.dynamic_lights),
-                "lodZoomDetail" => e.lod_zoom_detail = flag(e.lod_zoom_detail),
                 "uiSoundReserve" => e.ui_sound_reserve = flag(e.ui_sound_reserve),
                 "ownNameTag" => e.own_name_tag = flag(e.own_name_tag),
                 "skipModdedSplashesIfVanillaModified" => {
@@ -234,7 +201,7 @@ impl Extras {
                 }
                 "musicPage" => e.music_page = flag(e.music_page),
                 key => {
-                    if !e.pvp.parse_line(key, value) {
+                    if !e.chat.parse_line(key, value) {
                         e.unknown.push((key.to_owned(), raw.to_owned()));
                     }
                 }
@@ -252,11 +219,8 @@ impl Extras {
         let mut push = |key: &str, value: &dyn std::fmt::Display| {
             text.push_str(&format!("{key}:{value}\n"));
         };
-        push("packBrowser", &bool_text(self.pack_browser));
         push("pregen", &bool_text(self.pregen));
-        push("fullbright", &bool_text(self.fullbright));
         push("dynamicLights", &bool_text(self.dynamic_lights));
-        push("lodZoomDetail", &bool_text(self.lod_zoom_detail));
         push("uiSoundReserve", &bool_text(self.ui_sound_reserve));
         push("ownNameTag", &bool_text(self.own_name_tag));
         push(
@@ -281,7 +245,7 @@ impl Extras {
         );
         push("musicOff", &self.music_off.join(","));
         push("musicPage", &bool_text(self.music_page));
-        self.pvp.serialize(&mut text);
+        self.chat.serialize(&mut text);
         // As written: only the file's last record can lack a line end, and nothing follows it here.
         for (key, raw) in &self.unknown {
             if !owned(key) {
@@ -295,7 +259,6 @@ impl Extras {
         Some(match name {
             SORT_KEY => &self.sort_key,
             SHADER_PACK_KEY => &self.shader_pack_key,
-            crate::pvp::HUD_EDITOR_KEY => &self.pvp.editor_key,
             _ => return None,
         })
     }
@@ -312,7 +275,6 @@ impl Extras {
         match name {
             SORT_KEY => self.sort_key = value,
             SHADER_PACK_KEY => self.shader_pack_key = value,
-            crate::pvp::HUD_EDITOR_KEY => self.pvp.editor_key = value,
             _ => return false,
         }
         true
@@ -372,95 +334,9 @@ impl Extras {
     }
 }
 
-/// Frame times over the last few seconds: frames per second, the minimum
-/// and the 1% low, recomputed twice a second.
-pub struct FpsCounter {
-    /// (end time in seconds, frame milliseconds), oldest first.
-    frames: VecDeque<(f64, f32)>,
-    shown: FpsReading,
-    computed_at: f64,
-}
-#[derive(Clone, Copy, Debug, Default, PartialEq)]
-pub struct FpsReading {
-    pub fps: u32,
-    pub min: u32,
-    pub low: u32,
-}
-/// Seconds the minimum and 1% low look back.
-const LOW_WINDOW: f64 = 5.0;
-impl Default for FpsCounter {
-    fn default() -> Self {
-        Self {
-            frames: VecDeque::new(),
-            shown: FpsReading::default(),
-            computed_at: f64::NEG_INFINITY,
-        }
-    }
-}
-impl FpsCounter {
-    /// A frame that ended at `now` (seconds) and took `ms`.
-    pub fn record(&mut self, now: f64, ms: f32) {
-        self.frames.push_back((now, ms));
-        while self
-            .frames
-            .front()
-            .is_some_and(|&(t, _)| now - t > LOW_WINDOW)
-        {
-            self.frames.pop_front();
-        }
-        if now - self.computed_at >= 0.5 {
-            self.computed_at = now;
-            self.shown = self.compute(now);
-        }
-    }
-    fn compute(&self, now: f64) -> FpsReading {
-        let fps = self.frames.iter().filter(|&&(t, _)| now - t < 1.0).count() as u32;
-        let mut times: Vec<f32> = self.frames.iter().map(|f| f.1).collect();
-        if times.is_empty() {
-            return FpsReading::default();
-        }
-        times.sort_by(|a, b| b.total_cmp(a));
-        let to_fps = |ms: f32| (1000.0 / ms.max(0.001)).round() as u32;
-        // The 1% low: the frame rate of the 99th percentile frame time.
-        let low = times[(times.len() - 1) / 100];
-        FpsReading {
-            fps,
-            min: to_fps(times[0]),
-            low: to_fps(low),
-        }
-    }
-    pub fn reading(&self) -> FpsReading {
-        self.shown
-    }
-    pub fn clear(&mut self) {
-        *self = Self::default();
-    }
-}
-
-/// Clicks of one button in the last second.
-#[derive(Default)]
-pub struct Cps {
-    clicks: VecDeque<f64>,
-}
-impl Cps {
-    pub fn click(&mut self, now: f64) {
-        self.clicks.push_back(now);
-        self.forget(now);
-    }
-    fn forget(&mut self, now: f64) {
-        while self.clicks.front().is_some_and(|&t| now - t >= 1.0) {
-            self.clicks.pop_front();
-        }
-    }
-    pub fn per_second(&mut self, now: f64) -> usize {
-        self.forget(now);
-        self.clicks.len()
-    }
-}
 /// The settings Sunrise Settings' Gameplay page shows, one per row.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
-    Fullbright,
     DynamicLights,
     OwnNameTag,
     HideBlockParticles,
@@ -483,19 +359,17 @@ pub enum Item {
     /// On the AI Agent page, next to Agent Control: the F3 recording shortcuts.
     ReproKeys,
     WheelCyclesSettings,
-    /// The Select Resource Packs screen's Add button (Modrinth).
-    PackBrowser,
     Pregen,
-    /// On the PvP & HUD page (`pvp::rows`).
-    Pvp(crate::pvp::Opt),
+    /// Chat options.
+    Chat(crate::chat_options::Opt),
 }
 /// Sunrise Settings' Gameplay page: headers (language keys) and items.
 pub fn rows() -> Vec<Result<Item, &'static str>> {
     use Item::*;
-    // Fullbright, Dynamic lights and Hide block-break particles change the picture: they
+    // Dynamic lights and Hide block-break particles change the picture: they
     // are on the graphics screen's Quality page (`graphics_ui::rows`), not here. A section a crate
     // adds joins the group its title names (`sunrise_hooks::pages::Place::Extras`).
-    vec![
+    let mut rows = vec![
         Err("sunrise.extras.header.third_person"),
         Ok(OwnNameTag),
         Err("sunrise.extras.header.inventory"),
@@ -506,6 +380,14 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Err("sunrise.extras.header.chat"),
         Ok(ChatAnimation),
         Ok(ChatIndicator),
+    ];
+    rows.extend(
+        crate::chat_options::Opt::ALL
+            .iter()
+            .copied()
+            .map(|opt| Ok(Chat(opt))),
+    );
+    rows.extend([
         Err("sunrise.extras.header.world"),
         Ok(Pregen),
         Err("sunrise.extras.header.multiplayer"),
@@ -514,14 +396,13 @@ pub fn rows() -> Vec<Result<Item, &'static str>> {
         Ok(MusicPage),
         Err("sunrise.extras.header.menus"),
         Ok(WheelCyclesSettings),
-        Ok(PackBrowser),
-    ]
+    ]);
+    rows
 }
 impl Item {
     /// The language key of the caption (`sunrise.*`, assets/sunrise/lang).
     pub fn caption_key(self) -> &'static str {
         match self {
-            Item::Fullbright => "sunrise.extras.fullbright",
             Item::DynamicLights => "sunrise.extras.dynamic_lights",
             Item::OwnNameTag => "sunrise.extras.own_name_tag",
             Item::HideBlockParticles => "sunrise.extras.hide_block_particles",
@@ -538,15 +419,13 @@ impl Item {
             Item::ChatAnimation => "sunrise.extras.chat_animation",
             Item::ChatIndicator => "sunrise.extras.chat_indicator",
             Item::WheelCyclesSettings => "sunrise.extras.wheel_cycles_settings",
-            Item::PackBrowser => "sunrise.extras.pack_browser",
             Item::Pregen => "sunrise.extras.pregen",
-            Item::Pvp(o) => o.caption_key(),
+            Item::Chat(o) => o.caption_key(),
         }
     }
     /// The language key of the description shown as the row's tooltip.
     pub fn description_key(self) -> &'static str {
         match self {
-            Item::Fullbright => "sunrise.extras.fullbright.tooltip",
             Item::DynamicLights => "sunrise.extras.dynamic_lights.tooltip",
             Item::OwnNameTag => "sunrise.extras.own_name_tag.tooltip",
             Item::HideBlockParticles => "sunrise.extras.hide_block_particles.tooltip",
@@ -563,9 +442,8 @@ impl Item {
             Item::ChatAnimation => "sunrise.extras.chat_animation.tooltip",
             Item::ChatIndicator => "sunrise.extras.chat_indicator.tooltip",
             Item::WheelCyclesSettings => "sunrise.extras.wheel_cycles_list_settings.tooltip",
-            Item::PackBrowser => "sunrise.extras.pack_browser.tooltip",
             Item::Pregen => "sunrise.extras.pregen.tooltip",
-            Item::Pvp(o) => o.description_key(),
+            Item::Chat(o) => o.description_key(),
         }
     }
     /// The caption in the current language (English when the key is missing).
@@ -580,7 +458,6 @@ impl Item {
     /// `sunrise.extras.*` in en_us.json.
     pub fn caption(self) -> &'static str {
         match self {
-            Item::Fullbright => "Fullbright",
             Item::DynamicLights => "Dynamic lights",
             Item::OwnNameTag => "Own name tag",
             Item::HideBlockParticles => "Hide block-break particles",
@@ -597,9 +474,8 @@ impl Item {
             Item::AgentControl => "Agent Control",
             Item::ReproKeys => "Recording shortcuts",
             Item::WheelCyclesSettings => "Scroll wheel changes settings",
-            Item::PackBrowser => "Resource pack browser",
             Item::Pregen => "Chunk pregeneration",
-            Item::Pvp(o) => o.caption(),
+            Item::Chat(o) => o.caption(),
         }
     }
     /// The switch this setting belongs to: it does nothing while that is off.
@@ -609,10 +485,10 @@ impl Item {
             UiSoundReserve => return None,
             MouseTweaksWheel => MouseTweaks,
             SortKey => Sort,
-            Pvp(o) => return o.parent().map(Pvp),
-            Fullbright | DynamicLights | OwnNameTag | HideBlockParticles | MouseTweaks | Sort
+            Chat(_) => return None,
+            DynamicLights | OwnNameTag | HideBlockParticles | MouseTweaks | Sort
             | ChatAnimation | ChatIndicator | NoAi | AgentControl | ReproKeys
-            | WheelCyclesSettings | MusicPage | PackBrowser | Pregen | ShaderPackKey => {
+            | WheelCyclesSettings | MusicPage | Pregen | ShaderPackKey => {
                 return None;
             }
         })
@@ -623,7 +499,6 @@ impl Item {
             Item::Pregen => {
                 "Enables /pregen in your single-player and LAN worlds. With cheats enabled, use /pregen start to generate an area before exploring it. Does not enable the command on servers you join."
             }
-            Item::Fullbright => "Show blocks and entities at full light, even in dark areas.",
             Item::DynamicLights => {
                 "Torches and other light sources held, dropped or on fire light the blocks around them."
             }
@@ -667,12 +542,9 @@ impl Item {
             Item::ReproKeys => {
                 "F3+R starts or stops a repro recording and F3+E writes its bundle. Off by default: a recording copies the world."
             }
-            Item::Pvp(o) => o.description(),
+            Item::Chat(o) => o.description(),
             Item::WheelCyclesSettings => {
                 "The scroll wheel over a button in the settings changes its value, as in vanilla. Off, the wheel only scrolls the list."
-            }
-            Item::PackBrowser => {
-                "Select Resource Packs gets an Add button that searches Modrinth and installs a pack into your packs folder. Off, the game never contacts Modrinth."
             }
         }
     }
@@ -680,7 +552,6 @@ impl Item {
     pub fn cost(self) -> Option<crate::graphics_style::Cost> {
         use crate::graphics_style::Cost;
         match self {
-            Item::Fullbright => Some(Cost::None),
             Item::UiSoundReserve => Some(Cost::None),
             Item::MusicPage => Some(Cost::None),
             Item::DynamicLights => Some(Cost::Low),
@@ -689,15 +560,13 @@ impl Item {
             | Item::HideBlockParticles
             | Item::MouseTweaks
             | Item::Sort
-            | Item::WheelCyclesSettings
-            | Item::PackBrowser => Some(Cost::None),
+            | Item::WheelCyclesSettings => Some(Cost::None),
             _ => None,
         }
     }
     /// On/off items and their value.
     pub fn switch(self, e: &Extras) -> Option<bool> {
         Some(match self {
-            Item::Fullbright => e.fullbright,
             Item::DynamicLights => e.dynamic_lights,
             Item::OwnNameTag => e.own_name_tag,
             Item::HideBlockParticles => e.hide_block_particles,
@@ -712,9 +581,8 @@ impl Item {
             Item::AgentControl => e.agent_control,
             Item::ReproKeys => e.repro_keys,
             Item::WheelCyclesSettings => e.wheel_cycles_settings,
-            Item::PackBrowser => e.pack_browser,
             Item::Pregen => e.pregen,
-            Item::Pvp(o) => return o.switch(&e.pvp),
+            Item::Chat(o) => o.switch(&e.chat),
             _ => return None,
         })
     }
@@ -723,18 +591,15 @@ impl Item {
         match self {
             Item::SortKey => crate::keybinds::display_name(&e.sort_key).plain(),
             Item::ShaderPackKey => crate::keybinds::display_name(&e.shader_pack_key).plain(),
-            Item::Pvp(o) if o.switch(&e.pvp).is_none() => o.value(&e.pvp).unwrap_or_default(),
             other => match other.switch(e) {
                 Some(true) => crate::lang::get_or("On", "On"),
                 _ => crate::lang::get_or("Off", "Off"),
             },
         }
     }
-    /// A click (`back` for the right button: a PvP & HUD choice steps back; a switch flips
-    /// either way). The sort key binds instead.
-    pub fn cycle(self, e: &mut Extras, back: bool) {
+    /// A click toggles a switch. The sort key binds instead.
+    pub fn cycle(self, e: &mut Extras) {
         match self {
-            Item::Fullbright => e.fullbright = !e.fullbright,
             Item::DynamicLights => e.dynamic_lights = !e.dynamic_lights,
             Item::OwnNameTag => e.own_name_tag = !e.own_name_tag,
             Item::HideBlockParticles => e.hide_block_particles = !e.hide_block_particles,
@@ -749,9 +614,8 @@ impl Item {
             Item::AgentControl => e.agent_control = !e.agent_control,
             Item::ReproKeys => e.repro_keys = !e.repro_keys,
             Item::WheelCyclesSettings => e.wheel_cycles_settings = !e.wheel_cycles_settings,
-            Item::PackBrowser => e.pack_browser = !e.pack_browser,
             Item::Pregen => e.pregen = !e.pregen,
-            Item::Pvp(o) => o.cycle(&mut e.pvp, back),
+            Item::Chat(o) => o.cycle(&mut e.chat),
             Item::SortKey | Item::ShaderPackKey => {}
         }
     }
@@ -760,7 +624,6 @@ impl Item {
         match self {
             Item::SortKey => Some(SORT_KEY),
             Item::ShaderPackKey => Some(SHADER_PACK_KEY),
-            Item::Pvp(crate::pvp::Opt::HudEditorKey) => Some(crate::pvp::HUD_EDITOR_KEY),
             _ => None,
         }
     }
@@ -773,9 +636,7 @@ mod tests {
 
     fn all_set() -> Extras {
         Extras {
-            pack_browser: true,
             pregen: true,
-            fullbright: true,
             music_off: vec!["a".into(), "b".into()],
             own_name_tag: true,
             ..Extras::default()
@@ -825,8 +686,6 @@ mod tests {
         let out = e.serialize();
         assert_eq!(out.matches("\nsortKey:").count(), 1, "{out}");
         assert!(!out.contains("foo"));
-        let e = Extras::parse("hudEditorKey:foo\n");
-        assert!(e.unknown.is_empty());
     }
 
     fn scratch(name: &str) -> std::path::PathBuf {
@@ -879,7 +738,7 @@ mod tests {
         fs::write(dir.join(FILE), bytes).unwrap();
         let mut e = Extras::load(&dir);
         assert!(e.own_name_tag);
-        e.fullbright = true;
+        e.dynamic_lights = true;
         e.save(&dir);
         assert_eq!(fs::read(dir.join(FILE)).unwrap(), bytes);
         // A file that can't be read at all (a folder in its place) is left alone.
@@ -909,7 +768,7 @@ mod tests {
     #[test]
     fn everything_is_off_by_default_and_round_trips() {
         let d = Extras::default();
-        assert!(!d.fullbright && !d.dynamic_lights);
+        assert!(!d.dynamic_lights);
         assert!(!d.mouse_tweaks && !d.sort && !d.own_name_tag && !d.ui_sound_reserve);
         assert!(!d.hide_block_particles && !d.pregen);
         assert!(!d.music_page && d.music_off.is_empty());
@@ -917,17 +776,15 @@ mod tests {
         assert_eq!(Extras::parse(""), d);
         assert_eq!(Extras::parse(&d.serialize()), d);
         let mut e = d.clone();
-        Item::Fullbright.cycle(&mut e, false);
-        assert_eq!(Item::Fullbright.switch(&e), Some(true));
-        Item::DynamicLights.cycle(&mut e, false);
+        Item::DynamicLights.cycle(&mut e);
         assert_eq!(Item::DynamicLights.switch(&e), Some(true));
         assert_eq!(Extras::parse(&e.serialize()), e);
-        Item::Pregen.cycle(&mut e, false);
+        Item::Pregen.cycle(&mut e);
         assert_eq!(Item::Pregen.switch(&e), Some(true));
-        Item::OwnNameTag.cycle(&mut e, false);
+        Item::OwnNameTag.cycle(&mut e);
         assert_eq!(Item::OwnNameTag.switch(&e), Some(true));
         assert_eq!(Item::HideBlockParticles.switch(&e), Some(false));
-        Item::HideBlockParticles.cycle(&mut e, false);
+        Item::HideBlockParticles.cycle(&mut e);
         assert!(e.hide_block_particles);
         assert_eq!(Item::HideBlockParticles.switch(&e), Some(true));
         let only = Extras::parse("hideBlockParticles:true\n");
@@ -938,14 +795,14 @@ mod tests {
         e.sort_key = "key.keyboard.r".into();
         e.chat_animation = true;
         e.chat_indicator = false;
-        Item::WheelCyclesSettings.cycle(&mut e, false);
+        Item::WheelCyclesSettings.cycle(&mut e);
         assert_eq!(Item::WheelCyclesSettings.switch(&e), Some(true));
         e.music_off = vec![
             "minecraft:music/game/calm1".into(),
             "minecraft:music.menu".into(),
         ];
         assert!(!e.music_page);
-        Item::MusicPage.cycle(&mut e, false);
+        Item::MusicPage.cycle(&mut e);
         assert_eq!(Item::MusicPage.switch(&e), Some(true));
         assert_eq!(Extras::parse(&e.serialize()), e);
     }
@@ -958,63 +815,41 @@ mod tests {
     }
 
     #[test]
-    fn fps_counter_reports_rate_minimum_and_low() {
-        let mut c = FpsCounter::default();
-        let mut t = 0.0;
-        // Two seconds at 100 fps with one 50 ms hitch.
-        for i in 0..200 {
-            let ms = if i == 150 { 50.0 } else { 10.0 };
-            t += f64::from(ms) / 1000.0;
-            c.record(t, ms);
-        }
-        c.computed_at = f64::NEG_INFINITY;
-        c.record(t + 0.01, 10.0);
-        let r = c.reading();
-        assert!((95..=101).contains(&r.fps), "{r:?}");
-        assert_eq!(r.min, 20);
-        assert_eq!(r.low, 100, "one frame in 200 is under the 1% mark");
-        // Hitches beyond 1% of frames pull the 1% low down.
-        let mut c = FpsCounter::default();
-        let mut t = 0.0;
-        for i in 0..100 {
-            let ms = if i % 25 == 0 { 40.0 } else { 10.0 };
-            t += f64::from(ms) / 1000.0;
-            c.record(t, ms);
-        }
-        c.computed_at = f64::NEG_INFINITY;
-        c.record(t, 10.0);
-        assert_eq!(c.reading().low, 25);
-    }
-
-    #[test]
-    fn old_frames_leave_the_window() {
-        let mut c = FpsCounter::default();
-        c.record(0.0, 100.0);
-        for i in 1..=700 {
-            c.record(f64::from(i) / 100.0, 10.0);
-        }
-        assert_eq!(c.reading().min, 100, "the 100 ms frame is 7 s old");
-    }
-
-    #[test]
-    fn cps_counts_the_last_second() {
-        let mut cps = Cps::default();
-        for i in 0..10 {
-            cps.click(f64::from(i) * 0.1);
-        }
-        assert_eq!(cps.per_second(0.95), 10);
-        assert_eq!(cps.per_second(1.25), 7);
-        assert_eq!(cps.per_second(3.0), 0);
-    }
-
-    #[test]
     fn items_cycle_through_their_values() {
         let mut e = Extras::default();
-        Item::Sort.cycle(&mut e, true);
+        Item::Sort.cycle(&mut e);
         assert_eq!(Item::Sort.value(&e), "On");
         for item in rows().into_iter().flatten() {
             assert!(!item.caption().is_empty() && !item.description().is_empty());
         }
+    }
+
+    #[test]
+    fn chat_options_join_the_existing_gameplay_chat_section() {
+        use crate::chat_options::Opt::*;
+        use Item::*;
+
+        let rows = rows();
+        let start = rows
+            .iter()
+            .position(|row| *row == Err("sunrise.extras.header.chat"))
+            .unwrap();
+        let chat: Vec<_> = rows[start + 1..]
+            .iter()
+            .copied()
+            .map_while(Result::ok)
+            .collect();
+        assert_eq!(
+            chat,
+            [
+                ChatAnimation,
+                ChatIndicator,
+                Chat(ChatTimestamps),
+                Chat(ChatCompact),
+                Chat(ChatCopy),
+                Chat(ChatSearch),
+            ]
+        );
     }
 
     /// The shader pack key is bound to K out of the box, rebinds through the generic extra-key

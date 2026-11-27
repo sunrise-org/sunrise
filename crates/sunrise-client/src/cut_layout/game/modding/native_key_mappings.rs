@@ -30,9 +30,12 @@ mod tests {
                 false,
                 0,
             );
-            game.open_hud_editor(false);
-            assert!(matches!(game.client.screen, crate::game::Screen::HudEditor));
-            game.close_hud_editor();
+            game.open_advancements(false);
+            assert!(matches!(
+                game.client.screen,
+                crate::game::Screen::Advancements
+            ));
+            game.close_advancements();
             assert!(!pending.consume_click(game).unwrap());
         });
     }

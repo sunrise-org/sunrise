@@ -56,8 +56,7 @@ miniz_oxide = "0.8"
 naga = { version = "30.0.1", features = ["wgsl-in", "glsl-in", "hlsl-out"] }
 half = "2"
 png = "0.18"
-# Project icons served by Modrinth are often WebP or JPEG rather than PNG, and
-# the pack browser showed nothing for those. Both are small pure-Rust decoders.
+# WebP and JPEG decoding for `hud::decode_image_bytes`: small pure-Rust decoders.
 image-webp = { version = "0.2", default-features = false }
 zune-jpeg = { version = "0.4", default-features = false, features = ["std"] }
 pollster = "0.4"

@@ -73,13 +73,12 @@ fn terrain_fade_reaches_pack_pixels_through_real_instances() {
     }
     let uploaded = Instant::now();
     let cases = [
-        ("first frame", Some(&uploaded), 0, 1000, 0, 0.0),
-        ("137ms", Some(&uploaded), 137, 1000, 0, 0.137),
-        ("midpoint", Some(&uploaded), 500, 1000, 0, 0.5),
-        ("finished", Some(&uploaded), 1000, 1000, 0, 1.0),
-        ("disabled", Some(&uploaded), 0, 0, 0, 1.0),
-        ("no upload transition", None, 0, 1000, 0, 1.0),
-        ("distant handover", Some(&uploaded), 500, 1000, 17, 1.0),
+        ("first frame", Some(&uploaded), 0, 1000, 0.0),
+        ("137ms", Some(&uploaded), 137, 1000, 0.137),
+        ("midpoint", Some(&uploaded), 500, 1000, 0.5),
+        ("finished", Some(&uploaded), 1000, 1000, 1.0),
+        ("disabled", Some(&uploaded), 0, 0, 1.0),
+        ("no upload transition", None, 0, 1000, 1.0),
     ];
     let mut count = 0;
     for requested in [false, true] {
@@ -139,13 +138,13 @@ fn terrain_fade_reaches_pack_pixels_through_real_instances() {
                     let program = program
                         .as_ref()
                         .unwrap_or_else(|| panic!("{name}: {:?}", post.notes));
-                    for &(case, timestamp, elapsed, fade_ms, handover, expected) in &cases {
+                    for &(case, timestamp, elapsed, fade_ms, expected) in &cases {
                         let visibility = section_visibility(
                             timestamp,
                             fade_ms,
                             uploaded + Duration::from_millis(elapsed),
                         );
-                        let origin = section_instance([48.0, 0.0, -16.0], handover, visibility);
+                        let origin = section_instance([48.0, 0.0, -16.0], visibility);
                         let pixel = sample(
                             &device,
                             &queue,
@@ -252,7 +251,7 @@ fn terrain_tier_reaches_pack_pixels() {
             .as_ref()
             .unwrap_or_else(|| panic!("{:?}", post.notes));
         for (tier, expected) in cases {
-            let origin = section_instance([0.0; 3], 0, 1.0);
+            let origin = section_instance([0.0; 3], 1.0);
             let pixel = sample(
                 &device,
                 &queue,

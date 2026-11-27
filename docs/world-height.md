@@ -33,9 +33,9 @@ dimension type codec checks them (`LevelShape::new`). **`LevelShapes`** holds a 
 | Chunk storage (`chunk.rs`) | the chunk's own `min_y` and sections |
 | Light (`light.rs`) | the chunk's sections; the relighter the world's column (`LightWorld::layout`) |
 | World, streaming, meshing, renderer | `World::layout()`, the chunk's `min_y`, the renderer's layout |
-| Saves (`save.rs`) | `SaveDir.shape` (sections, `yPos`, heightmaps, light layers, far tiles) |
+| Saves (`save.rs`) | `SaveDir.shape` (sections, `yPos`, heightmaps, light layers) |
 | Network (`lan/`, `game/network/remote_chunks.rs`) | the level's shape on the host, the server's dimension type on the client |
-| Section caches, generation glue, far terrain, flat worlds | the chunk's column, the generator's level range |
+| Section caches, generation glue, flat worlds | the chunk's column, the generator's level range |
 | Gameplay (bounds, searches, commands, mobs) | `World::bottom_y`/`top_y` (the column), `World.shape`, `Game.server.level_shapes` |
 
 Section sets are `SectionMask`s (256 bits: vanilla's tallest level has 254 sections, light data one more
@@ -70,6 +70,5 @@ of a vanilla server does.
   chunk's column while vanilla's spreads one section past the level, so it needs that border in the flood fill
   and the relighter first, checked with `test_light_parity.py`.
 - The vanilla constants `MIN_Y`, `HEIGHT` and `SECTIONS` remain as the default column and in tests.
-- Far terrain's detail for a camera far above the world uses vanilla's top (`lod.rs`).
 - Looking down from far above the terrain shows fog: vanilla's render-distance fog uses `max(xz, |y|)`, so
   terrain more than the render distance below the camera is fogged in vanilla too.

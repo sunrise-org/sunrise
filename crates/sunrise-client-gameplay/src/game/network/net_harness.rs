@@ -10,13 +10,73 @@
 //! (`sunrise_protocol::quiet`, `tools/quiet_commands_e2e.py`) and waits two
 //! seconds for any chat they bring. `SUNRISE_NET_ENTITY_TAG` also records one
 //! entity type tag at join and waits for its membership to change in play.
+//! `SUNRISE_NET_PACKETS` names a JSONL capture of inbound play packets.
 use crate::game::ClientGame;
 use serde_json::json;
 use std::{
-    path::Path,
+    path::{Path, PathBuf},
+    sync::Mutex,
     time::{Duration, Instant},
 };
+use sunrise_client::net::{PacketRecorder, RecorderStatus};
 use sunrise_game_data::Result;
+use sunrise_protocol::packets::play::Clientbound;
+
+struct PacketLog {
+    path: PathBuf,
+    start: Instant,
+    rows: Mutex<Vec<String>>,
+}
+
+impl PacketRecorder for PacketLog {
+    fn is_active(&self) -> bool {
+        true
+    }
+
+    fn received(&self, _: &Clientbound, id: i32, payload: &[u8]) {
+        const DIGITS: &[u8; 16] = b"0123456789abcdef";
+        let mut prefix = Vec::with_capacity(5);
+        sunrise_core::vanilla_bytes::write_varint(&mut prefix, id);
+        let mut hex = String::with_capacity(2 * (prefix.len() + payload.len()));
+        for &byte in prefix.iter().chain(payload) {
+            hex.push(DIGITS[usize::from(byte >> 4)] as char);
+            hex.push(DIGITS[usize::from(byte & 0xf)] as char);
+        }
+        let mut rows = self.rows.lock().unwrap();
+        let row = json!({
+            "sequence": rows.len(),
+            "timestamp_ms": self.start.elapsed().as_millis() as u64,
+            "payload": hex,
+        });
+        rows.push(row.to_string());
+    }
+
+    // The parity oracle compares incoming server packets, not client-generated poses.
+    fn record_packet(&self, _: i32, _: &[u8]) {}
+
+    fn status(&self) -> RecorderStatus {
+        let rows = self.rows.lock().unwrap();
+        RecorderStatus {
+            active: true,
+            path: self.path.clone(),
+            elapsed: self.start.elapsed(),
+            packet_count: rows.len() as u64,
+            bytes_written: 0,
+            error: None,
+        }
+    }
+
+    fn stop(self: Box<Self>) -> std::io::Result<PathBuf> {
+        use std::io::Write as _;
+
+        let mut output = std::io::BufWriter::new(std::fs::File::create(&self.path)?);
+        for row in self.rows.into_inner().unwrap() {
+            writeln!(output, "{row}")?;
+        }
+        output.flush()?;
+        Ok(self.path)
+    }
+}
 
 impl ClientGame<'_> {
     pub(in crate::game::client_side) fn run_net_harness(&mut self, report: &Path) -> Result<()> {
@@ -42,6 +102,7 @@ impl ClientGame<'_> {
         let mut chunks = 0;
         let mut error = None;
         let entity_tag = std::env::var("SUNRISE_NET_ENTITY_TAG").ok();
+        let packets = std::env::var_os("SUNRISE_NET_PACKETS").map(PathBuf::from);
         let mut entity_tag_snapshots = Vec::new();
         while Instant::now() < deadline {
             self.side_update_world();
@@ -95,6 +156,16 @@ impl ClientGame<'_> {
                         .remote
                         .as_ref()
                         .is_some_and(|r| r.secure_chat.signed());
+                    if let (Some(path), Some(remote)) = (&packets, &self.client.remote) {
+                        remote.session.start_recording(
+                            PacketLog {
+                                path: path.clone(),
+                                start: now,
+                                rows: Mutex::default(),
+                            },
+                            |_| {},
+                        );
+                    }
                     self.send_signed_chat_input(&lines[0]);
                     sent = 1;
                     step = 2;
@@ -156,6 +227,15 @@ impl ClientGame<'_> {
             .as_ref()
             .map(|r| r.chat.iter().map(|(t, _)| t.clone()).collect())
             .unwrap_or_default();
+        if packets.is_some()
+            && let Some(Err(e)) = self
+                .client
+                .remote
+                .as_ref()
+                .and_then(|r| r.session.stop_recording())
+        {
+            error.get_or_insert(format!("SUNRISE_NET_PACKETS: {e}"));
+        }
         if self.client.remote.is_some() {
             self.leave_server(None)?;
         }

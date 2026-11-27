@@ -60,7 +60,6 @@ pub mod jigsaw_block;
 pub mod level_loading;
 pub mod light;
 pub mod light_border;
-pub mod lod_data;
 pub mod logging;
 pub mod mod_chunk_tickets;
 pub mod options_file;

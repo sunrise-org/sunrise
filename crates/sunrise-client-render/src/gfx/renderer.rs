@@ -81,12 +81,6 @@ pub struct Renderer {
     /// for the settings in `graphics::gpu_culling_offer`), and whether the last frame drew
     /// them so (`gpu_frame`).
     pub(crate) gpu_culling: Option<gpu_culling::GpuCulling>,
-    /// Sourced geometry's residency beside them (`sourced_geometry::gpu::Sourced`): its
-    /// record table, made with the first recorded mesh and dropped with the last, each
-    /// mesh's record in it, and the meshes a GPU frame still lists the CPU. Whether the
-    /// last frame drew them so is `gpu_sourced_frame`.
-    pub(crate) sourced: sourced_geometry::gpu::Sourced,
-    pub(crate) gpu_sourced_frame: bool,
     pub(crate) gpu_culling_offer: crate::graphics::GpuCullingOffer,
     pub(crate) gpu_frame: bool,
     /// GPU frames since GPU culling was switched on: the first and every 64th after it
@@ -302,32 +296,7 @@ pub struct Renderer {
     pub(crate) outline: wgpu::Buffer,
     pub(crate) depth: wgpu::TextureView,
     pub(crate) sections: resident::Resident<SectionGpu>,
-    pub(crate) lods: FxHashMap<crate::lod::TileKey, lod::Tile>,
-    /// Vertex bytes of the current tile meshes (not their fading stand-ins).
-    pub(crate) lod_vertex_bytes: u64,
-    /// The same tiles by cell (`lod::TileGrid`), to test them a handful of
-    /// boxes at a time (`draw_frame`).
-    pub(crate) lod_cells: lod::TileGrid,
-    /// Far tiles' occlusion culling slots (`lod::Tile::cull_slot`): those
-    /// free, and the next never used.
-    pub(crate) lod_cull_free: Vec<u32>,
-    pub(crate) lod_cull_next: u32,
-    /// The chunk columns the resident tiles leave out (`Lod::take_cutout`):
-    /// their sections are drawn even past the render distance, so terrain
-    /// leaving it never opens a hole before the tiles fill it in.
-    pub(crate) lod_cutout: crate::fast_hash::FxHashSet<(i32, i32)>,
-    /// Removed sections of `lod_cutout` columns, released once tiles cover them.
-    pub(crate) lod_retiring: crate::fast_hash::FxHashSet<SectionKey>,
-    /// Removed sections fading out over far terrain (`leave_section`).
-    pub(crate) lod_leaving: Vec<(SectionKey, std::time::Instant)>,
-    /// Finished tile meshes `upload_lods` has yet to upload.
-    pub(crate) lod_pending: Option<lod::Pending>,
-    /// When the fades the last tile job began are over (`upload_lods`): until
-    /// then tiles may be dying or standing in for their replacements.
-    pub(crate) lod_settled: Option<std::time::Instant>,
     pub(crate) detail_columns: FxHashMap<(i32, i32), SectionMask>,
-    /// Bumped whenever a column becomes or stops being complete.
-    pub(crate) detail_revision: u64,
     pub(crate) arena: arena::Arena,
     /// Translucent quads' own arena, with large pages, while the layout is split
     /// (`translucent_split`): the back-to-front list then stays in one page (and
@@ -337,7 +306,7 @@ pub struct Renderer {
     /// Translucent Batching (`Graphics::translucent_batching`, read when a renderer
     /// is made), where it is offered (`graphics::offer_translucent_batching`).
     pub(crate) translucent_batching: bool,
-    /// Every section and far tile was dropped to change the layout since the game
+    /// Every section was dropped to change the layout since the game
     /// last asked (`take_dropped_sections`).
     pub(crate) sections_dropped: bool,
     pub(crate) sorted_indices: arena::Arena,
@@ -352,7 +321,6 @@ pub struct Renderer {
     pub multi_draw: bool,
     /// Per-frame scratch, kept to avoid allocating every frame.
     pub(crate) visible: Vec<resident::Visible>,
-    pub(crate) visible_lods: Vec<lod::Visible>,
     /// Canonical primary-camera visible sections exposed to `FrameHooks` (reused across frames).
     pub(crate) visible_renderable_sections: Vec<mod_api::RenderableSection>,
     pub(crate) visible_renderable_scratch: Vec<(u64, SectionKey, Option<u32>)>,
@@ -360,10 +328,6 @@ pub struct Renderer {
     pub(crate) hook_geometry: world_primitives::PreparedHookGeometry,
     pub(crate) hook_entities_scratch: Vec<Vertex>,
     pub(crate) hook_see_through_scratch: Vec<Vertex>,
-    /// Every far tile in view, whether the GPU's solid draws own it or not: the water's
-    /// re-sort walks it (`draw_frame`), so its budget and rotation do not follow which
-    /// solid draws the sourced-geometry pass took over.
-    pub(crate) translucent_lods: Vec<lod::Visible>,
     /// The sections a shader pack's shadow camera sees (`external::ShadowView`).
     pub(crate) shadow_visible: Vec<resident::Visible>,
     /// The external shader pipeline world frames call (`external`); `None` draws vanilla's way.
@@ -404,14 +368,11 @@ pub struct Renderer {
     /// the static cache can remove deleted models without a global flush.
     pub(crate) block_entity_membership_revisions: FxHashMap<SectionKey, u64>,
     /// When each section was first uploaded (`RenderSection.uploadedTime`): kept across meshing
-    /// it again, gone with its column. Sections that fade in over far terrain are not in it.
+    /// it again, gone with its column.
     pub(crate) section_uploaded: FxHashMap<SectionKey, std::time::Instant>,
     /// When `section_uploaded` last gained a section: once the fade time has passed since,
     /// every section is whole and frames skip the per-section lookups.
     pub(crate) newest_upload: Option<std::time::Instant>,
-    /// When a section last began to fade in over far terrain (`SectionGpu::fading`), for the
-    /// same shortcut.
-    pub(crate) newest_lod_fade: Option<std::time::Instant>,
     /// Changes whenever `block_entities` does (unique across renderers).
     pub(crate) block_entity_revision: u64,
     /// VisGraph face connectivity per meshed section (cave culling).
@@ -514,8 +475,6 @@ pub struct Renderer {
     pub(crate) debug_lines_scratch: Vec<[f32; 8]>,
     /// Screen effect vertices, retained between frames.
     pub(crate) screen_vertices_scratch: Vec<crate::screen_effects::ScreenVertex>,
-    /// LOD leaving chunk columns, retained between frames.
-    pub(crate) lod_leaving_scratch: crate::fast_hash::FxHashSet<(i32, i32)>,
     /// Shadow visible boxed sections, retained between frames.
     pub(crate) shadow_boxed_scratch: Vec<resident::Visible>,
     /// Shadow visible seen section keys, retained between frames.
@@ -552,9 +511,6 @@ pub struct Renderer {
     /// `draw_frame`'s frames past its early returns, and the one whose statistics are shown.
     pub(crate) frame_serial: u64,
     pub(crate) stats_frame: u64,
-    /// The readback halves a GPU frame's statistics wait for (`in_flight::collect_stats`):
-    /// a half alone undercounts the frame.
-    pub(crate) stats_halves: in_flight::StatsHalves,
     pub uploaded_bytes: u64,
     pub(crate) started: Instant,
     /// The next frame to write to a PNG path (control socket, F2, world icon).
@@ -573,8 +529,6 @@ pub struct Renderer {
     pub(crate) screenshot_halvings: u32,
     /// Brightness option (lightmap gamma), 0..1.
     pub gamma: f32,
-    /// Optional full-light lightmap (Sunrise Extras).
-    pub fullbright: bool,
     /// The Improved transparency option (`GameRenderer.useImprovedTransparency`).
     pub improved_transparency: bool,
     /// Its passes and targets, made when first drawn with.
@@ -582,7 +536,7 @@ pub struct Renderer {
     /// Advance animated block textures (Sunrise setting; vanilla always does).
     pub animated_textures: bool,
     pub(crate) present_modes: Vec<wgpu::PresentMode>,
-    /// CPU copies of the section and far tile meshes uploaded while `render-capture` is on
+    /// CPU copies of the section meshes uploaded while `render-capture` is on
     /// (`keep_capture_copies`, or `SUNRISE_RENDER_CAPTURE` at creation); `None` otherwise.
     pub(crate) capture_copies: Option<capture::Copies>,
     /// A scene to write from the next frame (`sunrise-ctl render-capture DIR`).

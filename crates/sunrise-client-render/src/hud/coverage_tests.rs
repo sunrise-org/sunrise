@@ -223,7 +223,7 @@ impl Gpu {
         self.queue.write_buffer(
             &self.hud.uniform,
             0,
-            bytemuck::bytes_of(&HudUniform::new([4.0, 2.0, 1.0, 0.75], batch.end_portal, 0)),
+            bytemuck::bytes_of(&HudUniform::new([4.0, 2.0, 1.0, 0.75], batch.end_portal)),
         );
         let mut encoder = self.device.create_command_encoder(&Default::default());
         for (view, value) in [(&frame_view, backdrop), (&mask_view, initial)] {

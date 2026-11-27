@@ -539,7 +539,6 @@ pub enum PendingWorldEntry {
         /// A transfer's carried-over server cookies (`TransferState`).
         cookies: Option<sunrise_client::net::Cookies>,
     },
-    StudioReplay(std::path::PathBuf),
 }
 
 #[cfg(feature = "client")]

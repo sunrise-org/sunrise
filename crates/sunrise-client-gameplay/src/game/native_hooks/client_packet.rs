@@ -7,8 +7,7 @@ impl crate::game::ClientGame<'_> {
     /// payloads included, in the order the server sent them. Packets the
     /// network thread handles itself are not heard: keep-alives, bundle
     /// delimiters, resource pack pushes and pops, cookies, server links,
-    /// transfers, disconnects, the configuration switch, `minecraft:brand`
-    /// and far terrain tiles; neither is the configuration phase.
+    /// transfers, disconnects, the configuration switch, `minecraft:brand` or configuration packets.
     /// Read-only: the game handles the packet as it would without the mod.
     /// Client-side, on any server, single player's own included.
     /// Every packet exposes its protocol type id. Custom payloads also expose

@@ -296,13 +296,6 @@ impl crate::game::ClientGame<'_> {
     /// position, yaw and pitch to render from (without `compute_camera_angles`
     /// or `camera_position` mod hooks).
     pub fn camera_view(&mut self, partial: f32) -> Option<(glam::DVec3, f32, f32)> {
-        if self.client.studio.flying() {
-            return Some((
-                self.client.studio.freecam.position,
-                self.client.studio.freecam.yaw,
-                self.client.studio.freecam.pitch,
-            ));
-        }
         let source = self.camera_alignment_source(partial)?;
         let view = self.align_view_with_angles(
             &source,
@@ -326,43 +319,28 @@ impl crate::game::ClientGame<'_> {
 
     /// The authoritative frame camera. NeoForge posts `ComputeCameraAngles` only on ordinary
     /// entity alignment, not in `Camera.alignWithEntity`'s interpolating minecart branch. The
-    /// final `camera_position` stage sees either placed entity view, or the studio's custom view.
+    /// final `camera_position` stage sees the placed entity view.
     /// Neither callback runs for the title panorama.
     pub fn frame_camera(&mut self, partial: f32) -> Option<(glam::DVec3, f32, f32, f32)> {
         self.apply_requested_camera_type();
         let run_hooks = !self.shows_panorama();
-        let (mut view, alignment) = if self.client.studio.flying() {
-            let mut view = self.client.view;
-            if let Some(source) = self.camera_alignment_source(partial) {
-                view.align_eye(&source.entity, partial);
-            }
-            let freecam = &self.client.studio.freecam;
-            // Studio stores roll with the opposite sign to NeoForge's camera angles.
-            view.set_rotation_with_roll(freecam.yaw, freecam.pitch, -freecam.roll);
-            view.position = freecam.position.to_array();
-            (view, None)
-        } else {
-            let source = self.camera_alignment_source(partial)?;
-            let (mut yaw, mut pitch, mut roll) = (
-                source.entity.view_y_rot(partial),
-                source.entity.view_x_rot(partial),
-                0.0,
-            );
-            if run_hooks && !source.interpolating_minecart {
-                self.native_compute_camera_angles(partial, &mut yaw, &mut pitch, &mut roll);
-                self.apply_requested_camera_type();
-            }
-            let angles = (yaw, pitch, roll);
-            let view = self.align_view_with_angles(&source, partial, angles);
-            (view, Some((source, angles)))
-        };
+        let source = self.camera_alignment_source(partial)?;
+        let (mut yaw, mut pitch, mut roll) = (
+            source.entity.view_y_rot(partial),
+            source.entity.view_x_rot(partial),
+            0.0,
+        );
+        if run_hooks && !source.interpolating_minecart {
+            self.native_compute_camera_angles(partial, &mut yaw, &mut pitch, &mut roll);
+            self.apply_requested_camera_type();
+        }
+        let angles = (yaw, pitch, roll);
+        let mut view = self.align_view_with_angles(&source, partial, angles);
         view.placed_position = view.position;
         if run_hooks {
             let mut position = mod_api::CameraPosition::placed_at(view.position);
             self.native_camera_position(partial, &mut position);
-            if self.apply_requested_camera_type()
-                && let Some((source, angles)) = alignment
-            {
+            if self.apply_requested_camera_type() {
                 view = self.align_view_with_angles(&source, partial, angles);
             }
             view.placed_position = view.position;
@@ -383,9 +361,6 @@ impl crate::game::ClientGame<'_> {
     /// `Camera.rotation()` as the quads of particles take it: the frame's camera (a
     /// bed's, a front view's, a mod's), not the player's own yaw and pitch.
     pub(in crate::game::client_side) fn particle_rotation(&self) -> glam::Quat {
-        if self.client.studio.flying() {
-            return self.camera_orientation();
-        }
         let (yaw, pitch, roll) = self.client.posed_rotation.unwrap_or((
             self.client.view.y_rot,
             self.client.view.x_rot,
@@ -729,40 +704,11 @@ impl crate::game::ClientGame<'_> {
             .held_arm_pose = poses;
     }
 
-    #[cfg(any(test, feature = "test-support"))]
-    #[inline(always)]
-    pub fn test_activate_studio_camera(
-        &mut self,
-        position: glam::DVec3,
-        yaw: f32,
-        pitch: f32,
-        fov: f32,
-        roll: f32,
-    ) {
-        self.client
-            .studio
-            .freecam
-            .activate(position, yaw, pitch, fov);
-        self.client.studio.freecam.roll = roll;
-    }
-
-    #[cfg(any(test, feature = "test-support"))]
-    #[inline(always)]
-    pub fn test_studio_camera_position(&self) -> glam::DVec3 {
-        self.client.studio.freecam.position
-    }
     /// `Entity.turn` for the player, by the mouse, a pad, the arrow keys or an
     /// agent's `turn`.
     /// The model's old pitch is the player's `xRotO`, which the turn moves
     /// with `xRot` (`turn_rotation`).
     pub fn turn_player(&mut self, mut xo: f64, mut yo: f64) {
-        if self.client.studio.flying() {
-            self.client
-                .studio
-                .freecam
-                .turn((xo * 0.15) as f32, (yo * 0.15) as f32);
-            return;
-        }
         if self.common.player.is_some() && mod_api::__private::listened(mod_api::HookId::PlayerTurn)
         {
             let (orig_x, orig_y) = (xo, yo);
@@ -825,11 +771,10 @@ impl crate::game::ClientGame<'_> {
         }
     }
     /// `LevelExtractor` submits the local player only when it holds the camera, and
-    /// skips the first-person body unless it is sleeping. Studio freecam draws it too.
+    /// skips the first-person body unless it is sleeping.
     pub(in crate::game::client_side) fn own_body_in_view(&self) -> bool {
-        self.client.studio.flying()
-            || (self.controls_camera()
-                && (!self.client.camera_type.is_first_person() || self.common.sleeping.is_some()))
+        self.controls_camera()
+            && (!self.client.camera_type.is_first_person() || self.common.sleeping.is_some())
     }
     /// Whether the player's own model shows in the world view (its body or,
     /// while invisible, only its armour and held items).
@@ -900,7 +845,7 @@ impl crate::game::ClientGame<'_> {
         let start = out.len();
         self.mark_player(start, !body_in_view);
         self.mark_motion(start, sunrise_gameplay_common::game::MOTION_OWN_PLAYER);
-        self.player_model_geometry(camera, self.own_player_alpha(), out);
+        self.player_model_geometry(camera, self.common.clock.camera_fraction(), out);
         // A native pack's shadow pass alone gets the first-person model (no per-entity draws).
         if self.client.pack_ids.is_none() && !body_in_view {
             self.client

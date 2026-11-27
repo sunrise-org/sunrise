@@ -17,8 +17,8 @@ Shader Options... row opens the picked pack's own settings.
 
 The Shaders page of Sunrise Settings has a Shader pack key for the same pick: press it and the picked pack turns off,
 press it again and the same pack runs again. It is bound there (click the row, then press a key; Escape unbinds it),
-`K` out of the box, and it is not a vanilla key binding, so rebinding it never turns into another mapping's key
-(Replay Studio keeps physical `K` for its camera keyframe). Turning off remembers the pick in the Extras settings,
+`K` out of the box, and it is not a vanilla key binding, so rebinding it never turns into another mapping's key.
+Turning off remembers the pick in the Extras settings,
 so the pack stays off across restarts until the key is pressed again; the menu's second click on the picked pack
 does the same.
 

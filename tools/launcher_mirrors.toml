@@ -6,13 +6,13 @@ version = 1
 launcher = "smod"
 sources = ["crates/sunrise-mod-package/src"]
 note = ".smod, the manifest and the registry index; the game keeps the content fence"
-surface = "sha256:e685b79eb756c20a9d1e0ccd21aa7dc806286ae7b16e48b0522955d2107d195a"
+surface = "sha256:8078b992dff9ec93e8ca50a597ae724c548559509dd184859bbf8163021e127d"
 
 [[mirror]]
 launcher = "sdk"
 sources = ["crates/sunrise-mod-package/src", "crates/sunrise-native-build/src"]
 note = "the read-only half of the SDK index (sdk.json) and the native-build contract"
-surface = "sha256:f133100b2405cc7703e3c1d068bb863dc9e3ce8f75ab4aed9d64ab67eb66c7e3"
+surface = "sha256:e8ce21383edb0c4ac5e9a971b58474ea63329f536ba6daec7a5f6f8376eb91b8"
 
 [[mirror]]
 launcher = "nbt"

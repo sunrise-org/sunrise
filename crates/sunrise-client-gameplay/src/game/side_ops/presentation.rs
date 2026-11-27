@@ -28,11 +28,6 @@ impl SideOps for crate::game::client_side::ClientState {
     fn side_is_published(game: &Self::Game<'_>) -> bool {
         game.client_is_published()
     }
-    fn side_clear_lod(game: &mut Self::Game<'_>) {
-        {
-            game.client_clear_lod();
-        }
-    }
     fn side_clear_render_caches(game: &mut Self::Game<'_>) {
         {
             game.client_clear_render_caches();

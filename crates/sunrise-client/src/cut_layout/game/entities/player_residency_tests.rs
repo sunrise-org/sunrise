@@ -363,7 +363,6 @@ fn production_login_and_local_body_constructor_admit_profile_and_real_loan() {
         let net = NetConfig {
             listen: false,
             announce: false,
-            lod_distance: 0,
             ..NetConfig::lan(0, String::new(), 2)
         };
         let config = HubConfig {

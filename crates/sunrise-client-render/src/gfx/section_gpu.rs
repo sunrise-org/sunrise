@@ -1,8 +1,6 @@
 //! GPU representation and fading state of world sections.
 
-use super::{
-    FadeInputs, SectionKey, gpu_culling, lod, packed, resident, section_fade, translucency,
-};
+use super::{FadeInputs, SectionKey, gpu_culling, packed, resident, section_fade, translucency};
 
 use crate::mesher::{SectionMesh, Sides};
 use glam::Vec3;
@@ -24,9 +22,6 @@ pub(crate) struct SectionGpu {
     /// (`packed`, `mesher::packed`) a record each and the vertices of those without one.
     pub(super) solid_slots: u64,
     pub(super) packed: bool,
-    /// Its records are a far tile's (`lod::packed`), not a section's: the two
-    /// layouts are told apart by the base vertex its draws use.
-    pub(super) packed_far: bool,
     /// Where the solid quads' buckets by facing side end (`mesher::Sides`).
     pub(super) sides: Sides,
     pub(super) translucent: u32,
@@ -41,13 +36,6 @@ pub(crate) struct SectionGpu {
     /// while its instance carries a fade (`drawn_faded`), and GPU culling's
     /// pass leaves it out.
     pub(super) gpu_fading: bool,
-    /// When it came in over the far terrain it replaces (drawn whole at once,
-    /// `fade`): a section new where far tiles are drawn, which skips vanilla's
-    /// fade-in. Meshed again, it stays as it was.
-    pub(super) fading: Option<std::time::Instant>,
-    /// When it began to fade out, its column gone over far terrain that
-    /// stays behind it (`Renderer::leave_section`); released once it has.
-    pub(super) leaving: Option<std::time::Instant>,
     /// Animated sprite layers present in this section.
     pub(super) animated_layers: Box<[u16]>,
 }
@@ -81,22 +69,6 @@ impl SectionGpu {
             * std::mem::size_of::<super::TerrainVertex>() as u64
     }
 
-    /// Its fade code this frame: 0, drawn whole, or `lod::HELD` (whole, in
-    /// front of far terrain) while it leaves (`leaving`) or its column has left
-    /// the render distance and far terrain is coming in under it (`retiring`).
-    /// A near section never dithers over far terrain: the holes of its pattern
-    /// showed its own inside (cave walls, the stone under the grass), nearer
-    /// than the tile behind, an x-ray of each column coming in or going out.
-    /// It comes in whole over the tile it replaces, which stays behind it until
-    /// `fading` is `lod::FADE` old, and leaves whole after as long.
-    pub(super) fn fade(&self, retiring: bool) -> u32 {
-        if self.leaving.is_some() || retiring {
-            lod::HELD
-        } else {
-            0
-        }
-    }
-
     /// Its vertices in `arena`, and in `translucent_arena` when `split` (there
     /// is one): (page, first vertex, vertices) of each.
     pub(super) fn vertex_ranges(
@@ -123,18 +95,12 @@ impl SectionGpu {
 
     /// The base vertex of its solid draws: quad `q`'s corners are `base + 4 * q` on (the
     /// quad indices). In a compact layout they name its record's slot past
-    /// `PACKED_BASE`, or past `FAR_BASE` for a far tile's records, which is how
-    /// terrain.wgsl's `section_corner` tells the two apart.
+    /// `PACKED_BASE`.
     pub(super) fn solid_base(&self) -> u32 {
         if !self.packed {
             return self.start as u32;
         }
-        let base = if self.packed_far {
-            crate::lod::packed::FAR_BASE
-        } else {
-            packed::PACKED_BASE
-        };
-        base + 4 * self.start as u32
+        packed::PACKED_BASE + 4 * self.start as u32
     }
 
     /// GPU culling's record of it at `key`, its quads within `bounds`
@@ -168,26 +134,15 @@ impl SectionGpu {
         near && self.gpu_id.is_some() && !self.gpu_fading
     }
 
-    /// Whether frames draw it faded at `f.now`: its instance, as the instance
-    /// loop makes it (`section_instance` with its `fade` and its vanilla
-    /// visibility), is not a whole section's. As time goes on a fade only ends:
-    /// once false, this stays false until the section is meshed again, leaves,
-    /// is held (`lod_retiring`), or the chunk fade-in time changes.
+    /// Whether the section is fading in at `f.now`.
     pub(super) fn drawn_faded(&self, key: SectionKey, f: FadeInputs<'_>) -> bool {
-        let fade = self.fade(f.retiring.contains(&key));
         let visibility = section_visibility(f.uploaded.get(&key), f.fade_ms, f.now);
-        section_instance([0.0; 3], fade, visibility)[3].to_bits()
-            != section_instance([0.0; 3], 0, 1.0)[3].to_bits()
+        section_instance([0.0; 3], visibility)[3].to_bits()
+            != section_instance([0.0; 3], 1.0)[3].to_bits()
     }
 
-    /// When its fade is over at the latest (`drawn_faded`): the end of
-    /// vanilla's fade-in (its first upload and `f.fade_ms`; one coming in over
-    /// far terrain is whole at once, `fade`). None while it leaves or is held,
-    /// which ends only when it goes or is meshed again, and without a fade-in.
+    /// The end of vanilla's fade-in, if a fade-in time is set.
     pub(super) fn fade_end(&self, key: SectionKey, f: FadeInputs<'_>) -> Option<Instant> {
-        if self.leaving.is_some() || f.retiring.contains(&key) {
-            return None;
-        }
         let vanilla = f.uploaded.get(&key).filter(|_| f.fade_ms > 0);
         vanilla.map(|&t| t + std::time::Duration::from_millis(f.fade_ms))
     }
@@ -269,26 +224,6 @@ pub(super) fn decide_fade(
         fades.push(end, key);
     }
     fading
-}
-
-/// GPU culling: the section at `key` began to fade out over far terrain
-/// (`Renderer::leave_section`), or is held while far terrain comes in
-/// (`Renderer::lod_retiring`). It draws faded until it goes or is meshed again,
-/// so its record is flagged and the CPU draws it, with no end to wait for.
-pub(super) fn hold_fading(
-    sections: &mut resident::Resident<SectionGpu>,
-    records: &mut gpu_culling::Records,
-    key: SectionKey,
-) {
-    let Some(s) = sections.find_mut(key).filter(|s| !s.gpu_fading) else {
-        return;
-    };
-    let Some(id) = s.gpu_id else {
-        return;
-    };
-    s.gpu_fading = true;
-    records.set_fading(id, true);
-    sections.set_marked(key, true);
 }
 
 /// GPU culling switched off (`Renderer::set_gpu_culling`): no section keeps a

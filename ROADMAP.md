@@ -34,7 +34,7 @@ Owner: [ludovic111](https://github.com/ludovic111) · Tracking: [#3909](https://
 
 <details><summary>Technical</summary>
 
-Frame pacing at render distance 32 ([#678](https://github.com/horizon-rust/horizon/issues/678)): long frames come from work competing with the render thread. In review: no main-thread tick stutter at high render distances ([#3827](https://github.com/horizon-rust/horizon/issues/3827)), each proto chunk's light view built once ([#3815](https://github.com/horizon-rust/horizon/issues/3815)), video memory handed back by the vertex arena ([#3466](https://github.com/horizon-rust/horizon/issues/3466)), chunk batches assembled on helper threads ([#3036](https://github.com/horizon-rust/horizon/issues/3036)), free structure starts in the generation workers ([#1760](https://github.com/horizon-rust/horizon/issues/1760)). Still open: far terrain at 48 to 64 chunks ([#718](https://github.com/horizon-rust/horizon/issues/718)) and CPU-bound fields of block entities ([#717](https://github.com/horizon-rust/horizon/issues/717)). Every change shows before and after numbers from `tools/perf_bench.py` against vanilla 26.3 ([docs/benchmark.md](docs/benchmark.md)).
+Frame pacing at render distance 32 ([#678](https://github.com/horizon-rust/horizon/issues/678)): long frames come from work competing with the render thread. In review: no main-thread tick stutter at high render distances ([#3827](https://github.com/horizon-rust/horizon/issues/3827)), each proto chunk's light view built once ([#3815](https://github.com/horizon-rust/horizon/issues/3815)), video memory handed back by the vertex arena ([#3466](https://github.com/horizon-rust/horizon/issues/3466)), chunk batches assembled on helper threads ([#3036](https://github.com/horizon-rust/horizon/issues/3036)), free structure starts in the generation workers ([#1760](https://github.com/horizon-rust/horizon/issues/1760)). Still open: CPU-bound fields of block entities ([#717](https://github.com/horizon-rust/horizon/issues/717)). Every change shows before and after numbers from `tools/perf_bench.py` against vanilla 26.3 ([docs/benchmark.md](docs/benchmark.md)).
 
 </details>
 
@@ -170,7 +170,7 @@ Sunrise should run well on small machines: integrated graphics, the Steam Deck, 
 
 <details><summary>Technical</summary>
 
-Partly done: an opt-in 60 FPS cap with fewer workers on battery, Far Detail Reduced for integrated GPUs and animated textures on the GPU (both shipped). Left: measured targets and fixes per class of machine (memory use, worker counts, startup) on a Steam Deck, old Intel and Apple Silicon Macs and 8 GB computers, reported on the Benchmarks page.
+Partly done: an opt-in 60 FPS cap with fewer workers on battery, and animated textures on the GPU. Left: measured targets and fixes per class of machine (memory use, worker counts, startup) on a Steam Deck, old Intel and Apple Silicon Macs and 8 GB computers, reported on the Benchmarks page.
 
 More: [docs/benchmark.md](docs/benchmark.md) · [https://playsunrise.net/docs/performance](https://playsunrise.net/docs/performance)
 
@@ -289,18 +289,6 @@ More: [#3635](https://github.com/horizon-rust/horizon/issues/3635) · [#3636](ht
 ## Later
 
 ### Performance
-
-#### Exact far terrain from real chunks
-
-Far terrain drawn from the world you really built and explored, caves and builds included, not only a preview from the seed.
-
-<details><summary>Technical</summary>
-
-Keep a 3D mip store on disk built from real chunks, drawn by the GPU beside the seed preview for areas nobody has visited. Written from scratch and measured before it is kept. Builds on Far Detail and the far-terrain levels of detail already shipped; the open work on them is [#718](https://github.com/horizon-rust/horizon/issues/718).
-
-More: [#4678](https://github.com/horizon-rust/horizon/issues/4678)
-
-</details>
 
 #### A batch of targeted optimisations
 
@@ -768,18 +756,6 @@ A player's idea (#sunrise-ideas). The launcher's AppImage ships with each launch
 
 ### Sunrise extras
 
-#### A complete video studio inside the game
-
-Record, replay and edit videos without leaving the game: record in a keypress, replay a session, cut and finish the video. One of Sunrise's original goals.
-
-<details><summary>Technical</summary>
-
-Three stages. Recording: capture gameplay in a keypress with an encoder thread and little frame-time cost. Replay: a replay mode for recorded sessions. Editing: cuts, camera paths, titles and export. None of it exists yet; the agent-control socket ([docs/agent-control.md](docs/agent-control.md)) already lets tools drive the game for scripted shots.
-
-More: [#10025](https://github.com/horizon-rust/horizon/issues/10025)
-
-</details>
-
 #### Game menus in the launcher's style
 
 An optional look for the game's own menus and options that matches the Sunrise launcher. Off by default: the vanilla menus stay as they are.
@@ -907,7 +883,6 @@ More: [https://playsunrise.net/docs/performance](https://playsunrise.net/docs/pe
 - **Single player on its own server thread** (v0.2.39): Single player runs on a server thread, as vanilla does, so the world keeps ticking smoothly while the window draws. [#1514](https://github.com/horizon-rust/horizon/issues/1514) · [docs/server-levels.md](docs/server-levels.md)
 - **GPU occlusion culling on Macs** (v0.2.17): On Macs the GPU now skips terrain hidden behind hills and caves: 8 to 48% more frames per second at 32 chunks on an M4 Pro. [#1434](https://github.com/horizon-rust/horizon/issues/1434)
 - **Animated textures on the GPU** (v0.2.5): Water, lava and other animated blocks are now animated by the graphics card: 1.7 to 2.4 times better 1% lows on Intel graphics. [#1239](https://github.com/horizon-rust/horizon/issues/1239)
-- **Far Detail for integrated graphics** (v0.2.5): An optional Reduced setting for far terrain, suggested on integrated graphics, that saves 2 to 4 ms of GPU time per frame. [#1199](https://github.com/horizon-rust/horizon/issues/1199) · [#1029](https://github.com/horizon-rust/horizon/issues/1029)
 - **The launcher's mod browser** (launcher@0.2.0): Search Modrinth for mods, modpacks and resource packs from the launcher; it says before installing what works in Sunrise. [#1154](https://github.com/horizon-rust/horizon/issues/1154) · [#1242](https://github.com/horizon-rust/horizon/issues/1242) · [#1243](https://github.com/horizon-rust/horizon/issues/1243) · [#1246](https://github.com/horizon-rust/horizon/issues/1246) · [docs/mod-browser.md](docs/mod-browser.md)
 - **A blocky, Minecraft-like launcher** (launcher@0.2.0): The launcher got a new blocky look in Sunrise's purple, in dark and light. [#1269](https://github.com/horizon-rust/horizon/issues/1269) · [docs/design-system.md](docs/design-system.md)
 - **Dynamic lights** (v2026.10.22): An optional extra: torches you hold, drop or set on fire light up what is around them. [#1162](https://github.com/horizon-rust/horizon/issues/1162)

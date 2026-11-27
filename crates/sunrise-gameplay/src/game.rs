@@ -210,8 +210,6 @@ pub(in crate::game) use server_side::lan_crafting;
 #[allow(unused_imports)]
 pub(in crate::game) use server_side::lan_entities;
 #[allow(unused_imports)]
-pub(in crate::game) use server_side::lan_far;
-#[allow(unused_imports)]
 pub(in crate::game) use server_side::lan_menus;
 #[allow(unused_imports)]
 pub use server_side::lan_mobs;

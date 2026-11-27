@@ -2,7 +2,7 @@
 //! Sunrise's own, so that picking one gives the same settings whatever was set before.
 //! Every preset turns on the optimizations that leave the picture as it is; Full
 //! Performance adds the ones that change it. What no table names keeps the player's
-//! choice: the display preferences (`graphics_ui`'s `touched`), Far Detail and Leaf
+//! choice: the display preferences (`graphics_ui`'s `touched`), Leaf
 //! Culling, which follow the machine and the look the player picked, Translucent
 //! Batching, on unless the player turned it off, and GPU Culling, off unless the player
 //! turns it on: its picture isn't proven to be vanilla's.
@@ -26,8 +26,6 @@ struct Table {
     entity_distance: f64,
     cutout_leaves: bool,
     weather_radius: i32,
-    /// Far terrain's range in chunks; 0 is off.
-    lod_distance: u32,
     opaque_ice: bool,
     resolution_scale: u32,
     fxaa: bool,
@@ -47,7 +45,6 @@ fn table(preset: Preset) -> Option<Table> {
             entity_distance: 0.5,
             cutout_leaves: false,
             weather_radius: 3,
-            lod_distance: 0,
             opaque_ice: true,
             resolution_scale: 75,
             fxaa: false,
@@ -64,7 +61,6 @@ fn table(preset: Preset) -> Option<Table> {
             entity_distance: 0.5,
             cutout_leaves: false,
             weather_radius: 3,
-            lod_distance: 0,
             opaque_ice: false,
             resolution_scale: 100,
             fxaa: false,
@@ -81,7 +77,6 @@ fn table(preset: Preset) -> Option<Table> {
             entity_distance: 0.75,
             cutout_leaves: true,
             weather_radius: 5,
-            lod_distance: 0,
             opaque_ice: false,
             resolution_scale: 100,
             fxaa: false,
@@ -98,7 +93,6 @@ fn table(preset: Preset) -> Option<Table> {
             entity_distance: 1.0,
             cutout_leaves: true,
             weather_radius: 10,
-            lod_distance: 64,
             opaque_ice: false,
             resolution_scale: 100,
             fxaa: true,
@@ -115,7 +109,6 @@ fn table(preset: Preset) -> Option<Table> {
             entity_distance: 1.5,
             cutout_leaves: true,
             weather_radius: 10,
-            lod_distance: 128,
             opaque_ice: false,
             resolution_scale: 100,
             fxaa: true,
@@ -141,7 +134,6 @@ pub fn apply_preset(preset: Preset, s: &mut Settings) {
     s.graphics_preset = "custom".into();
     let g = &mut s.sunrise;
     g.preset = preset;
-    g.lod_distance = t.lod_distance;
     g.cave_culling = true;
     g.entity_culling = EntityCullingMode::Asynchronous;
     g.particle_culling = ParticleCullingMode::Asynchronous;

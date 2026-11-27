@@ -229,7 +229,7 @@ swim in it or get pushed by it. In the world it draws its `sprite`, a block atla
 its `tint`; with neither it looks like water, and a `tint` alone colours water's textures. A client mod's
 `register_fluid_models` hook accepts `mod_api::FluidModel` values with separate flowing and overlay sprites via
 `event.register(model)`. The hook runs again before each resource bake, so a resource reload can change model
-identifiers as well as textures. Far terrain (LOD) omits mod fluids. LAN and dedicated server players play with
+identifiers as well as textures. LAN and dedicated server players play with
 them when they run the same mods: a client whose mods add different content is refused when it joins, with
 the reason.
 

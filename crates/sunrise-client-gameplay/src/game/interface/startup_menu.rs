@@ -699,14 +699,6 @@ impl Loading {
                         &additional,
                     );
                 }
-                Event::DownloadPack(i) => {
-                    let dir = packs::packs_dir();
-                    if let Some(screen) = &mut self.menu.options.pack_screen
-                        && let Some(browser) = &mut screen.browser
-                    {
-                        browser.download(i, &dir, sunrise_core::VANILLA_VERSION);
-                    }
-                }
                 Event::DataPacks(ids) => {
                     let resources = self.vanilla_root.clone();
                     if let Some(title) = &mut self.menu.title {
@@ -777,11 +769,8 @@ impl Loading {
                     super::packs::open_uri(super::options::ACCESSIBILITY_HELP_LINK)
                 }
                 // Mods' settings pages and config screens open only in a running game.
-                // The HUD editor needs a world: its button is inactive here.
-                Event::NativeSettings(_)
-                | Event::NativeSetting(..)
-                | Event::ModConfigScreen(_)
-                | Event::HudEditor => {}
+                Event::NativeSettings(_) | Event::NativeSetting(..) | Event::ModConfigScreen(_) => {
+                }
                 // The startup menu runs before the game opens a control socket,
                 // and before its sound engine (no clicks, no volume previews,
                 // and no music tracks to list or play).
@@ -792,16 +781,6 @@ impl Loading {
                 | Event::ListMusicTracks
                 | Event::PlayMusicTrack(..)
                 | Event::Volume(..) => {}
-                Event::OpenStudioFolder => {
-                    let dir = std::path::PathBuf::from("recordings");
-                    let _ = std::fs::create_dir_all(&dir);
-                    packs::open_folder(&dir);
-                }
-                Event::OpenStudioReplay(path) => {
-                    self.menu.options_open = false;
-                    self.menu.dragging = false;
-                    self.menu.pending = Some(PendingWorldEntry::StudioReplay(path));
-                }
             }
         }
     }

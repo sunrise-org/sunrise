@@ -1,6 +1,6 @@
 # Sunrise extras
 
-Optional conveniences built into the client: fullbright, dynamic lights, your own name tag, hiding block-break particles, auto-reconnect,
+Optional conveniences built into the client: dynamic lights, your own name tag, hiding block-break particles, auto-reconnect,
 Mouse Tweaks-style inventory controls, inventory sorting, a smooth chat and a music page. **Every one is off by default**: a fresh
 install looks and behaves exactly like vanilla 26.3, and turning an extra off
 again restores vanilla's behaviour completely.
@@ -18,7 +18,7 @@ again restores vanilla's behaviour completely.
 | Mouse Tweaks-style controls, sort buttons | `crates/sunrise-client-gameplay/src/game/interface/extras/mouse_tweaks.rs`, `crates/sunrise-client-gameplay/src/game/interface/extras/sorting.rs` |
 | Sort order and its clicks | `crates/sunrise-client/src/inv_sort.rs` (pure, unit tested) |
 | The music page's rows, and the pools it filters | `options_ui.rs` (`Page::Music`), `crates/sunrise-client/src/music.rs` (`track_groups`, `MusicManager::set_off`), `sound_events.rs` (`sound_except`) |
-| The settings page | `extras_ui.rs`, shown as **Options → Sunrise Settings... → Gameplay** (`sunrise_ui.rs`); fullbright, dynamic lights and hiding block-break particles are on its Quality page instead (`graphics_ui.rs`), the shader pack key on its Shaders page, No AI on its AI Agent page (Tools) |
+| The settings page | `extras_ui.rs`, shown as **Options → Sunrise Settings... → Gameplay** (`sunrise_ui.rs`); dynamic lights and hiding block-break particles are on its Quality page instead (`graphics_ui.rs`), the shader pack key on its Shaders page, No AI on its AI Agent page (Tools) |
 
 The settings are grouped by extra, under a header each, one to a row, and the strip
 under the list says what the row in focus or under the pointer does. An
@@ -47,15 +47,6 @@ in Controls, and adding one would put a non-vanilla mapping into `options.txt`.
   needed. `--pregen` still enables it for the whole run. Dedicated servers use their own property.
 - Turning it off hides the command without cancelling an existing task; turn it on again to manage
   that task, or cancel it first. See [pregeneration](pregeneration.md).
-
-### Fullbright (`fullbright`, default off)
-- Displays blocks and entities with a fully bright lightmap, including in dark caves.
-- Turning it off restores the normal lightmap using the current brightness,
-  time of day and effects. The brightness slider keeps its normal range.
-- Held off on another's server (#3823): a multiplayer server or another player's LAN world draws the normal
-  lightmap and the graphics screen hides the row, while the saved choice stays for the next world. Single
-  player, a LAN host and Replay Studio keep it (`fullbright_held`,
-  `game/options.rs`).
 
 ### Dynamic lights (`dynamicLights`, default off)
 - A light source held by a player or mob (main or off hand), dropped as an item, or an entity on
@@ -184,10 +175,19 @@ and the container screen tests are unchanged).
 
 - The key on Sunrise Settings' Shaders page for the shader pack pick: press it and the running pack turns off, press it again and
   the same pack runs again. Click the row, then press a key to rebind it (Escape unbinds); it is not a vanilla
-  key binding, so it never collides with one (Replay Studio keeps physical `K` for its camera keyframe).
+  key binding, so it never collides with one.
 - Turning off writes the pick to `lastShaderPack`, so the pack stays off across restarts until the key is
   pressed again. The menu's second click on the picked pack does the same through the same pick.
 - A pack whose owning mod is off can't run: the key reports that instead of claiming it turned on.
+
+### Chat options (default off)
+
+| Option | Key | What it does |
+|---|---|---|
+| Timestamps | `chatTimestamps` | The local time a message came in, before it, in grey (`sunrise.chat.timestamp`). |
+| Compact chat | `chatCompact` | A message equal to the one before it (same text, kind and tag, neither signed) raises that one's count, "(x3)", instead of adding lines. |
+| Copy on click | `chatCopy` | In the open chat, a click on a message where the click has no action of its own copies the message's text (without time or count). |
+| Chat search | `chatSearch` | Ctrl+F in the open chat: the box takes a query and only the messages holding it (any case) show. Enter, Esc or Ctrl+F again stops. |
 
 ### Smooth chat (`chatAnimation`, default off; `chatIndicator`, default on)
 - A new chat line slides in from the left while it fades in over a quarter of
@@ -245,7 +245,7 @@ Splitscreen is temporarily unavailable; it returns as an official mod.
   the world, like vanilla's HUD. Extras in the top left corner give way to the
   debug screen (F3), which shows the FPS anyway.
 - Corners stack: extras placed in the same corner stack downward (top corners)
-  or upward (bottom corners) in the order the PvP HUD widgets, then mods' panels. The top
+  or upward (bottom corners) in draw order. The top
   right corner starts below the status effect icons.
 
 ## Perf budget

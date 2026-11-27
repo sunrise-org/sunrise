@@ -59,11 +59,6 @@ pub trait PresentationSideGameExt<'__sg>: crate::game::SideGame<'__sg> {
     }
 
     #[inline(always)]
-    fn side_clear_lod(&mut self) {
-        <Self::State as SideOps>::side_clear_lod(self)
-    }
-
-    #[inline(always)]
     #[allow(dead_code)]
     fn side_clear_render_caches(&mut self) {
         <Self::State as SideOps>::side_clear_render_caches(self)
@@ -139,7 +134,6 @@ pub trait SideOps: Sized {
     fn side_sync_hub_clocks(game: &mut Self::Game<'_>);
     fn side_has_singleplayer_server(game: &Self::Game<'_>) -> bool;
     fn side_is_published(game: &Self::Game<'_>) -> bool;
-    fn side_clear_lod(game: &mut Self::Game<'_>);
     fn side_clear_render_caches(game: &mut Self::Game<'_>);
     fn side_expire_cracks(game: &mut Self::Game<'_>);
     fn side_update_spawner_display(game: &mut Self::Game<'_>, key: (i32, i32, i32)) -> bool;

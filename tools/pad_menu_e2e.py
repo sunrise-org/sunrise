@@ -41,7 +41,6 @@ Cases:
 - long_label: a label too wide for its button slides, beside its glyph.
 - every_screen_has_targets: the title's submenus and every options page give the focus something to land on.
 - pause_icon: the pause menu's icons are targets, and A presses one.
-- studio_rows: the D-pad walks Replay Studio's recordings to its buttons, and B leaves.
 - erase_checkbox: the D-pad reaches Optimize World's Erase Cached Data box, and A ticks it.
 - controller_settings_pad: Controller Settings on the settings shell, by the pad alone: its pages, the D-pad through
   every page and its rows, the strip describing the focused row, A changing Vibration, X undoing it, B leaving.
@@ -124,7 +123,6 @@ import subprocess
 import sys
 import tempfile
 import time
-import zipfile
 import zlib
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -1618,17 +1616,16 @@ def controller_settings_keys(args, name):
 
 OPTIONS_PAGES = ('main', 'video', 'sound', 'controls', 'keybinds', 'controller', 'controller-binds', 'controller-radial', 'mouse', 'chat',
                  'accessibility', 'language', 'font', 'packs', 'mods', 'shader-packs', 'graphics', 'graphics-advanced',
-                 'graphics-hdr', 'extras', 'pvp', 'credits', 'sunrise', 'agent')
+                 'graphics-hdr', 'extras', 'credits', 'sunrise', 'agent')
 # Screens allowed to draw no target, and why. The pad falls back to the crosshair on these.
 TARGETS_WAIT = 5
-STUDIO_RECORDINGS, STUDIO_BUTTONS = 12, 3
 
 
 EXTRAS_ABOUT = 'Optional additions, all off by default'
 PREGEN = 'Chunk pregeneration'
 PREGEN_ABOUT = 'Enables /pregen in your single-player and LAN worlds'
 FIRST_EXTRA = 'Own name tag'
-LAST_MENU_EXTRA = 'Resource pack browser'
+LAST_MENU_EXTRA = 'Scroll wheel changes settings'
 GREYED_EXTRA = 'Sort key'
 ROW_WALK = 40
 
@@ -2154,72 +2151,6 @@ def every_screen_has_targets(game, check, single, options, quit_game):
         game.ctl('options', page)
         time.sleep(SETTLE)
         check_has_targets(game, check, page)
-    open_replay_studio(game)
-    check_has_targets(game, check, 'studio')
-
-
-def open_replay_studio(game):
-    """Replay Studio, from its row on Sunrise Settings' Tools page (the wheel over the page list brings the Tools
-    tab into view in a short window)."""
-    game.ctl('options', 'sunrise')
-    time.sleep(SETTLE)
-    game.wait_targets()
-    for _ in range(10):
-        tools = next((w for w in game.widgets() if w['id'] == 'tools'), None)
-        if tools:
-            break
-        # Over the page list's first place, under the search field.
-        x, y, w, h = widget(game, 'field-0')['bounds']
-        game.ctl('scroll-at', x + w / 2, y + 30, -1)
-        time.sleep(SETTLE)
-    click_widget(game, widget(game, 'tools'))
-    click_widget(game, widget(game, 'studio'))
-
-
-def seed_recordings(game_home):
-    """More saved recordings than the Studio page shows at once."""
-    folder = game_home / 'recordings'
-    folder.mkdir()
-    for i in range(STUDIO_RECORDINGS):
-        with zipfile.ZipFile(folder / f'run{i:02}.mcpr', 'w') as archive:
-            archive.writestr('metaData.json', json.dumps({'serverName': f'Server{i:02}', 'date': i, 'duration': 1000}))
-
-
-def studio_rows(args, name):
-    """The D-pad walks Replay Studio's recordings, scrolling the hidden ones, to its buttons."""
-    game = Game(args, name, seed=seed_recordings)
-    check = Check()
-    try:
-        game.wait_targets()
-        open_replay_studio(game)
-        game.wait_targets()
-        first = game.rows()[0]['label']
-        for _ in range(4):
-            game.stick()
-        check(game.rows()[0]['label'] != first, f'the right stick did not scroll the list: {first} still on top')
-        for _ in range(8):
-            game.stick(1)
-        check(game.rows()[0]['label'] == first, f'the right stick did not scroll back: {game.rows()[0]["label"]} on top')
-        kinds = [t['kind'] for t in game.menu()['targets']]
-        check(kinds.count('row') > 0 and kinds.count('row') < STUDIO_RECORDINGS, f'recordings in view: {kinds}')
-        check(kinds.count('button') == STUDIO_BUTTONS, f'its buttons: {kinds}')
-        game.pad('down')
-        walked = set()
-        for _ in range(STUDIO_RECORDINGS + STUDIO_BUTTONS):
-            walked.add(game.focused_label())
-            before = game.focus()
-            kind = next((t['kind'] for t in game.menu()['targets'] if tuple(t['rect']) == before), None)
-            if kind == 'button':
-                break
-            game.pad('down')
-        check(kind == 'button', f'the D-pad never left the list for the buttons: on {kind}')
-        check(len(walked) >= STUDIO_RECORDINGS, f'the D-pad skipped hidden recordings: {sorted(map(str, walked))}')
-        check(game.menu()['actions'], 'Done declares no button')
-        game.pad('east')
-        time.sleep(SETTLE)
-        check(not any(w['id'] == 'open-folder' for w in game.widgets()), 'B stayed on the Studio page')
-    finally:
-        game.quit()
     return check.failures
 
 
@@ -4755,7 +4686,7 @@ CASES = {'idle_a': idle_a, 'idle_b': idle_b, 'idle_x': idle_x, 'release': releas
          'controller_settings_keys': controller_settings_keys,
          'controller_notices': controller_notices,
          'every_screen_has_targets': every_screen_has_targets,
-         'studio_rows': studio_rows, 'pause_icon': pause_icon,
+         'pause_icon': pause_icon,
          'erase_checkbox': erase_checkbox,
          'extras_shell': extras_shell,
          'extras_shell_edges': extras_shell_edges,
