@@ -10,10 +10,11 @@ use mod_api::__private::game::Fields;
 use mod_api::{BufferError, Identifier, PipelineDrawError, UniformBufferRef};
 use std::collections::{BTreeMap, BTreeSet};
 
-/// Reserved view IDs for engine-owned textures (never issued to cached standalone views).
+/// Reserved view IDs for engine-owned textures (never issued to cached standalone views). The
+/// world depth has none: the renderer replaces its texture, so its view ID comes from this
+/// store's counter each time (`ModGpuResources::replace_world_depth`).
 pub const ATLAS_VIEW_ID: u64 = 1;
 pub const LIGHTMAP_VIEW_ID: u64 = 2;
-pub const WORLD_DEPTH_VIEW_ID: u64 = 3;
 const FIRST_CUSTOM_VIEW_ID: u64 = 16;
 /// Set on the view ID of a dynamic texture, whose ID is its GPU texture's revision from the HUD's
 /// own counter: that keeps it apart from the IDs above, which a bind group's cache key shares.
@@ -222,7 +223,7 @@ impl ModUniformBuffers {
         Ok((view_id, view))
     }
 
-    fn alloc_view_id(&mut self) -> u64 {
+    pub(super) fn alloc_view_id(&mut self) -> u64 {
         let id = self.next_view_id;
         self.next_view_id = self
             .next_view_id

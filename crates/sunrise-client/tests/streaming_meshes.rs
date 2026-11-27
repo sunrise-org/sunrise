@@ -25,10 +25,10 @@ use sunrise_client::{
     },
     world::World,
 };
-use sunrise_core::biome::BiomeZoom;
+use sunrise_core::{biome::BiomeZoom, prepared_test_support::STREAMING_INPUTS};
 use sunrise_world::registry::BlockStateId;
-#[path = "../src/test_resources.rs"]
-mod test_resources;
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+mod prepared_test_root;
 
 /// A saved world: every column loads with its light, as saved chunks do.
 struct Saved;
@@ -52,7 +52,7 @@ impl ChunkGenerator for Saved {
 #[test]
 #[ignore = "daily"]
 fn columns_loaded_past_the_render_distance_mesh_when_they_come_in_range() {
-    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[STREAMING_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let render = Arc::new(
         sunrise_client::assets::RenderAssets::load(
@@ -166,7 +166,7 @@ fn roofed(x: i32, z: i32, stone: u32, glowstone: u32) -> Chunk {
 #[test]
 #[ignore = "daily"]
 fn relit_columns_keep_every_mesh_current() {
-    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[STREAMING_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let render = Arc::new(
         sunrise_client::assets::RenderAssets::load(
@@ -307,7 +307,7 @@ fn relit_columns_keep_every_mesh_current() {
 #[test]
 #[ignore = "daily"]
 fn every_extra_area_loads_however_the_areas_change() {
-    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[STREAMING_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let render = Arc::new(
         sunrise_client::assets::RenderAssets::load(
@@ -387,7 +387,7 @@ fn every_extra_area_loads_however_the_areas_change() {
 #[test]
 #[ignore = "daily"]
 fn meshes_waiting_for_upload_hold_back_new_mesh_jobs() {
-    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
+    let root = prepared_test_root::prepared_root(&[STREAMING_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let source = sunrise_assets::resource_source::ResourceRoot::directory(root.clone());
     let render = Arc::new(sunrise_client::assets::RenderAssets::load(&source, &assets).unwrap());

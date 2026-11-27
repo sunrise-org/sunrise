@@ -42,7 +42,8 @@ struct Block {
     array: String,
 }
 
-/// `code` with its plain `in`/`out` interface blocks as varyings, or `None` when it has none.
+/// `code` with its plain `in`/`out` interface blocks as varyings, or `None` when nothing changes.
+/// Blocks that cannot be flattened stay as written for downstream parsing.
 pub(super) fn flatten(code: &str) -> Option<String> {
     flatten_as(code, "")
 }
@@ -283,7 +284,8 @@ fn find_blocks(tokens: &[String]) -> Vec<Block> {
 }
 
 /// The block whose declaration runs from token `start` to its `{` at `open`, if it is a plain
-/// `[layout(...)] in|out Name { members } [instance];`.
+/// `[layout(...)] in|out Name { members } [instance];`. A member without a type leaves the
+/// block unflattened.
 fn block(tokens: &[String], start: usize, open: usize) -> Option<Block> {
     let head: Vec<usize> = (start..open).filter(|&i| significant(&tokens[i])).collect();
     let (&name_at, rest) = head.split_last()?;
@@ -344,12 +346,12 @@ fn block(tokens: &[String], start: usize, open: usize) -> Option<Block> {
                 break;
             }
         }
-        // The type, its array suffix, then the declarators.
-        k += 1;
+        // Skip the required type, then read its array suffix and declarators.
+        let declarators = words.get(k + 1..)?;
         let mut names = Vec::new();
         let mut brackets = 0;
         let mut expect_name = true;
-        for &w in &words[k..] {
+        for &w in declarators {
             match tokens[w].as_str() {
                 "[" => brackets += 1,
                 "]" => brackets -= 1,
@@ -405,6 +407,28 @@ fn block(tokens: &[String], start: usize, open: usize) -> Option<Block> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::translate::{Target, tests::program};
+
+    #[test]
+    fn an_empty_interface_member_is_refused_at_its_line() {
+        let vsh = "#version 430\nout VertexData {\n    vec2 uv;\n    ;\n} vOut;\n\
+                   void main() { gl_Position = vec4(1.0); }\n";
+        let fsh = "#version 120\nvoid main() { gl_FragColor = vec4(1.0); }\n";
+        let Err(errors) = program(
+            &[("composite.vsh", vsh), ("composite.fsh", fsh)],
+            Target::Buffers,
+        ) else {
+            panic!("an empty interface member translated");
+        };
+        assert!(
+            errors.iter().any(|error| {
+                error.file == "composite.vsh"
+                    && error.line == 4
+                    && error.message.contains("found Semicolon")
+            }),
+            "{errors:?}"
+        );
+    }
 
     /// A local variable or parameter named like the instance hides it (GLSL 4.60, 4.2), and
     /// `light.v` is another struct's member: the block is still flattened, those stay.

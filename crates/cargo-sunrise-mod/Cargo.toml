@@ -22,7 +22,7 @@ sunrise-mod-source = { path = "../sunrise-mod-source" }
 # `canonicalize` that keeps plain Windows paths (no verbatim prefix), as `cargo metadata` prints them.
 dunce = "1.0.5"
 sunrise-mod-package = { path = "../sunrise-mod-package", default-features = false, features = ["index", "prebuilt", "references", "folder"] }
-# `native-build`: the launcher's native mod build, run from a JSON plan.
+# The native mod compiler, also exposed as `native-build` with a JSON plan.
 sunrise-native-build = { path = "../sunrise-native-build" }
 # The uses scan, the fit test, the surface search and its diff, over the fetched SDK's `surface.json`.
 sunrise-mod-surface = { path = "../sunrise-mod-surface" }

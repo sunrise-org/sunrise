@@ -1261,7 +1261,7 @@ impl Renderer {
         {
             let mut warned = self
                 .mod_gpu
-                .warned_frame_graph_cycles
+                .warned_frame_graph
                 .lock()
                 .unwrap_or_else(|e| e.into_inner());
             mod_frame_graph::FrameGraphRunner::prepare(recorded, hook_oit, &mut warned)

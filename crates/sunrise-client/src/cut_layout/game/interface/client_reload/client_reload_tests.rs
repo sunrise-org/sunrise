@@ -852,7 +852,7 @@ fn client_reload_reads_real_assets_with_pack_overrides() {
                 let base = sunrise_gameplay_common::game::mods::content_overlay(
                     &resources,
                     &sources,
-                    &sunrise_level::logging::game_home().join("jars"),
+                    &dir.join("jars"),
                 )
                 .unwrap()
                 .root;

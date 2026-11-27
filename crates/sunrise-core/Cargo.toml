@@ -9,6 +9,7 @@ description = "Sunrise simulation foundations for the pinned vanilla Java Editio
 [features]
 # Records the call sites of LegacyRandom draws (mob AI parity debugging).
 rng-trace = []
+test-support = []
 
 [dependencies]
 stacker = "0.1.25"

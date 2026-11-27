@@ -1866,7 +1866,8 @@ pub enum MeshError {
     InvalidAlignment,
     /// Buffer length is zero, or `byte_offset + data.len()` exceeds the buffer capacity.
     OutOfRange,
-    /// Requested buffer size exceeds `device.limits().max_buffer_size`.
+    /// Requested buffer size exceeds `device.limits().max_buffer_size`
+    /// ([`RenderLimits::max_buffer_size`]).
     ExceedsDeviceLimit,
 }
 
@@ -2783,6 +2784,36 @@ pub struct RenderCapabilities {
     /// adapter lacks `MULTI_DRAW_INDIRECT_COUNT`, and on DirectX 12, whose count draws leave an
     /// indexed command's `base_vertex` out of the vertex fetch.
     pub multi_draw_indirect_count: bool,
+    /// The device's own size limits, the numbers the buffer, binding, dispatch and render target
+    /// refusals are checked against.
+    pub limits: RenderLimits,
+}
+
+/// The device's numeric limits that mod GPU calls are checked against
+/// ([`RenderCapabilities::limits`]), as the adapter reports them (vanilla's
+/// `GpuDevice.getDeviceInfo().limits()`). All zero where no GPU renderer is available. A mod
+/// sizes its buffers, dispatches and targets from these rather than trying an allocation and
+/// reading the refusal.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+#[non_exhaustive]
+// no wire: local client device limits.
+pub struct RenderLimits {
+    /// The largest GPU buffer in bytes (`max_buffer_size`): a [`crate::StorageBuffer`], a mesh
+    /// buffer, a uniform buffer.
+    pub max_buffer_size: u64,
+    /// The longest range one storage binding may take, in bytes
+    /// (`max_storage_buffer_binding_size`, at most `max_buffer_size`). Also the largest inline
+    /// texel payload a draw may bind.
+    pub max_storage_buffer_binding_size: u64,
+    /// The largest inline uniform payload a draw may bind, in bytes
+    /// (`max_uniform_buffer_binding_size`, at most `max_buffer_size`).
+    pub max_uniform_buffer_binding_size: u64,
+    /// The most workgroups a compute dispatch may run along each axis
+    /// (`max_compute_workgroups_per_dimension`).
+    pub max_compute_workgroups_per_dimension: u32,
+    /// The longest side of a 2D texture in pixels (`max_texture_dimension_2d`): render targets
+    /// and dynamic textures.
+    pub max_texture_dimension_2d: u32,
 }
 
 /// Why a mod-owned offscreen [`RenderTargetRef`] operation was refused.
@@ -2797,7 +2828,8 @@ pub enum RenderTargetError {
     Stale,
     /// The calling mod does not own this render target.
     NotOwned,
-    /// Width or height was zero or exceeded `device.limits().max_texture_dimension_2d`.
+    /// Width or height was zero or exceeded `device.limits().max_texture_dimension_2d`
+    /// ([`RenderLimits::max_texture_dimension_2d`]).
     InvalidSize,
     /// `color_targets.len()` exceeded [`MAX_COLOR_TARGETS`] (`8`).
     TooManyColorTargets,
@@ -4165,6 +4197,19 @@ pub enum PipelineDrawError {
     /// Set-1 [`DrawBindings`] is missing a declared entry, supplies an unknown/duplicate entry,
     /// mismatches kind or `min_size`, references an unknown/unavailable texture, or provides an
     /// invalid push-constant payload.
+    ///
+    /// A draw or compute dispatch that samples a transient colour or depth attachment must
+    /// declare `.reads(FrameTarget::Transient(id))` on a consumer pass that does not write that
+    /// transient; the graph computes the target's lifetime from declared uses, as vanilla's
+    /// `FramePass.reads` does. An undeclared sample is refused at submit, with this error for a
+    /// draw and [`crate::ComputeDispatchError::InvalidBinding`] for a dispatch, even when the
+    /// pass lists the transient in `.writes(...)`. The renderer logs the refusal once per pass
+    /// label and transient id, not once per command, and only when the id names a transient of
+    /// the graph and the draw is not sampling its own attachment. A draw sampling its own
+    /// transient attachment returns [`Self::TargetReadWriteHazard`] instead. Declaring the read
+    /// on a pass that also writes the transient is refused before recording with
+    /// [`crate::FrameGraphError::SelfDependency`]: split the producer and the consumer. A
+    /// refused command records nothing.
     InvalidBinding,
     /// An active shader pack links this world draw to a translated pack program, whose fixed
     /// sampler layout cannot bind one of the draw's textures. Direct mod draws, including those
@@ -4190,6 +4235,9 @@ pub enum PipelineDrawError {
     /// [`DrawBindings`] binds a mip level of a [`RenderTargetRef`] both as a storage image and
     /// as something else the draw reads or writes (a sampled view, or a storage image of another
     /// access), which one render pass cannot do.
+    ///
+    /// A draw that samples the transient attachment it renders into also returns this error,
+    /// before the undeclared-read refusal documented on [`Self::InvalidBinding`] applies.
     TargetReadWriteHazard,
 }
 
