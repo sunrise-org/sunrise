@@ -40,7 +40,7 @@ impl Title {
         focused: bool,
         phases: &mut dyn FnMut(crate::screen_draw::RenderPhase, &mut HudBatch),
     ) {
-        crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+        crate::ui::menu_background_full(batch, atlas, w, h, false);
         phases(crate::screen_draw::RenderPhase::Background, batch);
         centered(
             atlas,
@@ -96,7 +96,7 @@ impl Title {
         (w, h): (f32, f32),
         phases: &mut dyn FnMut(crate::screen_draw::RenderPhase, &mut HudBatch),
     ) {
-        crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+        crate::ui::menu_background_full(batch, atlas, w, h, false);
         phases(crate::screen_draw::RenderPhase::Background, batch);
         let description = lang::get("sunrise.biome_regions.adopt.description");
         let lines = wrapped(atlas, &description, w - 50.0);

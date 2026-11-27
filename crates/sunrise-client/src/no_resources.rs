@@ -106,7 +106,11 @@ impl NoResources {
         let layout = self.layout((ui.w, ui.h), |face, size, text| {
             ui.measure(face, size, text)
         });
-        ui.rounded(0.0, 0.0, ui.w, ui.h, 0.0, color::bg());
+        if ui.batch.content_clip().is_some() {
+            ui.batch.fill_target(ui.atlas, color::bg());
+        } else {
+            ui.rounded(0.0, 0.0, ui.w, ui.h, 0.0, color::bg());
+        }
         let mut y = layout.y;
         ui.text_line(
             Face::Medium,

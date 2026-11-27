@@ -5952,7 +5952,7 @@ impl Screen {
         let cx = (w / 2.0).floor();
         let mid = (h / 2.0).floor();
         let t = crate::lang::get;
-        crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+        crate::ui::menu_background_full(batch, atlas, w, h, false);
         // Popup underlays and the configure tab strip are part of the active
         // screen's background; report only after their final background paint.
         match &self.subscreen {
@@ -6218,7 +6218,7 @@ impl Screen {
                 // which *replaces* the backup screen: only the logo, the task's title and
                 // the dots show. Nothing of the list may leak through behind them.
                 if restore_job.is_some() || download_task.is_some() {
-                    crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                    crate::ui::menu_background_full(batch, atlas, w, h, false);
                     phases(crate::screen_draw::RenderPhase::Background, batch);
                     let top = task_stack_top((w, h));
                     realms_logo(batch, atlas, cx, top);
@@ -8009,7 +8009,7 @@ impl Screen {
                 ..
             }) => {
                 self.draw_main(batch, atlas, cursor, w, h, false);
-                batch.fill(atlas, 0.0, 0.0, w, h, rgba(16, 16, 16, 192));
+                batch.fill_target(atlas, rgba(16, 16, 16, 192));
                 let lines = if message.is_empty() {
                     Vec::new()
                 } else {

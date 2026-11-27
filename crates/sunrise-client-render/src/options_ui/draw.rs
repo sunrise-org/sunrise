@@ -44,7 +44,7 @@ impl OptionsUi {
         let (w, h) = (batch.width, batch.height);
         let page = self.page();
         if self.resource_error.is_some() {
-            ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);
+            ui::menu_background_full(batch, atlas, w, h, self.in_world);
             self.frame_draw = Some(FrameDraw::Error);
             return;
         }
@@ -62,7 +62,7 @@ impl OptionsUi {
         {
             FrameDraw::Calibration(calibration.draw_background(batch, atlas))
         } else if page == Page::ControllerRadialName && self.radial.screen.naming.is_some() {
-            ui::menu_background(batch, atlas, 0.0, 0.0, w.ceil(), h.ceil(), in_world);
+            ui::menu_background_full(batch, atlas, w.ceil(), h.ceil(), in_world);
             FrameDraw::RadialName
         } else if let Some(shell) = self.shell_mut() {
             shell.draw_background(s, batch, atlas, in_world, waiting);
@@ -74,7 +74,7 @@ impl OptionsUi {
             if page == Page::Packs {
                 self.watch_data_packs(atlas, (w, h));
             }
-            ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
+            ui::menu_background_full(batch, atlas, w, h, in_world);
             match page {
                 Page::Mods => FrameDraw::Mods,
                 Page::Packs => FrameDraw::Packs,
@@ -87,7 +87,7 @@ impl OptionsUi {
             let layout = self.built_layout(s, w, h);
             let (_, top, bottom, _) = layout.parts();
             self.size = (w, h);
-            ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
+            ui::menu_background_full(batch, atlas, w, h, in_world);
             if bottom > top {
                 ui::list_background(batch, atlas, top, bottom, in_world);
             }

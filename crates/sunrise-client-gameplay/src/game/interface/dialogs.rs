@@ -1387,7 +1387,7 @@ fn draw_background(batch: &mut HudBatch, atlas: &sunrise_client::hud::HudAtlas, 
     let (w, h) = (batch.width, batch.height);
     // Screen.extractBackground draws the panorama and blur before this menu overlay.
     // The frame renderer already supplies them while a server is configuring.
-    ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
+    ui::menu_background_full(batch, atlas, w, h, in_world);
 }
 
 #[cfg(feature = "client")]

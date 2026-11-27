@@ -336,12 +336,43 @@ impl ClientGame<'_> {
             self.client.scope_scale = 0.5;
             return;
         }
-        let draws = hud_overlays::spyglass(
-            batch.width as i32,
-            batch.height as i32,
-            self.client.scope_scale,
+        let atlas = &self.client.gui.atlas;
+        if batch.content_clip().is_none() {
+            let draws = hud_overlays::spyglass(
+                batch.width as i32,
+                batch.height as i32,
+                self.client.scope_scale,
+            );
+            hud_layout::paint(batch, atlas, &draws);
+            return;
+        }
+        let [x, y, w, h] = batch.target_rect();
+        let start = batch.vertices.len();
+        let side = (w.min(h) * self.client.scope_scale).floor().max(1.0);
+        let (left, top) = ((w - side) * 0.5, (h - side) * 0.5);
+        let draws = hud_overlays::spyglass(side as i32, side as i32, 1.0);
+        hud_layout::paint(batch, atlas, &draws[..1]);
+        batch.shift_to_target_since(start, [left, top]);
+        let black = 0xff00_0000;
+        batch.fill(atlas, x, y, w, top.max(0.0), black);
+        batch.fill(atlas, x, y + top + side, w, top.max(0.0), black);
+        batch.fill(
+            atlas,
+            x,
+            y + top.max(0.0),
+            left.max(0.0),
+            side.min(h),
+            black,
         );
-        hud_layout::paint(batch, &self.client.gui.atlas, &draws);
+        batch.fill(
+            atlas,
+            x + left + side,
+            y + top.max(0.0),
+            left.max(0.0),
+            side.min(h),
+            black,
+        );
+        batch.full_target_since(start);
     }
 }
 

@@ -235,7 +235,7 @@ impl<P: Copy, S: Copy> Lines<P, S> {
 /// The world or the menu's background, as vanilla's screens draw it.
 pub(crate) fn backdrop(batch: &mut HudBatch, atlas: &HudAtlas, in_world: bool) {
     let (w, h) = (batch.width, batch.height);
-    ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
+    ui::menu_background_full(batch, atlas, w, h, in_world);
 }
 
 /// The mark and the screen's name over the search field.

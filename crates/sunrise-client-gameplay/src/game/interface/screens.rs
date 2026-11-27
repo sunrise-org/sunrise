@@ -411,7 +411,7 @@ impl crate::game::ClientGame<'_> {
         let friends = self.friends_shown();
         let atlas = &self.client.gui.atlas;
         let (w, h) = (batch.width, batch.height);
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        ui::menu_background_full(batch, atlas, w, h, true);
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
         let title = Text::translate("menu.game", &[]);
         widgets::begin_screen(|| ScreenInfo::new("pause", title.plain()));
@@ -774,15 +774,17 @@ impl crate::game::ClientGame<'_> {
         let atlas = &self.client.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         // fillGradient(0x60500000 -> 0xA0803030).
-        let rows = h.ceil() as i32;
+        let [left, top, width, height] = batch.target_rect();
+        let start = batch.vertices.len();
+        let rows = height.ceil() as i32;
         for y in 0..rows {
-            let t = y as f32 / h.max(1.0);
+            let t = y as f32 / height.max(1.0);
             let lerp = |a: f32, b: f32| (a + (b - a) * t) as u8;
             batch.fill(
                 atlas,
-                0.0,
-                y as f32,
-                w,
+                left,
+                top + y as f32,
+                width,
                 1.0,
                 rgba(
                     lerp(80.0, 128.0),
@@ -792,6 +794,7 @@ impl crate::game::ClientGame<'_> {
                 ),
             );
         }
+        batch.full_target_since(start);
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
         // DeathScreen.handleExitToTitleScreen: the TitleConfirmScreen takes the
         // screen over, on the same background.

@@ -48,7 +48,7 @@ impl Title {
             // `CreateWorldScreen.openCreateWorldScreen`'s queued
             // `GenericMessageScreen`: the menu background and the message
             // alone, centred, no progress.
-            crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+            crate::ui::menu_background_full(batch, atlas, w, h, false);
             phases(crate::screen_draw::RenderPhase::Background, batch);
             let text = if self.pack_validation.is_some() {
                 crate::lang::get_or(
@@ -139,7 +139,7 @@ impl Title {
                 }
             }
             Mode::Select { worlds, selected } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 centered(
                     atlas,
@@ -320,7 +320,7 @@ impl Title {
                 buffet::draw(self, atlas, batch, cursor, buffet, phases)
             }
             Mode::CreatePreset { session, .. } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 let fallback;
                 let title = match session.title() {
@@ -337,7 +337,7 @@ impl Title {
             }
             Mode::AdoptBiomeRegions { .. } => self.draw_adopt_regions(atlas, batch, (w, h), phases),
             Mode::Delete { world } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 let message = translate(
                     "selectWorld.deleteWarning",
@@ -362,7 +362,7 @@ impl Title {
                 }
             }
             Mode::Recover { world, issues } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 let dir = self.saves.join(&world.folder);
                 let title =
@@ -411,7 +411,7 @@ impl Title {
                 }
             }
             Mode::Recovered { success, .. } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 let title = lang::get_or("recover_world.done.title", "Recovery done");
                 let message = if *success {
@@ -439,7 +439,7 @@ impl Title {
             Mode::BackupBeforeUpgrade {
                 downgrade, stem, ..
             } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 // BackupStatus.DOWNGRADE is severe: its question is red (-2142128).
                 let (question, warning, color) = match (downgrade, stem) {
@@ -498,7 +498,7 @@ impl Title {
                 }
             }
             Mode::OptimizeConfirm { erase_cache, .. } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 let description = lang::get_or(
                     "optimizeWorld.confirm.description",
@@ -541,12 +541,12 @@ impl Title {
                 );
             }
             Mode::Optimize { world } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 self.draw_optimize(atlas, batch, w, h, &world.name);
             }
             Mode::LowDiskSpace { .. } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 let message = lang::get_or(
                     "selectWorld.warning.lowDiskSpace.description",
@@ -571,7 +571,7 @@ impl Title {
                 }
             }
             Mode::PackValidationFailed { .. } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 // ConfirmScreen with an empty message: the title alone.
                 self.message_lines.set(0);
@@ -591,7 +591,7 @@ impl Title {
             }
             Mode::Backup { .. } => {
                 self.backup_shown.set(true);
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 centered(
                     atlas,
@@ -618,7 +618,7 @@ impl Title {
                 }
             }
             Mode::Error { message, alert, .. } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 let lines: Vec<String> = message
                     .split('\n')
@@ -661,12 +661,12 @@ impl Title {
                 }
             }
             Mode::MissingMods { missing, .. } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 self.draw_missing_mods(atlas, batch, (w, h), missing)
             }
             Mode::MultiplayerWarning { check } => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 let message = lang::get_or(
                     "multiplayerWarning.message",
@@ -753,7 +753,7 @@ impl Title {
                 fade_from = Some(self.draw_onboarding(atlas, batch, w, h, phases))
             }
             Mode::BanNotice(notice) => {
-                crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+                crate::ui::menu_background_full(batch, atlas, w, h, false);
                 phases(crate::screen_draw::RenderPhase::Background, batch);
                 let now = chrono::Utc::now().timestamp_millis();
                 let layout = crate::confirm_screen::Choice::new(

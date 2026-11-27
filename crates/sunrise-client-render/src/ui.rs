@@ -1073,6 +1073,23 @@ pub fn menu_background(
         batch.fill(atlas, x, y, w, h, rgba(0, 0, 0, 160));
     }
 }
+pub fn menu_background_full(
+    batch: &mut HudBatch,
+    atlas: &HudAtlas,
+    w: f32,
+    h: f32,
+    in_world: bool,
+) {
+    let [x, y, w, h] = if batch.content_clip().is_some() {
+        batch.target_rect()
+    } else {
+        [0.0, 0.0, w, h]
+    };
+    let start = batch.vertices.len();
+    menu_background(batch, atlas, x, y, w, h, in_world);
+    batch.full_target_since(start);
+}
+
 /// Header and footer separators of list screens.
 pub fn separators(
     batch: &mut HudBatch,

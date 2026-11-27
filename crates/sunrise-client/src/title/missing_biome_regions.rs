@@ -54,7 +54,7 @@ impl Title {
         missing: &[(String, String)],
         phases: &mut dyn FnMut(crate::screen_draw::RenderPhase, &mut HudBatch),
     ) {
-        crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+        crate::ui::menu_background_full(batch, atlas, w, h, false);
         phases(crate::screen_draw::RenderPhase::Background, batch);
         let lines = wrapped(atlas, &message(missing), w - 50.0);
         self.message_lines.set(lines.len());

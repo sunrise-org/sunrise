@@ -468,7 +468,7 @@ impl RulesScreen {
 
     pub fn draw_background(&self, batch: &mut HudBatch, atlas: &HudAtlas) {
         let (w, h) = (batch.width, batch.height);
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);
+        ui::menu_background_full(batch, atlas, w, h, self.in_world);
     }
 
     /// Paint contents once and return the hovered tooltip for after Foreground.

@@ -146,7 +146,7 @@ impl ConfirmExperimentsScreen {
         phases: &mut dyn FnMut(crate::screen_draw::RenderPhase, &mut HudBatch),
     ) {
         let (w, h) = (batch.width, batch.height);
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.in_world);
+        ui::menu_background_full(batch, atlas, w, h, self.in_world);
         phases(crate::screen_draw::RenderPhase::Background, batch);
         let font = &atlas.font;
         if self.details {

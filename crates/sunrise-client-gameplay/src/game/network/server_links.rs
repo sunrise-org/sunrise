@@ -139,7 +139,7 @@ impl crate::game::ClientGame<'_> {
         });
         let atlas = &self.client.gui.atlas;
         let (w, h) = (batch.width, batch.height);
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        ui::menu_background_full(batch, atlas, w, h, true);
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
         let links = self.server_links().to_vec();
         self.client.links_ui.scroll = self
@@ -333,7 +333,7 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn draw_confirm_link(&mut self, batch: &mut HudBatch) {
         let atlas = &self.client.gui.atlas;
         let (w, h) = (batch.width, batch.height);
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        ui::menu_background_full(batch, atlas, w, h, true);
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
         let url = self.client.links_ui.confirm.clone().unwrap_or_default();
         let trusted = self.client.links_ui.trusted;
@@ -418,7 +418,7 @@ impl crate::game::ClientGame<'_> {
         });
         let atlas = &self.client.gui.atlas;
         let (w, h) = (batch.width, batch.height);
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        ui::menu_background_full(batch, atlas, w, h, true);
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
         let layout = dialog_warning_layout(atlas, (w, h));
         for (line, x, y) in &layout.lines {

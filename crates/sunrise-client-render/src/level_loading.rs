@@ -383,7 +383,7 @@ pub fn draw_loading_overlay(
 ) {
     let (w, h) = (batch.width, batch.height);
     let background = brand_background(dark) & 0x00FF_FFFF | u32::from(fade.background) << 24;
-    batch.fill(atlas, 0.0, 0.0, w, h, background);
+    batch.fill_target(atlas, background);
     let (x, y, half_width, logo_height) = logo_layout(w, h);
     if let Some(r) = atlas.sprites.get(MOJANG_STUDIOS_LOGO).copied() {
         // blit(.., u, v, width, height, 120, 60, 120, 120): the left half
@@ -518,7 +518,7 @@ pub fn draw_connecting(
     cancel: bool,
 ) {
     let (w, h) = (batch.width, batch.height);
-    crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+    crate::ui::menu_background_full(batch, atlas, w, h, false);
     let tw = atlas.font.width_text(status);
     let (x, y) = (((w - tw) / 2.0).trunc(), (h / 2.0).trunc() - 50.0);
     batch.text_styled(atlas, status, x, y, u32::MAX, true);
@@ -584,7 +584,7 @@ pub fn draw_file_fixer(
 ) {
     const GREY: u32 = 0xFFA0_A0A0;
     let (w, h) = (batch.width, batch.height);
-    crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+    crate::ui::menu_background_full(batch, atlas, w, h, false);
     let (x_center, y_center) = ((w as i32) / 2, (h as i32) / 2);
     let text_top = y_center - 50;
     centered_line(

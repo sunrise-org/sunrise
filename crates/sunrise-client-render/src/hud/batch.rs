@@ -453,6 +453,25 @@ impl HudBatch {
             })
     }
 
+    pub fn fill_target(&mut self, atlas: &HudAtlas, color: u32) {
+        let [x, y, w, h] = self.target_rect();
+        let start = self.vertices.len();
+        self.fill(atlas, x, y, w, h, color);
+        self.full_target_since(start);
+    }
+
+    pub fn shift_to_target_since(&mut self, start: usize, offset: [f32; 2]) {
+        if self.content_clip.is_some() {
+            for vertex in &mut self.vertices[start..] {
+                for ((value, origin), offset) in vertex.pos.iter_mut().zip(self.origin).zip(offset)
+                {
+                    *value += offset - origin;
+                }
+            }
+            self.full_target_since(start);
+        }
+    }
+
     pub fn full_target_since(&mut self, start: usize) {
         let end = self.vertices.len() as u32;
         if self.content_clip.is_some() && (start as u32) < end {
@@ -1155,6 +1174,23 @@ impl HudUniform {
 #[cfg(test)]
 mod bounds_tests {
     use super::*;
+
+    #[test]
+    fn a_full_target_run_reaches_the_edges_before_a_content_run() {
+        let frame = GuiFrame::from_insets([853, 481], 2, true, Some([15, 9, 7, 3]));
+        let mut batch = HudBatch::for_frame(&frame);
+        let [x, y, w, h] = batch.target_rect();
+        let quad = [[x, y], [x + w, y], [x + w, y + h], [x, y + h]];
+        batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
+        batch.full_target_since(0);
+        batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
+        assert_eq!(
+            batch
+                .scissored_intervals(0..12, Blend::Alpha, frame.target, 1.0)
+                .collect::<Vec<_>>(),
+            [(0..6, [0, 0, 853, 481]), (6..12, [16, 10, 829, 467])]
+        );
+    }
 
     #[test]
     fn safe_area_scissors_clip_local_geometry_at_window_and_capture_scale() {

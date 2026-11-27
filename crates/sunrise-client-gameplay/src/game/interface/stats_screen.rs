@@ -460,7 +460,7 @@ impl crate::game::ClientGame<'_> {
         });
         let (w, h) = (batch.width, batch.height);
         let atlas = &self.client.gui.atlas;
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        ui::menu_background_full(batch, atlas, w, h, true);
         let (top, bottom) = (TAB_H, h - FOOTER);
         ui::separators(batch, atlas, top, bottom, true);
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);

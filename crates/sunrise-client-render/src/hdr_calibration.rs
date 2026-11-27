@@ -241,7 +241,7 @@ impl Calibration {
         let (w, h) = (batch.width, batch.height);
         let l = self.layout(&atlas.font, (w, h));
         // Above the band HDR output draws the test picture over whatever is here.
-        batch.fill(atlas, 0.0, 0.0, w, h, rgba(0, 0, 0, 255));
+        batch.fill_target(atlas, rgba(0, 0, 0, 255));
         batch.fill(atlas, 0.0, l.top, w, h - l.top, rgba(24, 24, 24, 255));
         l
     }

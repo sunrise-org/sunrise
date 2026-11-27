@@ -2452,20 +2452,34 @@ impl crate::game::ClientGame<'_> {
                     let full = crosshair_attack.is_some_and(|(strength, delay)| {
                         hud_layout::full_attack_indicator(strength, delay, g.crosshair_living())
                     });
+                    let [_, _, width, height] = batch.target_rect();
+                    let (crosshair_w, crosshair_h) = if batch.content_clip().is_some() {
+                        (width.ceil() as i32, height.ceil() as i32)
+                    } else {
+                        (wi, hi)
+                    };
+                    let start = batch.vertices.len();
                     let draws = hud_layout::crosshair(
-                        wi,
-                        hi,
+                        crosshair_w,
+                        crosshair_h,
                         crosshair_attack.map(|(strength, _)| strength),
                         full,
                     );
                     // The custom crosshair takes the sprite's place (the first draw); the
                     // attack indicator stays.
                     if g.custom_crosshair() {
-                        g.draw_custom_crosshair(batch, wi, hi);
+                        g.draw_custom_crosshair(batch, crosshair_w, crosshair_h);
                         hud_layout::paint(batch, &g.client.gui.atlas, &draws[1..]);
                     } else {
                         hud_layout::paint(batch, &g.client.gui.atlas, &draws);
                     }
+                    batch.shift_to_target_since(
+                        start,
+                        [
+                            width / 2.0 - ((crosshair_w - 15) / 2) as f32 - 7.5,
+                            height / 2.0 - ((crosshair_h - 15) / 2) as f32 - 7.5,
+                        ],
+                    );
                 }
             });
             self.gui_layer(VanillaGuiLayer::Hotbar, &mut batch, &mut |g, batch| {
@@ -2689,8 +2703,16 @@ impl crate::game::ClientGame<'_> {
                 VanillaGuiLayer::SleepOverlay,
                 &mut batch,
                 &mut |g, batch| {
-                    let draws = hud_overlays::sleep_overlay(wi, hi, g.sleep_timer);
+                    let [_, _, width, height] = batch.target_rect();
+                    let start = batch.vertices.len();
+                    let (width, height) = if batch.content_clip().is_some() {
+                        (width.ceil() as i32, height.ceil() as i32)
+                    } else {
+                        (wi, hi)
+                    };
+                    let draws = hud_overlays::sleep_overlay(width, height, g.sleep_timer);
                     hud_layout::paint(batch, &g.client.gui.atlas, &draws);
+                    batch.shift_to_target_since(start, [0.0; 2]);
                 },
             );
             self.gui_layer(
@@ -4085,11 +4107,9 @@ impl crate::game::ClientGame<'_> {
             if let (Some(renderer), Some(frame)) = (&mut self.client.renderer.0, loading_gui) {
                 let mut hud = HudBatch::for_frame(&frame);
                 let (w, h) = (hud.width, hud.height);
-                sunrise_client::ui::menu_background(
+                sunrise_client::ui::menu_background_full(
                     &mut hud,
                     &self.client.gui.atlas,
-                    0.0,
-                    0.0,
                     w,
                     h,
                     false,

@@ -226,7 +226,7 @@ impl crate::game::ClientGame<'_> {
         self.draw_debug_overlay_under(batch, size);
         let atlas = &self.client.gui.atlas;
         let in_world = self.common.player.is_some();
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
+        ui::menu_background_full(batch, atlas, w, h, in_world);
         let reduced = self.reduced_debug_info();
         let rows = rows(&self.client.registered_debug_entries.0, &s.search.value);
         let (top, bottom) = (HEADER, h - FOOTER);

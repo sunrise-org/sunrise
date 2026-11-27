@@ -256,7 +256,7 @@ impl Title {
             return batch.vertices.len();
         };
         screen.alpha.set(screen.fade(Instant::now()));
-        crate::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+        crate::ui::menu_background_full(batch, atlas, w, h, false);
         phases(crate::screen_draw::RenderPhase::Background, batch);
         let lines = title_lines(atlas);
         self.message_lines.set(lines.len());

@@ -91,14 +91,16 @@ impl crate::game::ClientGame<'_> {
         let (w, h) = (batch.width, batch.height);
         match reason {
             // The panorama and its blur are drawn by the renderer.
-            Reason::Other => {
-                sunrise_client::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false)
-            }
+            Reason::Other => sunrise_client::ui::menu_background_full(batch, atlas, w, h, false),
             Reason::NetherPortal => {
-                let overlay = hud_overlays::portal_overlay(w as i32, h as i32, 1.0);
+                let [_, _, width, height] = batch.target_rect();
+                let start = batch.vertices.len();
+                let overlay =
+                    hud_overlays::portal_overlay(width.ceil() as i32, height.ceil() as i32, 1.0);
                 hud_layout::paint(batch, atlas, &[overlay]);
+                batch.shift_to_target_since(start, [0.0; 2]);
             }
-            Reason::EndPortal => batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255)),
+            Reason::EndPortal => batch.fill_target(atlas, rgba(20, 20, 20, 255)),
         }
     }
     /// Dispatch at the boundary reported by the screen that owns the drawing.
@@ -213,14 +215,7 @@ impl crate::game::ClientGame<'_> {
         self.native_screen_transparent_background(screen, batch, &mut canceled);
         if !canceled {
             let atlas = &self.client.gui.atlas;
-            batch.fill(
-                atlas,
-                0.0,
-                0.0,
-                batch.width,
-                batch.height,
-                rgba(16, 16, 16, 160),
-            );
+            batch.fill_target(atlas, rgba(16, 16, 16, 160));
         }
         // Screen.extractBackground draws deferred subtitles after its dimming and before widgets.
         self.draw_deferred_subtitles(batch);

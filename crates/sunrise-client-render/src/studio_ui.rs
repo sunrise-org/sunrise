@@ -234,7 +234,7 @@ impl StudioUi {
         in_world: bool,
     ) -> [f32; 4] {
         let (w, h) = (batch.width, batch.height);
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
+        ui::menu_background_full(batch, atlas, w, h, in_world);
 
         // Main content area layout
         let panel_w = (w - 40.0).clamp(280.0, 440.0);

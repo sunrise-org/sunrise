@@ -372,18 +372,33 @@ impl Title {
     ) {
         let (w, h) = (batch.width.ceil(), batch.height.ceil());
         // extractMenuBackground: the tab header strip, the menu background under it.
+        let [left, top, bg_w, bg_h] = if batch.content_clip().is_some() {
+            batch.target_rect()
+        } else {
+            [0.0, 0.0, w, h]
+        };
+        let start = batch.vertices.len();
         ui::tiled(
             batch,
             atlas,
             "gui/tab_header_background",
-            0.0,
-            0.0,
-            w,
-            TAB_BAR,
+            left,
+            top,
+            bg_w,
+            TAB_BAR - top,
             16.0,
             u32::MAX,
         );
-        ui::menu_background(batch, atlas, 0.0, TAB_BAR, w, h - TAB_BAR, false);
+        ui::menu_background(
+            batch,
+            atlas,
+            left,
+            TAB_BAR,
+            bg_w,
+            bg_h + top - TAB_BAR,
+            false,
+        );
+        batch.full_target_since(start);
         phases(crate::screen_draw::RenderPhase::Background, batch);
         // MenuTabBar: header separators either side of the tabs.
         let (x0, tw) = tabs(w);

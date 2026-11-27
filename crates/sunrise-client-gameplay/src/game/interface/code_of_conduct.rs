@@ -195,9 +195,9 @@ impl crate::game::ClientGame<'_> {
         let (w, h) = (batch.width, batch.height);
         if self.common.player.is_none() {
             // In place of the connecting screen, on its background.
-            batch.fill(atlas, 0.0, 0.0, w, h, rgba(20, 20, 20, 255));
+            batch.fill_target(atlas, rgba(20, 20, 20, 255));
         }
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, self.common.player.is_some());
+        ui::menu_background_full(batch, atlas, w, h, self.common.player.is_some());
         let layout = prompt.layout(&atlas.font, (w, h));
         let cursor = self.client.cursor;
         let [ax, ay, aw, ah] = layout.area;

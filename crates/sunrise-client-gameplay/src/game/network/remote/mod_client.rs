@@ -769,7 +769,7 @@ impl crate::game::ClientGame<'_> {
     ) {
         let atlas = &self.client.gui.atlas;
         let (w, h) = (batch.width, batch.height);
-        sunrise_client::ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+        sunrise_client::ui::menu_background_full(batch, atlas, w, h, false);
         let title = sunrise_game_data::text::Text::translate("connect.reconfiguring", &[]);
         let ((tx, ty), (bx, by)) = self.reconfigure_layout((w, h));
         batch.text_styled(atlas, &title, tx, ty, u32::MAX, true);

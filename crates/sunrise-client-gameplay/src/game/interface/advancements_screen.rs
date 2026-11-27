@@ -554,7 +554,7 @@ impl crate::game::ClientGame<'_> {
         let (sx, sy) = (sx.floor() as i32, sy.floor() as i32);
         self.adv_tick_hover(&view, sx, sy, left, top);
         let atlas = &self.client.gui.atlas;
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        ui::menu_background_full(batch, atlas, w, h, true);
         let tree = self.common.adv.tree.clone();
         let tab = view.tab;
         match tab {

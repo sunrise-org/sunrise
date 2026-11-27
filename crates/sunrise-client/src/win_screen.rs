@@ -243,7 +243,7 @@ impl WinScreen {
         let (w, h) = (batch.width, batch.height);
         if self.poem {
             let start = batch.vertices.len();
-            batch.fill(atlas, 0.0, 0.0, w, h, u32::MAX);
+            batch.fill_target(atlas, u32::MAX);
             batch.blend_since(start, Blend::EndPortal);
             batch.end_portal = end_portal;
         } else {
@@ -252,7 +252,9 @@ impl WinScreen {
         // extractVignette: credits_vignette.png stretched over the screen.
         if let Some(r) = atlas.sprites.get("misc/credits_vignette").copied() {
             let start = batch.vertices.len();
-            batch.rect_uv(0.0, 0.0, w, h, r, u32::MAX);
+            let [x, y, w, h] = batch.target_rect();
+            batch.rect_uv(x, y, w, h, r, u32::MAX);
+            batch.full_target_since(start);
             batch.blend_since(start, Blend::Vignette);
         }
     }
@@ -308,19 +310,25 @@ impl WinScreen {
     /// scrolled by half the text's scroll.
     fn menu_background(&self, batch: &mut HudBatch, atlas: &HudAtlas, w: f32, h: f32) {
         let v = (self.scroll * 0.5).rem_euclid(32.0);
+        let [x, y, w, h] = if batch.content_clip().is_some() {
+            batch.target_rect()
+        } else {
+            [0.0, 0.0, w, h]
+        };
         let start = batch.vertices.len();
         crate::ui::tiled(
             batch,
             atlas,
             "gui/menu_background",
-            0.0,
-            -v,
+            x,
+            y - v,
             w,
             h + 32.0,
             32.0,
             u32::MAX,
         );
-        batch.clip_since(start, 0.0, 0.0, w, h);
+        batch.clip_since(start, x, y, x + w, y + h);
+        batch.full_target_since(start);
     }
 }
 

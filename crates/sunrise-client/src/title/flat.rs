@@ -477,7 +477,7 @@ pub(super) fn draw(
     phases: &mut dyn FnMut(crate::screen_draw::RenderPhase, &mut HudBatch),
 ) {
     let (w, h) = (batch.width.ceil(), batch.height.ceil());
-    ui::menu_background(batch, atlas, 0.0, 0.0, w, h, false);
+    ui::menu_background_full(batch, atlas, w, h, false);
     phases(crate::screen_draw::RenderPhase::Background, batch);
     match state.page {
         Page::Layers => draw_layers(title, atlas, items, batch, cursor, state, (w, h)),

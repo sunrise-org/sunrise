@@ -699,14 +699,7 @@ const BOOT_LOG: u32 = color::hex(0x9BA1A6, 255);
 pub fn draw_boot(atlas: &HudAtlas, batch: &mut HudBatch, logs: &[String]) {
     // Pure black under everything: the frame's panorama (the title artwork
     // once the bundle is in) must not leak through.
-    batch.fill(
-        atlas,
-        0.0,
-        0.0,
-        batch.width,
-        batch.height,
-        color::hex(0x000000, 255),
-    );
+    batch.fill_target(atlas, color::hex(0x000000, 255));
     wordmark(atlas, batch);
     draw_boot_log(atlas, batch, logs);
 }

@@ -844,11 +844,9 @@ impl crate::game::ClientGame<'_> {
                         ui::tooltip(batch, &self.client.gui.atlas, &tooltip, self.client.cursor);
                     }
                 } else {
-                    ui::menu_background(
+                    ui::menu_background_full(
                         batch,
                         &self.client.gui.atlas,
-                        0.0,
-                        0.0,
                         batch.width,
                         batch.height,
                         true,
@@ -927,7 +925,7 @@ impl crate::game::ClientGame<'_> {
         });
         let atlas = &self.client.gui.atlas;
         let (w, h) = (batch.width, batch.height);
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        ui::menu_background_full(batch, atlas, w, h, true);
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
         let title = Text::translate("restrictions_screen.title", &[]);
         let tw = atlas.font.width_text(&title);
@@ -989,7 +987,7 @@ impl crate::game::ClientGame<'_> {
         let (w, h) = (batch.width, batch.height);
         // extractMenuBackground: the in-world background, the list
         // background under the content, then the separators over it.
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        ui::menu_background_full(batch, atlas, w, h, true);
         ui::list_background(batch, atlas, HEADER, h - FOOTER, true);
         ui::separators(batch, atlas, HEADER, h - FOOTER, true);
         if active_screen {

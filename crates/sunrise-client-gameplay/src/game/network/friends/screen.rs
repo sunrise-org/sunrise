@@ -234,7 +234,7 @@ pub(in crate::game::client_side) fn draw(
     phases: &mut dyn FnMut(sunrise_client::screen_draw::RenderPhase, &mut HudBatch),
 ) {
     let (w, h) = (batch.width, batch.height);
-    ui::menu_background(batch, atlas, 0.0, 0.0, w, h, in_world);
+    ui::menu_background_full(batch, atlas, w, h, in_world);
     phases(sunrise_client::screen_draw::RenderPhase::Background, batch);
     let title = Text::literal(title());
     let tw = atlas.font.width_text(&title);

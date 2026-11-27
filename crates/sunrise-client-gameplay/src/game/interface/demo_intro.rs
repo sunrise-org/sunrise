@@ -137,7 +137,7 @@ impl crate::game::ClientGame<'_> {
         let atlas = &self.client.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         let layout = intro.layout(atlas, w, h);
-        ui::menu_background(batch, atlas, 0.0, 0.0, w, h, true);
+        ui::menu_background_full(batch, atlas, w, h, true);
         let [x, y, width, height] = layout.panel;
         ui::nine_slice(
             batch,
