@@ -53,7 +53,7 @@ PrepareRamNearestTarget.canStillUse	port	crates/sunrise-client/src/mobs/goat.rs:
 PrepareRamNearestTarget.getEdgeOfBlock	inline	crates/sunrise-client/src/mobs/goat.rs::prepare_tick	half block offset by the sign toward the target
 RandomStroll.fly	inline	crates/sunrise-client/src/mobs/animal_brain.rs::B::trigger	Stroll arm with fly set (ghastling); only without a walk target
 RandomStroll.strollFlyOrSwim	inline	crates/sunrise-client/src/mobs/animal_brain.rs::B::trigger	Stroll arm: only without a walk target, walk target set or erased; the monster and warden brains have their own stroll arms
-RandomStroll.getTargetSwimPos	inline	crates/sunrise-client/src/mobs/animal_brain.rs::axolotl_action	SwimStroll arm: the (1,1) to (10,7) tiers with the fallback
+RandomStroll.getTargetSwimPos	port	crates/sunrise-client/src/mobs/animal_brain.rs::swim_stroll_target	the distance tiers and fallback shared by aquatic brains and frogs
 RandomStroll.getTargetFlyPos	inline	crates/sunrise-client/src/mobs/animal_brain.rs::B::trigger	air_and_water_random_pos along the view vector, -2 vertical offset
 SetClosestHomeAsWalkTarget.create	inline	crates/sunrise-client/src/mobs/villager_brain.rs::B::try_start	ClosestHomeAsWalkTarget arm: nearest home within 48, five per batch, 40 tick cache
 SetEntityLookTarget.create	inline	crates/sunrise-client/src/mobs/villager_brain.rs::B::try_start	LookAtEntity arm (species, player or mob category within 8); the sniffer and warden brains have their own; piglins use the LookAtPlayer goal
@@ -140,8 +140,8 @@ TransportItemsBetweenContainers.enterCooldownAfterNoMatchingTargetFound	port	cra
 TransportItemsBetweenContainers.TransportItemTarget.tryCreatePossibleTarget	inline	crates/sunrise-client/src/mobs/transport_items.rs::Transport::find_target	the target is built from container() when a chest has one
 TransportItemsBetweenContainers.TransportItemTarget.getBlockEntityContainer	port	crates/sunrise-client/src/mobs/transport_items.rs::container	gap: minor: a cat sitting on the chest does not block it, only a redstone conductor above does
 TriggerGate.triggerGate	inline	crates/sunrise-client/src/mobs/villager_brain.rs::B::try_start	TriggerGate arm: shuffle by weight, then each trigger until one fires; the piglin's idle gate is part of its goals
-TryFindLand.create	inline	crates/sunrise-client/src/mobs/goals.rs::Stroll::can_use	gap: minor: a frog in water strolls to a random land spot within 15 blocks (water-avoiding stroll, every tick) instead of the nearest standable block within 6 to 8 with a 60 tick cooldown, at speed 1.0 not 1.5
-TryFindLand.canStandOn	inline	crates/sunrise-client/src/mobs/frog.rs::LaySpawn::land_near_water	an empty collision shape at the cell and a non-empty block below (a solid test stands in for isFaceSturdy(UP))
+TryFindLand.create	port	crates/sunrise-client/src/mobs/frog.rs::SwimActivity::find_land	swimming frogs search up to eight blocks at speed 1.5 with the 60-tick retry deadline; idle search remains unported
+TryFindLand.canStandOn	inline	crates/sunrise-client/src/mobs/frog.rs::SwimActivity::find_land	empty collision shape at the candidate, with a sturdy upper face below
 TryFindLandNearLiquid.create	port	crates/sunrise-client/src/mobs/frog.rs::LaySpawn::find	the 8 block manhattan scan for land beside water, its 40 tick retry and the walk target on the spot found
 TryFindLiquid.create	port	crates/sunrise-client/src/mobs/animal_brain.rs::axolotl_action	FindLiquid arm: nearest water within 6, speed 0.15, re-run every 40 ticks
 TryLaySpawnOnFluidNearLand.create	inline	crates/sunrise-client/src/mobs/frog.rs::LaySpawn::can_use	goal stand-in for the frog brain (no tick parity: the probe has no frog brain): feeding, pregnancy, walk to land beside water, frogspawn

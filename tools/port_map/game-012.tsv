@@ -46,11 +46,11 @@ Frog.createAttributes	skip:data		attributes come from entity-types.json
 Frog.checkFrogSpawnRules	port	crates/sunrise-client/src/mobs/spawn_rules.rs::check_spawn_rules	frogs_spawnable_on below and bright enough
 Frog.FrogNodeEvaluator.getStart	missing		minor: frogs use the plain ground navigation, so a frog in water does not start its path at the box corner
 Frog.FrogNodeEvaluator.getPathType	missing		minor: blocks above #frog_prefer_jump_to (lily pad, dripleaf) are not treated as open path nodes
-Frog.FrogPathNavigation.canCutCorner	port	crates/sunrise-client/src/mobs/nav.rs::Navigation::can_cut_corner	with the frog on the amphibious finder the corners it refuses are the generic set (fire, damage, walkable doors), which is the frog's own three
+Frog.FrogPathNavigation.canCutCorner	port	crates/sunrise-client/src/mobs/nav.rs::Mob::follow_the_path	refuses to skip water-border nodes in addition to the generic path-type exclusions
 Frog.FrogPathNavigation.createPathFinder	port	crates/sunrise-client/src/mobs/frog.rs::register	amphibious navigation with the frog's prefersShallowSwimming (water below sea level - 10 costs more)
 FrogAi.initCoreActivity	inline	crates/sunrise-client/src/mobs/frog.rs::register	AnimalPanic(2.0) is the Panic goal; look and move sinks are the controls
 FrogAi.initIdleActivity	inline	crates/sunrise-client/src/mobs/frog.rs::register	gap: minor: Croak, stroll and look at player (6 blocks), the 1.25 food tempt (unless pregnant) and the mate search; no TryFindLand
-FrogAi.initSwimActivity	inline	crates/sunrise-client/src/mobs/frog.rs::register	gap: minor: no separate swim activity: Float and the land stroll stand in, no random swim at 0.75 or find-land
+FrogAi.initSwimActivity	inline	crates/sunrise-client/src/mobs/frog.rs::SwimActivity::can_use	finds nearby shore, then tries random swimming at 0.75 and land wandering; the general goal selector supplies scheduling
 FrogAi.initLaySpawnActivity	port	crates/sunrise-client/src/mobs/frog.rs::register	the LaySpawn goal, added in place of the activity
 FrogAi.initJumpActivity	port	crates/sunrise-client/src/mobs/frog.rs::register	the LongJump goal, added in place of the activity
 FrogAi.initTongueActivity	inline	crates/sunrise-client/src/mobs/frog.rs::register	ShootTongue goal at priority 2 with the attack-target checks inside it

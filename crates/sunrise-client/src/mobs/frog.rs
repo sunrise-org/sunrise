@@ -8,8 +8,9 @@
 //! picks: `Croak` takes those, and the frog's stroll then follows at once.
 use super::{
     DamageLevel, Mob, MobEvent, MobWorld, Species, Who,
+    brain::WalkTarget,
     goals::{
-        Breed, Cx, Float, Goal, LOOK, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll, Tempt,
+        Breed, Cx, Goal, LOOK, LookAtPlayer, MOVE, Panic, RandomLookAround, Stroll, Tempt,
         goal_clone,
     },
     sync,
@@ -19,7 +20,7 @@ use mod_api::SoundSource;
 use std::fmt::Debug;
 use std::ops::ControlFlow;
 use sunrise_core::{
-    geometry::Vec3,
+    geometry::{Direction, Vec3},
     random::{LegacyRandom, RandomSource},
 };
 
@@ -121,7 +122,6 @@ pub fn register(m: &mut Mob) {
         prefers_shallow: true,
     };
     let g = &mut m.ai.goals;
-    g.add(0, Float);
     // `FrogAi.initCoreActivity`: `AnimalPanic(2.0)` — the panic speed
     // multiplier is 2.0, not the 1.25 its temptation uses.
     g.add(1, Panic::new(2.0));
@@ -131,10 +131,11 @@ pub fn register(m: &mut Mob) {
     g.add(2, ShootTongue);
     g.add(2, LaySpawn::default());
     g.add(3, LongJump::default());
-    g.add(4, Croak);
+    g.add(4, SwimActivity::default());
+    g.add(5, Croak);
     g.add(
-        5,
-        Unless(laying_trip, Stroll::avoiding_water(1.0).interval(1)),
+        6,
+        Unless(block_land_stroll, Stroll::avoiding_water(1.0).interval(1)),
     );
     g.add(6, LookAtPlayer::new(6.0));
     g.add(7, RandomLookAround::default());
@@ -236,6 +237,105 @@ pub fn server_ai_step(m: &mut Mob, w: &MobWorld) {
     m.extra.frog.nearest = nearest;
 }
 
+/// `FrogAi.initSwimActivity`: give a nearby shore priority over wandering in water.
+#[derive(Clone, Debug, Default)]
+struct SwimActivity {
+    next_land_search: i64,
+    target: Option<WalkTarget>,
+}
+
+impl SwimActivity {
+    /// `TryFindLand.create`: search once per gap in walk targets, keeping the
+    /// retry deadline 60 ticks past the last attempt.
+    fn find_land(&mut self, m: &Mob, w: &MobWorld) -> Option<WalkTarget> {
+        let at = [
+            m.position.x.floor() as i32,
+            m.position.y.floor() as i32,
+            m.position.z.floor() as i32,
+        ];
+        if w.fluid(at[0], at[1], at[2]) != Fluid::Water {
+            return None;
+        }
+        let search = w.game_time >= self.next_land_search;
+        self.next_land_search = w.game_time + 60;
+        if !search {
+            return None;
+        }
+        manhattan_box(at, 8)
+            .find(|&[x, y, z]| {
+                (x != at[0] || z != at[2])
+                    && w.fluid(x, y, z) == Fluid::None
+                    && w.collision_bounds([x, y, z]).is_none()
+                    && w.facts.get(w.world.block(x, y - 1, z)).sturdy_full
+                        & (1 << Direction::Up as u8)
+                        != 0
+            })
+            .map(|pos| WalkTarget::new(pos, 1.5, 1))
+    }
+}
+
+impl Goal for SwimActivity {
+    goal_clone!();
+
+    fn flags(&self) -> u8 {
+        MOVE
+    }
+
+    fn can_use(&mut self, m: &mut Mob, cx: &mut Cx) -> bool {
+        if !m.fluids.in_water || is_pregnant(m) {
+            return false;
+        }
+        self.target = self.find_land(m, cx.w).or_else(|| {
+            super::animal_brain::swim_stroll_target(m, cx.w)
+                .map(|p| {
+                    WalkTarget::new(
+                        [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32],
+                        0.75,
+                        0,
+                    )
+                })
+                .or_else(|| {
+                    m.land_random_pos(cx.w, 10, 7)
+                        .map(|p| WalkTarget::new(p.map(|coord| coord.floor() as i32), 1.0, 0))
+                })
+        });
+        self.target.is_some()
+    }
+
+    fn can_continue(&mut self, m: &mut Mob, _cx: &mut Cx) -> bool {
+        !is_pregnant(m)
+            && !m.ai.nav.is_done()
+            && self.target.is_some_and(|target| !target.reached(m))
+    }
+
+    fn start(&mut self, m: &mut Mob, cx: &mut Cx) {
+        let Some(target) = self.target else { return };
+        if target.reached(m) {
+            return;
+        }
+        let path = m.create_path_to(cx.w, target.pos, 0);
+        m.nav_move_to_path(cx.w, path, target.speed);
+    }
+
+    /// `LookAtTargetSink.tick`: keep looking toward the shore during the swim.
+    /// The pitch also determines the direction of the swimming input.
+    fn tick(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        if let Some(shore) = self.target.filter(|target| target.close == 1) {
+            let [x, y, z] = shore.pos;
+            m.look_at([f64::from(x) + 0.5, f64::from(y) + 0.5, f64::from(z) + 0.5]);
+        }
+    }
+
+    fn every_tick(&self) -> bool {
+        true
+    }
+
+    fn stop(&mut self, m: &mut Mob, _cx: &mut Cx) {
+        self.target = None;
+        m.nav_stop();
+    }
+}
+
 /// `Croak`: the pose sync::CROAKING for 60 ticks (the croak is the frog's ambient
 /// sound).
 #[derive(Clone, Debug)]
@@ -286,6 +386,10 @@ const PREGNANT: &str = "is_pregnant";
 /// `LaySpawn`'s walk target is set.
 fn laying_trip(m: &Mob) -> bool {
     m.extra.frog.lay_target.is_some()
+}
+
+fn block_land_stroll(m: &Mob) -> bool {
+    (m.fluids.in_water && !is_pregnant(m)) || laying_trip(m)
 }
 pub fn is_pregnant(m: &Mob) -> bool {
     m.extra.memories.iter().any(|x| x.0 == PREGNANT)
@@ -394,7 +498,6 @@ impl LaySpawn {
             return;
         }
         let found = manhattan_box(at, 8)
-            .into_iter()
             .find(|p| (p[0] != at[0] || p[2] != at[2]) && Self::land_near_water(cx.w, *p));
         if let Some(p) = found {
             let to = [
@@ -501,24 +604,22 @@ impl Goal for LaySpawn {
 /// `Direction.Plane.HORIZONTAL` as x and z steps: north, east, south, west.
 const HORIZONTAL: [[i32; 2]; 4] = [[0, -1], [1, 0], [0, 1], [-1, 0]];
 /// `BlockPos.withinManhattan`: nearest first, then x, y, and +z before -z.
-fn manhattan_box(o: [i32; 3], range: i32) -> Vec<[i32; 3]> {
-    let mut out = Vec::new();
-    for depth in 0..=range * 3 {
+fn manhattan_box(o: [i32; 3], range: i32) -> impl Iterator<Item = [i32; 3]> {
+    (0..=range * 3).flat_map(move |depth| {
         let max_x = range.min(depth);
-        for x in -max_x..=max_x {
+        (-max_x..=max_x).flat_map(move |x| {
             let max_y = range.min(depth - x.abs());
-            for y in -max_y..=max_y {
+            (-max_y..=max_y).flat_map(move |y| {
                 let z = depth - x.abs() - y.abs();
-                if z <= range {
-                    out.push([o[0] + x, o[1] + y, o[2] + z]);
-                    if z != 0 {
-                        out.push([o[0] + x, o[1] + y, o[2] - z]);
-                    }
-                }
-            }
-        }
-    }
-    out
+                [
+                    (z <= range).then(|| [o[0] + x, o[1] + y, o[2] + z]),
+                    (z > 0 && z <= range).then(|| [o[0] + x, o[1] + y, o[2] - z]),
+                ]
+                .into_iter()
+                .flatten()
+            })
+        })
+    })
 }
 
 /// `ShootTongue` with the tongue activity's `StartAttacking` and
@@ -1353,7 +1454,7 @@ mod tests {
 
     #[test]
     fn the_land_search_goes_out_by_manhattan_distance() {
-        let all = manhattan_box([0, 0, 0], 8);
+        let all: Vec<_> = manhattan_box([0, 0, 0], 8).collect();
         assert_eq!(all[0], [0, 0, 0]);
         assert_eq!(all.len(), 17 * 17 * 17);
         // x, then y, and +z before -z, at distance 1.

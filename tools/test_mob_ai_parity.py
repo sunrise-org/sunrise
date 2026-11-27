@@ -822,6 +822,40 @@ def compare(vanilla, rust, fields=None, blame=None):
     return report, totals
 
 
+def record_scenarios(build, chosen, *, java_only=False, rust_only=False, writers=False, trace=False):
+    """Run the vanilla and Sunrise mob traces for the supplied scenarios."""
+    build.mkdir(parents=True, exist_ok=True)
+    inputs = build / 'scenarios.txt'
+    write_scenarios(inputs, chosen)
+    lock, jars, _ = base.verify_artifacts()
+    if not rust_only:
+        classes, dependencies, _ = oracle_harness.compile_oracle(build, 'VanillaMobAiOracle', jars, baking.client_libraries(),
+                                                                lock['minecraft']['java_major'])
+        # The oracle's server world: cleared before each run, never left in /tmp.
+        world = build / 'world'
+        shutil.rmtree(world, ignore_errors=True)
+        # Each scenario forces 9x9 chunks 512 blocks past the last one, so a run generates ~80 chunks per scenario;
+        # 3g ran out of heap in PoiManager.tick on a busy runner (#2160's CI, 143 scenarios).
+        # 4g then ran out within ~3 minutes on a fresh run once the scenarios grew (2026-10-30); 8g passes.
+        jfr = build / 'writers.jfr'
+        jfr.unlink(missing_ok=True)
+        record = [f'-XX:StartFlightRecording:method-trace={writer_filter()},filename={jfr}'] if writers else []
+        oracle_harness.run_logged(['java', '-Xmx8g', '-Djava.awt.headless=true', *record, '-cp', str(classes) + os.pathsep + dependencies,
+                                   'dev.sunriselab.parity.VanillaMobAiOracle', inputs, build / 'vanilla.txt', world],
+                                  build, 'vanilla', timeout=3600)
+    if not java_only:
+        command = ['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'sunrise-client-lib', '--example', 'client_probe']
+        target, env = lab.cargo_target(), None
+        if trace:
+            target = lab.LOCAL / 'mob-ai-trace-target'
+            command += ['--features', 'rng-trace']
+            env = dict(os.environ, CARGO_TARGET_DIR=str(target), CARGO_PROFILE_RELEASE_DEBUG='line-tables-only',
+                       CARGO_PROFILE_RELEASE_LTO='false', CARGO_PROFILE_RELEASE_CODEGEN_UNITS='16')
+        oracle_harness.run_logged(command, build, 'compile-rust', env=env)
+        binary = target / 'fast/examples/client_probe'
+        oracle_harness.run_logged([binary, 'mob_ai_probe', lab.RESOURCES, inputs, build / 'sunrise.txt'], build, 'sunrise')
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument('--only', nargs='*')
@@ -835,37 +869,9 @@ def main():
                         help="also trace Sunrise's mob random draws (rng-trace probe with line tables)")
     args = parser.parse_args()
     build = lab.LOCAL / 'mob-ai-parity'
-    build.mkdir(parents=True, exist_ok=True)
     chosen = [(i, s) for i, s in enumerate(scenarios()) if not args.only or any(o in s[0] for o in args.only)]
-    inputs = build / 'scenarios.txt'
-    write_scenarios(inputs, chosen)
-    lock, jars, _ = base.verify_artifacts()
-    if not args.rust_only:
-        classes, dependencies, _ = oracle_harness.compile_oracle(build, 'VanillaMobAiOracle', jars, baking.client_libraries(),
-                                                                lock['minecraft']['java_major'])
-        # The oracle's server world: cleared before each run, never left in /tmp.
-        world = build / 'world'
-        shutil.rmtree(world, ignore_errors=True)
-        # Each scenario forces 9x9 chunks 512 blocks past the last one, so a run generates ~80 chunks per scenario;
-        # 3g ran out of heap in PoiManager.tick on a busy runner (#2160's CI, 143 scenarios).
-        # 4g then ran out within ~3 minutes on a fresh run once the scenarios grew (2026-10-30); 8g passes.
-        jfr = build / 'writers.jfr'
-        jfr.unlink(missing_ok=True)
-        record = [f'-XX:StartFlightRecording:method-trace={writer_filter()},filename={jfr}'] if args.writers else []
-        oracle_harness.run_logged(['java', '-Xmx8g', '-Djava.awt.headless=true', *record, '-cp', str(classes) + os.pathsep + dependencies,
-                                   'dev.sunriselab.parity.VanillaMobAiOracle', inputs, build / 'vanilla.txt', world],
-                                  build, 'vanilla', timeout=3600)
-    if not args.java_only:
-        command = ['cargo', 'build', '--locked', '--profile', 'fast', '-p', 'sunrise-client-lib', '--example', 'client_probe']
-        target, env = lab.cargo_target(), None
-        if args.trace:
-            target = lab.LOCAL / 'mob-ai-trace-target'
-            command += ['--features', 'rng-trace']
-            env = dict(os.environ, CARGO_TARGET_DIR=str(target), CARGO_PROFILE_RELEASE_DEBUG='line-tables-only',
-                       CARGO_PROFILE_RELEASE_LTO='false', CARGO_PROFILE_RELEASE_CODEGEN_UNITS='16')
-        oracle_harness.run_logged(command, build, 'compile-rust', env=env)
-        binary = target / 'fast/examples/client_probe'
-        oracle_harness.run_logged([binary, 'mob_ai_probe', lab.RESOURCES, inputs, build / 'sunrise.txt'], build, 'sunrise')
+    record_scenarios(build, chosen, java_only=args.java_only, rust_only=args.rust_only,
+                     writers=args.writers, trace=args.trace)
     if args.java_only:
         return
     names = {s[0] for _, s in chosen}

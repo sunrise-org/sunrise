@@ -671,7 +671,10 @@ impl Mob {
         let zd = (self.position.z - (f64::from(n.z) + 0.5)).abs();
         let max = f64::from(self.ai.nav.max_distance_to_waypoint);
         let close = xd < max && zd < max && yd < vertical;
-        if (close || Navigation::can_cut_corner(n.kind) && self.should_target_next_node(w, mob_pos))
+        // `FrogPathNavigation.canCutCorner` keeps water-edge nodes in the route.
+        let can_cut_corner = Navigation::can_cut_corner(n.kind)
+            && !(self.species() == super::Species::Frog && n.kind == PathType::WaterBorder);
+        if (close || can_cut_corner && self.should_target_next_node(w, mob_pos))
             && let Some(p) = &mut self.ai.nav.path
         {
             p.advance();

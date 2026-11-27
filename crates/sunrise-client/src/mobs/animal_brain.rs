@@ -2506,6 +2506,59 @@ fn sense_axolotl_attackables(m: &mut Mob, w: &MobWorld) {
     });
     mem(m).nearest_attackable.set_opt(target);
 }
+/// `RandomStroll.getTargetSwimPos`: extend the first swimmable direction until
+/// the next distance tier would leave the fluid or the mob's restriction.
+pub(super) fn swim_stroll_target(m: &mut Mob, w: &MobWorld) -> Option<Vec3> {
+    let mut fallback: Option<Vec3> = None;
+    for (h, v) in [(1, 1), (3, 3), (5, 5), (6, 5), (7, 7), (10, 7)] {
+        let point = if let Some(p) = fallback {
+            let delta = Vec3::new(p.x - m.position.x, p.y - m.position.y, p.z - m.position.z);
+            let length = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).sqrt();
+            let n = if length < 1.0e-5 {
+                Vec3::ZERO
+            } else {
+                Vec3::new(delta.x / length, delta.y / length, delta.z / length)
+            };
+            Some(Vec3::new(
+                m.position.x + n.x * f64::from(h),
+                m.position.y + n.y * f64::from(v),
+                m.position.z + n.z * f64::from(h),
+            ))
+        } else {
+            let mut p = m.default_random_pos(w, h, v);
+            let mut count = 0;
+            while let Some(q) = p {
+                let state = w.world.block(
+                    q[0].floor() as i32,
+                    q[1].floor() as i32,
+                    q[2].floor() as i32,
+                );
+                if w.data
+                    .pathfindable(state, super::data::PathComputationType::Water)
+                    || count >= 10
+                {
+                    break;
+                }
+                count += 1;
+                p = m.default_random_pos(w, h, v);
+            }
+            p.map(|q| Vec3::new(q[0], q[1], q[2]))
+        };
+        let Some(point) = point else { break };
+        let q = [
+            point.x.floor() as i32,
+            point.y.floor() as i32,
+            point.z.floor() as i32,
+        ];
+        let restricted = m.restricted(f64::from(h), q);
+        if w.fluid(q[0], q[1], q[2]) == crate::blocks::Fluid::None || restricted {
+            break;
+        }
+        fallback = Some(point);
+    }
+    fallback
+}
+
 fn axolotl_action(m: &mut Mob, cx: &mut Bx, action: AxolotlAction, until: &mut i64) -> bool {
     use AxolotlAction::*;
     match action {
@@ -2698,59 +2751,10 @@ fn axolotl_action(m: &mut Mob, cx: &mut Bx, action: AxolotlAction, until: &mut i
             if mem(m).walk_target.present() || !m.fluids.in_water {
                 return false;
             }
-            let mut fallback: Option<Vec3> = None;
-            for (h, v) in [(1, 1), (3, 3), (5, 5), (6, 5), (7, 7), (10, 7)] {
-                let point = if let Some(p) = fallback {
-                    let delta =
-                        Vec3::new(p.x - m.position.x, p.y - m.position.y, p.z - m.position.z);
-                    let length = (delta.x * delta.x + delta.y * delta.y + delta.z * delta.z).sqrt();
-                    let n = if length < 1.0e-5 {
-                        Vec3::ZERO
-                    } else {
-                        Vec3::new(delta.x / length, delta.y / length, delta.z / length)
-                    };
-                    Some(Vec3::new(
-                        m.position.x + n.x * f64::from(h),
-                        m.position.y + n.y * f64::from(v),
-                        m.position.z + n.z * f64::from(h),
-                    ))
-                } else {
-                    let mut p = m.default_random_pos(cx.w, h, v);
-                    let mut count = 0;
-                    while let Some(q) = p {
-                        let state = cx.w.world.block(
-                            q[0].floor() as i32,
-                            q[1].floor() as i32,
-                            q[2].floor() as i32,
-                        );
-                        if cx
-                            .w
-                            .data
-                            .pathfindable(state, super::data::PathComputationType::Water)
-                            || count >= 10
-                        {
-                            break;
-                        }
-                        count += 1;
-                        p = m.default_random_pos(cx.w, h, v);
-                    }
-                    p.map(|q| Vec3::new(q[0], q[1], q[2]))
-                };
-                let Some(point) = point else { break };
-                let q = [
-                    point.x.floor() as i32,
-                    point.y.floor() as i32,
-                    point.z.floor() as i32,
-                ];
-                let restricted = m.restricted(f64::from(h), q);
-                if cx.w.fluid(q[0], q[1], q[2]) == crate::blocks::Fluid::None || restricted {
-                    break;
-                }
-                fallback = Some(point);
-            }
+            let target = swim_stroll_target(m, cx.w);
             mem(m)
                 .walk_target
-                .set_opt(fallback.map(|p| WalkTarget::point([p.x, p.y, p.z], 0.5, 0)));
+                .set_opt(target.map(|p| WalkTarget::point([p.x, p.y, p.z], 0.5, 0)));
             true
         }
         WalkFromLook => {
