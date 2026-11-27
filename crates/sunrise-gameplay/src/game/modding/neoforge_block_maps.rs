@@ -1,22 +1,244 @@
-//! NeoForge's built-in block data maps (`NeoForgeDataMaps`): `neoforge:flammable`,
-//! `neoforge:oxidizables` and `neoforge:waxables`, merged from the world's
-//! data packs and mods' files as a mod's own data maps are, and installed on
-//! the world's behaviours for fire spread, weathering, scraping and waxing.
+//! NeoForge's built-in block and block-transformer data maps (`NeoForgeDataMaps`):
+//! `neoforge:flammable`, `neoforge:oxidizables`, `neoforge:waxables`,
+//! `neoforge:transformables`, and `neoforge:block_transform_appenders`, merged
+//! from the world's data packs and mods' files as a mod's own data maps are.
 use crate::game::ServerGame;
-use serde_json::Value;
+use serde_json::{Map, Value};
+use std::collections::{BTreeMap, HashMap};
 use std::sync::Arc;
-use sunrise_core::identifier::Identifier;
-use sunrise_gameplay_common::game::native_data_maps_common::{
-    MapRegistries, WorldRegistries, load_maps,
+use sunrise_core::{identifier::Identifier, nbt::Tag};
+use sunrise_gameplay_common::game::{
+    data_map_json::to_tag,
+    native_data_maps_common::{MapRegistries, WorldRegistries, load_maps},
 };
-use sunrise_world::level::{BlockMapValue, BlockMaps};
+use sunrise_sim::block_transform::{Transform, parse_transform};
+use sunrise_world::{
+    level::{BlockMapValue, BlockMaps},
+    registry::BlockRegistry,
+};
 
-/// The three maps' ids, all on `minecraft:block`.
+/// The three block-behaviour maps' ids, all on `minecraft:block`.
 const MAPS: [&str; 3] = [
     "neoforge:flammable",
     "neoforge:oxidizables",
     "neoforge:waxables",
 ];
+
+const TRANSFORMABLES_ID: &str = "neoforge:transformables";
+const BLOCK_TRANSFORM_APPENDERS_ID: &str = "neoforge:block_transform_appenders";
+
+#[derive(Clone)]
+enum TransformMapValue {
+    Transformable(BTreeMap<String, (Transform, Value)>),
+    Appender(Vec<(Transform, Value)>),
+}
+
+/// Loaded `neoforge:transformables` and `neoforge:block_transform_appenders` data maps
+/// alongside the extra `Transform`s appended to each `BlockTransformer` in NeoForge's
+/// `DataMapHooks.appendDatamapTransformers` order (appenders first, then transformables).
+pub(in crate::game::server_side) struct LoadedTransformMaps {
+    pub values: Vec<(&'static str, &'static str, Vec<(String, Tag)>)>,
+    pub extra_transformers: HashMap<String, Vec<Transform>>,
+}
+
+/// Load `neoforge:transformables` (`minecraft:block`, `supports_tags = false`, map merger,
+/// transformer-id partial remover) and `neoforge:block_transform_appenders`
+/// (`minecraft:block_transformer`, list merger) reusing `block_transform::parse_transform`.
+pub(in crate::game::server_side) fn load_transform_maps(
+    overlay: &sunrise_world::loot::PackOverlay<'_>,
+    registries: &dyn MapRegistries,
+    block_registry: &BlockRegistry,
+) -> LoadedTransformMaps {
+    let block_reg = Identifier::parse_namespaced("minecraft:block").unwrap();
+    let transformer_reg = Identifier::parse_namespaced("minecraft:block_transformer").unwrap();
+    let types = vec![
+        Arc::new(mod_api::__private::RegisteredDataMap::from_raw(
+            "neoforge",
+            block_reg,
+            Identifier::parse_namespaced(TRANSFORMABLES_ID).unwrap(),
+            mod_api::RawDataMap::new("minecraft:block", TRANSFORMABLES_ID).supports_tags(false),
+        )),
+        Arc::new(mod_api::__private::RegisteredDataMap::from_raw(
+            "neoforge",
+            transformer_reg,
+            Identifier::parse_namespaced(BLOCK_TRANSFORM_APPENDERS_ID).unwrap(),
+            mod_api::RawDataMap::new("minecraft:block_transformer", BLOCK_TRANSFORM_APPENDERS_ID),
+        )),
+    ];
+
+    let mut loaded = load_maps(
+        &types,
+        overlay,
+        registries,
+        |id, value| match id {
+            TRANSFORMABLES_ID => {
+                let Some(object) = value.as_object() else {
+                    return Err("transformable must be an object".into());
+                };
+                let mut entries = BTreeMap::new();
+                if let (Some(transformer), Some(data)) =
+                    (object.get("transformer"), object.get("transform_data"))
+                {
+                    let raw_id = transformer
+                        .as_str()
+                        .ok_or("transformer must be a block transformer identifier")?;
+                    let transformer_id = Identifier::parse(raw_id)
+                        .map_err(|error| format!("transformer: {error}"))?
+                        .to_string();
+                    let _ = to_tag(data)
+                        .map_err(|_| "transform_data cannot be represented as NBT".to_owned())?;
+                    let parsed = parse_transform(data, block_registry)?;
+                    entries.insert(transformer_id, (parsed, data.clone()));
+                } else if let Some(transformers) = object.get("transformers") {
+                    let Some(map) = transformers.as_object() else {
+                        return Err("transformers must be an object".into());
+                    };
+                    for (raw_id, data) in map {
+                        let transformer_id = Identifier::parse(raw_id)
+                            .map_err(|error| format!("transformers.{raw_id}: {error}"))?
+                            .to_string();
+                        let _ = to_tag(data).map_err(|_| {
+                            format!("transformers.{raw_id} cannot be represented as NBT")
+                        })?;
+                        let parsed = parse_transform(data, block_registry)?;
+                        entries.insert(transformer_id, (parsed, data.clone()));
+                    }
+                } else {
+                    return Err(
+                        "transformable requires {transformer, transform_data} or {transformers}"
+                            .into(),
+                    );
+                }
+                Ok(TransformMapValue::Transformable(entries))
+            }
+            BLOCK_TRANSFORM_APPENDERS_ID => {
+                let Some(items) = value.as_array() else {
+                    return Err("block_transform_appenders value must be an array".into());
+                };
+                let mut entries = Vec::with_capacity(items.len());
+                for item in items {
+                    let _ = to_tag(item).map_err(|_| {
+                        "block_transform_appenders entry cannot be represented as NBT".to_owned()
+                    })?;
+                    let parsed = parse_transform(item, block_registry)?;
+                    entries.push((parsed, item.clone()));
+                }
+                Ok(TransformMapValue::Appender(entries))
+            }
+            _ => unreachable!("only transformables and block_transform_appenders are loaded here"),
+        },
+        |id, rem| match id {
+            // NeoForge `Transformable.Remover.CODEC`: `ResourceKey.codec(Registries.BLOCK_TRANSFORMER)`.
+            TRANSFORMABLES_ID => {
+                let raw = rem.as_str().ok_or_else(|| {
+                    "transformables remover must be a block transformer identifier".to_owned()
+                })?;
+                Ok(Identifier::parse(raw)
+                    .map_err(|error| format!("transformables remover: {error}"))?
+                    .to_string())
+            }
+            _ => Err("data map does not support partial removers".into()),
+        },
+        |_reg, _entry, existing, incoming| match (existing, incoming) {
+            (
+                TransformMapValue::Transformable(existing),
+                TransformMapValue::Transformable(incoming),
+            ) => {
+                let mut merged = existing.clone();
+                for (k, v) in incoming {
+                    merged.insert(k.clone(), v.clone());
+                }
+                Ok(TransformMapValue::Transformable(merged))
+            }
+            (TransformMapValue::Appender(existing), TransformMapValue::Appender(incoming)) => {
+                let mut merged = existing.clone();
+                merged.extend(incoming.iter().cloned());
+                Ok(TransformMapValue::Appender(merged))
+            }
+            _ => Err("mismatched transform data map value kinds".into()),
+        },
+        |_reg, _entry, existing, remover| match existing {
+            TransformMapValue::Transformable(map) => {
+                if !map.contains_key(remover) {
+                    return Ok(Some(TransformMapValue::Transformable(map.clone())));
+                }
+                let mut reduced = map.clone();
+                reduced.remove(remover);
+                if reduced.is_empty() {
+                    Ok(None)
+                } else {
+                    Ok(Some(TransformMapValue::Transformable(reduced)))
+                }
+            }
+            TransformMapValue::Appender(_) => {
+                Err("data map does not support partial removers".into())
+            }
+        },
+    );
+
+    let mut extra_transformers: HashMap<String, Vec<Transform>> = HashMap::new();
+    let mut appender_tags = Vec::new();
+    if let Some(mut by_map) = loaded.remove("minecraft:block_transformer")
+        && let Some(entries) = by_map.remove(BLOCK_TRANSFORM_APPENDERS_ID)
+    {
+        for (transformer_id, value) in entries {
+            if let TransformMapValue::Appender(items) = value {
+                let json = Value::Array(items.iter().map(|(_, j)| j.clone()).collect());
+                if let Ok(tag) = to_tag(&json) {
+                    appender_tags.push((transformer_id.clone(), tag));
+                }
+                extra_transformers
+                    .entry(transformer_id)
+                    .or_default()
+                    .extend(items.into_iter().map(|(t, _)| t));
+            }
+        }
+    }
+
+    let mut transformable_tags = Vec::new();
+    if let Some(mut by_map) = loaded.remove("minecraft:block")
+        && let Some(entries) = by_map.remove(TRANSFORMABLES_ID)
+    {
+        for (block_id, value) in entries {
+            if let TransformMapValue::Transformable(map) = value {
+                let json = if map.len() == 1 {
+                    let (id, (_, data)) = map.iter().next().unwrap();
+                    serde_json::json!({
+                        "transformer": id,
+                        "transform_data": data,
+                    })
+                } else {
+                    let mut obj = Map::new();
+                    for (id, (_, data)) in &map {
+                        obj.insert(id.clone(), data.clone());
+                    }
+                    serde_json::json!({ "transformers": obj })
+                };
+                if let Ok(tag) = to_tag(&json) {
+                    transformable_tags.push((block_id, tag));
+                }
+                for (transformer_id, (transform, _)) in map {
+                    extra_transformers
+                        .entry(transformer_id)
+                        .or_default()
+                        .push(transform);
+                }
+            }
+        }
+    }
+
+    LoadedTransformMaps {
+        values: vec![
+            ("minecraft:block", TRANSFORMABLES_ID, transformable_tags),
+            (
+                "minecraft:block_transformer",
+                BLOCK_TRANSFORM_APPENDERS_ID,
+                appender_tags,
+            ),
+        ],
+        extra_transformers,
+    }
+}
 
 /// Load the world's block maps. Resolve targets against `block_id` before merging each layer,
 /// as NeoForge's `Waxable` and `Oxidizable` codecs do. The block id also orders inverse ties.
@@ -242,5 +464,231 @@ mod tests {
             Some("test:weathered_tin")
         );
         assert_eq!(block_maps.waxed("test:tin"), Some("test:waxed_tin"));
+    }
+
+    #[test]
+    fn transformables_and_appenders_merge_partially_remove_enforce_no_tags_and_apply() {
+        use sunrise_sim::block_transform::{Around, Transformers};
+        use sunrise_world::chunk::BlockState;
+        use sunrise_world::registry::BlockRegistry;
+
+        let names = [
+            "minecraft:air",
+            "minecraft:andesite",
+            "minecraft:polished_andesite",
+            "minecraft:cobblestone",
+            "minecraft:quartz_block",
+            "minecraft:chiseled_quartz_block",
+        ];
+        let registry = BlockRegistry::from_nbt(&Tag::compound([
+            ("DataVersion", Tag::Int(sunrise_core::version::DATA_VERSION)),
+            (
+                "states",
+                Tag::List(
+                    names
+                        .iter()
+                        .map(|name| Tag::compound([("id", Tag::String((*name).into()))]))
+                        .collect(),
+                ),
+            ),
+            (
+                "defaults",
+                Tag::compound(
+                    names
+                        .iter()
+                        .enumerate()
+                        .map(|(i, name)| (*name, Tag::Int(i as i32))),
+                ),
+            ),
+        ]))
+        .unwrap();
+
+        let rule = |from: &str, to: &str, sound: &str| {
+            json!({
+                "block_state_provider": {
+                    "type": "minecraft:rule_based",
+                    "rules": [{
+                        "if_true": {
+                            "type": "minecraft:matching_blocks",
+                            "blocks": from
+                        },
+                        "then": { "id": to }
+                    }]
+                },
+                "sound": sound
+            })
+        };
+
+        let layers = |values: &[serde_json::Value]| {
+            values
+                .iter()
+                .map(|value| serde_json::to_vec(value).unwrap())
+                .collect::<Vec<_>>()
+        };
+        let files = vec![
+            (
+                "data_maps/neoforge:block/transformables".to_owned(),
+                layers(&[
+                    // Layer 1: single-form axe transform + disallowed #tag entry (must be ignored).
+                    json!({
+                        "values": {
+                            "minecraft:andesite": {
+                                "transformer": "minecraft:axe",
+                                "transform_data": rule(
+                                    "minecraft:andesite",
+                                    "minecraft:polished_andesite",
+                                    "minecraft:item.axe.strip"
+                                )
+                            },
+                            "#test:stones": {
+                                "transformer": "minecraft:axe",
+                                "transform_data": rule(
+                                    "minecraft:quartz_block",
+                                    "minecraft:cobblestone",
+                                    "minecraft:item.axe.strip"
+                                )
+                            }
+                        }
+                    }),
+                    // Layer 2: merge a shovel transform onto minecraft:andesite (keeps axe too).
+                    json!({
+                        "values": {
+                            "minecraft:andesite": {
+                                "transformers": {
+                                    "minecraft:shovel": rule(
+                                        "minecraft:andesite",
+                                        "minecraft:cobblestone",
+                                        "minecraft:item.shovel.flatten"
+                                    )
+                                }
+                            }
+                        }
+                    }),
+                    // Layer 3: partially remove only minecraft:shovel from minecraft:andesite.
+                    json!({
+                        "values": {},
+                        "remove": {
+                            "minecraft:andesite": "minecraft:shovel"
+                        }
+                    }),
+                ]),
+            ),
+            (
+                "data_maps/neoforge:block_transformer/block_transform_appenders".to_owned(),
+                layers(&[
+                    json!({
+                        "values": {
+                            "minecraft:shovel": [rule(
+                                "minecraft:quartz_block",
+                                "minecraft:chiseled_quartz_block",
+                                "minecraft:item.armor.equip_gold"
+                            )]
+                        }
+                    }),
+                    json!({
+                        "values": {
+                            "minecraft:shovel": [rule(
+                                "minecraft:andesite",
+                                "minecraft:cobblestone",
+                                "minecraft:item.shovel.flatten"
+                            )]
+                        }
+                    }),
+                ]),
+            ),
+        ];
+        let overlay = sunrise_world::loot::PackOverlay {
+            files: &files,
+            ..sunrise_world::loot::PackOverlay::default()
+        };
+        let blocks = [
+            "minecraft:andesite",
+            "minecraft:polished_andesite",
+            "minecraft:cobblestone",
+            "minecraft:quartz_block",
+            "minecraft:chiseled_quartz_block",
+        ]
+        .map(String::from);
+        let transformers_ids =
+            ["minecraft:axe", "minecraft:shovel", "minecraft:hoe"].map(String::from);
+        let mut items = sunrise_items::items::Items::empty();
+        items.block_tags.insert(
+            "test:stones".into(),
+            ["minecraft:quartz_block".to_owned()].into_iter().collect(),
+        );
+        let registries = WorldRegistries::new(
+            [
+                ("minecraft:block", blocks.as_slice()),
+                ("minecraft:block_transformer", transformers_ids.as_slice()),
+            ],
+            None,
+            &items,
+            std::path::Path::new(""),
+            &overlay,
+        );
+
+        let loaded = load_transform_maps(&overlay, &registries, &registry);
+
+        struct SingleBlock(&'static str);
+        impl Around for SingleBlock {
+            fn state(&self, _offset: [i32; 3]) -> BlockState {
+                BlockState {
+                    name: self.0.to_owned(),
+                    properties: Default::default(),
+                }
+            }
+        }
+
+        let transformers = Transformers::default().with_extra(loaded.extra_transformers);
+        // Axe on andesite -> polished_andesite (kept after shovel partial removal).
+        let (_, t, state) = transformers
+            .apply(
+                &items,
+                &registry,
+                "minecraft:axe",
+                "up",
+                &SingleBlock("minecraft:andesite"),
+            )
+            .expect("axe transformable applies");
+        assert_eq!(state.name, "minecraft:polished_andesite");
+        assert_eq!(t.sound, "minecraft:item.axe.strip");
+
+        // Axe on quartz_block -> None (#test:stones tag entry was ignored).
+        assert!(
+            transformers
+                .apply(
+                    &items,
+                    &registry,
+                    "minecraft:axe",
+                    "up",
+                    &SingleBlock("minecraft:quartz_block"),
+                )
+                .is_none()
+        );
+
+        // Shovel appenders concatenated both layers: quartz_block -> chiseled_quartz_block
+        // and andesite -> cobblestone.
+        let (_, t, state) = transformers
+            .apply(
+                &items,
+                &registry,
+                "minecraft:shovel",
+                "up",
+                &SingleBlock("minecraft:quartz_block"),
+            )
+            .expect("first shovel appender layer applies");
+        assert_eq!(state.name, "minecraft:chiseled_quartz_block");
+        assert_eq!(t.sound, "minecraft:item.armor.equip_gold");
+
+        let (_, _, state) = transformers
+            .apply(
+                &items,
+                &registry,
+                "minecraft:shovel",
+                "up",
+                &SingleBlock("minecraft:andesite"),
+            )
+            .expect("second shovel appender layer applies");
+        assert_eq!(state.name, "minecraft:cobblestone");
     }
 }

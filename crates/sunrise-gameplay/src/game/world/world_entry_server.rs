@@ -921,7 +921,7 @@ impl crate::game::ServerGame<'_> {
         if reload {
             items.retain_unbound_tags(self.items());
         }
-        let transformers = Arc::new(transformers?);
+        let transformers = transformers?;
         let sources = sources?;
         let (mut loot, context) = loot?;
         let recipes = Recipes::from_resolved(root, &items, &overlay, &sources)?;
@@ -1003,12 +1003,19 @@ impl crate::game::ServerGame<'_> {
         let gameplay = Arc::new(sunrise_sim::patrol::GameplayAttributes::load(
             root, &overlay,
         )?);
+        let transform_maps = neoforge_block_maps::load_transform_maps(
+            &overlay,
+            &registries,
+            self.common.pack.assets.registry,
+        );
+        let transformers = Arc::new(transformers.with_extra(transform_maps.extra_transformers));
         let data_maps = DataMaps::load(
             mod_api::__private::installed_data_maps(),
             &overlay,
             &registries,
         )
         .with_builtins(builtin)
+        .with_transform_maps(transform_maps.values)
         .with_biome_keys(mod_api::__private::BiomeKeys::new(
             next_biome_keys_session(),
             biomes.table.registered_keys().iter().cloned(),

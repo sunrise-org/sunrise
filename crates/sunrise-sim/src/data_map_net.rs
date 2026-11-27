@@ -31,6 +31,11 @@ pub const BUILTIN_SYNCED_MAPS: &[(&str, &str)] = &[
     ("minecraft:block", "neoforge:flammable"),
     ("minecraft:block", "neoforge:oxidizables"),
     ("minecraft:block", "neoforge:waxables"),
+    ("minecraft:block", "neoforge:transformables"),
+    (
+        "minecraft:block_transformer",
+        "neoforge:block_transform_appenders",
+    ),
     (
         "minecraft:entity_type",
         "neoforge:acceptable_villager_distances",

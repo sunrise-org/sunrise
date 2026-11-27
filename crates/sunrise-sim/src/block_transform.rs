@@ -9,6 +9,7 @@ use std::collections::HashMap;
 use sunrise_core::identifier::Identifier;
 use sunrise_world::{chunk::BlockState, registry::BlockRegistry};
 
+#[derive(Clone)]
 enum Predicate {
     Blocks {
         names: Vec<String>,
@@ -22,6 +23,7 @@ enum Predicate {
     AnyOf(Vec<Predicate>),
 }
 
+#[derive(Clone)]
 enum Provider {
     Rules(Vec<(Predicate, Provider)>),
     State(BlockState),
@@ -30,6 +32,7 @@ enum Provider {
 }
 
 /// One `BlockTransformData`.
+#[derive(Clone)]
 pub struct Transform {
     provider: Provider,
     pub disallowed_faces: Vec<String>,
@@ -46,6 +49,7 @@ pub struct Transform {
 #[derive(Default)]
 pub struct Transformers {
     transformers: HashMap<String, Vec<Transform>>,
+    extra: HashMap<String, Vec<Transform>>,
 }
 
 /// What the transformer reads of the world: the block state at an offset from
@@ -166,9 +170,20 @@ fn provider(value: &Value, states: States) -> std::result::Result<Provider, Stri
             &value["source"],
             states,
         )?))),
+        Some("minecraft:simple_state_provider") => states(&value["state"]).map(Provider::State),
         Some(other) => Err(format!("unsupported block state provider {other}")),
         None => states(value).map(Provider::State),
     }
+}
+
+/// Decode one `BlockTransformer.BlockTransformData` JSON object against `registry`, validating
+/// field types and filling vanilla defaults (used by `neoforge:transformables` and
+/// `neoforge:block_transform_appenders`).
+pub fn parse_transform(
+    value: &Value,
+    registry: &BlockRegistry,
+) -> std::result::Result<Transform, String> {
+    transform(value, &resolved(registry), &|_| true)
 }
 
 /// `BlockTransformer.DIRECT_CODEC`: one to 200 `BlockTransformData`.
@@ -370,7 +385,17 @@ impl Transformers {
             let list = transforms(value, &states, &|_| true).map_err(|e| format!("{id}: {e}"))?;
             transformers.insert(id.to_owned(), list);
         }
-        Ok(Self { transformers })
+        Ok(Self {
+            transformers,
+            extra: HashMap::new(),
+        })
+    }
+
+    /// Attach data-map appended transforms (`neoforge:block_transform_appenders` followed by
+    /// `neoforge:transformables`) evaluated after each transformer's base list.
+    pub fn with_extra(mut self, extra: HashMap<String, Vec<Transform>>) -> Self {
+        self.extra = extra;
+        self
     }
 
     /// `BlockTransformer.transformBlock` without the world writes: the first
@@ -384,9 +409,35 @@ impl Transformers {
         face: &str,
         around: &dyn Around,
     ) -> Option<(usize, &'a Transform, BlockState)> {
-        self.transformers
-            .get(id)?
-            .iter()
+        self.apply_with_extra(
+            self.extra.get(id).map(Vec::as_slice),
+            items,
+            registry,
+            id,
+            face,
+            around,
+        )
+    }
+
+    /// `DataMapHooks.appendDatamapTransformers`: evaluate `id`'s base transforms
+    /// followed by any data-map appended transforms (`neoforge:block_transform_appenders`
+    /// then `neoforge:transformables`).
+    pub fn apply_with_extra<'a>(
+        &'a self,
+        extra: Option<&'a [Transform]>,
+        items: &Items,
+        registry: &BlockRegistry,
+        id: &str,
+        face: &str,
+        around: &dyn Around,
+    ) -> Option<(usize, &'a Transform, BlockState)> {
+        let base = self.transformers.get(id).map(Vec::as_slice).unwrap_or(&[]);
+        let extra = extra.unwrap_or(&[]);
+        if base.is_empty() && extra.is_empty() {
+            return None;
+        }
+        base.iter()
+            .chain(extra.iter())
             .enumerate()
             .filter(|(_, t)| !t.disallowed_faces.iter().any(|f| f == face))
             .find_map(|(i, t)| Some((i, t, t.provider.state(items, registry, around)?)))
