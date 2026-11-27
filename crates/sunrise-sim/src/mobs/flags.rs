@@ -12,7 +12,6 @@ pub struct Flags {
     pub lava_walker: bool,
     /// Slot in the owning level's bound entity type tags. Synthetic types have no slot.
     pub entity_tag_slot: Option<usize>,
-    pub spawn_category: Option<super::spawn_selection::Category>,
     /// LivingEntity.omnidirectionalAirMover (bees and parrots).
     pub omnidirectional: bool,
     pub fire_immune: bool,

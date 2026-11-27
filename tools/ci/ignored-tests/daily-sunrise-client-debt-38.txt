@@ -11,3 +11,4 @@ sunrise-client cut_layout::game::creatures::pending_birth_tests::baby_spawn_reso
 sunrise-gameplay game::server_side::natural_spawning::tests::configured_spawner_lends_and_finalizes_its_loaded_body lib daily child-process
 sunrise-gameplay game::server_side::natural_spawning::tests::natural_admission_publishes_primary_and_passenger_constructor_uuids lib daily child-process
 sunrise-gameplay game::server_side::natural_spawning::tests::entity_parts_answer_the_spawn_cluster_size lib daily child-process
+sunrise-gameplay game::server_side::natural_spawning::tests::run_natural_spawn_pass_index_matches_linear_scan_and_invalidates_on_join_hook lib daily child-process
