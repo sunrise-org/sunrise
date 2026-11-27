@@ -239,14 +239,14 @@ impl crate::game::ServerGame<'_> {
                 {
                     self.common.riding = None;
                 }
-                for seat in crate::game::server_side::boarding::ordered_passengers(self, c.id) {
-                    if !seat.player
+                for (_, rider, player) in self.seated_passengers(c.id) {
+                    if !player
                         && self
                             .common
-                            .mob_object(seat.id)
+                            .mob_object(rider)
                             .is_some_and(|mob| !mob.removed && mob.extra.mount == Some(c.id))
                     {
-                        self.dismount_mob_from_cart(seat.id, c);
+                        self.dismount_mob_from_cart(rider, c);
                     }
                 }
                 if c.hurt_time == 0 {

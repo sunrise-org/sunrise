@@ -612,7 +612,7 @@ impl crate::game::ServerGame<'_> {
         if self.server_pick_camera_id() == Some(entity) {
             return self.common.riding;
         }
-        crate::game::server_side::boarding::vehicle_of_entity(self, entity).or_else(|| {
+        self.vehicle_of_any(entity).or_else(|| {
             self.common
                 .armor_stands
                 .iter()

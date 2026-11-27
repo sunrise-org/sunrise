@@ -1,1 +1,2 @@
 sunrise-gameplay game::server_side::commands_server::targets::projection_tests::player_motion_projection_matches_body lib daily resources
+sunrise-gameplay game::server_side::boarding::tests::ordered_passengers_matches_seated_passengers_on_live_game lib daily resources

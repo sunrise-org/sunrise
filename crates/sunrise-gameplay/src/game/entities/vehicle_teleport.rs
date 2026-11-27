@@ -234,12 +234,11 @@ impl ServerGame<'_> {
             vehicle.width(),
             vehicle.bounds(),
         );
-        let children = crate::game::server_side::boarding::ordered_passengers(self, root);
-        for (seat, child) in children.iter().enumerate() {
-            if child.player {
+        let children = self.seated_passengers(root);
+        for (seat, &(_, id, player)) in children.iter().enumerate() {
+            if player {
                 continue;
             }
-            let id = child.id;
             let Some(m) = self.common.mob_object(id) else {
                 continue;
             };
@@ -255,9 +254,9 @@ impl ServerGame<'_> {
             let at = riders::seat(attachment, offset, position, yaw);
             sunrise_sim::mobs::living::teleports::snap_to(m, at);
         }
-        for child in children {
-            if !child.player {
-                self.snap_mob_passengers(child.id);
+        for (_, child, player) in children {
+            if !player {
+                self.snap_mob_passengers(child);
             }
         }
     }

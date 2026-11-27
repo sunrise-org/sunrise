@@ -16,12 +16,12 @@ pub(in crate::game) struct SeatedPassenger {
     pub player: bool,
 }
 
-struct SeatIterators<'a, G, RM, OM, GP, B> {
+struct LazySeatSources<'a, PG, RP, RM, OM, GP, B> {
     acting: Option<u32>,
     riding: Option<u32>,
     has_player: bool,
-    riding_player: Option<(u32, i64)>,
-    placed_guests: G,
+    placed_guests: PG,
+    riding_player: RP,
     resident_mobs: RM,
     lent_mobs: &'a [Mob],
     off_level_mobs: OM,
@@ -29,13 +29,14 @@ struct SeatIterators<'a, G, RM, OM, GP, B> {
     bolts: B,
 }
 
+#[inline(always)]
 fn visit_player_seat_sources<'a>(
     vehicle: u32,
     acting: Option<u32>,
     riding: Option<u32>,
     has_player: bool,
-    riding_player: Option<(u32, i64)>,
     placed_guests: impl Iterator<Item = &'a Guest>,
+    riding_player: impl FnOnce() -> Option<(u32, i64)>,
     mut matches: impl FnMut(i64, u32) -> bool,
 ) -> bool {
     let mut acting_listed = false;
@@ -50,31 +51,37 @@ fn visit_player_seat_sources<'a>(
             return true;
         }
     }
-    // An unlisted acting guest goes first. This game's own player keeps its seat order.
-    riding_player.is_some_and(|(me, place)| {
+    riding_player().is_some_and(|(me, place)| {
         !acting_listed && has_player && riding == Some(vehicle) && matches(place, me)
     })
 }
 
-fn visit_seat_sources<'a, G, RM, OM, GP, B>(
+#[inline(always)]
+fn visit_seat_sources_lazy<'a, PG, G, RP, RM, R, OM, O, GP, P, B, BI>(
     vehicle: u32,
-    sources: SeatIterators<'a, G, RM, OM, GP, B>,
+    sources: LazySeatSources<'a, PG, RP, RM, OM, GP, B>,
     mut matches: impl FnMut(SeatedPassenger) -> bool,
 ) -> bool
 where
+    PG: FnOnce() -> G,
     G: Iterator<Item = &'a Guest>,
-    RM: Iterator<Item = &'a Mob>,
-    OM: Iterator<Item = &'a Mob>,
-    GP: Iterator<Item = (i64, u32)>,
-    B: Iterator<Item = (Option<u32>, i64, u32)>,
+    RP: FnOnce() -> Option<(u32, i64)>,
+    RM: FnOnce() -> R,
+    R: Iterator<Item = &'a Mob>,
+    OM: FnOnce() -> O,
+    O: Iterator<Item = &'a Mob>,
+    GP: FnOnce() -> P,
+    P: Iterator<Item = (i64, u32)>,
+    B: FnOnce() -> BI,
+    BI: Iterator<Item = (Option<u32>, i64, u32)>,
 {
     if visit_player_seat_sources(
         vehicle,
         sources.acting,
         sources.riding,
         sources.has_player,
+        (sources.placed_guests)(),
         sources.riding_player,
-        sources.placed_guests,
         |order, id| {
             matches(SeatedPassenger {
                 order,
@@ -85,41 +92,47 @@ where
     ) {
         return true;
     }
-    let other_mobs = sources
-        .lent_mobs
-        .iter()
-        .chain(sources.off_level_mobs)
-        .filter(|m| m.extra.mount == Some(vehicle));
-    sources
-        .resident_mobs
-        .chain(other_mobs)
-        .filter(|m| !m.removed)
-        .any(|m| {
-            matches(SeatedPassenger {
-                order: m.extra.vehicle_order,
-                id: m.id,
-                player: false,
+    let mob_hit = {
+        let other_mobs = sources
+            .lent_mobs
+            .iter()
+            .chain((sources.off_level_mobs)())
+            .filter(|m| m.extra.mount == Some(vehicle));
+        (sources.resident_mobs)()
+            .chain(other_mobs)
+            .filter(|m| !m.removed)
+            .any(|m| {
+                matches(SeatedPassenger {
+                    order: m.extra.vehicle_order,
+                    id: m.id,
+                    player: false,
+                })
             })
+    };
+    if mob_hit {
+        return true;
+    }
+    if (sources.general_passengers)().any(|(order, id)| {
+        matches(SeatedPassenger {
+            order,
+            id,
+            player: false,
         })
-        || sources.general_passengers.any(|(order, id)| {
+    }) {
+        return true;
+    }
+    (sources.bolts)()
+        .filter(|&(mount, ..)| mount == Some(vehicle))
+        .any(|(_, order, id)| {
             matches(SeatedPassenger {
                 order,
                 id,
                 player: false,
             })
         })
-        || sources
-            .bolts
-            .filter(|&(mount, ..)| mount == Some(vehicle))
-            .any(|(_, order, id)| {
-                matches(SeatedPassenger {
-                    order,
-                    id,
-                    player: false,
-                })
-            })
 }
 
+#[inline(always)]
 fn collect_ordered_seats(
     visit: impl FnOnce(&mut dyn FnMut(SeatedPassenger) -> bool),
 ) -> Vec<SeatedPassenger> {
@@ -132,47 +145,51 @@ fn collect_ordered_seats(
     seats
 }
 
+#[inline(always)]
 fn visit_game_passenger_seats(
     game: &ServerGame<'_>,
     vehicle: u32,
     lent_mobs: &[Mob],
     matches: impl FnMut(SeatedPassenger) -> bool,
 ) -> bool {
-    visit_seat_sources(
+    visit_seat_sources_lazy(
         vehicle,
-        SeatIterators {
+        LazySeatSources {
             acting: game
                 .server
                 .lan_acting
                 .filter(|_| game.common.player.is_some()),
             riding: game.common.riding,
             has_player: game.common.player.is_some(),
-            riding_player: game.riding_player(),
-            placed_guests: game.placed_seat_guests(),
-            resident_mobs: game.resident_mob_riders(vehicle).map(|(_, m)| m),
+            placed_guests: || game.placed_seat_guests(),
+            riding_player: || game.riding_player(),
+            resident_mobs: || game.resident_mob_riders(vehicle).map(|(_, m)| m),
             lent_mobs,
-            off_level_mobs: game
-                .common
-                .persist
-                .off_level
-                .values()
-                .filter_map(OffLevel::as_mob),
-            general_passengers: game
-                .common
-                .general_passengers(vehicle)
-                .map(|row| (row.vehicle_order, row.id)),
-            bolts: game
-                .common
-                .bolts
-                .iter()
-                .map(|b| (b.mount, b.vehicle_order, b.id)),
+            off_level_mobs: || {
+                game.common
+                    .persist
+                    .off_level
+                    .values()
+                    .filter_map(OffLevel::as_mob)
+            },
+            general_passengers: || {
+                game.common
+                    .general_passengers(vehicle)
+                    .map(|row| (row.vehicle_order, row.id))
+            },
+            bolts: || {
+                game.common
+                    .bolts
+                    .iter()
+                    .map(|b| (b.mount, b.vehicle_order, b.id))
+            },
         },
         matches,
     )
 }
 
-/// The passengers of `vehicle` in `Entity.passengers` order across all server
-/// seat sources, preserving source encounter order when places tie.
+/// Ordered server passengers for `vehicle`, preserving source encounter order on ties.
+#[inline(always)]
 pub(in crate::game) fn ordered_passengers(
     game: &ServerGame<'_>,
     vehicle: u32,
@@ -182,31 +199,11 @@ pub(in crate::game) fn ordered_passengers(
     })
 }
 
-/// The vehicle `rider` directly sits in across server seat sources.
-pub(in crate::game) fn vehicle_of_entity(game: &ServerGame<'_>, rider: u32) -> Option<u32> {
-    if game.common.player.is_some() && game.riding_player().is_some_and(|(id, _)| id == rider) {
-        return game.common.riding;
-    }
-    let acting = game
-        .server
-        .lan_acting
-        .filter(|_| game.common.player.is_some());
-    if let Some(guest) = game
-        .placed_seat_guests()
-        .find(|g| g.entity_id as u32 == rider)
-    {
-        return if acting == Some(guest.conn) {
-            game.common.riding
-        } else {
-            guest.vehicle
-        };
-    }
-    match game.player_vehicle(rider) {
-        Some(player) => game.native_vehicle_id(player),
-        None => game
-            .native_vehicle_id(Target::Mob(rider))
-            .or_else(|| game.native_vehicle_id(Target::General(rider))),
-    }
+/// Shared non-player rider-parent lookup for resident/off-level mobs and general rows.
+#[inline(always)]
+pub(in crate::game) fn non_player_vehicle_of(game: &ServerGame<'_>, id: u32) -> Option<u32> {
+    game.native_vehicle_id(Target::Mob(id))
+        .or_else(|| game.native_vehicle_id(Target::General(id)))
 }
 
 pub(super) fn next_boarded_rider(
@@ -311,8 +308,8 @@ impl ServerGame<'_> {
                 .filter(|_| self.common.player.is_some()),
             self.common.riding,
             self.common.player.is_some(),
-            self.riding_player(),
             self.placed_seat_guests(),
+            || self.riding_player(),
             matches,
         )
     }
@@ -328,7 +325,16 @@ impl ServerGame<'_> {
     /// The parent behind a boarded seat. A displaced player's handle can be hidden during a
     /// nested guest turn, but the player's seat still has a parent in the hub.
     pub(super) fn seated_passenger_vehicle(&self, rider: u32) -> Option<u32> {
-        vehicle_of_entity(self, rider)
+        if self.player.is_some() && self.riding_player().is_some_and(|(id, _)| id == rider) {
+            return self.riding;
+        }
+        if let Some(guest) = self
+            .placed_seat_guests()
+            .find(|g| g.entity_id as u32 == rider)
+        {
+            return guest.vehicle;
+        }
+        self.vehicle_of_any(rider)
     }
 
     /// The first actual rider, or the rider directly after `after`, even off-level.
@@ -375,11 +381,11 @@ impl ServerGame<'_> {
     /// `Entity.addPassenger`: the place of `rider` getting on `vehicle`. On a server a player
     /// goes ahead of a first passenger that is no player; everything else goes last.
     pub fn boarding_order(&self, vehicle: u32, rider: u32, player: bool) -> i64 {
-        let mut aboard = ordered_passengers(self, vehicle);
-        aboard.retain(|seat| seat.id != rider);
+        let mut aboard = self.seated_passengers(vehicle);
+        aboard.retain(|&(_, id, _)| id != rider);
         match (aboard.first(), aboard.last()) {
-            (Some(first), _) if player && !first.player => first.order - 1,
-            (_, Some(last)) => last.order + 1,
+            (Some(&(first, _, false)), _) if player => first - 1,
+            (_, Some(&(last, ..))) => last + 1,
             _ => 0,
         }
     }
@@ -563,19 +569,19 @@ mod tests {
         let bolts = [(Some(vehicle), 0, 401), (Some(other), 0, 402)];
 
         let with_acting_guest = collect_ordered_seats(|visit| {
-            visit_seat_sources(
+            visit_seat_sources_lazy(
                 vehicle,
-                SeatIterators {
+                LazySeatSources {
                     acting: Some(1),
                     riding: Some(vehicle),
                     has_player: true,
-                    riding_player: Some((101, i64::MIN)),
-                    placed_guests: guests.iter(),
-                    resident_mobs: resident_mobs.iter(),
+                    placed_guests: || guests.iter(),
+                    riding_player: || Some((101, i64::MIN)),
+                    resident_mobs: || resident_mobs.iter(),
                     lent_mobs: &lent_mobs,
-                    off_level_mobs: off_level_mobs.iter(),
-                    general_passengers: general.iter().copied(),
-                    bolts: bolts.iter().copied(),
+                    off_level_mobs: || off_level_mobs.iter(),
+                    general_passengers: || general.iter().copied(),
+                    bolts: || bolts.iter().copied(),
                 },
                 visit,
             );
@@ -623,19 +629,19 @@ mod tests {
 
         // Unlisted own player ties after placed guests and ahead of mobs.
         let with_own_player = collect_ordered_seats(|visit| {
-            visit_seat_sources(
+            visit_seat_sources_lazy(
                 vehicle,
-                SeatIterators {
+                LazySeatSources {
                     acting: None,
                     riding: Some(vehicle),
                     has_player: true,
-                    riding_player: Some((110, 0)),
-                    placed_guests: guests.iter(),
-                    resident_mobs: resident_mobs.iter(),
+                    placed_guests: || guests.iter(),
+                    riding_player: || Some((110, 0)),
+                    resident_mobs: || resident_mobs.iter(),
                     lent_mobs: &lent_mobs,
-                    off_level_mobs: off_level_mobs.iter(),
-                    general_passengers: general.iter().copied(),
-                    bolts: bolts.iter().copied(),
+                    off_level_mobs: || off_level_mobs.iter(),
+                    general_passengers: || general.iter().copied(),
+                    bolts: || bolts.iter().copied(),
                 },
                 visit,
             );
@@ -650,19 +656,19 @@ mod tests {
         let mut cursor_ids = Vec::new();
         let mut after = None;
         while let Some(id) = next_boarded_rider(after, |visit| {
-            visit_seat_sources(
+            visit_seat_sources_lazy(
                 vehicle,
-                SeatIterators {
+                LazySeatSources {
                     acting: None,
                     riding: Some(vehicle),
                     has_player: true,
-                    riding_player: Some((110, 0)),
-                    placed_guests: guests.iter(),
-                    resident_mobs: resident_mobs.iter(),
+                    placed_guests: || guests.iter(),
+                    riding_player: || Some((110, 0)),
+                    resident_mobs: || resident_mobs.iter(),
                     lent_mobs: &lent_mobs,
-                    off_level_mobs: off_level_mobs.iter(),
-                    general_passengers: general.iter().copied(),
-                    bolts: bolts.iter().copied(),
+                    off_level_mobs: || off_level_mobs.iter(),
+                    general_passengers: || general.iter().copied(),
+                    bolts: || bolts.iter().copied(),
                 },
                 |seat| visit(seat.order, seat.id),
             );
@@ -689,19 +695,19 @@ mod tests {
         let bolts = [(Some(vehicle), 2, 401), (Some(vehicle), -2, 402)];
 
         let ordered = collect_ordered_seats(|visit| {
-            visit_seat_sources(
+            visit_seat_sources_lazy(
                 vehicle,
-                SeatIterators {
+                LazySeatSources {
                     acting: None,
                     riding: Some(vehicle),
                     has_player: true,
-                    riding_player: Some((110, 0)),
-                    placed_guests: guests.iter(),
-                    resident_mobs: resident_mobs.iter(),
+                    placed_guests: || guests.iter(),
+                    riding_player: || Some((110, 0)),
+                    resident_mobs: || resident_mobs.iter(),
                     lent_mobs: &[],
-                    off_level_mobs: off_level_mobs.iter(),
-                    general_passengers: general.iter().copied(),
-                    bolts: bolts.iter().copied(),
+                    off_level_mobs: || off_level_mobs.iter(),
+                    general_passengers: || general.iter().copied(),
+                    bolts: || bolts.iter().copied(),
                 },
                 visit,
             );
@@ -764,10 +770,8 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn ordered_passengers_matches_seated_passengers_on_live_game() {
-        if std::env::var_os("SUNRISE_TEST_RESOURCES").is_none() {
-            return;
-        }
         use sunrise_gameplay_common::game::lightning_common::Bolt;
         use sunrise_sim::lan::{NetConfig, hub::HubConfig};
 
@@ -856,9 +860,11 @@ mod tests {
             assert!(game.has_seated_passengers(vehicle));
 
             for rider in [510, 511, 520, 522, 530] {
-                assert_eq!(vehicle_of_entity(game, rider), Some(vehicle));
+                assert_eq!(game.seated_passenger_vehicle(rider), Some(vehicle));
             }
-            assert_eq!(vehicle_of_entity(game, 521), None);
+            assert_eq!(game.seated_passenger_vehicle(521), None);
+            assert_eq!(game.seated_passenger_vehicle(540), None);
+            assert_eq!(game.vehicle_of_any(540), None);
 
             // Reassign places with mixed and equal orders across sources.
             game.server.riding_order = 1;

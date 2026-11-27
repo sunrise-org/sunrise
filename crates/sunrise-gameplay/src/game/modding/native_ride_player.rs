@@ -78,7 +78,7 @@ impl crate::game::ServerGame<'_> {
             return Err(RidePlayerRefusal::Cycle);
         }
         if !force {
-            if self.has_seated_passengers(vehicle_id) {
+            if !self.seated_passengers(vehicle_id).is_empty() {
                 return Err(RidePlayerRefusal::Full);
             }
             if cannot_ride {
@@ -259,7 +259,10 @@ impl crate::game::ServerGame<'_> {
     /// What `id` rides, when `id` may be a player: the next link of a
     /// vehicle walk that can pass through a player carrying a mob.
     pub(in crate::game) fn vehicle_of_any(&self, id: u32) -> Option<u32> {
-        crate::game::server_side::boarding::vehicle_of_entity(self, id)
+        match self.player_vehicle(id) {
+            Some(player) => self.native_player_vehicle_id(player),
+            None => crate::game::server_side::boarding::non_player_vehicle_of(self, id),
+        }
     }
 
     fn native_player_vehicle_id(&self, player: Target) -> Option<u32> {

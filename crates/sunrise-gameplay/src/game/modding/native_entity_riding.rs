@@ -549,7 +549,7 @@ impl crate::game::ServerGame<'_> {
             {
                 return Err(R::Cycle);
             }
-            current = crate::game::server_side::boarding::vehicle_of_entity(self, id);
+            current = self.vehicle_of_any(id);
         }
         if current.is_some() {
             return Err(R::Cycle);
@@ -619,13 +619,13 @@ impl crate::game::ServerGame<'_> {
                     .iter()
                     .find(|m| m.id == id && m.alive())
                     .ok_or(R::NoEntity)?;
-                let seats = crate::game::server_side::boarding::ordered_passengers(self, id);
+                let seats = self.seated_passengers(id);
                 let players = seats
                     .iter()
-                    .filter(|seat| seat.player)
+                    .filter(|(_, _, player)| *player)
                     .count()
                     .max(usize::from(mob.rider.is_some()));
-                let passengers = players + seats.iter().filter(|seat| !seat.player).count();
+                let passengers = players + seats.iter().filter(|(_, _, player)| !*player).count();
                 if !force && !sunrise_sim::mobs::riders::can_add_passenger(mob, passengers) {
                     return Err(R::Full);
                 }
@@ -634,13 +634,13 @@ impl crate::game::ServerGame<'_> {
                 if self.seat(id).is_none() {
                     return Err(R::UnsupportedVehicle);
                 }
-                if !force && self.has_seated_passengers(id) {
+                if !force && !self.seated_passengers(id).is_empty() {
                     return Err(R::Full);
                 }
             }
             // `Player` keeps `Entity.canAddPassenger`: one passenger unless forced.
             Target::Player | Target::Guest(_) => {
-                if !force && self.has_seated_passengers(vehicle_id) {
+                if !force && !self.seated_passengers(vehicle_id).is_empty() {
                     return Err(R::Full);
                 }
             }
@@ -710,7 +710,7 @@ impl crate::game::ServerGame<'_> {
         vehicle: u32,
         y: f64,
     ) {
-        let passengers = crate::game::server_side::boarding::ordered_passengers(self, vehicle);
+        let passengers = self.seated_passengers(vehicle);
         let own = self
             .common
             .player
@@ -720,12 +720,13 @@ impl crate::game::ServerGame<'_> {
         // An own-player edge that has no seat entry still needs to dismount.
         if let Some(own) = own
             && self.common.riding == Some(vehicle)
-            && !passengers.iter().any(|seat| seat.player && seat.id == own)
+            && !passengers
+                .iter()
+                .any(|&(_, id, player)| player && id == own)
         {
             self.stop_riding_from_removed_vehicle(vehicle, y);
         }
-        for seat in passengers {
-            let (id, player) = (seat.id, seat.player);
+        for (_, id, player) in passengers {
             if player {
                 let target = if own == Some(id) {
                     Some(Target::Player)
@@ -844,7 +845,7 @@ impl crate::game::ServerGame<'_> {
         Ok(visit_passenger_tree(
             entity.id(),
             |vehicle, after| self.next_passenger_seat(vehicle, after),
-            |rider| crate::game::server_side::boarding::vehicle_of_entity(self, rider),
+            |rider| self.seated_passenger_vehicle(rider),
             |rider| {
                 self.entity(rider)
                     .map_or(ControlFlow::Continue(()), &mut *visit)
@@ -861,7 +862,7 @@ impl crate::game::ServerGame<'_> {
                 return Some(root);
             };
             root = vehicle;
-            next = crate::game::server_side::boarding::vehicle_of_entity(self, vehicle);
+            next = self.vehicle_of_any(vehicle);
         }
         None
     }

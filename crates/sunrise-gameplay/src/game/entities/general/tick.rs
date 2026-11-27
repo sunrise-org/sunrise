@@ -97,9 +97,7 @@ impl ServerGame<'_> {
                     let mut depth = 1;
                     let mut parent = vehicle;
                     while depth <= self.riding_link_limit() {
-                        let Some(next) =
-                            crate::game::server_side::boarding::vehicle_of_entity(self, parent)
-                        else {
+                        let Some(next) = self.vehicle_of_any(parent) else {
                             break;
                         };
                         depth += 1;

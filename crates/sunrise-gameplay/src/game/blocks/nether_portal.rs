@@ -968,8 +968,9 @@ impl crate::game::ServerGame<'_> {
         {
             PROJECTILE_DELAY
         } else if self
-            .first_seated_passenger(id)
-            .is_some_and(|(_, _, player)| player)
+            .seated_passengers(id)
+            .first()
+            .is_some_and(|&(_, _, player)| player)
         {
             PLAYER_DELAY
         } else {

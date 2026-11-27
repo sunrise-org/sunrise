@@ -562,10 +562,10 @@ impl crate::game::ClientGame<'_> {
         use sunrise_gameplay_common::game::entity::{
             DragonPartRef, EntityProjection, with_common_entity_projection,
         };
-        let pos3 = |e: &dyn EntityProjection| {
+        fn pos3(e: &dyn EntityProjection) -> [f64; 3] {
             let p = e.projected_position();
             [p.x, p.y, p.z]
-        };
+        }
         match target {
             Target::Guest(_) => None,
             Target::Other(_) => self.native_client_tracked(entity).map(|(_, pos)| pos),

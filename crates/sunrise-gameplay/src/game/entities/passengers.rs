@@ -237,9 +237,9 @@ impl ServerGame<'_> {
 
     /// The passengers of `vehicle` in `getPassengers` order on the server.
     pub(in crate::game::server_side) fn passenger_order(&self, vehicle: u32) -> Vec<u32> {
-        crate::game::server_side::boarding::ordered_passengers(self, vehicle)
+        self.seated_passengers(vehicle)
             .into_iter()
-            .map(|seat| seat.id)
+            .map(|(_, id, _)| id)
             .collect()
     }
 
