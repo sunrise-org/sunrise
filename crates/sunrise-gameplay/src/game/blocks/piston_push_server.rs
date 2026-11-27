@@ -1060,30 +1060,32 @@ impl crate::game::ServerGame<'_> {
             };
             if authoritative || wanted.y.abs() > 0.0 {
                 let mut paused_hurt = None;
-                let mut mobs = self.common.mobs.lift();
-                let mut lent = sunrise_sim::health::LentLevel::take(&mut self.common.world);
-                let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                    let world = self.mob_world_base(&[]);
-                    let mut level = sunrise_sim::health::DamageLevel::lent(
-                        &self.common.world,
-                        self.common.pack.assets.registry,
-                        &mut lent,
-                        Some(world_items!(self)),
-                        Some(&self.common.pack.block_registries),
-                        &self.common.damage_hooks,
-                    )
-                    .with_variants(world_variants!(self))
-                    .with_reads(crate::game::entity_server::hit_reads_of!(self))
-                    .with_mob_hurt_handoff(&mut paused_hurt);
-                    mobs[i].update_pushed_support(&world, wanted, moved);
-                    if authoritative {
-                        mobs[i].restitute_movement(&world, &mut level, wanted, moved);
-                    }
-                }));
-                lent.give_back(&mut self.common.world);
-                self.common
-                    .mobs
-                    .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+                let result = self.with_lifted_mobs(
+                    sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+                    |game, mobs| {
+                        let mut lent = sunrise_sim::health::LentLevel::take(&mut game.common.world);
+                        let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            let world = game.mob_world_base(&[]);
+                            let mut level = sunrise_sim::health::DamageLevel::lent(
+                                &game.common.world,
+                                game.common.pack.assets.registry,
+                                &mut lent,
+                                Some(world_items!(game)),
+                                Some(&game.common.pack.block_registries),
+                                &game.common.damage_hooks,
+                            )
+                            .with_variants(world_variants!(game))
+                            .with_reads(crate::game::entity_server::hit_reads_of!(game))
+                            .with_mob_hurt_handoff(&mut paused_hurt);
+                            mobs[i].update_pushed_support(&world, wanted, moved);
+                            if authoritative {
+                                mobs[i].restitute_movement(&world, &mut level, wanted, moved);
+                            }
+                        }));
+                        lent.give_back(&mut game.common.world);
+                        result
+                    },
+                );
                 if let Err(payload) = result {
                     std::panic::resume_unwind(payload);
                 }

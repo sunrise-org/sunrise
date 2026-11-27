@@ -1847,44 +1847,44 @@ impl crate::game::ServerGame<'_> {
                 self.common.tnts[i].used_portal = true;
             }
         } else {
-            let mut items = self.common.dropped.lift();
-            let mut arrival = None;
-            let mut removed: Vec<_> = items
-                .iter()
-                .enumerate()
-                .map(|(i, item)| {
-                    if item.id == id {
-                        arrival = Some(i);
-                    }
-                    self.common
-                        .persist
-                        .removals
-                        .contains(&super::commands::Target::Item(item.id))
-                })
-                .collect();
-            if let Some(item) = arrival {
-                let mut cells = sunrise_sim::entities::ItemCells::new(&items);
-                sunrise_sim::entities::merge_with_neighbours(
-                    &mut items,
-                    &mut removed,
-                    &mut cells,
-                    item,
-                    false,
-                    &|stack| self.stack_max_size(stack).max(1),
-                );
-            }
-            let mut removed = removed.into_iter();
-            // A logically removed row belongs to the native removal sweep, not
-            // this merge's structural retirement.
-            items.retain(|item| {
-                !removed.next().unwrap()
-                    || self
-                        .common
-                        .persist
-                        .removals
-                        .contains(&super::commands::Target::Item(item.id))
+            self.with_lifted_dropped(|game, items| {
+                let mut arrival = None;
+                let mut removed: Vec<_> = items
+                    .iter()
+                    .enumerate()
+                    .map(|(i, item)| {
+                        if item.id == id {
+                            arrival = Some(i);
+                        }
+                        game.common
+                            .persist
+                            .removals
+                            .contains(&super::commands::Target::Item(item.id))
+                    })
+                    .collect();
+                if let Some(item) = arrival {
+                    let mut cells = sunrise_sim::entities::ItemCells::new(items);
+                    sunrise_sim::entities::merge_with_neighbours(
+                        items,
+                        &mut removed,
+                        &mut cells,
+                        item,
+                        false,
+                        &|stack| game.stack_max_size(stack).max(1),
+                    );
+                }
+                let mut removed = removed.into_iter();
+                // A logically removed row belongs to the native removal sweep, not
+                // this merge's structural retirement.
+                items.retain(|item| {
+                    !removed.next().unwrap()
+                        || game
+                            .common
+                            .persist
+                            .removals
+                            .contains(&super::commands::Target::Item(item.id))
+                });
             });
-            self.common.put_back_dropped(items);
         }
     }
 

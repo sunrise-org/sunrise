@@ -33,41 +33,42 @@ impl crate::game::ServerGame<'_> {
             Vec3::new(at[0] + w, at[1] + f64::from(dims.height), at[2] + w),
         )
         .inflate(Vec3::new(1.0, 0.5, 1.0));
-        let mut projectiles = self.common.creatures.projectiles.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        let mut picked = Vec::new();
-        projectiles.retain(|shot| {
-            let Some(a) = shot.arrow.as_ref().filter(|a| !a.removed) else {
-                return true;
-            };
-            let p = shot.position;
-            let bounds = Aabb::new(
-                Vec3::new(p.x - 0.25, p.y, p.z - 0.25),
-                Vec3::new(p.x + 0.25, p.y + 0.5, p.z + 0.25),
-            );
-            if !bounds.intersects(reach) {
-                return true;
-            }
-            let taken = match a.player_touch(creative) {
-                Touch::Ignore => false,
-                Touch::Take => true,
-                // Inventory.add: a creative player takes what does not fit.
-                Touch::Give(stack) => {
-                    self.as_guest(conn, |g| g.add_stack_to_inventory(stack))
-                        .flatten()
-                        .is_none()
-                        || creative
-                }
-            };
-            if taken {
-                picked.push(shot.clone());
-            }
-            !taken
-        });
-        self.common.creatures.projectiles.restore(
-            projectiles,
+        let picked = self.with_lifted_projectiles(
             sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+            |game, projectiles| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                let mut picked = Vec::new();
+                projectiles.retain(|shot| {
+                    let Some(a) = shot.arrow.as_ref().filter(|a| !a.removed) else {
+                        return true;
+                    };
+                    let p = shot.position;
+                    let bounds = Aabb::new(
+                        Vec3::new(p.x - 0.25, p.y, p.z - 0.25),
+                        Vec3::new(p.x + 0.25, p.y + 0.5, p.z + 0.25),
+                    );
+                    if !bounds.intersects(reach) {
+                        return true;
+                    }
+                    let taken = match a.player_touch(creative) {
+                        Touch::Ignore => false,
+                        Touch::Take => true,
+                        // Inventory.add: a creative player takes what does not fit.
+                        Touch::Give(stack) => {
+                            game.as_guest(conn, |g| g.add_stack_to_inventory(stack))
+                                .flatten()
+                                .is_none()
+                                || creative
+                        }
+                    };
+                    if taken {
+                        picked.push(shot.clone());
+                    }
+                    !taken
+                });
+                picked
+            },
         );
         for shot in picked {
             if let Some(arrow) = shot.arrow.as_ref() {

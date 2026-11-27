@@ -108,49 +108,51 @@ impl crate::game::ServerGame<'_> {
             &mut Vec<HeartEvent>,
         ),
     ) -> Result<()> {
-        let mut mobs = self.common.mobs.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        let mut uuids = std::mem::take(&mut self.common.persist.uuids);
-        let mut next_entity = self.server.next_entity;
-        let mut random = self.common.world.random.clone();
-        let spawning = self.spawning_monsters();
-        let creaking = self
-            .common
-            .res
-            .mob_types()
-            .get("minecraft:creaking")
-            .cloned();
-        let player_uuid = self.common.level.player_uuid;
-        let snapshot: Vec<_> = if others {
-            mobs.iter()
-                .map(|m| seen(m, player_uuid, world_items!(self)))
-                .collect()
-        } else {
-            Vec::new()
-        };
-        let mut events = Vec::new();
-        let index = std::cell::RefCell::new(std::mem::take(&mut self.common.mob_index));
-        let (added, index) = {
-            let w = others.then(|| self.mob_world_base(&snapshot));
-            let mut host = Host {
-                mobs: &mut mobs,
-                added: Vec::new(),
-                uuids: &mut uuids,
-                creaking,
-                next_entity: &mut next_entity,
-                spawning,
-                index,
-            };
-            f(heart, w.as_ref(), &mut random, &mut host, &mut events);
-            (host.added, host.index.into_inner())
-        };
-        // The heart's additions go after every slot the index holds.
-        self.common.mob_index = index;
-        mobs.extend(added);
-        self.common
-            .mobs
-            .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+        let (uuids, next_entity, random, events) = self.with_lifted_mobs(
+            sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+            |game, mobs| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                let mut uuids = std::mem::take(&mut game.common.persist.uuids);
+                let mut next_entity = game.server.next_entity;
+                let mut random = game.common.world.random.clone();
+                let spawning = game.spawning_monsters();
+                let creaking = game
+                    .common
+                    .res
+                    .mob_types()
+                    .get("minecraft:creaking")
+                    .cloned();
+                let player_uuid = game.common.level.player_uuid;
+                let snapshot: Vec<_> = if others {
+                    mobs.iter()
+                        .map(|m| seen(m, player_uuid, world_items!(game)))
+                        .collect()
+                } else {
+                    Vec::new()
+                };
+                let mut events = Vec::new();
+                let index = std::cell::RefCell::new(std::mem::take(&mut game.common.mob_index));
+                let (added, index) = {
+                    let w = others.then(|| game.mob_world_base(&snapshot));
+                    let mut host = Host {
+                        mobs,
+                        added: Vec::new(),
+                        uuids: &mut uuids,
+                        creaking,
+                        next_entity: &mut next_entity,
+                        spawning,
+                        index,
+                    };
+                    f(heart, w.as_ref(), &mut random, &mut host, &mut events);
+                    (host.added, host.index.into_inner())
+                };
+                // The heart's additions go after every slot the index holds.
+                game.common.mob_index = index;
+                mobs.extend(added);
+                (uuids, next_entity, random, events)
+            },
+        );
         self.common.persist.uuids = uuids;
         self.server.next_entity = next_entity;
         self.common.world.random = random;

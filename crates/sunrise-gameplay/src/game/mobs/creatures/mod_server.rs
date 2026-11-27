@@ -6064,100 +6064,125 @@ impl crate::game::ServerGame<'_> {
             .remove(level_id)
             .unwrap_or_default();
         let primable = self.sulfur_cubes_adopted_explosive();
-        let mut mobs = self.common.mobs.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        let mut dead = Vec::new();
-        let mut died = std::mem::take(&mut self.server.died);
-        let mut ticked = std::mem::take(&mut self.common.creatures.ticked);
-        ticked.clear();
-        // With guests on, each mob sees its nearest player (game/network/lan_mobs.rs).
-        let mut guests = self.lan_guest_views();
-        // What stands in a guest's slot while a mob holds that guest's view for
-        // its tick (see `lent` below).
-        let mut spare = guests.first().map(|g| g.1.clone());
-        let mut bindings = match self.server.lan.as_mut() {
-            Some(host) if !guests.is_empty() => std::mem::take(&mut host.mob_players),
-            _ => Default::default(),
-        };
-        // The guests' entity ids by connection, for the shulker bullets fired
-        // at the guest a mob sees.
-        let mut guest_ids: Vec<(u32, u32)> = match self.server.lan.as_ref() {
-            Some(host) if !guests.is_empty() => host
-                .hub
-                .guests
-                .iter()
-                .map(|g| (g.conn, g.entity_id as u32))
-                .collect(),
-            _ => Vec::new(),
-        };
-        let mut guest_events = Vec::new();
-        let mut player_credit = std::mem::take(&mut self.server.last_hurt_by_player);
-        // The block writes since the last tick: mobs re-path around them.
-        let mut path_writes =
-            std::mem::take(self.common.world.path_writes.get_or_insert_with(Vec::new));
-        // The mobs whose bodies go this tick: (id, feet, width, height, split).
-        // 🤖 Agent: the last field is the grown slime, magma cube or sulfur
-        // cube the body leaves behind (`AbstractCubeMob.remove`), captured as
-        // the body goes because it has left the list by the time it splits.
-        let mut gone = Vec::new();
-        let mut restocks = Vec::new();
-        // The level's random and attachments, lent to the mobs (brain behaviours draw from
-        // the random, and a hit's damage hooks get both) and taken back after their ticks.
-        let lent = sunrise_sim::health::LentLevel::take(&mut self.common.world);
-        let mut stand_result = Ok(());
-        let (lent, dispatch_panic) = self.tick_borrowed_creatures(borrowed_tick::BorrowedMobTick {
-            mobs: &mut mobs,
-            snapshot: &mut snapshot,
-            passenger_objects: &passenger_objects,
-            blocked: &blocked,
-            events: &mut events,
-            restocks: &mut restocks,
-            pushes: &mut pending.pushes,
-            dead: &mut dead,
-            died: &mut died,
-            ticked: &mut ticked,
-            guests: &mut guests,
-            spare: &mut spare,
-            bindings: &mut bindings,
-            guest_ids: &mut guest_ids,
-            guest_events: &mut guest_events,
-            player_credit: &mut player_credit,
-            path_writes: &mut path_writes,
-            gone: &mut gone,
-            lent,
-            laps: &mut laps,
-            uuid,
-            level_id,
-            round: &mut round,
-            stand_result: &mut stand_result,
-        });
-        let aborted = dispatch_panic.is_some() || stand_result.is_err();
-        if aborted {
-            // The aborted pass never applies retention, including previously
-            // finished despawn answers. Do not carry those into the retry.
-            for m in &mut mobs {
-                m.despawn = mod_api::Despawn::default();
-            }
-        }
-        lent.give_back(&mut self.common.world);
-        self.server.last_hurt_by_player = player_credit;
-        if let Some(host) = self.server.lan.as_mut()
-            && !guests.is_empty()
-        {
-            // A set: a scan of every mob for each binding is quadratic, and a
-            // server's loaded mobs run into the thousands.
-            let live: sunrise_level::fast_hash::FxHashSet<u32> =
-                mobs.iter().map(|m| m.id).collect();
-            bindings.retain(|id, _| live.contains(id));
-            host.mob_players = bindings;
-        }
         // The mobs added during the tick (into the emptied `self.mobs`) come
         // first, as `append` put them; with none, the ticked list goes back
         // as it is instead of being copied into a new one, every mob a tick.
-        self.common
-            .mobs
-            .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
+        let (
+            aborted,
+            dead,
+            mut died,
+            ticked,
+            mut guest_events,
+            path_writes,
+            gone,
+            restocks,
+            dispatch_panic,
+            stand_result,
+        ) = self.with_lifted_mobs(
+            sunrise_sim::join_seq::RestoreOrder::SpawnsFirst,
+            |game, mobs| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                let mut dead = Vec::new();
+                let mut died = std::mem::take(&mut game.server.died);
+                let mut ticked = std::mem::take(&mut game.common.creatures.ticked);
+                ticked.clear();
+                // With guests on, each mob sees its nearest player (game/network/lan_mobs.rs).
+                let mut guests = game.lan_guest_views();
+                // What stands in a guest's slot while a mob holds that guest's view for
+                // its tick (see `lent` below).
+                let mut spare = guests.first().map(|g| g.1.clone());
+                let mut bindings = match game.server.lan.as_mut() {
+                    Some(host) if !guests.is_empty() => std::mem::take(&mut host.mob_players),
+                    _ => Default::default(),
+                };
+                // The guests' entity ids by connection, for the shulker bullets fired
+                // at the guest a mob sees.
+                let mut guest_ids: Vec<(u32, u32)> = match game.server.lan.as_ref() {
+                    Some(host) if !guests.is_empty() => host
+                        .hub
+                        .guests
+                        .iter()
+                        .map(|g| (g.conn, g.entity_id as u32))
+                        .collect(),
+                    _ => Vec::new(),
+                };
+                let mut guest_events = Vec::new();
+                let mut player_credit = std::mem::take(&mut game.server.last_hurt_by_player);
+                // The block writes since the last tick: mobs re-path around them.
+                let mut path_writes =
+                    std::mem::take(game.common.world.path_writes.get_or_insert_with(Vec::new));
+                // The mobs whose bodies go this tick: (id, feet, width, height, split).
+                // 🤖 Agent: the last field is the grown slime, magma cube or sulfur
+                // cube the body leaves behind (`AbstractCubeMob.remove`), captured as
+                // the body goes because it has left the list by the time it splits.
+                let mut gone = Vec::new();
+                let mut restocks = Vec::new();
+                // The level's random and attachments, lent to the mobs (brain behaviours draw from
+                // the random, and a hit's damage hooks get both) and taken back after their ticks.
+                let lent = sunrise_sim::health::LentLevel::take(&mut game.common.world);
+                let mut stand_result = Ok(());
+                let (lent, dispatch_panic) =
+                    game.tick_borrowed_creatures(borrowed_tick::BorrowedMobTick {
+                        mobs,
+                        snapshot: &mut snapshot,
+                        passenger_objects: &passenger_objects,
+                        blocked: &blocked,
+                        events: &mut events,
+                        restocks: &mut restocks,
+                        pushes: &mut pending.pushes,
+                        dead: &mut dead,
+                        died: &mut died,
+                        ticked: &mut ticked,
+                        guests: &mut guests,
+                        spare: &mut spare,
+                        bindings: &mut bindings,
+                        guest_ids: &mut guest_ids,
+                        guest_events: &mut guest_events,
+                        player_credit: &mut player_credit,
+                        path_writes: &mut path_writes,
+                        gone: &mut gone,
+                        lent,
+                        laps: &mut laps,
+                        uuid,
+                        level_id,
+                        round: &mut round,
+                        stand_result: &mut stand_result,
+                    });
+                let aborted = dispatch_panic.is_some() || stand_result.is_err();
+                if aborted {
+                    // The aborted pass never applies retention, including previously
+                    // finished despawn answers. Do not carry those into the retry.
+                    for m in mobs.iter_mut() {
+                        m.despawn = mod_api::Despawn::default();
+                    }
+                }
+                lent.give_back(&mut game.common.world);
+                game.server.last_hurt_by_player = player_credit;
+                if let Some(host) = game.server.lan.as_mut()
+                    && !guests.is_empty()
+                {
+                    // A set: a scan of every mob for each binding is quadratic, and a
+                    // server's loaded mobs run into the thousands.
+                    let live: sunrise_level::fast_hash::FxHashSet<u32> =
+                        mobs.iter().map(|m| m.id).collect();
+                    bindings.retain(|id, _| live.contains(id));
+                    host.mob_players = bindings;
+                }
+                (
+                    aborted,
+                    dead,
+                    died,
+                    ticked,
+                    guest_events,
+                    path_writes,
+                    gone,
+                    restocks,
+                    dispatch_panic,
+                    stand_result,
+                )
+            },
+        );
         if aborted {
             // These death callbacks have not run, and the borrowed block writes
             // must still invalidate paths on the next attempted pass.
@@ -6797,41 +6822,43 @@ impl crate::game::ServerGame<'_> {
         )
         .inflate(Vec3::new(1.0, 0.5, 1.0));
         let creative = self.common.creative;
-        let mut projectiles = self.common.creatures.projectiles.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        projectiles.retain(|shot| {
-            let Some(a) = shot.arrow.as_ref().filter(|a| !a.removed) else {
-                return true;
-            };
-            let at = shot.position;
-            let bounds = Aabb::new(
-                Vec3::new(at.x - 0.25, at.y, at.z - 0.25),
-                Vec3::new(at.x + 0.25, at.y + 0.5, at.z + 0.25),
-            );
-            if !bounds.intersects(reach) {
-                return true;
-            }
-            let taken = match a.player_touch(creative) {
-                Touch::Ignore => false,
-                Touch::Take => true,
-                Touch::Give(stack) => self.add_stack_to_inventory(stack).is_none() || creative,
-            };
-            if taken {
-                let r = &mut self.common.world.random;
-                let pitch = (r.next_float() - r.next_float()) * 1.4 + 2.0;
-                self.server_play_sound(
-                    "minecraft:entity.item.pickup",
-                    [at.x, at.y, at.z],
-                    0.2,
-                    pitch,
-                );
-            }
-            !taken
-        });
-        self.common.creatures.projectiles.restore(
-            projectiles,
+        self.with_lifted_projectiles(
             sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+            |game, projectiles| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                projectiles.retain(|shot| {
+                    let Some(a) = shot.arrow.as_ref().filter(|a| !a.removed) else {
+                        return true;
+                    };
+                    let at = shot.position;
+                    let bounds = Aabb::new(
+                        Vec3::new(at.x - 0.25, at.y, at.z - 0.25),
+                        Vec3::new(at.x + 0.25, at.y + 0.5, at.z + 0.25),
+                    );
+                    if !bounds.intersects(reach) {
+                        return true;
+                    }
+                    let taken = match a.player_touch(creative) {
+                        Touch::Ignore => false,
+                        Touch::Take => true,
+                        Touch::Give(stack) => {
+                            game.add_stack_to_inventory(stack).is_none() || creative
+                        }
+                    };
+                    if taken {
+                        let r = &mut game.common.world.random;
+                        let pitch = (r.next_float() - r.next_float()) * 1.4 + 2.0;
+                        game.server_play_sound(
+                            "minecraft:entity.item.pickup",
+                            [at.x, at.y, at.z],
+                            0.2,
+                            pitch,
+                        );
+                    }
+                    !taken
+                });
+            },
         );
     }
     /// `SpawnEggItem.useOn` for a block, or `use` for a fluid source.
@@ -8168,13 +8195,7 @@ impl crate::game::ServerGame<'_> {
                     .update(pos, |p| p.previous = at);
                 continue;
             }
-            let mut _save_lease = Some(
-                self.common
-                    .creatures
-                    .projectiles
-                    .visibility_lease()
-                    .ok_or_else(sunrise_sim::join_seq::visibility::PassLease::enter),
-            );
+            let mut _save_lease = Some(self.common.creatures.projectiles.extraction_lease());
             let Some(mut p) = self.common.creatures.projectiles.extract(join) else {
                 continue;
             };
@@ -8275,13 +8296,7 @@ impl crate::game::ServerGame<'_> {
                 let place = pos.min(self.common.creatures.projectiles.len());
                 self.common.creatures.projectiles.put_back(place, p);
                 let canceled = self.native_projectile_impact_canceled(&snapshot, hit);
-                _save_lease = Some(
-                    self.common
-                        .creatures
-                        .projectiles
-                        .visibility_lease()
-                        .ok_or_else(sunrise_sim::join_seq::visibility::PassLease::enter),
-                );
+                _save_lease = Some(self.common.creatures.projectiles.extraction_lease());
                 let unchanged = !self.projectile_removal_pending(pid)
                     && self
                         .common
@@ -8305,11 +8320,8 @@ impl crate::game::ServerGame<'_> {
                     if let Some(i) = self.common.creatures.projectiles.locate(join) {
                         if flies {
                             self.common.creatures.projectiles.store_back(i, flown);
-                            if !keep
-                                && let Some(row) = self.common.creatures.projectiles.extract(join)
-                            {
-                                let end = self.common.creatures.projectiles.len();
-                                self.common.creatures.projectiles.put_back(end, row);
+                            if !keep {
+                                self.common.creatures.projectiles.reposition_to_end(join);
                             }
                         } else {
                             self.common.creatures.projectiles.remove(i);

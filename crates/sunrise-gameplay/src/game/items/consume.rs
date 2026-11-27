@@ -125,28 +125,29 @@ impl crate::game::ServerGame<'_> {
         let failures = mod_api::runtime::isolated_failures();
         let result: Result<bool, ()> = self.storage_transaction(|game, _| {
             {
-                let mut mobs = game.mobs.lift();
-                if let Some(mob) = mobs.iter_mut().find(|m| m.id == decision.mob) {
-                    let mut events = Vec::new();
-                    sunrise_sim::mobs::fox::consumed_before_effects(
-                        &game.mob_world_base(&[]),
-                        mob,
-                        &mut events,
-                        &decision.stack,
-                    );
-                    game.mobs
-                        .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
-                    if game.handle_mob_events(events).is_err() {
-                        return if mod_api::runtime::isolated_failures() != failures {
-                            Err(())
-                        } else {
-                            Ok(false)
-                        };
-                    }
-                } else {
-                    game.mobs
-                        .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
+                let events = game.with_lifted_mobs(
+                    sunrise_sim::join_seq::RestoreOrder::SpawnsFirst,
+                    |game, mobs| {
+                        let mob = mobs.iter_mut().find(|m| m.id == decision.mob)?;
+                        let mut events = Vec::new();
+                        sunrise_sim::mobs::fox::consumed_before_effects(
+                            &game.mob_world_base(&[]),
+                            mob,
+                            &mut events,
+                            &decision.stack,
+                        );
+                        Some(events)
+                    },
+                );
+                let Some(events) = events else {
                     return Ok(false);
+                };
+                if game.handle_mob_events(events).is_err() {
+                    return if mod_api::runtime::isolated_failures() != failures {
+                        Err(())
+                    } else {
+                        Ok(false)
+                    };
                 }
                 let can_finish = game.apply_consumable_effects(
                     &decision.stack,

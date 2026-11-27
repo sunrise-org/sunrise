@@ -110,38 +110,40 @@ impl ServerGame<'_> {
             .iter()
             .map(|m| seen(m, self.common.level.player_uuid, self.items()))
             .collect();
-        let mut lifted = self.common.mobs.lift();
-        let mut lent = sunrise_sim::health::LentLevel::take(&mut self.common.world);
-        let mut w = self.mob_world_base(&snapshot);
-        let pos = lifted[index].position;
-        w.difficulty = self.local_difficulty([pos.x, pos.y, pos.z]);
-        let mut events = Vec::new();
-        let answer = {
-            let mut level = sunrise_sim::health::DamageLevel::lent(
-                &self.common.world,
-                self.common.pack.assets.registry,
-                &mut lent,
-                Some(world_items!(self)),
-                Some(&self.common.pack.block_registries),
-                &self.common.damage_hooks,
-            )
-            .with_variants(world_variants!(self))
-            .with_mob_uuids(&self.common.persist.uuids)
-            .with_reads(crate::game::entity_server::hit_reads_of!(self));
-            let mut cx = Cx {
-                w: &w,
-                level: &mut level,
-                events: &mut events,
-            };
-            let answer = mobs::combat::do_hurt_target_any(&mut lifted[index], who, &mut cx);
-            mobs::apply_brain_events(&mut lifted, &mut level, &mut events, 0, &w.teams);
-            answer
-        };
-        drop(w);
-        lent.give_back(&mut self.common.world);
-        self.common
-            .mobs
-            .restore(lifted, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+        let (events, answer) = self.with_lifted_mobs(
+            sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+            |game, lifted| {
+                let mut lent = sunrise_sim::health::LentLevel::take(&mut game.common.world);
+                let mut w = game.mob_world_base(&snapshot);
+                let pos = lifted[index].position;
+                w.difficulty = game.local_difficulty([pos.x, pos.y, pos.z]);
+                let mut events = Vec::new();
+                let answer = {
+                    let mut level = sunrise_sim::health::DamageLevel::lent(
+                        &game.common.world,
+                        game.common.pack.assets.registry,
+                        &mut lent,
+                        Some(world_items!(game)),
+                        Some(&game.common.pack.block_registries),
+                        &game.common.damage_hooks,
+                    )
+                    .with_variants(world_variants!(game))
+                    .with_mob_uuids(&game.common.persist.uuids)
+                    .with_reads(crate::game::entity_server::hit_reads_of!(game));
+                    let mut cx = Cx {
+                        w: &w,
+                        level: &mut level,
+                        events: &mut events,
+                    };
+                    let answer = mobs::combat::do_hurt_target_any(&mut lifted[index], who, &mut cx);
+                    mobs::apply_brain_events(lifted, &mut level, &mut events, 0, &w.teams);
+                    answer
+                };
+                drop(w);
+                lent.give_back(&mut game.common.world);
+                (events, answer)
+            },
+        );
         Some((events, answer))
     }
 }

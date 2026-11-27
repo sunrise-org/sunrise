@@ -1482,6 +1482,17 @@ macro_rules! define_server_entity_handles {
                     debug_assert_eq!(self.common$(.$list)+.len(), expected);
                 })*
             }
+            /// Lends every typed entity list out for a pass and restores survivors before spawns.
+            #[inline(always)]
+            pub fn with_taken_entities<R>(
+                &mut self,
+                work: impl FnOnce(&mut Self, &mut TakenEntities) -> R,
+            ) -> R {
+                let mut taken = self.take_entities();
+                let result = work(self, &mut taken);
+                self.restore_entities(taken);
+                result
+            }
 
             pub(in crate::game::server_side) fn entity_id_cursor(&self) -> EntityIdCursor {
                 EntityIdCursor {
@@ -1549,6 +1560,79 @@ macro_rules! define_server_entity_handles {
 }
 pub(crate) use define_server_entity_handles;
 entity_lists!(crate::game::entity_server::define_server_entity_handles,);
+
+impl crate::game::ServerGame<'_> {
+    #[inline(always)]
+    pub(in crate::game) fn with_lifted_mobs<R>(
+        &mut self,
+        order: sunrise_sim::join_seq::RestoreOrder,
+        work: impl FnOnce(&mut Self, &mut sunrise_sim::join_seq::JoinList<Mob>) -> R,
+    ) -> R {
+        let mut mobs = self.common.mobs.lift();
+        let result = work(self, &mut mobs);
+        self.common.mobs.restore(mobs, order);
+        result
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn with_lifted_projectiles<R>(
+        &mut self,
+        order: sunrise_sim::join_seq::RestoreOrder,
+        work: impl FnOnce(&mut Self, &mut sunrise_sim::join_seq::JoinList<Projectile, false>) -> R,
+    ) -> R {
+        let mut projectiles = self.common.creatures.projectiles.lift();
+        let result = work(self, &mut projectiles);
+        self.common
+            .creatures
+            .projectiles
+            .restore(projectiles, order);
+        result
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn with_lifted_dropped<R>(
+        &mut self,
+        work: impl FnOnce(&mut Self, &mut sunrise_sim::join_seq::JoinList<ItemEntity>) -> R,
+    ) -> R {
+        let mut items = self.common.dropped.lift();
+        let result = work(self, &mut items);
+        self.common.put_back_dropped(items);
+        result
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn with_lifted_breath_clouds<R>(
+        &mut self,
+        order: sunrise_sim::join_seq::RestoreOrder,
+        work: impl FnOnce(
+            &mut Self,
+            &mut sunrise_sim::join_seq::ResidentList<
+                sunrise_gameplay_common::game::dragon_common::Breath,
+            >,
+        ) -> R,
+    ) -> R {
+        let mut clouds = self.common.breath_clouds.lift();
+        let result = work(self, &mut clouds);
+        self.common.breath_clouds.restore(clouds, order);
+        result
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn hand_back_projectile_pass<R>(
+        &mut self,
+        projectiles: &mut sunrise_sim::join_seq::JoinList<Projectile, false>,
+        order: sunrise_sim::join_seq::RestoreOrder,
+        work: impl FnOnce(&mut Self) -> R,
+    ) -> R {
+        self.common
+            .creatures
+            .projectiles
+            .restore(projectiles.take_owned_pass(), order);
+        let result = work(self);
+        *projectiles = self.common.creatures.projectiles.lift();
+        result
+    }
+}
 
 /// What a hit lends its listeners besides the level ([`sunrise_client::health::HitEffects`]):
 /// the level sound queue and sound-seed stream, and the entity the site lends (`$lend`: an

@@ -1161,234 +1161,253 @@ impl crate::game::ServerGame<'_> {
                 gone_rows = false;
             }
             // Mobs that joined during the pass go first on a restore: the rows move.
-            let restored_offset = self.common.mobs.len();
-            let same_rows = same_rows && restored_offset == 0;
-            self.common
-                .mobs
-                .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
-            let mut restored = Some(self.common.mobs.stamp());
-            self.file_mob_section_entries(&mut section_entered);
-            std::mem::swap(&mut self.server.last_hurt_by_player, &mut player_credit);
-            std::mem::swap(&mut self.server.died, &mut died);
-            std::mem::swap(&mut self.common.creatures.ticked, &mut ticked);
-            if let Some(host) = self.server.lan.as_mut() {
-                std::mem::swap(&mut host.mob_players, &mut bindings);
-            }
-            let breeding = matches!(pause, Some(Pause::Breeding { .. }));
-            if let Some(sections) = section_table.as_ref() {
-                std::mem::swap(
-                    &mut self.common.native_lifecycle.entity_sections,
-                    &mut sections.borrow_mut(),
-                );
-            }
-            // A work step's restock reaches the screen before any callback can edit it.
-            let callback_panic = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                for restock in state.restocks.drain(..) {
-                    self.villager_offers_open(restock);
-                }
-                if let Some(index) = section_hint {
-                    let written = self.entity_sections_ticked_live(
-                        &mut section_moves,
-                        Some(restored_offset + index),
-                    );
-                    restored = (!written).then(|| self.common.mobs.stamp());
-                }
-                if !pending_effects.is_empty() {
-                    let _ = self.handle_mob_events(std::mem::take(&mut pending_effects));
-                }
-                if removal.is_some() || breeding {
-                    // Consume completed removals before calling a listener which can unwind.
-                    self.emit_death_poofs(gone.drain(..));
-                }
-                let mut vehicle_split = false;
-                if let Some((join, split)) = removal {
-                    if removing_vehicle.is_some_and(|id| {
-                        self.common
-                            .mob_index
-                            .find(&self.common.mobs, id)
-                            .is_some_and(|i| self.common.mobs[i].join == join)
-                    }) {
-                        vehicle_split = split;
-                    } else {
-                        self.complete_mob_removal(join, split);
+            let (relifted, batch_unchanged, callback_panic) =
+                self.hand_back_mob_batch(mobs, |game, restored_offset, restored| {
+                    game.file_mob_section_entries(&mut section_entered);
+                    std::mem::swap(&mut game.server.last_hurt_by_player, &mut player_credit);
+                    std::mem::swap(&mut game.server.died, &mut died);
+                    std::mem::swap(&mut game.common.creatures.ticked, &mut ticked);
+                    if let Some(host) = game.server.lan.as_mut() {
+                        std::mem::swap(&mut host.mob_players, &mut bindings);
                     }
-                }
-                if let Some(mut sting) = sting {
-                    let before_hurt = events.drain(brain_from..sting.at).collect();
-                    let _ = self.handle_mob_events(before_hurt);
-                    if let Some(i) = self.common.mob_index.find(&self.common.mobs, sting.target)
-                        && sting.same_target(&self.common.mobs[i])
-                    {
-                        if let Some(hit) = paused_hurt.take() {
-                            self.server.paused_mob_hurt.0 = Some(hit);
-                            if let Some((i, hurt)) = self.complete_mob_hurt(i, false) {
-                                sting.resolved_hit(hurt);
-                                self.finish_mob_damage_at(i);
-                            } else {
-                                sting.resolved_hit(false);
+                    let breeding = matches!(pause, Some(Pause::Breeding { .. }));
+                    if let Some(sections) = section_table.as_ref() {
+                        std::mem::swap(
+                            &mut game.common.native_lifecycle.entity_sections,
+                            &mut sections.borrow_mut(),
+                        );
+                    }
+                    // A work step's restock reaches the screen before any callback can edit it.
+                    let callback_panic =
+                        std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                            for restock in state.restocks.drain(..) {
+                                game.villager_offers_open(restock);
                             }
-                        } else {
-                            self.finish_mob_damage_at(i);
-                        }
-                        self.settle_creaking_hurt(sting.target);
-                    }
-                    if self
-                        .common
-                        .mob_object(sting.fish)
-                        .is_some_and(|mob| sting.same_fish(mob))
-                    {
-                        if let Some(ticks) = sting.poison_ticks()
-                            && self
-                                .mob_object(sting.target)
-                                .is_some_and(|mob| sting.same_target(mob))
-                        {
-                            self.add_mob_effect(
-                                sting.target,
-                                sunrise_level::effects::EffectInstance::new("poison", ticks, 0),
-                                self.entity(sting.fish),
-                            );
-                        }
-                        if let Some(sound) = self
-                            .mob_object(sting.fish)
-                            .and_then(|fish| sting.sound(fish))
-                        {
-                            let _ = self.handle_mob_events(vec![sound]);
-                        }
-                    } else {
-                        events.truncate(brain_from);
-                        resume_brain = None;
-                    }
-                } else if let Some(id) = retry_rider {
-                    self.dismount_mob(id);
-                } else if let Some((paused, (id, join))) = pause.as_mut().zip(resume_entity)
-                    && let Some(i) = self.common.mob_index.find(&self.common.mobs, id)
-                    && self.common.mobs[i].join == join
-                    && !self.common.mobs[i].removed
-                {
-                    match paused {
-                        Pause::Consumption { decision, .. } => {
-                            self.apply_fox_consumption(decision);
-                        }
-                        Pause::Drink { stack, .. } => {
-                            self.finish_mob_drink(id, stack);
-                        }
-                        Pause::Breathing { air, .. } => {
-                            air_answer = self.ask_mob_breath(air);
-                        }
-                        Pause::Equipment { first, .. } => {
-                            self.detect_mob_equipment_updates(id, join, *first);
-                        }
-                        Pause::RegisterBehaviors { .. } => {
-                            self.flush_resident_mob_parts(id, join);
-                        }
-                        Pause::Breeding { event, .. } => {
-                            if let Some(event) = event.take() {
-                                self.deliver_breed(*event, true);
+                            if let Some(index) = section_hint {
+                                let written = game.entity_sections_ticked_live(
+                                    &mut section_moves,
+                                    Some(restored_offset + index),
+                                );
+                                *restored = (!written).then(|| game.common.mobs.stamp());
                             }
-                        }
-                        Pause::AfterDamage(_) => {
-                            if self.common.mobs[i].has_protected_hurt()
-                                || sunrise_sim::mobs::creaking::has_pending_hurt(
-                                    &self.common.mobs[i],
+                            if !pending_effects.is_empty() {
+                                let _ =
+                                    game.handle_mob_events(std::mem::take(&mut pending_effects));
+                            }
+                            if removal.is_some() || breeding {
+                                // Consume completed removals before calling a listener which can unwind.
+                                game.emit_death_poofs(gone.drain(..));
+                            }
+                            let mut vehicle_split = false;
+                            if let Some((join, split)) = removal {
+                                if removing_vehicle.is_some_and(|id| {
+                                    game.common
+                                        .mob_index
+                                        .find(&game.common.mobs, id)
+                                        .is_some_and(|i| game.common.mobs[i].join == join)
+                                }) {
+                                    vehicle_split = split;
+                                } else {
+                                    game.complete_mob_removal(join, split);
+                                }
+                            }
+                            if let Some(mut sting) = sting {
+                                let before_hurt = events.drain(brain_from..sting.at).collect();
+                                let _ = game.handle_mob_events(before_hurt);
+                                if let Some(i) =
+                                    game.common.mob_index.find(&game.common.mobs, sting.target)
+                                    && sting.same_target(&game.common.mobs[i])
+                                {
+                                    if let Some(hit) = paused_hurt.take() {
+                                        game.server.paused_mob_hurt.0 = Some(hit);
+                                        if let Some((i, hurt)) = game.complete_mob_hurt(i, false) {
+                                            sting.resolved_hit(hurt);
+                                            game.finish_mob_damage_at(i);
+                                        } else {
+                                            sting.resolved_hit(false);
+                                        }
+                                    } else {
+                                        game.finish_mob_damage_at(i);
+                                    }
+                                    game.settle_creaking_hurt(sting.target);
+                                }
+                                if game
+                                    .common
+                                    .mob_object(sting.fish)
+                                    .is_some_and(|mob| sting.same_fish(mob))
+                                {
+                                    if let Some(ticks) = sting.poison_ticks()
+                                        && game
+                                            .mob_object(sting.target)
+                                            .is_some_and(|mob| sting.same_target(mob))
+                                    {
+                                        game.add_mob_effect(
+                                            sting.target,
+                                            sunrise_level::effects::EffectInstance::new(
+                                                "poison", ticks, 0,
+                                            ),
+                                            game.entity(sting.fish),
+                                        );
+                                    }
+                                    if let Some(sound) = game
+                                        .mob_object(sting.fish)
+                                        .and_then(|fish| sting.sound(fish))
+                                    {
+                                        let _ = game.handle_mob_events(vec![sound]);
+                                    }
+                                } else {
+                                    events.truncate(brain_from);
+                                    resume_brain = None;
+                                }
+                            } else if let Some(id) = retry_rider {
+                                game.dismount_mob(id);
+                            } else if let Some((paused, (id, join))) =
+                                pause.as_mut().zip(resume_entity)
+                                && let Some(i) = game.common.mob_index.find(&game.common.mobs, id)
+                                && game.common.mobs[i].join == join
+                                && !game.common.mobs[i].removed
+                            {
+                                match paused {
+                                    Pause::Consumption { decision, .. } => {
+                                        game.apply_fox_consumption(decision);
+                                    }
+                                    Pause::Drink { stack, .. } => {
+                                        game.finish_mob_drink(id, stack);
+                                    }
+                                    Pause::Breathing { air, .. } => {
+                                        air_answer = game.ask_mob_breath(air);
+                                    }
+                                    Pause::Equipment { first, .. } => {
+                                        game.detect_mob_equipment_updates(id, join, *first);
+                                    }
+                                    Pause::RegisterBehaviors { .. } => {
+                                        game.flush_resident_mob_parts(id, join);
+                                    }
+                                    Pause::Breeding { event, .. } => {
+                                        if let Some(event) = event.take() {
+                                            game.deliver_breed(*event, true);
+                                        }
+                                    }
+                                    Pause::AfterDamage(_) => {
+                                        if game.common.mobs[i].has_protected_hurt()
+                                            || sunrise_sim::mobs::creaking::has_pending_hurt(
+                                                &game.common.mobs[i],
+                                            )
+                                        {
+                                            // The earlier emissions (e.g. drowning bubbles) precede this hurt.
+                                            let before_hurt = events.split_off(resume_from);
+                                            let _ = game.handle_mob_events(before_hurt);
+                                        }
+                                        if let Some(i) =
+                                            game.common.mob_index.find(&game.common.mobs, id)
+                                            && game.common.mobs[i].join == join
+                                            && !game.common.mobs[i].removed
+                                        {
+                                            game.server.paused_mob_hurt.0 = paused_hurt.take();
+                                            game.finish_mob_damage_at(i);
+                                            game.settle_creaking_hurt(id);
+                                        }
+                                    }
+                                    Pause::Trample(trample) => {
+                                        game.trample_farmland(id, false, *trample);
+                                    }
+                                    Pause::FallToPassengers(fall) => {
+                                        game.fall_to_passengers(id, fall.distance, fall.modifier);
+                                    }
+                                    Pause::InsideEffects(inside) => {
+                                        let effects = std::mem::take(&mut inside.effects);
+                                        game.flush_mob_inside_live(
+                                            inside.mob,
+                                            inside.join,
+                                            effects,
+                                        );
+                                    }
+                                }
+                            }
+                            if let Some(id) = removing_vehicle {
+                                // LivingEntity.tickDeath broadcasts event 60 before remove;
+                                // cube splitting and the killed effects also precede setRemoved.
+                                let animation = gone.pop_if(|death| death.0 == id);
+                                let killed_effects = removal.is_some();
+                                let animate = |game: &mut Self| {
+                                    if let Some((id, at, width, height)) = animation {
+                                        game.emit_death_poofs([(id, at, width, height)]);
+                                    }
+                                    if vehicle_split
+                                        && let Some(i) =
+                                            game.common.mob_index.find(&game.common.mobs, id)
+                                    {
+                                        let mut dying = game.common.mobs[i].clone();
+                                        game.split_cube_children(&mut dying);
+                                    }
+                                };
+                                if game.common.mob_object(id).is_some_and(|mob| mob.removed) {
+                                    animate(game);
+                                    game.finish_mob_removal(id);
+                                } else {
+                                    game.remove_mob_after(id, killed_effects, animate);
+                                }
+                                if let Some(index) =
+                                    game.common.mobs.iter().position(|mob| mob.id == id)
+                                {
+                                    game.common.mobs.remove(index);
+                                }
+                            }
+                            if let Some((shulker, area, delta)) = lid_push {
+                                game.server_shulker_lid_push(shulker, area, delta);
+                            }
+                            if let Some(cut) = stand_cut {
+                                *state.stand_result = game.tick_armor_stands_before(cut);
+                            }
+                            if !stinging && let Some((id, kind)) = &tell_post {
+                                game.native_tick_post_one(round, *id, &kind.id);
+                            }
+                            if let Some((id, join)) = tick_enchantments
+                                && game
+                                    .mob_object(id)
+                                    .is_some_and(|mob| mob.join == join && !mob.removed)
+                            {
+                                game.tick_equipment_enchantments(
+                                    crate::game::commands::Target::Mob(id),
+                                    id,
+                                );
+                                views_dirty = true;
+                            }
+                            // Let through, it checks its sleep as a mob told with its family does.
+                            if let Some((id, kind, at)) = &tell_pre
+                                && game.native_tick_pre_one(round, *id, &kind.id)
+                                && mod_api::__private::listened(
+                                    mod_api::HookId::CanContinueSleeping,
                                 )
+                                && let Some(i) =
+                                    super::super::native_ticks::place(&game.common.mobs, *at, |m| {
+                                        m.id == *id
+                                    })
                             {
-                                // The earlier emissions (e.g. drowning bubbles) precede this hurt.
-                                let before_hurt = events.split_off(resume_from);
-                                let _ = self.handle_mob_events(before_hurt);
+                                game.sync_sleeping_mob(i);
                             }
-                            if let Some(i) = self.common.mob_index.find(&self.common.mobs, id)
-                                && self.common.mobs[i].join == join
-                                && !self.common.mobs[i].removed
-                            {
-                                self.server.paused_mob_hurt.0 = paused_hurt.take();
-                                self.finish_mob_damage_at(i);
-                                self.settle_creaking_hurt(id);
-                            }
-                        }
-                        Pause::Trample(trample) => {
-                            self.trample_farmland(id, false, *trample);
-                        }
-                        Pause::FallToPassengers(fall) => {
-                            self.fall_to_passengers(id, fall.distance, fall.modifier);
-                        }
-                        Pause::InsideEffects(inside) => {
-                            let effects = std::mem::take(&mut inside.effects);
-                            self.flush_mob_inside_live(inside.mob, inside.join, effects);
-                        }
+                        }))
+                        .err();
+                    if let Some(sections) = section_table.as_ref() {
+                        std::mem::swap(
+                            &mut game.common.native_lifecycle.entity_sections,
+                            &mut sections.borrow_mut(),
+                        );
                     }
-                }
-                if let Some(id) = removing_vehicle {
-                    // LivingEntity.tickDeath broadcasts event 60 before remove;
-                    // cube splitting and the killed effects also precede setRemoved.
-                    let animation = gone.pop_if(|death| death.0 == id);
-                    let killed_effects = removal.is_some();
-                    let animate = |game: &mut Self| {
-                        if let Some((id, at, width, height)) = animation {
-                            game.emit_death_poofs([(id, at, width, height)]);
-                        }
-                        if vehicle_split
-                            && let Some(i) = game.common.mob_index.find(&game.common.mobs, id)
-                        {
-                            let mut dying = game.common.mobs[i].clone();
-                            game.split_cube_children(&mut dying);
-                        }
-                    };
-                    if self.common.mob_object(id).is_some_and(|mob| mob.removed) {
-                        animate(self);
-                        self.finish_mob_removal(id);
-                    } else {
-                        self.remove_mob_after(id, killed_effects, animate);
+                    if tell_pre.is_some() || tick_enchantments.is_some() {
+                        told_at = Some(cursor);
                     }
-                    if let Some(index) = self.common.mobs.iter().position(|mob| mob.id == id) {
-                        self.common.mobs.remove(index);
+                    if tick_enchantments.is_some() {
+                        enchantment_tick_at = Some(cursor);
                     }
-                }
-                if let Some((shulker, area, delta)) = lid_push {
-                    self.server_shulker_lid_push(shulker, area, delta);
-                }
-                if let Some(cut) = stand_cut {
-                    *state.stand_result = self.tick_armor_stands_before(cut);
-                }
-                if !stinging && let Some((id, kind)) = &tell_post {
-                    self.native_tick_post_one(round, *id, &kind.id);
-                }
-                if let Some((id, join)) = tick_enchantments
-                    && self
-                        .mob_object(id)
-                        .is_some_and(|mob| mob.join == join && !mob.removed)
-                {
-                    self.tick_equipment_enchantments(crate::game::commands::Target::Mob(id), id);
-                    views_dirty = true;
-                }
-                // Let through, it checks its sleep as a mob told with its family does.
-                if let Some((id, kind, at)) = &tell_pre
-                    && self.native_tick_pre_one(round, *id, &kind.id)
-                    && mod_api::__private::listened(mod_api::HookId::CanContinueSleeping)
-                    && let Some(i) =
-                        super::super::native_ticks::place(&self.common.mobs, *at, |m| m.id == *id)
-                {
-                    self.sync_sleeping_mob(i);
-                }
-            }))
-            .err();
-            if let Some(sections) = section_table.as_ref() {
-                std::mem::swap(
-                    &mut self.common.native_lifecycle.entity_sections,
-                    &mut sections.borrow_mut(),
-                );
-            }
-            let unchanged = same_rows && !views_dirty && restored == Some(self.common.mobs.stamp());
-            if tell_pre.is_some() || tick_enchantments.is_some() {
-                told_at = Some(cursor);
-            }
-            if tick_enchantments.is_some() {
-                enchantment_tick_at = Some(cursor);
-            }
-            tell_post = None;
-            if retry_rider.is_some() || removing_vehicle.is_some() {
-                blocked = std::borrow::Cow::Owned(self.mobs_below_off_level());
-            }
-            mobs = self.common.mobs.lift();
+                    tell_post = None;
+                    if retry_rider.is_some() || removing_vehicle.is_some() {
+                        blocked = std::borrow::Cow::Owned(game.mobs_below_off_level());
+                    }
+                    callback_panic
+                });
+            mobs = relifted;
+            let unchanged = same_rows && !views_dirty && batch_unchanged;
             std::mem::swap(&mut self.server.last_hurt_by_player, &mut player_credit);
             std::mem::swap(&mut self.server.died, &mut died);
             std::mem::swap(&mut self.common.creatures.ticked, &mut ticked);
@@ -1511,6 +1530,23 @@ impl crate::game::ServerGame<'_> {
         *state.path_writes = path_writes;
         *state.gone = gone;
         (lent, dispatch_panic)
+    }
+
+    #[inline(always)]
+    fn hand_back_mob_batch<R>(
+        &mut self,
+        mobs: sunrise_sim::join_seq::JoinList<Mob>,
+        run: impl FnOnce(&mut Self, usize, &mut Option<sunrise_sim::join_seq::ListStamp>) -> R,
+    ) -> (sunrise_sim::join_seq::JoinList<Mob>, bool, R) {
+        let restored_offset = self.common.mobs.len();
+        self.common
+            .mobs
+            .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
+        let mut restored = Some(self.common.mobs.stamp());
+        let result = run(self, restored_offset, &mut restored);
+        let unchanged = restored_offset == 0 && restored == Some(self.common.mobs.stamp());
+        let mobs = self.common.mobs.lift();
+        (mobs, unchanged, result)
     }
 
     fn file_mob_section_entries(&mut self, entered: &mut Vec<(u32, [f64; 3])>) {

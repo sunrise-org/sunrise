@@ -1930,27 +1930,30 @@ impl crate::game::ServerGame<'_> {
             .into_iter()
             .filter(|p| p.alive)
             .collect();
-        let mut clouds = self.common.breath_clouds.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        let ticking = self.entity_ticking_area();
-        let mut expired: Vec<u32> = Vec::new();
-        clouds.retain_mut(|c| {
-            let keep =
-                c.potion.is_none() || !ticking(c.at[0].floor() as i32, c.at[2].floor() as i32) || {
-                    self.cloud_fluid_step(c);
-                    // Entity.baseTick: `fireImmune()` clears the fire.
-                    c.fire_ticks = c.fire_ticks.min(0);
-                    self.tick_potion_cloud(c, &players)
-                };
-            if !keep {
-                expired.push(c.id);
-            }
-            keep
-        });
-        self.common
-            .breath_clouds
-            .restore(clouds, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
+        let expired = self.with_lifted_breath_clouds(
+            sunrise_sim::join_seq::RestoreOrder::SpawnsFirst,
+            |game, clouds| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                let ticking = game.entity_ticking_area();
+                let mut expired: Vec<u32> = Vec::new();
+                clouds.retain_mut(|c| {
+                    let keep = c.potion.is_none()
+                        || !ticking(c.at[0].floor() as i32, c.at[2].floor() as i32)
+                        || {
+                            game.cloud_fluid_step(c);
+                            // Entity.baseTick: `fireImmune()` clears the fire.
+                            c.fire_ticks = c.fire_ticks.min(0);
+                            game.tick_potion_cloud(c, &players)
+                        };
+                    if !keep {
+                        expired.push(c.id);
+                    }
+                    keep
+                });
+                expired
+            },
+        );
         // A cloud that expired on its own takes its `noPhysics` write with it.
         for id in expired {
             self.forget_entity(id);
