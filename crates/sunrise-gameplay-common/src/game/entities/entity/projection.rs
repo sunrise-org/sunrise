@@ -1396,8 +1396,8 @@ mod tests {
         assert!(neg_lo[0] > neg_hi[0]);
         assert_eq!(neg.projected_raw_bounds(), Some((neg_lo, neg_hi)));
         let normalized = neg.projected_bounds().unwrap();
-        assert_eq!(normalized.min.x, neg_hi[0]);
-        assert_eq!(normalized.max.x, neg_lo[0]);
+        assert_eq!(normalized.min(sunrise_core::geometry::Axis::X), neg_hi[0]);
+        assert_eq!(normalized.max(sunrise_core::geometry::Axis::X), neg_lo[0]);
     }
 
     #[test]
