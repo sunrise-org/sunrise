@@ -10,10 +10,12 @@ class ModGpuAccessTests(unittest.TestCase):
             "fn a(&self) { self.renderer.as_ref(); }\n"
             "// self.renderer in a comment\n"
             "fn b(&self) { self.game\n    .renderer.as_ref(); self.mod_gpu(); }\n"
-            "/* self.renderer\n in a block */\n"
-            "#[cfg(test)]\nmod tests { fn c(&self) { self.renderer.take(); } }\n"
+            "fn c(&self) { self.client.renderer.as_ref(); }\n"
+            "fn d(&self) { self.game.client\n    .renderer.as_ref(); }\n"
+            "/* self.client.renderer\n in a block */\n"
+            "#[cfg(test)]\nmod tests { fn e(&self) { self.client.renderer.take(); } }\n"
         )
-        self.assertEqual([n for n, _ in check.offenders(source)], [1, 3])
+        self.assertEqual([n for n, _ in check.offenders(source)], [1, 3, 5, 6])
 
     def test_the_guarded_files_are_clean(self):
         for name in check.GUARDED:
