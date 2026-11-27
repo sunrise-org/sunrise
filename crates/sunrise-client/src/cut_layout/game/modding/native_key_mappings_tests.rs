@@ -328,7 +328,26 @@ fn a_mod_rebinds_and_resets_its_own_mapping() {
             let zoom = ClientInputClientHost::mod_key_mapping(game, "keys", "zoom").unwrap();
             let boost = ClientInputClientHost::mod_key_mapping(game, "keys", "boost").unwrap();
             let grab = ClientInputClientHost::mod_key_mapping(game, "keys", "grab").unwrap();
-            // Rebound to X with control: Z no longer counts; X counts only with control held.
+
+            // Capture a non-default binding through the Config UI: click the bind button to
+            // enter capture mode, then send N, and assert the live binding and the saved value.
+            let config_size = (480.0, 270.0);
+            let bind_events = options_click(game, config_size, 75.0, 99.0);
+            assert!(bind_events.contains(&sunrise_client::options_ui::Event::ButtonClick));
+            let capture_events = game.client.chat_ui.options.key(
+                &mut game.client.settings,
+                &game.client.gui.atlas,
+                winit::keyboard::KeyCode::KeyN,
+                None,
+            );
+            game.handle_option_events(capture_events).unwrap();
+            assert_eq!(
+                zoom.binding(game),
+                Ok(("key.keyboard.n", ClientModifiers::default()))
+            );
+            assert_eq!(saved("zoom"), ("key.keyboard.n".to_owned(), 0));
+
+            // Rebound by Host to X with control: Z no longer counts; X counts only with control held.
             assert_eq!(
                 zoom.set_binding(game, "key.keyboard.x", ClientModifiers::new(2)),
                 Ok(())
@@ -344,6 +363,9 @@ fn a_mod_rebinds_and_resets_its_own_mapping() {
                     .append(Text::literal(" + "))
                     .append(Text::literal("X")))
             );
+            // Return to Playing before gameplay key assertions: the screen being open suppresses
+            // key presses even for Universal mappings.
+            game.set_screen(Screen::Playing);
             line(game, "key z tap");
             line(game, "key x tap");
             assert!(!zoom.consume_click(game).unwrap());
@@ -353,6 +375,9 @@ fn a_mod_rebinds_and_resets_its_own_mapping() {
             assert!(zoom.consume_click(game).unwrap());
             // Saved as Controls saves it: the next start reads exactly this binding.
             assert_eq!(saved("zoom"), ("key.keyboard.x".to_owned(), 2));
+
+            // Re-open Config to continue the UI checks.
+            game.open_options_at(false, sunrise_client::options_ui::Page::NativeMod(0));
 
             // A modifier key bound on its own is the key, not a modifier held with itself.
             assert_eq!(
@@ -365,9 +390,9 @@ fn a_mod_rebinds_and_resets_its_own_mapping() {
             );
             assert_eq!(saved("boost"), ("key.keyboard.left.shift".to_owned(), 0));
 
-            // Reset: the declared default is back, Z counts again, and the saved list holds no
-            // binding of it any more (the default answers).
-            let reset_events = options_click(game, (480.0, 270.0), 282.5, 99.0);
+            // Reset via Config click: the declared default is back, Z counts again, and the saved
+            // list holds no binding of it any more (the default answers).
+            let reset_events = options_click(game, config_size, 282.5, 99.0);
             assert!(reset_events.contains(&sunrise_client::options_ui::Event::Changed));
             assert_eq!(
                 zoom.binding(game),
@@ -377,19 +402,41 @@ fn a_mod_rebinds_and_resets_its_own_mapping() {
                 zoom.translated_key_message(game),
                 Ok(Text::literal("").append(Text::literal("Z")))
             );
+            assert_eq!(saved("zoom"), ("default".to_owned(), 99));
+            // Gameplay check: return to Playing first so the key press is not dropped.
+            game.set_screen(Screen::Playing);
             line(game, "key z tap");
             assert!(zoom.consume_click(game).unwrap());
-            assert_eq!(saved("zoom"), ("default".to_owned(), 99));
+            game.open_options_at(false, sunrise_client::options_ui::Page::NativeMod(0));
 
-            // A Host rebind and reset while Config stays open update the cached Reset state.
+            // A Host rebind and reset while Config stays open must update the cached Reset state.
+            // Build the layout before the first Host write to capture Reset disabled (zoom is at
+            // its registered default after the Reset click above).
+            let no_change = options_click(game, config_size, 282.5, 99.0);
+            assert!(!no_change.contains(&sunrise_client::options_ui::Event::Changed));
+            // Host rebind: the layout revision bumps; the next read must show Reset enabled.
             assert_eq!(
                 zoom.set_binding(game, "key.keyboard.x", ClientModifiers::default()),
                 Ok(())
             );
             assert_eq!(saved("zoom"), ("key.keyboard.x".to_owned(), 0));
+            // Build layout and confirm Reset is now enabled (fires Changed and resets the binding).
+            let rebind_reset_events = options_click(game, config_size, 282.5, 99.0);
+            assert!(rebind_reset_events.contains(&sunrise_client::options_ui::Event::Changed));
+            assert_eq!(
+                zoom.binding(game),
+                Ok(("key.keyboard.z", ClientModifiers::default()))
+            );
+            assert_eq!(saved("zoom"), ("default".to_owned(), 99));
+            // Host rebind again, then Host reset: revision bumps twice; the layout must reflect the
+            // double update and show Reset disabled.
+            assert_eq!(
+                zoom.set_binding(game, "key.keyboard.x", ClientModifiers::default()),
+                Ok(())
+            );
             assert_eq!(zoom.reset_binding(game), Ok(()));
-            let reset_events = options_click(game, (480.0, 270.0), 282.5, 99.0);
-            assert!(!reset_events.contains(&sunrise_client::options_ui::Event::Changed));
+            let after_host_reset = options_click(game, config_size, 282.5, 99.0);
+            assert!(!after_host_reset.contains(&sunrise_client::options_ui::Event::Changed));
             assert_eq!(
                 zoom.binding(game),
                 Ok(("key.keyboard.z", ClientModifiers::default()))
