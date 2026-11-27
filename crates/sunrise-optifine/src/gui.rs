@@ -6,7 +6,8 @@
 //! What the open screen belongs to is the client's to say ([`Subject`]): it knows the block, the
 //! entity and their names.
 //!
-//! Written from OptiFine's public documentation of the format (`custom_guis.properties`, OptiDocs).
+//! Written from OptiFine's public documentation of the format
+//! (`OptiFineDoc/doc/custom_guis.properties`).
 
 use std::collections::HashSet;
 
@@ -130,8 +131,9 @@ const PROFESSIONS: [&str; 15] = [
 ];
 
 /// What the open container screen belongs to: the facts the rules that ask more than the
-/// container test. A rule that asks about a fact the screen has none of (`large` of a screen that
-/// is no chest) never matches it.
+/// container test. The containers that have such facts (the chest, beacon, dispenser, villager,
+/// horse and shulker box) match no rule on a screen that gives none (a barrel's, a wandering
+/// trader's): OptiFine's rules are for the block or the entity itself.
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum Detail<'a> {
     /// Nothing more to ask (the anvil, the furnace, the inventories...).

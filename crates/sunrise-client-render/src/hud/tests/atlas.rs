@@ -2131,10 +2131,7 @@ fn a_custom_gui_picture_packs_at_the_size_of_the_texture_it_replaces() {
     fs::create_dir_all(&folder).unwrap();
     fs::write(
         folder.join("desert.properties"),
-        "container=furnace
-texture=desert
-biomes=desert
-",
+        "container=furnace\ntexture=desert\nbiomes=desert\n",
     )
     .unwrap();
     // Twice the resolution of the texture it replaces.
@@ -2148,9 +2145,7 @@ biomes=desert
     // A rule whose picture the pack lacks.
     fs::write(
         folder.join("missing.properties"),
-        "container=hopper
-texture=missing
-",
+        "container=hopper\ntexture=missing\n",
     )
     .unwrap();
     let atlas = HudAtlas::build_over(
