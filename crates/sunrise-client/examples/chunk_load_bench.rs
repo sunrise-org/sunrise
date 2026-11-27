@@ -250,6 +250,7 @@ fn mesher<'a>(context: &'a WorkerContext, seed: i64) -> Mesher<'a> {
         smooth_lighting: true,
         cutout_leaves: true,
         opaque_ice: false,
+        natural_textures: false,
         translucent_layers: &[],
         layer_overrides: &[],
         leaf_culling: LeafCullingMode::Off,

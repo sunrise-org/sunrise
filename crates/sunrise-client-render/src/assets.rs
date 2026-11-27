@@ -44,6 +44,9 @@ pub struct RenderAssets {
     pub pbr_size: u32,
     /// OptiFine connected textures (empty without `optifine/ctm` files).
     pub connected: crate::connected::ConnectedTextures,
+    /// What each sprite layer does under the Natural Textures option, from the pack's
+    /// `optifine/natural.properties` or OptiFine's own list; empty when no listed sprite is drawn.
+    pub natural: crate::natural::NaturalTextures,
     /// Fusion connected textures (empty without Fusion's connecting textures and models).
     pub fusion: crate::fusion::FusionTextures,
     /// The keyframe animations mods and packs ship (`neoforge/animations/entity`), by id.
@@ -78,6 +81,7 @@ impl RenderAssets {
             pbr_specular: Vec::new(),
             pbr_size: 0,
             connected: Default::default(),
+            natural: Default::default(),
             fusion: Default::default(),
             mod_animations: Default::default(),
             mod_pipelines: Default::default(),
@@ -475,6 +479,14 @@ impl RenderAssets {
         sprites.keep_apart(crate::connected::ConnectedTextures::matched_sprites(
             &ctm_rules,
         ));
+        // Natural textures find their faces by sprite layer too: what they list keeps a layer of
+        // its own, so an identical texture elsewhere doesn't turn with it.
+        let natural_rules = if draws {
+            crate::natural::read_rules(root.source())
+        } else {
+            Vec::new()
+        };
+        sprites.keep_apart(crate::natural::sprites(&natural_rules));
         if draws {
             // After the rules' names are kept apart, so a sprite a source made keeps its own layer
             // where a rule matches it.
@@ -583,6 +595,8 @@ impl RenderAssets {
                 registry,
             )?);
         }
+        let natural =
+            crate::natural::NaturalTextures::load(&natural_rules, |name| sprites.model_layer(name));
         // After the connected tiles: a tile identical to a block shares its layer, and the
         // overlays skip shared layers.
         let emissive_layers = if draws {
@@ -624,6 +638,7 @@ impl RenderAssets {
             pbr_specular: sprites.specular,
             pbr_size: sprites.pbr_size,
             connected,
+            natural,
             fusion,
             mod_animations: if draws {
                 crate::mod_animations::Animations::load(root.source())

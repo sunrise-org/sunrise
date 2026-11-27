@@ -2312,6 +2312,9 @@ pub struct Mesher<'a> {
     pub cutout_leaves: bool,
     /// The `opaqueIce` option: regular ice draws opaque in the solid pass.
     pub opaque_ice: bool,
+    /// The `naturalTextures` option: the faces of the sprites natural textures list
+    /// (`RenderAssets::natural`) turn and flip by their block's position.
+    pub natural_textures: bool,
     /// Sprite layers a shader pack moves into the translucent pass, by layer.
     pub translucent_layers: &'a [bool],
     /// By state id, the terrain layer a shader pack's `block.properties` moves the state's model
@@ -3018,11 +3021,25 @@ impl Mesher<'_> {
         // land where the neighbours are: on a pane, tiles take the cube's own UVs.
         let standard = || q.positions.map(|p| standard_uv(q.facing, p));
         let tiled = !matches!(pick, Pick::Keep);
+        // Natural textures turn or flip a face the connected textures left as it is.
+        let natural = if self.natural_textures && !tiled {
+            let world = at.sample.world;
+            self.render.natural.variant(
+                face.layer,
+                &q.uv,
+                [world.x, world.y, world.z],
+                q.facing as u8,
+            )
+        } else {
+            None
+        };
         let corners = if state.pane && tiled {
             vertices(tint, standard())
         } else {
-            // The face's own UVs, already packed: no per-vertex rounding.
-            std::array::from_fn(|i| (vertex(tint, i, face.uv_fixed[i]), q.uv[i]))
+            // The face's own UVs, already packed: no per-vertex rounding. A turned or flipped
+            // face gives each corner another's.
+            let from = |i: usize| natural.map_or(i, |variant| variant.source(i));
+            std::array::from_fn(|i| (vertex(tint, i, face.uv_fixed[from(i)]), q.uv[from(i)]))
         };
         let own = TileLayer::Layer {
             layer: face.layer as u16,

@@ -148,6 +148,7 @@ fn a_tall_column_streams_lights_and_meshes_to_its_top() {
             smooth_lighting: true,
             cutout_leaves: true,
             opaque_ice: false,
+            natural_textures: false,
             translucent_layers: &[],
             layer_overrides: &[],
             leaf_culling: LeafCullingMode::Off,

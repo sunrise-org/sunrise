@@ -101,6 +101,7 @@ pub mod mods_screen;
 pub mod monitor;
 pub mod multiline_edit;
 pub mod native_emissive;
+pub mod natural;
 pub use sunrise_level::options_file;
 pub use sunrise_level::options_fixes;
 pub mod options_ui;

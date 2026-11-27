@@ -65,6 +65,7 @@ pub struct MeshSettings {
     pub(super) smooth_lighting: bool,
     pub(super) cutout_leaves: bool,
     pub(super) opaque_ice: bool,
+    pub(super) natural_textures: bool,
     pub(super) translucent_layers: Arc<[bool]>,
     pub(super) layer_overrides: Arc<[Option<sunrise_shaders::RenderLayer>]>,
     pub(super) leaf_culling: LeafCullingMode,
@@ -345,6 +346,8 @@ pub struct MeshStreamer {
     pub cutout_leaves: bool,
     /// Draw regular ice opaque in the solid pass (`Mesher::opaque_ice`).
     pub opaque_ice: bool,
+    /// Turn and flip the faces natural textures list (`Mesher::natural_textures`).
+    pub natural_textures: bool,
     /// Sprite layers a shader pack draws in the translucent pass (`[[materials]]
     /// translucent`), by layer; empty without one.
     pub translucent_layers: Arc<[bool]>,
@@ -422,6 +425,7 @@ impl MeshStreamer {
             smooth_lighting: true,
             cutout_leaves: true,
             opaque_ice: false,
+            natural_textures: false,
             translucent_layers: Arc::from([]),
             layer_overrides: Arc::from([]),
             leaf_culling: LeafCullingMode::Off,

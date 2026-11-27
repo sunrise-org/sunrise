@@ -46,6 +46,7 @@ fn mesh(
         smooth_lighting: true,
         cutout_leaves,
         opaque_ice: false,
+        natural_textures: false,
         translucent_layers: &[],
         layer_overrides,
         leaf_culling: LeafCullingMode::Off,
