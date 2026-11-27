@@ -2829,8 +2829,12 @@ fn lingering_and_splash_potions_name_themselves_as_the_direct_entity() {
         game.mobs.push(Mob::new(43, kind, Vec3::ZERO, 0.0));
         game.cloud_affect(
             Victim::Mob(43),
-            &[("instant_damage", 1, 0)],
-            (&[], &[], 1.0),
+            &[sunrise_level::effects::EffectInstance::new(
+                "instant_damage",
+                1,
+                0,
+            )],
+            1.0,
             [0.0, 0.0, 0.0],
             &sunrise_game_data::text::Text::literal("Cloud"),
             (Some(sunrise_sim::mobs::Who::Mob(50)), None),
@@ -2855,8 +2859,12 @@ fn lingering_and_splash_potions_name_themselves_as_the_direct_entity() {
         game.set_game_mode(GameMode::Survival);
         game.cloud_affect(
             Victim::Player(sunrise_gameplay_common::game::dragon_common::FightWho::Host),
-            &[("instant_damage", 1, 0)],
-            (&[], &[], 1.0),
+            &[sunrise_level::effects::EffectInstance::new(
+                "instant_damage",
+                1,
+                0,
+            )],
+            1.0,
             [0.0, 0.0, 0.0],
             &sunrise_game_data::text::Text::literal("Cloud"),
             (Some(sunrise_sim::mobs::Who::Mob(50)), None),

@@ -66,8 +66,12 @@ fn a_harming_area_cloud_credits_its_owner_and_its_sword() {
             sunrise_game_data::text::Text::translate("entity.minecraft.area_effect_cloud", &[]);
         game.cloud_affect(
             sunrise_gameplay_common::game::potions_common::Victim::Mob(100),
-            &[("instant_damage", 1, 0)],
-            (&[], &[], 1.0),
+            &[sunrise_level::effects::EffectInstance::new(
+                "instant_damage",
+                1,
+                0,
+            )],
+            1.0,
             [0.0, 0.0, 0.0],
             &text,
             (Some(Who::Mob(50)), None),
