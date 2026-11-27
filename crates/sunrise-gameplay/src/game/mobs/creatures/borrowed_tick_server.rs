@@ -1161,8 +1161,9 @@ impl crate::game::ServerGame<'_> {
                 gone_rows = false;
             }
             // Mobs that joined during the pass go first on a restore: the rows move.
-            let (relifted, batch_unchanged, callback_panic) =
+            let (relifted, (callback_panic, unchanged)) =
                 self.hand_back_mob_batch(mobs, |game, restored_offset, restored| {
+                    let same_rows = same_rows && restored_offset == 0;
                     game.file_mob_section_entries(&mut section_entered);
                     std::mem::swap(&mut game.server.last_hurt_by_player, &mut player_credit);
                     std::mem::swap(&mut game.server.died, &mut died);
@@ -1394,6 +1395,8 @@ impl crate::game::ServerGame<'_> {
                             &mut sections.borrow_mut(),
                         );
                     }
+                    let unchanged =
+                        same_rows && !views_dirty && *restored == Some(game.common.mobs.stamp());
                     if tell_pre.is_some() || tick_enchantments.is_some() {
                         told_at = Some(cursor);
                     }
@@ -1404,10 +1407,9 @@ impl crate::game::ServerGame<'_> {
                     if retry_rider.is_some() || removing_vehicle.is_some() {
                         blocked = std::borrow::Cow::Owned(game.mobs_below_off_level());
                     }
-                    callback_panic
+                    (callback_panic, unchanged)
                 });
             mobs = relifted;
-            let unchanged = same_rows && !views_dirty && batch_unchanged;
             std::mem::swap(&mut self.server.last_hurt_by_player, &mut player_credit);
             std::mem::swap(&mut self.server.died, &mut died);
             std::mem::swap(&mut self.common.creatures.ticked, &mut ticked);
@@ -1537,16 +1539,15 @@ impl crate::game::ServerGame<'_> {
         &mut self,
         mobs: sunrise_sim::join_seq::JoinList<Mob>,
         run: impl FnOnce(&mut Self, usize, &mut Option<sunrise_sim::join_seq::ListStamp>) -> R,
-    ) -> (sunrise_sim::join_seq::JoinList<Mob>, bool, R) {
+    ) -> (sunrise_sim::join_seq::JoinList<Mob>, R) {
         let restored_offset = self.common.mobs.len();
         self.common
             .mobs
             .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
         let mut restored = Some(self.common.mobs.stamp());
         let result = run(self, restored_offset, &mut restored);
-        let unchanged = restored_offset == 0 && restored == Some(self.common.mobs.stamp());
         let mobs = self.common.mobs.lift();
-        (mobs, unchanged, result)
+        (mobs, result)
     }
 
     fn file_mob_section_entries(&mut self, entered: &mut Vec<(u32, [f64; 3])>) {

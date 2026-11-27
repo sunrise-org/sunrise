@@ -6062,9 +6062,7 @@ impl crate::game::ServerGame<'_> {
             .remove(level_id)
             .unwrap_or_default();
         let primable = self.sulfur_cubes_adopted_explosive();
-        // The mobs added during the tick (into the emptied `self.mobs`) come
-        // first, as `append` put them; with none, the ticked list goes back
-        // as it is instead of being copied into a new one, every mob a tick.
+        // Nested spawns precede ticked survivors on restore.
         let (
             aborted,
             dead,
@@ -6076,6 +6074,7 @@ impl crate::game::ServerGame<'_> {
             restocks,
             dispatch_panic,
             stand_result,
+            _retained,
         ) = self.with_lifted_mobs(
             sunrise_sim::join_seq::RestoreOrder::SpawnsFirst,
             |game, mobs| {
@@ -6157,7 +6156,7 @@ impl crate::game::ServerGame<'_> {
                 }
                 lent.give_back(&mut game.common.world);
                 game.server.last_hurt_by_player = player_credit;
-                if let Some(host) = game.server.lan.as_mut()
+                let remaining_bindings = if let Some(host) = game.server.lan.as_mut()
                     && !guests.is_empty()
                 {
                     // A set: a scan of every mob for each binding is quadratic, and a
@@ -6166,7 +6165,10 @@ impl crate::game::ServerGame<'_> {
                         mobs.iter().map(|m| m.id).collect();
                     bindings.retain(|id, _| live.contains(id));
                     host.mob_players = bindings;
-                }
+                    None
+                } else {
+                    Some(bindings)
+                };
                 (
                     aborted,
                     dead,
@@ -6178,6 +6180,7 @@ impl crate::game::ServerGame<'_> {
                     restocks,
                     dispatch_panic,
                     stand_result,
+                    (guests, spare, remaining_bindings, guest_ids),
                 )
             },
         );

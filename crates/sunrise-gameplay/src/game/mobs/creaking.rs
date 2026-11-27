@@ -109,7 +109,7 @@ impl crate::game::ServerGame<'_> {
             &mut Vec<HeartEvent>,
         ),
     ) -> Result<()> {
-        let (uuids, next_entity, random, events) = self.with_lifted_mobs(
+        let (uuids, next_entity, random, events, _snapshot) = self.with_lifted_mobs(
             sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
             |game, mobs| {
                 #[cfg(any(test, feature = "test-support"))]
@@ -151,7 +151,7 @@ impl crate::game::ServerGame<'_> {
                 // The heart's additions go after every slot the index holds.
                 game.common.mob_index = index;
                 mobs.extend(added);
-                (uuids, next_entity, random, events)
+                (uuids, next_entity, random, events, snapshot)
             },
         );
         self.common.persist.uuids = uuids;
