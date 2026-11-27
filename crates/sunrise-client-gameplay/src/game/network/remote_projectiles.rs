@@ -426,16 +426,14 @@ impl crate::game::ClientGame<'_> {
                 .add(&smoke, [p.x, p.y + 0.5, p.z], [0.0; 3]);
         }
         // Clients simulate motion and drag; only the server places/removes the landing block.
-        let mut falling = self.common.falling.lift();
-        #[cfg(test)]
-        nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Falling);
-        falling.for_each_mut(|f| {
-            let _ = self.client_fall_step(f);
-            self.pick_section_move(f.id, f.position.components());
+        self.with_lifted_falling(|game, falling| {
+            #[cfg(test)]
+            nested_spawn_tests::after_lift(game, nested_spawn_tests::Point::Falling);
+            falling.for_each_mut(|f| {
+                let _ = game.client_fall_step(f);
+                game.pick_section_move(f.id, f.position.components());
+            });
         });
-        self.common
-            .falling
-            .restore(falling, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         // Projectiles tick on the client too and fly on between the tracker's
         // updates (10 to 20 ticks apart); a block stops them there, and only
         // the server decides what they hit. EntityTickEvent.Pre and .Post bracket each remote
@@ -443,63 +441,61 @@ impl crate::game::ClientGame<'_> {
         // runs with zero hand-backs.
         let mut round = self.native_tick_round();
         let told = round.told_listening();
-        let mut projectiles = self.common.creatures.projectiles.lift();
-        #[cfg(test)]
-        nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Projectile);
-        let bubbles: Vec<_> = projectiles
-            .iter()
-            .filter_map(Projectile::water_bubbles)
-            .collect();
-        let mut tridents = self.common.tridents.lift();
-        #[cfg(test)]
-        nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Trident);
+        let mut bubbles = Vec::new();
         let mut arrow_events = Vec::new();
-        if told {
-            (projectiles, tridents) = self.tick_remote_projectiles_told(
-                projectiles,
-                tridents,
-                &mut round,
-                &mut arrow_events,
-            );
-        } else {
-            // Their visits, counted once the loop hands the game back: no hook runs between.
-            let mut visited = Vec::new();
-            {
-                let rain = self.arrow_rain();
-                let arrow_scene = self.client_arrow_scene(&rain);
-                let side = self.client_mob_side();
-                let w = self.client_mob_world_base(&[], &side);
-                let world = super::creatures::ProjWorld {
-                    w: &w,
-                    targets: &[],
-                    border: Some(self.common.border.bounds()),
-                };
-                projectiles.for_each_mut(|p| {
-                    visited.push(p.id);
-                    remote_projectile_step(p, &arrow_scene, &world, &mut arrow_events);
-                    self.pick_section_move(p.id, p.position.components());
-                });
-                for t in &mut tridents {
-                    visited.push(t.id);
-                    crate::game::client_side::trident_client::remote_tick(
-                        t,
-                        &world,
-                        self.remote_eye(t.owner),
+        self.with_lifted_remote_projectiles(
+            |game, projectiles| {
+                #[cfg(test)]
+                nested_spawn_tests::after_lift(game, nested_spawn_tests::Point::Projectile);
+                bubbles = projectiles
+                    .iter()
+                    .filter_map(Projectile::water_bubbles)
+                    .collect();
+            },
+            |game, mut projectiles, mut tridents| {
+                #[cfg(test)]
+                nested_spawn_tests::after_lift(game, nested_spawn_tests::Point::Trident);
+                if told {
+                    (projectiles, tridents) = game.tick_remote_projectiles_told(
+                        projectiles,
+                        tridents,
+                        &mut round,
+                        &mut arrow_events,
                     );
-                    self.pick_section_move(t.id, t.position.components());
+                } else {
+                    // Their visits, counted once the loop hands the game back: no hook runs between.
+                    let mut visited = Vec::new();
+                    {
+                        let rain = game.arrow_rain();
+                        let arrow_scene = game.client_arrow_scene(&rain);
+                        let side = game.client_mob_side();
+                        let w = game.client_mob_world_base(&[], &side);
+                        let world = super::creatures::ProjWorld {
+                            w: &w,
+                            targets: &[],
+                            border: Some(game.common.border.bounds()),
+                        };
+                        projectiles.for_each_mut(|p| {
+                            visited.push(p.id);
+                            remote_projectile_step(p, &arrow_scene, &world, &mut arrow_events);
+                            game.pick_section_move(p.id, p.position.components());
+                        });
+                        for t in &mut tridents {
+                            visited.push(t.id);
+                            crate::game::client_side::trident_client::remote_tick(
+                                t,
+                                &world,
+                                game.remote_eye(t.owner),
+                            );
+                            game.pick_section_move(t.id, t.position.components());
+                        }
+                    }
+                    for id in visited {
+                        game.count_client_tick(id);
+                    }
                 }
-            }
-            for id in visited {
-                self.count_client_tick(id);
-            }
-        }
-        self.common.creatures.projectiles.restore(
-            projectiles,
-            sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
-        );
-        self.common.tridents.restore(
-            tridents,
-            sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+                (projectiles, tridents)
+            },
         );
         for (at, event) in arrow_events {
             self.client_arrow_event(at, event);
@@ -521,36 +517,34 @@ impl crate::game::ClientGame<'_> {
         // follows it, and every rocket leaves its spark trail on a client. One
         // boosting this client's own player ticks after it (`tick_own_rockets`).
         let me = self.remote_player_id();
-        let mut rockets = self.common.rockets.lift();
-        #[cfg(test)]
-        nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::RemoteRocket);
-        for r in &mut rockets {
-            let side_server = self.game_side_client();
-            r.remote_step(
-                self.common
-                    .body_motion(&client_game_side!(self, side_server)),
-            );
-            if let Some(target) = r.attached_to {
-                if me == Some(target) {
-                    self.pick_section_move(r.id, r.position.components());
-                    continue;
+        self.with_lifted_rockets(|game, rockets| {
+            #[cfg(test)]
+            nested_spawn_tests::after_lift(game, nested_spawn_tests::Point::RemoteRocket);
+            for r in rockets.iter_mut() {
+                let side_server = game.game_side_client();
+                r.remote_step(
+                    game.common
+                        .body_motion(&client_game_side!(game, side_server)),
+                );
+                if let Some(target) = r.attached_to {
+                    if me == Some(target) {
+                        game.pick_section_move(r.id, r.position.components());
+                        continue;
+                    }
+                    if let Some(m) = game.common.mobs.iter().find(|m| m.id == target) {
+                        // Another player's motion is not known here: its step.
+                        r.velocity = Vec3::new(
+                            m.position.x - r.previous.x,
+                            m.position.y - r.previous.y,
+                            m.position.z - r.previous.z,
+                        );
+                        r.position = m.position;
+                    }
                 }
-                if let Some(m) = self.common.mobs.iter().find(|m| m.id == target) {
-                    // Another player's motion is not known here: its step.
-                    r.velocity = Vec3::new(
-                        m.position.x - r.previous.x,
-                        m.position.y - r.previous.y,
-                        m.position.z - r.previous.z,
-                    );
-                    r.position = m.position;
-                }
+                game.pick_section_move(r.id, r.position.components());
+                game.rocket_spark(r);
             }
-            self.pick_section_move(r.id, r.position.components());
-            self.rocket_spark(r);
-        }
-        self.common
-            .rockets
-            .restore(rockets, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+        });
         for c in &mut self.common.crystals {
             // ClientLevel.tickNonPassenger's setOldPosAndRot, then the interpolation step.
             c.previous = c.position;
@@ -776,6 +770,56 @@ impl crate::game::ClientGame<'_> {
             self.common.tridents.lift(),
             changed,
         )
+    }
+
+    #[inline(always)]
+    fn with_lifted_falling(
+        &mut self,
+        work: impl FnOnce(&mut Self, &mut JoinList<FallingBlock, false>),
+    ) {
+        let mut falling = self.common.falling.lift();
+        work(self, &mut falling);
+        self.common
+            .falling
+            .restore(falling, RestoreOrder::SurvivorsFirst);
+    }
+
+    #[inline(always)]
+    fn with_lifted_rockets(
+        &mut self,
+        work: impl FnOnce(&mut Self, &mut JoinList<super::fireworks::Rocket>),
+    ) {
+        let mut rockets = self.common.rockets.lift();
+        work(self, &mut rockets);
+        self.common
+            .rockets
+            .restore(rockets, RestoreOrder::SurvivorsFirst);
+    }
+
+    #[inline(always)]
+    fn with_lifted_remote_projectiles(
+        &mut self,
+        between_lifts: impl FnOnce(&mut Self, &JoinList<Projectile, false>),
+        work: impl FnOnce(
+            &mut Self,
+            JoinList<Projectile, false>,
+            JoinList<sunrise_sim::thrown_trident::ThrownTrident>,
+        ) -> (
+            JoinList<Projectile, false>,
+            JoinList<sunrise_sim::thrown_trident::ThrownTrident>,
+        ),
+    ) {
+        let projectiles = self.common.creatures.projectiles.lift();
+        between_lifts(self, &projectiles);
+        let tridents = self.common.tridents.lift();
+        let (projectiles, tridents) = work(self, projectiles, tridents);
+        self.common
+            .creatures
+            .projectiles
+            .restore(projectiles, RestoreOrder::SurvivorsFirst);
+        self.common
+            .tridents
+            .restore(tridents, RestoreOrder::SurvivorsFirst);
     }
 }
 
