@@ -28,6 +28,7 @@ mod pack;
 mod post;
 mod preprocess;
 mod properties;
+mod reserved;
 mod screens;
 mod textures;
 mod translate;
@@ -60,6 +61,9 @@ pub use post::{
 };
 pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
 pub use properties::{Entry, Note, Properties, Tonemap};
+pub use reserved::{
+    GBUFFERS_CENTER_DEPTH, GBUFFERS_FOG_MODE, GBUFFERS_FOG_SHAPE, PACK_UNIFORM_NAMES,
+};
 pub use screens::{Item as ScreenItem, Screens};
 pub use textures::{
     CustomTexture, Dim as TextureDim, EVERY_STAGE, PngError, Texels, Texture, TextureSource,
