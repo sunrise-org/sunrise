@@ -2332,4 +2332,74 @@ void main() {
         assert_eq!(problems[0].stage, Some(ShaderStage::Compute));
         assert_eq!(problems[0].line, 6);
     }
+
+    #[test]
+    fn early_depth_test_passes_backend_check_and_survives_linear_light_finish() {
+        let storage_only_fsh = "\
+#version 330
+layout(early_fragment_tests) in;
+layout(std430) buffer Vis { uint visible[]; };
+void main() {
+    visible[0] = 1u;
+}
+";
+        let color_and_storage_fsh = "\
+#version 330
+layout(early_fragment_tests) in;
+layout(std430) buffer Vis { uint visible[]; };
+out vec4 fragColor;
+void main() {
+    visible[0] = 1u;
+    fragColor = vec4(0.5, 0.25, 0.125, 1.0);
+}
+";
+        let mod_bindings = [ModBinding {
+            name: "Vis",
+            kind: ModBindingKind::StorageBuffer { read_only: false },
+        }];
+        let options = Options {
+            mod_bindings: &mod_bindings,
+            linear_light: true,
+            check_backends: true,
+            ..Default::default()
+        };
+
+        let storage_only = translate(&sources(VSH, storage_only_fsh), &options, &stub_include)
+            .unwrap_or_else(|problems| panic!("early-Z storage-only shader failed: {problems:?}"));
+        assert!(storage_only.translated.uses_early_depth_test());
+        assert!(storage_only.translated.uses_fragment_writable_storage());
+
+        let with_color = translate(
+            &sources(VSH, color_and_storage_fsh),
+            &options,
+            &stub_include,
+        )
+        .unwrap_or_else(|problems| panic!("early-Z color shader failed: {problems:?}"));
+        assert!(with_color.translated.uses_early_depth_test());
+        assert!(with_color.translated.uses_fragment_writable_storage());
+        assert!(
+            with_color
+                .translated
+                .fragment
+                .functions
+                .iter()
+                .any(|(_, f)| f.name.as_deref() == Some("hz_main")),
+            "linear_light must wrap vec4 fragment output in hz_main"
+        );
+
+        let lazy_linear = translate_linear_fragment(
+            &with_color.vertex_expanded,
+            &with_color.fragment_expanded,
+            &options,
+        )
+        .expect("lazy linear re-translation must preserve early_depth_test");
+        assert!(
+            sunrise_glsl::module_uses_early_depth_test(&lazy_linear),
+            "linear_fragment_finish rewrite must preserve layout(early_fragment_tests) in"
+        );
+        assert!(
+            sunrise_glsl::module_writes_storage(&lazy_linear),
+            "linear_fragment_finish rewrite must preserve storage write detection"
+        );
+    }
 }

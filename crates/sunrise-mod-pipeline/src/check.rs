@@ -74,33 +74,41 @@ fn translate_validated(module: &naga::Module, info: &ModuleInfo) -> Vec<String> 
                 }),
             )
         });
-        let msl = refusal(|| {
-            naga::back::msl::write_string(
-                module,
-                info,
-                &naga::back::msl::Options {
-                    lang_version: (2, 4),
-                    ..Default::default()
-                },
-                &naga::back::msl::PipelineOptions {
-                    entry_point: Some((e.stage, e.name.clone())),
-                    ..Default::default()
-                },
-            )
-        });
-        let hlsl = refusal(|| {
-            naga::back::hlsl::Writer::new(
-                &mut String::new(),
-                &naga::back::hlsl::Options {
-                    shader_model: naga::back::hlsl::ShaderModel::V6_0,
-                    ..Default::default()
-                },
-                &naga::back::hlsl::PipelineOptions {
-                    entry_point: Some((e.stage, e.name.clone())),
-                },
-            )
-            .write(module, info, None)
-        });
+        // Forced hardware early depth tests (`layout(early_fragment_tests) in;`) are gated at
+        // runtime by `RenderCapabilities::shader_early_depth_test` (Vulkan/OpenGL, non-Adreno), so
+        // skip Metal (MSL) and DirectX 12 (HLSL) backend checks when the entry point uses them.
+        let (msl, hlsl) = if e.early_depth_test.is_some() {
+            (None, None)
+        } else {
+            let msl = refusal(|| {
+                naga::back::msl::write_string(
+                    module,
+                    info,
+                    &naga::back::msl::Options {
+                        lang_version: (2, 4),
+                        ..Default::default()
+                    },
+                    &naga::back::msl::PipelineOptions {
+                        entry_point: Some((e.stage, e.name.clone())),
+                        ..Default::default()
+                    },
+                )
+            });
+            let hlsl = refusal(|| {
+                naga::back::hlsl::Writer::new(
+                    &mut String::new(),
+                    &naga::back::hlsl::Options {
+                        shader_model: naga::back::hlsl::ShaderModel::V6_0,
+                        ..Default::default()
+                    },
+                    &naga::back::hlsl::PipelineOptions {
+                        entry_point: Some((e.stage, e.name.clone())),
+                    },
+                )
+                .write(module, info, None)
+            });
+            (msl, hlsl)
+        };
         for (backend, err) in [
             ("Vulkan (SPIR-V)", spv),
             ("Metal", msl),

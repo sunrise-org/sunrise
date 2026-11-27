@@ -669,6 +669,11 @@ pub(super) fn probe_render_capabilities(
             .features()
             .contains(wgpu::Features::INDIRECT_FIRST_INSTANCE),
         multi_draw_indirect_count(&adapter.get_info(), device.features()),
+        super::cull::early_depth_test_supported(adapter, device),
+        adapter
+            .get_downlevel_capabilities()
+            .flags
+            .contains(wgpu::DownlevelFlags::FRAGMENT_WRITABLE_STORAGE),
         render_limits(&device.limits()),
     )
 }

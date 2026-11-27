@@ -378,19 +378,52 @@ const OIT_INCLUDE: &str = "minecraft:shaders/include/oit.glsl";
 /// ([`sunrise_mod_pipeline::ProgramBindings::vertex_inputs`]), and a program that includes
 /// `oit.glsl`, in its own text or through another include, is also checked against the
 /// order-independent transparency passes. A program whose includes cannot be expanded is refused.
+/// Outcome of checking all GLSL core render-pipeline programs in a mod package.
+#[derive(Clone, Debug, Default, PartialEq, Eq)]
+pub struct PipelineShaderReport {
+    /// Number of paired core render-pipeline programs checked.
+    pub checked: usize,
+    /// Refusals formatted as `<file>[:<line>:<column>]: <message>`.
+    pub refused: Vec<String>,
+    /// Fragment shader asset paths whose programs require
+    /// `RenderCapabilities::shader_early_depth_test` (Metal and DirectX 12 checks skipped).
+    pub early_depth_test: Vec<String>,
+}
+
+/// Like [`check_pipeline_shaders`], returning `(checked, refused)`.
 pub fn pipeline_shaders(
     files: &BTreeMap<String, Vec<u8>>,
     resources: Option<&Path>,
 ) -> (usize, Vec<String>) {
+    let report = check_pipeline_shaders(files, resources);
+    (report.checked, report.refused)
+}
+
+/// Translates and validates every GLSL core shader program in `files`, returning counts,
+/// refusals, and programs requiring optional runtime capabilities (`shader_early_depth_test`).
+pub fn check_pipeline_shaders(
+    files: &BTreeMap<String, Vec<u8>>,
+    resources: Option<&Path>,
+) -> PipelineShaderReport {
     let programs = pair_programs(files);
     let assets = Assets { files, resources };
     let mut refused = Vec::new();
+    let mut early_depth_test = Vec::new();
     for program in &programs {
-        if let Err(problems) = check_program(program, &assets) {
-            refused.extend(problems);
+        match check_program(program, &assets) {
+            Ok(uses_early_depth) => {
+                if uses_early_depth {
+                    early_depth_test.push(program.fragment_file.clone());
+                }
+            }
+            Err(problems) => refused.extend(problems),
         }
     }
-    (programs.len(), refused)
+    PipelineShaderReport {
+        checked: programs.len(),
+        refused,
+        early_depth_test,
+    }
 }
 
 /// The fragment stage of a vertex-only file: it only lets the vertex stage be validated.
@@ -509,7 +542,7 @@ impl Assets<'_> {
 /// its own, and refuses only one of a type no vertex attribute format supplies; which of them the
 /// game binds, and from which vertex bindings, the pipeline's registered format decides at
 /// registration.
-fn check_program(program: &Program, assets: &Assets<'_>) -> Result<(), Vec<String>> {
+fn check_program(program: &Program, assets: &Assets<'_>) -> Result<bool, Vec<String>> {
     let fragment = if program.stand_in {
         STAND_IN_FRAGMENT.to_owned()
     } else {
@@ -551,14 +584,14 @@ fn check_program(program: &Program, assets: &Assets<'_>) -> Result<(), Vec<Strin
     let refusals = |problems: Vec<sunrise_mod_pipeline::check::Problem>| {
         problems.iter().map(ToString::to_string).collect::<Vec<_>>()
     };
-    sunrise_mod_pipeline::translate(&sources, &options, &include).map_err(refusals)?;
+    let built = sunrise_mod_pipeline::translate(&sources, &options, &include).map_err(refusals)?;
     // A program joins the OIT passes by including `oit.glsl`, directly or through another
     // include: `bindings.includes` lists every file its stages' expansion read.
     if !program.stand_in && bindings.includes.iter().any(|id| id == OIT_INCLUDE) {
         sunrise_mod_pipeline::translate_oit(&sources, &options, false, &include)
             .map_err(refusals)?;
     }
-    Ok(())
+    Ok(built.translated.uses_early_depth_test())
 }
 
 /// One line per data folder that holds files under 26.2's name for a folder 26.3 reads under
@@ -1202,6 +1235,34 @@ void main() {
                 .iter()
                 .any(|r| r.contains("bad_oit.fsh") && r.contains("OIT depth_bounds")),
             "expected bad OIT shader refusal at depth_bounds, got: {refused:?}"
+        );
+    }
+
+    #[test]
+    fn pipeline_shaders_reports_early_depth_test_capability_requirement() {
+        let mut files = BTreeMap::new();
+        files.insert(
+            "assets/example/shaders/core/occlude.fsh".to_owned(),
+            b"\
+#version 330
+layout(early_fragment_tests) in;
+layout(std430) buffer Vis { uint visible[]; };
+void main() {
+    visible[0] = 1u;
+}
+"
+            .to_vec(),
+        );
+        let report = check_pipeline_shaders(&files, None);
+        assert_eq!(report.checked, 1);
+        assert!(
+            report.refused.is_empty(),
+            "early_fragment_tests shader must pass SPIR-V check: {:?}",
+            report.refused
+        );
+        assert_eq!(
+            report.early_depth_test,
+            vec!["assets/example/shaders/core/occlude.fsh".to_owned()]
         );
     }
 }

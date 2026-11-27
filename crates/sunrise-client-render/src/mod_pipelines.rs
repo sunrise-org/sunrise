@@ -990,6 +990,16 @@ pub enum BuiltTexture {
     Sprite(String),
 }
 
+/// Why a device refused a render pipeline its load had translated.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub(crate) enum Refusal {
+    /// Over a device limit, missing texture sprite, or the device rejected the shader/pipeline.
+    Invalid,
+    /// Needs a device feature the adapter lacks (`shader_early_depth_test` or
+    /// `fragment_writable_storage`).
+    UnsupportedFeature,
+}
+
 /// The registered pipelines as one resource load built them, by slot. An optional pipeline the
 /// load refused has no shader here and resolves to [`RenderPipelineError::Invalid`].
 #[derive(Clone, Debug, Default)]
@@ -998,7 +1008,7 @@ pub struct Pipelines {
     built: Vec<Option<Arc<Built>>>,
     /// The render assets' generation this set was loaded for; 0 for none.
     generation: u64,
-    invalid: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+    refused: std::sync::Arc<std::sync::Mutex<Vec<(usize, Refusal)>>>,
     oit_ineligible_logged: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
     /// The texture-taking built-in render types made so far, shared by clones of this set.
     textured: std::sync::Arc<std::sync::Mutex<TexturedRenderTypes>>,
@@ -1210,7 +1220,7 @@ impl Pipelines {
             keys: registered.iter().map(|p| p.id.clone()).collect(),
             built,
             generation,
-            invalid: Default::default(),
+            refused: Default::default(),
             oit_ineligible_logged: Default::default(),
             textured: Default::default(),
             compute: Default::default(),
@@ -1304,22 +1314,44 @@ impl Pipelines {
         }
     }
 
-    /// Marks `slot` as one the GPU refused; false when it already was, so it is reported once.
-    pub(crate) fn invalidate(&self, slot: usize) -> bool {
-        let mut invalid = self.invalid.lock().unwrap_or_else(|e| e.into_inner());
-        let fresh = !invalid.contains(&slot);
+    /// Marks `slot` as one the device refused, for `reason`; false when it already was, so it is
+    /// reported once.
+    pub(crate) fn refuse(&self, slot: usize, reason: Refusal) -> bool {
+        let mut refused = self.refused.lock().unwrap_or_else(|e| e.into_inner());
+        let fresh = !refused.iter().any(|(s, _)| *s == slot);
         if fresh {
-            invalid.push(slot);
+            refused.push((slot, reason));
         }
         fresh
     }
 
+    /// Marks `slot` as one the GPU refused as [`Refusal::Invalid`]; false when already refused.
+    pub(crate) fn invalidate(&self, slot: usize) -> bool {
+        self.refuse(slot, Refusal::Invalid)
+    }
+
     /// Makes `slot` usable again: a renderer that built it took the refusal of another over.
     pub(crate) fn revalidate(&self, slot: usize) {
-        self.invalid
+        self.refused
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .retain(|&invalid| invalid != slot);
+            .retain(|(s, _)| *s != slot);
+    }
+
+    fn refusal(&self, slot: usize) -> Option<Refusal> {
+        self.refused
+            .lock()
+            .unwrap_or_else(|e| e.into_inner())
+            .iter()
+            .find_map(|(s, reason)| (*s == slot).then_some(*reason))
+    }
+
+    fn error_of(&self, slot: usize) -> Option<RenderPipelineError> {
+        match self.refusal(slot) {
+            Some(Refusal::UnsupportedFeature) => Some(RenderPipelineError::UnsupportedFeature),
+            Some(Refusal::Invalid) => Some(RenderPipelineError::Invalid),
+            None => None,
+        }
     }
 
     /// The load this set belongs to: a renderer holding another builds its pipelines again.
@@ -1339,14 +1371,11 @@ impl Pipelines {
             .iter()
             .position(|registered| registered == id)
             .ok_or(RenderPipelineError::Unknown)?;
-        if self.built[slot].is_none()
-            || self
-                .invalid
-                .lock()
-                .unwrap_or_else(|e| e.into_inner())
-                .contains(&slot)
-        {
+        if self.built[slot].is_none() {
             return Err(RenderPipelineError::Invalid);
+        }
+        if let Some(error) = self.error_of(slot) {
+            return Err(error);
         }
         Ok(mod_api::__private::built::render_pipeline_ref(
             self.generation,
@@ -1361,13 +1390,8 @@ impl Pipelines {
         if fields.generation != self.generation {
             return Err(RenderPipelineError::Stale);
         }
-        if self
-            .invalid
-            .lock()
-            .unwrap_or_else(|e| e.into_inner())
-            .contains(&(fields.slot as usize))
-        {
-            return Err(RenderPipelineError::Invalid);
+        if let Some(error) = self.error_of(fields.slot as usize) {
+            return Err(error);
         }
         match self.built.get(fields.slot as usize) {
             Some(Some(_)) => Ok(fields.slot),
@@ -1403,12 +1427,7 @@ impl Pipelines {
         let setup = &custom[index];
         // If backed by a registered mod pipeline, reflect its build validity in this load.
         if let Some(pipeline_slot) = self.keys.iter().position(|k| k == &setup.pipeline)
-            && (self.built[pipeline_slot].is_none()
-                || self
-                    .invalid
-                    .lock()
-                    .unwrap_or_else(|e| e.into_inner())
-                    .contains(&pipeline_slot))
+            && (self.built[pipeline_slot].is_none() || self.refusal(pipeline_slot).is_some())
         {
             return Err(RenderTypeError::Invalid);
         }
@@ -1528,13 +1547,7 @@ impl Pipelines {
         let setup = custom.get(index).ok_or(RenderTypeError::Unknown)?;
         let mod_pipeline_slot =
             if let Some(pipeline_slot) = self.keys.iter().position(|k| k == &setup.pipeline) {
-                if self.built[pipeline_slot].is_none()
-                    || self
-                        .invalid
-                        .lock()
-                        .unwrap_or_else(|e| e.into_inner())
-                        .contains(&pipeline_slot)
-                {
+                if self.built[pipeline_slot].is_none() || self.refusal(pipeline_slot).is_some() {
                     return Err(RenderTypeError::Invalid);
                 }
                 Some(pipeline_slot as u32)
@@ -3291,5 +3304,49 @@ void main() {
             assert_eq!(mapped.read_mask, 0xAA);
             assert_eq!(mapped.write_mask, 0x55);
         }
+    }
+
+    #[test]
+    fn pipeline_refusal_distinguishes_unsupported_feature_from_invalid() {
+        let pid = id("example:early_z");
+        let set = Pipelines::build(
+            &[RenderPipeline::new(
+                pid.clone(),
+                id("example:core/early_z"),
+                PipelineBlend::Opaque,
+                WorldDepth::Tested,
+            )
+            .optional()],
+            3,
+            |file| {
+                if file.ends_with(".vsh") {
+                    Ok(Some(
+                        "#version 330\nin vec3 Position;\nvoid main() { gl_Position = vec4(Position, 1.0); }\n"
+                            .into(),
+                    ))
+                } else if file.ends_with(".fsh") {
+                    Ok(Some(
+                        "#version 330\nout vec4 fragColor;\nvoid main() { fragColor = vec4(1.0); }\n"
+                            .into(),
+                    ))
+                } else {
+                    Ok(None)
+                }
+            },
+        )
+        .unwrap();
+        let handle = set.resolve(&pid).unwrap();
+        assert!(set.refuse(0, Refusal::UnsupportedFeature));
+        assert!(!set.refuse(0, Refusal::Invalid));
+        assert_eq!(
+            set.resolve(&pid),
+            Err(RenderPipelineError::UnsupportedFeature)
+        );
+        assert_eq!(
+            set.slot(handle),
+            Err(RenderPipelineError::UnsupportedFeature)
+        );
+        set.revalidate(0);
+        assert_eq!(set.slot(handle), Ok(0));
     }
 }

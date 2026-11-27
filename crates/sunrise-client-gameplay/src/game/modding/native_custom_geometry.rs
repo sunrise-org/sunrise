@@ -665,6 +665,8 @@ impl ClientGame<'_> {
                     false,
                     false,
                     false,
+                    false,
+                    false,
                     mod_api::RenderLimits::default(),
                 )
             },
