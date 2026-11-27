@@ -81,10 +81,14 @@ pub trait ItemEntitiesBackendMut {
     /// `ItemEntity.playerTouch(player)` now: the pickup the game's own pass runs when the item
     /// meets the player, with its pickup-delay and target checks, `item_picked_up` and
     /// `item_picked_up_post`, `Inventory.add` (what does not fit stays on the ground), the
-    /// statistic, the advancement criterion, and the take animation and sound. `Ok` of the count
-    /// the inventory took: 0 when the delay, the target, a mod or a full inventory refused it.
-    /// `Err(Stale)` for a stale player or item handle or a dead player (the game's pickup skips
-    /// the dead), and `Err(Unavailable)` on a client.
+    /// statistic and the advancement criterion. `Ok` of the count `Inventory.add` took, whatever
+    /// an `item_picked_up_post` listener then does with the rest: 0 when the delay, the target,
+    /// a mod or a full inventory refused it, and for an item whose own pickup is running (a call
+    /// from its `item_picked_up` or `item_picked_up_post` listener). One take of that count goes
+    /// to every client tracking the item, which plays the pickup animation and sound, wherever
+    /// the player stands. `Err(Stale)` for a stale player or item handle, an item of another
+    /// level than the one in place, or a dead player (the game's pickup skips the dead);
+    /// `Err(OtherLevel)` for a player of another level; `Err(Unavailable)` on a client.
     ///
     /// Not transactional: the pickup commits at once, its take packet and sound included.
     /// Inside an open transaction it is refused with `Err(InTransaction)` and nothing is done.
@@ -94,14 +98,16 @@ pub trait ItemEntitiesBackendMut {
         item: ItemEntityRef,
     ) -> Result<u32, PickupError>;
     /// Side: server.
-    /// `ExperienceOrb.playerTouch(player)` now, wherever the orb is: refused while the player's
-    /// `takeXpDelay` runs (`Ok(false)`); else `pickup_xp` fires first and a veto, or a listener
-    /// that removes the orb, refuses it (`Ok(false)`). Otherwise the delay is set to 2, one of
-    /// the orb's count is taken with the take animation and sound, its value goes through
-    /// Mending and the rest to the player's experience, and a one-count orb is discarded.
-    /// `Ok(true)` when taken. The same for the host's own player and for a LAN guest. `Err` as
-    /// for `player_touch_item`, including `Err(InTransaction)`: the orb's take, Mending and the
-    /// experience commit at once and are refused inside an open transaction.
+    /// `ExperienceOrb.playerTouch(player)` now, wherever the orb is in the level in place:
+    /// refused while the player's `takeXpDelay` runs (`Ok(false)`); else `pickup_xp` fires first
+    /// and a veto, a listener that removes the orb, or one that starts the player's delay (by
+    /// taking another orb) refuses it (`Ok(false)`). Otherwise the delay is set to 2, one take
+    /// goes to every client tracking the orb, the pickup sound plays, the orb's value goes
+    /// through Mending and the rest to the player's experience, and one of the orb's count is
+    /// taken, a one-count orb discarded. `Ok(true)` once the delay is set, even when a Mending
+    /// listener then removes the orb. The same for the host's own player and for a LAN guest.
+    /// `Err` as for `player_touch_item`: `Err(Stale)` also for an orb of another level, and
+    /// `Err(InTransaction)`, as the orb's take, Mending and the experience commit at once.
     fn player_touch_orb(
         &mut self,
         player: PlayerRef,

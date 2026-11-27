@@ -133,7 +133,7 @@ impl crate::game::ServerGame<'_> {
         item_id: u32,
         player: [i32; 4],
         taken: &mut Vec<(u32, u32)>,
-    ) {
+    ) -> u32 {
         self.native_touch_item_entity(
             PickupSlot::Resident {
                 conn,
@@ -141,77 +141,83 @@ impl crate::game::ServerGame<'_> {
                 taken,
             },
             player,
-        );
+        )
     }
 
     /// `ItemEntity.playerTouch` now, for the player in place (the host's own, or the guest whose
-    /// turn it is), on the resident item `id`: the pickup the pass runs, with its hooks, its
-    /// statistic and its take animation. The count the inventory took.
+    /// turn it is), on the resident item `id`: the pickup the pass runs, with its hooks and its
+    /// statistic. The count `Inventory.add` took, whatever a `Post` listener then does with the
+    /// rest; one take of that count goes to every guest tracking the item (`Entity.take` through
+    /// `ServerChunkCache.broadcast`), wherever the collector stands.
     pub(in crate::game) fn native_touch_item_now(&mut self, id: u32) -> u32 {
-        let Some(before) = self
-            .common
-            .dropped
-            .iter()
-            .find(|d| d.id == id)
-            .map(|d| d.stack.count)
-        else {
+        if !self.common.dropped.iter().any(|d| d.id == id) {
             return 0;
-        };
-        if let Some(conn) = self.server.lan_acting {
-            let Some(host) = self.server.lan.as_ref() else {
-                return 0;
-            };
-            let Some(guest) = host
-                .hub
-                .guests
-                .connection_index(conn)
-                .map(|gi| &host.hub.guests[gi])
+        }
+        let accepted = if let Some(conn) = self.server.lan_acting {
+            let Some(uuid) = self
+                .server
+                .lan
+                .as_ref()
+                .and_then(|host| host.hub.guest(conn))
+                .map(|guest| sunrise_sim::lan::playerdata::uuid_ints(guest.uuid))
             else {
                 return 0;
             };
-            let (collector, position, uuid) = (
-                guest.entity_id,
-                guest.position,
-                sunrise_sim::lan::playerdata::uuid_ints(guest.uuid),
-            );
+            // The pass's near-collector takes are left unsent: the tracked one below replaces them.
             let mut taken = Vec::new();
-            self.native_guest_pickup(conn, id, uuid, &mut taken);
-            if let Some(host) = self.server.lan.as_ref() {
-                for &(item, count) in &taken {
-                    host.hub
-                        .take_item(item as i32, collector, count as i32, position);
-                }
+            self.native_guest_pickup(conn, id, uuid, &mut taken)
+        } else {
+            if self.common.player.is_none() {
+                return 0;
             }
-            return taken.iter().map(|&(_, count)| count).sum();
+            let own = self.common.level.ensure_player_uuid();
+            let mut items = self.common.dropped.lift();
+            let found = (0..items.len()).find(|&i| items[i].id == id);
+            let accepted = match found {
+                Some(mut index) => self.native_touch_item_entity(
+                    PickupSlot::Lifted {
+                        items: &mut items,
+                        index: &mut index,
+                    },
+                    own,
+                ),
+                None => 0,
+            };
+            self.common.put_back_dropped(items);
+            accepted
+        };
+        if accepted > 0
+            && let Some(host) = self.server.lan.as_ref()
+        {
+            host.hub
+                .take_item_tracked(id as i32, self.own_entity_id(), accepted as i32);
         }
-        if self.common.player.is_none() {
-            return 0;
-        }
-        let own = self.common.level.ensure_player_uuid();
-        let mut items = self.common.dropped.lift();
-        let found = (0..items.len()).find(|&i| items[i].id == id);
-        if let Some(mut index) = found {
-            self.native_touch_item_entity(
-                PickupSlot::Lifted {
-                    items: &mut items,
-                    index: &mut index,
-                },
-                own,
-            );
-        }
-        self.common.put_back_dropped(items);
-        let after = self
-            .common
-            .dropped
-            .iter()
-            .find(|d| d.id == id)
-            .map_or(0, |d| d.stack.count);
-        before.saturating_sub(after)
+        accepted
     }
 
     /// Unified `ItemEntity.playerTouch` sequence shared by host-player and guest
-    /// pickups (matching NeoForge `ItemEntityPickupEvent.Pre` and `Post`).
-    fn native_touch_item_entity(&mut self, mut slot: PickupSlot<'_>, player: [i32; 4]) {
+    /// pickups (matching NeoForge `ItemEntityPickupEvent.Pre` and `Post`): the count
+    /// `Inventory.add` took, before any `item_picked_up_post` edit. While a mod hears either
+    /// notice, the item is in `touching_items` for the sequence, so a `touch_item` from its own
+    /// listener takes nothing (`player_touch_item`).
+    fn native_touch_item_entity(&mut self, slot: PickupSlot<'_>, player: [i32; 4]) -> u32 {
+        if !mod_api::__private::listened(mod_api::HookId::ItemPickedUp)
+            && !mod_api::__private::listened(mod_api::HookId::ItemPickedUpPost)
+        {
+            return self.native_touch_item_sequence(slot, player);
+        }
+        let id = match &slot {
+            PickupSlot::Lifted { items, index } => items[**index].id,
+            PickupSlot::Resident { item_id, .. } => *item_id,
+        };
+        self.server.touching_items.push(id);
+        let accepted = self.native_touch_item_sequence(slot, player);
+        self.server.touching_items.pop();
+        accepted
+    }
+
+    /// `native_touch_item_entity`'s sequence.
+    fn native_touch_item_sequence(&mut self, mut slot: PickupSlot<'_>, player: [i32; 4]) -> u32 {
         let listens_pre = mod_api::__private::listened(mod_api::HookId::ItemPickedUp);
         let (id, captured, stack_revision) = match &mut slot {
             PickupSlot::Lifted { items, index } => {
@@ -227,17 +233,17 @@ impl crate::game::ServerGame<'_> {
                         ))
                 {
                     **index += 1;
-                    return;
+                    return 0;
                 }
                 (id, item.stack.clone(), item.stack_revision)
             }
             PickupSlot::Resident { item_id, .. } => {
                 let id = *item_id;
                 if self.common.persist.removals.contains(&Target::Item(id)) {
-                    return;
+                    return 0;
                 }
                 let Some(at) = self.common.dropped.iter().position(|d| d.id == id) else {
-                    return;
+                    return 0;
                 };
                 let item = &self.common.dropped[at];
                 if !listens_pre
@@ -248,7 +254,7 @@ impl crate::game::ServerGame<'_> {
                         TriState::Default,
                     )
                 {
-                    return;
+                    return 0;
                 }
                 (id, item.stack.clone(), item.stack_revision)
             }
@@ -263,7 +269,7 @@ impl crate::game::ServerGame<'_> {
                     let Some(answer) =
                         self.as_guest_here(*conn, |game| game.native_pickup_answer(id))
                     else {
-                        return;
+                        return 0;
                     };
                     let present = self.common.dropped.iter().any(|d| d.id == id);
                     let removed =
@@ -277,7 +283,7 @@ impl crate::game::ServerGame<'_> {
                 {
                     **index += 1;
                 }
-                return;
+                return 0;
             }
             answer
         } else {
@@ -288,7 +294,7 @@ impl crate::game::ServerGame<'_> {
             PickupSlot::Lifted { items, index } => &items[**index],
             PickupSlot::Resident { .. } => {
                 let Some(live) = self.common.dropped.iter().find(|item| item.id == id) else {
-                    return;
+                    return 0;
                 };
                 live
             }
@@ -297,7 +303,7 @@ impl crate::game::ServerGame<'_> {
             if let PickupSlot::Lifted { index, .. } = &mut slot {
                 **index += 1;
             }
-            return;
+            return 0;
         }
 
         let stack_replaced =
@@ -311,7 +317,7 @@ impl crate::game::ServerGame<'_> {
                 let Some(rest) =
                     self.as_guest_here(*conn, |game| game.native_pickup_insert(&captured))
                 else {
-                    return;
+                    return 0;
                 };
                 rest
             }
@@ -320,8 +326,10 @@ impl crate::game::ServerGame<'_> {
             if let PickupSlot::Lifted { index, .. } = &mut slot {
                 **index += 1;
             }
-            return;
+            return 0;
         }
+        // What went in, before a `Post` listener's edit or discard of the remainder.
+        let accepted = before.saturating_sub(rest.as_ref().map_or(0, |r| r.count));
 
         let listens_post = mod_api::__private::listened(mod_api::HookId::ItemPickedUpPost);
         let mut post_changed = false;
@@ -378,7 +386,7 @@ impl crate::game::ServerGame<'_> {
                 {
                     **index += 1;
                 }
-                return;
+                return accepted;
             }
             post_changed = told != rest_before;
             told
@@ -415,7 +423,7 @@ impl crate::game::ServerGame<'_> {
                     taken.push((id, amount));
                 }
             }
-            return;
+            return accepted;
         };
 
         if (!stack_replaced && !listens_post) || post_changed {
@@ -438,6 +446,7 @@ impl crate::game::ServerGame<'_> {
         if let PickupSlot::Lifted { index, .. } = &mut slot {
             **index += 1;
         }
+        accepted
     }
 
     fn record_item_pickup(
@@ -482,3 +491,5 @@ impl crate::game::ServerGame<'_> {
 use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
 
 use sunrise_gameplay_common::game::native_hooks::ModGameExt1 as _;
+
+use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;
