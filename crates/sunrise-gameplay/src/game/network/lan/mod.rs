@@ -3271,25 +3271,28 @@ impl LanHost {
     }
 }
 
-#[cfg(test)]
-pub(in crate::game) mod tests {
-    use super::{EventTimings, Hub, LanHost, OFFHAND_SLOT, living_flags};
-    use sunrise_gameplay_common::game::lan_mob_metadata::{mob_freeze_meta, mob_meta};
-    use sunrise_gameplay_common::game::{
-        native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _,
-        tables::{GameItems as _, WorldTablesExt as _},
-    };
+#[cfg(any(test, feature = "test-support"))]
+pub mod tracker_tests {
+    use super::{LanHost, Mob};
 
     fn tracker_test_host() -> LanHost {
-        let mut hub = meta_hub("TrackerStateTest");
-        let mut sync = super::lan::data::SyncData::empty();
+        let mut hub = sunrise_gameplay_common::game::lan_meta_fixture::meta_hub("TrackerStateTest");
+        hub.sync = tracker_test_sync(&["minecraft:entity_effect"]);
+        LanHost::for_test(hub)
+    }
+
+    fn tracker_test_sync(particles: &[&str]) -> std::sync::Arc<super::SyncData> {
+        let mut sync = super::SyncData::empty();
         for (registry, names) in [
             (
                 "minecraft:entity_type",
                 &["minecraft:ocelot", "minecraft:cow"][..],
             ),
-            ("minecraft:item", &["minecraft:air", "minecraft:stick"][..]),
-            ("minecraft:particle_type", &["minecraft:entity_effect"][..]),
+            (
+                "minecraft:item",
+                &["minecraft:air", "minecraft:stick", "minecraft:iron_sword"][..],
+            ),
+            ("minecraft:particle_type", particles),
             ("minecraft:damage_type", &["minecraft:fall"][..]),
         ] {
             sync.builtin.registries.insert(
@@ -3299,73 +3302,153 @@ pub(in crate::game) mod tests {
                 ),
             );
         }
-        hub.sync = std::sync::Arc::new(sync);
-        LanHost::for_test(hub)
+        std::sync::Arc::new(sync)
     }
 
-    #[test]
-    #[ignore = "daily"]
-    fn cached_tracker_states_match_full_rebuilds_across_ticks_and_levels() {
+    pub fn cached_tracker_states_match_full_rebuilds_across_ticks_and_levels(
+        root: std::path::PathBuf,
+    ) {
         use crate::game::native_entity_refs::tests::{
-            prepare_entity_ticking_neighborhood, with_resident_game,
+            prepare_entity_ticking_neighborhood, with_game_at,
         };
+        use std::sync::Arc;
         use sunrise_core::{geometry::Vec3, position::ChunkPos};
-        use sunrise_items::items::ItemStack;
+        use sunrise_items::{equipment::MAINHAND, items::ItemStack};
+        use sunrise_sim::join_seq::{
+            Joined,
+            residency::{Change, Event, Identity, Kind, Owner},
+        };
         use sunrise_sim::mobs::{
             finalize::{Attr, set_base},
-            sync,
+            sync, villager,
         };
+        use sunrise_world::attributes::{Modifier, Operation, entity::Catalog};
 
-        with_resident_game(|game| {
+        with_game_at(root, |game| {
+            prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, 0));
             game.server.lan = Some(tracker_test_host());
             let kind = game.res.mob_types()["minecraft:ocelot"].clone();
             let at = Vec3::new(0.5, 70.0, 0.5);
             game.mobs.push(Mob::new(77, kind.clone(), at, 0.0));
             let mut cached = super::States::default();
             let mut reference = super::States::default();
-            let mut compare = |game: &mut crate::game::ServerGame<'_>, ids: &[i32]| {
-                game.world.game_time += 1;
-                game.lan_entities(&mut cached, true, 0, None);
-                game.lan_hook_states(&mut cached);
-                game.resolve_lan_entity_uuids(&mut cached, true);
-                game.build_lan_entities(&mut reference, true, 0, None, None);
-                game.lan_hook_states(&mut reference);
-                game.resolve_lan_entity_uuids(&mut reference, false);
-                assert_eq!(cached.as_slice(), reference.as_slice());
-                assert_eq!(
-                    cached
-                        .as_slice()
-                        .iter()
-                        .map(|state| state.id)
-                        .collect::<Vec<_>>(),
-                    ids,
-                );
-                cached.as_slice().to_vec()
-            };
+            let mut compare =
+                |game: &mut crate::game::ServerGame<'_>, ids: &[i32], bare: Option<i32>| {
+                    game.world.game_time += 1;
+                    game.lan_entities(&mut cached, true, 0, None);
+                    game.lan_hook_states(&mut cached);
+                    game.build_lan_entities(&mut reference, true, 0, None, None);
+                    game.lan_hook_states(&mut reference);
+                    for states in [&mut cached, &mut reference] {
+                        if let Some(state) = states
+                            .as_mut_slice()
+                            .iter_mut()
+                            .find(|state| Some(state.id) == bare)
+                        {
+                            state.bare = true;
+                        }
+                    }
+                    game.resolve_lan_entity_uuids(&mut cached, true);
+                    game.resolve_lan_entity_uuids(&mut reference, false);
+                    assert_eq!(cached.as_slice(), reference.as_slice());
+                    assert_eq!(
+                        cached
+                            .as_slice()
+                            .iter()
+                            .map(|state| state.id)
+                            .collect::<Vec<_>>(),
+                        ids,
+                    );
+                    cached.as_slice().to_vec()
+                };
 
-            let start = compare(game, &[77]);
-            assert_eq!(compare(game, &[77]), start);
+            let start = compare(game, &[77], None);
+            assert_eq!(compare(game, &[77], None), start);
             game.mobs[0].health -= 2.0;
-            assert_ne!(compare(game, &[77])[0].meta, start[0].meta);
+            assert_ne!(compare(game, &[77], None)[0].meta, start[0].meta);
 
             assert!(game.mobs[0].set_equipment_stack(
                 sunrise_items::equipment::MAINHAND,
                 Some(ItemStack::new("minecraft:stick", 1)),
             ));
-            assert_eq!(compare(game, &[77])[0].equipment.len(), 1);
+            let stick = compare(game, &[77], None)[0].equipment.clone();
+            assert_eq!(stick.len(), 1);
+            let sword = ItemStack::new("minecraft:iron_sword", 1);
+            game.mobs[0].set_equipment_stack(MAINHAND, Some(sword.clone()));
+            let plain = compare(game, &[77], None)[0].equipment.clone();
+            assert_ne!(plain, stick);
+            let mut damaged = sword.clone();
+            damaged.damage = 7;
+            game.mobs[0].set_equipment_stack(MAINHAND, Some(damaged));
+            assert_ne!(compare(game, &[77], None)[0].equipment, plain);
+            game.mobs[0].set_equipment_stack(MAINHAND, Some(sword));
+            assert_eq!(compare(game, &[77], None)[0].equipment, plain);
+            game.mobs[0].set_equipment_stack(MAINHAND, None);
+            assert!(compare(game, &[77], None)[0].equipment.is_empty());
             set_base(&mut game.mobs[0], Attr::MovementSpeed, 0.125);
-            assert_ne!(compare(game, &[77])[0].attributes, start[0].attributes);
+            assert_ne!(
+                compare(game, &[77], None)[0].attributes,
+                start[0].attributes
+            );
+
+            let catalog = game.common.motion.attributes.clone();
+            let edit_speed = |mob: &mut Mob, amount| {
+                mob.extra
+                    .live
+                    .edit(
+                        &catalog,
+                        &mob.kind.id,
+                        Attr::MovementSpeed.id(),
+                        false,
+                        Vec::new,
+                        |value, observer| {
+                            value.add_or_update_transient(
+                                Modifier::new("sunrise:tracker_test", amount, Operation::AddValue)
+                                    .unwrap(),
+                                observer,
+                            )
+                        },
+                    )
+                    .unwrap();
+            };
+            edit_speed(&mut game.mobs[0], 0.1);
+            let with_modifier = compare(game, &[77], None);
+            edit_speed(&mut game.mobs[0], 0.2);
+            assert_ne!(
+                compare(game, &[77], None)[0].attributes,
+                with_modifier[0].attributes
+            );
+            game.mobs[0].extra.sprinting = true;
+            assert!(compare(game, &[77], None)[0].attributes.iter().any(|row| {
+                row.modifiers
+                    .iter()
+                    .any(|modifier| modifier.id == "minecraft:sprinting")
+            }));
 
             game.mobs[0].add_effect("minecraft:speed", 20, 1);
+            let effect = compare(game, &[77], None);
+            assert!(effect[0].meta.iter().any(|entry| entry.0 == 10));
+            game.server.lan.as_mut().unwrap().hub.sync =
+                tracker_test_sync(&["minecraft:flame", "minecraft:entity_effect"]);
+            assert_ne!(compare(game, &[77], None)[0].meta, effect[0].meta);
+
+            game.mobs[0].extra.ambient_effects.push("minecraft:speed");
             assert!(
-                compare(game, &[77])[0]
+                compare(game, &[77], None)[0]
                     .meta
                     .iter()
-                    .any(|entry| entry.0 == 10)
+                    .any(|entry| entry.0 == 11)
+            );
+            game.mobs[0].extra.hidden_effects.push("minecraft:speed");
+            assert!(
+                compare(game, &[77], None)[0]
+                    .meta
+                    .iter()
+                    .all(|entry| entry.0 != 10)
             );
             game.mobs[0].retain_effects(|_| false);
             assert!(
-                compare(game, &[77])[0]
+                compare(game, &[77], None)[0]
                     .meta
                     .iter()
                     .all(|entry| entry.0 != 10)
@@ -3373,48 +3456,213 @@ pub(in crate::game) mod tests {
 
             game.mobs[0].extra.pose = sync::CROUCHING;
             assert!(
-                compare(game, &[77])[0]
+                compare(game, &[77], None)[0]
                     .meta
                     .iter()
                     .any(|entry| entry.0 == 6)
             );
             game.mobs[0].custom_name = Some("Test Cat".into());
             assert!(
-                compare(game, &[77])[0]
+                compare(game, &[77], None)[0]
                     .meta
                     .iter()
                     .any(|entry| entry.0 == 2)
             );
-            game.common.persist.uuids.insert(77, [1, 2, 3, 4]);
-            assert_ne!(compare(game, &[77])[0].uuid, start[0].uuid);
+            let baseline = compare(game, &[77], None);
+            villager::ext_mut(&mut game.mobs[0]).sleeping_pos = Some([0, 70, 1]);
+            assert!(
+                compare(game, &[77], None)[0]
+                    .meta
+                    .iter()
+                    .any(|entry| entry.0 == 14)
+            );
+            villager::ext_mut(&mut game.mobs[0]).sleeping_pos = None;
+            assert_eq!(compare(game, &[77], None), baseline);
+            game.mobs[0].custom_name_text = Some(sunrise_game_data::text::Text::literal("Styled"));
+            assert_ne!(compare(game, &[77], None)[0].meta, baseline[0].meta);
+            game.mobs[0].custom_name_text = None;
+            assert_eq!(compare(game, &[77], None), baseline);
 
-            game.mobs.push(Mob::new(78, kind.clone(), at, 0.0));
-            compare(game, &[77, 78]);
+            let flags: [(u8, fn(&mut Mob)); 15] = [
+                (0, |m| m.fire_ticks = 10),
+                (0, |m| m.invisible = true),
+                (0, |m| m.glowing = true),
+                (3, |m| m.name_visible = true),
+                (5, |m| m.no_gravity = true),
+                (8, |m| m.extra.using_item = 6),
+                (8, |m| m.extra.using_off_hand = true),
+                (15, |m| m.no_ai = true),
+                (15, |m| m.extra.left_handed = true),
+                (15, |m| m.ai.aggressive = true),
+                (1, |m| m.air -= 1),
+                (7, |m| m.ticks_frozen = 3),
+                (12, |m| m.extra.stuck.arrows = 2),
+                (13, |m| m.extra.stuck.stingers = 1),
+                (18, |m| m.extra.trusting = true),
+            ];
+            let mut flagged = baseline;
+            for (index, change) in flags {
+                change(&mut game.mobs[0]);
+                let changed = compare(game, &[77], None);
+                assert_ne!(
+                    changed[0].meta.iter().find(|entry| entry.0 == index),
+                    flagged[0].meta.iter().find(|entry| entry.0 == index),
+                    "{index}",
+                );
+                flagged = changed;
+            }
+
+            let replacement_catalog = Catalog::from_json(&serde_json::json!({
+                "data_version": sunrise_world::DATA_VERSION,
+                "attributes": [{"id": Attr::MovementSpeed.id(), "default": "3fd0000000000000", "syncable": true}],
+                "entities": {"minecraft:ocelot": {"minecraft:movement_speed": "3fd0000000000000"}}
+            })).unwrap();
+            let replacement_catalog = Arc::new(replacement_catalog);
+            let host = game.server.lan.as_mut().unwrap();
+            let original = host
+                .mob_states
+                .level(game.common.dim, &catalog, &host.hub.sync);
+            assert!(original.has_row(77));
+            let replaced =
+                host.mob_states
+                    .level(game.common.dim, &replacement_catalog, &host.hub.sync);
+            assert!(!replaced.has_row(77));
+
+            let mob = &mut game.mobs[0];
+            mob.extra.live.invalidate();
+            mob.extra
+                .live
+                .edit(
+                    &replacement_catalog,
+                    &mob.kind.id,
+                    Attr::MovementSpeed.id(),
+                    false,
+                    Vec::new,
+                    |value, observer| value.set_base_value(0.5, observer),
+                )
+                .unwrap();
+            assert_ne!(
+                compare(game, &[77], None)[0].attributes,
+                flagged[0].attributes
+            );
+
+            game.common.persist.uuids.insert(77, [1, 2, 3, 4]);
+            assert_ne!(compare(game, &[77], None)[0].uuid, start[0].uuid);
+
+            let ocelot = compare(game, &[77], None);
             game.mobs.remove(0);
-            let overworld = compare(game, &[78]);
+            let sheep = game.res.mob_types()["minecraft:sheep"].clone();
+            game.mobs.push(Mob::new(77, sheep, at, 0.0));
+            let adult = compare(game, &[77], None);
+            assert_ne!(adult[0].kind, ocelot[0].kind);
+            let sheep_fields: [(u8, fn(&mut Mob)); 4] = [
+                (16, |m| m.extra.age = -20),
+                (17, |m| m.extra.age_locked = true),
+                (18, |m| m.extra.color = 4),
+                (18, |m| m.extra.sheared = true),
+            ];
+            let mut sheep = adult;
+            for (index, change) in sheep_fields {
+                change(&mut game.mobs[0]);
+                let changed = compare(game, &[77], None);
+                assert_ne!(
+                    changed[0].meta.iter().find(|entry| entry.0 == index),
+                    sheep[0].meta.iter().find(|entry| entry.0 == index),
+                    "{index}",
+                );
+                sheep = changed;
+            }
+
+            let ghast = game.res.mob_types()["minecraft:happy_ghast"].clone();
+            game.mobs.push(Mob::new(78, ghast, at, 0.0));
+            assert!(!compare(game, &[77, 78], None)[1].precise);
+            game.mobs[1].extra.counter = 1;
+            assert!(compare(game, &[77, 78], None)[1].precise);
+            let villager_kind = game.res.mob_types()["minecraft:villager"].clone();
+            game.mobs.push(Mob::new(93, villager_kind, at, 0.0));
+            let awake = compare(game, &[77, 78, 93], None);
+            villager::ext_mut(&mut game.mobs[2]).sleeping_pos = Some([0, 70, 1]);
+            assert_ne!(compare(game, &[77, 78, 93], None)[2].meta, awake[2].meta);
+            game.mobs.remove(2);
+            game.mobs.remove(0);
+            let overworld = compare(game, &[78], None);
 
             let previous = game.common.dim;
             game.enter_level(super::super::Dim::Nether).unwrap();
             prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, 0));
             game.mobs.push(Mob::new(79, kind, at, 0.0));
-            compare(game, &[79]);
+            compare(game, &[79], None);
             game.enter_level(previous).unwrap();
-            assert_eq!(compare(game, &[78]), overworld);
+            assert_eq!(compare(game, &[78], None), overworld);
+
+            let zombie = game.res.mob_types()["minecraft:zombie"].clone();
+            let horse = game.res.mob_types()["minecraft:horse"].clone();
+            game.mobs.push(Mob::new(80, zombie.clone(), at, 0.0));
+            game.mobs.push(Mob::new(81, horse, at, 0.0));
+            let adult = compare(game, &[78, 80, 81], None);
+            game.mobs[1].extra.age = -20;
+            game.mobs[2].extra.vector[0] = 0.75;
+            let young = compare(game, &[78, 80, 81], None);
+            assert_ne!(young[1].attributes, adult[1].attributes);
+            assert_ne!(young[2].attributes, adult[2].attributes);
+            game.mobs[2].extra.vector[0] = 0.85;
+            assert_ne!(
+                compare(game, &[78, 80, 81], None)[2].attributes,
+                young[2].attributes
+            );
+
+            for id in 82..=91 {
+                let mut mob = Mob::new(id, zombie.clone(), at, 0.0);
+                if id % 2 == 0 {
+                    mob.removed = true;
+                } else {
+                    mob.position.x += 16_000.0;
+                }
+                game.mobs.push(mob);
+            }
+            game.mobs.push(Mob::new(92, zombie, at, 0.0));
+            let ids = &[78, 80, 81, 92];
+            let before = compare(game, ids, None);
+            let identity = Identity::new(92, game.mobs.last().unwrap().join_seq()).unwrap();
+            let owner = Owner {
+                dimension: game.common.dim.key(),
+                kind: Kind::Mob,
+            };
+            let journal = game.common.resident_entities.table.borrow().producer();
+            journal.push(Event {
+                owner,
+                change: Change::Remove(identity),
+            });
+            let known = [8, 9, 10, 11];
+            journal.push(Event {
+                owner,
+                change: Change::Install(identity.with_known_uuid(Some(known))),
+            });
+            let after = compare(game, ids, Some(81));
+            assert!(after[2].bare);
+            assert_ne!(after[2].uuid, before[2].uuid);
+            assert_eq!(
+                after[3].uuid,
+                sunrise_sim::lan::playerdata::ints_uuid(known)
+            );
         });
     }
 
-    #[test]
-    #[ignore = "daily"]
-    fn two_effect_flushes_keep_hurt_death_and_swing_in_order() {
-        use crate::game::native_entity_refs::tests::with_resident_game;
+    pub fn two_effect_flushes_keep_hurt_death_and_swing_in_order(root: std::path::PathBuf) {
+        use crate::game::native_entity_refs::tests::{
+            prepare_entity_ticking_neighborhood, with_game_at,
+        };
         use std::sync::{Arc, atomic::AtomicI32, mpsc};
         use sunrise_core::geometry::Vec3;
+        use sunrise_core::position::ChunkPos;
+        use sunrise_gameplay_common::game::dragon_common::Dragon;
         use sunrise_sim::{
             lan::{Joined, Out, PlayerSender, guest::Guest},
             mobs::Damage,
         };
 
-        with_resident_game(|game| {
+        with_game_at(root, |game| {
+            prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, 0));
             let mut host = tracker_test_host();
             let (tx, rx) = mpsc::channel();
             let at = [0.5, 70.0, 0.5];
@@ -3451,6 +3699,9 @@ pub(in crate::game) mod tests {
                     0.0,
                 ));
             }
+            let mut dragon = Dragon::new(Vec3::new(at[0], at[1], at[2]), 0.0, 1);
+            dragon.id = 80;
+            game.common.dragon.replace(dragon);
             let mut states = super::States::default();
             game.lan_entities(&mut states, false, 0, None);
             let hub = &mut game.server.lan.as_mut().unwrap().hub;
@@ -3484,8 +3735,14 @@ pub(in crate::game) mod tests {
             game.mobs[1].health = 0.0;
             game.mobs[2].ai.swinging = true;
             game.mobs[2].ai.swing_time = 3;
+            let dragon = game.common.dragon.as_mut().unwrap();
+            dragon.hurt_time = 6;
+            dragon.last_source = Some(("minecraft:fall", None, None));
             game.lan_flush_effects();
-            assert_eq!(packets(), [("hurt", 77), ("death", 78), ("swing", 79)]);
+            assert_eq!(
+                packets(),
+                [("hurt", 77), ("death", 78), ("swing", 79), ("hurt", 80)]
+            );
             game.lan_flush_effects();
             assert!(packets().is_empty());
 
@@ -3495,8 +3752,29 @@ pub(in crate::game) mod tests {
             assert_eq!(packets(), [("swing", 79)]);
             game.lan_flush_effects();
             assert!(packets().is_empty());
+
+            let host = game.server.lan.as_mut().unwrap();
+            assert!(host.mob_state[&game.common.dim].reordered.is_empty());
+            let guest = host.hub.guests.take_for_save(0);
+            game.lan_flush_effects();
+            assert!(packets().is_empty());
+            let host = game.server.lan.as_mut().unwrap();
+            assert!(host.mob_state.is_empty());
+            host.hub.guests.push(guest);
+            game.lan_flush_effects();
+            assert_eq!(packets(), [("death", 78), ("swing", 79), ("hurt", 80)]);
         });
     }
+}
+
+#[cfg(test)]
+pub(in crate::game) mod tests {
+    use super::{EventTimings, Hub, LanHost, OFFHAND_SLOT, living_flags};
+    use sunrise_gameplay_common::game::lan_mob_metadata::{mob_freeze_meta, mob_meta};
+    use sunrise_gameplay_common::game::{
+        native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _,
+        tables::{GameItems as _, WorldTablesExt as _},
+    };
 
     #[test]
     #[ignore = "daily"]

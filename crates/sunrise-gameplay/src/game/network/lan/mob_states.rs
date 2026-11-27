@@ -99,6 +99,11 @@ impl MobLevel {
         }
     }
 
+    #[cfg(any(test, feature = "test-support"))]
+    pub(super) fn has_row(&self, id: u32) -> bool {
+        self.rows.contains_key(&id)
+    }
+
     pub(super) fn row(&mut self, m: &Mob) -> &mut MobData {
         let row = self.rows.entry(m.id).or_insert_with(|| MobData::new(m));
         if row.join != m.join_seq() || !Arc::ptr_eq(&row.kind, &m.kind) {
