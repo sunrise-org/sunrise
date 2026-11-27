@@ -319,7 +319,9 @@ fn check_mask(
         log::error!("{message}");
         eprintln!("{message}");
         #[cfg(any(test, feature = "test-support"))]
-        panic!("{message}");
+        if crate::parallel::verify_panics() {
+            panic!("{message}");
+        }
     }
     let n = CHECKED.fetch_add(1, Ordering::Relaxed) + 1;
     if n == 1 || n.is_multiple_of(10_000) {
@@ -811,13 +813,8 @@ mod tick_parity {
                         &facts,
                         &behaviours,
                     );
-                    assert_eq!(
-                        crate::parallel::take_par_map_stats(),
-                        crate::parallel::ParMapStats {
-                            serial: 1,
-                            parallel: 0,
-                        }
-                    );
+                    let stats = crate::parallel::take_par_map_stats();
+                    assert_eq!((stats.serial, stats.parallel), (1, 0));
                     assert_eq!(take_verified_masks(), 0);
                 });
                 crate::parallel::with_test_mode(1, || {
@@ -829,13 +826,8 @@ mod tick_parity {
                         &facts,
                         &behaviours,
                     );
-                    assert_eq!(
-                        crate::parallel::take_par_map_stats(),
-                        crate::parallel::ParMapStats {
-                            serial: 0,
-                            parallel: 1,
-                        }
-                    );
+                    let stats = crate::parallel::take_par_map_stats();
+                    assert_eq!((stats.serial, stats.parallel), (0, 1));
                     assert_eq!(take_verified_masks(), 0);
                 });
                 crate::parallel::with_test_mode(2, || {
@@ -847,13 +839,8 @@ mod tick_parity {
                         &facts,
                         &behaviours,
                     );
-                    assert_eq!(
-                        crate::parallel::take_par_map_stats(),
-                        crate::parallel::ParMapStats {
-                            serial: 0,
-                            parallel: 1,
-                        }
-                    );
+                    let stats = crate::parallel::take_par_map_stats();
+                    assert_eq!((stats.serial, stats.parallel), (0, 1));
                     assert_eq!(take_verified_masks(), 132);
                 });
                 for &(x, z) in &keys {
@@ -1175,6 +1162,10 @@ mod tick_parity {
 
     #[test]
     fn prepare_masks_exercises_serial_parallel_and_verify_paths() {
+        // Warm the helper pool so parallel/verify runs distribute work onto helpers.
+        let _ = crate::parallel::par_map_on(&[0u8; 16], 2, 2, |part, out| {
+            out.extend_from_slice(part);
+        });
         let (chunks, keys, facts, candidates) = synthetic_mask_fixture();
         let view = BoolView(&candidates);
         let work = |view: &BoolView<'_>, (_, i, chunk): &((i32, i32), usize, Arc<Chunk>)| {
@@ -1182,31 +1173,10 @@ mod tick_parity {
         };
 
         let mut outputs = Vec::new();
-        for (mode, expected_stats, expected_verified) in [
-            (
-                0u8,
-                crate::parallel::ParMapStats {
-                    serial: 1,
-                    parallel: 0,
-                },
-                0usize,
-            ),
-            (
-                1u8,
-                crate::parallel::ParMapStats {
-                    serial: 0,
-                    parallel: 1,
-                },
-                0usize,
-            ),
-            (
-                2u8,
-                crate::parallel::ParMapStats {
-                    serial: 0,
-                    parallel: 1,
-                },
-                160usize,
-            ),
+        for (mode, expected_serial, expected_parallel, expected_verified) in [
+            (0u8, 1usize, 0usize, 0usize),
+            (1u8, 0usize, 1usize, 0usize),
+            (2u8, 0usize, 1usize, 160usize),
         ] {
             let mut cache = RandomTickSections::default();
             crate::parallel::with_test_mode(mode, || {
@@ -1220,11 +1190,20 @@ mod tick_parity {
                     work,
                     |id| candidates[id as usize],
                 );
+                let stats = crate::parallel::take_par_map_stats();
                 assert_eq!(
-                    crate::parallel::take_par_map_stats(),
-                    expected_stats,
+                    (stats.serial, stats.parallel),
+                    (expected_serial, expected_parallel),
                     "mode {mode}"
                 );
+                if mode == 0 {
+                    assert_eq!(stats.worker_parts, 0, "mode {mode}");
+                } else {
+                    assert!(
+                        stats.worker_parts > 0,
+                        "mode {mode}: helper threads must execute mask parts"
+                    );
+                }
                 assert_eq!(take_verified_masks(), expected_verified, "mode {mode}");
             });
             let mut masks = Vec::new();
@@ -1298,5 +1277,51 @@ mod tick_parity {
             message.contains("(40, 0)") && message.contains("section 5"),
             "unexpected panic message: {message}"
         );
+    }
+
+    #[test]
+    fn prepare_masks_verify_recovers_with_serial_mask_when_non_panicking() {
+        let (chunks, keys, facts, candidates) = synthetic_mask_fixture();
+        let view = BoolView(&candidates);
+        let wrong_work =
+            |view: &BoolView<'_>, (key, i, chunk): &((i32, i32), usize, Arc<Chunk>)| {
+                let mut mask = RandomTickSections::candidate_mask(&chunk.sections[*i], |id| {
+                    view.0[id as usize]
+                });
+                if *key == (40, 0) && *i == 5 {
+                    mask.0[0] ^= 1;
+                }
+                mask
+            };
+        let mut cache = RandomTickSections::default();
+        crate::parallel::with_test_mode(2, || {
+            crate::parallel::with_verify_panic(false, || {
+                let _ = crate::parallel::take_par_map_stats();
+                let _ = take_verified_masks();
+                cache.prepare_masks_with(
+                    &keys,
+                    |key| chunks.get(&key).cloned(),
+                    &facts,
+                    &view,
+                    wrong_work,
+                    |id| candidates[id as usize],
+                );
+                assert_eq!(take_verified_masks(), 160);
+            });
+        });
+        let chunk = &chunks[&(40, 0)];
+        let expected =
+            RandomTickSections::candidate_mask(&chunk.sections[5], |id| candidates[id as usize]);
+        let (y, published) = cache
+            .next_masked(
+                (40, 0),
+                chunk,
+                &facts,
+                |_| unreachable!("prepared ahead"),
+                MIN_Y + 5 * 16,
+            )
+            .unwrap();
+        assert_eq!(y, MIN_Y + 5 * 16);
+        assert_eq!(*published, expected);
     }
 }
