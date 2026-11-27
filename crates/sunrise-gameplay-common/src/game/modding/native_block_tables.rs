@@ -488,6 +488,7 @@ impl<'a> BlockTables<'a> {
             BlockClass::Slab => data.is(Class::Slab),
             BlockClass::Wall => data.is(Class::Wall),
             BlockClass::Fence => data.is(Class::Fence),
+            BlockClass::Fallable => data.implements(Interface::Fallable),
         }))
     }
 

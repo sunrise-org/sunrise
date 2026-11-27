@@ -239,7 +239,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, text) in bundle.as_object().unwrap() {
         definitions.apply_json(name, "vanilla", text.as_str().unwrap())?;
     }
-    let built = definitions.build(|id, _| facts["defaults"].get(id).map(|_| id.to_owned()))?;
+    let built = definitions.bind(|id, _| facts["defaults"].get(id).map(|_| id.to_owned()));
     assert!(built.missing.is_empty());
     let motion: BTreeSet<_> = built.tags["minecraft:blocks_motion_in_heightmap"]
         .iter()

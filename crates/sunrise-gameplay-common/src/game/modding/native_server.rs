@@ -943,12 +943,6 @@ impl Drop for Acting {
     }
 }
 
-/// The online mode a dedicated server's network config carries: it has an
-/// `OnlineMode` key (and so signs its logins) only in online mode.
-pub fn online_mode_of(config: &sunrise_sim::lan::NetConfig) -> bool {
-    config.online.is_some()
-}
-
 /// `Inventory`'s slot numbers past the 36 main slots (`EQUIPMENT_SLOT_MAPPING`).
 pub const SLOTS: u32 = 43;
 
@@ -2706,23 +2700,5 @@ pub mod fake_action_tests {
             assert_eq!(acting.blocked(), Some(FakeEffect::Sleep));
         }
         assert_eq!(Acting::start(&action).blocked(), None);
-    }
-}
-
-#[cfg(test)]
-pub(in crate::game) mod network_settings_tests {
-    use super::*;
-    #[test]
-    #[ignore = "daily"]
-    fn server_settings_follow_the_network_config() {
-        use sunrise_sim::lan::{NetConfig, OnlineMode};
-        let mut config = NetConfig::loopback(25565, String::new(), 20);
-        // online-mode=false: no key.
-        assert!(!online_mode_of(&config));
-        // online-mode=true: the server's key.
-        config.online = Some(std::sync::Arc::new(
-            OnlineMode::generate(false, std::sync::Arc::new(|_, _, _| Ok(None))).unwrap(),
-        ));
-        assert!(online_mode_of(&config));
     }
 }

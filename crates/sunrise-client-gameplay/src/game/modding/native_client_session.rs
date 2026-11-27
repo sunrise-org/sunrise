@@ -323,7 +323,7 @@ fn waypoints(
     let rows = waypoints.for_read(camera_entity_pos);
     let entries = rows
         .iter()
-        .filter_map(|w| {
+        .map(|w| {
             let id = match &w.id {
                 WaypointId::Uuid(uuid) => mod_api::ClientWaypointId::Uuid(*uuid),
                 WaypointId::Name(name) => mod_api::ClientWaypointId::Name(name.clone()),
@@ -336,17 +336,15 @@ fn waypoints(
                 WaypointTarget::Chunk([x, z]) => mod_api::ClientWaypointTarget::Chunk([x, z]),
                 WaypointTarget::Azimuth(angle) => mod_api::ClientWaypointTarget::Azimuth(angle),
             };
-            // A style the wire validator did not accept skips the entry instead of
-            // panicking on peer data.
-            let style = mod_api::Identifier::parse(&w.style).ok()?;
-            Some(mod_api::ClientWaypointEntry::new(
+            // The style was checked as the packet was decoded.
+            mod_api::ClientWaypointEntry::new(
                 id,
                 target,
-                style,
+                w.style.clone(),
                 // The packet stores the colour as ARGB; the API takes RGB, as
                 // `living_set_waypoint_color` does.
                 w.color.map(|c| (c as u32) & 0x00FF_FFFF),
-            ))
+            )
         })
         .collect();
     mod_api::ClientWaypoints::new(entries)
@@ -551,7 +549,7 @@ pub mod tests {
         let tracked = |id, style: &str, color, target| TrackedWaypoint {
             operation: waypoint_operation::TRACK,
             id,
-            style: style.into(),
+            style: sunrise_core::identifier::Identifier::parse(style).unwrap(),
             color,
             target,
         };
@@ -627,7 +625,7 @@ pub mod tests {
         table.apply(&TrackedWaypoint {
             operation: waypoint_operation::UNTRACK,
             id: WaypointId::Uuid(11),
-            style: "minecraft:default".into(),
+            style: sunrise_core::identifier::Identifier::parse("minecraft:default").unwrap(),
             color: None,
             target: WaypointTarget::Empty,
         });

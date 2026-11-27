@@ -715,9 +715,8 @@ pub struct PackBinding {
     /// Optional depth target for non-shadow slots. See [`PackDepthTarget`] for attachment
     /// selection and write rules.
     pub depth_target: Option<PackDepthTarget>,
-    /// Per-frame pack uniforms supplied by the mod under pack-side GLSL names. If a pack
-    /// declares a uniform with a different GLSL type, the engine leaves it unbound and logs
-    /// once without panicking.
+    /// Per-frame pack uniforms supplied by the mod under pack-side GLSL names. See
+    /// [`PackUniformDecl`] for type mismatches.
     pub frame_uniforms: Vec<PackUniformDecl>,
     /// Mapping from the pipeline's vertex or per-draw inputs to pack-side GLSL names.
     pub glsl_bindings: Vec<PackGlslInput>,
@@ -979,6 +978,11 @@ impl PackDepthTarget {
 }
 
 /// A per-frame pack uniform declared by a [`PackBinding`].
+///
+/// If the pack program declares the name (or its previous-frame alias) with an incompatible
+/// GLSL type, that uniform is left unwritten and reads zero. The engine does not convert the
+/// value. It logs the program, uniform name, and both types once per program and uniform; the
+/// pipeline stays bound.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 // no wire: local client shader-pack frame uniform declaration.

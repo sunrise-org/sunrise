@@ -113,6 +113,12 @@ pub enum BlockClass {
     Wall,
     /// `FenceBlock`, which includes the nether brick fence; not `FenceGateBlock`.
     Fence,
+    /// `Fallable`: the `instanceof Fallable` check, not a claim about whether a block will fall at
+    /// a particular position. It covers `FallingBlock` and its subclasses (sand, gravel,
+    /// concrete powder, anvils, the dragon egg), suspicious sand and gravel, and the
+    /// speleothems, pointed dripstone and sulfur spikes, which are `Fallable` without being a
+    /// `FallingBlock`.
+    Fallable,
 }
 
 /// An invalid constraint, identifying its index in the supplied list.

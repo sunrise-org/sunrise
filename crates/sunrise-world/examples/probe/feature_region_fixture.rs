@@ -512,7 +512,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, text) in bundle.as_object().unwrap() {
         definitions.apply_json(name, "vanilla", text.as_str().unwrap())?;
     }
-    let built = definitions.build(|id, _| facts["defaults"].get(id).map(|_| id.to_owned()))?;
+    let built = definitions.bind(|id, _| facts["defaults"].get(id).map(|_| id.to_owned()));
     assert!(built.missing.is_empty());
     let motion: BTreeSet<_> = built.tags["minecraft:blocks_motion_in_heightmap"]
         .iter()
@@ -543,8 +543,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, text) in fluid_resources {
         fluid_defs.apply_json(&name, "vanilla", &text)?;
     }
-    let fluid_tags =
-        fluid_defs.build(|name, _| FluidKind::from_name(name).map(|_| name.to_owned()))?;
+    let fluid_tags = fluid_defs.bind(|name, _| FluidKind::from_name(name).map(|_| name.to_owned()));
     assert!(fluid_tags.missing.is_empty());
     let bindings = FeatureBlockBindings::with_tags(&registry, BTreeSet::new(), &built.tags)?
         .with_fluid_tags(&fluid_tags.tags)?;

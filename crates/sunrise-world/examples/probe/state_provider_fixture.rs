@@ -316,8 +316,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, text) in resources.as_object().unwrap() {
         definitions.apply_json(name, "vanilla", text.as_str().unwrap())?;
     }
-    let built =
-        definitions.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
+    let built = definitions.bind(|name, _| registry.default_state(name).map(|_| name.to_owned()));
     assert!(built.missing.is_empty());
     let tag_states: BTreeMap<String, BTreeSet<BlockStateId>> = built
         .tags
@@ -336,8 +335,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, text) in fluid_resources {
         fluid_tags.apply_json(&name, "vanilla", &text)?;
     }
-    let fluid_tags =
-        fluid_tags.build(|name, _| FluidKind::from_name(name).map(|_| name.to_owned()))?;
+    let fluid_tags = fluid_tags.bind(|name, _| FluidKind::from_name(name).map(|_| name.to_owned()));
     assert!(fluid_tags.missing.is_empty());
     let biome_resources: BTreeMap<String, String> =
         serde_json::from_str(&fs::read_to_string(dir.join("biomes.json"))?)?;
@@ -353,7 +351,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
         definitions.apply_json(&name, "vanilla", &text)?;
     }
     let biome_tags =
-        definitions.build(|name, _| biome_names.contains_key(name).then(|| name.to_owned()))?;
+        definitions.bind(|name, _| biome_names.contains_key(name).then(|| name.to_owned()));
     assert!(biome_tags.missing.is_empty());
     let biomes = Arc::new(BiomePredicateBindings::new(&biome_names, &biome_tags.tags)?);
     let collision_tag = sunrise_core::nbt::read_named(

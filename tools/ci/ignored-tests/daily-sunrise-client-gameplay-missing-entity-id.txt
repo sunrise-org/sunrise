@@ -1,0 +1,3 @@
+# The daily tests of sunrise-client-gameplay: each is #[ignore = "daily"] in its source and runs once a day in the daily run,
+# where it must pass (README.md). Rows: PACKAGE TEST TARGET daily REASON, sorted; tools/ci/move_to_daily.py writes them.
+sunrise-client-gameplay game::client_side::shader_pack_switch_tests::a_packs_missing_entity_id_follows_its_entity_file lib daily child-process

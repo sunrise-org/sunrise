@@ -16,7 +16,6 @@ sunrise-mod-api-gen host::tests::forwarder_routes_compile_without_recursing_on_e
 sunrise-mod-api-gen internals::tests::discovery_keeps_the_catalog_and_normal_output_and_reports_compiler_uses lib daily child-process
 sunrise-mod-api-gen internals::tests::listed_function_module_helpers_compile_from_outside lib daily child-process
 sunrise-mod-api-gen internals::tests::staged_signatures_expose_private_types_and_traits lib daily child-process
-sunrise-mod-api-gen layout::native_hooks_live_in_their_catalog_area lib daily slow
 sunrise-mod-api-gen neighbor_source_identity_and_early_routing test:neighbor_source_identity daily child-process
 sunrise-mod-api-gen parts::installation::tests::a_foreign_author_constructs_nested_inputs_without_access_to_lookup_fields lib daily child-process
 sunrise-mod-api-gen parts::tests::a_new_kind_supplies_union_methods_impls_and_fixtures_without_shared_edits lib daily child-process

@@ -128,7 +128,7 @@ impl Assets {
         }
         let (registry, flags) = sunrise_world::level::data::load_registry_with_flags(root)?;
         let bundle: Value = sunrise_world::json_file::read(&root.join("block-tags.json"))?;
-        let mut definitions = TagDefinitions::default();
+        let mut definitions = TagDefinitions::with_conventions("block")?;
         for (name, text) in bundle
             .as_object()
             .ok_or_else(|| invalid("invalid block tag bundle"))?
@@ -141,7 +141,7 @@ impl Assets {
             )?;
         }
         let built =
-            definitions.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
+            definitions.bind(|name, _| registry.default_state(name).map(|_| name.to_owned()));
         if !built.missing.is_empty() {
             return Err(invalid("unresolved block tags").into());
         }

@@ -182,6 +182,9 @@ pub mod portal_sections;
 pub mod pose;
 pub mod powder_snow;
 pub mod pregen;
+#[cfg(test)]
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+pub(crate) mod prepared_test_root;
 pub mod projectiles;
 pub mod raid;
 pub mod random_tick_sections;

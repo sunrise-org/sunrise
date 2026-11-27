@@ -1,0 +1,2 @@
+# #6716: an enchant whose guest turn is refused commits nothing (prepared resources).
+sunrise-gameplay game::server_side::lan_stations::enchant_turn_tests::a_refused_guest_turn_commits_no_enchant lib daily child-process

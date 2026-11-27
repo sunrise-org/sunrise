@@ -403,13 +403,153 @@ pub fn walk_module_files(
     include_tests: bool,
     parse: impl Fn(&Path, &str) -> Result<syn::File, String>,
 ) -> Result<Vec<ModuleFile>, String> {
-    Ok(
-        walk_module_variants(module, path, dir, every_build, include_tests, parse)?
-            .into_iter()
-            .filter(|variant| variant.inline.is_empty())
-            .map(|variant| variant.file)
-            .collect(),
-    )
+    let mut files = FileCollector(Vec::new());
+    ModuleWalk {
+        every_build,
+        include_tests,
+    }
+    .walk_tree(module, path, dir, parse, &mut |_| true, &mut files)?;
+    files.0.sort_by(|a, b| a.path.cmp(&b.path));
+    Ok(files.0)
+}
+
+/// Options controlling a crate module walk (`every_build` omits `cfg`-gated modules;
+/// `include_tests` keeps `#[cfg(test)]` modules).
+#[derive(Clone, Copy, Debug)]
+pub struct ModuleWalk {
+    pub every_build: bool,
+    pub include_tests: bool,
+}
+
+trait WalkSink {
+    fn inline(&mut self, _file: ModuleFile, _inline: &[usize]) {}
+    fn file(&mut self, file: ModuleFile, parsed: syn::File);
+}
+
+struct FileVisitor<F>(F);
+
+impl<F: FnMut(&ModuleFile, syn::File)> WalkSink for FileVisitor<F> {
+    fn file(&mut self, file: ModuleFile, parsed: syn::File) {
+        (self.0)(&file, parsed);
+    }
+}
+
+struct FileCollector(Vec<ModuleFile>);
+
+impl WalkSink for FileCollector {
+    fn file(&mut self, file: ModuleFile, _parsed: syn::File) {
+        self.0.push(file);
+    }
+}
+
+struct VariantCollector(Vec<ModuleVariant>);
+
+impl WalkSink for VariantCollector {
+    fn inline(&mut self, file: ModuleFile, inline: &[usize]) {
+        self.0.push(ModuleVariant {
+            file,
+            inline: inline.to_vec(),
+        });
+    }
+
+    fn file(&mut self, file: ModuleFile, _parsed: syn::File) {
+        self.0.push(ModuleVariant {
+            file,
+            inline: Vec::new(),
+        });
+    }
+}
+
+impl ModuleWalk {
+    /// Walk modules for which `descend(module)` is true, borrowing each parsed file's
+    /// [`ModuleFile`] alongside its [`syn::File`] in one pass without collecting variants.
+    pub fn visit_files(
+        self,
+        module: String,
+        path: PathBuf,
+        dir: PathBuf,
+        parse: impl Fn(&Path, &str) -> Result<syn::File, String>,
+        mut descend: impl FnMut(&str) -> bool,
+        visit: impl FnMut(&ModuleFile, syn::File),
+    ) -> Result<(), String> {
+        if !descend(&module) {
+            return Ok(());
+        }
+        let mut sink = FileVisitor(visit);
+        self.walk_tree(module, path, dir, parse, &mut descend, &mut sink)
+    }
+
+    fn walk_tree<D: FnMut(&str) -> bool, S: WalkSink>(
+        self,
+        module: String,
+        path: PathBuf,
+        dir: PathBuf,
+        parse: impl Fn(&Path, &str) -> Result<syn::File, String>,
+        descend: &mut D,
+        sink: &mut S,
+    ) -> Result<(), String> {
+        let mut walker = Walker {
+            every_build: self.every_build,
+            include_tests: self.include_tests,
+            descend,
+            sink,
+            pending: vec![Pending {
+                file: ModuleFile {
+                    module,
+                    path,
+                    cfg: Vec::new(),
+                    included: false,
+                },
+                dir,
+                ancestors: Vec::new(),
+                shadowed: false,
+            }],
+        };
+        while let Some(Pending {
+            mut file,
+            dir,
+            mut ancestors,
+            shadowed,
+        }) = walker.pending.pop()
+        {
+            // A target with only conditional paths need not have a conventional file. A literal
+            // include has no such fallback: a fragment some build compiles must be readable, and
+            // one no build can compile is never opened.
+            if file.included && !may_compile(&file.cfg, self.include_tests) {
+                continue;
+            }
+            if !file.included && !file.path.is_file() {
+                continue;
+            }
+            let physical = file
+                .path
+                .canonicalize()
+                .map_err(|e| format!("{}: {e}", file.path.display()))?;
+            if ancestors.contains(&physical) {
+                return Err(format!("{}: source inclusion cycle", file.path.display()));
+            }
+            ancestors.push(physical);
+            let source = fs::read_to_string(&file.path)
+                .map_err(|e| format!("{}: {e}", file.path.display()))?;
+            let parsed = parse(&file.path, &source)?;
+            if !walker.keep(&parsed.attrs) {
+                continue;
+            }
+            file.cfg.extend(walker.conditions(&parsed.attrs));
+            let here = file.path.parent().expect("a source file has a folder");
+            walker.children(
+                &file,
+                &parsed.items,
+                here,
+                &dir,
+                &mut Vec::new(),
+                &ancestors,
+                shadowed,
+            );
+            walker.sink.file(file, parsed);
+        }
+        Ok(())
+    }
 }
 
 /// Like [`walk_module_files`], but also reports inline modules with their own conditions.
@@ -421,79 +561,22 @@ pub fn walk_module_variants(
     include_tests: bool,
     parse: impl Fn(&Path, &str) -> Result<syn::File, String>,
 ) -> Result<Vec<ModuleVariant>, String> {
-    let mut walker = Walker {
+    let mut variants = VariantCollector(Vec::new());
+    ModuleWalk {
         every_build,
         include_tests,
-        pending: vec![Pending {
-            file: ModuleFile {
-                module,
-                path,
-                cfg: Vec::new(),
-                included: false,
-            },
-            dir,
-            ancestors: Vec::new(),
-            shadowed: false,
-        }],
-        variants: Vec::new(),
-    };
-    while let Some(Pending {
-        mut file,
-        dir,
-        mut ancestors,
-        shadowed,
-    }) = walker.pending.pop()
-    {
-        // A target with only conditional paths need not have a conventional file. A literal
-        // include has no such fallback: a fragment some build compiles must be readable, and
-        // one no build can compile is never opened.
-        if file.included && !may_compile(&file.cfg, include_tests) {
-            continue;
-        }
-        if !file.included && !file.path.is_file() {
-            continue;
-        }
-        let physical = file
-            .path
-            .canonicalize()
-            .map_err(|e| format!("{}: {e}", file.path.display()))?;
-        if ancestors.contains(&physical) {
-            return Err(format!("{}: source inclusion cycle", file.path.display()));
-        }
-        ancestors.push(physical);
-        let source =
-            fs::read_to_string(&file.path).map_err(|e| format!("{}: {e}", file.path.display()))?;
-        let parsed = parse(&file.path, &source)?;
-        if !walker.keep(&parsed.attrs) {
-            continue;
-        }
-        file.cfg.extend(walker.conditions(&parsed.attrs));
-        let here = file.path.parent().expect("a source file has a folder");
-        walker.children(
-            &file,
-            &parsed.items,
-            here,
-            &dir,
-            &mut Vec::new(),
-            &ancestors,
-            shadowed,
-        );
-        walker.variants.push(ModuleVariant {
-            file,
-            inline: Vec::new(),
-        });
     }
-    walker
-        .variants
-        .sort_by(|a, b| a.file.path.cmp(&b.file.path));
-    Ok(walker.variants)
+    .walk_tree(module, path, dir, parse, &mut |_| true, &mut variants)?;
+    variants.0.sort_by(|a, b| a.file.path.cmp(&b.file.path));
+    Ok(variants.0)
 }
 
-struct Walker {
+struct Walker<'a, D, S> {
     every_build: bool,
     include_tests: bool,
+    descend: &'a mut D,
+    sink: &'a mut S,
     pending: Vec<Pending>,
-    variants: Vec<ModuleVariant>,
 }
 
 /// A file to read, the directory Rust uses for its conventional children, its physical
@@ -505,7 +588,7 @@ struct Pending {
     shadowed: bool,
 }
 
-impl Walker {
+impl<D: FnMut(&str) -> bool, S: WalkSink> Walker<'_, D, S> {
     fn keep(&self, attrs: &[syn::Attribute]) -> bool {
         (self.include_tests || !test_only(attrs)) && !(self.every_build && gated(attrs))
     }
@@ -555,6 +638,9 @@ impl Walker {
             }
             let name = declared.ident.to_string();
             let module = format!("{}::{name}", file.module);
+            if !(self.descend)(&module) {
+                continue;
+            }
             let mut cfg = file.cfg.clone();
             cfg.extend(self.conditions(&declared.attrs));
             let mut paths = Vec::new();
@@ -603,10 +689,7 @@ impl Walker {
                     self.children(
                         &child, inner, &inner_dir, &inner_dir, inline, ancestors, shadowed,
                     );
-                    self.variants.push(ModuleVariant {
-                        file: child,
-                        inline: inline.clone(),
-                    });
+                    self.sink.inline(child, inline);
                     inline.pop();
                 } else {
                     let (path, child_dir) = if let Some(relative) = explicit {
@@ -705,5 +788,93 @@ mod shadow {
             &gates(&["any(a, b)", "not(a)", "not(b)"]),
             false
         ));
+    }
+
+    #[test]
+    fn visit_module_files_prunes_unmatched_subtrees_in_one_pass() {
+        let root = tempfile::tempdir().unwrap();
+        let put = |rel: &str, text: &str| {
+            let path = root.path().join(rel);
+            if let Some(parent) = path.parent() {
+                fs::create_dir_all(parent).unwrap();
+            }
+            fs::write(path, text).unwrap();
+        };
+        put(
+            "lib.rs",
+            "mod wanted;\nmod skipped;\nmod inline_parent { mod nested; mod ignored; }\n",
+        );
+        put(
+            "wanted.rs",
+            "include!(\"wanted_part.rs\");\nfn from_wanted() {}\n",
+        );
+        put("wanted_part.rs", "fn from_include() {}\n");
+        put("skipped.rs", "fn (\n");
+        put("inline_parent/nested.rs", "fn from_nested() {}\n");
+        put("inline_parent/ignored.rs", "fn (\n");
+
+        let allowed = [
+            "lower",
+            "lower::wanted",
+            "lower::inline_parent",
+            "lower::inline_parent::nested",
+        ];
+        let parsed_count = std::cell::Cell::new(0usize);
+        let mut visited = Vec::new();
+        ModuleWalk {
+            every_build: false,
+            include_tests: false,
+        }
+        .visit_files(
+            "lower".into(),
+            root.path().join("lib.rs"),
+            root.path().to_owned(),
+            |path, text| {
+                parsed_count.set(parsed_count.get() + 1);
+                syn::parse_file(text).map_err(|e| format!("{}: {e}", path.display()))
+            },
+            |module| allowed.contains(&module),
+            |file, parsed| {
+                let rel = file
+                    .path
+                    .strip_prefix(root.path())
+                    .unwrap()
+                    .display()
+                    .to_string();
+                let fns: Vec<_> = parsed
+                    .items
+                    .iter()
+                    .filter_map(|item| match item {
+                        Item::Fn(func) => Some(func.sig.ident.to_string()),
+                        _ => None,
+                    })
+                    .collect();
+                visited.push((file.module.clone(), rel, fns));
+            },
+        )
+        .unwrap();
+        visited.sort();
+        assert_eq!(parsed_count.get(), 4);
+        assert_eq!(
+            visited,
+            [
+                ("lower".into(), "lib.rs".into(), vec![]),
+                (
+                    "lower::inline_parent::nested".into(),
+                    "inline_parent/nested.rs".into(),
+                    vec!["from_nested".into()],
+                ),
+                (
+                    "lower::wanted".into(),
+                    "wanted.rs".into(),
+                    vec!["from_wanted".into()],
+                ),
+                (
+                    "lower::wanted".into(),
+                    "wanted_part.rs".into(),
+                    vec!["from_include".into()],
+                ),
+            ]
+        );
     }
 }

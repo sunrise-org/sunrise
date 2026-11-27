@@ -3,19 +3,18 @@ pass over a clean checkout writes the SDK's build data, each file with the heade
 
 Kept outside tests/ discovery: it takes minutes, and the offline suite must not stage.
 """
-import importlib.util
 import json
 import os
 from pathlib import Path
 import shutil
 import subprocess
+import sys
 import tempfile
 import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = importlib.util.spec_from_file_location("prebuilt_game", ROOT / "tools/prebuilt_game.py")
-PREBUILT = importlib.util.module_from_spec(SPEC)
-SPEC.loader.exec_module(PREBUILT)
+sys.path.insert(0, str(ROOT))
+from tools import prebuilt_game as PREBUILT
 
 
 class StageBuildData(unittest.TestCase):

@@ -17,6 +17,29 @@ def git_in(folder):
     return git
 
 
+def merge_pull_request(root, base, tracked, main_change, pr_change):
+    """Leave HEAD at CI's test merge of a pull request into a main that moved on since `base`.
+
+    The pull request branches from `base` and makes `pr_change`; main then makes `main_change`; HEAD is
+    `git merge --no-ff` of the pull request into that main, so its first parent is main as it is now. `tracked` are
+    the paths (relative to `root`) the commits take. Returns (the pull request's commit, main's commit)."""
+    git = git_in(root)
+    identity = ("-c", "user.name=Test", "-c", "user.email=test@example.invalid")
+    git("checkout", "-q", "--detach", base)
+    git("checkout", "-q", "-b", "pull-request")
+    pr_change()
+    git("add", "-A", "--", *tracked)
+    git(*identity, "commit", "-q", "--allow-empty", "-m", "pull request")
+    pr = git("rev-parse", "HEAD")
+    git("checkout", "-q", "--detach", base)
+    main_change()
+    git("add", "-A", "--", *tracked)
+    git(*identity, "commit", "-q", "--allow-empty", "-m", "main moved on")
+    main = git("rev-parse", "HEAD")
+    git(*identity, "merge", "--no-ff", "-q", "-m", "Merge the pull request", "pull-request")
+    return pr, main
+
+
 def decoy_git_env(folder):
     """Simulate a caller with its own clean, disposable checkout selected."""
     folder.mkdir()

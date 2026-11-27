@@ -1,0 +1,5 @@
+# lan/hub.rs was split in #5893; the crate split moved it to sunrise-sim.
+path = "crates/sunrise-sim/src/lan/hub.rs"
+landing_path = "crates/sunrise-client/src/lan/hub.rs"
+split = "#5893"
+landing = "3d943f7248c814b351e167452f0370d369cd363c"

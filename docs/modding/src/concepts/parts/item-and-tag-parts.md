@@ -404,7 +404,10 @@ then work in that menu too. It declines from inside an `anvil_update` listener.
 
 The server's `anvil_craft_pre` and `anvil_craft_post` both borrow the same pre-take snapshot
 through `event.inputs` (`AnvilCraftInputs<'_>`). Read the optional stacks through `inputs.left`
-and `inputs.right`, and the taken result through `inputs.output`. Set `event.cancelled` or
+and `inputs.right`, the taken result through `inputs.output`, and the raw pre-take level cost
+through `inputs.xp_cost` (`AnvilMenu.cost`, which NeoForge listeners read with
+`AnvilMenu.getCost()`), read before the take changes anything. The snapshot does not expose
+the applied repair count. Set `event.cancelled` or
 return `Flow::Cancel` in Pre to return early before charging levels, consuming inputs,
 applying anvil wear and firing Post, without undoing the click's item move (matching
 NeoForge `AnvilMenu.onTake`). Post runs after those effects.

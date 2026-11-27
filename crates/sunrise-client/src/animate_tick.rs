@@ -357,12 +357,12 @@ impl AnimateTables {
             .collect();
         let bundle: BTreeMap<String, String> =
             serde_json::from_slice(&std::fs::read(root.join("block-tags.json"))?)?;
-        let mut definitions = TagDefinitions::default();
+        let mut definitions = TagDefinitions::with_conventions("block")?;
         for (name, text) in bundle {
             definitions.apply_json(&name, "vanilla", &text)?;
         }
         let built =
-            definitions.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
+            definitions.bind(|name, _| registry.default_state(name).map(|_| name.to_owned()));
         let by_state = |tag: &str| -> Vec<bool> {
             let names = built.tags.get(tag);
             (0..registry.len() as u32)
@@ -2784,3 +2784,7 @@ mod biome_particle_tests;
 #[cfg(test)]
 #[path = "animate_tick_parts_tests.rs"]
 mod parts_tests;
+
+#[cfg(test)]
+#[path = "startup_convention_tags_tests.rs"]
+mod startup_convention_tags_tests;

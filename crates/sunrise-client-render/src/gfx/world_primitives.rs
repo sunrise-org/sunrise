@@ -188,10 +188,29 @@ struct Globals {
     viewport: [f32; 4],
 }
 
-struct PrimitivePipelines {
+pub(super) struct PrimitivePipelines {
     /// Depth tested, then seen through walls.
     quad_pipelines: [wgpu::RenderPipeline; 2],
     line_pipelines: [wgpu::RenderPipeline; 2],
+}
+
+#[derive(Clone, Copy)]
+pub(super) enum PreparedPass<'a> {
+    World,
+    Oit(super::oit::Stage),
+    Pack {
+        pipelines: &'a PrimitivePipelines,
+        bound_slots: &'a [usize],
+    },
+}
+
+impl<'a> PreparedPass<'a> {
+    pub(super) fn skip_slots(self) -> &'a [usize] {
+        match self {
+            Self::Pack { bound_slots, .. } => bound_slots,
+            Self::World | Self::Oit(_) => &[],
+        }
+    }
 }
 
 /// The pipelines and buffers that draw a [`Batch`].
@@ -918,47 +937,11 @@ impl WorldPrimitives {
         oit: Option<super::oit::Stage>,
         draws: &[DrawRanges],
     ) -> bool {
-        let mut drew = match oit {
-            Some(stage) => self.oit_pipelines.as_ref().is_some_and(|pipelines| {
-                self.draw_prepared_ranges(pass, &pipelines[stage as usize], true, draws)
-            }),
-            None => self.draw_prepared_ranges(pass, &self.pipelines_standard, false, draws),
-        };
-        let has_pipeline_runs = draws.iter().any(|d| !d.pipeline_runs.is_empty());
-        if has_pipeline_runs {
-            let ranges = draws
-                .iter()
-                .filter(|d| !d.pipeline_runs.is_empty())
-                .map(|d| d.pipeline_runs.clone());
-            match oit {
-                Some(stage) => self
-                    .pipelines
-                    .draw_prepared_oit(pass, stage, &self.indices, ranges),
-                None => self
-                    .pipelines
-                    .draw_prepared_runs(pass, &self.indices, ranges),
-            }
-            drew = true;
-        }
-        let has_pipeline_draws = draws.iter().any(|d| !d.pipeline_draws.is_empty());
-        if has_pipeline_draws {
-            let ranges: Vec<std::ops::Range<u32>> = draws
-                .iter()
-                .filter(|d| !d.pipeline_draws.is_empty())
-                .map(|d| d.pipeline_draws.clone())
-                .collect();
-            match oit {
-                Some(stage) => {
-                    self.pipelines
-                        .draw_prepared_oit_draws(pass, stage, &self.indices, &ranges)
-                }
-                None => self
-                    .pipelines
-                    .draw_prepared_draws(pass, &self.indices, &ranges),
-            }
-            drew = true;
-        }
-        drew
+        self.draw_prepared_ranges(
+            pass,
+            oit.map_or(PreparedPass::World, PreparedPass::Oit),
+            draws,
+        )
     }
 
     pub(super) fn draw_pack_prepared(
@@ -971,7 +954,17 @@ impl WorldPrimitives {
         let Some((_, pipelines)) = &self.pack_pipelines else {
             return false;
         };
-        if draws.is_empty() || self.group.is_none() {
+        let bound_slots = self.bound_mod_slots.as_slice();
+        if self.group.is_none()
+            || !draws.iter().any(|draw| {
+                draw.primitives.iter().any(|range| !range.is_empty())
+                    || self.pipelines.has_unbound_prepared(
+                        draw.pipeline_runs.clone(),
+                        draw.pipeline_draws.clone(),
+                        bound_slots,
+                    )
+            })
+        {
             return false;
         }
         let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -995,7 +988,14 @@ impl WorldPrimitives {
             }),
             ..Default::default()
         });
-        self.draw_prepared_ranges(&mut pass, pipelines, false, draws)
+        self.draw_prepared_ranges(
+            &mut pass,
+            PreparedPass::Pack {
+                pipelines,
+                bound_slots,
+            },
+            draws,
+        )
     }
 
     /// Per-frame shader-pack uniform values uploaded from the latest [`Batch`].
@@ -1112,6 +1112,44 @@ impl WorldPrimitives {
     }
 
     fn draw_prepared_ranges(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        target: PreparedPass<'_>,
+        draws: &[DrawRanges],
+    ) -> bool {
+        let primitives = match target {
+            PreparedPass::World => Some(&self.pipelines_standard),
+            PreparedPass::Oit(stage) => self.oit_pipelines.as_ref().map(|p| &p[stage as usize]),
+            PreparedPass::Pack { pipelines, .. } => Some(pipelines),
+        };
+        let mut drew = primitives.is_some_and(|pipelines| {
+            let oit = matches!(target, PreparedPass::Oit(_));
+            self.draw_prepared_primitives(pass, pipelines, oit, draws)
+        });
+        let mut runs = draws
+            .iter()
+            .map(|draw| draw.pipeline_runs.clone())
+            .filter(|range| !range.is_empty())
+            .peekable();
+        if runs.peek().is_some() {
+            self.pipelines
+                .draw_prepared_runs(pass, &self.indices, runs, target);
+            drew = true;
+        }
+        let mut commands = draws
+            .iter()
+            .map(|draw| draw.pipeline_draws.clone())
+            .filter(|range| !range.is_empty())
+            .peekable();
+        if commands.peek().is_some() {
+            self.pipelines
+                .draw_prepared_draws(pass, &self.indices, commands, target);
+            drew = true;
+        }
+        drew
+    }
+
+    fn draw_prepared_primitives(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         pipelines: &PrimitivePipelines,

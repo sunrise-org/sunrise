@@ -14,7 +14,7 @@ use super::{
     generator::{
         GeneratorError,
         data::{
-            FeatureCodecContext, build_tags, load_biome_tags, load_carvers, load_fluid_tags,
+            FeatureCodecContext, load_biome_tags, load_block_tags, load_carvers, load_fluid_tags,
             load_structure_resources, read_registry_bundle, registry_tag_definitions,
         },
     },
@@ -84,13 +84,7 @@ impl<'a> BiomeGenerationRegistries<'a> {
 
     fn bind_features(&self) -> Result<FeatureBlockBindings<'static>, GeneratorError> {
         let mut warnings = Vec::new();
-        let block_tags = build_tags(
-            &read_registry_bundle(self.dir, self.packs, "block_tags")?.unwrap_or_default(),
-            self.packs,
-            "block_tags",
-            &mut warnings,
-            |id| self.blocks.default_state(id).is_some(),
-        )?;
+        let block_tags = load_block_tags(self.dir, self.packs, false, &mut warnings, self.blocks)?;
         let fluid_tags = load_fluid_tags(self.dir, self.packs, &mut warnings)?;
         let biome_tags = load_biome_tags(self.dir, self.packs, false, &mut warnings, |id| {
             self.biome_ids.contains_key(id)

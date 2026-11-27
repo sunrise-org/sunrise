@@ -25,7 +25,6 @@ use sunrise_gameplay_common::game::native_server::argument_kinds::{
     custom_value, dimension_value, nbt_value, parsed_type, positional_value,
 };
 use sunrise_gameplay_common::game::native_server::command_tree_for;
-use sunrise_gameplay_common::game::native_server::online_mode_of;
 use sunrise_gameplay_common::game::native_server::orb_meets;
 use sunrise_gameplay_common::game::native_server::ordered_box;
 use sunrise_gameplay_common::game::native_server::register_command_nodes;
@@ -2017,22 +2016,6 @@ impl crate::game::ServerGame<'_> {
         pos: [i32; 3],
     ) -> Option<bool> {
         self.level_is_raining_at(level, pos)
-    }
-}
-
-#[allow(dead_code, reason = "dedicated settings stay engine-private")]
-impl crate::game::ServerGame<'_> {
-    pub(in crate::game) fn native_online_mode(&self) -> Option<bool> {
-        Some(online_mode_of(&self.dedicated_lan()?.shared.config))
-    }
-
-    pub(in crate::game) fn native_server_port(&self) -> Option<u16> {
-        Some(self.dedicated_lan()?.port)
-    }
-
-    fn dedicated_lan(&self) -> Option<&sunrise_sim::lan::Lan> {
-        self.common.options.dedicated.as_ref()?;
-        Some(&self.server.lan.as_ref()?.hub.lan)
     }
 }
 

@@ -38,6 +38,8 @@ pub(crate) mod anvil_tests {
                 Some((Some("minecraft:iron_ingot"), 2, 0))
             );
             assert_eq!(stack(inputs.output), (Some("minecraft:iron_sword"), 1, 0));
+            // Two ingots repair the 80 damage, for 2 levels.
+            assert_eq!(inputs.xp_cost, 2);
             assert_eq!(self.0.load(Ordering::Relaxed), phase);
             self.0.fetch_add(1, Ordering::Relaxed);
         }

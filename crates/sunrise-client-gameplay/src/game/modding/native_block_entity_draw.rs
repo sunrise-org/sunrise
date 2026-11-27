@@ -1192,9 +1192,14 @@ impl<'v> BlockEntityDraw<'v> {
     pub(in crate::game) fn light(&self) -> u32 {
         self.light
     }
-    fn quad(&mut self, corners: [[f32; 3]; 4], uv: [[f32; 2]; 4], sprite: Rect, tint: u32) {
+    /// An atlas quad: false, with nothing appended, for a coordinate that is not finite or a
+    /// quad the batch has no room for, as [`Self::textured_quad`] answers.
+    fn quad(&mut self, corners: [[f32; 3]; 4], uv: [[f32; 2]; 4], sprite: Rect, tint: u32) -> bool {
         let start = self.vertices.len();
         self.emit_quad(corners, uv, sprite, tint, self.element_ambient());
+        if self.vertices.len() != start + 4 {
+            return false;
+        }
         self.drawn_since(
             start,
             || {
@@ -1206,6 +1211,7 @@ impl<'v> BlockEntityDraw<'v> {
             self.light,
         );
         self.crumbling_since(start);
+        true
     }
 
     /// A quad of `corners` showing a dynamic texture: `quad`'s shading and light, UVs in the
@@ -2121,7 +2127,8 @@ impl crate::game::ClientGame<'_> {
     /// from its front), textured with the `uv` rectangle (u0, v0, u1, v1 in
     /// texels of 16 per side) of `sprite` (`mymod:entity/screen`,
     /// `mymod:block/casing`, `block/stone`) times the 0xRRGGBB `tint`
-    /// (0xFFFFFF for none). False for an unknown sprite.
+    /// (0xFFFFFF for none). False, with nothing appended, for an unknown sprite, a coordinate
+    /// that is not finite, or a quad the batch has no room for.
     pub(in crate::game) fn native_draw_quad(
         &self,
         draw: &mut BlockEntityDraw,
@@ -2139,8 +2146,7 @@ impl crate::game::ClientGame<'_> {
             [[u0, v0], [u0, v1], [u1, v1], [u1, v0]],
             rect,
             tint,
-        );
-        true
+        )
     }
 
     /// Draws a quad of `corners` under `draw`'s pose showing the dynamic texture `render_type`
@@ -2853,6 +2859,34 @@ pub mod tests {
         let out = draw.animated(1.0).into_placed(Vec3::ZERO);
         assert!(out[..4].iter().all(|v| v.normal == [0; 4]));
         assert!(out[4..].iter().all(|v| v.normal == [0, 0, 127, 127]));
+    }
+
+    /// #6400: an atlas quad answers whether it was appended, as `textured_quad` does: true
+    /// while the batch has room, false with no vertices added once it is full or for a
+    /// coordinate that is not finite.
+    #[cfg(test)]
+    #[test]
+    fn an_atlas_quad_answers_whether_it_was_appended() {
+        use sunrise_client::gfx::EntityQuadCapacity;
+        let corners = [
+            [0.0, 0.0, 0.0],
+            [0.0, 1.0, 0.0],
+            [1.0, 1.0, 0.0],
+            [1.0, 0.0, 0.0],
+        ];
+        let uv = [[0.0; 2]; 4];
+        let capacity =
+            EntityQuadCapacity::from_max_buffer_size(EntityQuadCapacity::VERTEX_QUAD_BYTES * 2);
+        let mut draw = draw().with_quad_budget(capacity, 0);
+        assert!(draw.quad(corners, uv, sprite(), 0xFFFFFF));
+        let mut bad = corners;
+        bad[0][0] = f32::NAN;
+        assert!(!draw.quad(bad, uv, sprite(), 0xFFFFFF));
+        assert!(draw.quad(corners, uv, sprite(), 0xFFFFFF));
+        assert_eq!(draw.vertices.len(), 8);
+        // The batch is full: the next quad is dropped and says so.
+        assert!(!draw.quad(corners, uv, sprite(), 0xFFFFFF));
+        assert_eq!(draw.vertices.len(), 8);
     }
 
     #[cfg(test)]

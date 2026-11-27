@@ -108,9 +108,7 @@ impl Catalog {
             tags.apply_json(id, "vanilla", string(json)?)
                 .map_err(|e| invalid(e.to_string()))?;
         }
-        let tags = tags
-            .build(|id, _| ids.get(id).copied())
-            .map_err(|e| invalid(e.to_string()))?;
+        let tags = tags.bind(|id, _| ids.get(id).copied());
         if !tags.missing.is_empty() {
             return Err(invalid("unresolved required damage tag references"));
         }

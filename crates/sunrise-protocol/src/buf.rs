@@ -387,19 +387,36 @@ impl<const N: usize> Codec<String> for StrN<N> {
 /// Identifier.STREAM_CODEC: a validated resource location, with the default namespace.
 pub struct Ident;
 impl Ident {
+    const MAX: usize = 32767;
+    /// The wire text, not yet validated as an identifier.
+    fn read_text<'a>(r: &mut Reader<'a>) -> Result<&'a str> {
+        let len = r.count(Self::MAX * 3)?;
+        let value = r.bytes(len)?;
+        std::str::from_utf8(value).map_err(|_| Error::new("invalid resource identifier"))
+    }
+    /// All valid identifiers are ASCII, so byte and UTF-16 unit counts agree.
+    fn check_length(value: &str) -> Result<()> {
+        if value.len() > Self::MAX {
+            return Err(Error::new(format!(
+                "string longer than {} chars",
+                Self::MAX
+            )));
+        }
+        Ok(())
+    }
     /// Borrow the validated spelling on the wire. An empty namespace still denotes `minecraft`.
     pub(crate) fn read_borrowed<'a>(r: &mut Reader<'a>) -> Result<&'a str> {
-        const MAX: usize = 32767;
-        let len = r.count(MAX * 3)?;
-        let value = r.bytes(len)?;
-        // All valid identifiers are ASCII, so byte and UTF-16 unit counts agree.
-        let value =
-            std::str::from_utf8(value).map_err(|_| Error::new("invalid resource identifier"))?;
+        let value = Self::read_text(r)?;
         identifier::validate(value).map_err(|_| Error::new("invalid resource identifier"))?;
-        if value.len() > MAX {
-            return Err(Error::new(format!("string longer than {MAX} chars")));
-        }
+        Self::check_length(value)?;
         Ok(value)
+    }
+    /// Identifier.STREAM_CODEC straight into a typed [`identifier::Identifier`]: the text is
+    /// validated once, by the parse that builds it, with the same default namespace.
+    pub fn read_identifier(r: &mut Reader) -> Result<identifier::Identifier> {
+        let value = Self::read_text(r)?;
+        Self::check_length(value)?;
+        identifier::Identifier::parse(value).map_err(|_| Error::new("invalid resource identifier"))
     }
 }
 impl Codec<String> for Ident {
@@ -945,6 +962,33 @@ mod tests {
         assert_eq!(read(".:stone").unwrap(), ".:stone");
         assert_eq!(read("minecraft:..").unwrap(), "minecraft:..");
         assert_eq!(read("stone").unwrap(), "minecraft:stone");
+    }
+
+    /// `Ident::read_identifier` decodes identifiers with the default namespace, straight into a
+    /// typed identifier (#6064), and refuses past the wire limit like `Ident::read`.
+    #[test]
+    fn a_typed_identifier_reads_with_the_default_namespace() {
+        let wire = |text: &str| {
+            let mut w = Writer::new();
+            w.string(text);
+            w.data
+        };
+        let read = |text: &str| Ident::read_identifier(&mut Reader::new(&wire(text)));
+        for (text, expected) in [
+            ("stone", "minecraft:stone"),
+            (":stone", "minecraft:stone"),
+            ("mod:flag_1", "mod:flag_1"),
+            (".:stone", ".:stone"),
+            ("minecraft:..", "minecraft:.."),
+        ] {
+            assert_eq!(read(text).unwrap().as_str(), expected, "{text}");
+        }
+        for text in ["Bad Style!", "..:stone", "mod:a b"] {
+            assert!(read(text).is_err(), "{text}");
+        }
+        let at_the_limit = format!("a:{}", "a".repeat(32767 - 2));
+        assert_eq!(read(&at_the_limit).unwrap().as_str(), at_the_limit);
+        assert!(read(&format!("{at_the_limit}a")).is_err());
     }
 
     #[test]

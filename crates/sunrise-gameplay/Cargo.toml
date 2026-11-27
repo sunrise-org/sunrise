@@ -34,6 +34,7 @@ sunrise-sim = { path = "../sunrise-sim" }
 sunrise-level = { path = "../sunrise-level" }
 
 [dev-dependencies]
+sunrise-core = { path = "../sunrise-core", features = ["test-support"] }
 tempfile = "3"
 sunrise-java-properties = { path = "../sunrise-java-properties" }
 sunrise-gameplay-common = { path = "../sunrise-gameplay-common", features = ["test-support"] }

@@ -163,8 +163,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, text) in resources.as_object().unwrap() {
         definitions.apply_json(name, "vanilla", text.as_str().unwrap())?;
     }
-    let built =
-        definitions.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
+    let built = definitions.bind(|name, _| registry.default_state(name).map(|_| name.to_owned()));
     assert!(built.missing.is_empty());
     let bindings = FeatureBlockBindings::with_tags(&registry, integers, &built.tags)?;
     let blocks: Vec<_> = [

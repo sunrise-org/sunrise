@@ -275,12 +275,15 @@ impl GrindstoneTakeEdits {
     }
 }
 
-/// An anvil craft as `AnvilCraftEvent` reports it: the inputs and the result
-/// taken, before the crafting changed anything.
+/// An anvil craft as `AnvilCraftEvent` reports it: the inputs, the result
+/// taken and the level cost `AnvilMenu.onTake` is about to read, before the
+/// crafting changed anything.
 #[derive(Clone, Debug, PartialEq)]
 // exhaustive: the game builds it with a literal; mods only read it
 pub struct AnvilCraftSnapshot {
     pub left: Option<ItemStack>,
     pub right: Option<ItemStack>,
     pub output: ItemStack,
+    /// `AnvilMenu.cost`.
+    pub cost: i32,
 }

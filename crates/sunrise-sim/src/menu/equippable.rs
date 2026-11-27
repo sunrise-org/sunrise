@@ -66,7 +66,7 @@ impl Menu {
 
 #[cfg(test)]
 pub(super) mod tests {
-    use super::super::tests::{stack, with_menu};
+    use super::super::tests::{stack, with_bare_menu, with_menu};
     use super::super::{Input, Kind};
     use sunrise_core::nbt::Tag;
 
@@ -83,7 +83,7 @@ pub(super) mod tests {
     /// the head slot and is equipped there.
     #[test]
     fn a_menu_reads_a_stacks_equippable_slot() {
-        with_menu(Kind::Inventory, |env, menu| {
+        with_bare_menu(Kind::Inventory, |env, menu| {
             let stone = equippable(vec![("slot", Tag::String("head".into()))]);
             menu.set_slot(env, 9, stone);
             menu.click(env, 9, 0, Input::QuickMove).unwrap();
@@ -97,7 +97,7 @@ pub(super) mod tests {
     /// only a horse may wear stays out of the player's head slot.
     #[test]
     fn a_stacks_allowed_entities_keep_it_off_the_player() {
-        with_menu(Kind::Inventory, |env, menu| {
+        with_bare_menu(Kind::Inventory, |env, menu| {
             let stone = equippable(vec![
                 ("slot", Tag::String("head".into())),
                 ("allowed_entities", Tag::String("horse".into())),
@@ -124,6 +124,7 @@ pub(super) mod tests {
     /// an iron helmet off the head, an override for the feet moves it there, and an explicitly
     /// empty `allowed_entities` allows nobody while a component with none allows the player.
     #[test]
+    #[ignore = "daily"]
     fn the_armour_slots_read_the_stacks_own_equippable() {
         with_menu(Kind::Inventory, |env, menu| {
             let head = |slot: &str| ("slot", Tag::String(slot.into()));
@@ -175,6 +176,7 @@ pub(super) mod tests {
     /// with the component's answer, and takes its answer either way; with none lent, the
     /// component decides.
     #[test]
+    #[ignore = "daily"]
     fn the_armour_slots_ask_the_lent_can_equip() {
         with_menu(Kind::Inventory, |env, menu| {
             let helmet = stack("iron_helmet", 1).unwrap();

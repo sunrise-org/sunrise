@@ -367,7 +367,10 @@ pub trait BlockEntityDrawContext {
     /// from its front), textured with the `uv` rectangle (u0, v0, u1, v1 in
     /// texels of 16 per side) of `sprite` (`mymod:entity/screen`,
     /// `mymod:block/casing`, `block/stone`) times the 0xRRGGBB `tint`
-    /// (0xFFFFFF for none). False for an unknown sprite. Its UVs are texels of 16; those of
+    /// (0xFFFFFF for none). True when the quad's four vertices are appended to the current
+    /// draw; false, with nothing appended, for an unknown sprite, a transformed position or UV
+    /// that is not finite, or a quad the frame's batch has no room for, as
+    /// [`Self::textured_quad`] answers. Its UVs are texels of 16; those of
     /// [`Self::textured_quad`] are unit.
     fn quad(&mut self, sprite: &str, corners: [[f32; 3]; 4], uv: [f32; 4], tint: u32) -> bool {
         unimplemented!("BlockEntityDrawContext::draw_quad")
@@ -396,9 +399,11 @@ pub trait BlockEntityDrawContext {
     /// It takes only a dynamic texture id: a render type made for any other id, such as a
     /// texture in the resource packs, draws nothing and returns false.
     ///
-    /// Returns false, appending nothing, when `render_type` is not one of the three
-    /// texture-taking built-ins or is stale, when no dynamic texture named by it is live, when a
-    /// corner or UV is not finite, or in a first-person hand draw. It never panics.
+    /// Returns true when the quad's four vertices are appended to the current draw. Returns
+    /// false, appending nothing, when `render_type` is not one of the three texture-taking
+    /// built-ins or is stale, when no dynamic texture named by it is live, when a corner or UV
+    /// is not finite, when the frame's batch has no room for the quad, or in a first-person hand
+    /// draw. It never panics.
     fn textured_quad(
         &mut self,
         render_type: RenderTypeRef,

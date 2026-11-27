@@ -198,12 +198,12 @@ impl MotionResources {
         let properties = MovementProperties::from_table(file.table("movement")?)?;
         let bundle: BTreeMap<String, String> =
             sunrise_world::json_file::read(&root.join("block-tags.json"))?;
-        let mut definitions = TagDefinitions::default();
+        let mut definitions = TagDefinitions::with_conventions("block")?;
         for (name, text) in bundle {
             definitions.apply_json(&name, "vanilla", &text)?;
         }
         let built = definitions
-            .build(|name, _| assets.registry.default_state(name).map(|_| name.to_owned()))?;
+            .bind(|name, _| assets.registry.default_state(name).map(|_| name.to_owned()));
         if !built.missing.is_empty() {
             return Err("unresolved motion block tags".into());
         }
