@@ -565,179 +565,199 @@ impl crate::game::ServerGame<'_> {
         if self.common.potions.thrown.is_empty() {
             return;
         }
-        let thrown = std::mem::take(&mut self.common.potions.thrown);
-        let mut kept = Vec::with_capacity(thrown.len());
-        // ServerLevel.tick: only entities in entity-ticking chunks tick.
-        let ticking = self.entity_ticking_area();
-        let below_world = self.common.world.below_world_y();
-        for mut t in thrown {
-            if !ticking(t.position.x.floor() as i32, t.position.z.floor() as i32) {
+        let _ticking = self.with_lifted_thrown_potions(|game, thrown| {
+            let mut kept = Vec::with_capacity(thrown.len());
+            // ServerLevel.tick: only entities in entity-ticking chunks tick.
+            let ticking = game.entity_ticking_area();
+            let below_world = game.common.world.below_world_y();
+            for mut t in thrown {
+                if !ticking(t.position.x.floor() as i32, t.position.z.floor() as i32) {
+                    t.previous = t.position;
+                    kept.push(t);
+                    continue;
+                }
+                t.age += 1;
+                let owner = game.shooter_who(t.thrower, t.guest);
                 t.previous = t.position;
-                kept.push(t);
-                continue;
-            }
-            t.age += 1;
-            let owner = self.shooter_who(t.thrower, t.guest);
-            t.previous = t.position;
-            self.common.thrown_potion_motion(&mut t);
-            let from = t.position;
-            let to = from.add_vector(t.velocity);
-            let bounds_at = |p: Vec3| {
-                Aabb::new(
-                    p.add_vector(Vec3::new(-0.125, 0.0, -0.125)),
-                    p.add_vector(Vec3::new(0.125, 0.25, 0.125)),
-                )
-            };
-            let query = sunrise_gameplay_common::game::creatures::TargetQuery {
-                include_guests: true,
-                ..Default::default()
-            };
-            let (block_clip, entity_hit) = {
-                use sunrise_sim::projectiles::{NearestHit, ProjectileWorld, compute_margin};
-                let live = self.live_proj_world(query, &[]);
-                let block_clip = live.clip(from, to);
-                let entity_end = block_clip.map_or(to, |(at, ..)| at);
-                let search_area = bounds_at(from)
-                    .expand_towards(t.velocity)
-                    .inflate(Vec3::new(1.0, 1.0, 1.0));
-                let margin = compute_margin(t.age as i32);
-                let mut best = NearestHit::new();
-                self.visit_projectile_targets(query, &[], |c| {
-                    if !t.left_owner
-                        && let Some(o) = owner
-                        && self.in_same_vehicle_tree(o, c.who)
+                game.common.thrown_potion_motion(&mut t);
+                let from = t.position;
+                let to = from.add_vector(t.velocity);
+                let bounds_at = |p: Vec3| {
+                    Aabb::new(
+                        p.add_vector(Vec3::new(-0.125, 0.0, -0.125)),
+                        p.add_vector(Vec3::new(0.125, 0.25, 0.125)),
+                    )
+                };
+                let query = sunrise_gameplay_common::game::creatures::TargetQuery {
+                    include_guests: true,
+                    ..Default::default()
+                };
+                let (block_clip, entity_hit) = {
+                    use sunrise_sim::projectiles::{NearestHit, ProjectileWorld, compute_margin};
+                    let live = game.live_proj_world(query, &[]);
+                    let block_clip = live.clip(from, to);
+                    let entity_end = block_clip.map_or(to, |(at, ..)| at);
+                    let search_area = bounds_at(from)
+                        .expand_towards(t.velocity)
+                        .inflate(Vec3::new(1.0, 1.0, 1.0));
+                    let margin = compute_margin(t.age as i32);
+                    let mut best = NearestHit::new();
+                    game.visit_projectile_targets(query, &[], |c| {
+                        if !t.left_owner
+                            && let Some(o) = owner
+                            && game.in_same_vehicle_tree(o, c.who)
+                        {
+                            return;
+                        }
+                        best.consider(c, search_area, from, entity_end, margin);
+                    });
+                    (block_clip, best.finish())
+                };
+                let new_pos = entity_hit
+                    .map(|(_, at)| at)
+                    .or_else(|| block_clip.map(|(at, ..)| at))
+                    .unwrap_or(to);
+                t.position = new_pos;
+                game.entity_powder_snow_particles(
+                    t.previous,
+                    t.position,
+                    bounds_at(t.position),
+                    t.velocity,
+                    false,
+                );
+                // ThrowableProjectile.tick calls super.tick() (`checkLeftOwner`) after `setPos`.
+                if !t.left_owner {
+                    let swept = bounds_at(t.position)
+                        .expand_towards(t.velocity)
+                        .inflate(Vec3::new(1.0, 1.0, 1.0));
+                    t.left_owner =
+                        owner.is_none_or(|o| game.outside_owner_collision_range(o, swept));
+                }
+                if let Some((who, hit_at)) = entity_hit {
+                    // Projectile.hitTargetOrDeflectSelf: Breeze deflects without splashing.
+                    if let Who::Mob(id) = who
+                        && let Some(index) = game.common.mobs.iter().position(|m| {
+                            m.id == id
+                                && m.alive()
+                                && m.species() == sunrise_sim::mobs::Species::Breeze
+                        })
                     {
-                        return;
+                        if t.last_deflected_by != Some(id) {
+                            let _ = t.random.next_float();
+                            t.velocity = t.velocity.scale(-0.5);
+                            t.last_deflected_by = Some(id);
+                            game.play_mob_bound_sound(
+                                index,
+                                "minecraft:entity.breeze.deflect",
+                                5,
+                                1.0,
+                                1.0,
+                                false,
+                            );
+                        }
+                        if t.age < 1200 && t.position.y >= below_world {
+                            kept.push(t);
+                        }
+                        continue;
                     }
-                    best.consider(c, search_area, from, entity_end, margin);
-                });
-                (block_clip, best.finish())
-            };
-            let new_pos = entity_hit
-                .map(|(_, at)| at)
-                .or_else(|| block_clip.map(|(at, ..)| at))
-                .unwrap_or(to);
-            t.position = new_pos;
-            self.entity_powder_snow_particles(
-                t.previous,
-                t.position,
-                bounds_at(t.position),
-                t.velocity,
-                false,
-            );
-            // ThrowableProjectile.tick calls super.tick() (`checkLeftOwner`) after `setPos`.
-            if !t.left_owner {
-                let swept = bounds_at(t.position)
-                    .expand_towards(t.velocity)
-                    .inflate(Vec3::new(1.0, 1.0, 1.0));
-                t.left_owner = owner.is_none_or(|o| self.outside_owner_collision_range(o, swept));
-            }
-            if let Some((who, hit_at)) = entity_hit {
-                // Projectile.hitTargetOrDeflectSelf: Breeze deflects without splashing.
-                if let Who::Mob(id) = who
-                    && let Some(index) = self.common.mobs.iter().position(|m| {
-                        m.id == id && m.alive() && m.species() == sunrise_sim::mobs::Species::Breeze
-                    })
-                {
-                    if t.last_deflected_by != Some(id) {
-                        let _ = t.random.next_float();
-                        t.velocity = t.velocity.scale(-0.5);
-                        t.last_deflected_by = Some(id);
-                        self.play_mob_bound_sound(
-                            index,
-                            "minecraft:entity.breeze.deflect",
-                            5,
-                            1.0,
-                            1.0,
-                            false,
-                        );
+                    if let Who::Mob(id) = who {
+                        game.redirect_projectile(id, owner, None, t.guest, None);
                     }
-                    if t.age < 1200 && t.position.y >= below_world {
-                        kept.push(t);
+                    let target_pos = match who {
+                        Who::Player => game.common.player.as_ref().map(|p| p.position),
+                        Who::Mob(id) => game
+                            .common
+                            .mobs
+                            .iter()
+                            .find(|m| m.id == id)
+                            .map(|m| m.position)
+                            .or_else(|| {
+                                game.live_target_bounds(who).map(|b| {
+                                    let c = b.center();
+                                    Vec3::new(c.x, b.min_position().y, c.z)
+                                })
+                            }),
+                    };
+                    let thrower = t.owner.is_some().then_some(Who::Player);
+                    let silent = game.entity_silent(t.id);
+                    let item = t.stack.item.to_string();
+                    let potion_owner = PotionOwner {
+                        player: t.owner.is_some(),
+                        name: t.owner,
+                        attacker: None,
+                        guest: t.guest,
+                    };
+                    game.splash(
+                        &t.stack,
+                        hit_at,
+                        target_pos,
+                        None,
+                        t.age,
+                        t.id,
+                        &potion_owner,
+                        silent,
+                        t.velocity,
+                    );
+                    game.projectile_landed_event(t.id, thrower, [hit_at.x, hit_at.y, hit_at.z]);
+                    if item != "minecraft:experience_bottle" {
+                        game.native_potion_splash(&item, [hit_at.x, hit_at.y, hit_at.z]);
                     }
                     continue;
                 }
-                if let Who::Mob(id) = who {
-                    self.redirect_projectile(id, owner, None, t.guest, None);
+                if let Some((hit_at, pos, face)) = block_clip {
+                    let dir = Direction::approximate_nearest(Vec3::new(
+                        f64::from(face[0]),
+                        f64::from(face[1]),
+                        f64::from(face[2]),
+                    ));
+                    let thrower = t.owner.is_some().then_some(Who::Player);
+                    let silent = game.entity_silent(t.id);
+                    let item = t.stack.item.to_string();
+                    let potion_owner = PotionOwner {
+                        player: t.owner.is_some(),
+                        name: t.owner,
+                        attacker: None,
+                        guest: t.guest,
+                    };
+                    game.splash(
+                        &t.stack,
+                        hit_at,
+                        None,
+                        Some((pos, dir)),
+                        t.age,
+                        t.id,
+                        &potion_owner,
+                        silent,
+                        t.velocity,
+                    );
+                    game.projectile_block_landed_event(t.id, thrower, pos);
+                    if item != "minecraft:experience_bottle" {
+                        game.native_potion_splash(&item, [hit_at.x, hit_at.y, hit_at.z]);
+                    }
+                    continue;
                 }
-                let target_pos = match who {
-                    Who::Player => self.common.player.as_ref().map(|p| p.position),
-                    Who::Mob(id) => self
-                        .common
-                        .mobs
-                        .iter()
-                        .find(|m| m.id == id)
-                        .map(|m| m.position)
-                        .or_else(|| {
-                            self.live_target_bounds(who).map(|b| {
-                                let c = b.center();
-                                Vec3::new(c.x, b.min_position().y, c.z)
-                            })
-                        }),
-                };
-                let thrower = t.owner.is_some().then_some(Who::Player);
-                let silent = self.entity_silent(t.id);
-                let item = t.stack.item.to_string();
-                let potion_owner = PotionOwner {
-                    player: t.owner.is_some(),
-                    name: t.owner,
-                    attacker: None,
-                    guest: t.guest,
-                };
-                self.splash(
-                    &t.stack,
-                    hit_at,
-                    target_pos,
-                    None,
-                    t.age,
-                    t.id,
-                    &potion_owner,
-                    silent,
-                    t.velocity,
-                );
-                self.projectile_landed_event(t.id, thrower, [hit_at.x, hit_at.y, hit_at.z]);
-                if item != "minecraft:experience_bottle" {
-                    self.native_potion_splash(&item, [hit_at.x, hit_at.y, hit_at.z]);
+                if t.age < 1200 && t.position.y >= below_world {
+                    kept.push(t);
                 }
-                continue;
             }
-            if let Some((hit_at, pos, face)) = block_clip {
-                let dir = Direction::approximate_nearest(Vec3::new(
-                    f64::from(face[0]),
-                    f64::from(face[1]),
-                    f64::from(face[2]),
-                ));
-                let thrower = t.owner.is_some().then_some(Who::Player);
-                let silent = self.entity_silent(t.id);
-                let item = t.stack.item.to_string();
-                let potion_owner = PotionOwner {
-                    player: t.owner.is_some(),
-                    name: t.owner,
-                    attacker: None,
-                    guest: t.guest,
-                };
-                self.splash(
-                    &t.stack,
-                    hit_at,
-                    None,
-                    Some((pos, dir)),
-                    t.age,
-                    t.id,
-                    &potion_owner,
-                    silent,
-                    t.velocity,
-                );
-                self.projectile_block_landed_event(t.id, thrower, pos);
-                if item != "minecraft:experience_bottle" {
-                    self.native_potion_splash(&item, [hit_at.x, hit_at.y, hit_at.z]);
-                }
-                continue;
-            }
-            if t.age < 1200 && t.position.y >= below_world {
-                kept.push(t);
-            }
-        }
+            (kept, ticking)
+        });
+    }
+    #[inline(always)]
+    fn with_lifted_thrown_potions<R>(
+        &mut self,
+        work: impl FnOnce(
+            &mut Self,
+            Vec<sunrise_gameplay_common::game::potions_common::ThrownPotion>,
+        ) -> (
+            Vec<sunrise_gameplay_common::game::potions_common::ThrownPotion>,
+            R,
+        ),
+    ) -> R {
+        let thrown = std::mem::take(&mut self.common.potions.thrown);
+        let (kept, result) = work(self, thrown);
         self.common.potions.thrown.splice(0..0, kept);
+        result
     }
     /// `AreaEffectCloud.readAdditionalSaveData`: loaded clouds join the same
     /// simulation as lingering potions, with their own timing and potion data.
@@ -1930,7 +1950,7 @@ impl crate::game::ServerGame<'_> {
             .into_iter()
             .filter(|p| p.alive)
             .collect();
-        let expired = self.with_lifted_breath_clouds(
+        let (expired, _ticking) = self.with_lifted_breath_clouds(
             sunrise_sim::join_seq::RestoreOrder::SpawnsFirst,
             |game, clouds| {
                 #[cfg(any(test, feature = "test-support"))]
@@ -1951,7 +1971,7 @@ impl crate::game::ServerGame<'_> {
                     }
                     keep
                 });
-                expired
+                (expired, ticking)
             },
         );
         // A cloud that expired on its own takes its `noPhysics` write with it.

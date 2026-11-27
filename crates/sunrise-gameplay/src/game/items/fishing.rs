@@ -958,20 +958,33 @@ impl crate::game::ServerGame<'_> {
         );
         &*self.common.res.facts().get(state).name == "minecraft:water"
     }
+    #[inline(always)]
+    fn with_extracted_hook<R>(
+        &mut self,
+        work: impl FnOnce(&mut Self, Hook) -> Option<(Hook, R)>,
+    ) -> Option<R> {
+        let hook = self.common.hook.extract()?;
+        let (id, join) = (hook.id, hook.join);
+        match work(self, hook) {
+            Some((hook, result)) => {
+                self.common.hook.put_back(hook);
+                Some(result)
+            }
+            None => {
+                self.common.hook.retire_extracted(id, join);
+                None
+            }
+        }
+    }
     /// `FishingHook.tick`.
     pub fn tick_fishing(&mut self) {
-        let Some(hook) = self.common.hook.extract() else {
-            return;
-        };
-        let (id, join) = (hook.id, hook.join);
-        let from = hook.position;
-        match self.tick_fishing_extracted(hook) {
-            Some(hook) => {
-                let to = hook.position;
-                self.common.hook.put_back(hook);
-                self.entity_section_step(id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
-            }
-            None => self.common.hook.retire_extracted(id, join),
+        if let Some((id, from, to)) = self.with_extracted_hook(|game, hook| {
+            let (id, from) = (hook.id, hook.position);
+            let hook = game.tick_fishing_extracted(hook)?;
+            let to = hook.position;
+            Some((hook, (id, from, to)))
+        }) {
+            self.entity_section_step(id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
         }
     }
     pub(in crate::game::server_side) fn tick_fishing_extracted(

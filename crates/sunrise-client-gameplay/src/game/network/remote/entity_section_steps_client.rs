@@ -18,41 +18,55 @@ pub(in crate::game) fn tick_items(
     game: &mut crate::game::ClientGame<'_>,
     entered: &mut Vec<sunrise_sim::entities::ItemSplash>,
 ) {
-    let mut items = game.dropped.lift();
-    let mut i = 0;
-    while i < items.len() {
-        let (_, discarded) = game.tick_item_with_block_contacts(
-            &mut items[i],
-            None,
-            &[],
-            true,
-            None,
-            &mut |splash| entered.push(splash),
-        );
-        let from = items[i].previous;
-        let to = items[i].position;
-        if !discarded {
-            let live = game.entity_section_step_visible(
-                items[i].id,
-                [from.x, from.y, from.z],
-                [to.x, to.y, to.z],
+    game.with_lifted_dropped(|game, items| {
+        let mut i = 0;
+        while i < items.len() {
+            let (_, discarded) = game.tick_item_with_block_contacts(
+                &mut items[i],
+                None,
+                &[],
+                true,
+                None,
+                &mut |splash| entered.push(splash),
             );
-            if !live {
+            let from = items[i].previous;
+            let to = items[i].position;
+            if !discarded {
+                let live = game.entity_section_step_visible(
+                    items[i].id,
+                    [from.x, from.y, from.z],
+                    [to.x, to.y, to.z],
+                );
+                if !live {
+                    items.remove(i);
+                    continue;
+                }
+            }
+            if discarded {
                 items.remove(i);
-                continue;
+            } else {
+                i += 1;
             }
         }
-        if discarded {
-            items.remove(i);
-        } else {
-            i += 1;
-        }
-    }
-    game.put_back_dropped(items);
+    });
 }
 
 #[cfg(feature = "client")]
 impl ClientGame<'_> {
+    #[inline(always)]
+    fn with_lifted_dropped<R>(
+        &mut self,
+        work: impl FnOnce(
+            &mut Self,
+            &mut sunrise_sim::join_seq::JoinList<sunrise_sim::entities::ItemEntity>,
+        ) -> R,
+    ) -> R {
+        let mut items = self.common.dropped.lift();
+        let result = work(self, &mut items);
+        self.put_back_dropped(items);
+        result
+    }
+
     /// `ClientLevel.isTickingEntity`: players always tick; other entities tick while their chunk is loaded.
     pub(in crate::game::client_side) fn remote_entity_is_ticking(&self, id: i32) -> bool {
         let Some(r) = self.client.remote.as_ref() else {

@@ -10,6 +10,22 @@ use sunrise_items::items::ItemStack;
 use sunrise_level::containers::BlockEntity;
 
 impl ServerGame<'_> {
+    #[inline(always)]
+    fn with_extracted_cart_global_lease<R>(
+        &mut self,
+        index: usize,
+        work: impl FnOnce(&mut Self, &mut Minecart) -> R,
+    ) -> R {
+        let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();
+        let mut cart = self
+            .common
+            .carts
+            .extract(self.common.carts[index].join)
+            .unwrap();
+        let result = work(self, &mut cart);
+        self.common.carts.put_back(index, cart);
+        result
+    }
     /// `getDismountLocationForPassenger`: beside the cart's motion direction,
     /// else on top.
     pub(in crate::game) fn dismount_cart(&mut self, i: usize) {
@@ -195,19 +211,14 @@ impl ServerGame<'_> {
             let tnt_prime =
                 self.common.carts[i].kind == CartKind::Tnt && (fire || speed >= f64::from(0.01f32));
             if tnt_prime {
-                let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();
-                let mut c = self
-                    .common
-                    .carts
-                    .extract(self.common.carts[i].join)
-                    .unwrap();
-                // MinecartTNT.destroy: prime instead of breaking.
-                if c.fuse < 0 {
-                    self.prime_cart(&mut c);
-                    c.fuse = c.random.next_int_bound(20).unwrap_or(0)
-                        + c.random.next_int_bound(20).unwrap_or(0);
-                }
-                self.common.carts.put_back(i, c);
+                self.with_extracted_cart_global_lease(i, |game, c| {
+                    // MinecartTNT.destroy: prime instead of breaking.
+                    if c.fuse < 0 {
+                        game.prime_cart(c);
+                        c.fuse = c.random.next_int_bound(20).unwrap_or(0)
+                            + c.random.next_int_bound(20).unwrap_or(0);
+                    }
+                });
             } else {
                 let join = self.common.carts[i].join;
                 let at = self.common.carts[i].position.components();

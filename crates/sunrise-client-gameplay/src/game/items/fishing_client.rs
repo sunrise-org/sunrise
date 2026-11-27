@@ -266,6 +266,19 @@ impl crate::game::ClientGame<'_> {
             );
         }
     }
+    #[inline(always)]
+    fn with_extracted_client_hook(&mut self, work: impl FnOnce(&mut Self, &mut Hook)) {
+        if let Some(mut hook) = self.common.hook.extract() {
+            work(self, &mut hook);
+            self.common.hook.put_back(hook);
+        }
+    }
+    #[inline(always)]
+    fn with_lifted_remote_hooks(&mut self, work: impl FnOnce(&mut Self, &mut Vec<RemoteHook>)) {
+        let mut hooks = std::mem::take(&mut self.client.remote_hooks);
+        work(self, &mut hooks);
+        self.client.remote_hooks = hooks;
+    }
     /// `FishingHook.tick` on a client: the interpolation step towards the
     /// server's last update, then its own movement between the tracker's
     /// updates (every five ticks), floating in water and riding what it
@@ -274,12 +287,12 @@ impl crate::game::ClientGame<'_> {
         if self.client.remote.is_none() {
             return;
         }
-        if let Some(mut h) = self.common.hook.extract() {
+        self.with_extracted_client_hook(|game, h| {
             h.previous = h.position;
             h.position = h.lerp.step(h.position);
             let before = h.position;
-            let owner = self.common.player.as_ref().map(|p| p.position);
-            (h.position, h.velocity, h.state, h.ground) = self.client_hook_step(
+            let owner = game.common.player.as_ref().map(|p| p.position);
+            (h.position, h.velocity, h.state, h.ground) = game.client_hook_step(
                 h.id,
                 owner,
                 true,
@@ -287,29 +300,28 @@ impl crate::game::ClientGame<'_> {
                 &mut h.random,
             );
             h.lerp.moved(h.position.subtract(before));
-            self.common.hook.put_back(h);
-        }
-        let mut hooks = std::mem::take(&mut self.client.remote_hooks);
-        for h in &mut hooks {
-            h.previous = h.position;
-            h.position = h.lerp.step(h.position);
-            let before = h.position;
-            let owner = self
-                .common
-                .mobs
-                .iter()
-                .find(|m| m.id == h.owner)
-                .map(|m| m.position);
-            (h.position, h.velocity, h.state, h.ground) = self.client_hook_step(
-                h.id,
-                owner,
-                false,
-                (h.position, h.velocity, h.state, h.ground),
-                &mut h.random,
-            );
-            h.lerp.moved(h.position.subtract(before));
-        }
-        self.client.remote_hooks = hooks;
+        });
+        self.with_lifted_remote_hooks(|game, hooks| {
+            for h in hooks {
+                h.previous = h.position;
+                h.position = h.lerp.step(h.position);
+                let before = h.position;
+                let owner = game
+                    .common
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == h.owner)
+                    .map(|m| m.position);
+                (h.position, h.velocity, h.state, h.ground) = game.client_hook_step(
+                    h.id,
+                    owner,
+                    false,
+                    (h.position, h.velocity, h.state, h.ground),
+                    &mut h.random,
+                );
+                h.lerp.moved(h.position.subtract(before));
+            }
+        });
     }
     /// FishingHookRenderer: each line, 16 black `lines` segments sagging
     /// from a quarter block above the hook to the rod in its owner's hand,

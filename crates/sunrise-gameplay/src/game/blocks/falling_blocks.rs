@@ -83,27 +83,46 @@ impl crate::game::ServerGame<'_> {
             }
             // Only terminal owners leave storage. Carry the original lifetime
             // into the final state until placement, drops or travel finish.
-            let Some(mut owner) = game.falling.extract(join) else {
-                return Ok(());
-            };
-            sunrise_sim::join_seq::store_back(&mut owner, f);
-            if let Some(mut kept) = game.finish_falling_step(step, owner)
-                && !game
+            if let Some(state) = game.with_extracted_falling(i, id, join, |game, mut owner| {
+                sunrise_sim::join_seq::store_back(&mut owner, f);
+                let mut kept = game.finish_falling_step(step, owner)?;
+                if game
                     .persist
                     .removals
                     .contains(&super::commands::Target::Falling(id))
-            {
+                {
+                    return None;
+                }
                 // Entity.scale(getAirDrag()) ends the tick of a block that stays.
                 kept.velocity = sunrise_sim::entity_rules::scale_air_drag(kept.velocity);
                 let state = kept.state;
-                let falling = &mut game.common.falling;
-                falling.put_back(i.min(falling.len()), kept);
+                Some((kept, state))
+            }) {
                 game.note_falling_tick(id, join, state);
-                return Ok(());
             }
-            game.falling.retire_extracted(id, join);
             Ok(())
         })
+    }
+    #[inline(always)]
+    fn with_extracted_falling<R>(
+        &mut self,
+        index: usize,
+        id: u32,
+        join: sunrise_sim::join_seq::JoinSeq,
+        work: impl FnOnce(&mut Self, FallingBlock) -> Option<(FallingBlock, R)>,
+    ) -> Option<R> {
+        let owner = self.common.falling.extract(join)?;
+        match work(self, owner) {
+            Some((kept, result)) => {
+                let falling = &mut self.common.falling;
+                falling.put_back(index.min(falling.len()), kept);
+                Some(result)
+            }
+            None => {
+                self.common.falling.retire_extracted(id, join);
+                None
+            }
+        }
     }
     /// The landing work of a falling block's tick: nothing for one gone, its item for one
     /// that dropped, or the landing decision for one on the ground (returning the block when

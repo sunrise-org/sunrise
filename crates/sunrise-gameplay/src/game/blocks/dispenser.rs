@@ -862,6 +862,22 @@ impl crate::game::ServerGame<'_> {
         self.player_equipped(name, Some(one));
         self.apply_equipment();
     }
+    #[inline(always)]
+    fn with_extracted_mob_global_lease<R>(
+        &mut self,
+        index: usize,
+        work: impl FnOnce(&mut Self, &mut sunrise_sim::mobs::Mob) -> R,
+    ) -> (sunrise_sim::join_seq::visibility::PassLease, R) {
+        let lease = sunrise_sim::join_seq::visibility::PassLease::enter();
+        let mut mob = self
+            .common
+            .mobs
+            .extract(self.common.mobs[index].join)
+            .unwrap();
+        let result = work(self, &mut mob);
+        self.common.mobs.put_back(index, mob);
+        (lease, result)
+    }
     /// After `EntityType.spawn` / `MobBucketItem.spawn`: `mob.playAmbientSound()`.
     pub(in crate::game::server_side) fn mob_ambient(&mut self, id: u32) -> Result<()> {
         if self.dragon_spawn_ambient(id) {
@@ -870,14 +886,14 @@ impl crate::game::ServerGame<'_> {
         let Some(i) = self.common.mobs.iter().position(|m| m.id == id) else {
             return Ok(());
         };
-        let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();
-        let mut m = self.common.mobs.extract(self.common.mobs[i].join).unwrap();
-        let mut events = Vec::new();
-        {
-            let w = self.mob_world_base(&[]);
-            sunrise_sim::mobs::ai::ambient_sound(&mut m, &w, &mut events);
-        }
-        self.common.mobs.put_back(i, m);
+        let (_save_lease, events) = self.with_extracted_mob_global_lease(i, |game, m| {
+            let mut events = Vec::new();
+            {
+                let w = game.mob_world_base(&[]);
+                sunrise_sim::mobs::ai::ambient_sound(m, &w, &mut events);
+            }
+            events
+        });
         self.handle_mob_events(events)
     }
     /// A mob a bucket emptied (`MobBucketItem.spawn`): the bucket's components

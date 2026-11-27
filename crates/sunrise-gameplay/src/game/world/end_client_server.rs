@@ -88,42 +88,54 @@ impl ServerGame<'_> {
     }
     /// EyeOfEnder.tick: fly, then drop (4 in 5) or shatter after 80 ticks.
     pub(in crate::game::server_side) fn tick_eyes(&mut self) {
-        let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();
-        let mut eyes = std::mem::take(&mut self.common.end.eyes);
-        let mut shattered = Vec::new();
-        eyes.retain_mut(|eye| {
-            eye.previous = eye.position;
-            let next = eye.position + eye.velocity;
-            eye.velocity = EyeOfEnder::update_delta(eye.velocity, next, eye.target);
-            eye.position = next;
-            // Its move is filed at once (told with the dragon's step), also for one about to go.
-            self.entity_section_step(eye.id, eye.previous.to_array(), next.to_array());
-            eye.life += 1;
-            if eye.life <= 80 {
-                return true;
-            }
-            let at = eye.position.to_array();
-            self.server_play_sound("minecraft:entity.ender_eye.death", at, 1.0, 1.0);
-            if eye.survive {
-                // new ItemEntity(level, x, y, z, item): random spread, 0.2 up.
-                let vx = self.common.world.random.next_double() * 0.2 - 0.1;
-                let vz = self.common.world.random.next_double() * 0.2 - 0.1;
-                let stack = ItemStack {
-                    item: "minecraft:ender_eye".into(),
-                    count: 1,
-                    damage: 0,
-                    extra: None,
-                };
-                self.spawn_item(stack, at, [vx, 0.2, vz], 0);
-            } else {
-                shattered.push(at.map(|v| v.floor() as i32));
-            }
-            false
+        let (_save_lease, shattered) = self.with_lifted_eyes(|game, eyes| {
+            let mut shattered = Vec::new();
+            eyes.retain_mut(|eye| {
+                eye.previous = eye.position;
+                let next = eye.position + eye.velocity;
+                eye.velocity = EyeOfEnder::update_delta(eye.velocity, next, eye.target);
+                eye.position = next;
+                // Its move is filed at once (told with the dragon's step), also for one about to go.
+                game.entity_section_step(eye.id, eye.previous.to_array(), next.to_array());
+                eye.life += 1;
+                if eye.life <= 80 {
+                    return true;
+                }
+                let at = eye.position.to_array();
+                game.server_play_sound("minecraft:entity.ender_eye.death", at, 1.0, 1.0);
+                if eye.survive {
+                    // new ItemEntity(level, x, y, z, item): random spread, 0.2 up.
+                    let vx = game.common.world.random.next_double() * 0.2 - 0.1;
+                    let vz = game.common.world.random.next_double() * 0.2 - 0.1;
+                    let stack = ItemStack {
+                        item: "minecraft:ender_eye".into(),
+                        count: 1,
+                        damage: 0,
+                        extra: None,
+                    };
+                    game.spawn_item(stack, at, [vx, 0.2, vz], 0);
+                } else {
+                    shattered.push(at.map(|v| v.floor() as i32));
+                }
+                false
+            });
+            shattered
         });
-        self.common.end.eyes = eyes;
         for pos in shattered {
             self.server_level_event_at(2003, pos, 0);
         }
+    }
+
+    #[inline(always)]
+    fn with_lifted_eyes<R>(
+        &mut self,
+        work: impl FnOnce(&mut Self, &mut Vec<EyeOfEnder>) -> R,
+    ) -> (sunrise_sim::join_seq::visibility::PassLease, R) {
+        let lease = sunrise_sim::join_seq::visibility::PassLease::enter();
+        let mut eyes = std::mem::take(&mut self.common.end.eyes);
+        let result = work(self, &mut eyes);
+        self.common.end.eyes = eyes;
+        (lease, result)
     }
 }
 
