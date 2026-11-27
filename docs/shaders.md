@@ -62,3 +62,10 @@ starts the pack over as if just loaded and draws 64 frames 50 ms apart on its cl
 decimal: `16.666667` steps a 60 fps clock. The same build, GPU
 and driver write the same bytes every run, so two versions of a pack compare by a pixel diff. `screenshot-sequence
 cancel` stops one.
+
+## Comparing with Java
+
+`tools/shader_scenes.py` photographs a pack at the fixed views of `tools/shader-scenes/scenes.json` in Sunrise and in
+Java 26.3 with Iris, in one shared world, and writes a report with both pictures side by side and a difference per
+view. How to run it and what it checks:
+[tools/shader-scenes/README.md](../tools/shader-scenes/README.md).

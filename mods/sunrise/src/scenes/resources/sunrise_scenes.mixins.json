@@ -1,0 +1,11 @@
+{
+  "required": true,
+  "package": "dev.sunriselab.scenes.mixin",
+  "compatibilityLevel": "JAVA_25",
+  "client": [
+    "SceneFrameMixin"
+  ],
+  "injectors": {
+    "defaultRequire": 1
+  }
+}

@@ -1,0 +1,21 @@
+{
+  "schemaVersion": 1,
+  "id": "sunrise_scenes",
+  "version": "1.0.0",
+  "name": "Sunrise shader scene driver",
+  "description": "Dev-only: places the vanilla client at tools/shader-scenes/scenes.json's views and saves a picture of each, for tools/shader_scenes.py. Never shipped.",
+  "license": "PolyForm-Shield-1.0.0",
+  "environment": "client",
+  "entrypoints": {
+    "client": [
+      "dev.sunriselab.scenes.SceneDriver"
+    ]
+  },
+  "mixins": [
+    "sunrise_scenes.mixins.json"
+  ],
+  "depends": {
+    "fabricloader": ">=0.19.5",
+    "minecraft": "26.3"
+  }
+}

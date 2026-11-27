@@ -27,7 +27,7 @@ An agent session that has read any forbidden material is disqualified for both r
 |---|---|---|
 | May read | Public documentation of the pack format for pack authors (OptiFine's `shaders.txt` / `shaders.properties` docs, the `shaders.properties` documentation site, ShaderDoc, the shaderLABS wiki, tutorials about writing packs); the GLSL and OpenGL specifications; packs' own `.properties` and `.lang` files and folder layout; Minecraft 26.3 | **This folder only** (the spec, its open questions, the answers to its questions); Minecraft 26.3 (the project's reference, as for every Sunrise feature); wgpu and naga documentation; Sunrise's code outside the removed shader feature |
 | May use | web search and fetch for documentation pages; local copies of public packs | running shader packs inside Sunrise as black boxes and looking at the result; the packs' own `.properties` and `.lang` files when a test needs them |
-| Never | source or binaries of Iris, OptiFine, Oculus, Canvas, Sodium or any other loader or renderer; Sunrise's removed shader code (`crates/sunrise-shaderpack`, `java_pack.rs`, `gfx/java_stages.rs`, `gfx/java_terrain.rs`, `gfx/pack_stages.rs`, `shader_pack.rs`, `docs/shader-packs.md`, `docs/java-packs.md`), its git history and its PRs; "how X does it" answers built from code | everything in the spec team's "Never" column, **and** the documentation the spec team read (the spec is the only channel), old Sunrise notes, reports or issues about the removed feature, and `git log` / `git show` / `git blame` of the removed paths |
+| Never | source or binaries of Iris, OptiFine, Oculus, Canvas, Sodium or any other loader or renderer (one exception, [D-11](decisions.md#d-11-java-263--iris-as-a-black-box-reference-for-the-scene-suite): running the pinned Iris and Sodium jars as a black box, only to capture screenshots of the checked-in scene file's views (`tools/shader-scenes/scenes.json`) as comparison references); Sunrise's removed shader code (`crates/sunrise-shaderpack`, `java_pack.rs`, `gfx/java_stages.rs`, `gfx/java_terrain.rs`, `gfx/pack_stages.rs`, `shader_pack.rs`, `docs/shader-packs.md`, `docs/java-packs.md`), its git history and its PRs; "how X does it" answers built from code | everything in the spec team's "Never" column, **and** the documentation the spec team read (the spec is the only channel), old Sunrise notes, reports or issues about the removed feature, and `git log` / `git show` / `git blame` of the removed paths |
 
 The Khronos GLSL and OpenGL specifications are public standards the spec cites by section. Whether the implementation
 team may read them directly (they are needed to write a GLSL front end) is Ludovic's call; the spec team's
@@ -35,6 +35,11 @@ recommendation is yes, because they describe the language, not any loader.
 
 Running another loader to look at a pack's output is not part of this process. If a comparison with real output is
 needed, the spec team records the observation (what was seen, with which pack and settings) in a new spec revision.
+One exception, [D-11](decisions.md#d-11-java-263--iris-as-a-black-box-reference-for-the-scene-suite): the scene
+suite (`tools/shader_scenes.py`) may run the pinned Iris and Sodium jars as a black box, only to capture screenshots of
+the checked-in scene file's views (`tools/shader-scenes/scenes.json`) as comparison references. Every rule of the
+"Never" row still holds: no source, decompiling, jar inspection or documentation of Iris or OptiFine; looking up the
+`depends` field of a jar's `fabric.mod.json` (metadata, to know which jars load together) is not jar inspection.
 
 ## Workflow
 

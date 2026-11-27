@@ -198,3 +198,23 @@ the full list.
   pipeline.
 - **Tests:** `pack_post::tests::a_sampler_of_another_class_than_its_image_refuses_the_program`
   (`sunrise-render-shaderpack`).
+
+## D-11: Java 26.3 + Iris as a black-box reference for the scene suite
+
+- **Open point:** decided 2026-11-27 for #318 by the shader lead (vnsmoreira). The [README](README.md) lists Iris
+  binaries under "Never" and says running another loader to look at a pack's output is not part of the process. The
+  scene suite (`tools/shader_scenes.py`) compares Sunrise's pictures of a pack with reference pictures of the same
+  fixed views, and needs those references from somewhere.
+- **Decision:** the suite's Java side (`tools/shader_scenes_java.py`) may run the released Iris, Sodium and Fabric API
+  jars pinned by sha512 in `tools/shader-scenes/mods.lock.json`, only to capture screenshots of the views in the
+  checked-in scene file, `tools/shader-scenes/scenes.json`, as comparison references; the tool refuses a pack run
+  with any other scene file. Reading Iris's or OptiFine's source, decompiling or otherwise inspecting their jars, and
+  reading their documentation stay forbidden. The one exception is metadata, not code: the `depends` field of each
+  jar's `fabric.mod.json` may be looked up, to know which jars must load together. Packs are only loaded, never
+  opened. The pictures are references for what a pack's output looks like; nothing in Sunrise's code comes from them,
+  and they are never committed.
+- **Reason:** the suite's purpose is visual parity with how packs look for players in Java, which a picture of the
+  output shows and a document can't. A screenshot of a fixed view says what the pack draws there, not how the loader
+  does it, and it is taken without opening the loader.
+- **Tests:** `tests/test_shader_scenes.py`, `PathTests.test_iris_runs_only_the_checked_in_scene_file` (the scope);
+  the rest of the rule is a process rule, held by review.
