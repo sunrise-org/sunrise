@@ -2115,3 +2115,69 @@ fn a_raw_texture_answers_to_its_name_with_or_without_minecraft() {
     );
     assert_eq!(atlas.texture_rect("textures/gui/own"), None);
 }
+
+/// A pack's Custom GUIs rule puts its picture on a container screen: the picture packs under the
+/// rule's name at the size of the texture it replaces (the screen lays out by that size), and the
+/// atlas answers with it only for a screen the rule holds for and whose picture packed.
+#[test]
+fn a_custom_gui_picture_packs_at_the_size_of_the_texture_it_replaces() {
+    use sunrise_optifine::gui::{Container, Detail, Subject};
+    let temp = std::env::temp_dir().join(format!("sunrise-atlas-gui-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&temp);
+    let (defaults, pack) = (temp.join("defaults"), temp.join("pack"));
+    write_png(&defaults, "gui/container/furnace", 256, 256);
+    write_png(&pack, "gui/container/furnace", 256, 256);
+    let folder = pack.join("assets/minecraft/optifine/gui/container");
+    fs::create_dir_all(&folder).unwrap();
+    fs::write(
+        folder.join("desert.properties"),
+        "container=furnace
+texture=desert
+biomes=desert
+",
+    )
+    .unwrap();
+    // Twice the resolution of the texture it replaces.
+    write_strip(
+        &folder.join("desert.png"),
+        512,
+        512,
+        &[[200, 150, 50, 255]],
+        None,
+    );
+    // A rule whose picture the pack lacks.
+    fs::write(
+        folder.join("missing.properties"),
+        "container=hopper
+texture=missing
+",
+    )
+    .unwrap();
+    let atlas = HudAtlas::build_over(
+        &ResourceSource::directory(pack.clone()),
+        &ResourceSource::directory(defaults.clone()),
+    )
+    .unwrap();
+    let _ = fs::remove_dir_all(&temp);
+    let screen = |container, biome| Subject {
+        container,
+        biome,
+        y: 64,
+        name: None,
+        detail: Detail::None,
+    };
+    let furnace = "gui/container/furnace";
+    let sprite = atlas.container_sprite(furnace, || screen(Container::Furnace, "minecraft:desert"));
+    assert_eq!(sprite, "optifine/gui/container/desert");
+    let rect = atlas.sprites[sprite];
+    assert_eq!(
+        ((rect.w, rect.h), rect.texels((atlas.width, atlas.height))),
+        ((256, 256), (512, 512))
+    );
+    assert_eq!(texel_at(&atlas, rect, 100, 100), [200, 150, 50, 255]);
+    let plains = atlas.container_sprite(furnace, || screen(Container::Furnace, "minecraft:plains"));
+    assert_eq!(plains, furnace);
+    let hopper = "gui/container/hopper";
+    let missing = atlas.container_sprite(hopper, || screen(Container::Hopper, "minecraft:desert"));
+    assert_eq!(missing, hopper);
+}

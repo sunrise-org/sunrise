@@ -104,6 +104,9 @@ pub struct HudAtlas {
     pub emissive: std::sync::Arc<sunrise_optifine::emissive::Emissive>,
     /// ETF's blinking frames (`_blink`), packed here too.
     pub blinks: sunrise_optifine::blink::Blinks,
+    /// The packs' OptiFine Custom GUIs rules, whose pictures this atlas packs
+    /// ([`HudAtlas::container_sprite`]).
+    pub custom_guis: sunrise_optifine::gui::CustomGuis,
     /// Of the shared atlas's textures, their LabPBR normal and specular maps as paged maps
     /// (`paged_maps.rs`), read while loading for shader packs (`sprites::labpbr_maps`).
     pub material_maps: std::sync::Arc<[Option<crate::paged_maps::PagedMap>; 2]>,
@@ -398,6 +401,7 @@ impl HudAtlas {
             random_textures: self.random_textures.clone(),
             emissive: self.emissive.clone(),
             blinks: self.blinks.clone(),
+            custom_guis: self.custom_guis.clone(),
             material_maps: self.material_maps.clone(),
             white: self.white,
         }
@@ -656,6 +660,7 @@ impl HudAtlas {
             random_textures: Default::default(),
             emissive: Arc::default(),
             blinks: Default::default(),
+            custom_guis: Default::default(),
             white,
         })
     }
@@ -751,6 +756,7 @@ impl HudAtlas {
             random_textures: Default::default(),
             emissive: Default::default(),
             blinks: Default::default(),
+            custom_guis: Default::default(),
         }
     }
 }

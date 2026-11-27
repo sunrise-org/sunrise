@@ -340,10 +340,17 @@ impl HudAtlas {
                 name.clone_from(&key);
             }
         }
-        let mut cit_names = HashSet::new();
+        // What the atlas may do without when the images do not all fit: Custom Item Textures
+        // and the pictures of Custom GUIs.
+        let mut optional = HashSet::new();
         let mut gui_files = HashMap::new();
         let mut gui_names = Vec::new();
         let mut non_gui = HashSet::new();
+        let custom_guis = if full {
+            sunrise_optifine::gui::CustomGuis::load(root)
+        } else {
+            Default::default()
+        };
         if full {
             let found = atlas_sprites(root, &images);
             let dropped = found.dropped;
@@ -359,12 +366,19 @@ impl HudAtlas {
             gui_names = found.gui;
             non_gui = found.non_gui;
             for (image, image_flags, is_animated) in cit_sprites(root, &images) {
-                cit_names.insert(image.0.clone());
+                optional.insert(image.0.clone());
                 if let Some(f) = image_flags {
                     flags.insert(image.0.clone(), f);
                 }
                 if is_animated {
                     animated.push(image.0.clone());
+                }
+                images.push(image);
+            }
+            for (image, gui_size) in custom_gui_sprites(root, defaults, &custom_guis) {
+                optional.insert(image.0.clone());
+                if let Some(size) = gui_size {
+                    gui_sizes.insert(image.0.clone(), size);
                 }
                 images.push(image);
             }
@@ -404,7 +418,7 @@ impl HudAtlas {
             pad_sprite_borders(&mut base_images, &flags, u32::MAX)?;
         base_images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
         let (width, placements, glyph_region) =
-            Self::layout_leaving_out(&mut base_images, &mut animated, &cit_names, max_atlas_size)
+            Self::layout_leaving_out(&mut base_images, &mut animated, &optional, max_atlas_size)
                 .or_else(|error| -> Result<_> {
                 let models = reducible_model_sprites(root, &base_images, &blur_bordered);
                 let layout = Self::layout_reducing_models_with_borders(
@@ -556,6 +570,7 @@ impl HudAtlas {
             random_textures,
             emissive,
             blinks,
+            custom_guis,
             font,
             white,
         })
