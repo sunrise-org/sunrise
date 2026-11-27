@@ -228,17 +228,27 @@ def read_run(folder):
         record = json.loads(path.read_text())
     except (OSError, ValueError) as error:
         return {"unreadable": f"{path}: {error}"}
+    try:
+        # A lone surrogate (JSON's "\\ud800") decodes, but no report can be written with it.
+        json.dumps(record, ensure_ascii=False).encode("utf-8")
+    except UnicodeEncodeError:
+        return {"unreadable": f"{path}: a string in it is not text (a lone surrogate)"}
     problem = record_shape_problem(record)
     return {"unreadable": f"{path}: {problem}"} if problem else record
 
 
-def run_folders(out):
-    """{pack key: {side: folder}} for every run folder this tool made under out/base and out/head."""
+def run_folders(out, keys=None):
+    """{pack key: {side: folder}} for the run folders this tool made under out/base and out/head: those of `keys`
+    only when given, else every one there is."""
     runs = {}
     for side in SIDES:
         base = Path(out) / side
-        if base.is_dir():
-            for folder in sorted(p for p in base.iterdir() if p.is_dir() and (p / RUN_MARK).exists()):
+        if keys is not None:
+            folders = [base / key for key in keys]
+        else:
+            folders = sorted(base.iterdir()) if base.is_dir() else []
+        for folder in folders:
+            if folder.is_dir() and (folder / RUN_MARK).exists():
                 runs.setdefault(folder.name, {})[side] = folder
     return runs
 
@@ -367,10 +377,11 @@ def compare(out, scenes, packs=None, jobs=None):
     out = Path(out)
     report_dir = fresh_report_dir(out)
     size = scenes["size"]
-    runs = run_folders(out)
-    # An explicit list (`run`'s packs) is the whole scope: an earlier run's folder of another pack is not this
-    # comparison's. Without one (`compare` on its own) every run folder this tool made is compared.
-    keys = sorted(set(packs)) if packs is not None else sorted(runs)
+    # An explicit list (`run`'s packs) is the whole scope: only its folders are looked for, so an earlier run's
+    # folder of another pack is not this comparison's. Without one (`compare` on its own) every run folder this tool
+    # made is compared.
+    runs = run_folders(out, None if packs is None else sorted(set(packs)))
+    keys = sorted(set(runs) | set(packs or []))
     current = scene_hash(scenes)
     report = {"size": size, "scene_hash": current, "packs": {}}
     tasks, rows_of = [], {}
