@@ -18,7 +18,10 @@ use super::native_shaders::{fingerprint, outcome, refused, remember};
 use super::{Dim, Screen};
 use std::cell::RefCell;
 use std::collections::{BTreeMap, HashMap};
-use std::path::Path;
+use std::{
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use sunrise_client_render::render_geometry::EntitySpan;
 
 /// The values the player chose for pack `name`'s options (`shaderpacks/<name>.txt`).
@@ -491,6 +494,72 @@ impl PackIds {
         }
     }
 }
+
+#[derive(Clone, PartialEq, Eq)]
+struct PackSelection {
+    path: PathBuf,
+    dimension: &'static str,
+    options_revision: u64,
+    renderer_epoch: u64,
+    renderer_layout: (bool, u32, Option<Tonemap>),
+    resource_generation: u64,
+    world_generation: u64,
+    registry: usize,
+    biomes: usize,
+    fluids_revision: u64,
+}
+
+#[derive(Clone, PartialEq, Eq)]
+struct TranslationKey {
+    generation: u64,
+    selection: PackSelection,
+    fingerprint: Option<u64>,
+}
+
+struct TranslationRequest {
+    key: TranslationKey,
+    pack: Pack,
+    folder: String,
+    properties: Properties,
+    macros: Macros,
+    inputs: sunrise_shaders::GameInputs,
+    biomes: Vec<String>,
+    registry: &'static sunrise_world::registry::BlockRegistry,
+    facts: Arc<sunrise_items::blocks::BlockFacts>,
+    resources: sunrise_assets::resource_source::ResourceSource,
+    fluids: Vec<(
+        sunrise_world::fluid::ModFluid,
+        &'static sunrise_world::fluid::ModFluidType,
+    )>,
+}
+
+struct TranslatedPack {
+    post: sunrise_shaders::Post,
+    folder: String,
+    blocks: BlockIds,
+    layers: BlockLayers,
+    terrain_states: Vec<i32>,
+    block_items: HashMap<String, i32>,
+    items: HashMap<String, i32>,
+    entities: HashMap<String, i32>,
+    item_file: bool,
+    old_hand_light: bool,
+    vignette: bool,
+    old_lighting: bool,
+    separate_ao: bool,
+    resource_notes: Vec<String>,
+}
+
+struct TranslationReply {
+    key: TranslationKey,
+    outcome: Result<Option<TranslatedPack>, String>,
+}
+
+const _: fn() = || {
+    fn assert_owned<T: Send + 'static>() {}
+    assert_owned::<TranslationRequest>();
+    assert_owned::<TranslationReply>();
+};
 
 impl crate::game::ClientGame<'_> {
     /// Loads the pack for the current dimension when it changed, and returns this frame's
