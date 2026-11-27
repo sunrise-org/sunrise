@@ -147,7 +147,7 @@ fn sprite(key: &str) -> Option<String> {
 /// The entries of the file `text`, in file order. A texture listed twice keeps its last value, and
 /// a line whose value is not one of the five is left out, as is a `0`.
 pub fn parse(text: &str) -> Vec<Entry> {
-    Properties::parse(text)
+    Properties::parse_equals_first(text)
         .entries
         .into_iter()
         .filter_map(|(key, value)| {
