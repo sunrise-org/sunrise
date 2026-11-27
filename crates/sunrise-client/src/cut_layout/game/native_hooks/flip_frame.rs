@@ -50,7 +50,7 @@ mod tests {
                 let frame = |game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
                              shown,
                              moments: &[&str]| {
-                    game.extras_frame(elapsed);
+                    game.extras_frame();
                     assert_eq!(game.render_and_flip(elapsed).unwrap(), shown);
                     assert_eq!(*heard.lock().unwrap(), moments);
                     heard.lock().unwrap().clear();
@@ -63,12 +63,15 @@ mod tests {
                 *game.test_title_mut() = Some(title);
                 game.render_with(|_, frame| {
                     assert!(frame.title);
+                    heard.lock().unwrap().push("draw");
                     Ok(false)
                 })
                 .unwrap();
+                assert_eq!(*heard.lock().unwrap(), ["pre", "draw", "post"]);
+                heard.lock().unwrap().clear();
                 frame(game, true, &["pre", "post", "flip"]);
 
-                // A minimized window: the frame is prepared, never drawn.
+                // A suspended renderer is called but refuses presentation.
                 game.test_renderer_mut().as_mut().unwrap().suspended = true;
                 frame(game, false, &["pre", "post"]);
                 *game.test_title_mut() = None;

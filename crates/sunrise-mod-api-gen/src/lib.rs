@@ -667,12 +667,12 @@ mod tests {
             .iter()
             .find(|p| p.name == "render_frame_pre")
             .unwrap();
-        assert_eq!(frame.version, 2);
+        assert_eq!(frame.version, 3);
         let post = points
             .iter()
             .find(|p| p.name == "render_frame_post")
             .unwrap();
-        assert_eq!(post.version, 2);
+        assert_eq!(post.version, 3);
         assert_eq!(
             frame.target,
             "sunrise_client_gameplay::game::native_hooks::render_frame_pre::ClientGame<'_>::native_render_frame_pre"

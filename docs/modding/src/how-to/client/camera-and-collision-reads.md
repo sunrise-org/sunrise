@@ -67,7 +67,7 @@ headless host) the read is `None` and the write is `false`. Both take `&self`, s
 
 ## Camera snapshots and perspective
 
-The `ClientHost::camera()` helper returns the most recently extracted world frame's camera, or `None` without a loaded level or before its first extraction. Its position, interpolated eye height, partial tick, angles (`yaw`, `pitch`, and `roll`), final FOV, near/far planes and dimension accompany column-major view and projection matrices. The view is camera-relative and includes roll, bob and spin; projection uses reversed Z. Earlier callbacks in a frame can see the previous frame.
+The `ClientHost::camera()` helper returns the most recently extracted world frame's camera, or `None` without a loaded level or before its first extraction. Its position, interpolated eye height, partial tick, angles (`yaw`, `pitch`, and `roll`), final FOV, near/far planes and dimension accompany column-major view and projection matrices. The view is camera-relative and includes roll, bob and spin; projection uses reversed Z. Earlier callbacks in a frame can see the previous frame; `render_frame_pre` runs after extraction and sees the current world frame's camera when one was extracted.
 
 Resolve a level with `host.level(dimension)` and use
 `level.visit_block_collision(host, pos, &mut visit)`. The visitor receives block-local

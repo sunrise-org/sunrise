@@ -258,6 +258,7 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn frame_tick_rate_reads_the_displayed_levels_configured_rate() {
+        use sunrise_client_gameplay::game::native_hooks::particle_count_tests::frame_scene;
         use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
         use sunrise_protocol::{
             connection::Pipe,
@@ -319,6 +320,7 @@ mod tests {
         .into();
         mod_platform::testing::with_mods(mods, || {
             with_client_game(|game| {
+                let _event_loop = frame_scene(game);
                 let (client, _server) = Pipe::pair();
                 game.connect_local(client, "rate").unwrap();
                 let spawn = play::SpawnInfo {
@@ -350,8 +352,7 @@ mod tests {
                 .unwrap();
                 saw.lock().unwrap().original = game.native_client_level();
                 let frame = |game: &mut sunrise_client_gameplay::game::ClientGame<'_>| {
-                    game.native_render_frame_pre(Duration::ZERO, 0.5, 0.5);
-                    game.finish_render_frame(Duration::ZERO);
+                    game.render_and_flip(Duration::ZERO).unwrap();
                 };
                 frame(game);
                 for (rate, frozen) in [(37.5, false), (11.25, true)] {

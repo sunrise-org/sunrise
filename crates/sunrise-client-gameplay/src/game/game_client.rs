@@ -327,8 +327,8 @@ impl crate::game::ClientGame<'_> {
             window: self.pointer_space(framebuffer),
         }
     }
-    pub(in crate::game) fn render_frame(&mut self) -> Result<bool> {
-        self.render_with_hooks(|renderer, frame, hooks| {
+    pub(in crate::game) fn render_frame(&mut self, elapsed: Duration) -> Result<bool> {
+        self.render_with_hooks(elapsed, |renderer, frame, hooks| {
             sunrise_level::spans::time("renderer", || renderer.render(frame, hooks))
         })
     }
@@ -1983,7 +1983,7 @@ impl crate::game::ClientGame<'_> {
                         log::warn!("Sunrise: {e}");
                     }
                     self.client_tick_steps(steps, Some(event_loop))?;
-                    self.extras_frame(elapsed);
+                    self.extras_frame();
                     self.follow_retry()?;
                     self.apply_mouse_look();
                     self.input_look(elapsed.as_secs_f32());
@@ -3862,16 +3862,15 @@ impl crate::game::ClientGame<'_> {
             self.client.cursor = projection.project_pointer(position).subpixel();
         }
     }
-    pub(in crate::game::client_side) fn render(&mut self) -> Result<bool> {
+    pub(in crate::game::client_side) fn render(&mut self, elapsed: Duration) -> Result<bool> {
         if self.client.screenshot_sequence.0.is_some() {
-            return self.render_sequence_frame();
+            return self.render_sequence_frame(elapsed);
         }
-        self.render_frame()
+        self.render_frame(elapsed)
     }
-    /// Render the frame, then its two moments after that: `render_frame_post` whatever
-    /// became of it, `flip_frame` once it was presented.
+    /// Bracket the render call with the frame hooks, then report presentation with `flip_frame`.
     pub fn render_and_flip(&mut self, elapsed: Duration) -> Result<bool> {
-        let rendered = match self.render() {
+        let rendered = match self.render(elapsed) {
             // The callback can fire during this frame; rebuild on
             // the next redraw rather than exiting on its error.
             Err(_)
@@ -3886,7 +3885,6 @@ impl crate::game::ClientGame<'_> {
             }
             result => result?,
         };
-        self.finish_render_frame(elapsed);
         if rendered {
             // The submit thread may still hold the frame: a listener hears it after the
             // present, and with none the next frame keeps overlapping it.
@@ -3908,11 +3906,49 @@ impl crate::game::ClientGame<'_> {
         &mut self,
         consume: impl FnOnce(&mut Renderer, &Frame<'_>) -> Result<bool>,
     ) -> Result<bool> {
-        self.render_with_hooks(|renderer, frame, _| consume(renderer, frame))
+        self.render_with_hooks(Duration::ZERO, |renderer, frame, _| {
+            consume(renderer, frame)
+        })
+    }
+
+    /// Only call this once a draw is going to run. Its result (including an error
+    /// or a refused presentation) doesn't change which frame moments fire.
+    fn bracket_frame(
+        &mut self,
+        elapsed: Duration,
+        hud: &mut HudBatch,
+        draw: impl FnOnce(&mut Self, &HudBatch) -> Result<bool>,
+    ) -> Result<bool> {
+        let (world_partial_tick, partial_tick) = self
+            .client
+            .extras
+            .frame_partial_ticks
+            .unwrap_or_else(|| self.frame_partial_ticks());
+        self.native_render_frame_pre(elapsed, world_partial_tick, partial_tick);
+        // Include uploads queued during extraction or Pre before the renderer samples them.
+        hud.patches.append(&mut self.client.map_patches);
+        hud.patches.append(self.client.text_patches.get_mut());
+        self.dynamic_texture_commands(&mut hud.dynamic_commands);
+        let drawn = draw(self, hud);
+        self.client.extras.frame_partial_ticks = None;
+        self.native_render_frame_post(elapsed, world_partial_tick, partial_tick);
+        drawn
+    }
+
+    fn draw_loading_frame(&mut self, elapsed: Duration, mut hud: HudBatch) -> Result<bool> {
+        self.bracket_frame(elapsed, &mut hud, |game, hud| {
+            game.client
+                .renderer
+                .0
+                .as_mut()
+                .expect("renderer sized above")
+                .render(&loading_frame(hud), None)
+        })
     }
 
     fn render_with_hooks(
         &mut self,
+        elapsed: Duration,
         consume: impl FnOnce(
             &mut Renderer,
             &Frame<'_>,
@@ -3954,6 +3990,12 @@ impl crate::game::ClientGame<'_> {
         // `Gui.setScreen` clears the focus of the screen it leaves: a menu
         // that comes back starts with no widget highlighted.
         self.drop_left_screen_focus();
+        let size = self
+            .client
+            .renderer
+            .0
+            .as_ref()
+            .map(|r| [r.config.width, r.config.height]);
         // Minecraft.doWorldLoad: the LevelLoadingScreen while single player's
         // server starts, with the server's chunk map and progress.
         if let Some(starting) = &self.client.integrated_starting {
@@ -3967,27 +4009,20 @@ impl crate::game::ClientGame<'_> {
                         screen_info::tr("upgradeWorld.title", &[]),
                     )
                 });
+                let Some(size) = size else { return Ok(false) };
                 let cursor = self
-                    .client
-                    .renderer
-                    .0
-                    .as_ref()
-                    .and_then(|r| self.project_window_cursor([r.config.width, r.config.height]))
+                    .project_window_cursor(size)
                     .map_or(self.client.cursor, |p| p.pixel());
-                if let Some(renderer) = &mut self.client.renderer.0 {
-                    let size = [renderer.config.width, renderer.config.height];
-                    let mut hud = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-                    sunrise_client::level_loading::draw_file_fixer(
-                        &mut hud,
-                        &self.client.gui.atlas,
-                        upgrade,
-                        cursor,
-                    );
-                    pr.lap("pr_loading");
-                    drop(prepare);
-                    return renderer.render(&loading_frame(&hud), None);
-                }
-                return Ok(false);
+                let mut hud = HudBatch::new(size, self.client.settings.gui_scale_inputs());
+                sunrise_client::level_loading::draw_file_fixer(
+                    &mut hud,
+                    &self.client.gui.atlas,
+                    upgrade,
+                    cursor,
+                );
+                pr.lap("pr_loading");
+                drop(prepare);
+                return self.draw_loading_frame(elapsed, hud);
             }
             // The server's progress once it has some (`hasProgress`).
             let progress = Some(starting.handle.load_view())
@@ -3996,55 +4031,45 @@ impl crate::game::ClientGame<'_> {
             sunrise_client::widgets::begin_screen(|| {
                 screen_info::level_loading(progress, &screen_info::tr)
             });
-            if let Some(renderer) = &mut self.client.renderer.0 {
-                let mut hud = HudBatch::new(
-                    [renderer.config.width, renderer.config.height],
-                    self.client.settings.gui_scale_inputs(),
-                );
-                let (w, h) = (hud.width, hud.height);
-                sunrise_client::ui::menu_background(
-                    &mut hud,
-                    &self.client.gui.atlas,
-                    0.0,
-                    0.0,
-                    w,
-                    h,
-                    false,
-                );
-                // The chunk map and progress are the server thread's.
-                let view = self
-                    .client
-                    .integrated_starting
-                    .as_ref()
-                    .map(|s| s.handle.load_view().clone());
-                let status = |x: i32, z: i32| view.as_ref().and_then(|v| v.status(x, z));
-                let progress = view
-                    .as_ref()
-                    .is_some_and(|v| v.has_progress())
-                    .then_some(self.client.loading_progress);
-                sunrise_client::level_loading::draw(
-                    &mut hud,
-                    &self.client.gui.atlas,
-                    Some(&status),
-                    progress,
-                );
-                pr.lap("pr_loading");
-                drop(prepare);
-                return renderer.render(&loading_frame(&hud), None);
-            }
-            return Ok(false);
+            let Some(size) = size else { return Ok(false) };
+            let mut hud = HudBatch::new(size, self.client.settings.gui_scale_inputs());
+            let (w, h) = (hud.width, hud.height);
+            sunrise_client::ui::menu_background(
+                &mut hud,
+                &self.client.gui.atlas,
+                0.0,
+                0.0,
+                w,
+                h,
+                false,
+            );
+            // The chunk map and progress are the server thread's.
+            let view = self
+                .client
+                .integrated_starting
+                .as_ref()
+                .map(|s| s.handle.load_view().clone());
+            let status = |x: i32, z: i32| view.as_ref().and_then(|v| v.status(x, z));
+            let progress = view
+                .as_ref()
+                .is_some_and(|v| v.has_progress())
+                .then_some(self.client.loading_progress);
+            sunrise_client::level_loading::draw(
+                &mut hud,
+                &self.client.gui.atlas,
+                Some(&status),
+                progress,
+            );
+            pr.lap("pr_loading");
+            drop(prepare);
+            return self.draw_loading_frame(elapsed, hud);
         }
         if self.client.pending_entry.0.is_some() {
-            if let (Some(renderer), Some(loader)) =
-                (&mut self.client.renderer.0, &self.common.rest_loader)
-            {
+            if let (Some(size), Some(loader)) = (size, &self.common.rest_loader) {
                 sunrise_client::widgets::begin_screen(|| {
                     screen_info::level_loading(Some(loader.progress.fraction()), &screen_info::tr)
                 });
-                let mut hud = HudBatch::new(
-                    [renderer.config.width, renderer.config.height],
-                    self.client.settings.gui_scale_inputs(),
-                );
+                let mut hud = HudBatch::new(size, self.client.settings.gui_scale_inputs());
                 sunrise_client::level_loading::draw_progress(
                     &mut hud,
                     &self.client.gui.atlas,
@@ -4053,19 +4078,11 @@ impl crate::game::ClientGame<'_> {
                 );
                 pr.lap("pr_loading");
                 drop(prepare);
-                return renderer.render(&loading_frame(&hud), None);
+                return self.draw_loading_frame(elapsed, hud);
             }
             return Ok(false);
         }
-        let Some(size) = self
-            .client
-            .renderer
-            .0
-            .as_ref()
-            .map(|r| [r.config.width, r.config.height])
-        else {
-            return Ok(false);
-        };
+        let Some(size) = size else { return Ok(false) };
         // An opaque LoadingOverlay needs no world or screen behind it; the
         // ToastManager still draws in front of it.
         let reload_overlay = self.reload_overlay_frame();
@@ -4076,13 +4093,7 @@ impl crate::game::ClientGame<'_> {
             self.client.client_pack.item_renderer.end_gui_frame();
             pr.lap("pr_loading");
             drop(prepare);
-            return self
-                .client
-                .renderer
-                .0
-                .as_mut()
-                .expect("renderer sized above")
-                .render(&loading_frame(&hud), None);
+            return self.draw_loading_frame(elapsed, hud);
         }
         pr.lap("pr_setup");
         let alpha = self.frame_world_partial_tick();
@@ -4742,12 +4753,6 @@ impl crate::game::ClientGame<'_> {
         } else {
             Vec::new()
         };
-        // Map textures and font glyphs changed while building this frame's
-        // geometry (game/blocks/maps/mod.rs, world text) upload with this batch; draining
-        // map_patches any earlier leaves them a frame behind.
-        hud.patches.append(&mut self.client.map_patches);
-        hud.patches.append(self.client.text_patches.get_mut());
-        self.dynamic_texture_commands(&mut hud.dynamic_commands);
         let entity_spans = std::mem::take(self.client.entity_spans.get_mut());
         let entity_motion = std::mem::take(self.client.entity_motion.get_mut());
         let entity_motion_posed = std::mem::take(self.client.entity_motion_posed.get_mut());
@@ -4759,240 +4764,243 @@ impl crate::game::ClientGame<'_> {
         let camera_fog = self.camera_fog_type(camera.to_array());
         let boss_world_fog = self.client.boss_overlay.should_create_world_fog();
         let fast_clouds = self.effective_clouds() == "fast";
-        let frame = Frame {
-            weather: &weather,
-            weather_time: sunrise_client::weather::Time::new(
-                self.common.world.game_time,
-                alpha as f32,
-            ),
-            nether_lighting: self.nether_lighting(),
-            camera,
-            yaw,
-            pitch,
-            roll,
-            fov_degrees,
-            cull_fov_degrees,
-            eye: eye.filter(|_| !title).map_or(camera, |e| e.0),
-            eye_rotation: eye.filter(|_| !title).map_or([yaw, pitch], |e| e.1),
-            first_person: eye.is_none() || title || !self.client.view.detached,
-            bob,
-            view_transform,
-            spin,
-            sky,
-            shadow_scene_revision: (
-                self.common.world.revision,
-                self.common.world.chunks.membership_revision(),
-            ),
-            shadow_cache: self.client.settings.sunrise.shadow_cache,
-            distance,
-            detail_distance: effective_detail_distance,
-            shadow_distance: Some(effective_detail_distance),
-            depth_far,
-            underwater,
-            title,
-            sky_pass: !title
-                && sunrise_client::fog::sky_pass_present(camera_fog, sky_effect_blocked, skybox),
-            sky_blocked: sunrise_client::fog::sky_pass_skipped(
-                camera_fog,
-                sky_effect_blocked,
-                boss_world_fog,
-            ),
-            skybox: skybox == Skybox::Overworld && self.client.settings.sunrise.sky,
-            end_sky: skybox == Skybox::End && self.client.settings.sunrise.sky,
-            end_sky_sprite: self
-                .client
-                .gui
-                .atlas
-                .sprites
-                .get("environment/end_sky")
-                .map(|r| [r.u0, r.v0, r.u1, r.v1]),
-            boss_world_fog,
-            environment_fog: (self.common.dim == Dim::Nether)
-                .then_some((sky.fog_start, sky.fog_end)),
-            cave_culling,
-            water_fog,
-            fog: Some(fog),
-            dark_disc: self.dark_disc(camera),
-            outline,
-            outline_after_terrain,
-            outline_high_contrast: self.client.settings.file.bool("highContrastBlockOutline"),
-            debug_lines: &debug_lines,
-            debug_lines_on_top: &debug_lines_on_top,
-            debug_crosshair: &debug_crosshair,
-            hud: &hud,
-            glint_alpha: self.client.glint_frame.alpha,
-            glint_ticks: self.client.glint_frame.scroll_ticks(),
-            clouds: self
-                .frame_cloud_uv(title, &sky)
-                .map(|uv| sunrise_client::clouds::Input {
-                    texture: &self.client.client_pack.clouds,
-                    uv,
-                    camera,
-                    time: self.common.world.game_time,
-                    partial_tick: alpha,
-                    range: self.client.settings.cloud_range,
-                    fast: fast_clouds,
-                    color: sky.cloud_color,
-                    height: sky.cloud_height,
-                }),
-            entities: &entities,
-            explicit_particles: Some(&explicit_particle_quads),
-            static_block_entities: &static_block_entities,
-            visible_static_block_entity_sections: &visible_static_block_entity_sections,
-            static_block_entity_stats,
-            entity_motion: &entity_motion,
-            entity_motion_posed: &entity_motion_posed,
-            entity_spans: &entity_spans,
-            skin: skin.pending().then_some(&skin),
-            glowing: &glowing,
-            dynamic_lights: &self.client.dynamic_lights,
-            colored_lights: &colored_lights,
-            emissive_layers: if self.client.title.0.is_none() {
-                &self.client.client_pack.render.emissive_layers
-            } else {
-                &[]
-            },
-            lightning: sunrise_client::gfx::lightning::Input {
-                bolts: &bolts,
-                uv: sunrise_client::gfx::lightning::white_uv(&self.client.gui.atlas.font.white()),
-            },
-            additive: &additive,
-            see_through: &see_through,
-            world_primitives: Default::default(),
-            shadow_only: &shadow_only,
-            celestial: if self.client.settings.sunrise.sky || title {
-                &celestial
-            } else {
-                &[]
-            },
-            // With `celestial` left empty, these have no quad to draw.
-            celestial_bodies: &celestial_bodies,
-            stars: stars.filter(|_| self.client.settings.sunrise.sky || title),
-            hand: &hand,
-            hand_items: &hand_items,
-            hand_fov_degrees: hud_fov,
-            screen: &screen,
-            pack: pack_inputs,
-            border,
-            game_time: self.common.world.game_time as f32,
-            shader_game_time: ((self.common.world.game_time % 24000) as f32 + alpha as f32)
-                / 24000.0,
-            crumbling_sprite: frame_geometry::crumbling_sprite(
-                &self.client.gui.atlas.sprites,
-                self.client.settings.improved_transparency,
-            ),
-            end_portal_sprites: ["environment/end_sky", "entity/end_portal/end_portal"].map(|n| {
-                self.client
+        let mut prepared_draws =
+            std::mem::take(&mut *self.client.prepared_model_draws.borrow_mut());
+        let menu_blur = self.menu_blur();
+        // Geometry and screen extraction are finished. Pre can still upload the
+        // textures this frame samples, but it cannot change the extracted screen.
+        let result = self.bracket_frame(elapsed, &mut hud, |game, hud| {
+            let frame = Frame {
+                weather: &weather,
+                weather_time: sunrise_client::weather::Time::new(
+                    game.common.world.game_time,
+                    alpha as f32,
+                ),
+                nether_lighting: game.nether_lighting(),
+                camera,
+                yaw,
+                pitch,
+                roll,
+                fov_degrees,
+                cull_fov_degrees,
+                eye: eye.filter(|_| !title).map_or(camera, |e| e.0),
+                eye_rotation: eye.filter(|_| !title).map_or([yaw, pitch], |e| e.1),
+                first_person: eye.is_none() || title || !game.client.view.detached,
+                bob,
+                view_transform,
+                spin,
+                sky,
+                shadow_scene_revision: (
+                    game.common.world.revision,
+                    game.common.world.chunks.membership_revision(),
+                ),
+                shadow_cache: game.client.settings.sunrise.shadow_cache,
+                distance,
+                detail_distance: effective_detail_distance,
+                shadow_distance: Some(effective_detail_distance),
+                depth_far,
+                underwater,
+                title,
+                sky_pass: !title
+                    && sunrise_client::fog::sky_pass_present(
+                        camera_fog,
+                        sky_effect_blocked,
+                        skybox,
+                    ),
+                sky_blocked: sunrise_client::fog::sky_pass_skipped(
+                    camera_fog,
+                    sky_effect_blocked,
+                    boss_world_fog,
+                ),
+                skybox: skybox == Skybox::Overworld && game.client.settings.sunrise.sky,
+                end_sky: skybox == Skybox::End && game.client.settings.sunrise.sky,
+                end_sky_sprite: game
+                    .client
                     .gui
                     .atlas
                     .sprites
-                    .get(n)
-                    .map_or([0.0; 4], |r| [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0])
-            }),
-            ticks: self.texture_clock(),
-            darkness: self.darkness_lighting(alpha as f32),
-            night_vision: self.night_vision_intensity(alpha as f32),
-            block_flicker: self.client.fog.block_light_flicker,
-            boss_darken: self
-                .client
-                .boss_overlay
-                .darken_amount(self.common.clock.fraction() as f32),
-            menu_blur: self.menu_blur(),
-            post_effects: sunrise_client::post_chain::Request {
-                effects: &requested_post_effects,
-                root: &self.common.pack.source,
-                extras: polytone_extras.as_ref(),
-                poly_globals: Some(&post_globals),
-                menu_blur_radius: self.client.settings.menu_blur as f32,
-                // GlobalSettingsUniform.update.
-                globals: sunrise_client::post_chain::Globals {
-                    camera_block_pos: [
-                        camera.x.floor() as i32,
-                        camera.y.floor() as i32,
-                        camera.z.floor() as i32,
-                    ],
-                    camera_offset: [
-                        (camera.x.floor() - camera.x) as f32,
-                        (camera.y.floor() - camera.y) as f32,
-                        (camera.z.floor() - camera.z) as f32,
-                    ],
-                    game_time: ((self.common.world.game_time % 24000) as f32 + alpha as f32)
-                        / 24000.0,
-                    ..Default::default()
-                },
-            },
-            chunk_fade: self.client.settings.chunk_fade as f32,
-        };
-        pr.lap("pr_frame");
-        // Renderer encoding and GPU waiting belong to render, not prepare.
-        drop(prepare);
-        let debug_passes = self.debug_lists_gpu_passes();
-        let lightmap_chart = self.debug_shows_lightmap();
-        let mut prepared_draws =
-            std::mem::take(&mut *self.client.prepared_model_draws.borrow_mut());
-        let mut renderer_slot = self.client.renderer.0.take();
-        let result = match renderer_slot.as_mut() {
-            Some(renderer) => {
-                use sunrise_client::client_perf::request::GpuSwitch;
-                let capture_gpu = self.client.profile.gpu();
-                let recording = capture_gpu != GpuSwitch::Off;
-                renderer.set_pass_timing(debug_passes || self.client.gpu_passes || recording);
-                renderer.set_lightmap_readback(lightmap_chart);
-                renderer.set_keep_timed_frames(recording);
-                renderer.set_pass_detail(
-                    self.client.gpu_pass_detail || capture_gpu == GpuSwitch::Detail,
-                );
-                // `gpu_passes` and a capture's `--gpu` are measurements: they take every sample they can.
-                renderer.set_pass_timing_gap(if self.client.gpu_passes || recording {
-                    Duration::ZERO
-                } else {
-                    sunrise_client::debug_overlay::GPU_TIMING_GAP
-                });
-                renderer.stage_prepared_draws(&prepared_draws);
-                self.client.render_snapshot.set(Some(RenderSnapshot {
-                    framebuffer: [renderer.config.width, renderer.config.height],
-                    prepared_generation: renderer.prepared_generation(),
-                    staged_prepared_draws: prepared_draws.len() as u64,
-                }));
-                self.client
-                    .pack_frame_state
-                    .set(renderer.shader_pack_state(&frame));
-                let mut slots = self.client.pack_frame_slots.borrow_mut();
-                slots.clear();
-                slots.extend_from_slice(renderer.pack_bound_mod_slots());
-                drop(slots);
-                let world_camera = self
-                    .client
-                    .native_camera_frame
-                    .as_ref()
-                    .filter(|_| self.has_world_render_hooks());
-                let mut driver = world_camera.map(|camera| {
-                    native_custom_geometry::GameWorldStageDriver::new(
-                        self,
+                    .get("environment/end_sky")
+                    .map(|r| [r.u0, r.v0, r.u1, r.v1]),
+                boss_world_fog,
+                environment_fog: (game.common.dim == Dim::Nether)
+                    .then_some((sky.fog_start, sky.fog_end)),
+                cave_culling,
+                water_fog,
+                fog: Some(fog),
+                dark_disc: game.dark_disc(camera),
+                outline,
+                outline_after_terrain,
+                outline_high_contrast: game.client.settings.file.bool("highContrastBlockOutline"),
+                debug_lines: &debug_lines,
+                debug_lines_on_top: &debug_lines_on_top,
+                debug_crosshair: &debug_crosshair,
+                hud,
+                glint_alpha: game.client.glint_frame.alpha,
+                glint_ticks: game.client.glint_frame.scroll_ticks(),
+                clouds: game
+                    .frame_cloud_uv(title, &sky)
+                    .map(|uv| sunrise_client::clouds::Input {
+                        texture: &game.client.client_pack.clouds,
+                        uv,
                         camera,
-                        alpha,
-                        &mut world_geometry,
-                    )
-                });
-                let rendered = consume(
-                    renderer,
-                    &frame,
-                    driver
-                        .as_mut()
-                        .map(|d| d as &mut dyn sunrise_client::gfx::world_primitives::FrameHooks),
-                );
-                drop(driver);
-                self.client.render_snapshot.set(None);
-                rendered
-            }
-            None => {
-                self.client.pack_frame_state.set(None);
-                self.client.pack_frame_slots.borrow_mut().clear();
-                Err("renderer".into())
-            }
-        };
-        drop(frame);
-        self.client.renderer.0 = renderer_slot;
+                        time: game.common.world.game_time,
+                        partial_tick: alpha,
+                        range: game.client.settings.cloud_range,
+                        fast: fast_clouds,
+                        color: sky.cloud_color,
+                        height: sky.cloud_height,
+                    }),
+                entities: &entities,
+                explicit_particles: Some(&explicit_particle_quads),
+                static_block_entities: &static_block_entities,
+                visible_static_block_entity_sections: &visible_static_block_entity_sections,
+                static_block_entity_stats,
+                entity_motion: &entity_motion,
+                entity_motion_posed: &entity_motion_posed,
+                entity_spans: &entity_spans,
+                skin: skin.pending().then_some(&skin),
+                glowing: &glowing,
+                dynamic_lights: &game.client.dynamic_lights,
+                colored_lights: &colored_lights,
+                emissive_layers: if game.client.title.0.is_none() {
+                    &game.client.client_pack.render.emissive_layers
+                } else {
+                    &[]
+                },
+                lightning: sunrise_client::gfx::lightning::Input {
+                    bolts: &bolts,
+                    uv: sunrise_client::gfx::lightning::white_uv(
+                        &game.client.gui.atlas.font.white(),
+                    ),
+                },
+                additive: &additive,
+                see_through: &see_through,
+                world_primitives: Default::default(),
+                shadow_only: &shadow_only,
+                celestial: if game.client.settings.sunrise.sky || title {
+                    &celestial
+                } else {
+                    &[]
+                },
+                // With `celestial` left empty, these have no quad to draw.
+                celestial_bodies: &celestial_bodies,
+                stars: stars.filter(|_| game.client.settings.sunrise.sky || title),
+                hand: &hand,
+                hand_items: &hand_items,
+                hand_fov_degrees: hud_fov,
+                screen: &screen,
+                pack: pack_inputs,
+                border,
+                game_time: game.common.world.game_time as f32,
+                shader_game_time: ((game.common.world.game_time % 24000) as f32 + alpha as f32)
+                    / 24000.0,
+                crumbling_sprite: frame_geometry::crumbling_sprite(
+                    &game.client.gui.atlas.sprites,
+                    game.client.settings.improved_transparency,
+                ),
+                end_portal_sprites: ["environment/end_sky", "entity/end_portal/end_portal"].map(
+                    |n| {
+                        game.client
+                            .gui
+                            .atlas
+                            .sprites
+                            .get(n)
+                            .map_or([0.0; 4], |r| [r.u0, r.v0, r.u1 - r.u0, r.v1 - r.v0])
+                    },
+                ),
+                ticks: game.texture_clock(),
+                darkness: game.darkness_lighting(alpha as f32),
+                night_vision: game.night_vision_intensity(alpha as f32),
+                block_flicker: game.client.fog.block_light_flicker,
+                boss_darken: game
+                    .client
+                    .boss_overlay
+                    .darken_amount(game.common.clock.fraction() as f32),
+                menu_blur,
+                post_effects: sunrise_client::post_chain::Request {
+                    effects: &requested_post_effects,
+                    root: &game.common.pack.source,
+                    extras: polytone_extras.as_ref(),
+                    poly_globals: Some(&post_globals),
+                    menu_blur_radius: game.client.settings.menu_blur as f32,
+                    // GlobalSettingsUniform.update.
+                    globals: sunrise_client::post_chain::Globals {
+                        camera_block_pos: [
+                            camera.x.floor() as i32,
+                            camera.y.floor() as i32,
+                            camera.z.floor() as i32,
+                        ],
+                        camera_offset: [
+                            (camera.x.floor() - camera.x) as f32,
+                            (camera.y.floor() - camera.y) as f32,
+                            (camera.z.floor() - camera.z) as f32,
+                        ],
+                        game_time: ((game.common.world.game_time % 24000) as f32 + alpha as f32)
+                            / 24000.0,
+                        ..Default::default()
+                    },
+                },
+                chunk_fade: game.client.settings.chunk_fade as f32,
+            };
+            pr.lap("pr_frame");
+            // Renderer encoding and GPU waiting belong to render, not prepare.
+            drop(prepare);
+            let debug_passes = game.debug_lists_gpu_passes();
+            let lightmap_chart = game.debug_shows_lightmap();
+            let mut renderer = game.client.renderer.0.take().expect("renderer sized above");
+            use sunrise_client::client_perf::request::GpuSwitch;
+            let capture_gpu = game.client.profile.gpu();
+            let recording = capture_gpu != GpuSwitch::Off;
+            renderer.set_pass_timing(debug_passes || game.client.gpu_passes || recording);
+            renderer.set_lightmap_readback(lightmap_chart);
+            renderer.set_keep_timed_frames(recording);
+            renderer
+                .set_pass_detail(game.client.gpu_pass_detail || capture_gpu == GpuSwitch::Detail);
+            // `gpu_passes` and a capture's `--gpu` are measurements: they take every sample they can.
+            renderer.set_pass_timing_gap(if game.client.gpu_passes || recording {
+                Duration::ZERO
+            } else {
+                sunrise_client::debug_overlay::GPU_TIMING_GAP
+            });
+            renderer.stage_prepared_draws(&prepared_draws);
+            game.client.render_snapshot.set(Some(RenderSnapshot {
+                framebuffer: [renderer.config.width, renderer.config.height],
+                prepared_generation: renderer.prepared_generation(),
+                staged_prepared_draws: prepared_draws.len() as u64,
+            }));
+            game.client
+                .pack_frame_state
+                .set(renderer.shader_pack_state(&frame));
+            let mut slots = game.client.pack_frame_slots.borrow_mut();
+            slots.clear();
+            slots.extend_from_slice(renderer.pack_bound_mod_slots());
+            drop(slots);
+            let world_camera = game
+                .client
+                .native_camera_frame
+                .as_ref()
+                .filter(|_| game.has_world_render_hooks());
+            let mut driver = world_camera.map(|camera| {
+                native_custom_geometry::GameWorldStageDriver::new(
+                    game,
+                    camera,
+                    alpha,
+                    &mut world_geometry,
+                )
+            });
+            let rendered = consume(
+                &mut renderer,
+                &frame,
+                driver
+                    .as_mut()
+                    .map(|d| d as &mut dyn sunrise_client::gfx::world_primitives::FrameHooks),
+            );
+            drop(driver);
+            game.client.render_snapshot.set(None);
+            drop(frame);
+            game.client.renderer.0 = Some(renderer);
+            rendered
+        });
         self.apply_pending_present_mode();
         self.client.requested_post_effects_buf = requested_post_effects;
         prepared_draws.clear();
@@ -5615,3 +5623,272 @@ use sunrise_gameplay_common::game::integrated_common::IntegratedCommonGameExt1 a
 use sunrise_gameplay_common::game::native_components::NativeComponentsGameExt1 as _;
 
 use sunrise_gameplay_common::game::native_hooks::build_creative_mode_tab_contents::GameHooks as _;
+
+#[cfg(test)]
+mod frame_tests {
+    use super::*;
+    use crate::game::block_screen_effect_draw_tests::drawn_frame;
+    use crate::game::native_entity_refs::tests::with_client_game;
+    use crate::game::native_hooks::particle_count_tests::frame_scene;
+    use mod_api::{
+        ClientHost, FramerateLimitEvent, GuiBlitRegion, Hooks, Identifier, ModEntry,
+        RenderFramePostEvent, RenderFramePreEvent, RenderGuiPostEvent,
+    };
+    use std::sync::{
+        Mutex,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    };
+    use sunrise_gameplay_common::game::test_fixtures::run_fresh_cases;
+    use winit::event_loop::ControlFlow;
+
+    struct Moments {
+        heard: Arc<Mutex<Vec<&'static str>>>,
+        skip: Arc<AtomicBool>,
+    }
+
+    #[mod_api::__subscriptions]
+    impl Hooks for Moments {
+        fn framerate_limit(&self, _: &dyn ClientHost, event: &mut FramerateLimitEvent) {
+            if self.skip.load(Ordering::Relaxed) {
+                self.heard.lock().unwrap().push("limit 0");
+                event.limit = 0;
+            }
+        }
+        fn render_frame_pre(&self, _: &mut dyn ClientHost, _: &mut RenderFramePreEvent) {
+            self.heard.lock().unwrap().push("pre");
+        }
+        fn render_frame_post(&self, _: &mut dyn ClientHost, _: &mut RenderFramePostEvent) {
+            self.heard.lock().unwrap().push("post");
+        }
+    }
+
+    struct RedrawLoop;
+    impl EventLoopCtl for RedrawLoop {
+        fn exit(&self) {
+            panic!("unexpected exit on redraw");
+        }
+        fn set_control_flow(&self, _: ControlFlow) {}
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn normal_and_loading_draws_pair_frame_events_but_skipped_draws_do_not() {
+        if run_fresh_cases(
+            "game::client_side::game_client::frame_tests::normal_and_loading_draws_pair_frame_events_but_skipped_draws_do_not",
+            "SUNRISE_FRAME_BRACKET_CHILD",
+            &["bracket"],
+        ) {
+            return;
+        }
+        let heard = Arc::new(Mutex::new(Vec::new()));
+        let skip = Arc::new(AtomicBool::new(false));
+        let mods = vec![ModEntry::new(
+            "moments",
+            Box::new(Moments {
+                heard: Arc::clone(&heard),
+                skip: Arc::clone(&skip),
+            }),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_client_game(|game| {
+                let _window = frame_scene(game);
+                for answer in [Ok(false), Err("draw failed".into())] {
+                    let fails = answer.is_err();
+                    let result = game.render_with(|_, _| {
+                        heard.lock().unwrap().push("draw");
+                        answer
+                    });
+                    assert_eq!(result.is_err(), fails);
+                    assert_eq!(
+                        std::mem::take(&mut *heard.lock().unwrap()),
+                        ["pre", "draw", "post"]
+                    );
+                }
+
+                game.finish_close_world().unwrap();
+                game.client.reload_overlay = Some(crate::game::packs::ReloadOverlay {
+                    fade_in: Some(Instant::now() - Duration::from_secs(1)),
+                    ..Default::default()
+                });
+                assert!(game.render_and_flip(Duration::ZERO).unwrap());
+                assert_eq!(std::mem::take(&mut *heard.lock().unwrap()), ["pre", "post"]);
+                game.client.reload_overlay = None;
+
+                game.common.rest_loader = Some(WorldRestLoader {
+                    progress: Progress::new(),
+                    handle: std::thread::spawn(|| Ok(())),
+                });
+                game.client.pending_entry.0 = Some(crate::game::PendingWorldEntry::Local {
+                    folder: "loading-fixture".into(),
+                    name: None,
+                    seed: None,
+                    creative: false,
+                    create: None,
+                });
+                assert!(game.render_and_flip(Duration::ZERO).unwrap());
+                assert_eq!(std::mem::take(&mut *heard.lock().unwrap()), ["pre", "post"]);
+                game.client.pending_entry.0 = None;
+                game.common.rest_loader.take().unwrap().finish().unwrap();
+
+                skip.store(true, Ordering::Relaxed);
+                game.common.previous = Instant::now();
+                game.handle_window_event_inner(
+                    &RedrawLoop,
+                    WindowEvent::RedrawRequested,
+                    None,
+                    None,
+                );
+                assert_eq!(std::mem::take(&mut *heard.lock().unwrap()), ["limit 0"]);
+
+                let renderer = game.client.renderer.0.take();
+                assert!(!game.render_and_flip(Duration::ZERO).unwrap());
+                assert!(heard.lock().unwrap().is_empty());
+                game.client.renderer.0 = renderer;
+            })
+        });
+    }
+
+    struct CloseInPre(Arc<AtomicBool>);
+    #[mod_api::__subscriptions]
+    impl Hooks for CloseInPre {
+        fn render_frame_pre(&self, host: &mut dyn ClientHost, _: &mut RenderFramePreEvent) {
+            self.0.store(host.close_screen(), Ordering::Relaxed);
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn closing_the_pause_screen_in_pre_preserves_this_frames_blur_only() {
+        if run_fresh_cases(
+            "game::client_side::game_client::frame_tests::closing_the_pause_screen_in_pre_preserves_this_frames_blur_only",
+            "SUNRISE_FRAME_CLOSE_CHILD",
+            &["close"],
+        ) {
+            return;
+        }
+        let closed = Arc::new(AtomicBool::new(false));
+        let mods = vec![ModEntry::new(
+            "closer",
+            Box::new(CloseInPre(Arc::clone(&closed))),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_client_game(|game| {
+                let _window = frame_scene(game);
+                game.client.settings.menu_blur = 5;
+                game.client.pause_menu = true;
+                game.set_screen(Screen::Paused);
+                game.render_with(|_, frame| {
+                    assert!(closed.load(Ordering::Relaxed));
+                    assert_eq!(frame.menu_blur, Some(5.0));
+                    Ok(false)
+                })
+                .unwrap();
+                assert_eq!(game.client.screen, Screen::Playing);
+                game.render_with(|_, frame| {
+                    assert_eq!(frame.menu_blur, None);
+                    Ok(false)
+                })
+                .unwrap();
+            })
+        });
+    }
+
+    // Like a terminal screen: extraction names an existing texture, and Pre uploads the
+    // latest rasterized text to that same id. Keep the bitmap tiny so a pixel can prove
+    // whether the draw used the old or new text, independently of the upload queue.
+    struct Terminal {
+        id: Identifier,
+        cells: Arc<AtomicUsize>,
+        created: AtomicBool,
+        region_upload: bool,
+    }
+    impl Terminal {
+        const OFF: [u8; 4] = [0, 0, 0, 255];
+        const ON: [u8; 4] = [0, 255, 0, 255];
+    }
+
+    #[mod_api::__subscriptions]
+    impl Hooks for Terminal {
+        fn render_gui_post(&self, _: &dyn ClientHost, event: &mut RenderGuiPostEvent<'_>) {
+            if self.created.load(Ordering::Relaxed) {
+                let [w, h] = event.draw.size();
+                event
+                    .draw
+                    .draw_gui(&mut |gui| {
+                        gui.texture(
+                            &self.id,
+                            [w / 4.0, h / 4.0, w / 2.0, h / 2.0],
+                            GuiBlitRegion::new([0.0; 2], [2, 1], [2, 1]),
+                            u32::MAX,
+                        )
+                    })
+                    .unwrap();
+            }
+        }
+        fn render_frame_pre(&self, host: &mut dyn ClientHost, _: &mut RenderFramePreEvent) {
+            let cell = self.cells.load(Ordering::Relaxed);
+            let rgba = if cell == 0 {
+                [Self::ON, Self::OFF]
+            } else {
+                [Self::OFF, Self::ON]
+            }
+            .concat();
+            if self.created.load(Ordering::Relaxed) {
+                if self.region_upload {
+                    host.update_dynamic_texture_region(&self.id, 0, [0, 0], [2, 1], &rgba)
+                        .unwrap();
+                } else {
+                    host.update_dynamic_texture(&self.id, 2, 1, &rgba).unwrap();
+                }
+            } else {
+                host.create_dynamic_texture(&self.id, 2, 1, 1, &rgba)
+                    .unwrap();
+                self.created.store(true, Ordering::Relaxed);
+            }
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn a_terminal_texture_written_in_pre_shows_the_changed_text_in_that_draw() {
+        if run_fresh_cases(
+            "game::client_side::game_client::frame_tests::a_terminal_texture_written_in_pre_shows_the_changed_text_in_that_draw",
+            "SUNRISE_FRAME_UPLOAD_CHILD",
+            &["region", "terminal"],
+        ) {
+            return;
+        }
+        let cells = Arc::new(AtomicUsize::new(0));
+        let mods = vec![ModEntry::new(
+            "terminal",
+            Box::new(Terminal {
+                id: Identifier::parse("terminal:display").unwrap(),
+                cells: Arc::clone(&cells),
+                created: AtomicBool::new(false),
+                region_upload: std::env::var("SUNRISE_FRAME_UPLOAD_CHILD").unwrap() == "region",
+            }),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_client_game(|game| {
+                let _window = frame_scene(game);
+                game.client.screen_fx.vignette_brightness = 0.0;
+                // Establish the texture and its original pixels before reading it in extraction.
+                drawn_frame(game);
+                let pixels = |game: &mut ClientGame<'_>| {
+                    let (rgba, width) = drawn_frame(game);
+                    let height = rgba.len() / (width * 4);
+                    [3 * width / 8, 5 * width / 8].map(|x| {
+                        let offset = (height / 2 * width + x) * 4;
+                        [rgba[offset], rgba[offset + 1], rgba[offset + 2]]
+                    })
+                };
+                assert_eq!(pixels(game), [[0, 255, 0], [0, 0, 0]]);
+                cells.store(1, Ordering::Relaxed);
+                assert_eq!(pixels(game), [[0, 0, 0], [0, 255, 0]]);
+            })
+        });
+    }
+}
