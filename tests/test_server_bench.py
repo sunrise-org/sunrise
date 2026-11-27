@@ -132,23 +132,43 @@ class FakeServer:
             raise RuntimeError(f'no {pattern!r} within {timeout} s')
 
 
+STARTED_LINE = '[Server thread/INFO]: Sunrise: capturing to reports/profile-20261108-100211Z.hzperf'
 SAVED_LINE = ('[10:02:11] [Server thread/INFO]: Sunrise: Saved reports/profile-20261108-100211Z.hzperf '
               '(the file stays on your computer)')
 
 
 class ServerBenchProfileTests(unittest.TestCase):
+    def test_cli_enables_profile_by_default_and_allows_opt_out(self):
+        import contextlib
+        import io
+        from unittest import mock
+        import tools.server_bench as sb
+
+        with tempfile.TemporaryDirectory() as folder:
+            for flags, expected in (([], ''), (['--no-profile'], None),
+                                    (['--profile=--no-samples'], '--no-samples')):
+                argv = ['server_bench.py', '--servers', 'sunrise', '--bots', '1', '--behaviour', 'idle'] + flags
+                failed = {'server': 'sunrise', 'bots': 1, 'behaviour': 'idle', 'error': 'fixture'}
+                with mock.patch('sys.argv', argv), mock.patch.object(sb.lab, 'LOCAL', Path(folder)), \
+                        mock.patch.object(sb, 'versions', return_value={}), \
+                        mock.patch.object(sb.subprocess, 'run', return_value=SimpleNamespace(stdout='')), \
+                        mock.patch.object(sb, 'run_once', return_value=failed) as run, \
+                        contextlib.redirect_stdout(io.StringIO()):
+                    sb.main()
+                self.assertEqual(run.call_args.args[3].profile, expected)
+
     def test_the_report_is_asked_for_the_measure_window_with_the_given_flags(self):
         for profile, seconds, line in [('', 300, 'sunrise-report 300'),
                                        ('--no-samples', 120, 'sunrise-report 120 --no-samples'),
                                        # The game ends a report at 600 s.
                                        ('', 900, 'sunrise-report 600')]:
-            server = FakeServer()
+            server = FakeServer([STARTED_LINE])
             args = SimpleNamespace(profile=profile, seconds=seconds)
             self.assertTrue(start_profile(server, 'sunrise', args))
             self.assertEqual(server.typed, [line])
             self.assertEqual(report_line(seconds, profile), line)
 
-    def test_nothing_is_recorded_without_the_flag_or_on_another_server(self):
+    def test_nothing_is_recorded_with_opt_out_or_on_another_server(self):
         server = FakeServer()
         self.assertFalse(start_profile(server, 'sunrise', SimpleNamespace(profile=None, seconds=300)))
         for kind in ('vanilla', 'paper', 'fabric', 'pumpkin'):
@@ -167,20 +187,25 @@ class ServerBenchProfileTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as folder:
             directory = Path(folder)
             result = dict(record, bots_failed=[{'error': 'connect to 10.0.0.5:25599 refused'}])
-            finish_profile(FakeServer(['starting', SAVED_LINE]), directory, result, run=attach)
+            source = directory / 'reports/profile-20261108-100211Z.hzperf'
+            source.parent.mkdir()
+            source.write_bytes(b'capture')
+            output = directory / 'benchmarks'
+            finish_profile(FakeServer(['starting', SAVED_LINE]), directory, output, result, run=attach)
+            capture = output / result['profile']
+            self.assertEqual(capture.read_bytes(), b'capture')
         [(argv, body, kwargs)] = calls
-        capture = directory / 'reports/profile-20261108-100211Z.hzperf'
         self.assertEqual(argv[:3], [PERF, 'attach', capture])
         self.assertEqual(argv[3:5], ['--name', RUN_RECORD])
-        self.assertEqual(body, record)
+        self.assertEqual(body, dict(record, profile=capture.name))
         self.assertTrue(kwargs['check'])
-        self.assertEqual(result['profile'], str(capture))
+        self.assertEqual(result['profile'], capture.name)
 
     def test_a_server_that_never_saves_leaves_the_run_standing_with_the_reason(self):
         calls = []
         result = {'server': 'sunrise'}
         with tempfile.TemporaryDirectory() as folder:
-            finish_profile(FakeServer(['starting']), Path(folder), result, run=lambda *a, **k: calls.append(a))
+            finish_profile(FakeServer(['starting']), Path(folder), Path(folder), result, run=lambda *a, **k: calls.append(a))
         self.assertEqual(calls, [])
         self.assertNotIn('profile', result)
         self.assertIn('Saved', result['profile_error'])
@@ -191,8 +216,12 @@ class ServerBenchProfileTests(unittest.TestCase):
 
         result = {'server': 'sunrise'}
         with tempfile.TemporaryDirectory() as folder:
-            finish_profile(FakeServer([SAVED_LINE]), Path(folder), result, run=fails)
-        self.assertNotIn('profile', result)
+            directory = Path(folder)
+            source = directory / 'reports/profile-20261108-100211Z.hzperf'
+            source.parent.mkdir()
+            source.write_bytes(b'capture')
+            finish_profile(FakeServer([SAVED_LINE]), directory, directory, result, run=fails)
+            self.assertEqual((directory / result['profile']).read_bytes(), b'capture')
         self.assertIn('profile_error', result)
 
 
