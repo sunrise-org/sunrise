@@ -540,6 +540,7 @@ impl crate::game::ClientGame<'_> {
         #[cfg(test)]
         let stage = mod_api::testing::inherit_mods(stage);
         self.client.pack_reload.0 = Some(PackReload::spawn(kind, stage)?);
+        self.client.native_shaders.translation.resources_changed();
         self.client.reload_overlay = Some(ReloadOverlay::default());
         Ok(())
     }
@@ -732,6 +733,7 @@ impl crate::game::ClientGame<'_> {
             game.portal_sections.clear();
             game.options.resources = root.clone();
             game.client.falling_vertices.get_mut().clear();
+            game.client.native_shaders.translation.resources_changed();
             game.pack = pack;
             game.client.client_pack = client_pack;
             // The joined level's environment for the frame has the packs' layers over its type.

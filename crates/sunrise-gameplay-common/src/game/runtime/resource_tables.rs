@@ -12,6 +12,9 @@ impl Resources {
     pub fn facts(&self) -> &BlockFacts {
         &self.core.facts
     }
+    pub fn shared_facts(&self) -> Arc<BlockFacts> {
+        self.core.facts.clone()
+    }
     pub fn item_defaults(&self) -> &sunrise_world::item_defaults::ItemDefaults {
         self.core.item_data.defaults()
     }

@@ -1285,7 +1285,7 @@ pub struct Resources {
 
 pub struct WorldCore {
     pub item_data: Arc<sunrise_world::item_defaults::ItemData>,
-    facts: BlockFacts,
+    facts: Arc<BlockFacts>,
     pub biomes: Arc<Biomes>,
     environment: Environment,
     pub collision: Arc<BlockCollisionRegistry<'static>>,

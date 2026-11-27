@@ -39,6 +39,7 @@ impl crate::game::ClientGame<'_> {
         self.client.destroying.clear();
         self.client.mining_crack = None;
         self.common.mining = None;
+        self.client.native_shaders.translation.world_changed();
         self.common.world = world;
     }
 

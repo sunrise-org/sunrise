@@ -30,8 +30,7 @@ pub(in crate::game) fn refused(path: &Path, stamp: Option<u64>) -> bool {
 
 #[derive(Default)]
 pub(in crate::game) struct NativeShaders {
-    /// The path of the picked pack (`game/interface/shader_packs.rs`); empty: none.
-    pub picked: String,
+    pub translation: super::shader_packs::ShaderTranslation,
     /// The pick of a pack in the removed WGSL format that already got its note in the chat.
     pub noted: String,
     /// The pick's `sunrise.hdr` request as last read (`ClientGame::picked_pack_shape`).

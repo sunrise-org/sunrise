@@ -1066,6 +1066,14 @@ pub(crate) struct PackLoading {
     draws: PackDraws,
 }
 
+pub struct PackBuildDrain(PackLoading);
+
+impl PackBuildDrain {
+    pub fn is_finished(&self) -> bool {
+        self.0.thread.is_finished()
+    }
+}
+
 /// A running `shaders/` pack's block ids (`Renderer::pack_block_ids`).
 #[derive(Debug)]
 pub(crate) struct PackBlockIds(pub(crate) Vec<i32>);

@@ -385,6 +385,33 @@ impl Renderer {
         let report = self.install_shader_pack(loading.dimension, built.map(Some), block_ids);
         Some((loading.dimension, loading.label, loading.started, report))
     }
+    pub fn shader_pack_build_ready(&self) -> bool {
+        self.pack_loading
+            .as_ref()
+            .is_some_and(|build| build.thread.is_finished())
+    }
+
+    pub fn shader_pack_build_pending(&self) -> bool {
+        self.pack_loading.is_some()
+    }
+
+    pub fn cancel_shader_pack_build(&mut self) -> Option<PackBuildDrain> {
+        let loading = self.pack_loading.take()?;
+        loading
+            ._cancel
+            .0
+            .store(true, std::sync::atomic::Ordering::Relaxed);
+        Some(PackBuildDrain(loading))
+    }
+
+    pub fn shader_pack_input_layout(&self) -> (bool, u32, Option<sunrise_shaders::Tonemap>) {
+        (
+            self.flat.is_some() && self.flat_on,
+            self.mipmaps,
+            self.pack_hdr,
+        )
+    }
+
     /// Drops the running shader pack.
     pub fn drop_shader_packs(&mut self) {
         self.pack_loading = None;

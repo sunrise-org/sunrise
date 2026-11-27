@@ -5,7 +5,13 @@ use crate::{
     compression::invalid,
     registry::{BlockRegistry, BlockStateId},
 };
-use std::{io, sync::RwLock};
+use std::{
+    io,
+    sync::{
+        RwLock,
+        atomic::{AtomicU64, Ordering},
+    },
+};
 
 /// What a mod's world fluid does when it flows, as `FlowingFluid`'s overridable getters.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -41,6 +47,7 @@ pub struct ModFluidType {
 pub struct ModFluid(u16);
 
 /// Leaked so that names stay `&'static str`, as vanilla's are; there is one entry per fluid id.
+static MOD_FLUID_REVISION: AtomicU64 = AtomicU64::new(0);
 static MOD_FLUIDS: RwLock<Vec<&'static ModFluidType>> = RwLock::new(Vec::new());
 
 fn mod_fluid_table() -> std::sync::RwLockReadGuard<'static, Vec<&'static ModFluidType>> {
@@ -51,7 +58,13 @@ fn mod_fluid_table() -> std::sync::RwLockReadGuard<'static, Vec<&'static ModFlui
 /// again replaces what it does and keeps its number.
 pub fn register_mod_fluid(fluid: ModFluidType) -> Result<ModFluid, ModFluidRegistrationError> {
     let mut table = MOD_FLUIDS.write().unwrap_or_else(|e| e.into_inner());
-    register_in(&mut table, fluid)
+    let registered = register_in(&mut table, fluid)?;
+    MOD_FLUID_REVISION.fetch_add(1, Ordering::Relaxed);
+    Ok(registered)
+}
+
+pub fn mod_fluid_revision() -> u64 {
+    MOD_FLUID_REVISION.load(Ordering::Relaxed)
 }
 
 /// A fluid registration was refused without changing the registry.
@@ -433,7 +446,7 @@ impl FluidState {
         Self::from_block_with(state, mod_fluid_of_block_name)
     }
     /// [`Self::from_block`] with `mod_fluid_of_block` naming the mod fluid a block holds.
-    fn from_block_with(
+    pub fn from_block_with(
         state: &BlockState,
         mod_fluid_of_block: impl Fn(&str) -> Option<ModFluid>,
     ) -> io::Result<Self> {

@@ -796,7 +796,7 @@ pub fn prepare_core(
     Ok((
         PreparedCore {
             pack,
-            facts,
+            facts: Arc::new(facts),
             biomes,
             item_data,
             item_defaults,
