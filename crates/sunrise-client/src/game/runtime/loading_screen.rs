@@ -65,7 +65,7 @@ pub(super) struct Loading {
     pub(super) panorama_rotation: sunrise_client::gfx::panorama::Rotation,
     pub(super) progress: Progress,
     /// The bar as drawn, easing toward `progress` (`LoadingOverlay.currentProgress`).
-    pub(super) bar: f32,
+    pub(super) bar: sunrise_client::level_loading::OverlayBar,
     pub(super) receiver: Receiver<LoaderMsg>,
     pub(super) loaded: Option<std::result::Result<Loaded, super::resource_loader::LoaderFailure>>,
     /// The loader's `Done` arrived: its channel closing afterwards is expected.
