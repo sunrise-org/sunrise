@@ -44,21 +44,19 @@ a telemetry placeholder or an official-build promotion in the options screen.
 | Play with Friends | hosting: `game/friends.rs`, `game/friends/screen.rs`; joining: crate `sunrise-friends` (`game`) | hosting: the `friends` feature (`game/friends_off.rs` stands in); joining: only the official executable registers it ([layers.md](layers.md#how-a-sunrise-crate-plugs-in)) |
 | The anonymous "I'm playing" ping | crate `sunrise-heartbeat` | not in sunrise-client at all: only the official executable (`sunrise-official`) registers it ([layers.md](layers.md#how-a-sunrise-crate-plugs-in)) |
 | The performance overlay (frames per second, frame times and their graph) and its Performance Overlay row on Sunrise Settings' Gameplay page | crate `sunrise-perf-overlay` | not in sunrise-client at all: only the official executable (`sunrise-official`) registers it ([layers.md](layers.md#how-a-sunrise-crate-plugs-in)) |
+| Fullbright, dynamic lights and hiding block-break particles ([extras.md](extras.md)) | row descriptors: `extras.rs` (`sunrise-client-render`); gameplay effects: `game/interface/options.rs`, `game/game_client.rs`, `game/interface/dynamic_lights.rs`, `game/blocks/block_particles.rs`, `game/blocks/block_particles_client.rs` (`sunrise-client-gameplay`) | `sunrise-extras` feature (when off, the graphics screen omits the rows and the effects stay inactive; `sunrise-extras.txt` still reads and writes those keys unchanged) |
 
 Credits & Attribution then says where the official build is (`sunrise.plain.official`).
 
 `grep -rn sunrise-extras crates/` lists every gate. Apart from the `friends` feature above, the gates
-are `cfg!(feature = "sunrise-extras")`: both sides compile in every build, so no stub has to follow
-the code it replaces. To remove an extra for good, delete its files from the table and the lines its
-gate guards.
+use `feature = "sunrise-extras"` (`cfg!` in gameplay so both sides compile in every build, and `#[cfg]`
+on the renderer's row descriptors). To remove an extra for good, delete its files from the table and
+the lines its gate guards.
 
 ## Not behind the feature
 
 - The launcher (`https://github.com/sunrise-org/sunrise-launcher`) holds its themes, the telemetry consent and updates. A build of the game alone has none of them; without the
   launcher's consent the game keeps no crash or performance report (docs/telemetry.md).
-- The graphics screen's fullbright, dynamic lights and hiding block-break particles: renderer
-  options, off by default (docs/extras.md). A `sunrise-extras.txt` left by an official install is
-  still read.
 - The mod runtime: nothing installs a mod without the launcher, so it stays idle.
 - The `sunrise` brand reply to a Sunrise server, for its protocol extensions (`net.rs`).
 - Agent control (`--control`, `sunrise-ctl`), controllers, HDR, shader packs.
