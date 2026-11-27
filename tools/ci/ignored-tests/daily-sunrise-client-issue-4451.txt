@@ -2280,6 +2280,7 @@ sunrise-client cut_layout::game::remote_mob_use_tests::remote_mob_takes_only_adu
 sunrise-client cut_layout::game::client_side::remote_projectiles::entity_tick_tests::a_client_listener_hears_a_remote_arrows_tick lib daily resources
 sunrise-client-gameplay game::client_side::remote_projectiles::nested_spawn_tests::own_rocket_lift_keeps_a_new_attachment_until_the_next_pass lib daily resources
 sunrise-client-gameplay game::client_side::remote_projectiles::nested_spawn_tests::remote_lift_restores_each_nested_spawn_without_ticking_it_early lib daily resources
+sunrise-client-gameplay game::client_side::remote_projectiles::nested_spawn_tests::remote_projectiles_told_restores_fifo_and_tracks_write_stamps lib daily resources
 sunrise-client cut_layout::game::client_side::remote_removal::tests::add_entity_replaces_falling_block_without_removing_other_ids lib daily resources
 sunrise-client cut_layout::game::client_side::remote_removal::tests::remove_entities_detaches_only_removed_vehicles lib daily resources
 sunrise-client cut_layout::game::client_side::remote_removal::tests::remove_entities_filters_mixed_entity_lists lib daily resources

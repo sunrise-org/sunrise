@@ -20,6 +20,7 @@ class RemoteOwnRocketTests(unittest.TestCase):
             rust_fn("follow_own_player", owner="sunrise-gameplay-common"),
             rust_fn("rocket_spark", owner="sunrise-client-gameplay"),
             rust_fn("remote_player_id", owner="sunrise-client-gameplay"),
+            rust_fn("with_lifted_rockets", owner="sunrise-client-gameplay"),
             rust_fn("tick_own_rockets", owner="sunrise-client-gameplay"),
         ])
         fixture = r'''
@@ -49,6 +50,8 @@ mod sunrise_world {
 mod sunrise_sim {
     pub mod join_seq { pub enum RestoreOrder { SurvivorsFirst } }
 }
+use sunrise_sim::join_seq::RestoreOrder;
+type JoinList<T> = Vec<T>;
 trait Lift: Default + Sized {
     fn lift(&mut self) -> Self { std::mem::take(self) }
     fn restore(&mut self, taken: Self, order: sunrise_sim::join_seq::RestoreOrder);
@@ -116,13 +119,6 @@ fn side_state(&self) -> &ClientState { &self.client }
 fn stack_in(&self, slot: usize) -> Option<&ItemStack> { self.common.hotbar.as_ref().filter(|_| slot == 3) }
 // The pick-section index is not the subject of this physics fixture.
 fn pick_section_move(&mut self, _: u32, _: [f64; 3]) {}
-fn with_lifted_rockets(&mut self, work: impl FnOnce(&mut Self, &mut Vec<Rocket>)) {
-    let mut rockets = self.common.rockets.lift();
-    work(self, &mut rockets);
-    self.common
-        .rockets
-        .restore(rockets, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
-}
 METHODS
 }
 fn rocket() -> Option<ItemStack> { Some(ItemStack { item: "minecraft:firework_rocket".into() }) }

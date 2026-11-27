@@ -2,7 +2,10 @@
 //! end crystals on a server's client (`ClientPacketListener.handleAddEntity`
 //! and `handleSetEntityData`): the server simulates them, the client draws
 //! them where it says and interpolates their moves.
-use super::{FallingBlock, fireworks::fireworks_of};
+use super::{
+    FallingBlock,
+    fireworks::{Rocket, fireworks_of},
+};
 use sunrise_client_render::particles::ParticleLevel;
 use sunrise_core::{geometry::Vec3, position::BlockPos, random::RandomSource};
 use sunrise_gameplay_common::game::native_ticks::{TickRound, places_of, slot_place};
@@ -783,10 +786,7 @@ impl crate::game::ClientGame<'_> {
     }
 
     #[inline(always)]
-    fn with_lifted_rockets(
-        &mut self,
-        work: impl FnOnce(&mut Self, &mut JoinList<super::fireworks::Rocket>),
-    ) {
+    fn with_lifted_rockets(&mut self, work: impl FnOnce(&mut Self, &mut JoinList<Rocket>)) {
         let mut rockets = self.common.rockets.lift();
         work(self, &mut rockets);
         self.common
@@ -1584,6 +1584,66 @@ pub(in crate::game) mod nested_spawn_tests {
             assert_ne!(
                 game.rockets.iter().find(|r| r.id == ID).unwrap().position,
                 AT
+            );
+        });
+    }
+    #[test]
+    #[ignore = "daily"]
+    fn remote_projectiles_told_restores_fifo_and_tracks_write_stamps() {
+        use sunrise_sim::join_seq::residency::{Change, Kind};
+        crate::game::native_entity_refs::tests::with_client_game(|game| {
+            game.clear_remote_projectiles();
+            game.client_reset_entity_residency();
+            projectile(game, 71);
+            trident(game, 72);
+            let journal = game.common.resident_entities.table.borrow().producer();
+            let mut events = Vec::new();
+            journal.drain_into(&mut events);
+            events.clear();
+            let mut read_only = None;
+            let mut trident_write = None;
+            game.with_lifted_remote_projectiles(
+                |_, _| {},
+                |game, projectiles, tridents| {
+                    let (projectiles, tridents, first) =
+                        game.remote_projectiles_told(projectiles, tridents, |g| {
+                            let _ = (
+                                g.common.creatures.projectiles.len(),
+                                g.common.tridents.len(),
+                            );
+                        });
+                    read_only = Some(first);
+                    let (projectiles, tridents, second) =
+                        game.remote_projectiles_told(projectiles, tridents, |g| {
+                            g.common.tridents.for_each_mut(|_| {});
+                        });
+                    trident_write = Some(second);
+                    (projectiles, tridents)
+                },
+            );
+            assert_eq!(read_only, Some((false, false)));
+            assert_eq!(trident_write, Some((false, true)));
+            journal.drain_into(&mut events);
+            let markers: Vec<_> = events
+                .into_iter()
+                .map(|event| (event.owner.kind, event.change))
+                .collect();
+            assert_eq!(
+                markers,
+                [
+                    (Kind::Projectile, Change::Lifted),
+                    (Kind::Trident, Change::Lifted),
+                    (Kind::Projectile, Change::Restored),
+                    (Kind::Trident, Change::Restored),
+                    (Kind::Projectile, Change::Lifted),
+                    (Kind::Trident, Change::Lifted),
+                    (Kind::Projectile, Change::Restored),
+                    (Kind::Trident, Change::Restored),
+                    (Kind::Projectile, Change::Lifted),
+                    (Kind::Trident, Change::Lifted),
+                    (Kind::Projectile, Change::Restored),
+                    (Kind::Trident, Change::Restored),
+                ]
             );
         });
     }
