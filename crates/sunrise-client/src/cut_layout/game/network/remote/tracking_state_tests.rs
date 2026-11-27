@@ -12,22 +12,7 @@ use {
 #[test]
 fn any_tracked_passenger_makes_its_vehicle_a_vehicle() {
     use std::collections::{HashMap, HashSet};
-    let tracked = |kind: &str| Tracked {
-        kind: kind.to_owned(),
-        position: [0.0, 64.0, 0.0],
-        previous: [0.0, 64.0, 0.0],
-        yaw: 0.0,
-        pitch: 0.0,
-        previous_yaw: 0.0,
-        previous_pitch: 0.0,
-        codec_base: [0.0, 64.0, 0.0],
-        on_fire: false,
-        mod_fire_immune: false,
-        silent: false,
-        vehicle: None,
-        tick_count: 0,
-        size_answer: None,
-    };
+    let tracked = |kind: &str| Tracked::new(kind.to_owned(), [0.0, 64.0, 0.0], 0.0, 0.0);
     let mut entities = HashMap::from([
         (42, tracked("minecraft:player")),
         (43, tracked("minecraft:player")),

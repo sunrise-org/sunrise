@@ -2926,7 +2926,11 @@ impl Mob {
     /// Entity.isOnFire: fire-immune mobs never count as burning, even on the
     /// tick a sun or fire check set their timer before `base_tick` clears it.
     pub fn is_on_fire(&self) -> bool {
-        self.fire_ticks > 0 && !self.fire_immune()
+        self.is_on_fire_with_synced(false)
+    }
+    /// `Entity.isOnFire` on a client, where the shared flag can show flames without a countdown.
+    pub fn is_on_fire_with_synced(&self, synced_on_fire: bool) -> bool {
+        (self.fire_ticks > 0 || synced_on_fire) && !self.fire_immune()
     }
     pub fn ignite_for_ticks(&mut self, ticks: i32) {
         if self.mod_fire_immune {
@@ -5211,8 +5215,8 @@ impl Mob {
     pub fn has_effect(&self, effect: &str) -> bool {
         self.extra.effects.iter().any(|e| e.id == effect)
     }
-    /// `LivingEntity.isCurrentlyGlowing`: the Glowing effect or the `Glowing` tag (on a
-    /// server's client, `glowing` holds shared flag 6 instead).
+    /// `LivingEntity.isCurrentlyGlowing`: the Glowing effect or the saved `Glowing` tag.
+    /// Client rendering also reads shared flag 6 from its tracker.
     pub fn is_currently_glowing(&self) -> bool {
         self.glowing || self.has_effect("minecraft:glowing")
     }

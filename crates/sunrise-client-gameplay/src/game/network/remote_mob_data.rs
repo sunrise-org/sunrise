@@ -44,11 +44,7 @@ pub(in crate::game) fn apply(
             {
                 m.extra.avatar_pose = sunrise_sim::pose::Pose::from_id(*pose);
             }
-            // Entity.DATA_SHARED_FLAGS_ID's FLAG_ONFIRE: Entity.isOnFire on a
-            // client, which draws the flames. A client doesn't count the
-            // fire down: the flag goes off when the server's fire is out.
             (0, Value::Byte(flags)) => {
-                m.fire_ticks = i32::from(flags & 1);
                 // Entity.isSprinting: a dashing cat's or ocelot's model.
                 m.extra.sprinting = flags & 8 != 0;
                 // Drowned.setSwimming: the shared flag of swimming.
@@ -61,10 +57,21 @@ pub(in crate::game) fn apply(
                 if species == Species::Illusioner {
                     illusioner::set_invisible(m, invisible);
                 }
-                if &*m.kind.id != "minecraft:player" {
-                    m.invisible = invisible;
-                }
+                m.invisible = invisible;
             }
+            (2, Value::OptText(name)) => {
+                let text = name.as_ref().map(sunrise_sim::entity_nbt::name_text);
+                m.custom_name = text.as_ref().map(sunrise_game_data::text::Text::plain);
+                m.custom_name_text = text;
+            }
+            (2, Value::Text(name)) => {
+                let text = sunrise_sim::entity_nbt::name_text(name);
+                m.custom_name = Some(text.plain());
+                m.custom_name_text = Some(text);
+            }
+            (3, Value::Bool(visible)) => m.name_visible = *visible,
+            // Entity.DATA_NO_GRAVITY: `isNoGravity` in the client's own travel.
+            (5, Value::Bool(no_gravity)) => m.no_gravity = *no_gravity,
             // Entity.DATA_SILENT: Entity.isSilent, which keeps the sounds
             // a client plays itself quiet (LivingEntity.breakItem's).
             (4, Value::Bool(silent)) => m.silent = *silent,
@@ -609,6 +616,7 @@ fn fixture_mob_impl(kind: &str) -> Mob {
         "minecraft:witch" => Species::Witch,
         "minecraft:ravager" => Species::Ravager,
         "minecraft:zombie" => Species::Zombie,
+        "minecraft:slime" => Species::Slime,
         "minecraft:enderman" => Species::Enderman,
         "minecraft:piglin" => Species::Piglin,
         _ => panic!("unknown fixture species"),
@@ -1434,21 +1442,19 @@ pub mod tests {
     }
 
     #[test]
-    fn fire_health_and_size_follow_the_server() {
-        let Some(mut m) = mob("minecraft:slime") else {
-            return;
-        };
-        apply(
+    fn synced_flames_do_not_set_the_mob_fire_countdown() {
+        let mut m = fixture_mob("minecraft:slime");
+        super::apply(
             &mut m,
             &[
                 (0, s::BYTE, Value::Byte(1)),
                 (9, s::FLOAT, Value::Float(12.5)),
                 (18, s::INT, Value::Int(4)),
             ],
+            &Builtin::default(),
+            99,
         );
-        assert_eq!((m.fire_ticks, m.health, m.extra.size), (1, 12.5, 4));
-        apply(&mut m, &[(0, s::BYTE, Value::Byte(0))]);
-        assert_eq!(m.fire_ticks, 0);
+        assert_eq!((m.fire_ticks, m.health, m.extra.size), (0, 12.5, 4));
     }
 
     #[test]
