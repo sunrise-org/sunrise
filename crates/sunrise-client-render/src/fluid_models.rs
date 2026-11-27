@@ -61,16 +61,7 @@ impl FluidData {
             .looks
             .iter()
             .flat_map(|look| {
-                // The load's `resolved` already warned about bad sprite ids.
-                let model = resolve_look(look, &self.registered, false);
-                let tint = match model.tint {
-                    FluidTint::Fixed(rgb) => (0xFF00_0000 | rgb) as i32,
-                    FluidTint::Biome => WATER_ITEM_TINT,
-                };
-                let appearance = FluidAppearance {
-                    still: model.still,
-                    tint,
-                };
+                let appearance = look_appearance(look, &self.registered);
                 [
                     (look.flowing_id(), appearance.clone()),
                     (look.id.clone(), appearance),
@@ -80,16 +71,9 @@ impl FluidData {
         // A tank-only fluid has no registered model (a model naming one is reported as naming
         // no world fluid), so its look alone decides, by the same rule as a world fluid's.
         for look in &self.tank_looks {
-            let model = resolve_look(look, &[], false);
-            let tint = match model.tint {
-                FluidTint::Fixed(rgb) => (0xFF00_0000 | rgb) as i32,
-                FluidTint::Biome => WATER_ITEM_TINT,
-            };
-            let appearance = FluidAppearance {
-                still: model.still,
-                tint,
-            };
-            items.entry(look.id.clone()).or_insert(appearance);
+            items
+                .entry(look.id.clone())
+                .or_insert_with(|| look_appearance(look, &[]));
         }
         for (fluid, block) in [
             ("minecraft:water", "minecraft:water"),
@@ -221,6 +205,23 @@ fn resolve_look(look: &FluidLook, registered: &[FluidModel], warn: bool) -> Reso
             overlay: overlay.or_else(|| Some("minecraft:block/water_overlay".into())),
             tint: fixed.unwrap_or(FluidTint::Biome),
         },
+    }
+}
+
+/// What a mod fluid with `look` draws as an item's fluid layer and on a GUI canvas, `registered`
+/// being the models mods register ([`item_appearance`]'s rule for one look): its world model's
+/// still sprite, the look's sprite when no model names one, else water's; its fixed tint made
+/// opaque, white for a sprite with no tint, or water's item colour when it takes the biome's.
+/// Bad sprite ids are not logged again: the load's [`resolved`] already did.
+pub fn look_appearance(look: &FluidLook, registered: &[FluidModel]) -> FluidAppearance {
+    let model = resolve_look(look, registered, false);
+    let tint = match model.tint {
+        FluidTint::Fixed(rgb) => (0xFF00_0000 | rgb) as i32,
+        FluidTint::Biome => WATER_ITEM_TINT,
+    };
+    FluidAppearance {
+        still: model.still,
+        tint,
     }
 }
 

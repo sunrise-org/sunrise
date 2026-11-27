@@ -117,6 +117,20 @@ HUD or screen draw hooks.
 
 For replacing or wrapping a HUD status layer, see [HUD drawing](hud-drawing.md).
 
+## Fluids
+
+Call `canvas.fluid(&fluid_stack, [x, y, w, h])` to fill a rectangle with a fluid, as a tank gauge
+or a recipe viewer's fluid slot does. It draws the still sprite and tint the fluid has as an
+item's fluid layer and in the world: a registered fluid model's still sprite, else the sprite its
+look (`data/<mod>/sunrise/fluid/<name>.json`) names, else water's, times the look's tint made
+opaque (white for a sprite with no tint). Vanilla water draws `block/water_still` times
+`0xFF3F76E4`, lava `block/lava_still` untinted. The sprite tiles at its own pixel size from the
+top left and the last column and row are cut; only the tiles that can show through the scissor
+(else the screen) are drawn, so a rectangle far larger than the screen costs no more than the
+screen. A fluid no model knows draws the missing sprite, the empty fluid nothing, and a
+fluid that is not registered is refused with `UnknownFluid`. The stack's amount does not change
+the drawing: scale `h` yourself for a gauge.
+
 ## Blits
 
 - `canvas.blit_sprite` looks up a GUI sprite by id, such as `container/slot` or `mymod:panel`.
@@ -141,7 +155,7 @@ For replacing or wrapping a HUD status layer, see [HUD drawing](hud-drawing.md).
 `GuiDrawError` belongs to the call that returned it. Geometry or pose arithmetic that isn't finite
 returns `NotFinite`; text and stack conversion failures carry `Text` or `Stack` errors. The blit
 methods distinguish `UnknownSprite`, `UnknownTexture`, `BadSpriteRegion`, `BadBlitRegion` and
-`UnsupportedSpriteBlend`. Return a refusal from the callback to discard its whole group, or
+`UnsupportedSpriteBlend`, and `fluid` returns `UnknownFluid`. Return a refusal from the callback to discard its whole group, or
 handle it there and keep the successful draws.
 
 ## Turning what a GUI canvas draws
