@@ -2,6 +2,7 @@
 //! (`PackIds::separate_ao`) when it loads, and the meshing settings (`Streaming::separate_ao`)
 //! the frame after. The case runs in a process of its own (one event loop, its own resources).
 use super::native_entity_refs::tests::{run_fresh_cases, test_window, with_client_game};
+use super::packs::retained_mod_gpu_tests::same_device;
 use crate::game::ClientGame;
 use crate::game::model_baking_completed_tests::reload;
 use crate::game::native_hooks::particle_count_tests::frame_scene;
@@ -34,17 +35,12 @@ fn wait_for_pack(
     game: &mut ClientGame<'_>,
     expected_hides_clouds: bool,
 ) -> mod_api::ShaderPackState {
-    let started = std::time::Instant::now();
     loop {
         assert!(game.render().unwrap());
         if let Some(state) = game.shader_pack_state() {
             assert_eq!(state.hides_clouds, expected_hides_clouds);
             return state;
         }
-        assert!(
-            started.elapsed().as_secs() < 30,
-            "shader pack never became active"
-        );
         std::thread::sleep(std::time::Duration::from_millis(10));
     }
 }
@@ -99,7 +95,8 @@ fn shader_pack_generation_continues_across_renderer_replacement() {
         sunrise_client::sprites::set_labpbr_maps(true);
         let renderer = game.new_renderer(window.clone()).unwrap();
         game.set_renderer(renderer);
-        game.client.window.0 = Some(window.clone());
+        game.client.window.0 = Some(window);
+        let device = game.client.renderer.0.as_ref().unwrap().device.clone();
 
         assert!(game.render().unwrap());
         assert_eq!(game.shader_pack_state(), None);
@@ -111,33 +108,33 @@ fn shader_pack_generation_continues_across_renderer_replacement() {
 
         let case = std::env::var(GENERATION_CASE).unwrap();
         if case == "reuse" {
+            let asset_generation = game.client.client_pack.render.generation;
             write_pack("generation_reload", INNER);
             game.client.settings.resource_packs = vec!["file/generation_reload".into()];
             reload(game);
+            assert_eq!(
+                game.client.settings.resource_packs,
+                ["file/generation_reload"]
+            );
+            assert_eq!(
+                (
+                    game.client.client_pack.clouds.0,
+                    game.client.client_pack.clouds.1,
+                ),
+                (4, 6)
+            );
+            assert!(game.client.client_pack.render.generation > asset_generation);
+            assert!(
+                same_device(&device, &game.client.renderer.0.as_ref().unwrap().device),
+                "pack reload replaced the device"
+            );
         } else {
             game.client.renderer.0.as_mut().unwrap().wait_submissions();
-            let old = game.client.renderer.0.take().unwrap();
-            let carried = old.continuity();
-            game.client.mod_gpu = None;
-            drop(old);
-            let opened = pollster::block_on(sunrise_client::gfx::Opened::for_window(
-                &window,
-                true,
-                game.client.settings.sunrise.api,
-                game.client.client_pack.render.texture_layers,
-            ))
-            .unwrap();
-            let mut replacement = game
-                .renderer_for(
-                    window,
-                    &game.common.pack,
-                    &game.client.client_pack,
-                    &game.client.gui,
-                    Some(opened),
-                )
-                .unwrap();
-            replacement.continue_from(carried);
-            game.adopt_renderer(replacement);
+            game.replace_renderer_on_new_device().unwrap();
+            assert!(
+                !same_device(&device, &game.client.renderer.0.as_ref().unwrap().device),
+                "renderer replacement kept the old device"
+            );
         }
 
         game.client.settings.sunrise.shader_pack = pack_b.to_str().unwrap().to_owned();

@@ -136,7 +136,10 @@ fn assert_pixel(game: &ClientGame<'_>, target: RenderTargetRef, expected: [u8; 4
     assert_eq!(&slice.get_mapped_range().unwrap()[..], &expected);
 }
 
-fn same_device(old: &wgpu::Device, current: &wgpu::Device) -> bool {
+pub(in crate::game::client_side) fn same_device(
+    old: &wgpu::Device,
+    current: &wgpu::Device,
+) -> bool {
     // Each device owns its thread-local scope stack. If the handles share a device,
     // the inner (current) scope catches the error; otherwise only the old scope can.
     let old_scope = old.push_error_scope(wgpu::ErrorFilter::Validation);

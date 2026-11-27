@@ -439,9 +439,10 @@ and read unchanged by that frame's render callbacks:
   `projection`. They are in the same camera-relative space as `WorldRenderView` and are the current
   frame's values. Use them to cull shadow-casting geometry you submit to `PackPassSlot::Shadow`
   against the shadow volume (Iris's `ShadowRenderer` `MODELVIEW` and `PROJECTION`).
-- `generation`: changes every time a pack is loaded, switched or turned off, and at no other time.
-  Compare it each frame and re-read whatever you derived from the pack when it differs. It covers a
-  pack switch that fires no resource reload.
+- `generation`: changes every time a pack is loaded, switched or turned off, and at no other time;
+  it continues across renderer rebuilds rather than resetting. Compare it each frame and re-read
+  whatever you derived from the pack when it differs. It covers a pack switch that fires no
+  resource reload.
 
 `host.render_assets().pipeline_pack_bound(pipeline)` says whether the active pack compiled a program
 for the pipeline's `PackBinding`. It is `false` with no pack, for a stale or invalid handle, and when

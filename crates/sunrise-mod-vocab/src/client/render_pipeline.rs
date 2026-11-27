@@ -1064,8 +1064,9 @@ pub struct ShaderPackState {
     pub shadow: Option<ShaderPackShadowView>,
     /// Changes every time a shader pack is loaded, switched or turned off, including a reload of
     /// the same pack and a dimension change that loads the pack again, and at no other time.
-    /// Compare it each frame and re-read what you derived from the pack when it differs: that
-    /// covers a pack switch with no resource reload.
+    /// Continues across renderer rebuilds (resource reloads, frame-shape rebuilds and graphics
+    /// device recovery) rather than resetting. Compare it each frame and re-read what you derived
+    /// from the pack when it differs: that covers a pack switch with no resource reload.
     pub generation: u32,
 }
 
