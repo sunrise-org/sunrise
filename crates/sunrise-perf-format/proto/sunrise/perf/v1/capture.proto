@@ -430,6 +430,15 @@ message SpanBlock {
   repeated float cpu_ms = 10;
   // Units of the block in which the span ran.
   repeated uint32 seen = 11;
+  // Client frame timings in capture order.
+  repeated FrameTiming frames = 12;
+}
+
+message FrameTiming {
+  uint64 counter = 1;
+  // Frame end, in seconds since the side's capture began.
+  double t = 2;
+  float wall_ms = 3;
 }
 
 // Columnar spans of one thread over about one second, in start order; the arrays are parallel.

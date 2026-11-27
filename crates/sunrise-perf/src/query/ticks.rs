@@ -1,8 +1,8 @@
 use sunrise_perf_format::v1::Side;
 
 use super::profile;
-use super::rows::{Row, TickRow, TickSpanRow};
-use super::{Ctx, QueryError, Reply, num};
+use super::rows::{FrameTimingRow, Row, TickRow, TickSpanRow};
+use super::{Ctx, QueryError, Reply, fine, num};
 use crate::ids;
 use crate::samples::Samples;
 use crate::view::{TickUnit, View};
@@ -61,6 +61,67 @@ pub(super) fn ticks(ctx: &Ctx) -> Result<Reply, QueryError> {
     });
     units.truncate(ctx.q.worst.unwrap_or(ctx.q.filters.limit));
     let mut reply = Reply::new(unit_label(side), units.iter().map(unit_row).collect());
+    reply.window = Some(window);
+    Ok(reply)
+}
+
+pub(super) fn frame_timings(ctx: &Ctx) -> Result<Reply, QueryError> {
+    if ctx.files.len() != 1 {
+        return Err(QueryError::new(
+            "frames without function names takes one capture",
+        ));
+    }
+    if ctx.side(0)? != Side::Client {
+        return Err(QueryError::new(
+            "frame timings require a client capture; for server ticks use query ticks",
+        ));
+    }
+    let window = ctx.window(0, Side::Client, 0.0)?;
+    let timings = || {
+        ctx.views[0]
+            .capture
+            .span_blocks
+            .iter()
+            .filter(|block| block.side() == Side::Client)
+            .flat_map(|block| &block.frames)
+    };
+    if timings().next().is_none() {
+        return Err(QueryError::new(
+            "this capture has no timestamped client frame series; record with sunrise-client --benchmark SCENE --profile (add --profile-startup for loading), or use query ticks --side client for the retained slow frames",
+        ));
+    }
+    let mut frames: Vec<_> = timings()
+        .filter(|frame| {
+            window.contains(frame.t)
+                && ctx
+                    .q
+                    .over
+                    .is_none_or(|over| f64::from(frame.wall_ms) > over)
+        })
+        .collect();
+    if ctx.q.worst.is_some() {
+        frames.sort_unstable_by(|a, b| {
+            b.wall_ms
+                .total_cmp(&a.wall_ms)
+                .then(a.counter.cmp(&b.counter))
+        });
+    } else {
+        frames.sort_unstable_by_key(|frame| frame.counter);
+    }
+    let rows = frames
+        .into_iter()
+        .take(ctx.q.worst.unwrap_or(ctx.q.filters.limit))
+        .map(|frame| {
+            let wall_ms = f64::from(frame.wall_ms);
+            Row::FrameTiming(FrameTimingRow {
+                id: ids::tick(frame.counter),
+                start_t: fine(frame.t - wall_ms / 1000.0),
+                t: fine(frame.t),
+                wall_ms: num(wall_ms),
+            })
+        })
+        .collect();
+    let mut reply = Reply::new(Unit::MsPerFrame, rows);
     reply.window = Some(window);
     Ok(reply)
 }

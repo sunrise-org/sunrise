@@ -10,7 +10,7 @@ use crate::error::side_name;
 use crate::ids::{Id, Kind};
 use crate::samples::{Pick, Samples, Tally, Units, out_unit};
 use crate::view::{View, Window};
-use crate::wire::{Candidate, ContextKey, HotBy, SampleBy, Select};
+use crate::wire::{Candidate, ContextKey, HotBy, SampleBy, Select, Unit};
 use sunrise_perf_format::v1::Side;
 
 /// One capture's samples, narrowed by the query's filters.
@@ -349,8 +349,9 @@ struct Found {
 /// Per capture, each function's inclusive and own rate and sample count.
 type Stats = HashMap<String, (f64, f64, u64)>;
 
-fn stats(run: &Run, t: &Tally) -> (Stats, Vec<Found>) {
+fn stats(run: &Run, t: &Tally, total: bool) -> (Stats, Vec<Found>) {
     let s = &run.samples;
+    let value = |weight| if total { weight } else { run.per_unit(weight) };
     let mut stats: Stats = HashMap::new();
     for func in &s.functions {
         stats.insert(func.id.clone(), (0.0, 0.0, 0));
@@ -358,9 +359,9 @@ fn stats(run: &Run, t: &Tally) -> (Stats, Vec<Found>) {
     for node in 0..s.func.len() {
         let id = &s.function_of(node as u32).id;
         let entry = stats.get_mut(id).expect("every function has an entry");
-        entry.1 += run.per_unit(t.self_ms[node]);
+        entry.1 += value(t.self_ms[node]);
         if t.total_n[node] > 0 && !s.shadowed(node as u32) {
-            entry.0 += run.per_unit(t.total_ms[node]);
+            entry.0 += value(t.total_ms[node]);
             entry.2 += t.total_n[node];
         }
     }
@@ -402,12 +403,12 @@ fn wanted(arg: &str) -> Result<Wanted, QueryError> {
 
 /// Inclusive and own time of the named functions, one column per capture.
 pub(super) fn frames(ctx: &Ctx) -> Result<Reply, QueryError> {
-    if ctx.q.args.is_empty() {
-        return Err(QueryError::new(
-            "frames needs at least one NAME: an f: id, a short or full function name, or /regex/",
-        ));
-    }
     let f = &ctx.q.filters;
+    let unit = |run: &Run<'_>| match (ctx.q.total, f.select) {
+        (true, Select::Alloc | Select::Live) => Unit::Bytes,
+        (true, _) => Unit::Ms,
+        _ => unit_of(run, f.select, f.slow),
+    };
     let mut columns: Vec<Stats> = Vec::new();
     let mut known: Vec<Found> = Vec::new();
     let mut first_run = None;
@@ -415,7 +416,7 @@ pub(super) fn frames(ctx: &Ctx) -> Result<Reply, QueryError> {
     for i in 0..ctx.views.len() {
         let run = prepare(ctx, i, false)?;
         let t = run.samples.tally(&run.pick);
-        let (stats, found) = stats(&run, &t);
+        let (stats, found) = stats(&run, &t, ctx.q.total);
         for func in found {
             if !known.iter().any(|k| k.id == func.id) {
                 known.push(func);
@@ -424,7 +425,7 @@ pub(super) fn frames(ctx: &Ctx) -> Result<Reply, QueryError> {
         columns.push(stats);
         match &first_run {
             None => {
-                let mut reply = Reply::new(unit_of(&run, f.select, f.slow), Vec::new());
+                let mut reply = Reply::new(unit(&run), Vec::new());
                 reply.warnings = run.warnings(t.grand_n);
                 reply.sampled = Some(run.sampled(t.grand_n));
                 reply.window = run.window();
@@ -432,8 +433,8 @@ pub(super) fn frames(ctx: &Ctx) -> Result<Reply, QueryError> {
             }
             Some(first) => {
                 let thread = first.sampled.as_ref().map(|s| s.thread.as_str());
-                differs |= thread != Some(run.sampled(0).thread.as_str())
-                    || first.unit != unit_of(&run, f.select, f.slow);
+                differs |=
+                    thread != Some(run.sampled(0).thread.as_str()) || first.unit != unit(&run);
             }
         }
     }

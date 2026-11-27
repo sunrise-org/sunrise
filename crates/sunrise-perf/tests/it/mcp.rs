@@ -150,6 +150,7 @@ fn every_filter() -> QueryRequest {
         min_pct: Some(1.0),
         self_share: true,
         stats: true,
+        total: true,
     }
 }
 

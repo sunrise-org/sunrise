@@ -62,11 +62,12 @@ usage:
 
 OPs: {ops}.
 FILTERS: --side client|server --thread T --from T --to T (seconds; negative counts from the end; mark:NAME) --limit N --dir DIR
+  frames [FILE] --side client [--worst N] [--over MS]   client frame timings in capture order unless ranked
   spans: --slow --names a,b   ticks: --worst N --over MS   series: FIELD... --every S (h:NAME, span:NAME, x:NAME)
   memory: --diff [LABEL_A LABEL_B] --min-mb X   world: --by {by} [LABEL]
   samples (--select cpu|running|waiting|wall|alloc, --slow, --where k=v):
     hot [--by {hot}] [--match TEXT]   tree [ID] [--depth N] [--min-pct X]   callers ID [--depth N]   callees ID [--depth N]
-    split [ID] --by {split}   group --by {group}   frames NAME... [FILE...] (an f: id, a function name or /regex/)
+    split [ID] --by {split}   group --by {group}   frames NAME... [FILE...] (an f: id, a function name or /regex/) [--total]
 
 export writes stdout unless --out is given. pprof carries every kind of sample; folded counts --select (cpu by default); perfetto is the timeline.
 diff compares B against A (A is the earlier run): two captures, or two benchmark reports (benchmarks/*.json). --calls adds the sampled functions (f:) and call paths (p:). summary --baseline FILE compares against an earlier capture.
@@ -110,6 +111,7 @@ vocab! {
         Pprof = "pprof",
         Folded = "folded",
         Perfetto = "perfetto",
+        Total = "total",
     }
 }
 
@@ -120,6 +122,7 @@ impl Flag {
             Flag::Slow
             | Flag::All
             | Flag::Diff
+            | Flag::Total
             | Flag::Json
             | Flag::Calls
             | Flag::Pprof

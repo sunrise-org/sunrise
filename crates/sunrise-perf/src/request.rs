@@ -73,6 +73,8 @@ pub struct QueryRequest {
     pub self_share: bool,
     #[serde(default, skip_serializing_if = "std::ops::Not::not")]
     pub stats: bool,
+    #[serde(default, skip_serializing_if = "std::ops::Not::not")]
+    pub total: bool,
 }
 
 fn bound(name: &str, arg: Option<BoundArg>) -> Result<Option<Bound>, RequestError> {
@@ -101,6 +103,11 @@ pub fn side(name: Option<SideName>) -> Result<Option<Side>, RequestError> {
 impl QueryRequest {
     /// The query for `op` with the ids `args`, or what is wrong with the filters.
     pub fn into_query(self, op: Op, args: Vec<String>) -> Result<Query, RequestError> {
+        if self.total && (op != Op::Frames || args.is_empty()) {
+            return Err(RequestError(
+                "total needs frames with function names".into(),
+            ));
+        }
         let usage =
             |what: &str, spellings: String| RequestError(format!("by is {spellings}, got {what}"));
         let (mut by, mut hot_by, mut by_sample) = (None, None, None);
@@ -158,6 +165,7 @@ impl QueryRequest {
             min_pct: self.min_pct,
             self_share: self.self_share,
             stats: self.stats,
+            total: self.total,
         })
     }
 }

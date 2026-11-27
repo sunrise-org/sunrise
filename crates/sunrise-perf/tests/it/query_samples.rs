@@ -3,9 +3,14 @@ use crate::common;
 use std::process::Command;
 
 use common::samples::*;
-use common::{TempDir, frame_rows, hot_rows, query, save, split_rows, tree_rows};
+use common::{CLIENT, TempDir, frame_rows, hot_rows, query, rows, save, split_rows, tree_rows};
+use sunrise_perf::query::Row;
 use sunrise_perf::query::rows::{HotRow, SplitRow, TreeRow};
 use sunrise_perf::wire::{Candidate, Envelope, SampleBy, Unit};
+use sunrise_perf_format::{
+    Field,
+    v1::{FrameTiming, SpanBlock},
+};
 
 /// The standard tree: 120 samples of 10 ms over 50 ticks, so a sample is 0.2 ms/tick.
 fn standard(dir: &TempDir) -> String {
@@ -539,6 +544,102 @@ fn where_ands_keys_and_ors_repeated_values() {
     let rows = hot_rows(&chunk);
     assert_eq!(hot_row(&rows, LEVEL_ID).self_ms, 6.0);
     assert_eq!(hot_row(&rows, UPDATE_ID).self_ms, 4.0);
+}
+
+#[test]
+fn a_client_capture_lists_frame_intervals_and_sampled_function_totals() {
+    let dir = TempDir::new("frame-timings");
+    let mut capture = Builder::new(4, &[3, 1]);
+    capture.side = CLIENT;
+    capture.thread = "render".into();
+    let function = capture.node(None, "shaders::translate");
+    capture.weight(function, 30, W::default());
+    capture.weight(
+        function,
+        5,
+        W {
+            block: 1,
+            ..W::default()
+        },
+    );
+    let thread = capture.text("render");
+    let old_fields = capture.fields();
+    let old = save(&dir, "before-frame-series.hzperf", &old_fields);
+    let missing = query(&["frames", &old, "--side", "client"]);
+    assert!(!missing.ok);
+    let error = missing.error.unwrap();
+    assert!(error.contains("no timestamped client frame series"));
+    assert!(error.contains("--profile-startup"));
+
+    let mut fields = old_fields;
+    let stop = fields.pop().unwrap();
+    let timing = |counter, t, wall_ms| FrameTiming {
+        counter,
+        t,
+        wall_ms,
+    };
+    fields.push(Field::SpanBlock(SpanBlock {
+        side: CLIENT,
+        thread,
+        block_s: 5.0,
+        units: 3,
+        frames: vec![
+            timing(1, 0.125, 10.0),
+            timing(2, 1.375, 1250.0),
+            timing(3, 1.4, 25.0),
+        ],
+        ..SpanBlock::default()
+    }));
+    fields.push(Field::SpanBlock(SpanBlock {
+        side: CLIENT,
+        thread,
+        block: 1,
+        block_s: 5.0,
+        t0: 5.0,
+        units: 1,
+        frames: vec![timing(4, 6.0, 2000.0)],
+        ..SpanBlock::default()
+    }));
+    fields.push(stop);
+    let file = save(&dir, "startup.hzperf", &fields);
+
+    let ordered = query(&["frames", &file, "--side", "client"]);
+    let timings = |reply: &Envelope<Row>| {
+        rows(reply)
+            .iter()
+            .map(|row| {
+                let Row::FrameTiming(frame) = row else {
+                    panic!("{row:?}")
+                };
+                (frame.id.clone(), frame.start_t, frame.t, frame.wall_ms)
+            })
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(ordered.unit, Some(Unit::MsPerFrame));
+    assert_eq!(timings(&ordered).len(), 4);
+    assert_eq!(timings(&ordered)[0], ("k:1".into(), 0.115, 0.125, 10.0));
+
+    let worst = query(&[
+        "frames", &file, "--worst", "1", "--from", "0.125", "--to", "1.5",
+    ]);
+    assert_eq!(timings(&worst), [("k:2".into(), 0.125, 1.375, 1250.0)]);
+    let totals = query(&[
+        "frames",
+        "shaders::translate",
+        &file,
+        "--side",
+        "client",
+        "--from",
+        "0.125",
+        "--to",
+        "1.5",
+        "--total",
+    ]);
+    assert_eq!(totals.unit, Some(Unit::Ms));
+    assert_eq!(frame_rows(&totals)[0].values, [Some(300.0)]);
+    assert_eq!(frame_rows(&totals)[0].self_ms, [Some(300.0)]);
+    let selection = totals.selection.unwrap();
+    assert_eq!(selection.samples, Some(30));
 }
 
 #[test]

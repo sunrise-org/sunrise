@@ -97,6 +97,7 @@ fn block(n: &Names, index: u32, t0: f64, wall: [f32; 3], cpu: [f32; 3], seen: [u
         wall_ms: wall.to_vec(),
         cpu_ms: cpu.to_vec(),
         seen: seen.to_vec(),
+        frames: Vec::new(),
     })
 }
 

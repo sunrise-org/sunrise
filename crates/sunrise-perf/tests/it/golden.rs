@@ -114,6 +114,7 @@ fn client_fields() -> Vec<Field> {
             wall_ms: vec![3000.0 + 90.0 * block as f32, 450.0],
             cpu_ms: vec![2400.0, 300.0],
             seen: vec![300, 120],
+            frames: Vec::new(),
         }));
     }
     for t in 0..10 {

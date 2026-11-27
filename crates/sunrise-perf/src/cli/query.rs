@@ -27,7 +27,7 @@ const FLAGS: [Flag; 17] = [
     Flag::Depth,
     Flag::MinPct,
 ];
-const SWITCHES: [Flag; 3] = [Flag::Slow, Flag::All, Flag::Diff];
+const SWITCHES: [Flag; 4] = [Flag::Slow, Flag::All, Flag::Diff, Flag::Total];
 
 /// A positional is a capture when it says so: `latest`, a `.hzperf` name or a file that exists.
 fn is_capture(arg: &str) -> bool {
@@ -108,6 +108,7 @@ fn request(parsed: &Parsed) -> Result<QueryRequest, CliError> {
         min_pct: parsed.number(Flag::MinPct)?,
         self_share: false,
         stats: false,
+        total: parsed.flags.contains_key(&Flag::Total),
     })
 }
 

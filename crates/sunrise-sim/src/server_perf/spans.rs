@@ -3,7 +3,7 @@ use crate::fast_hash::FxHashMap;
 use crate::spans::Span;
 use sunrise_perf_format::Interner;
 use sunrise_perf_format::v1::{
-    Histogram, Side, SpanBlock, SpanCost, SpanSummary, SpanTotal, Unit, WorstUnit,
+    FrameTiming, Histogram, Side, SpanBlock, SpanCost, SpanSummary, SpanTotal, Unit, WorstUnit,
 };
 
 /// Seconds one `SpanBlock` covers.
@@ -157,6 +157,7 @@ pub struct SpanRecorder {
     unit: Unit,
     block: u32,
     units: u32,
+    frames: Vec<FrameTiming>,
     rows: FxHashMap<Key, Sum>,
     totals: FxHashMap<Key, Sum>,
     count: u64,
@@ -182,6 +183,7 @@ impl SpanRecorder {
             unit,
             block: 0,
             units: 0,
+            frames: Vec::new(),
             rows: FxHashMap::default(),
             totals: FxHashMap::default(),
             count: 0,
@@ -229,6 +231,13 @@ impl SpanRecorder {
         let cpu_ms = cpu_ms.unwrap_or(wall_ms);
         self.units += 1;
         self.count += 1;
+        if self.unit == Unit::Frame {
+            self.frames.push(FrameTiming {
+                counter,
+                t,
+                wall_ms,
+            });
+        }
         self.timing.record(wall_ms);
         self.recorded += spans.len() as u64;
         self.wall_total += f64::from(wall_ms);
@@ -277,6 +286,7 @@ impl SpanRecorder {
             t0: f64::from(self.block) * f64::from(BLOCK_S),
             block_s: BLOCK_S,
             units,
+            frames: std::mem::take(&mut self.frames),
             ..SpanBlock::default()
         };
         for ((name, parent), sum) in rows {

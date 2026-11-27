@@ -188,6 +188,10 @@ fn a_client_capture_reads_back_with_its_frames_marks_and_health() {
     assert_eq!(c.health[1].frame_ms_p99, Some(80.0));
     let frames: f32 = c.health.iter().filter_map(|h| h.fps).sum();
     assert_eq!(frames, 240.0);
+    let timings: Vec<_> = c.span_blocks.iter().flat_map(|b| &b.frames).collect();
+    assert_eq!(timings.len(), 240);
+    assert_eq!((timings[0].counter, timings[0].t), (121, 0.0));
+    assert_eq!((timings[60].t, timings[60].wall_ms), (1.0, 80.0));
 
     assert_eq!(c.marks.len(), 1);
     assert_eq!(c.marks[0].name, "loaded");

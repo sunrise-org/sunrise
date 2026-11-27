@@ -207,6 +207,7 @@ pub fn capture() -> Vec<Field> {
                 .map(|s| (s.3 * f64::from(units)) as f32)
                 .collect(),
             seen: spans.iter().map(|_| units).collect(),
+            frames: Vec::new(),
         }));
     }
 
