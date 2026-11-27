@@ -4,6 +4,9 @@
 //! a page list, a search field and a description of the hovered setting with its
 //! cost. Which settings it shows, in what pages, with what description and cost,
 //! and what they do live here.
+use std::collections::{HashMap, HashSet};
+use std::sync::{Mutex, OnceLock};
+
 use crate::{
     gfx::EffectiveOutput,
     graphics::{
@@ -23,7 +26,7 @@ use crate::{
 const TITLE: &str = "Graphics";
 
 /// The screen's pages, in its order.
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 pub enum Page {
     General,
     Quality,
@@ -121,22 +124,300 @@ pub enum H {
     HdrSmoothGradients,
 }
 
+impl H {
+    pub const fn row_id(self) -> RowId {
+        RowId(match self {
+            H::Preset => "graphics:preset",
+            H::LodDistance => "graphics:lod_distance",
+            H::FarDetail => "graphics:far_detail",
+            H::BlueMapRadius => "graphics:blue_map_radius",
+            H::CaveCulling => "graphics:cave_culling",
+            H::GpuCulling => "graphics:gpu_culling",
+            H::EntityCulling => "graphics:entity_culling",
+            H::EntityCullingPrecheck => "graphics:entity_culling_precheck",
+            H::ParticleCulling => "graphics:particle_culling",
+            H::LeafCulling => "graphics:leaf_culling",
+            H::OpaqueIce => "graphics:opaque_ice",
+            H::CacheShulkerBoxes => "graphics:cache_shulker_boxes",
+            H::CacheSigns => "graphics:cache_signs",
+            H::CacheDecoratedPots => "graphics:cache_decorated_pots",
+            H::CacheBells => "graphics:cache_bells",
+            H::CacheChests => "graphics:cache_chests",
+            H::CacheBanners => "graphics:cache_banners",
+            H::CacheCopperGolemStatues => "graphics:cache_copper_golem_statues",
+            H::ChunkUpdates => "graphics:chunk_updates",
+            H::UploadBudget => "graphics:upload_budget",
+            H::Sky => "graphics:sky",
+            H::Fog => "graphics:fog",
+            H::Weather => "graphics:weather",
+            H::AnimatedTextures => "graphics:animated_textures",
+            H::DitherCutoutMips => "graphics:dither_cutout_mips",
+            H::PresentMode => "graphics:present_mode",
+            H::Pacing => "graphics:pacing",
+            H::Workers => "graphics:workers",
+            H::ParallelTick => "graphics:parallel_tick",
+            H::ResolutionScale => "graphics:resolution_scale",
+            H::DynamicResolution => "graphics:dynamic_resolution",
+            H::TargetFps => "graphics:target_fps",
+            H::Antialiasing => "graphics:antialiasing",
+            H::Upscaling => "graphics:upscaling",
+            H::UpscalingSharpness => "graphics:upscaling_sharpness",
+            H::ScreenshotQuality => "graphics:screenshot_quality",
+            H::FrameGeneration => "graphics:frame_generation",
+            H::Hdr => "graphics:hdr",
+            H::HdrBlackLevel => "graphics:hdr_black_level",
+            H::HdrCalibrate => "graphics:hdr_calibrate",
+            H::HdrPeak => "graphics:hdr_peak",
+            H::HdrPaperWhite => "graphics:hdr_paper_white",
+            H::HdrUiBrightness => "graphics:hdr_ui_brightness",
+            H::HdrLighting => "graphics:hdr_lighting",
+            H::BatteryMode => "graphics:battery_mode",
+            H::ShadowCache => "graphics:shadow_cache",
+            H::GraphicsApi => "graphics:graphics_api",
+            H::TranslucentBatching => "graphics:translucent_batching",
+            H::HdrSmoothGradients => "graphics:hdr_smooth_gradients",
+        })
+    }
+}
+
+/// Stable namespaced identifier for a graphics settings row.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct RowId(pub &'static str);
+
+impl RowId {
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+}
+
+/// Stable identifier for a group on a graphics settings page, separate from its title key.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord, Hash)]
+pub struct GroupId(pub &'static str);
+
+impl GroupId {
+    pub const fn as_str(self) -> &'static str {
+        self.0
+    }
+    pub const PRESET: Self = Self("general.preset");
+    pub const DISTANCE: Self = Self("general.distance");
+    pub const DISPLAY: Self = Self("general.display");
+    pub const INTERFACE: Self = Self("general.interface");
+    pub const SKY_AND_WEATHER: Self = Self("quality.sky_and_weather");
+    pub const LIGHTING_AND_ENTITIES: Self = Self("quality.lighting_and_entities");
+    pub const TEXTURES: Self = Self("quality.textures");
+    pub const IMAGE: Self = Self("quality.image");
+    pub const CHUNK_LOADING: Self = Self("performance.chunk_loading");
+    pub const CULLING: Self = Self("performance.culling");
+    pub const BLOCK_ENTITIES: Self = Self("performance.block_entities");
+    pub const POWER: Self = Self("performance.power");
+    pub const BUILT_IN_SHADERS: Self = Self("shaders.built_in");
+    pub const FRAMES: Self = Self("advanced.frames");
+    pub const HDR_OUTPUT: Self = Self("hdr.output");
+    pub const HDR_BRIGHTNESS: Self = Self("hdr.brightness");
+}
+
+/// Where a described row sits in the graphics settings screen.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Placement {
+    pub page: Page,
+    pub group: GroupId,
+    pub after: Option<RowId>,
+}
+
+/// What pressing a [`RowControl::Press`] row asks the host to do.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum PressOutcome {
+    Nothing,
+    Changed,
+    OpenPage(OptionsPage),
+}
+
+/// Typed read and edit operations for a described row over the window's [`Settings`].
+#[derive(Clone, Copy)]
+pub enum RowControl {
+    Switch {
+        get: fn(&Settings) -> bool,
+        set: fn(&mut Settings, bool),
+    },
+    Choice {
+        value: fn(&Settings, &EffectiveOutput) -> String,
+        cycle: fn(&mut Settings, bool, [i32; 2], &EffectiveOutput),
+    },
+    Slider {
+        get: fn(&Settings) -> f64,
+        set: fn(&mut Settings, f64),
+        steps: Option<u32>,
+        value: fn(&Settings, &EffectiveOutput) -> String,
+    },
+    Press {
+        press: fn(&mut Settings, &EffectiveOutput) -> PressOutcome,
+    },
+}
+
+/// Static descriptor for a graphics settings row outside the engine's own enums.
+pub struct RowDescriptor {
+    pub id: RowId,
+    pub placement: Placement,
+    pub caption_key: &'static str,
+    pub caption_fallback: Option<&'static str>,
+    pub description_key: &'static str,
+    pub chosen_description: Option<fn(&Settings, &EffectiveOutput) -> Option<&'static str>>,
+    pub cost: Cost,
+    pub control: RowControl,
+    pub shown: fn(&Settings) -> bool,
+    pub blocked: Option<fn(&Settings, &EffectiveOutput) -> Option<&'static str>>,
+    pub affects_preset: bool,
+    pub undo: fn(&mut Settings, &Settings),
+}
+
+pub const fn vanilla_row_id(opt: Opt) -> Option<RowId> {
+    Some(RowId(match opt {
+        Opt::RenderDistance => "vanilla:render_distance",
+        Opt::SimulationDistance => "vanilla:simulation_distance",
+        Opt::GuiScale => "vanilla:gui_scale",
+        Opt::Fullscreen => "vanilla:fullscreen",
+        Opt::ExclusiveFullscreen => "vanilla:exclusive_fullscreen",
+        Opt::ExclusiveMode => "vanilla:exclusive_mode",
+        Opt::Vsync => "vanilla:vsync",
+        Opt::MaxFps => "vanilla:max_fps",
+        Opt::InactivityFps => "vanilla:inactivity_fps",
+        Opt::Gamma => "vanilla:gamma",
+        Opt::MenuBlur => "vanilla:menu_blur",
+        Opt::AttackIndicator => "vanilla:attack_indicator",
+        Opt::Autosave => "vanilla:autosave",
+        Opt::Clouds => "vanilla:clouds",
+        Opt::CloudRange => "vanilla:cloud_range",
+        Opt::WeatherRadius => "vanilla:weather_radius",
+        Opt::Particles => "vanilla:particles",
+        Opt::SmoothLighting => "vanilla:smooth_lighting",
+        Opt::BiomeBlend => "vanilla:biome_blend",
+        Opt::EntityDistance => "vanilla:entity_distance",
+        Opt::EntityShadows => "vanilla:entity_shadows",
+        Opt::Vignette => "vanilla:vignette",
+        Opt::ChunkFade => "vanilla:chunk_fade",
+        Opt::Mipmaps => "vanilla:mipmaps",
+        Opt::TextureFiltering => "vanilla:texture_filtering",
+        Opt::MaxAnisotropy => "vanilla:max_anisotropy",
+        Opt::CutoutLeaves => "vanilla:cutout_leaves",
+        Opt::ImprovedTransparency => "vanilla:improved_transparency",
+        Opt::ChunkBuilder => "vanilla:chunk_builder",
+        _ => return None,
+    }))
+}
+
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Item {
     Vanilla(Opt),
     Sunrise(H),
     /// A Sunrise extra that changes the picture (`extras::Item`, kept in `sunrise-extras.txt`).
     Extra(crate::extras::Item),
+    Described(RowId),
+}
+
+impl Item {
+    pub const fn row_id(self) -> Option<RowId> {
+        match self {
+            Item::Vanilla(o) => vanilla_row_id(o),
+            Item::Sunrise(h) => Some(h.row_id()),
+            Item::Extra(_) => None,
+            Item::Described(id) => Some(id),
+        }
+    }
+}
+
+#[cfg(test)]
+thread_local! {
+    static TEST_DESCRIPTORS: std::cell::Cell<Option<&'static [&'static RowDescriptor]>> =
+        const { std::cell::Cell::new(None) };
+}
+
+fn active_descriptors() -> &'static [&'static RowDescriptor] {
+    #[cfg(test)]
+    if let Some(rows) = TEST_DESCRIPTORS.get() {
+        return rows;
+    }
+    &[]
+}
+
+fn descriptor(id: RowId) -> Option<&'static RowDescriptor> {
+    active_descriptors().iter().copied().find(|d| d.id == id)
 }
 
 #[derive(Clone, Copy)]
 pub struct Setting {
+    pub id: RowId,
     pub item: Item,
     pub cost: Cost,
     pub text: &'static str,
 }
+
+/// One resolved group on a graphics settings page: stable id, display title key, and ordered rows.
+pub struct ResolvedGroup {
+    pub id: GroupId,
+    pub title: &'static str,
+    pub rows: Vec<Setting>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+enum OrderIssue {
+    DuplicateId(RowId),
+    UnknownGroup(RowId, Page, GroupId),
+    CrossGroupAnchor(RowId, RowId),
+    MissingAnchor(RowId, RowId),
+    AnchorCycle(RowId),
+}
+
+fn record_order_issue_once(issue: OrderIssue) -> bool {
+    static LOGGED: OnceLock<Mutex<HashSet<OrderIssue>>> = OnceLock::new();
+    let seen = LOGGED.get_or_init(|| Mutex::new(HashSet::new()));
+    seen.lock().unwrap_or_else(|e| e.into_inner()).insert(issue)
+}
+
+fn log_order_issue_once(issue: OrderIssue) {
+    if !record_order_issue_once(issue) {
+        return;
+    }
+    match issue {
+        OrderIssue::DuplicateId(id) => {
+            log::warn!(
+                "Sunrise: graphics row {} declared more than once; keeping the first",
+                id.as_str()
+            );
+        }
+        OrderIssue::UnknownGroup(id, page, group) => {
+            log::warn!(
+                "Sunrise: graphics row {} targets unknown group {} on {:?}; skipped",
+                id.as_str(),
+                group.as_str(),
+                page
+            );
+        }
+        OrderIssue::CrossGroupAnchor(id, anchor) => {
+            log::warn!(
+                "Sunrise: graphics row {} anchors after {} in another group; placing at end of group",
+                id.as_str(),
+                anchor.as_str()
+            );
+        }
+        OrderIssue::MissingAnchor(id, anchor) => {
+            log::warn!(
+                "Sunrise: graphics row {} anchors after missing row {}; placing at end of group",
+                id.as_str(),
+                anchor.as_str()
+            );
+        }
+        OrderIssue::AnchorCycle(id) => {
+            log::warn!(
+                "Sunrise: graphics row {} is part of an anchor cycle; placing at end of group",
+                id.as_str()
+            );
+        }
+    }
+}
+
 fn v(opt: Opt, cost: Cost, text: &'static str) -> Setting {
     Setting {
+        id: vanilla_row_id(opt).expect("graphics screen vanilla option must have a RowId"),
         item: Item::Vanilla(opt),
         cost,
         text,
@@ -144,6 +425,7 @@ fn v(opt: Opt, cost: Cost, text: &'static str) -> Setting {
 }
 fn h(opt: H, cost: Cost, text: &'static str) -> Setting {
     Setting {
+        id: opt.row_id(),
         item: Item::Sunrise(opt),
         cost,
         text,
@@ -152,14 +434,14 @@ fn h(opt: H, cost: Cost, text: &'static str) -> Setting {
 /// An extra's row: its description is its own language key.
 fn e(item: crate::extras::Item, cost: Cost) -> Setting {
     Setting {
+        id: RowId(item.caption_key()),
         item: Item::Extra(item),
         cost,
         text: item.description_key(),
     }
 }
 
-/// Every page's settings, in named groups of related rows.
-pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
+fn base_pages(macos: bool) -> Vec<(Page, Vec<ResolvedGroup>)> {
     use Cost::*;
     // Suggested, never switched on, where far terrain costs the GPU most.
     let far = if crate::graphics::reduced_far_detail_suggested() {
@@ -167,11 +449,14 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
     } else {
         "Reduced draws far terrain coarser, for GPUs it slows down."
     };
+    let g =
+        |id: GroupId, title: &'static str, rows: Vec<Setting>| ResolvedGroup { id, title, rows };
     let mut pages = vec![
         (
             Page::General,
             vec![
-                (
+                g(
+                    GroupId::PRESET,
                     "Preset",
                     vec![
                         // Vanilla's own preset stays on vanilla's Video Settings.
@@ -182,7 +467,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         ),
                     ],
                 ),
-                (
+                g(
+                    GroupId::DISTANCE,
                     "Distance",
                     vec![
                         v(
@@ -208,7 +494,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         ),
                     ],
                 ),
-                (
+                g(
+                    GroupId::DISPLAY,
                     "Display",
                     vec![
                         v(Opt::GuiScale, None, "Size of menus and the HUD."),
@@ -241,7 +528,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         v(Opt::Gamma, None, "Brightens dark places."),
                     ],
                 ),
-                (
+                g(
+                    GroupId::INTERFACE,
                     "Interface",
                     vec![
                         v(Opt::MenuBlur, Low, "Blurs the world behind menus."),
@@ -254,7 +542,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
         (
             Page::Quality,
             vec![
-                (
+                g(
+                    GroupId::SKY_AND_WEATHER,
                     "Sky and weather",
                     vec![
                         v(
@@ -279,7 +568,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         e(crate::extras::Item::HideBlockParticles, None),
                     ],
                 ),
-                (
+                g(
+                    GroupId::LIGHTING_AND_ENTITIES,
                     "Lighting and entities",
                     vec![
                         v(
@@ -308,7 +598,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         e(crate::extras::Item::Fullbright, None),
                     ],
                 ),
-                (
+                g(
+                    GroupId::TEXTURES,
                     "Textures",
                     vec![
                         v(
@@ -348,7 +639,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         ),
                     ],
                 ),
-                (
+                g(
+                    GroupId::IMAGE,
                     "Image",
                     vec![
                         h(
@@ -398,7 +690,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
         (
             Page::Performance,
             vec![
-                (
+                g(
+                    GroupId::CHUNK_LOADING,
                     "Chunk loading",
                     vec![
                         v(
@@ -428,7 +721,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         ),
                     ],
                 ),
-                (
+                g(
+                    GroupId::CULLING,
                     "Culling",
                     vec![
                         h(
@@ -468,7 +762,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         ),
                     ],
                 ),
-                (
+                g(
+                    GroupId::BLOCK_ENTITIES,
                     "Block Entities",
                     vec![
                         h(
@@ -508,7 +803,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         ),
                     ],
                 ),
-                (
+                g(
+                    GroupId::POWER,
                     "Power",
                     vec![h(
                         H::BatteryMode,
@@ -521,7 +817,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
         (
             Page::Shaders,
             // The packs themselves are listed over these (`sunrise_ui`).
-            vec![(
+            vec![g(
+                GroupId::BUILT_IN_SHADERS,
                 crate::shader_ui::BUILT_IN,
                 vec![h(
                     H::ShadowCache,
@@ -532,7 +829,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
         ),
         (
             Page::Advanced,
-            vec![(
+            vec![g(
+                GroupId::FRAMES,
                 "Frames",
                 vec![
                     h(
@@ -561,7 +859,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
         (
             Page::Hdr,
             vec![
-                (
+                g(
+                    GroupId::HDR_OUTPUT,
                     "Output",
                     vec![
                         h(
@@ -581,7 +880,8 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                         ),
                     ],
                 ),
-                (
+                g(
+                    GroupId::HDR_BRIGHTNESS,
                     "Brightness",
                     vec![
                         h(
@@ -616,16 +916,18 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
     ];
     // The fork forces ticking serial, so Parallel Tick would be a no-op setting.
     for (_, groups) in &mut pages {
-        for (_, rows) in groups {
-            rows.retain(|r| !matches!(r.item, Item::Sunrise(H::ParallelTick)));
+        for group in groups {
+            group
+                .rows
+                .retain(|r| !matches!(r.item, Item::Sunrise(H::ParallelTick)));
         }
     }
     // Only Windows and Linux have more than one graphics API, translucent batching (Metal
     // draws flat) and GPU culling (Metal draws no count the GPU wrote).
-    if cfg!(target_os = "macos") {
+    if macos {
         for (_, groups) in &mut pages {
-            for (_, rows) in groups {
-                rows.retain(|r| {
+            for group in groups {
+                group.rows.retain(|r| {
                     !matches!(
                         r.item,
                         Item::Sunrise(H::GraphicsApi | H::TranslucentBatching | H::GpuCulling)
@@ -635,6 +937,196 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
         }
     }
     pages
+}
+
+fn setting_of(d: &RowDescriptor) -> Setting {
+    Setting {
+        id: d.id,
+        item: Item::Described(d.id),
+        cost: d.cost,
+        text: d.description_key,
+    }
+}
+
+fn emit_children(
+    parent: RowId,
+    described: &[&RowDescriptor],
+    children: &HashMap<RowId, Vec<usize>>,
+    out: &mut Vec<Setting>,
+) {
+    let Some(direct) = children.get(&parent) else {
+        return;
+    };
+    let mut stack: Vec<usize> = direct.iter().rev().copied().collect();
+    while let Some(idx) = stack.pop() {
+        let d = described[idx];
+        out.push(setting_of(d));
+        if let Some(next) = children.get(&d.id) {
+            stack.extend(next.iter().rev().copied());
+        }
+    }
+}
+
+fn resolve_rows_with_issues(
+    macos: bool,
+    descriptors: &[&RowDescriptor],
+) -> (Vec<(Page, Vec<ResolvedGroup>)>, Vec<OrderIssue>) {
+    let mut pages = base_pages(macos);
+    let mut issues = Vec::new();
+    let mut group_loc: HashMap<(Page, GroupId), (usize, usize)> = HashMap::new();
+    let mut row_groups: HashMap<RowId, (Page, GroupId)> = HashMap::new();
+    for (p_idx, (page, groups)) in pages.iter().enumerate() {
+        for (g_idx, group) in groups.iter().enumerate() {
+            group_loc.insert((*page, group.id), (p_idx, g_idx));
+            for row in &group.rows {
+                row_groups.insert(row.id, (*page, group.id));
+            }
+        }
+    }
+
+    let mut per_group: HashMap<(Page, GroupId), Vec<&RowDescriptor>> = HashMap::new();
+    for &d in descriptors {
+        if row_groups.contains_key(&d.id) {
+            issues.push(OrderIssue::DuplicateId(d.id));
+            continue;
+        }
+        let target = (d.placement.page, d.placement.group);
+        if !group_loc.contains_key(&target) {
+            issues.push(OrderIssue::UnknownGroup(
+                d.id,
+                d.placement.page,
+                d.placement.group,
+            ));
+            continue;
+        }
+        row_groups.insert(d.id, target);
+        per_group.entry(target).or_default().push(d);
+    }
+
+    for (page, groups) in &mut pages {
+        for group in groups {
+            let key = (*page, group.id);
+            let Some(described) = per_group.remove(&key) else {
+                continue;
+            };
+            let engine_ids: HashSet<RowId> = group.rows.iter().map(|r| r.id).collect();
+            let desc_index: HashMap<RowId, usize> = described
+                .iter()
+                .enumerate()
+                .map(|(i, d)| (d.id, i))
+                .collect();
+
+            let mut anchors: Vec<Option<RowId>> = Vec::with_capacity(described.len());
+            let mut parent_desc: Vec<Option<usize>> = Vec::with_capacity(described.len());
+            for d in &described {
+                match d.placement.after {
+                    None => {
+                        anchors.push(None);
+                        parent_desc.push(None);
+                    }
+                    Some(anchor) if engine_ids.contains(&anchor) => {
+                        anchors.push(Some(anchor));
+                        parent_desc.push(None);
+                    }
+                    Some(anchor) if desc_index.contains_key(&anchor) => {
+                        anchors.push(Some(anchor));
+                        parent_desc.push(Some(desc_index[&anchor]));
+                    }
+                    Some(anchor) => {
+                        if row_groups.contains_key(&anchor) {
+                            issues.push(OrderIssue::CrossGroupAnchor(d.id, anchor));
+                        } else {
+                            issues.push(OrderIssue::MissingAnchor(d.id, anchor));
+                        }
+                        anchors.push(None);
+                        parent_desc.push(None);
+                    }
+                }
+            }
+
+            // Detect cycles in same-group described anchors; break cycle members to group end.
+            let mut state = vec![0u8; described.len()];
+            let mut in_cycle = vec![false; described.len()];
+            for start in 0..described.len() {
+                if state[start] != 0 {
+                    continue;
+                }
+                let mut path = Vec::new();
+                let mut cur = Some(start);
+                while let Some(u) = cur {
+                    if state[u] == 2 {
+                        break;
+                    }
+                    if state[u] == 1 {
+                        if let Some(pos) = path.iter().position(|&node| node == u) {
+                            for &node in &path[pos..] {
+                                in_cycle[node] = true;
+                            }
+                        }
+                        break;
+                    }
+                    state[u] = 1;
+                    path.push(u);
+                    cur = parent_desc[u];
+                }
+                for node in path {
+                    state[node] = 2;
+                }
+            }
+            for i in 0..described.len() {
+                if in_cycle[i] {
+                    issues.push(OrderIssue::AnchorCycle(described[i].id));
+                    anchors[i] = None;
+                }
+            }
+
+            let mut children: HashMap<RowId, Vec<usize>> = HashMap::new();
+            let mut end_roots: Vec<usize> = Vec::new();
+            for (i, anchor) in anchors.into_iter().enumerate() {
+                match anchor {
+                    Some(target) => children.entry(target).or_default().push(i),
+                    None => end_roots.push(i),
+                }
+            }
+
+            let mut ordered = Vec::with_capacity(group.rows.len() + described.len());
+            for row in group.rows.drain(..) {
+                let id = row.id;
+                ordered.push(row);
+                emit_children(id, &described, &children, &mut ordered);
+            }
+            for idx in end_roots {
+                let d = described[idx];
+                ordered.push(setting_of(d));
+                emit_children(d.id, &described, &children, &mut ordered);
+            }
+            group.rows = ordered;
+        }
+    }
+
+    (pages, issues)
+}
+
+/// Every page's settings, resolved with stable group and row ids.
+pub fn resolved_rows() -> Vec<(Page, Vec<ResolvedGroup>)> {
+    let (pages, issues) = resolve_rows_with_issues(cfg!(target_os = "macos"), active_descriptors());
+    for issue in issues {
+        log_order_issue_once(issue);
+    }
+    pages
+}
+
+/// Every page's settings, in named groups of related rows.
+pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
+    resolved_rows()
+        .into_iter()
+        .map(|(page, groups)| {
+            (
+                page,
+                groups.into_iter().map(|g| (g.title, g.rows)).collect(),
+            )
+        })
+        .collect()
 }
 
 /// BlueMap download radii, in chunks.
@@ -674,6 +1166,11 @@ fn description(
     out: &EffectiveOutput,
     text: &'static str,
 ) -> &'static str {
+    if let Item::Described(id) = item {
+        return descriptor(id)
+            .and_then(|d| d.chosen_description.and_then(|f| f(s, out)))
+            .unwrap_or(text);
+    }
     match (item, setup(s, out)) {
         (Item::Sunrise(H::Hdr), _) if out.held => HDR_HELD,
         (Item::Sunrise(H::HdrCalibrate), Setup::Unknown) => {
@@ -1138,11 +1635,15 @@ impl Item {
             Item::Vanilla(Opt::MaxAnisotropy) if s.file.int("textureFiltering") != 2 => {
                 Some("Only with Anisotropic texture filtering.")
             }
+            Item::Described(id) => descriptor(id).and_then(|d| d.blocked.and_then(|f| f(s, out))),
             _ => None,
         }
     }
     /// A value stepped between `<` `>`: not a tick box, a slider or a press.
     fn steps(self, s: &Settings, out: &EffectiveOutput) -> bool {
+        if let Item::Described(id) = self {
+            return descriptor(id).is_some_and(|d| matches!(d.control, RowControl::Choice { .. }));
+        }
         self.switch(s, out).is_none()
             && self.slider(s).is_none()
             && !matches!(self, Item::Sunrise(H::HdrCalibrate))
@@ -1177,6 +1678,12 @@ impl Item {
             }
             Item::Vanilla(Opt::Vsync) => s.vsync,
             Item::Extra(e) => return e.switch(&s.extras),
+            Item::Described(id) => {
+                return match descriptor(id).map(|d| d.control) {
+                    Some(RowControl::Switch { get, .. }) => Some(get(s)),
+                    _ => None,
+                };
+            }
             Item::Vanilla(Opt::Fullscreen) => s.fullscreen,
             Item::Vanilla(Opt::ExclusiveFullscreen) => s.file.bool("exclusiveFullscreen"),
             Item::Vanilla(Opt::SmoothLighting) => s.smooth_lighting,
@@ -1193,6 +1700,10 @@ impl Item {
             Item::Vanilla(o) => o.slider_position(s),
             Item::Sunrise(h) => h.slider(s).map(f64::from),
             Item::Extra(_) => None,
+            Item::Described(id) => match descriptor(id).map(|d| d.control) {
+                Some(RowControl::Slider { get, .. }) => Some(get(s)),
+                _ => None,
+            },
         }
     }
     pub fn label(self, s: &Settings, out: &EffectiveOutput) -> Text {
@@ -1210,6 +1721,18 @@ impl Item {
                 Text::literal(e.caption_text()),
                 Text::literal(e.value(&s.extras)),
             ),
+            Item::Described(id) => match descriptor(id) {
+                Some(d) => {
+                    let (name, value) = described_parts(d, s, out);
+                    match value {
+                        Some(val) => {
+                            Text::option_name_value(Text::literal(name), Text::literal(val))
+                        }
+                        None => Text::literal(name),
+                    }
+                }
+                None => Text::literal(id.as_str()),
+            },
         }
     }
     pub fn set_slider(self, s: &mut Settings, v: f64, out: &EffectiveOutput) {
@@ -1221,6 +1744,12 @@ impl Item {
             Item::Vanilla(o) => crate::options_ui::set_slider(o, s, v),
             Item::Sunrise(h) => h.set_slider(s, v as f32),
             Item::Extra(_) => {}
+            Item::Described(id) => {
+                let Some(RowControl::Slider { set, .. }) = descriptor(id).map(|d| d.control) else {
+                    return;
+                };
+                set(s, v);
+            }
         }
         self.touched(s);
     }
@@ -1232,46 +1761,60 @@ impl Item {
             Item::Vanilla(o) => o.cycle(s, back, framebuffer),
             Item::Sunrise(h) => h.cycle(s, back, out),
             Item::Extra(e) => e.cycle(&mut s.extras, back),
+            Item::Described(id) => {
+                if self.blocked(s, out).is_some() {
+                    return;
+                }
+                let Some(d) = descriptor(id) else {
+                    return;
+                };
+                match d.control {
+                    RowControl::Switch { get, set } => set(s, !get(s)),
+                    RowControl::Choice { cycle, .. } => cycle(s, back, framebuffer, out),
+                    RowControl::Slider { .. } | RowControl::Press { .. } => return,
+                }
+            }
         }
         self.touched(s);
     }
     /// A preset no longer describes the settings once one of them changes.
     fn touched(self, s: &mut Settings) {
-        let presetless = matches!(
-            self,
+        let presetless = match self {
+            Item::Described(id) => !descriptor(id).is_some_and(|d| d.affects_preset),
             Item::Extra(_)
-                | Item::Sunrise(
-                    H::Preset
-                        | H::BlueMapRadius
-                        | H::ScreenshotQuality
-                        | H::Pacing
-                        | H::PresentMode
-                        | H::Workers
-                        | H::ParallelTick
-                        | H::FrameGeneration
-                        | H::BatteryMode
-                        | H::ShadowCache
-                        | H::GraphicsApi
-                        | H::TranslucentBatching
-                        | H::GpuCulling
-                        | H::HdrSmoothGradients
-                )
-                | Item::Vanilla(
-                    Opt::GuiScale
-                        | Opt::Fullscreen
-                        | Opt::ExclusiveFullscreen
-                        | Opt::ExclusiveMode
-                        | Opt::Vsync
-                        | Opt::MaxFps
-                        | Opt::Gamma
-                        | Opt::InactivityFps
-                        | Opt::MenuBlur
-                        | Opt::ChunkFade
-                        | Opt::Vignette
-                        | Opt::Autosave
-                        | Opt::AttackIndicator
-                )
-        );
+            | Item::Sunrise(
+                H::Preset
+                | H::BlueMapRadius
+                | H::ScreenshotQuality
+                | H::Pacing
+                | H::PresentMode
+                | H::Workers
+                | H::ParallelTick
+                | H::FrameGeneration
+                | H::BatteryMode
+                | H::ShadowCache
+                | H::GraphicsApi
+                | H::TranslucentBatching
+                | H::GpuCulling
+                | H::HdrSmoothGradients,
+            )
+            | Item::Vanilla(
+                Opt::GuiScale
+                | Opt::Fullscreen
+                | Opt::ExclusiveFullscreen
+                | Opt::ExclusiveMode
+                | Opt::Vsync
+                | Opt::MaxFps
+                | Opt::Gamma
+                | Opt::InactivityFps
+                | Opt::MenuBlur
+                | Opt::ChunkFade
+                | Opt::Vignette
+                | Opt::Autosave
+                | Opt::AttackIndicator,
+            ) => true,
+            _ => false,
+        };
         if !presetless {
             s.sunrise.preset = Preset::Custom;
         }
@@ -1281,6 +1824,10 @@ impl Item {
             Item::Vanilla(o) => o.slider_steps(),
             Item::Sunrise(h) => h.slider_steps(),
             Item::Extra(_) => None,
+            Item::Described(id) => match descriptor(id).map(|d| d.control) {
+                Some(RowControl::Slider { steps, .. }) => steps,
+                _ => None,
+            },
         }
     }
     pub fn step_slider(self, s: &mut Settings, forward: bool, width: f32, out: &EffectiveOutput) {
@@ -1296,16 +1843,43 @@ impl Item {
     }
 }
 
+fn described_parts(
+    d: &RowDescriptor,
+    s: &Settings,
+    out: &EffectiveOutput,
+) -> (String, Option<String>) {
+    let caption = match d.caption_fallback {
+        Some(fb) => lang::get_or(d.caption_key, fb),
+        None => lang::get(d.caption_key),
+    };
+    let value = match d.control {
+        RowControl::Switch { get, .. } => {
+            let text = if get(s) { "On" } else { "Off" };
+            Some(lang::get_or(text, text))
+        }
+        RowControl::Choice { value, .. } | RowControl::Slider { value, .. } => Some(value(s, out)),
+        RowControl::Press { .. } => None,
+    };
+    (caption, value)
+}
+
 /// Whether a setting is on the screen now: Upscaling only while TAA is, which does it.
 fn shown(item: Item, s: &Settings) -> bool {
     match item {
         Item::Sunrise(H::Upscaling) => s.sunrise.taa,
         Item::Extra(crate::extras::Item::Fullbright) => !s.fullbright_held,
+        Item::Described(id) => descriptor(id).is_some_and(|d| (d.shown)(s)),
         _ => true,
     }
 }
 /// A control's label as its name and its value ("Render Distance" and "12 chunks").
 fn parts(item: Item, s: &Settings, out: &EffectiveOutput) -> (String, Option<String>) {
+    if let Item::Described(id) = item {
+        return match descriptor(id) {
+            Some(d) => described_parts(d, s, out),
+            None => (id.as_str().to_owned(), None),
+        };
+    }
     shell::name_and_value(&item.label(s, out).plain())
 }
 
@@ -1371,10 +1945,39 @@ const FILE_KEYS: [&str; 3] = [
     "maxAnisotropyBit",
 ];
 
+fn control_stamp(control: RowControl, s: &Settings, out: &EffectiveOutput) -> u64 {
+    match control {
+        RowControl::Switch { get, .. } => shell::stamp_of(&get(s)),
+        RowControl::Choice { value, .. } => shell::stamp_of(&value(s, out)),
+        RowControl::Slider { get, value, .. } => {
+            shell::stamp_of(&(get(s).to_bits(), value(s, out)))
+        }
+        RowControl::Press { .. } => 0,
+    }
+}
+
+fn described_stamps(
+    s: &Settings,
+    out: &EffectiveOutput,
+) -> Vec<(RowId, bool, Option<&'static str>, Option<&'static str>, u64)> {
+    active_descriptors()
+        .iter()
+        .map(|d| {
+            (
+                d.id,
+                (d.shown)(s),
+                d.blocked.and_then(|f| f(s, out)),
+                d.chosen_description.and_then(|f| f(s, out)),
+                control_stamp(d.control, s, out),
+            )
+        })
+        .collect()
+}
+
 /// What the screen's rows read from the settings: what Undo puts back (`GraphicsScreen::undo`),
 /// and what changes beside the screen (fullscreen, the language, the display's modes). A test
 /// changes every row and checks this reads the change.
-fn read(s: &Settings) -> impl std::fmt::Debug + '_ {
+fn read<'a>(s: &'a Settings, out: &EffectiveOutput) -> impl std::fmt::Debug + 'a {
     let distances = (
         s.render_distance,
         s.simulation_distance,
@@ -1414,7 +2017,15 @@ fn read(s: &Settings) -> impl std::fmt::Debug + '_ {
         &s.language,
         s.force_unicode,
     );
-    (&s.sunrise, &s.extras, distances, frames, picture, window)
+    (
+        &s.sunrise,
+        &s.extras,
+        distances,
+        frames,
+        picture,
+        window,
+        described_stamps(s, out),
+    )
 }
 
 /// Sunrise's graphics screen on the settings shell (`settings_shell`): its pages and rows from
@@ -1444,7 +2055,7 @@ impl Screen for GraphicsScreen {
             g::gpu_culling_offer(),
             g::reduced_far_detail_suggested(),
         );
-        shell::stamp_of(&(read(s), s.fullbright_held, offers))
+        shell::stamp_of(&(read(s, &self.output), s.fullbright_held, offers))
     }
     fn sheets(&self, s: &Settings) -> Vec<Sheet<Page, Item>> {
         let sheet = |(page, groups): (Page, Vec<(&'static str, Vec<Setting>)>)| Sheet {
@@ -1475,6 +2086,26 @@ impl Screen for GraphicsScreen {
                 vec![Output::Event(Event::Changed)]
             }
             Item::Sunrise(H::HdrCalibrate) => vec![Output::Push(OptionsPage::HdrCalibration)],
+            Item::Described(id) => {
+                if item.blocked(s, &self.output).is_some() {
+                    return Vec::new();
+                }
+                match descriptor(id).map(|d| d.control) {
+                    Some(RowControl::Press { press }) => match press(s, &self.output) {
+                        PressOutcome::Nothing => Vec::new(),
+                        PressOutcome::Changed => {
+                            item.touched(s);
+                            vec![Output::Event(Event::Changed)]
+                        }
+                        PressOutcome::OpenPage(page) => vec![Output::Push(page)],
+                    },
+                    Some(RowControl::Switch { .. } | RowControl::Choice { .. }) => {
+                        item.cycle(s, back, self.framebuffer, &self.output);
+                        vec![Output::Event(Event::Changed)]
+                    }
+                    Some(RowControl::Slider { .. }) | None => Vec::new(),
+                }
+            }
             _ => {
                 item.cycle(s, back, self.framebuffer, &self.output);
                 vec![Output::Event(Event::Changed)]
@@ -1539,6 +2170,9 @@ impl Screen for GraphicsScreen {
             }
         }
         s.file.fullscreen_resolution = b.file.fullscreen_resolution.clone();
+        for d in active_descriptors() {
+            (d.undo)(s, b);
+        }
         Vec::new()
     }
     /// Calibration can change what Undo puts back, as a row does.
@@ -2097,7 +2731,7 @@ mod tests {
                 continue;
             }
             // `read` and not the stamp, which also reads what other tests offer meanwhile.
-            let reads = |s: &Settings| format!("{:?}", read(s));
+            let reads = |s: &Settings| format!("{:?}", read(s, &NONE));
             assert_ne!(reads(&s), reads(&default), "{item:?}");
             if item != Item::Vanilla(Opt::Fullscreen) {
                 screen.undo(&mut s, &default);
@@ -3019,3 +3653,7 @@ mod tests {
 #[cfg(test)]
 #[path = "graphics_ui_hdr_tests.rs"]
 mod hdr_tests;
+
+#[cfg(test)]
+#[path = "graphics_ui_rows_tests.rs"]
+mod rows_tests;
