@@ -94,6 +94,7 @@ pub enum H {
     Weather,
     AnimatedTextures,
     DitherCutoutMips,
+    NaturalTextures,
     PresentMode,
     Pacing,
     Workers,
@@ -345,6 +346,11 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                             H::DitherCutoutMips,
                             Low,
                             "Keeps fine plants in high-res packs from fading far away.",
+                        ),
+                        h(
+                            H::NaturalTextures,
+                            Low,
+                            "Turns and flips block textures by position, so repeats show no grid.",
                         ),
                     ],
                 ),
@@ -884,6 +890,7 @@ impl H {
             H::Weather => labelled("Weather", on_off(g.weather)),
             H::AnimatedTextures => labelled("Animated Textures", on_off(g.animated_textures)),
             H::DitherCutoutMips => labelled("Distant Plant Dither", on_off(g.dither_cutout_mips)),
+            H::NaturalTextures => labelled("Natural Textures", on_off(g.natural_textures)),
             H::PresentMode => labelled("Present Mode", g.present_mode.label()),
             H::Pacing => labelled(
                 "Frame Pacing",
@@ -1023,6 +1030,7 @@ impl H {
             H::AnimatedTextures => g.animated_textures = !g.animated_textures,
             H::DynamicResolution => g.dynamic_resolution = !g.dynamic_resolution,
             H::DitherCutoutMips => g.dither_cutout_mips = !g.dither_cutout_mips,
+            H::NaturalTextures => g.natural_textures = !g.natural_textures,
             H::PresentMode => g.present_mode = step(&PresentMode::ALL, g.present_mode, back),
             // Off, FXAA, TAA.
             H::Antialiasing => {
@@ -1166,6 +1174,7 @@ impl Item {
             Item::Sunrise(H::AnimatedTextures) => g.animated_textures,
             Item::Sunrise(H::DynamicResolution) => g.dynamic_resolution,
             Item::Sunrise(H::DitherCutoutMips) => g.dither_cutout_mips,
+            Item::Sunrise(H::NaturalTextures) => g.natural_textures,
             Item::Sunrise(H::HdrLighting) => g.hdr_lighting,
             Item::Sunrise(H::BatteryMode) => g.battery,
             Item::Sunrise(H::ShadowCache) => g.shadow_cache,
@@ -1248,6 +1257,7 @@ impl Item {
                         | H::PresentMode
                         | H::Workers
                         | H::ParallelTick
+                        | H::NaturalTextures
                         | H::FrameGeneration
                         | H::BatteryMode
                         | H::ShadowCache
@@ -2617,6 +2627,34 @@ mod tests {
             .unwrap();
         assert_eq!(group.0, Page::Performance);
         assert!(group.1.iter().any(|r| r.item == item));
+    }
+
+    #[test]
+    fn natural_textures_toggles_and_round_trips() {
+        let mut s = Settings::default();
+        let item = Item::Sunrise(H::NaturalTextures);
+        assert_eq!(item.switch(&s, &NONE), Some(false));
+        assert_eq!(item.label(&s, &NONE).plain(), "Natural Textures: Off");
+        // No preset sets it, so it leaves the preset as it is.
+        s.sunrise.preset = Preset::Balanced;
+        item.cycle(&mut s, false, FB, &NONE);
+        assert_eq!(s.sunrise.preset, Preset::Balanced);
+        assert_eq!(item.label(&s, &NONE).plain(), "Natural Textures: On");
+        assert!(
+            crate::graphics::Graphics::parse(&s.sunrise.serialize()).natural_textures,
+            "the choice is saved"
+        );
+        item.cycle(&mut s, false, FB, &NONE);
+        assert_eq!(item.switch(&s, &NONE), Some(false));
+        assert!(!crate::graphics::Graphics::parse(&s.sunrise.serialize()).natural_textures);
+
+        // It sits with the other texture switches on the Quality page.
+        let group = rows()
+            .into_iter()
+            .flat_map(|(page, groups)| groups.into_iter().map(move |(_, b)| (page, b)))
+            .find(|(_, b)| b.iter().any(|r| r.item == item))
+            .unwrap();
+        assert_eq!(group.0, Page::Quality);
     }
 
     #[test]

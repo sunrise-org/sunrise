@@ -1202,6 +1202,7 @@ mod tests {
             smooth_lighting: false,
             cutout_leaves: false,
             opaque_ice: false,
+            natural_textures: false,
             translucent_layers: &[],
             layer_overrides: &[],
             leaf_culling: LeafCullingMode::Off,

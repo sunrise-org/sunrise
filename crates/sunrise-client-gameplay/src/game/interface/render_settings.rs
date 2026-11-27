@@ -187,7 +187,7 @@ impl crate::game::ClientGame<'_> {
         let render_distance_changed = self.client.streaming.radius != streaming_target;
         self.client.streaming.radius = streaming_target;
         // Options.renderDistance, biomeBlendRadius, ambientOcclusion,
-        // cutoutLeaves, Opaque Ice and the leaf-culling mode:
+        // cutoutLeaves, Opaque Ice, Natural Textures and the leaf-culling mode:
         // LevelExtractor.allChanged when they change.
         let leaf_culling = self.effective_leaf_culling();
         let (s, st) = (&self.client.settings, &self.client.streaming);
@@ -197,18 +197,21 @@ impl crate::game::ClientGame<'_> {
                 s.smooth_lighting,
                 s.cutout_leaves,
                 s.sunrise.opaque_ice,
+                s.sunrise.natural_textures,
                 leaf_culling,
             ) != (
                 st.biome_blend,
                 st.smooth_lighting,
                 st.cutout_leaves,
                 st.opaque_ice,
+                st.natural_textures,
                 st.leaf_culling,
             );
         self.client.streaming.biome_blend = self.client.settings.biome_blend;
         self.client.streaming.smooth_lighting = self.client.settings.smooth_lighting;
         self.client.streaming.cutout_leaves = self.client.settings.cutout_leaves;
         self.client.streaming.opaque_ice = self.client.settings.sunrise.opaque_ice;
+        self.client.streaming.natural_textures = self.client.settings.sunrise.natural_textures;
         self.client.streaming.leaf_culling = leaf_culling;
         if reload {
             self.all_sections_changed();

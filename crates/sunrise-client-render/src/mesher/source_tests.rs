@@ -183,6 +183,7 @@ pub(crate) fn shaped_mesh(compact: bool) -> SectionMesh {
         smooth_lighting: false,
         cutout_leaves: true,
         opaque_ice: false,
+        natural_textures: false,
         translucent_layers: &[],
         layer_overrides: &[],
         leaf_culling: LeafCullingMode::Off,
@@ -251,6 +252,7 @@ fn assemble(
         pbr_specular: vec![],
         pbr_size: 1,
         connected: Default::default(),
+        natural: Default::default(),
         fusion: Default::default(),
         mod_animations: Default::default(),
         mod_pipelines: Default::default(),
@@ -390,6 +392,7 @@ fn terrain_source_cpu_multipart_and_waterlogged_faces_keep_their_owner() {
         smooth_lighting: false,
         cutout_leaves: true,
         opaque_ice: false,
+        natural_textures: false,
         translucent_layers: &[],
         layer_overrides: &[],
         leaf_culling: LeafCullingMode::Off,
@@ -481,6 +484,7 @@ fn a_folder_without_connected_texture_rules_meshes_exactly_as_before() {
             smooth_lighting: false,
             cutout_leaves: true,
             opaque_ice: false,
+            natural_textures: false,
             translucent_layers: &[],
             layer_overrides: &[],
             leaf_culling: LeafCullingMode::Off,
@@ -566,4 +570,79 @@ fn terrain_source_cpu_partial_metadata_never_inherits_a_previous_face() {
     );
     mesh.clear();
     assert!(mesh.solid_sources.is_empty());
+}
+
+#[test]
+fn natural_textures_flip_the_faces_their_blocks_position_picks() {
+    let (_scratch, assets, mut render, tables, biomes) = fixture();
+    let mut chunk = Chunk::with_layout(3, -2, crate::chunk::ColumnLayout::new(0, 16).unwrap());
+    for x in 1..=8 {
+        chunk.set(x, 3, 4, 1);
+    }
+    let region = [
+        [None, None, None],
+        [None, Some(&chunk), None],
+        [None, None, None],
+    ];
+    let mesh = |render: &RenderAssets, natural_textures: bool| {
+        let mut mesher = Mesher {
+            hidden_states: &[],
+            part_tables: Default::default(),
+            nether_shading: false,
+            shader_pack_lighting: false,
+            separate_ao: false,
+            shader_pack: false,
+            assets: &assets,
+            render,
+            tables: &tables,
+            biomes: &biomes,
+            visibility: FaceVisibility::empty(),
+            zoom: BiomeZoom::new(0),
+            blend_radius: 0,
+            smooth_lighting: false,
+            cutout_leaves: true,
+            opaque_ice: false,
+            natural_textures,
+            translucent_layers: &[],
+            layer_overrides: &[],
+            leaf_culling: LeafCullingMode::Off,
+        };
+        mesher.mesh(&region, 0)
+    };
+    let plain = mesh(&render, true);
+    assert_eq!(plain.solid.len(), 8 * 2 * 4, "two faces for each block");
+
+    // The fixture's one sprite, listed as one that only flips.
+    render.natural = crate::natural::NaturalTextures::load(
+        &[sunrise_optifine::natural::Entry {
+            sprite: "fixture:block/shared".into(),
+            natural: sunrise_optifine::natural::Natural::parse("F").unwrap(),
+        }],
+        |name| (name == "fixture:block/shared").then_some(0),
+    );
+    let off = mesh(&render, false);
+    assert_eq!(
+        bytemuck::cast_slice::<_, u8>(&off.solid),
+        bytemuck::cast_slice::<_, u8>(&plain.solid),
+        "the option is off"
+    );
+
+    // The blocks stand at x = 49 to 56, y = 3, z = -28: OptiFine's choice flips the faces toward
+    // up of those at 50, 52, 54 and 55.
+    let flipped = [false, true, false, true, false, true, true, false];
+    let on = mesh(&render, true);
+    assert_eq!(on.solid.len(), plain.solid.len());
+    for (face, (was, now)) in plain.solid.chunks(4).zip(on.solid.chunks(4)).enumerate() {
+        // Each block's two faces, in the order of the blocks.
+        let flip = flipped[face / 2];
+        for (i, vertex) in now.iter().enumerate() {
+            let from = if flip { 3 - i } else { i };
+            assert_eq!(vertex.uv, was[from].uv, "face {face}, corner {i}");
+            assert_eq!(vertex.pos, was[i].pos, "face {face}, corner {i}");
+        }
+    }
+    assert_ne!(
+        bytemuck::cast_slice::<_, u8>(&on.solid),
+        bytemuck::cast_slice::<_, u8>(&plain.solid)
+    );
 }

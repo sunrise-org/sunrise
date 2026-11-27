@@ -791,6 +791,10 @@ pub struct Graphics {
     pub leaf_culling: LeafCullingMode,
     /// Draw regular ice opaque in the solid pass, without its see-through texture.
     pub opaque_ice: bool,
+    /// Natural Textures: block textures turn and flip by position, as the pack's
+    /// `optifine/natural.properties` lists them, or OptiFine's own list for a pack with none.
+    /// Off by default, as in OptiFine; it applies to the sections as they are meshed again.
+    pub natural_textures: bool,
     /// Cache settled shulker-box models.
     pub cache_shulker_boxes: bool,
     /// Cache sign-text geometry.
@@ -911,6 +915,7 @@ impl Default for Graphics {
             particle_culling: ParticleCullingMode::Off,
             leaf_culling: LeafCullingMode::Off,
             opaque_ice: false,
+            natural_textures: false,
             cache_shulker_boxes: false,
             // Sign text has used its renderer cache independently of the new model caches.
             cache_signs: true,
@@ -1063,6 +1068,7 @@ impl Graphics {
                 "particleCulling" => g.particle_culling = ParticleCullingMode::parse(value),
                 "leafCulling" => g.leaf_culling = LeafCullingMode::parse(value),
                 "opaqueIce" => g.opaque_ice = flag(g.opaque_ice),
+                "naturalTextures" => g.natural_textures = flag(g.natural_textures),
                 "parallelTick" => g.parallel_tick = ParallelTickMode::parse(value),
                 "blockEntityCache" => {
                     let enabled = flag(false);
@@ -1173,7 +1179,7 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         let mut text = format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nentityCullingPrecheck:{}\nparticleCulling:{}\nleafCulling:{}\nopaqueIce:{}\nblockEntityCacheShulkerBoxes:{}\nblockEntityCacheSigns:{}\nblockEntityCacheDecoratedPots:{}\nblockEntityCacheBells:{}\nblockEntityCacheChests:{}\nblockEntityCacheBanners:{}\nblockEntityCacheCopperGolemStatues:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\ntextureBudgetMiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\nditherCutoutMips:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\nresolutionScale:{}\ndynamicResolution:{}\ntargetFps:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nupscalingSharpness:{}\nscreenshotQuality:{}\nframeGeneration:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiNits:{}\nhdrLighting:{}\nbatteryMode:{}\nshadowCache:{}\ngraphicsApi:{}\npickedShaderPack:{}\nbatchTranslucent:{}\nhdrSmoothGradients:{}\ngpuCullingMode:{}\ngpuCulling:{}\ngpuCullingWritten:{}\nparallelTick:{}\n",
+            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nentityCullingPrecheck:{}\nparticleCulling:{}\nleafCulling:{}\nopaqueIce:{}\nnaturalTextures:{}\nblockEntityCacheShulkerBoxes:{}\nblockEntityCacheSigns:{}\nblockEntityCacheDecoratedPots:{}\nblockEntityCacheBells:{}\nblockEntityCacheChests:{}\nblockEntityCacheBanners:{}\nblockEntityCacheCopperGolemStatues:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\ntextureBudgetMiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\nditherCutoutMips:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\nresolutionScale:{}\ndynamicResolution:{}\ntargetFps:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nupscalingSharpness:{}\nscreenshotQuality:{}\nframeGeneration:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiNits:{}\nhdrLighting:{}\nbatteryMode:{}\nshadowCache:{}\ngraphicsApi:{}\npickedShaderPack:{}\nbatchTranslucent:{}\nhdrSmoothGradients:{}\ngpuCullingMode:{}\ngpuCulling:{}\ngpuCullingWritten:{}\nparallelTick:{}\n",
             self.preset.name(),
             self.lod_distance,
             self.far_detail.name(),
@@ -1183,6 +1189,7 @@ impl Graphics {
             self.particle_culling.name(),
             self.leaf_culling.name(),
             bool_text(self.opaque_ice),
+            bool_text(self.natural_textures),
             bool_text(self.cache_shulker_boxes),
             bool_text(self.cache_signs),
             bool_text(self.cache_decorated_pots),
@@ -1561,6 +1568,7 @@ mod tests {
             particle_culling: ParticleCullingMode::Asynchronous,
             leaf_culling: LeafCullingMode::SolidAggressive,
             opaque_ice: true,
+            natural_textures: true,
             cache_shulker_boxes: true,
             cache_signs: true,
             cache_decorated_pots: true,
