@@ -718,15 +718,20 @@ impl ServerGame<'_> {
             )
         });
         // Player.onEnchantmentPerformed, and EnchantmentMenu's awardStat(ENCHANT_ITEM).
-        self.as_guest(conn, |game| {
-            game.enchantment_performed(need);
-            game.award_custom_stat("enchant_item", 1);
-            if let Some(given) = &given {
-                game.native_player_enchant_item(uuid, entity_id, &enchanted, given);
-            }
-            // CriteriaTriggers.ENCHANTED_ITEM, with the levels it cost.
-            game.trigger_enchanted_item(&enchanted, need);
-        });
+        if self
+            .as_guest(conn, |game| {
+                game.enchantment_performed(need);
+                game.award_custom_stat("enchant_item", 1);
+                if let Some(given) = &given {
+                    game.native_player_enchant_item(uuid, entity_id, &enchanted, given);
+                }
+                // CriteriaTriggers.ENCHANTED_ITEM, with the levels it cost.
+                game.trigger_enchanted_item(&enchanted, need);
+            })
+            .is_none()
+        {
+            return;
+        }
         let new_seed = self.common.world.random.next_int();
         if let Some(host) = self.server.lan.as_mut() {
             {
@@ -1244,3 +1249,70 @@ use sunrise_gameplay_common::game::transactions::TransactionsGameExt as _;
 use sunrise_gameplay_common::game::api_values_common::ApiValuesCommonGameExt1 as _;
 
 use sunrise_gameplay_common::game::bookshelves_common::BookshelvesCommonGameExt1 as _;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::native_guest_turn_tests::with_guests;
+
+    #[test]
+    #[ignore = "daily"]
+    fn refused_guest_turn_does_not_commit_enchanting() {
+        sunrise_gameplay_common::game::in_own_process(
+            "game::server_side::lan_stations::tests::refused_guest_turn_does_not_commit_enchanting",
+            || {
+                with_guests(|game| {
+                    let conn = 12;
+                    let gi = game.guest_index(conn).unwrap();
+                    let seed = 12345;
+                    let host = game.server.lan.as_mut().unwrap();
+                    host.hub.guests.update(gi, |guest| guest.xp_seed = seed);
+                    let mut station = GuestStation {
+                        window: 1,
+                        state: 0,
+                        kind: StationKind::Enchanting,
+                        pos: [1, 64, 1],
+                        menu: Box::new(Menu::new(Kind::Enchanting)),
+                        sent_data: Vec::new(),
+                        last_sound: 0,
+                    };
+                    let book = ItemStack {
+                        item: "minecraft:book".into(),
+                        count: 1,
+                        damage: 0,
+                        extra: None,
+                    };
+                    let lapis = ItemStack {
+                        item: "minecraft:lapis_lazuli".into(),
+                        count: 3,
+                        damage: 0,
+                        extra: None,
+                    };
+                    station.menu.load_slot(0, Some(book.clone()));
+                    station.menu.load_slot(1, Some(lapis.clone()));
+                    game.lan_enchant_offers(gi, &mut station);
+                    let data = station.menu.data.clone();
+                    // Choose a row that reaches the turn rather than returning without an enchantment.
+                    let row = (0..3)
+                        .find(|&row| {
+                            data[row] > 0
+                                && game.table_enchant(seed, row, data[row], &book).is_some()
+                        })
+                        .expect("the book has an enchantment offer");
+
+                    // The same guest is already acting, so the inner turn is refused.
+                    game.as_guest(conn, |game| game.lan_enchant(gi, &mut station, row))
+                        .unwrap();
+
+                    assert_eq!(station.menu.slot(0), Some(&book));
+                    assert_eq!(station.menu.slot(1), Some(&lapis));
+                    assert_eq!(
+                        game.server.lan.as_ref().unwrap().hub.guests[gi].xp_seed,
+                        seed
+                    );
+                    assert_eq!(station.menu.data, data);
+                });
+            },
+        );
+    }
+}

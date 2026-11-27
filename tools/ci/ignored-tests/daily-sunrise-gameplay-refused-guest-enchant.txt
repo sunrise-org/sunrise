@@ -1,0 +1,2 @@
+# The enchanting menu fixture loads prepared resources in an isolated process.
+sunrise-gameplay game::server_side::lan_stations::tests::refused_guest_turn_does_not_commit_enchanting lib daily child-process
