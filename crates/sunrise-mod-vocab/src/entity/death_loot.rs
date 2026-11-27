@@ -2,7 +2,8 @@
 
 use crate::{EntityRef, Identifier, StackWriteError};
 
-/// The `DamageSource` for [`EntityRef::roll_death_loot`].
+/// The `DamageSource` for [`EntityRef::roll_death_loot`] and
+/// [`LevelRef::roll_entity_loot`](crate::LevelRef::roll_entity_loot).
 // no wire: a borrowed call-scoped argument.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
@@ -31,13 +32,15 @@ impl<'a> LootDamageSource<'a> {
     }
 }
 
-/// Why [`EntityRef::roll_death_loot`] could not return the rolled stacks.
+/// Why [`EntityRef::roll_death_loot`] or
+/// [`LevelRef::roll_entity_loot`](crate::LevelRef::roll_entity_loot) could not return the rolled
+/// stacks.
 #[derive(Clone, Debug, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
 #[non_exhaustive]
 pub enum DeathLootError {
     /// No server backend can roll here, or the level's loot tables are unavailable.
     Unavailable,
-    /// A supplied handle is stale or unavailable to this host.
+    /// A supplied handle (the level's too) is stale or unavailable to this host.
     StaleEntity,
     /// The target is not a `LivingEntity`.
     NotLiving,
@@ -47,6 +50,9 @@ pub enum DeathLootError {
     UnknownTable,
     /// The roll succeeded, but a generated stack could not cross into the mod API.
     Stack(StackWriteError),
+    /// The kind [`LevelRef::roll_entity_loot`](crate::LevelRef::roll_entity_loot) was given is
+    /// not a registered living entity type the game creates as a mob.
+    UnknownKind,
 }
 
 impl std::fmt::Display for DeathLootError {
@@ -58,6 +64,7 @@ impl std::fmt::Display for DeathLootError {
             Self::UnknownDamageType => "the damage type is not registered in this world",
             Self::UnknownTable => "the death loot table is not loaded",
             Self::Stack(_) => "a rolled stack could not be represented in the mod API",
+            Self::UnknownKind => "the entity type is not a registered living mob type",
         })
     }
 }

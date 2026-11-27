@@ -134,4 +134,31 @@ pub trait LevelDatapacksBackendMut {
         tool: Option<&ItemStack>,
         entity: Option<EntityRef>,
     ) -> Result<Option<Vec<ItemStack>>, StackWriteError>;
+    /// Side: server.
+    /// One roll of `kind`'s death loot with no entity of it in the world: the roll
+    /// [`EntityRef::roll_death_loot`] makes, for a `kind` that is created and never spawned
+    /// (`EntityType.create` with no `finalizeSpawn`: an adult with its type's defaults, no
+    /// equipment, not riding) standing at `origin` in this level, as a mob farm, a loot preview
+    /// or a data-model generator rolls it. Nothing joins the level, dies or drops; no experience,
+    /// no `living_drops`.
+    ///
+    /// `None` uses the kind's own table (`minecraft:entities/zombie`). The `ENTITY` context has
+    /// `origin` as ORIGIN and `source`'s causing and direct entities as ATTACKING_ENTITY and
+    /// DIRECT_ATTACKING_ENTITY; the credited player, if supplied, sets LAST_DAMAGE_PLAYER and
+    /// luck, and may be a fake. Looting and the other enchantment bonuses come from the
+    /// attacker's own equipment, as for a death. There is no TOOL and no death-table seed: the
+    /// roll draws from the table's random sequence, else the level random, and moves later draws.
+    ///
+    /// `enchanted_entity_loot` is not asked: it names the living entity dropping the loot, and
+    /// there is none. Stale handles, an unknown or non-living kind, an unknown damage type or
+    /// table, a level not in place and a client are refused before drawing.
+    fn level_roll_entity_loot(
+        &mut self,
+        level: LevelRef,
+        kind: &Identifier,
+        table: Option<&Identifier>,
+        origin: [f64; 3],
+        source: LootDamageSource<'_>,
+        last_damage_player: Option<PlayerRef>,
+    ) -> Result<Vec<ItemStack>, DeathLootError>;
 }

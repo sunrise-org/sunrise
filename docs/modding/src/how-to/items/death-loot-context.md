@@ -29,6 +29,30 @@ The roll asks `enchanted_entity_loot` for enchantment levels, as a real death do
 listener of that hook that calls `roll_death_loot` rolls again inside itself, so it must
 stop its own recursion.
 
+## Roll a kind's death loot with no entity
+
+`level.roll_entity_loot(host, kind, table, origin, source, last_damage_player)` is the
+same roll for an entity type, with nothing spawned: a mob farm block, a loot preview or a
+data-model generator calls it instead of spawning a mob, rolling and discarding it. The
+entity is one of `kind` as `EntityType.create` makes it, never spawned: an adult with the
+type's defaults and no equipment, standing at `origin` in this level.
+
+```rust,ignore
+let zombie = Identifier::parse("minecraft:zombie")?;
+let damage_type = Identifier::parse("minecraft:player_attack")?;
+let killer = fake.entity();
+let source = LootDamageSource::new(&damage_type, Some(killer), Some(killer));
+let drops = level.roll_entity_loot(host, &zombie, None, center, source, Some(fake))?;
+```
+
+`source` and the credited player work as above, and a fake player counts. Looting comes
+from the attacker's equipment, so a fake player holding a Looting sword rolls with Looting.
+There is no death-table seed: the roll advances the table's random sequence or the level's
+random stream. `enchanted_entity_loot` is not asked, since there is no living entity for it
+to name. Nothing joins the level, so no spawn, join or death hook fires. An unknown or
+non-living kind returns `DeathLootError::UnknownKind`; the other refusals are those of
+`roll_death_loot`, a stale level handle included.
+
 ## Read the source of an actual death
 
 `LootDrops::damage_source` carries the death's damage type and causing/direct entity IDs.

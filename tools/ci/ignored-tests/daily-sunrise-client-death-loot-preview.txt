@@ -1,1 +1,2 @@
+sunrise-client game::native_entity_refs::death_loot::tests::rolls_a_kind_that_is_never_spawned lib daily resources
 sunrise-client game::native_entity_refs::death_loot::tests::rolls_live_death_context_without_dropping lib daily resources

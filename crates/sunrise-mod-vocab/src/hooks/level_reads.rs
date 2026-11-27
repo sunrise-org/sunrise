@@ -75,6 +75,11 @@ machine that turns an input into a table's roll. The context is the one `/loot â
 `this`. The stacks come split to their stack sizes. It draws as `block_drops` does and fires no
 `loot_drops` event. None for a table that isn't there.
 
+`LevelRef::roll_entity_loot(host, kind, table, origin, source, last_damage_player)` is
+`EntityRef::roll_death_loot` for an entity type rather than a live entity: the death table of a
+`kind` created at `origin` and never spawned, with the same damage source and kill credit, for a
+mob farm or a loot preview. Nothing joins the level and nothing drops.
+
 `fluid_shape(host, pos)` is `FluidState.getShape`: no box for no fluid, else one block-local box
 up to the fluid's height, a full block under the same fluid. `has_collisions(host, aabb)` asks
 whether any block collision shape is in a box, with `visit_block_collisions`'s walk and
