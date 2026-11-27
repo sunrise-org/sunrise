@@ -1,12 +1,35 @@
 use super::*;
 
+fn open_loom(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) -> mod_api::MenuRef {
+    use sunrise_core::nbt::Tag;
+    use sunrise_protocol::packets::play::{Clientbound, OpenScreen};
+
+    let loom = game
+        .client
+        .remote
+        .as_ref()
+        .unwrap()
+        .builtin
+        .get("minecraft:menu")
+        .unwrap()
+        .id("minecraft:loom")
+        .unwrap();
+    game.handle_packet(Clientbound::OpenScreen(OpenScreen {
+        container: 5,
+        menu: loom,
+        title: Tag::String("Loom".into()),
+    }))
+    .unwrap();
+    game.player_container_menu(game.local_player().unwrap())
+        .unwrap()
+}
+
 /// `MenuRef::close` and `click_button` go through the screen's own close
 /// and the button packet, and refuse a menu that is not open or stale.
 #[test]
 #[ignore = "daily"]
 fn client_menu_close_and_button_click_reach_the_server() {
     use crate::game::server_side::native_entity_refs::tests::with_client_game;
-    use sunrise_core::nbt::Tag;
     use sunrise_gameplay_common::game::Screen;
     use sunrise_protocol::packets::play::{self, Clientbound as C};
 
@@ -31,28 +54,7 @@ fn client_menu_close_and_button_click_reach_the_server() {
         assert_eq!(game.client.screen, Screen::Playing);
         assert!(!inventory.close(game));
         assert!(!inventory.click_button(game, 0));
-        let loom = game
-            .client
-            .remote
-            .as_ref()
-            .unwrap()
-            .builtin
-            .get("minecraft:menu")
-            .unwrap()
-            .id("minecraft:loom")
-            .unwrap();
-        let open = |game: &mut sunrise_client_gameplay::game::ClientGame<'_>| {
-            game.handle_packet(C::OpenScreen(play::OpenScreen {
-                container: 5,
-                menu: loom,
-                title: Tag::String("Loom".into()),
-            }))
-            .unwrap();
-            game.local_player()
-                .and_then(|player| game.player_container_menu(player))
-                .unwrap()
-        };
-        let menu = open(game);
+        let menu = open_loom(game);
         assert_eq!(game.client.screen, Screen::Inventory);
         // The old inventory handle is stale now that the loom replaced it.
         assert!(!inventory.close(game));
@@ -74,10 +76,10 @@ fn client_menu_close_and_button_click_reach_the_server() {
         assert!(!menu.close(game));
         assert!(!menu.click_button(game, 3));
         // A server-side close leaves a reopened menu's old handle stale too.
-        let first = open(game);
+        let first = open_loom(game);
         game.handle_packet(C::ContainerClose(play::ContainerClose { container: 5 }))
             .unwrap();
-        let second = open(game);
+        let second = open_loom(game);
         assert!(!first.close(game));
         assert!(!first.click_button(game, 3));
         assert!(second.close(game));
@@ -89,6 +91,88 @@ fn client_menu_close_and_button_click_reach_the_server() {
         };
         assert_eq!(close.container, 5);
         assert!(sent(&mut reader).is_none());
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn client_menu_close_follows_payload_on_commit_and_keeps_menu_on_abort() {
+    use crate::game::remote::tests::play_bundle_tests::{SERVER_ONLY, connect_probe, with_probe};
+    use mod_api::{ClientHost, PayloadAccepted, PayloadBytes, PayloadId};
+    use std::time::Duration;
+    use sunrise_gameplay_common::game::{Screen, transactions::TransactionsGameExt as _};
+    use sunrise_protocol::packets::play::{self, Serverbound as S};
+
+    with_probe(|game, _| {
+        let (local, mut reader, _writer) = connect_probe(game);
+        // The fixture installs the player without polling the session's Joined event.
+        game.client.remote.as_mut().unwrap().joined = true;
+        let menu = open_loom(game);
+        let channel = PayloadId(SERVER_ONLY.into());
+        let assert_open = |game: &sunrise_client_gameplay::game::ClientGame<'_>| {
+            assert_eq!(game.client.screen, Screen::Inventory);
+            assert_eq!(
+                game.player_container_menu(game.local_player().unwrap()),
+                Some(menu)
+            );
+        };
+
+        reader
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        for (commit, byte) in [(false, 1), (true, 2)] {
+            game.storage_scope(|game, _| {
+                let host: &mut dyn ClientHost = game;
+                assert_eq!(
+                    host.send_payload_to_server(&channel, PayloadBytes(vec![byte])),
+                    Ok(PayloadAccepted::Queued)
+                );
+                assert!(menu.close(host));
+                assert_open(game);
+                assert!(reader.recv().unwrap_err().is_timed_out());
+                ((), commit)
+            });
+            if !commit {
+                assert_open(game);
+                assert!(reader.recv().unwrap_err().is_timed_out());
+            }
+        }
+        assert_eq!(game.client.screen, Screen::Playing);
+        assert!(game.client.remote.as_ref().unwrap().menu.as_ref().is_none());
+        reader
+            .set_read_timeout(Some(Duration::from_secs(5)))
+            .unwrap();
+        let mut recv = || {
+            let (id, body) = reader.recv().unwrap();
+            S::decode_with_payload_codecs(id, &body, &local.codecs).unwrap()
+        };
+        let S::CustomPayload(payload) = recv() else {
+            panic!("the committed payload must precede the close packet");
+        };
+        assert_eq!(payload.channel, SERVER_ONLY);
+        assert_eq!(payload.data, [2]);
+        assert_eq!(
+            recv(),
+            S::ContainerClose(play::ContainerClose { container: 5 })
+        );
+
+        let old = open_loom(game);
+        let replacement = game.storage_scope(|game, _| {
+            assert!(old.close(game));
+            // A new opening can reuse the numeric window but not the handle's generation.
+            let replacement = open_loom(game);
+            assert_ne!(old, replacement);
+            (replacement, true)
+        });
+        assert_eq!(game.client.screen, Screen::Inventory);
+        assert_eq!(
+            game.player_container_menu(game.local_player().unwrap()),
+            Some(replacement)
+        );
+        reader
+            .set_read_timeout(Some(Duration::from_millis(20)))
+            .unwrap();
+        assert!(reader.recv().unwrap_err().is_timed_out());
     });
 }
 

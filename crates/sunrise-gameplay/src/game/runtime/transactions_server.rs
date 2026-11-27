@@ -1836,8 +1836,8 @@ impl crate::game::ServerGame<'_> {
                 self.server_level_event_at(id, [x, y, z], data)
             }
             After::Payload(payload) => payload.publish(),
-            After::Packet(..) => {
-                debug_assert!(!self.is_logical_server(), "After::Packet is client-only");
+            After::Packet(..) | After::ClientMenuClose { .. } => {
+                debug_assert!(!self.is_logical_server(), "client-only transaction effect");
             }
             // Only reached through a root commit, which replays blocks and connection groups in order.
             After::Block(_) | After::BulkBlocks(..) | After::ConnectionGroup(..) => {}

@@ -1,4 +1,4 @@
-use crate::game::ClientGame;
+use crate::game::{ClientGame, Screen};
 use mod_api::TransactionLifecycle;
 use sunrise_gameplay_common::game::transactions::{
     After, ClosingPhase, JournaledPlayer, Kept, KeptPlayer, Level, Pos, StorageSettlement, entities,
@@ -137,6 +137,19 @@ impl ClientGame<'_> {
         match after {
             After::Payload(payload) => payload.publish(),
             After::Packet(packet, owner) => self.publish_mod_packet(packet, owner),
+            After::ClientMenuClose { menu, prepared } => {
+                if self.client.screen == Screen::Inventory
+                    && self.native_client_menu_name(menu).is_some()
+                {
+                    if let Some(packet) = prepared {
+                        self.publish_mod_packet(packet, None);
+                    }
+                    self.clear_container_screen_state();
+                    self.remote_close_local();
+                    self.set_screen(Screen::Playing);
+                    self.capture(true);
+                }
+            }
             After::Block(_)
             | After::BulkBlocks(..)
             | After::ConnectionGroup(..)
