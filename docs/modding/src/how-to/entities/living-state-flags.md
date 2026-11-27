@@ -55,7 +55,8 @@ does for a mob. `is_silent`, `glowing` and `permanently_invulnerable` and their 
 fire immune and has positive fire ticks or, on a client, synced shared flag 0. It covers every kind of
 entity, and every entity a client tracks (a general entity's `Fire`, with `fire_ticks` and
 `set_remaining_fire_ticks`, is synced as bit 0 of the shared flags). On a client it reads that
-client's copy, including the local player's predicted timer, not a server query.
+client's copy, including the local player's predicted timer, not a server query. The synced fire
+flag does not populate the client's remaining fire ticks.
 
 `EntityRef::fire_immune(host)` reads type immunity or a live grant on that side, not
 separate species-specific damage rules. On the server, use `set_fire_immunity(host, immune)` for a player, mob or armor

@@ -322,7 +322,6 @@ impl crate::game::ClientGame<'_> {
                         join: JoinSeq::next(),
                         position,
                         velocity: Vec3::ZERO,
-                        no_gravity: false,
                     },
                 );
             }
@@ -334,22 +333,7 @@ impl crate::game::ClientGame<'_> {
             };
             r.entities.insert(
                 id,
-                Tracked {
-                    kind: kind.to_owned(),
-                    position,
-                    previous: position,
-                    yaw: tracked_yaw,
-                    pitch: tracked_pitch,
-                    previous_yaw: tracked_yaw,
-                    previous_pitch: tracked_pitch,
-                    codec_base: position,
-                    on_fire: false,
-                    mod_fire_immune: false,
-                    silent: false,
-                    vehicle: None,
-                    tick_count: 0,
-                    size_answer: None,
-                },
+                Tracked::new(kind.to_owned(), position, tracked_yaw, tracked_pitch),
             );
         }
     }

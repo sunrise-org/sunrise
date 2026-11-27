@@ -86,7 +86,7 @@ impl ClientGame<'_> {
                 t.position.y.floor() as i32,
                 t.position.z.floor() as i32,
             );
-            if t.fire_ticks > 0 {
+            if t.fire_ticks > 0 || self.tracked_entity_on_fire(t.id) {
                 // The flames face the camera, turned round in the front view.
                 let fire_yaw = if self.client.camera_type
                     == sunrise_level::camera_math::CameraType::ThirdPersonFront

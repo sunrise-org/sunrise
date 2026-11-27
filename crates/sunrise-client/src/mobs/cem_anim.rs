@@ -426,20 +426,28 @@ fn flag(b: bool) -> f32 {
     f32::from(b)
 }
 
+/// The render-only flags synced for this entity, independent of its saved data.
+#[derive(Clone, Copy, Default)]
+pub struct SyncedFlags {
+    pub on_fire: bool,
+    /// Shared flag 6, or `None` for a model without synced state.
+    pub glowing: Option<bool>,
+}
+
 impl Animation {
     /// Runs the animation for `m` over `poses`, which the vanilla animation has set.
-    pub fn run(&self, m: &Mob, s: &State, poses: &mut Poses) {
-        self.run_in(&frame(), m, s, poses);
+    pub fn run(&self, m: &Mob, s: &State, poses: &mut Poses, synced: SyncedFlags) {
+        self.run_in(&frame(), m, s, poses, synced);
     }
 
     /// `run` in `frame`.
-    fn run_in(&self, frame: &Frame, m: &Mob, s: &State, poses: &mut Poses) {
+    fn run_in(&self, frame: &Frame, m: &Mob, s: &State, poses: &mut Poses, synced: SyncedFlags) {
         // The matching random-model rule's number: a grazing cow reads 2.
         let rule_index = super::cem::rule_index(&self.rules, m);
         self.run_with(
             m.id,
             frame.frame_counter,
-            |slots| params(m, s, frame, rule_index, slots),
+            |slots| params(m, s, frame, rule_index, slots, synced),
             poses,
         );
     }
@@ -569,7 +577,14 @@ impl Saved {
     }
 }
 
-fn params(m: &Mob, s: &State, frame: &Frame, rule_index: f32, slots: &mut [f32]) {
+fn params(
+    m: &Mob,
+    s: &State,
+    frame: &Frame,
+    rule_index: f32,
+    slots: &mut [f32],
+    synced: SyncedFlags,
+) {
     let max_health = super::finalize::max_health(m);
     let (dx, dy, dz) = (
         m.position.x - frame.player[0],
@@ -664,9 +679,9 @@ fn params(m: &Mob, s: &State, frame: &Frame, rule_index: f32, slots: &mut [f32])
             // The synced `Mob.isAggressive`, which a client's mobs have too.
             Aggressive => flag(m.ai.aggressive),
             Alive => flag(m.alive()),
-            Burning => flag(m.fire_ticks > 0 && !m.mod_fire_immune),
+            Burning => flag(m.is_on_fire_with_synced(synced.on_fire)),
             Child => flag(s.baby),
-            Glowing => flag(m.glowing),
+            Glowing => flag(synced.glowing.unwrap_or_else(|| m.is_currently_glowing())),
             Hurt => flag(m.hurt_time > 0),
             InWater => flag(m.fluids.in_water),
             InLava => flag(m.fluids.in_lava),
@@ -836,12 +851,24 @@ mod tests {
         let mut m = mob();
         m.standing_on = Some("minecraft:grass_block".into());
         let mut poses = Poses::new(&model);
-        animation.run_in(&Frame::default(), &m, &still(), &mut poses);
+        animation.run_in(
+            &Frame::default(),
+            &m,
+            &still(),
+            &mut poses,
+            SyncedFlags::default(),
+        );
         assert_eq!(poses.get("root")[0], 2.0);
         // Off the grass: the unconditional base 0.
         m.standing_on = Some("minecraft:stone".into());
         let mut poses = Poses::new(&model);
-        animation.run_in(&Frame::default(), &m, &still(), &mut poses);
+        animation.run_in(
+            &Frame::default(),
+            &m,
+            &still(),
+            &mut poses,
+            SyncedFlags::default(),
+        );
         assert_eq!(poses.get("root")[0], 0.0);
     }
 
@@ -962,10 +989,84 @@ mod tests {
             ..Frame::default()
         };
         let mut poses = Poses::new(&model);
-        animation.run_in(&frame, &m, &s, &mut poses);
+        animation.run_in(&frame, &m, &s, &mut poses, SyncedFlags::default());
         // `hurt_time` reads the whole 5 ticks, not the partial-tick 4.75: vanilla's
         // `hurtTime` is an int and EMF reads it so.
         assert_eq!(poses.get("root")[..6], [5.0, 1.5, 30.0, 7.0, 5.0, 2.0]);
+    }
+
+    #[test]
+    fn visual_fire_and_glow_drive_cem_without_saved_fire_or_glow() {
+        let m = mob();
+        let model = bone("root", vec![]);
+        let animation = animate(
+            &model,
+            &[("root.tx", "is_burning"), ("root.ty", "is_glowing")],
+        );
+        let frame = Frame::default();
+        for (flag, expected) in [(true, 1.0), (false, 0.0)] {
+            let mut poses = Poses::new(&model);
+            animation.run_in(
+                &frame,
+                &m,
+                &still(),
+                &mut poses,
+                SyncedFlags {
+                    on_fire: flag,
+                    glowing: Some(flag),
+                },
+            );
+            assert_eq!(poses.get("root")[..2], [expected; 2]);
+        }
+    }
+
+    #[test]
+    fn synced_glow_overrides_local_glow_in_cem() {
+        let mut m = mob();
+        m.extra.effects.push(sunrise_sim::mobs::StoredEffect::new(
+            "minecraft:glowing",
+            20,
+            0,
+        ));
+        let model = bone("root", vec![]);
+        let animation = animate(&model, &[("root.tx", "is_glowing")]);
+        for (glowing, expected) in [(Some(false), 0.0), (None, 1.0)] {
+            let mut poses = Poses::new(&model);
+            animation.run_in(
+                &Frame::default(),
+                &m,
+                &still(),
+                &mut poses,
+                SyncedFlags {
+                    glowing,
+                    ..SyncedFlags::default()
+                },
+            );
+            assert_eq!(poses.get("root")[0], expected);
+        }
+    }
+
+    #[test]
+    fn species_fire_immunity_keeps_cem_is_burning_off() {
+        let mut m = mob();
+        std::sync::Arc::make_mut(&mut m.kind).flags.fire_immune = true;
+        let model = bone("root", vec![]);
+        let animation = animate(&model, &[("root.tx", "is_burning")]);
+        for (fire_ticks, on_fire) in [(20, false), (0, true)] {
+            m.fire_ticks = fire_ticks;
+            let mut poses = Poses::new(&model);
+            animation.run_in(
+                &Frame::default(),
+                &m,
+                &still(),
+                &mut poses,
+                SyncedFlags {
+                    on_fire,
+                    ..SyncedFlags::default()
+                },
+            );
+            assert_eq!(poses.get("root")[0], 0.0);
+        }
     }
 
     /// A mob at the origin of the test species.
@@ -1027,7 +1128,13 @@ mod tests {
             )],
         );
         let mut poses = Poses::new(&model);
-        animation.run_in(&Frame::default(), &m, &still(), &mut poses);
+        animation.run_in(
+            &Frame::default(),
+            &m,
+            &still(),
+            &mut poses,
+            SyncedFlags::default(),
+        );
         assert_eq!(
             poses.get("root")[0],
             (31 + 64 + 128 + 256 + 512 + 2048 + 8192 + 16384) as f32
@@ -1046,7 +1153,13 @@ mod tests {
         let mut s = still();
         s.partial = 0.5;
         let mut poses = Poses::new(&model);
-        animation.run_in(&Frame::default(), &m, &s, &mut poses);
+        animation.run_in(
+            &Frame::default(),
+            &m,
+            &s,
+            &mut poses,
+            SyncedFlags::default(),
+        );
         let [x, y] = [poses.get("root")[0], poses.get("root")[1]];
         assert!((x - std::f32::consts::PI).abs() < 1e-4, "rot_y read {x}");
         assert!((y - 20f32.to_radians()).abs() < 1e-4, "rot_x read {y}");
@@ -1061,7 +1174,13 @@ mod tests {
         let mut read = |in_water: bool| {
             m.fluids.in_water = in_water;
             let mut poses = Poses::new(&model);
-            animation.run_in(&Frame::default(), &m, &still(), &mut poses);
+            animation.run_in(
+                &Frame::default(),
+                &m,
+                &still(),
+                &mut poses,
+                SyncedFlags::default(),
+            );
             poses.get("root")[0]
         };
         assert_eq!([read(true), read(false)], [1.0, 3.0]);
@@ -1080,7 +1199,13 @@ mod tests {
         let mut sitting = |flags: i32| {
             m.extra.ints[0] = flags;
             let mut poses = Poses::new(&model);
-            animation.run_in(&Frame::default(), &m, &still(), &mut poses);
+            animation.run_in(
+                &Frame::default(),
+                &m,
+                &still(),
+                &mut poses,
+                SyncedFlags::default(),
+            );
             poses.get("root")[0]
         };
         assert_eq!(sitting(crate::mobs::fox::SITTING), 1.0);
@@ -1111,7 +1236,7 @@ mod tests {
                 ..Frame::default()
             };
             let mut poses = Poses::new(&model);
-            animation.run_in(&frame, &m, &s, &mut poses);
+            animation.run_in(&frame, &m, &s, &mut poses, SyncedFlags::default());
             poses.get("root")[0]
         };
         // A preview in a frame the world drew, then one in a frame it didn't: each starts from
@@ -1258,7 +1383,7 @@ mod tests {
         let animation = animate(&model, &[("root.tx", "is_in_gui"), ("root.ty", "time")]);
         let run = || {
             let mut poses = Poses::new(&model);
-            animation.run(&m, &s, &mut poses);
+            animation.run(&m, &s, &mut poses, SyncedFlags::default());
             let p = *poses.get("root");
             [p[0], p[1]]
         };

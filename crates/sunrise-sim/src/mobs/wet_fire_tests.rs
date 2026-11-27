@@ -1,6 +1,18 @@
 use super::*;
 use std::sync::Arc;
 
+#[test]
+fn species_fire_immunity_blocks_both_sources_of_on_fire() {
+    let mut kind = crate::mobs::sensor_scan_tests::kind();
+    Arc::make_mut(&mut kind).flags.fire_immune = true;
+    let mut mob = Mob::new(1, kind, Vec3::ZERO, 0.0);
+
+    for (fire_ticks, synced_on_fire) in [(20, false), (0, true)] {
+        mob.fire_ticks = fire_ticks;
+        assert!(!mob.is_on_fire_with_synced(synced_on_fire));
+    }
+}
+
 fn pig(types: &crate::mobs::MobTypes, no_ai: bool, immune: bool, fire: i32) -> Mob {
     let mut kind = types.types["minecraft:pig"].clone();
     kind.flags.fire_immune = immune;
