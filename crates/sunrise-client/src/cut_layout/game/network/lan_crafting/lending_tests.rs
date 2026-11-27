@@ -145,6 +145,7 @@ fn setup(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> &'static ModMenuT
     guest.loaded = true;
     guest.menu = Some(HubMenu {
         window: WINDOW,
+        active_chest: None,
         kind: 0,
         registry_id: t.id.into(),
         pos: Some(STATION),

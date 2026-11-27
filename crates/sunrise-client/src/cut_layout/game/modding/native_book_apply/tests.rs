@@ -67,6 +67,7 @@ fn open_mod_menu_named(
         let window = g.next_menu_window();
         g.menu = Some(Open {
             window,
+            active_chest: None,
             kind: 0,
             registry_id: menu_id.into(),
             pos: Some(pos),

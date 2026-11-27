@@ -522,6 +522,7 @@ mod recipe_check_tests {
             guest.inventory[0] = Some(ItemStack::new("minecraft:oak_planks", 2));
             guest.menu = Some(HubMenu {
                 window: WINDOW,
+                active_chest: None,
                 kind: 0,
                 registry_id: "test:station".into(),
                 pos: Some(STATION),

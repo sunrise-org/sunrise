@@ -774,6 +774,7 @@ fn open_native_menu(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> i32 {
     use sunrise_sim::lan::menu::Menu;
     let menu = Menu {
         window: 5,
+        active_chest: None,
         kind: 2,
         pos: None,
         slots: Slots::Native,
