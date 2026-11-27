@@ -2162,11 +2162,15 @@ impl Renderer {
         // Post effects (a resource pack's chains, `use_depth_buffer`) read the world's depth
         // after the world pass, as `GameRenderer.render` hands them the main target's.
         let post_reads_depth = !frame.title && !frame.post_effects.effects.is_empty();
+        let frame_graph_needs_world_depth = frame_graph
+            .as_ref()
+            .is_some_and(|fg| fg.needs_world_depth(sky_stage == Some(SkyStageOwner::Inline)));
         let keep_depth = pack_post
             || post_reads_depth
             || (taa && self.world_post.taa)
             || oit_on
             || native_render::needs().world_depth
+            || frame_graph_needs_world_depth
             || fg;
         // The pack's program reads the vertices this frame's draws bind.
         let pack_draws_terrain = pack_terrain && flat_frame == self.pack_terrain_flat;
