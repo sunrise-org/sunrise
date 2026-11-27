@@ -58,6 +58,8 @@ pub struct Mod {
 #[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 pub struct Conditions {
     #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub profiling: Option<Profiling>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
     pub scenario: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub seed: Option<String>,
@@ -84,6 +86,24 @@ pub struct Conditions {
     pub load_avg_1m: Option<f64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub backend: Option<String>,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum ProfileThreads {
+    Main,
+    All,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+pub struct Profiling {
+    pub recording: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub threads: Option<ProfileThreads>,
+    #[serde(default)]
+    pub startup: bool,
+    #[serde(default)]
+    pub complete: bool,
 }
 
 /// A measurement over a run's repeats.
@@ -239,6 +259,8 @@ pub struct Report {
     pub hardware: Hardware,
     #[serde(default)]
     pub conditions: Conditions,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub captures: Vec<String>,
     /// Scalar measurements by name; the unit is the name's suffix (`_ms`, `_mb`...).
     #[serde(default)]
     pub metrics: BTreeMap<String, Summary>,
@@ -273,6 +295,7 @@ impl Report {
             app,
             hardware,
             conditions: Conditions::default(),
+            captures: Vec::new(),
             metrics: BTreeMap::new(),
             frames: Vec::new(),
             ab: None,
@@ -312,6 +335,7 @@ impl Report {
         Report {
             label: None,
             local: Vec::new(),
+            captures: Vec::new(),
             created: format!("{day}T00:00:00Z"),
             ..self.clone()
         }

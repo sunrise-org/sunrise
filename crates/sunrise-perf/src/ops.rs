@@ -231,7 +231,7 @@ pub fn compare(a: &Path, b: &Path, options: &DiffOptions) -> Result<DiffAnswer, 
             compare_captures((&name_a, &x), (&name_b, &y), options)
         }
         (Report::Bench(x), Report::Bench(y)) => Ok(DiffAnswer::Bench {
-            diff: bench_diff::diff(&x, &y, options),
+            diff: bench_diff::diff(&x, &y, options)?,
             a: name_a,
             b: name_b,
         }),

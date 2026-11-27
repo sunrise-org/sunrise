@@ -87,7 +87,7 @@ pub(super) fn frame_timings(ctx: &Ctx) -> Result<Reply, QueryError> {
     };
     if timings().next().is_none() {
         return Err(QueryError::new(
-            "this capture has no timestamped client frame series; record with sunrise-client --benchmark SCENE --profile (add --profile-startup for loading), or use query ticks --side client for the retained slow frames",
+            "this capture has no timestamped client frame series; record with sunrise-client --benchmark SCENE (add --profile-startup for loading), or use query ticks --side client for the retained slow frames",
         ));
     }
     let mut frames: Vec<_> = timings()

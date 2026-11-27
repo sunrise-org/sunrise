@@ -1126,7 +1126,10 @@ impl ClientGame<'_> {
             self.client.profile.hardware_warmed = true;
             server_perf::warm_hardware();
         }
-        if !self.client.profile.env_tried && server_perf::hardware().is_some() {
+        if !self.client.profile.env_tried
+            && self.common.options.benchmark.is_none()
+            && server_perf::hardware().is_some()
+        {
             self.client.profile.env_tried = true;
             let named = |var: &str| std::env::var_os(var).filter(|v| !v.is_empty());
             let gpu = client_perf::env_gpu(

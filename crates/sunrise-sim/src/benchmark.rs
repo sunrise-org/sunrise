@@ -304,12 +304,12 @@ fn run(
     report.hardware.display = serde_json::from_value(title["display"].clone()).ok();
 
     let mut steady = Vec::new();
-    match &scenario {
+    let capture_path = match &scenario {
         Scenario::Ab(switch) => keeping_switch(control, switch, || {
             measure(control, &setup, &scenario, &mut report, &mut steady)
         })?,
         _ => measure(control, &setup, &scenario, &mut report, &mut steady)?,
-    }
+    };
 
     let status = control.status();
     let renderer = &status["renderer"];
@@ -354,17 +354,67 @@ fn run(
     if let Ok(meta) = std::env::current_exe().and_then(std::fs::metadata) {
         report.metric("game.binary_bytes", &[meta.len() as f64]);
     }
+    report.conditions.profiling = Some(match setup.profile {
+        Some(profile) => sunrise_bench::Profiling {
+            recording: true,
+            threads: Some(match profile.threads {
+                crate::perf_types::Threads::Main => sunrise_bench::ProfileThreads::Main,
+                crate::perf_types::Threads::All => sunrise_bench::ProfileThreads::All,
+            }),
+            startup: profile.startup,
+            complete: control
+                .call("profile client status")
+                .ok()
+                .is_some_and(|status| status["capturing"].as_bool() == Some(true)),
+        },
+        None => sunrise_bench::Profiling {
+            recording: false,
+            threads: None,
+            startup: false,
+            complete: false,
+        },
+    });
     keep_benchmark(&sunrise_level::logging::game_home(), &report);
     let written = report
         .write_to(&setup.game_dir.join("benchmarks"))
         .map_err(|e| e.to_string())?;
     if setup.profile.is_some() {
-        match control.call(&stop_capture(&written)) {
-            Ok(done) => println!("Sunrise: benchmark capture {}", text(&done["path"])),
-            Err(e) => eprintln!("Sunrise: the benchmark capture failed: {e}"),
+        let home = sunrise_level::logging::game_home();
+        let source = match control.call(&stop_capture(&written)) {
+            Ok(done) => Some(home.join(text(&done["path"]))),
+            Err(error) => {
+                eprintln!(
+                    "Sunrise: the benchmark could not embed its report in the capture: {error}"
+                );
+                capture_path
+                    .map(|path| home.join(path))
+                    .filter(|path| sunrise_perf_format::files::is_complete(path).unwrap_or(false))
+            }
+        };
+        if let Some(source) = source {
+            let sibling = written.with_extension("hzperf");
+            match std::fs::hard_link(&source, &sibling).or_else(|_| copy_capture(&source, &sibling))
+            {
+                Ok(()) => println!("Sunrise: benchmark capture {}", sibling.display()),
+                Err(error) => eprintln!(
+                    "Sunrise: benchmark capture {} could not be placed beside the report: {error}",
+                    source.display()
+                ),
+            }
         }
     }
     Ok(written)
+}
+
+fn copy_capture(source: &Path, sibling: &Path) -> std::io::Result<()> {
+    let mut from = std::fs::File::open(source)?;
+    let mut to = std::fs::File::create_new(sibling)?;
+    if let Err(error) = std::io::copy(&mut from, &mut to) {
+        drop(to);
+        let _ = std::fs::remove_file(sibling);
+        return Err(error);
+    }
+    Ok(())
 }
 
 /// Starts the capture the run's frames feed; its trigger is the benchmark's.
@@ -387,7 +437,8 @@ fn measure(
     scenario: &Scenario,
     report: &mut Report,
     steady: &mut Vec<(Instant, Instant)>,
-) -> Result<(), String> {
+) -> Result<Option<String>, String> {
+    let mut capture_path = None;
     match (scenario, &setup.set) {
         (Scenario::Ab(switch), _) => apply_set(control, switch.name, switch.b)?,
         (_, Some((name, value))) => apply_set(control, name, value)?,
@@ -395,6 +446,10 @@ fn measure(
     }
     replace_world(&setup.game_dir)?;
     if setup.profile.is_some_and(|p| p.startup) {
+        capture_path = control
+            .call("profile client status")
+            .ok()
+            .and_then(|reply| reply["path"].as_str().map(str::to_owned));
         control.mark("world", "begin");
     }
     control.call(&format!("open {WORLD} {SEED} creative"))?;
@@ -410,7 +465,8 @@ fn measure(
 
     if let Some(profile) = setup.profile {
         if !profile.startup {
-            control.call(start_capture(profile.threads))?;
+            let reply = control.call(start_capture(profile.threads))?;
+            capture_path = reply["path"].as_str().map(str::to_owned);
         }
         control.mark("world", "loaded");
     }
@@ -438,7 +494,7 @@ fn measure(
             ab_blocks(control, switch, &plan, report, steady)?;
         }
     }
-    Ok(())
+    Ok(capture_path)
 }
 
 /// Reads a switch before the run and puts it back after, whatever the run did and however it ended.

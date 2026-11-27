@@ -24,6 +24,8 @@ vocab! {
 #[derive(Clone, Debug, PartialEq, Deserialize)]
 pub struct BenchReport {
     #[serde(default)]
+    conditions: sunrise_bench::Conditions,
+    #[serde(default)]
     frames: Vec<BenchFrame>,
     #[serde(default)]
     ab: Option<Ab>,
@@ -126,7 +128,15 @@ fn phases(report: &BenchReport) -> BTreeMap<String, BTreeMap<BenchMetric, Vec<f6
 }
 
 /// Compares two reports; `ab` results are carried over and never recomputed.
-pub fn diff(a: &BenchReport, b: &BenchReport, options: &DiffOptions) -> BenchDiff {
+pub fn diff(a: &BenchReport, b: &BenchReport, options: &DiffOptions) -> Result<BenchDiff, String> {
+    let pa = a.conditions.profiling;
+    let pb = b.conditions.profiling;
+    if pa != pb || pa.is_some_and(|p| p.recording && !p.complete) {
+        return Err(
+            "cannot compare benchmark reports with different or incomplete profiling conditions"
+                .into(),
+        );
+    }
     let mut ab = Vec::new();
     let mut warnings = Vec::new();
     for (report, value) in [(Role::A, a), (Role::B, b)] {
@@ -180,7 +190,7 @@ pub fn diff(a: &BenchReport, b: &BenchReport, options: &DiffOptions) -> BenchDif
         let other = if ab[0].report == Role::A { "B" } else { "A" };
         warnings.push(format!("report {other} has no A/B result"));
     }
-    BenchDiff { ab, rows, warnings }
+    Ok(BenchDiff { ab, rows, warnings })
 }
 
 impl BenchDiff {

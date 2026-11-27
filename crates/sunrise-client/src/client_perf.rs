@@ -344,6 +344,7 @@ pub fn bench_result(report_json: String) -> Result<BenchResult, String> {
     let mut report = sunrise_bench::Report::parse(&report_json)?;
     report.label = None;
     report.local.clear();
+    report.captures.clear();
     Ok(BenchResult {
         side: Side::Client as i32,
         format: sunrise_bench::FORMAT.to_owned(),

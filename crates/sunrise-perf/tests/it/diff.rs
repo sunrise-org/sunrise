@@ -472,6 +472,33 @@ fn report(frames: Vec<Frames>, ab: Option<Ab>) -> String {
 }
 
 #[test]
+fn benchmark_diff_refuses_different_profiling_conditions() {
+    use sunrise_bench::{ProfileThreads, Profiling};
+
+    let dir = TempDir::new("bench-profile");
+    let mut report = Report::parse(&report(frames("flight", &[2.0, 3.0], false), None)).unwrap();
+    let a = dir.path().join("a.json");
+    let b = dir.path().join("b.json");
+    let config = Profiling {
+        recording: true,
+        threads: Some(ProfileThreads::Main),
+        startup: false,
+        complete: true,
+    };
+    report.conditions.profiling = Some(config);
+    std::fs::write(&a, report.to_json()).unwrap();
+    report.conditions.profiling = Some(Profiling {
+        threads: Some(ProfileThreads::All),
+        ..config
+    });
+    std::fs::write(&b, report.to_json()).unwrap();
+    assert!(matches!(
+        cli(&["diff", a.to_str().unwrap(), b.to_str().unwrap()]),
+        Err(CliError::Failed(message)) if message.contains("profiling conditions")
+    ));
+}
+
+#[test]
 fn benchmark_reports_with_an_ab_print_its_verdict_unchanged_and_never_recompute() {
     // The frames below are 2 ms apart and would be slower in any recomputation; the stored verdict says otherwise.
     let paired = |a, b, diff, diff_pct, ci95, confidence, noise, verdict| Paired {

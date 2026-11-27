@@ -2040,7 +2040,7 @@ pub(in crate::game) mod tests {
         use sunrise_sim::{benchmark::Profile, perf_types::Threads};
 
         assert_eq!(
-            parse(&["--benchmark", "village", "--profile"])
+            parse(&["--benchmark", "village"])
                 .unwrap()
                 .benchmark_profile,
             Some(Profile {
@@ -2053,7 +2053,6 @@ pub(in crate::game) mod tests {
                 "--profile-threads",
                 "all",
                 "--profile-startup",
-                "--profile",
                 "--benchmark",
                 "village"
             ])
@@ -2065,15 +2064,28 @@ pub(in crate::game) mod tests {
             }),
         );
         assert_eq!(
-            parse(&["--benchmark", "village"])
+            parse(&["--benchmark", "village", "--profile", "--no-profile"])
                 .unwrap()
                 .benchmark_profile,
             None
         );
+        assert_eq!(
+            parse(&["--benchmark", "village", "--profile"])
+                .unwrap()
+                .benchmark_profile,
+            parse(&["--benchmark", "village"])
+                .unwrap()
+                .benchmark_profile,
+        );
         for args in [
             &["--profile"][..],
-            &["--benchmark", "village", "--profile-startup"],
-            &["--benchmark", "village", "--profile-threads", "main"],
+            &[
+                "--benchmark",
+                "village",
+                "--profile-startup",
+                "--no-profile",
+            ],
+            &["--profile-threads", "main"],
             &[
                 "--benchmark",
                 "village",
