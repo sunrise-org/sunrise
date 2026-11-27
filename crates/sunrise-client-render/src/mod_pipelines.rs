@@ -3034,16 +3034,16 @@ void main() {
 
     #[test]
     fn registration_validates_pack_preludes_with_typed_errors() {
-        use mod_api::{BindGroupLayout, BindingKind, PackBinding};
+        use mod_api::{BindEntry, BindGroupLayout, BindingKind, PackBinding};
 
         let storage_layout = BindGroupLayout::builder()
-            .entry(
+            .entry(BindEntry::new(
                 "Verts",
                 BindingKind::StorageBuffer {
                     read_only: true,
                     min_size: 16,
                 },
-            )
+            ))
             .build()
             .unwrap();
         let valid = pipeline("example:prelude_ok", "example:prelude_ok")
