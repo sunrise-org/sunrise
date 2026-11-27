@@ -607,7 +607,7 @@ impl crate::game::ClientGame<'_> {
             }
         }
         if s.screen.has_draw() {
-            let frame = s.frame(batch, (ox, oy), self.client.cursor);
+            let frame = s.frame(batch.size(), (ox, oy), self.client.cursor);
             let mut draw = crate::game::host::draw::GameDrawContext::new(self, batch);
             s.screen.draw(self, frame, &mut draw);
         }
@@ -821,7 +821,7 @@ impl crate::game::ClientGame<'_> {
             Self::menu_slot_index(&screen.menu.name, slot).map(|slot| slot as u32)
         });
         let frame = screen.frame(
-            batch,
+            batch.size(),
             self.inventory_origin(batch.size()),
             self.client.cursor,
         );

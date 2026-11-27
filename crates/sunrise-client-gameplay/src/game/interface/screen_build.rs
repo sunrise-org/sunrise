@@ -1082,8 +1082,8 @@ mod tests {
         ] {
             let frame = GuiFrame::new(target, requested, unicode)
                 .with_pointer_space(PointerSpace::new([1927, 1083], 1.25));
-            let batch = HudBatch::for_frame(&frame);
-            let legacy = HudBatch::new(target, GuiScale { requested, unicode });
+            let mut batch = HudBatch::for_frame(&frame);
+            let mut legacy = HudBatch::new(target, GuiScale { requested, unicode });
             assert_eq!(frame.size(), (legacy.width, legacy.height));
             assert_eq!(frame.scale(), legacy.scale);
 
@@ -1093,11 +1093,17 @@ mod tests {
             assert_eq!(build.size, (legacy.width, legacy.height));
             assert_eq!(build.scale, legacy.scale);
 
-            assert_eq!(batch.viewport, legacy.viewport);
-            assert_eq!(
-                (batch.width, batch.height, batch.scale),
-                (legacy.width, legacy.height, legacy.scale)
-            );
+            assert_eq!(batch.size(), legacy.size());
+            assert_eq!(batch.scale, legacy.scale);
+
+            let (right, bottom) = (legacy.width + 1.0, legacy.height + 1.0);
+            let quad = [[0.0, 0.0], [right, 0.0], [right, bottom], [0.0, bottom]];
+            for batch in [&mut batch, &mut legacy] {
+                batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
+            }
+            let bounds = legacy.visible_vertex_bounds(0);
+            assert!(bounds.is_some());
+            assert_eq!(batch.visible_vertex_bounds(0), bounds);
 
             for point in [[0.0, -0.0], [1.25, -3.75], [legacy.width, legacy.height]] {
                 assert_eq!(

@@ -1,3 +1,5 @@
+use mod_api::ScreenView;
+
 /// The hook points. Each does nothing in Sunrise.
 #[cfg(feature = "client")]
 impl crate::game::ClientGame<'_> {
