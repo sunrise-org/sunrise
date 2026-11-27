@@ -8,6 +8,7 @@ pub(in crate::game) struct LandedPlayerArrow {
 use super::piston_push::Lid;
 #[allow(unused_imports)]
 use super::{Dim, InteractTarget, view_vector};
+use crate::game::server_side::lan_entities::commit_next_entity_id;
 use crate::game::server_side::native_projectiles::{
     Impact, PendingImpact, ProjectileHit, projectile_impact_event,
 };
@@ -227,8 +228,7 @@ impl crate::game::ServerGame<'_> {
     /// (`Entity.id`, the same counter as the rest) when it has none. Its id.
     pub fn add_projectile(&mut self, mut p: sunrise_sim::projectiles::Projectile) -> u32 {
         if p.id == 0 {
-            self.server.next_entity += 1;
-            p.id = self.server.next_entity;
+            p.id = commit_next_entity_id(&mut self.server.next_entity);
         }
         // The UUID its own random made, unless it already has one (a client
         // copy's from the spawn packet).
@@ -1078,7 +1078,7 @@ impl crate::game::ServerGame<'_> {
         if let Some(at) = at_conversion {
             sunrise_sim::mobs::conversion::motion_at(&mut from, at);
         }
-        self.server.next_entity += 1;
+        commit_next_entity_id(&mut self.server.next_entity);
         let mut mob = Mob::new(self.server.next_entity, t, from.position, from.yaw);
         sunrise_sim::mobs::conversion::single(&from, &mut mob, params);
         self.transfer_conversion_identity(from.id, mob.id);
@@ -1156,7 +1156,7 @@ impl crate::game::ServerGame<'_> {
             format!("minecraft:{kind}")
         };
         let t = self.common.res.mob_types().get(&kind).cloned()?;
-        self.server.next_entity += 1;
+        commit_next_entity_id(&mut self.server.next_entity);
         // Yaw belongs to the vanilla creation path, independently of whether
         // the fork's SpawnSite allows finalizeSpawn (and its hook).
         let yaw = match (fixed_yaw, site) {
@@ -2443,8 +2443,7 @@ impl crate::game::ServerGame<'_> {
                     }
                 }
                 MobEvent::Spawn(mut m) => {
-                    self.server.next_entity += 1;
-                    m.id = self.server.next_entity;
+                    m.id = commit_next_entity_id(&mut self.server.next_entity);
                     self.common.mobs.push(*m);
                     self.admit_new_mobs(self.common.mobs.len() - 1);
                 }
@@ -4390,8 +4389,7 @@ impl crate::game::ServerGame<'_> {
     }
     /// A mob's projectile enters the level.
     pub fn launch_mob_projectile(&mut self, mut p: Projectile) {
-        self.server.next_entity += 1;
-        p.id = self.server.next_entity;
+        p.id = commit_next_entity_id(&mut self.server.next_entity);
         self.spawn_mob_projectile(p);
     }
     /// `LivingEntity.die` / `dropAllDeathLoot`. Does not finish a hurt.
