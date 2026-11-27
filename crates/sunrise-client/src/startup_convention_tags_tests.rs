@@ -2,7 +2,7 @@
 use super::AnimateTables;
 use crate::{assets::Assets, blocks::BlockFacts, models, motion::MotionResources};
 use serde_json::{Value, json};
-use std::{collections::BTreeMap, fs, path::PathBuf};
+use std::{collections::BTreeMap, fs};
 use sunrise_core::geometry::Direction;
 use sunrise_world::{
     fluid::FluidKind, heightmap::HeightmapState, worldgen::terrain::TerrainBlockStates,
@@ -22,12 +22,7 @@ fn startup_binds_required_convention_tags() -> crate::Result<()> {
         return Ok(());
     }
 
-    let prepared = PathBuf::from(
-        std::env::var_os("SUNRISE_TEST_RESOURCES").ok_or("SUNRISE_TEST_RESOURCES is required")?,
-    );
-    let scratch = tempfile::tempdir()?;
-    let root = scratch.path();
-    for name in [
+    let copied = [
         "attributes.json",
         "block-behaviours.json",
         "cached-collision.nbt",
@@ -40,7 +35,15 @@ fn startup_binds_required_convention_tags() -> crate::Result<()> {
         "occlusion.nbt",
         "player-float-ids.json",
         "sunrise-resources.json",
-    ] {
+    ];
+    let fluid_dir = "data/minecraft/tags/fluid";
+    let prepared = crate::prepared_test_root::prepared_root(&[
+        &copied,
+        &["block-tags.json", "render-definitions.json", fluid_dir],
+    ]);
+    let scratch = tempfile::tempdir()?;
+    let root = scratch.path();
+    for name in copied {
         fs::copy(prepared.join(name), root.join(name))
             .unwrap_or_else(|error| panic!("prepared resource {name}: {error}"));
     }
@@ -75,7 +78,6 @@ fn startup_binds_required_convention_tags() -> crate::Result<()> {
         serde_json::to_vec(&render)?,
     )?;
 
-    let fluid_dir = "data/minecraft/tags/fluid";
     fs::create_dir_all(root.join(fluid_dir))?;
     for file in fs::read_dir(prepared.join(fluid_dir))? {
         let file = file?;

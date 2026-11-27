@@ -71,7 +71,9 @@ READERS = {
         "crates/sunrise-gameplay/src", "crates/sunrise-mod-vocab/src/hooks", "crates/sunrise-world/src",
         "docs/api/launch-reference.md", "docs/modding/examples/src/worldgen.rs",
     ],
-    "sunrise-gameplay": ["crates/sunrise-mod-vocab/src/hooks", "tests/fixtures"],
+    "sunrise-gameplay": [
+        "crates/sunrise-core/src/prepared_test_root.rs", "crates/sunrise-mod-vocab/src/hooks", "tests/fixtures",
+    ],
     "sunrise-client-gameplay": ["crates/sunrise-mod-vocab/src/hooks"],
     "sunrise-parity-fixtures": [*SUNRISE_CLIENT, "crates/sunrise-gameplay-common/src/game/parity_fixtures.rs"],
     "sunrise-sim": [

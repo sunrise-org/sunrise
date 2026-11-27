@@ -2227,15 +2227,16 @@ mod tests {
     #[ignore = "daily"]
     fn biome_admission_binds_convention_block_tags_with_prepared_resources() {
         use serde_json::{Value, json};
-        use std::{fs::File, path::PathBuf};
+        use std::fs::File;
         use sunrise_assets::resource_source::ResourceRoot;
         use sunrise_level::datapack::DataPack;
         use sunrise_world::{loot::PackOverlay, registry::BlockRegistry};
 
         const BIOME: &str = "demo:convention_tags";
-        let root = PathBuf::from(
-            std::env::var_os("SUNRISE_TEST_RESOURCES").expect("SUNRISE_TEST_RESOURCES"),
-        );
+        let root = crate::prepared_test_root::prepared_root(&[
+            sunrise_core::prepared_test_support::WORLDGEN_INPUTS,
+            &["block-behaviours.json"],
+        ]);
         let blocks = Box::leak(Box::new(
             BlockRegistry::from_facts_json(File::open(root.join("facts.json")).unwrap()).unwrap(),
         ));
