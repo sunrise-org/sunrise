@@ -420,13 +420,13 @@ For mods that run where the world is simulated: a dedicated server, a LAN host, 
   to leave the position unchanged. Direct player flint-and-steel/fire-charge placement is not covered.
 - **`block_burn(dimension, pos, cancel)`** (on `GameLevel`): fire's burnout check is about to remove the block at
   `pos`. Set `cancel` to keep it.
-- **`crop_grow_pre(dimension, pos, state, result)`** and **`crop_grow_post(dimension, pos,
+- **`crop_grow_pre(dimension, pos, state, vanilla, result)`** and **`crop_grow_post(dimension, pos,
   original_state, state)`** (on `GameLevel`): NeoForge's `CropGrowEvent.Pre` and `.Post`, at the random-tick growth of
   crops (beetroot and torchflowers after their own 1 in 3 skip), stems, nether wart, cocoa, sweet berries, bamboo,
   cactus, chorus flowers, sugar cane, kelp and the vines. `result` is a `TriState`: `Default` keeps vanilla's
   chance, `True` grows, `False` doesn't. Pre fires at the position that grows (the block above for cactus and chorus,
   the block grown into for kelp and vines). Vanilla's random roll is drawn first, in vanilla's order, and passed as
-  the default, so crops keep vanilla's random sequence. Pitcher crops, bamboo saplings and mangrove propagules
+  read-only `vanilla` default (unlike NeoForge's event). Pitcher crops, bamboo saplings and mangrove propagules
   don't fire.
 - **`fluid_level_change(dimension, pos, fluid, from, to, cancel)`** (on `GameLevel`): flowing `water` or `lava`
   at `pos` is about to change level. Levels run from 0 through 8. Set `cancel` to keep the old level.

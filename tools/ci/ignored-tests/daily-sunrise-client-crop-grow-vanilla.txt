@@ -1,0 +1,1 @@
+sunrise-client game::crop_grow_tests::a_mod_sees_the_vanilla_roll_and_default_follows_it lib daily resources

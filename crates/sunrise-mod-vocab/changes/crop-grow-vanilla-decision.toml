@@ -1,0 +1,3 @@
+ids = ["hook:crop_grow_pre", "hook:crop_grow_pre.vanilla", "type:CropGrowPreEvent.vanilla"]
+why = "Version 2 exposes vanilla's already-computed growth decision as read-only vanilla: the chance roll, or true for cactus, sugar cane and chorus flowers. Default yields that decision. NeoForge does not expose it on CropGrowEvent.Pre. Rolls remain in vanilla's order, including sweet berries and bamboo, rather than NeoForge's moved draw order."
+migrate = "Rebuild against the current SDK. Read event.vanilla to distinguish ticks where Default grows from ticks where it does not; keep result at Default to follow vanilla, or set True or False to override it."

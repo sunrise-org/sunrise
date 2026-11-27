@@ -1,7 +1,7 @@
 //! `crop_grow_pre` and `crop_grow_post` reach mods from the server's random ticks.
 use crate::game::LevelDimension;
 use mod_api::{CropGrowPostEvent, CropGrowPreEvent, Hooks, LevelRandomHost, Registrar, TriState};
-use std::sync::Mutex;
+use std::sync::{Arc, Mutex};
 use sunrise_core::position::BlockPos;
 
 static HEARD: Mutex<Vec<String>> = Mutex::new(Vec::new());
@@ -13,6 +13,7 @@ struct Gardener;
 impl Hooks for Gardener {
     fn register(&self, _: &mut dyn Registrar, _: &mod_api::RegistrationContext) {}
     fn crop_grow_pre(&self, _: &mut dyn LevelRandomHost, event: &mut CropGrowPreEvent<'_>) {
+        assert!(event.vanilla, "sugar cane has no chance roll");
         let BlockPos { x, y, z } = event.pos;
         HEARD
             .lock()
@@ -115,6 +116,54 @@ fn a_mod_stops_one_cane_and_hears_the_other_grow() {
                     "post 4 65 0 same false".to_string(),
                 ]
             );
+        });
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn a_mod_sees_the_vanilla_roll_and_default_follows_it() {
+    struct Observer(Arc<Mutex<Vec<bool>>>);
+    #[mod_api::__subscriptions]
+    impl Hooks for Observer {
+        fn crop_grow_pre(&self, _: &mut dyn LevelRandomHost, event: &mut CropGrowPreEvent<'_>) {
+            assert_eq!(*event.result, TriState::Default);
+            self.0.lock().unwrap().push(event.vanilla);
+        }
+    }
+    let heard = Arc::new(Mutex::new(Vec::new()));
+    let mods: mod_api::Mods = vec![mod_api::ModEntry::new(
+        "observer",
+        Box::new(Observer(Arc::clone(&heard))),
+    )]
+    .into();
+    mod_platform::testing::with_mods(mods, || {
+        super::native_guest_turn_tests::with_guests(|game| {
+            game.options.dedicated = Some(Vec::new());
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)));
+            let cocoa = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:cocoa")
+                .unwrap();
+            let pos = BlockPos::new(0, 64, 0);
+            // LegacyRandom seeds 0 and 2 start with nextInt(5) = 0 and 3.
+            for (seed, grows) in [(0, true), (2, false)] {
+                game.world.set(pos.x, pos.y, pos.z, cocoa).unwrap();
+                *game.world.random = sunrise_core::random::LegacyRandom::new(seed);
+                game.with_level(|behaviours, level, ticks| {
+                    behaviours.random_tick(level, ticks, pos);
+                });
+                assert_eq!(
+                    game.world.block(pos.x, pos.y, pos.z) != cocoa,
+                    grows,
+                    "Default follows the existing growth roll",
+                );
+            }
+            assert_eq!(*heard.lock().unwrap(), [true, false]);
         });
     });
 }
