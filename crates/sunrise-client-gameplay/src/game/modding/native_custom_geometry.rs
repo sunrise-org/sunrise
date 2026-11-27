@@ -5601,6 +5601,7 @@ void main() {
                     .push(TerrainVertex::new(pos, uv, 0, u32::MAX, 0xf0f0));
             }
             wall.sort_solid();
+            renderer.load_column(0, 0);
             renderer.upload((0, 10, 0), &wall); // Section starts at y = -64 + 10 * 16 = 96.
             let hud = sunrise_client::hud::HudBatch::scratch([
                 renderer.config.width,
@@ -5608,6 +5609,8 @@ void main() {
             ]);
             let mut frame = loading_frame(&hud);
             frame.title = false;
+            frame.distance = 64.0;
+            frame.detail_distance = 64.0;
             frame.camera = DVec3::new(8.0, 104.0, 2.0);
             frame.eye = frame.camera;
             frame.pitch = 0.0;
@@ -5624,6 +5627,14 @@ void main() {
             );
             let mut hooks = GameWorldStageDriver::new(game, &camera, 0.0, &mut draw);
             assert!(renderer.render(&frame, Some(&mut hooks)).unwrap());
+            assert_eq!(
+                renderer.drawn_sections, 1,
+                "the opaque wall section must draw"
+            );
+            assert!(
+                renderer.section_draws > 0,
+                "the opaque wall must issue a draw"
+            );
             drop(hooks);
             renderer.wait_submissions();
             let panics = take_hook_panics();
