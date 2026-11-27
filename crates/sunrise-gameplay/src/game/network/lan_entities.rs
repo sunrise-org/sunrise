@@ -667,10 +667,11 @@ impl ServerGame<'_> {
             let id = e.id as u32;
             let mob = direct_mobs
                 .then(|| {
-                    // Inaccessible and removed mobs can leave gaps in the tracker list.
-                    let end = (next_mob + 4).min(self.common.mobs.len());
-                    let found = (next_mob..end).find(|&i| self.common.mobs[i].id == id)?;
-                    next_mob = found + 1;
+                    // Mob states are emitted first and filtering preserves their order.
+                    let len = self.common.mobs.len();
+                    let found = (next_mob..len).find(|&i| self.common.mobs[i].id == id);
+                    next_mob = found.map_or(len, |i| i + 1);
+                    let found = found?;
                     let mob = &self.common.mobs[found];
                     Some(Location {
                         owner: Owner {

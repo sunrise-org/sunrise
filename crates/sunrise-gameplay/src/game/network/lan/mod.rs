@@ -115,7 +115,6 @@ impl AnimationStates {
         self.next.clear();
         self.ordered = self.rows.iter().map(|&(id, _)| id).eq(ids);
         if !self.ordered {
-            self.reordered.clear();
             self.reordered.extend(self.rows.iter().copied());
         }
     }
@@ -130,6 +129,9 @@ impl AnimationStates {
 
     fn finish(&mut self) {
         std::mem::swap(&mut self.rows, &mut self.next);
+        if !self.reordered.is_empty() {
+            self.reordered.clear();
+        }
     }
 }
 

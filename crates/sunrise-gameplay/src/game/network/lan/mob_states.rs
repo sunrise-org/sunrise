@@ -212,6 +212,7 @@ impl Metadata {
 #[derive(Clone, Copy, PartialEq)]
 struct MetadataInputs {
     species_data: [Option<i32>; 3],
+    sleeping_pos: Option<[i32; 3]>,
     health: u32,
     air: i32,
     frozen: i32,
@@ -226,6 +227,10 @@ impl MetadataInputs {
         use sunrise_sim::mobs::{spear_use::is_using_item, sync::pose_id};
         if m.extra.modified_effect_particles.is_some()
             || m.custom_name_text.is_some()
+            || m.extra
+                .effects
+                .iter()
+                .any(|effect| sunrise_game_data::potions::is_mod_effect(effect.id))
             || m.kind.class_id() != m.kind.id.as_str()
             || sunrise_sim::mobs::raider::is_raider(m.species())
             || sunrise_sim::mobs::camel::is_camel(m.species())
@@ -308,6 +313,7 @@ impl MetadataInputs {
         .fold(0, |bits, (index, on)| bits | (u16::from(on) << index));
         Some(Self {
             species_data,
+            sleeping_pos: sunrise_sim::mobs::villager::sleeping_pos(m),
             health: m.health.max(0.0).to_bits(),
             air: m.air,
             frozen: m.ticks_frozen,
