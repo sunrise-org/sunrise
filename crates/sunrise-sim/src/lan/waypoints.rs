@@ -766,6 +766,7 @@ impl Waypoints {
     /// threads, and its packets come out as the loop sends them.
     fn moves_by_receiver(&mut self, t: &mut Tick, players: &[Player]) {
         self.moves.clear();
+        self.move_jobs.clear();
         for player in players {
             let memo = self
                 .memo

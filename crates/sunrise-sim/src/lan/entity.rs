@@ -2202,12 +2202,13 @@ impl Entities {
             made,
             ..
         } = self;
-        made.resize_with(active.len(), Made::default);
-        for (m, &index) in made.iter_mut().zip(active) {
+        let mut scratch = std::mem::take(made);
+        scratch.resize_with(active.len(), Made::default);
+        for (m, &index) in scratch.iter_mut().zip(active) {
             m.index = index;
         }
         let mut states = states.of_indices_mut(active);
-        let mut jobs: Vec<_> = states.chunks_mut(64).zip(made.chunks_mut(64)).collect();
+        let mut jobs: Vec<_> = states.chunks_mut(64).zip(scratch.chunks_mut(64)).collect();
         let (pairs, is_moved, synced_ranges, probes, players_read) =
             (&*pairs, &*is_moved, &*synced_ranges, &*probes, &*players);
         crate::parallel::par_chunks_mut(&mut jobs, 1, |jobs| {
@@ -2261,12 +2262,12 @@ impl Entities {
             }
         });
         drop(jobs);
-        made.retain(|m| !m.changes.all.is_empty() || m.pairing.is_some());
+        scratch.retain(|m| !m.changes.all.is_empty() || m.pairing.is_some());
 
         // Mod codecs, outbox admission and backpressure handling belong to the owner thread.
         if players.iter().any(|(v, _, starts)| owner_pairs(v, starts)) {
             let project = capture_attachment_projection();
-            for m in &*made {
+            for m in &scratch {
                 for (v, flags, starts) in &mut *players {
                     if !owner_pairs(v, starts) {
                         continue;
@@ -2286,17 +2287,18 @@ impl Entities {
         crate::parallel::par_chunks_mut(players, 4, |part| {
             for (v, flags, starts) in part {
                 if !owner_pairs(v, starts) {
-                    for m in &*made {
+                    for m in &scratch {
                         m.write_to(v, flags[m.index], probes[m.index].id);
                     }
                 }
             }
         });
-        for m in made {
+        for m in &mut scratch {
             m.changes.all.clear();
             m.changes.vanilla = None;
             m.pairing = None;
         }
+        *made = scratch;
     }
 }
 
