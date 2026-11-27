@@ -2268,4 +2268,68 @@ void main() {{
         assert!(other.contains("MySampler0 is not"), "{other}");
         assert!(!other.contains(hint), "{other}");
     }
+
+    /// A compute shader using subgroup built-ins, arithmetic, shuffle, quad swap, ballot and a
+    /// subgroup barrier translates and passes all three backend checks (SPIR-V 1.3, MSL 2.4,
+    /// HLSL SM 6.0).
+    #[test]
+    fn subgroup_compute_shader_passes_all_backend_checks() {
+        let source = "\
+#version 450
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
+#extension GL_KHR_shader_subgroup_shuffle : enable
+#extension GL_KHR_shader_subgroup_quad : enable
+layout(local_size_x = 64) in;
+layout(std430) buffer Out { uint values[]; };
+void main() {
+    uint lane = gl_SubgroupInvocationID;
+    uint reduced = subgroupMax(lane);
+    uint xored = subgroupShuffleXor(reduced, 1u);
+    uint swapped = subgroupQuadSwapHorizontal(xored);
+    uvec4 mask = subgroupBallot(swapped > 0u);
+    subgroupBarrier();
+    values[gl_GlobalInvocationID.x] = swapped + mask.x + gl_SubgroupSize;
+}
+";
+        let compute = ComputeSources {
+            file: "assets/example/shaders/compute/reduce.csh",
+            dir: "example:shaders/compute/",
+            source,
+        };
+        let options = ComputeOptions {
+            defines: &[],
+            mod_bindings: &[ModBinding {
+                name: "Out",
+                kind: ModBindingKind::StorageBuffer { read_only: false },
+            }],
+            check_backends: true,
+            interface: DEVICELESS_INTERFACE_LIMITS,
+        };
+        let translated = translate_compute(&compute, &options, &stub_include)
+            .unwrap_or_else(|problems| panic!("expected subgroup compute to pass: {problems:?}"));
+        assert!(translated.uses_subgroup);
+        assert!(translate_backends(&translated.module).is_empty());
+
+        // A real shader error inside a subgroup compute shader is still refused at its location.
+        let broken = "\
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+layout(local_size_x = 64) in;
+layout(std430) buffer Out { uint values[]; };
+void main() {
+    values[gl_GlobalInvocationID.x] = subgroupMax(undeclared_var);
+}
+";
+        let bad = ComputeSources {
+            source: broken,
+            ..compute
+        };
+        let problems = translate_compute(&bad, &options, &stub_include)
+            .expect_err("broken subgroup compute shader must be refused");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(problems[0].stage, Some(ShaderStage::Compute));
+        assert_eq!(problems[0].line, 6);
+    }
 }
