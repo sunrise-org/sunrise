@@ -6030,7 +6030,7 @@ void main() {
     #[ignore = "daily"]
     fn frame_graph_compute_reads_identical_world_depth_with_and_without_terrain_pack() {
         use super::super::native_entity_refs::tests::{test_window, with_client_game};
-        use crate::game::loading_window::{loading_frame, loading_renderer};
+        use crate::game::loading_window::loading_renderer;
         use mod_api::__private::{game::RegistrationContextNew, take_hook_panics};
         use std::sync::Arc;
         use sunrise_client::mesher::{SectionMesh, TerrainVertex};
@@ -6121,8 +6121,21 @@ void main() {
             renderer.load_column(0, 0);
             renderer.upload((0, 10, 0), &wall);
 
+            fn make_frame(hud: &sunrise_client::hud::HudBatch) -> sunrise_client::gfx::Frame<'_> {
+                let mut frame = crate::game::loading_window::loading_frame(hud);
+                frame.title = false;
+                frame.distance = 64.0;
+                frame.detail_distance = 64.0;
+                frame.camera = glam::DVec3::new(8.0, 104.0, 2.0);
+                frame.eye = frame.camera;
+                frame.pitch = 0.0;
+                frame.eye_rotation = [0.0, 0.0];
+                frame
+            }
+
             let render_and_read = |renderer: &mut sunrise_client::gfx::Renderer,
                                    game: &mut ClientGame<'_>,
+                                   route: &str,
                                    want_screenshot: bool|
              -> ([[u8; 4]; 2], Option<[u8; 4]>) {
                 if want_screenshot {
@@ -6137,14 +6150,7 @@ void main() {
                     renderer.config.width,
                     renderer.config.height,
                 ]);
-                let mut frame = loading_frame(&hud);
-                frame.title = false;
-                frame.distance = 64.0;
-                frame.detail_distance = 64.0;
-                frame.camera = DVec3::new(8.0, 104.0, 2.0);
-                frame.eye = frame.camera;
-                frame.pitch = 0.0;
-                frame.eye_rotation = [0.0, 0.0];
+                let frame = make_frame(&hud);
                 let camera = test_camera(
                     frame.camera.to_array(),
                     sunrise_client::camera::view_rotation_matrix(0.0, 0.0).0,
@@ -6159,11 +6165,11 @@ void main() {
                 assert!(renderer.render(&frame, Some(&mut hooks)).unwrap());
                 assert_eq!(
                     renderer.drawn_sections, 1,
-                    "the opaque wall section must draw"
+                    "the opaque wall section must draw ({route})"
                 );
                 assert!(
                     renderer.section_draws > 0,
-                    "the opaque wall must issue a draw"
+                    "the opaque wall must issue a draw ({route})"
                 );
                 drop(hooks);
                 renderer.wait_submissions();
@@ -6221,7 +6227,7 @@ void main() {
             };
 
             // Frame 1 (plain route, no shader pack): top hits wall (6), bottom hits sky (0).
-            let (plain_depths, _) = render_and_read(&mut renderer, game, false);
+            let (plain_depths, _) = render_and_read(&mut renderer, game, "plain", false);
             assert_eq!(plain_depths, [[6, 0, 0, 255], [0, 0, 0, 255]]);
 
             // Enable a minimal `gbuffers_terrain` shader pack that draws terrain pure blue into
@@ -6237,12 +6243,13 @@ void main() {
             .unwrap();
             std::fs::write(
                 pack_shaders.join("gbuffers_terrain.fsh"),
-                "#version 120\nvoid main() {\n    gl_FragData[0] = vec4(0.0, 0.0, 1.0, 1.0);\n}\n",
+                "#version 120\n/* DRAWBUFFERS:0 */\nvoid main() {\n    gl_FragData[0] = vec4(0.0, 0.0, 1.0, 1.0);\n}\n",
             )
             .unwrap();
             let pack = sunrise_shaders::Pack::open(pack_dir.path()).unwrap();
-            let properties = sunrise_shaders::Properties::default();
-            let macros = sunrise_shaders::Macros::default();
+            let mut macros = sunrise_shaders::Macros::standard();
+            renderer.define_pack_macros(&mut macros);
+            let (properties, _) = sunrise_shaders::read_properties(&pack, &mut macros);
             let inputs = renderer.pack_inputs();
             let post = sunrise_shaders::load_post(&pack, "", &properties, &macros, &inputs);
             assert!(post.terrain.is_some(), "gbuffers_terrain must translate");
@@ -6255,10 +6262,30 @@ void main() {
             );
             assert_eq!(renderer.shader_pack_kind(), Some("iris"));
 
+            // Installing a terrain-drawing pack changes the section arena layout on the next world
+            // frame (`follow_arena_layout` / `follow_translucent_layout` / `follow_packed_layout`),
+            // dropping previously uploaded sections for re-upload (`take_dropped_sections`). Let
+            // one world frame settle the pack's layout, then re-upload the wall in that layout,
+            // mirroring `ClientGame::client_update_world`.
+            {
+                let hud = sunrise_client::hud::HudBatch::scratch([
+                    renderer.config.width,
+                    renderer.config.height,
+                ]);
+                let frame = make_frame(&hud);
+                assert!(renderer.render(&frame, None).unwrap());
+                renderer.wait_submissions();
+                if renderer.take_dropped_sections() {
+                    renderer.load_column(0, 0);
+                    renderer.upload((0, 10, 0), &wall);
+                }
+            }
+
             // Frame 2 (shader pack draws terrain): the pack drew the blue wall into depthtex0 and
             // `PackPost::export_depth` copied it into `world_depth` before `AfterOpaqueBlocks`,
             // giving the exact same reversed-Z, screen-row values as the plain route.
-            let (pack_depths, pack_top_pixel) = render_and_read(&mut renderer, game, true);
+            let (pack_depths, pack_top_pixel) =
+                render_and_read(&mut renderer, game, "terrain pack", true);
             assert_eq!(
                 pack_top_pixel.unwrap(),
                 [0, 0, 255, 255],
