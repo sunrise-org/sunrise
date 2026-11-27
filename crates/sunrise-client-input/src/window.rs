@@ -1254,10 +1254,25 @@ mod tests {
         assert_eq!(frame.clip(), Some([16, 10, 845, 477]));
         let projection = PointerProjection::new(frame);
         let at = (17.25, 22.5);
-        let sample = space.physical_sample(projection.window_pointer(at));
+        assert_eq!(frame.gui_to_target([at.0, at.1]), [50.5, 55.0]);
+        let physical = |x: f64, y: f64| {
+            PhysicalPosition::new(x * 857.0 / 853.0 * 1.25, y * 483.0 / 481.0 * 1.25)
+        };
+        let expected = physical(50.5, 55.0);
+        let warped = projection.window_pointer(at);
+        assert!((warped.x - expected.x).abs() < 1.0e-10);
+        assert!((warped.y - expected.y).abs() < 1.0e-10);
+        let sample = space.physical_sample(expected);
         assert_eq!(projection.project_pointer(sample).subpixel(), at);
+        let moved = space.physical_sample(physical(56.5, 51.0));
+        assert_eq!(projection.drag_delta(sample, moved), [3.0, -2.0]);
         assert!(frame.contains(at));
         assert!(!frame.contains((-0.25, 2.0)));
+
+        let overflow = GuiFrame::from_insets([100, 100], 0, false, Some([70, 60, 50, 50]));
+        assert_eq!(overflow.origin(), [70, 60]);
+        assert_eq!(overflow.clip(), Some([70, 60, 71, 61]));
+        assert_eq!(overflow.size(), (1.0, 1.0));
 
         for target in [[1, 1], [3, 2], [0, 1]] {
             let tiny = GuiFrame::from_insets(target, 0, true, Some([u32::MAX; 4]));
