@@ -179,6 +179,10 @@ impl Default for PointerSample {
     }
 }
 
+pub fn centered_gui_origin((w, h): (f32, f32), width: f32, height: f32) -> (f32, f32) {
+    (((w - width) / 2.0).trunc(), ((h - height) / 2.0).trunc())
+}
+
 #[derive(Clone, Copy, Debug)]
 pub struct GuiFrame {
     pub target: [u32; 2],

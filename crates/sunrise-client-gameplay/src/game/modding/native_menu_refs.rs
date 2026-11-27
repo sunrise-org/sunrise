@@ -117,7 +117,7 @@ impl ClientGame<'_> {
             return Some(Vec::new());
         }
         let batch = super::HudBatch::new(framebuffer, self.client.settings.gui_scale_inputs());
-        let (ox, oy) = Self::creative_origin(&batch);
+        let (ox, oy) = Self::creative_origin(batch.size());
         let shown = self
             .client
             .creative_screen
@@ -151,7 +151,7 @@ impl ClientGame<'_> {
             Some(_) => {}
         }
         let visible = self.slots();
-        let (ox, oy) = self.inventory_origin(batch);
+        let (ox, oy) = self.inventory_origin(batch.size());
         Some(
             (0..)
                 .map_while(slot_id)
@@ -530,7 +530,7 @@ pub mod tests {
         for (index, expected_slot) in [(0, 200), (9, 9), (36, 0), (45, 504)] {
             let [x, y, w, h] = boxes[index].unwrap();
             assert_eq!(
-                game.slot_at(&batch, x + w / 2.0, y + h / 2.0),
+                game.slot_at(batch.size(), x + w / 2.0, y + h / 2.0),
                 Some(expected_slot)
             );
         }
@@ -627,7 +627,7 @@ pub mod tests {
                     game.client.screen = super::super::Screen::Creative;
                     game.refresh_creative_tabs();
                     let batch = window_batch(game);
-                    let (ox, oy) = crate::game::ClientGame::creative_origin(&batch);
+                    let (ox, oy) = crate::game::ClientGame::creative_origin(batch.size());
                     // Menu index, game slot, position on the inventory tab, shown on item tabs.
                     let expected = |index: usize| -> Option<(usize, (f32, f32), bool)> {
                         let row = |i: usize| (9.0 + (i % 9) as f32 * 18.0, (i / 9) as f32 * 18.0);
@@ -667,7 +667,7 @@ pub mod tests {
                             );
                             if let Some((slot, (x, y), _)) = want {
                                 assert_eq!(
-                                    game.slot_at(&batch, ox + x + 8.0, oy + y + 8.0),
+                                    game.slot_at(batch.size(), ox + x + 8.0, oy + y + 8.0),
                                     Some(slot),
                                     "{tab} slot {index}"
                                 );
@@ -736,7 +736,7 @@ pub mod tests {
                     let _window = offscreen_window(game);
                     let batch = window_batch(game);
                     let hover = |game: &mut crate::game::ClientGame<'_>, slot: usize| {
-                        let (ox, oy) = game.inventory_origin(&batch);
+                        let (ox, oy) = game.inventory_origin(batch.size());
                         let (x, y) = game.slot_position(slot);
                         game.client.cursor = (ox + x + 8.0, oy + y + 8.0);
                         ScreensClientHost::screen_hovered_stack(&*game)
@@ -771,7 +771,7 @@ pub mod tests {
                     is_potion(hover(game, 9));
                     is_sword(hover(game, 500));
                     assert_eq!(hover(game, 11), None);
-                    let (ox, oy) = game.inventory_origin(&batch);
+                    let (ox, oy) = game.inventory_origin(batch.size());
                     let (tx, ty) = Creative::TRASH_POSITION;
                     game.client.cursor = (ox + tx + 8.0, oy + ty + 8.0);
                     assert_eq!(ScreensClientHost::screen_hovered_stack(&*game), None);

@@ -367,13 +367,10 @@ impl crate::game::ClientGame<'_> {
         first_controller_target(targets.iter().copied().filter(|t| Some(t.rect) != warning))
     }
 
-    pub fn gui_batch(&self) -> Option<HudBatch> {
-        self.client.renderer.0.as_ref().map(|r| {
-            HudBatch::new(
-                [r.config.width, r.config.height],
-                self.client.settings.gui_scale_inputs(),
-            )
-        })
+    #[inline(always)]
+    pub fn renderer_gui_frame(&self) -> Option<sunrise_client::window::GuiFrame> {
+        let r = self.client.renderer.0.as_ref()?;
+        Some(self.gui_frame_for([r.config.width, r.config.height]))
     }
 
     /// Focus drives the open screen: every menu but inventories and
@@ -428,16 +425,16 @@ impl crate::game::ClientGame<'_> {
 
     fn pad_visible_targets(&self) -> Vec<Target> {
         let targets = self.pad_all_targets();
-        match self.gui_batch() {
-            Some(batch) => key_focus::on_screen(targets, (batch.width, batch.height)),
+        match self.renderer_gui_frame() {
+            Some(frame) => key_focus::on_screen(targets, frame.size()),
             None => targets,
         }
     }
 
     /// The inventory screen's slots as pad targets, at the positions the
     /// frame draws them (a mod screen's moved slots included).
-    pub fn pad_slot_targets(&self, batch: &HudBatch) -> Vec<Target> {
-        let (ox, oy) = self.inventory_origin(batch);
+    pub fn pad_slot_targets(&self, gui: (f32, f32)) -> Vec<Target> {
+        let (ox, oy) = self.inventory_origin(gui);
         self.slots()
             .into_iter()
             .map(|i| {
@@ -460,7 +457,7 @@ impl crate::game::ClientGame<'_> {
         {
             return targets;
         }
-        let Some(batch) = self.gui_batch() else {
+        let Some(frame) = self.renderer_gui_frame() else {
             return targets;
         };
         let slot = |x: f32, y: f32| Target {
@@ -469,8 +466,8 @@ impl crate::game::ClientGame<'_> {
         };
         match self.client.screen {
             Screen::Inventory => {
-                let (ox, oy) = self.inventory_origin(&batch);
-                targets.extend(self.pad_slot_targets(&batch));
+                let (ox, oy) = self.inventory_origin(frame.size());
+                targets.extend(self.pad_slot_targets(frame.size()));
                 targets.extend(
                     self.station_targets()
                         .into_iter()
@@ -482,7 +479,7 @@ impl crate::game::ClientGame<'_> {
                 targets.extend(self.recipe_book_targets());
             }
             Screen::Creative => {
-                let (ox, oy) = Self::creative_origin(&batch);
+                let (ox, oy) = Self::creative_origin(frame.size());
                 if self.creative_inventory_open() {
                     targets.extend(self.slots().into_iter().map(|i| {
                         let (x, y) = self.slot_position(i);
@@ -549,7 +546,7 @@ impl crate::game::ClientGame<'_> {
         {
             return Some(targets[i]);
         }
-        let batch = self.gui_batch()?;
+        let frame = self.renderer_gui_frame()?;
         let at = |x: f32, y: f32| {
             targets
                 .iter()
@@ -559,14 +556,14 @@ impl crate::game::ClientGame<'_> {
         if self.client.title.0.is_none() {
             match self.client.screen {
                 Screen::Inventory => {
-                    let (ox, oy) = self.inventory_origin(&batch);
+                    let (ox, oy) = self.inventory_origin(frame.size());
                     let (x, y) = self.slot_position(self.common.selected);
                     if let Some(t) = at(ox + x, oy + y) {
                         return Some(t);
                     }
                 }
                 Screen::Creative if !self.creative_inventory_open() => {
-                    let (ox, oy) = Self::creative_origin(&batch);
+                    let (ox, oy) = Self::creative_origin(frame.size());
                     if let Some(t) = at(ox + 9.0 + self.common.selected as f32 * 18.0, oy + 112.0) {
                         return Some(t);
                     }
@@ -2125,10 +2122,10 @@ impl crate::game::ClientGame<'_> {
     /// same widget. Too far for `pad_follow_focus` and `snap::follow`, which it
     /// holds off (true) until then.
     fn pad_follow_resize(&mut self, event_loop: &dyn EventLoopCtl) -> bool {
-        let Some(batch) = self.gui_batch() else {
+        let Some(frame) = self.renderer_gui_frame() else {
             return false;
         };
-        let (screen, size) = (self.key_screen(), (batch.width, batch.height));
+        let (screen, size) = (self.key_screen(), frame.size());
         let Some(mut layout) = self
             .client
             .pad

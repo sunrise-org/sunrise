@@ -12,7 +12,7 @@ use sunrise_sim::merchant::{self, MerchantOffer, TradeContext};
 impl ClientGame<'_> {
     /// `MerchantScreen` rendering.
     pub fn draw_merchant(&mut self, batch: &mut HudBatch) -> bool {
-        let (ox, oy) = self.inventory_origin(batch);
+        let (ox, oy) = self.inventory_origin(batch.size());
         let local = (self.client.cursor.0 - ox, self.client.cursor.1 - oy);
         let Some(m) = self
             .common
@@ -240,7 +240,7 @@ impl ClientGame<'_> {
             && local.1 >= 35.0 - 1.0
             && local.1 < 35.0 + 21.0 + 1.0;
         let slot_tooltip = if !deprecated && offer_tooltip.is_none() {
-            self.slot_at(batch, self.client.cursor.0, self.client.cursor.1)
+            self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1)
                 .and_then(|slot| self.slot_mut(slot).clone())
         } else {
             None
@@ -320,10 +320,7 @@ impl ClientGame<'_> {
         else {
             return false;
         };
-        let (_, oy) = self.inventory_origin(&HudBatch::new(
-            size,
-            self.client.settings.gui_scale_inputs(),
-        ));
+        let (_, oy) = self.inventory_origin(self.gui_frame_for(size).size());
         let y = self.client.cursor.1 - oy;
         if let Some(m) = self
             .common

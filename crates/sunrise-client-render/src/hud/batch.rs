@@ -417,11 +417,13 @@ impl HudBatch {
     }
     /// `AbstractContainerScreen.init`: center in integer GUI coordinates.
     pub fn centered_origin(&self, width: f32, height: f32) -> (f32, f32) {
-        (
-            ((self.width - width) / 2.0).trunc(),
-            ((self.height - height) / 2.0).trunc(),
-        )
+        sunrise_client_input::window::centered_gui_origin(self.size(), width, height)
     }
+
+    pub fn size(&self) -> (f32, f32) {
+        (self.width, self.height)
+    }
+
     pub fn quad(&mut self, p: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: u32) {
         self.quad_lit(p, uv, color, 0);
     }

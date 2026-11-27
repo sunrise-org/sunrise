@@ -162,7 +162,9 @@ impl crate::game::ClientGame<'_> {
     /// `pad status`: the glyphs drawn now and where: the part each is for, its label, its text's
     /// place, what it covers, and its sprite (none: the label on a key).
     pub(in crate::game::client_side) fn pad_glyphs_status(&self) -> Vec<serde_json::Value> {
-        let view = self.gui_batch().map_or((0.0, 0.0), |b| (b.width, b.height));
+        let view = self
+            .renderer_gui_frame()
+            .map_or((0.0, 0.0), sunrise_client::window::GuiFrame::size);
         let atlas = &self.client.gui.atlas;
         self.pad_glyphs(view)
             .iter()

@@ -502,7 +502,7 @@ fn the_creative_screen_excludes_its_two_tab_rows() {
         crate::game::native_entity_refs::tests::with_client_game(|game| {
             game.client.screen = Screen::Creative;
             let batch = HudBatch::scratch([854, 480]);
-            let image = game.container_image(&batch);
+            let image = game.container_image(batch.size());
             let (x, y) = (image.left as f32, image.top as f32);
             let areas = game.screen_own_exclusion(&batch);
             assert_eq!(areas[0], [x, y - 28.0, 195.0, 28.0]);

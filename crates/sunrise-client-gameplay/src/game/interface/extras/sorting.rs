@@ -94,11 +94,8 @@ impl crate::game::ClientGame<'_> {
         let Some(r) = self.client.renderer.0.as_ref() else {
             return false;
         };
-        let batch = HudBatch::new(
-            [r.config.width, r.config.height],
-            self.client.settings.gui_scale_inputs(),
-        );
-        let (ox, oy) = self.inventory_origin(&batch);
+        let frame = self.gui_frame_for([r.config.width, r.config.height]);
+        let (ox, oy) = self.inventory_origin(frame.size());
         let (cx, cy) = self.client.cursor;
         let hit = self.sort_buttons().into_iter().find(|((x, y), _)| {
             let (x, y) = (ox + x, oy + y);

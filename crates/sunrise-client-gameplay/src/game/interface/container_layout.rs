@@ -37,13 +37,13 @@ impl crate::game::ClientGame<'_> {
         })
     }
 
-    pub fn container_layout(&self, batch: &sunrise_client::hud::HudBatch) -> ContainerLayout {
-        self.build_container_layout(batch, self.container_layout_inputs(batch))
+    pub fn container_layout(&self, gui: (f32, f32)) -> ContainerLayout {
+        self.build_container_layout(gui, self.container_layout_inputs(gui))
     }
 
     pub(in crate::game::client_side) fn build_container_layout(
         &self,
-        batch: &sunrise_client::hud::HudBatch,
+        gui: (f32, f32),
         mut inputs: ContainerLayout,
     ) -> ContainerLayout {
         #[cfg(any(test, feature = "test-support"))]
@@ -66,7 +66,7 @@ impl crate::game::ClientGame<'_> {
             .shows_effects
             .then(|| {
                 self.inventory_effects_rect(
-                    batch,
+                    gui,
                     [inputs.origin.0, inputs.origin.1],
                     inputs.image[2],
                     &inputs.effects_layout,
@@ -83,13 +83,13 @@ impl crate::game::ClientGame<'_> {
     /// nothing else does.
     pub(in crate::game::client_side) fn container_layout_inputs(
         &self,
-        batch: &sunrise_client::hud::HudBatch,
+        gui: (f32, f32),
     ) -> ContainerLayout {
-        let image = self.container_image_parts(batch);
-        let origin = self.inventory_origin_unbuilt(batch);
+        let image = self.container_image_parts(gui);
+        let origin = self.inventory_origin_unbuilt(gui);
         // A title over the inventory draws no book or effects of its own.
         let covered = self.client.screen == Screen::Inventory && self.client.title.0.is_some();
-        let book = (!covered).then(|| self.recipe_book_rect(batch)).flatten();
+        let book = (!covered).then(|| self.recipe_book_rect(gui)).flatten();
         let shows_effects = !covered
             && match self.client.screen {
                 Screen::Creative => true,
@@ -100,7 +100,7 @@ impl crate::game::ClientGame<'_> {
                 }
                 _ => false,
             };
-        let space = Self::effects_space(batch, [origin.0, origin.1], image[2]);
+        let space = Self::effects_space(gui, [origin.0, origin.1], image[2]);
         let effects_layout = if shows_effects {
             self.inventory_effects_layout(&space, image)
         } else {

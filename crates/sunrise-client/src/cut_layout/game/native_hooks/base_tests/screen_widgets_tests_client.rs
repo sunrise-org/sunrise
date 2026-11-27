@@ -2373,8 +2373,8 @@ fn separate_input_pre_post_parity_and_receiving_screen() {
             game.open_player_inventory();
             assert_eq!(game.client.screen, Screen::Inventory);
             game.inventory[9] = Some(sunrise_items::items::ItemStack::new("minecraft:stick", 2));
-            let batch = game.gui_batch().unwrap();
-            let layout = game.built_container(&batch).unwrap();
+            let batch = HudBatch::for_frame(&game.renderer_gui_frame().unwrap());
+            let layout = game.built_container(batch.size()).unwrap();
             let &(_, [x, y, _, _]) = layout.slots.iter().find(|(slot, _)| *slot == 9).unwrap();
             move_mouse(game, win_id, f64::from(x + 5.0), f64::from(y + 5.0));
             cancel_key_post.store(true, Ordering::SeqCst);
@@ -2403,7 +2403,7 @@ fn separate_input_pre_post_parity_and_receiving_screen() {
                     components: String::new(),
                 }],
             );
-            let mut batch = game.gui_batch().unwrap();
+            let mut batch = HudBatch::for_frame(&game.renderer_gui_frame().unwrap());
             game.draw_mod_browser(&mut batch);
             let search = game.client.panel.search.as_ref().unwrap();
             game.client.cursor = (search.x + 2.0, search.y + 2.0);
@@ -2461,8 +2461,8 @@ fn separate_input_pre_post_parity_and_receiving_screen() {
             game.client.settings.extras.sort = true;
             game.client.settings.extras.sort_key = "key.keyboard.q".into();
             game.open_player_inventory();
-            let batch = game.gui_batch().unwrap();
-            let layout = game.built_container(&batch).unwrap();
+            let batch = HudBatch::for_frame(&game.renderer_gui_frame().unwrap());
+            let layout = game.built_container(batch.size()).unwrap();
             let &(_, [x, y, _, _]) = layout.slots.iter().find(|(slot, _)| *slot == 301).unwrap();
             move_mouse(game, win_id, f64::from(x + 5.0), f64::from(y + 5.0));
             game.dispatch_window_keyboard(&NoLoop, Some(KeyCode::KeyK), true, false, None, None)

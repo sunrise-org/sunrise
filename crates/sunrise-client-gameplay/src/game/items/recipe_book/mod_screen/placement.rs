@@ -65,8 +65,8 @@ impl crate::game::ClientGame<'_> {
         ) {
             self.send_mod_book_placement(frame);
             if self
-                .batch_for_size()
-                .is_some_and(|batch| self.mod_book_overlay(batch.width))
+                .recipe_book_frame()
+                .is_some_and(|frame| self.mod_book_overlay(frame.size().0))
                 && let Some((_, filtering)) = self.mod_book_flags()
                 && let Some(book) = self.native_screen_book().cloned()
             {

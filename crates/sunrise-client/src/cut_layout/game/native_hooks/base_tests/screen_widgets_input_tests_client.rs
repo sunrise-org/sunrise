@@ -52,8 +52,8 @@ fn inventory_release_post_distinguishes_quick_craft_from_swallowed_release() {
         game.container = Some(pos);
         game.open_player_inventory();
         game.carried = Some(ItemStack::new("minecraft:stick", 8));
-        let batch = game.gui_batch().unwrap();
-        let layout = game.built_container(&batch).unwrap();
+        let gui = game.renderer_gui_frame().unwrap().size();
+        let layout = game.built_container(gui).unwrap();
         let point = |slot| {
             let &(_, [x, y, ..]) = layout.slots.iter().find(|(i, _)| *i == slot).unwrap();
             (f64::from(x + 5.0), f64::from(y + 5.0))

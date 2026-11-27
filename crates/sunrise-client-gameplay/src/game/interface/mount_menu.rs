@@ -269,11 +269,9 @@ impl crate::game::ClientGame<'_> {
         let Some(r) = self.client.renderer.0.as_ref() else {
             return true;
         };
-        let batch = HudBatch::new(
-            [r.config.width, r.config.height],
-            self.client.settings.gui_scale_inputs(),
-        );
-        let Some(slot) = self.slot_at(&batch, self.client.cursor.0, self.client.cursor.1) else {
+        let frame = self.gui_frame_for([r.config.width, r.config.height]);
+        let Some(slot) = self.slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1)
+        else {
             return true;
         };
         let shift = self.has_shift_down();

@@ -157,8 +157,8 @@ impl crate::game::ClientGame<'_> {
         else {
             return false;
         };
-        let batch = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        let Some(internal) = self.slot_at(&batch, self.client.cursor.0, self.client.cursor.1)
+        let frame = self.gui_frame_for(size);
+        let Some(internal) = self.slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1)
         else {
             return false;
         };

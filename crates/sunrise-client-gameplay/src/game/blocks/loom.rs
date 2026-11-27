@@ -150,10 +150,7 @@ impl crate::game::ClientGame<'_> {
         else {
             return false;
         };
-        let (_, oy) = self.inventory_origin(&HudBatch::new(
-            size,
-            self.client.settings.gui_scale_inputs(),
-        ));
+        let (_, oy) = self.inventory_origin(self.gui_frame_for(size).size());
         let cursor_y = self.client.cursor.1;
         if self.common.station.is_none() {
             return false;

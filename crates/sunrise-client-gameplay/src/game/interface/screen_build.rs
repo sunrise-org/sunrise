@@ -627,8 +627,8 @@ impl crate::game::ClientGame<'_> {
         let shown = self.client.screen != Screen::Playing
             || self.client.title.0.is_some()
             || self.screen_over_playing();
-        let inputs = self.client.settings.gui_scale_inputs();
-        let gui = GuiSize::new(framebuffer, inputs.requested, inputs.unicode);
+        let frame = self.gui_frame_for(framebuffer);
+        let gui = frame.gui;
         let identity = self
             .client
             .title
@@ -650,13 +650,7 @@ impl crate::game::ClientGame<'_> {
         // the exclusion never disagree by a frame.
         let container = (shown
             && matches!(self.client.screen, Screen::Inventory | Screen::Creative))
-        .then(|| {
-            let batch = sunrise_client::hud::HudBatch::new(
-                framebuffer,
-                self.client.settings.gui_scale_inputs(),
-            );
-            self.container_layout_inputs(&batch)
-        });
+        .then(|| self.container_layout_inputs(frame.size()));
         let container = container.and_then(|inputs| {
             let unchanged = self
                 .client
@@ -682,15 +676,7 @@ impl crate::game::ClientGame<'_> {
                                     && old.slot_inputs == inputs.slot_inputs
                             })
                 });
-            (!unchanged).then(|| {
-                self.build_container_layout(
-                    &sunrise_client::hud::HudBatch::new(
-                        framebuffer,
-                        self.client.settings.gui_scale_inputs(),
-                    ),
-                    inputs,
-                )
-            })
+            (!unchanged).then(|| self.build_container_layout(frame.size(), inputs))
         });
         // The pause menu's inputs can change while it is open: a server's
         // links or a custom-additions dialog arriving. Compare them here and
@@ -781,7 +767,7 @@ impl crate::game::ClientGame<'_> {
         let tabs = self.client.screen_state.0.drawn_book_tabs.take();
         let shown = region_screen.filter(|_| self.screen_view_listened());
         if let Some(screen) = shown
-            && let Some(layout) = self.built_container(batch)
+            && let Some(layout) = self.built_container(batch.size())
         {
             self.collect_screen_regions(screen, layout, batch.width, &mut regions);
             if screen == Screen::Inventory
@@ -809,18 +795,15 @@ impl crate::game::ClientGame<'_> {
         }
     }
 
-    /// The build's container layout, when it holds `batch`'s size.
-    pub fn built_container(
-        &self,
-        batch: &sunrise_client::hud::HudBatch,
-    ) -> Option<&ContainerLayout> {
+    /// The build's container layout, when it holds the current GUI size.
+    pub fn built_container(&self, gui: (f32, f32)) -> Option<&ContainerLayout> {
         self.client
             .screen_state
             .0
             .build
             .current
             .as_ref()?
-            .container(batch.width, batch.height)
+            .container(gui.0, gui.1)
     }
 
     /// The build's pause layout, when it holds `(width, height)`.

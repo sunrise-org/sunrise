@@ -332,11 +332,11 @@ impl<'g> crate::game::ClientGame<'g> {
     }
     /// The panel's corner, which slot positions are from, and its size, as `batch`'s frame lays
     /// the screen out.
-    fn container_frame(&self, batch: &HudBatch) -> ((f32, f32), Panel) {
-        let (origin, width, height) = match self.built_container(batch) {
+    fn container_frame(&self, gui: (f32, f32)) -> ((f32, f32), Panel) {
+        let (origin, width, height) = match self.built_container(gui) {
             Some(layout) => (layout.origin, layout.image[2], layout.image[3]),
             None => (
-                self.inventory_origin_unbuilt(batch),
+                self.inventory_origin_unbuilt(gui),
                 self.native_screen_width().unwrap_or(176.0),
                 self.screen_height(),
             ),
@@ -357,10 +357,9 @@ impl<'g> crate::game::ClientGame<'g> {
         BUILT.with(|n| n.set(n.get() + 1));
         let slots = self.slots();
         let (origin, panel) = match self.client.renderer.0.as_ref() {
-            Some(r) => self.container_frame(&HudBatch::new(
-                [r.config.width, r.config.height],
-                self.client.settings.gui_scale_inputs(),
-            )),
+            Some(r) => {
+                self.container_frame(self.gui_frame_for([r.config.width, r.config.height]).size())
+            }
             None => (
                 (0.0, 0.0),
                 Panel::new(176.0, self.screen_height(), 6.0, 72.0),
@@ -473,7 +472,7 @@ impl<'g> crate::game::ClientGame<'g> {
         };
         #[cfg(any(test, feature = "test-support"))]
         BUILT.with(|n| n.set(n.get() + 1));
-        let (origin, panel) = self.container_frame(batch);
+        let (origin, panel) = self.container_frame(batch.size());
         let open = Open {
             game: Backing::Shared(self),
             menu,

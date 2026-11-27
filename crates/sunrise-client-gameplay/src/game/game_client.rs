@@ -5331,8 +5331,8 @@ impl crate::game::ClientGame<'_> {
             Screen::WorldOptions if left => self.world_options_drag(),
             Screen::Options if left => self.options_drag()?,
             Screen::Creative => {
-                let batch = HudBatch::new(framebuffer, self.client.settings.gui_scale_inputs());
-                let (_, oy) = Self::creative_origin(&batch);
+                let frame = self.gui_frame_for(framebuffer);
+                let (_, oy) = Self::creative_origin(frame.size());
                 (left
                     && self
                         .client

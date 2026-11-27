@@ -10,7 +10,7 @@ impl crate::game::ClientGame<'_> {
         if !matches!(self.client.screen, Screen::Inventory | Screen::Creative) {
             return None;
         }
-        let slot = self.slot_at(batch, x, y)?;
+        let slot = self.slot_at(batch.size(), x, y)?;
         if self.creative_tab_open() && slot >= Creative::DISPLAY {
             return self.creative_display_stack(slot);
         }

@@ -749,8 +749,8 @@ impl crate::game::ClientGame<'_> {
         else {
             return true;
         };
-        let batch = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        let (ox, oy) = self.inventory_origin(&batch);
+        let frame = self.gui_frame_for(size);
+        let (ox, oy) = self.inventory_origin(frame.size());
         let local = (self.client.cursor.0 - ox, self.client.cursor.1 - oy);
         let shift = self.has_shift_down();
         if let Some(kind) = self.common.station.as_ref().map(|s| s.kind) {
@@ -783,7 +783,8 @@ impl crate::game::ClientGame<'_> {
                 return true;
             }
         }
-        let Some(slot) = self.slot_at(&batch, self.client.cursor.0, self.client.cursor.1) else {
+        let Some(slot) = self.slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1)
+        else {
             return true;
         };
         // Every station's clicks (and the brewing stand's) run on the
@@ -872,10 +873,10 @@ impl crate::game::ClientGame<'_> {
     /// under the cursor: the list scrolls a row, if it can, and the cursor
     /// stays. False leaves the step to go on to whatever is that way.
     pub(in crate::game::client_side) fn station_list_step(&mut self, up: bool) -> bool {
-        let Some(batch) = self.gui_batch() else {
+        let Some(frame) = self.renderer_gui_frame() else {
             return false;
         };
-        let (ox, oy) = self.inventory_origin(&batch);
+        let (ox, oy) = self.inventory_origin(frame.size());
         let local = (self.client.cursor.0 - ox, self.client.cursor.1 - oy);
         if !off_visible_rows(&self.station_targets(), local, up) {
             return false;
@@ -931,10 +932,7 @@ impl crate::game::ClientGame<'_> {
         else {
             return handled;
         };
-        let (_, oy) = self.inventory_origin(&HudBatch::new(
-            size,
-            self.client.settings.gui_scale_inputs(),
-        ));
+        let (_, oy) = self.inventory_origin(self.gui_frame_for(size).size());
         let y = self.client.cursor.1 - oy;
         // `StonecutterScreen.mouseDragged`.
         if let Some((s, ui)) = self.station_and_ui_mut()
@@ -2091,7 +2089,8 @@ impl crate::game::ClientGame<'_> {
         if self.mod_browser_dragging() {
             return;
         }
-        let Some(slot) = self.slot_at(batch, self.client.cursor.0, self.client.cursor.1) else {
+        let Some(slot) = self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1)
+        else {
             return;
         };
         // The recipe book's tooltip is drawn after the slot's own, so a ghost wins.

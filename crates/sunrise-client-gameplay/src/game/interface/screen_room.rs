@@ -34,14 +34,14 @@ pub(in crate::game::client_side) fn room_offset(
 
 impl crate::game::ClientGame<'_> {
     /// Ask once per frame for left and right room beside an eligible inventory screen.
-    pub(in crate::game::client_side) fn mod_room(&self, batch: &HudBatch) -> [f32; 2] {
+    pub(in crate::game::client_side) fn mod_room(&self, gui: (f32, f32)) -> [f32; 2] {
         let kind = self.common.station.as_ref().map(|s| s.kind);
         if self.client.screen != Screen::Inventory
             || matches!(
                 kind,
                 Some(stations::Kind::Merchant | stations::Kind::Beacon)
             )
-            || self.book_covers_menu(batch.width)
+            || self.book_covers_menu(gui.0)
             || !mod_api::__private::listened(mod_api::HookId::ScreenRoom)
         {
             return [0.0; 2];
@@ -57,8 +57,8 @@ impl crate::game::ClientGame<'_> {
         }
         let image = self.native_screen_width().unwrap_or(176.0);
         let height = self.screen_height();
-        let (x, y) = batch.centered_origin(image, height);
-        let rect = [x + self.recipe_book_shift(batch.width), y, image, height];
+        let (x, y) = sunrise_client::window::centered_gui_origin(gui, image, height);
+        let rect = [x + self.recipe_book_shift(gui.0), y, image, height];
         // Asked while the screen is laid out: nothing is drawn beside it yet.
         let view = super::screen_backgrounds::without_regions(
             &self.screen_view_at(self.client.screen, rect),
@@ -74,16 +74,16 @@ impl crate::game::ClientGame<'_> {
     }
 
     /// The signed offset of the container and open book after the mods reserve room.
-    pub(in crate::game::client_side) fn screen_room_offset(&self, batch: &HudBatch) -> f32 {
-        let rooms = self.mod_room(batch);
+    pub(in crate::game::client_side) fn screen_room_offset(&self, gui: (f32, f32)) -> f32 {
+        let rooms = self.mod_room(gui);
         if rooms == [0.0; 2] {
             return 0.0;
         }
         let image = self.native_screen_width().unwrap_or(176.0);
-        let (x, _) = batch.centered_origin(image, self.screen_height());
-        let x = x + self.recipe_book_shift(batch.width);
-        let (book, toggle) = (self.open_book_left(batch), self.mod_book_toggle_span(batch));
-        room_offset(batch.width, x, image, book, toggle, rooms)
+        let (x, _) = sunrise_client::window::centered_gui_origin(gui, image, self.screen_height());
+        let x = x + self.recipe_book_shift(gui.0);
+        let (book, toggle) = (self.open_book_left(gui), self.mod_book_toggle_span(gui));
+        room_offset(gui.0, x, image, book, toggle, rooms)
     }
 }
 

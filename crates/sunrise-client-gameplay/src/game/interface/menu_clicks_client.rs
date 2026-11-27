@@ -304,8 +304,8 @@ impl crate::game::ClientGame<'_> {
             .0
             .as_ref()
             .map(|r| [r.config.width, r.config.height])?;
-        let batch = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        self.slot_at(&batch, self.client.cursor.0, self.client.cursor.1)
+        let frame = self.gui_frame_for(size);
+        self.slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1)
     }
     /// Several clicks on one menu instance (a quick craft drag is three).
     pub fn menu_ops(&mut self, ops: &[(Option<usize>, i32, sunrise_sim::menu::Input)]) -> bool {

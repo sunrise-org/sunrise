@@ -23,9 +23,9 @@ impl crate::game::ClientGame<'_> {
         if !matches!(self.client.screen, Screen::Inventory | Screen::Creative) {
             return Vec::new();
         }
-        match self.built_container(batch) {
+        match self.built_container(batch.size()) {
             Some(layout) => layout.exclusion(),
-            None => self.container_layout(batch).exclusion(),
+            None => self.container_layout(batch.size()).exclusion(),
         }
     }
 }

@@ -2,8 +2,8 @@ use super::*;
 use sunrise_items::creative_catalog::{item_group_key, mod_item_group_key};
 
 impl crate::game::ClientGame<'_> {
-    pub(in crate::game) fn creative_origin(batch: &HudBatch) -> (f32, f32) {
-        batch.centered_origin(Creative::WIDTH, Creative::HEIGHT)
+    pub(in crate::game) fn creative_origin(gui: (f32, f32)) -> (f32, f32) {
+        sunrise_client::window::centered_gui_origin(gui, Creative::WIDTH, Creative::HEIGHT)
     }
 
     pub(in crate::game) fn click_creative(&mut self, right: bool) -> bool {
@@ -19,8 +19,8 @@ impl crate::game::ClientGame<'_> {
         else {
             return false;
         };
-        let batch = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        let (ox, oy) = Self::creative_origin(&batch);
+        let frame = self.gui_frame_for(size);
+        let (ox, oy) = Self::creative_origin(frame.size());
         let (cx, cy) = self.client.cursor;
         // NeoForge's page buttons, when mods add tabs.
         if let Some(step) =
@@ -61,7 +61,7 @@ impl crate::game::ClientGame<'_> {
             return true;
         }
         if self.creative_inventory_open() {
-            if Self::creative_trash_hovered(&batch, self.client.cursor) {
+            if Self::creative_trash_hovered(frame.size(), self.client.cursor) {
                 if self.has_shift_down() {
                     self.common.inventory.fill(None);
                     self.common.armor.fill(None);
@@ -78,7 +78,9 @@ impl crate::game::ClientGame<'_> {
                 self.client.inv_drag = None;
                 self.client.inv_clicks = Default::default();
                 return true;
-            } else if self.slot_at(&batch, cx, cy).is_some() || self.clicked_outside(&batch) {
+            } else if self.slot_at(frame.size(), cx, cy).is_some()
+                || self.clicked_outside(frame.size())
+            {
                 return self.inventory_press(right);
             }
             return false;
@@ -96,7 +98,7 @@ impl crate::game::ClientGame<'_> {
         {
             return true;
         }
-        if self.slot_at(&batch, cx, cy).is_some() || self.clicked_outside(&batch) {
+        if self.slot_at(frame.size(), cx, cy).is_some() || self.clicked_outside(frame.size()) {
             return self.inventory_press(right);
         }
         false
@@ -213,10 +215,10 @@ impl crate::game::ClientGame<'_> {
         lines
     }
     pub(in crate::game::client_side) fn creative_trash_hovered(
-        batch: &HudBatch,
+        gui: (f32, f32),
         cursor: (f32, f32),
     ) -> bool {
-        let (ox, oy) = Self::creative_origin(batch);
+        let (ox, oy) = Self::creative_origin(gui);
         let (x, y) = Creative::TRASH_POSITION;
         cursor.0 >= ox + x
             && cursor.0 < ox + x + 16.0
@@ -228,7 +230,7 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game) fn draw_creative(&mut self, batch: &mut HudBatch) -> bool {
         // CreativeModeInventoryScreen: `CommonComponents.EMPTY` for a title.
         screen_info::begin_container("creative");
-        let (ox, oy) = Self::creative_origin(batch);
+        let (ox, oy) = Self::creative_origin(batch.size());
         let selected = self.client.creative_screen.0.selected_index();
         // Only what is drawn of the tabs: their stacks stay where they are.
         let tabs = self.client.creative_screen.0.tab_headers();
@@ -336,7 +338,7 @@ impl crate::game::ClientGame<'_> {
         let mut hovered: Option<(ItemStack, bool)> = None;
         // Use the same padded slot bounds as clicks and the other menus, so
         // highlights and tooltips remain visible between adjacent items.
-        let hovered_slot = self.slot_at(batch, self.client.cursor.0, self.client.cursor.1);
+        let hovered_slot = self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1);
         if tab.inventory {
             self.draw_player_preview(
                 batch,
@@ -347,7 +349,7 @@ impl crate::game::ClientGame<'_> {
                 20.0,
                 0.0625,
             );
-            let trash = Self::creative_trash_hovered(batch, self.client.cursor);
+            let trash = Self::creative_trash_hovered(batch.size(), self.client.cursor);
             let (tx, ty) = Creative::TRASH_POSITION;
             if trash {
                 self.draw_slot_highlight(batch, false, ox + tx, oy + ty);
@@ -410,13 +412,13 @@ impl crate::game::ClientGame<'_> {
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Foreground);
         self.draw_carried(batch);
         if tab.inventory {
-            if Self::creative_trash_hovered(batch, self.client.cursor) {
+            if Self::creative_trash_hovered(batch.size(), self.client.cursor) {
                 // `CreativeModeInventoryScreen`: the destroy slot's tooltip is
                 // `inventory.binSlot`, not an English literal.
                 let destroy = self.translate_with_fallback("inventory.binSlot", "Destroy Item");
                 self.tooltip(batch, &destroy, self.client.cursor.0, self.client.cursor.1);
             } else if let Some(slot) =
-                self.slot_at(batch, self.client.cursor.0, self.client.cursor.1)
+                self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1)
                 && let Some(stack) = self.slot_view(slot)
                 && self.tooltip_with_carried(&stack)
             {

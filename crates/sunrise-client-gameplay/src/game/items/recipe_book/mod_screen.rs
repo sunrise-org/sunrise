@@ -164,9 +164,9 @@ impl crate::game::ClientGame<'_> {
             .panel(menu, key)
     }
     fn mod_book_layout(&self, width: f32, open: bool) -> Option<layout::BookLayout> {
-        let batch = self.batch_for_size()?;
+        let frame = self.recipe_book_frame()?;
         layout::layout(
-            [width, batch.height],
+            [width, frame.size().1],
             [self.native_screen_width()?, self.native_screen_height()?],
             self.native_screen_toggle(),
             open,
@@ -182,9 +182,9 @@ impl crate::game::ClientGame<'_> {
     }
     pub(in crate::game) fn mod_book_flags(&self) -> Option<(bool, bool)> {
         self.mod_book_panel()?;
-        let batch = self.batch_for_size()?;
-        self.mod_book_layout(batch.width, false)?;
-        self.mod_book_layout(batch.width, true)?;
+        let frame = self.recipe_book_frame()?;
+        self.mod_book_layout(frame.size().0, false)?;
+        self.mod_book_layout(frame.size().0, true)?;
         let flags = self.custom_book_settings(self.native_screen_book()?)?;
         Some((flags.open, flags.filtering))
     }
@@ -193,9 +193,9 @@ impl crate::game::ClientGame<'_> {
     }
     fn refresh_mod_book(&mut self) {
         if self.mod_book_panel().is_some()
-            && self.batch_for_size().is_some_and(|batch| {
-                self.mod_book_layout(batch.width, false).is_none()
-                    || self.mod_book_layout(batch.width, true).is_none()
+            && self.recipe_book_frame().is_some_and(|frame| {
+                self.mod_book_layout(frame.size().0, false).is_none()
+                    || self.mod_book_layout(frame.size().0, true).is_none()
             })
         {
             if !self.client.recipe_ui.0.custom.refused {
@@ -307,14 +307,14 @@ impl crate::game::ClientGame<'_> {
         ui.presentation = Some(presentation);
     }
     /// A mod menu's book toggle edges before the window moves to make room.
-    pub(in crate::game) fn mod_book_toggle_span(&self, batch: &HudBatch) -> Option<[f32; 2]> {
+    pub(in crate::game) fn mod_book_toggle_span(&self, gui: (f32, f32)) -> Option<[f32; 2]> {
         let (open, _) = self.mod_book_flags()?;
-        Some(self.mod_book_layout(batch.width, open)?.toggle_span())
+        Some(self.mod_book_layout(gui.0, open)?.toggle_span())
     }
-    fn mod_book_button(&self, batch: &HudBatch) -> (f32, f32) {
-        self.mod_book_layout(batch.width, self.mod_book_open())
+    fn mod_book_button(&self, gui: (f32, f32)) -> (f32, f32) {
+        self.mod_book_layout(gui.0, self.mod_book_open())
             .map_or((0.0, 0.0), |layout| {
-                layout.shifted_toggle(self.screen_room_offset(batch))
+                layout.shifted_toggle(self.screen_room_offset(gui))
             })
     }
     pub(in crate::game) fn draw_mod_book(
@@ -323,7 +323,7 @@ impl crate::game::ClientGame<'_> {
     ) -> Option<Vec<(Text, u32)>> {
         self.refresh_mod_book();
         let (open, filtering) = self.mod_book_flags()?;
-        let (bx, by) = self.mod_book_button(batch);
+        let (bx, by) = self.mod_book_button(batch.size());
         batch.sprite(
             &self.client.gui.atlas,
             &sprite(if inside(self.client.cursor, bx, by, 20.0, 18.0) {
@@ -341,7 +341,7 @@ impl crate::game::ClientGame<'_> {
         if !open {
             return None;
         }
-        let (xo, yo) = self.book_origin(batch);
+        let (xo, yo) = self.book_origin(batch.size());
         let search = match self.client.recipe_ui.0.search.as_mut() {
             Some(edit) => {
                 edit.x = xo + 25.0;
@@ -408,14 +408,14 @@ impl crate::game::ClientGame<'_> {
         let Some((open, filtering)) = self.mod_book_flags() else {
             return false;
         };
-        let Some(batch) = self.batch_for_size() else {
+        let Some(frame) = self.recipe_book_frame() else {
             return false;
         };
         let cursor = self.client.cursor;
-        let consumed = self.mod_book_click_panel(&batch, open, filtering, right);
+        let consumed = self.mod_book_click_panel(frame.size(), open, filtering, right);
         if !consumed
             && self
-                .slot_at(&batch, cursor.0, cursor.1)
+                .slot_at(frame.size(), cursor.0, cursor.1)
                 .is_some_and(|slot| slot >= 300)
         {
             self.client.recipe_ui.0.ghost.clear();
@@ -424,12 +424,12 @@ impl crate::game::ClientGame<'_> {
     }
     fn mod_book_click_panel(
         &mut self,
-        batch: &HudBatch,
+        gui: (f32, f32),
         open: bool,
         filtering: bool,
         right: bool,
     ) -> bool {
-        let (bx, by) = self.mod_book_button(batch);
+        let (bx, by) = self.mod_book_button(gui);
         let cursor = self.client.cursor;
         if inside(cursor, bx, by, 20.0, 18.0) {
             if let Some(book) = self.native_screen_book().cloned() {
@@ -446,11 +446,11 @@ impl crate::game::ClientGame<'_> {
         if !open {
             return false;
         }
-        let narrow = self.mod_book_overlay(batch.width);
+        let narrow = self.mod_book_overlay(gui.0);
         if self.common.spectator() {
             return narrow;
         }
-        let (xo, yo) = self.book_origin(batch);
+        let (xo, yo) = self.book_origin(gui);
         if self.consume_mod_book_overlay(right) {
             return true;
         }
@@ -546,9 +546,9 @@ impl crate::game::ClientGame<'_> {
         }
         narrow
     }
-    pub(in crate::game) fn mod_book_area(&self, batch: &HudBatch) -> Option<(bool, bool)> {
+    pub(in crate::game) fn mod_book_area(&self, gui: (f32, f32)) -> Option<(bool, bool)> {
         let (open, _) = self.mod_book_flags()?;
-        let (xo, yo) = self.book_origin(batch);
+        let (xo, yo) = self.book_origin(gui);
         let ui = &self.client.recipe_ui.0.custom;
         let hovered = ui.presentation.as_ref().is_some_and(|p| {
             ui.visible_tabs().into_iter().enumerate().any(|(n, index)| {
@@ -568,19 +568,20 @@ impl crate::game::ClientGame<'_> {
     }
     pub(in crate::game) fn mod_book_targets(&self) -> Vec<sunrise_client::widgets::Target> {
         use sunrise_client::widgets::{Kind, Target};
-        let (Some((open, _)), Some(batch)) = (self.mod_book_flags(), self.batch_for_size()) else {
+        let (Some((open, _)), Some(frame)) = (self.mod_book_flags(), self.recipe_book_frame())
+        else {
             return Vec::new();
         };
         let button = |rect| Target {
             rect,
             kind: Kind::Button,
         };
-        let (bx, by) = self.mod_book_button(&batch);
+        let (bx, by) = self.mod_book_button(frame.size());
         let mut targets = vec![button([bx, by, 20.0, 18.0])];
         if !open || self.common.spectator() {
             return targets;
         }
-        let (xo, yo) = self.book_origin(&batch);
+        let (xo, yo) = self.book_origin(frame.size());
         let ui = &self.client.recipe_ui.0.custom;
         if let Some(overlay) = &ui.overlay {
             let columns = if overlay.view.recipes.len() <= 16 {

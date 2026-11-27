@@ -83,7 +83,7 @@ pub(crate) fn exercise_blank_inventory_presses() {
                         [renderer.config.width, renderer.config.height],
                         game.client.settings.gui_scale_inputs(),
                     );
-                    let (x, y) = game.inventory_origin(&batch);
+                    let (x, y) = game.inventory_origin(batch.size());
                     game.client.cursor = (x + 3.0, y + 3.0);
                     assert_eq!(game.inventory_target(), (None, false));
                     for button in [

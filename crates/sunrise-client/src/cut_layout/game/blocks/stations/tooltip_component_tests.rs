@@ -1129,12 +1129,12 @@ fn show_tooltip_with_item_in_hand_controls_carried_visibility() {
         assert!(!game.tooltip_with_carried(&apple));
 
         let mut batch = HudBatch::scratch([512, 512]);
-        let (ox, oy) = game.inventory_origin(&batch);
+        let (ox, oy) = game.inventory_origin(batch.size());
 
         let (sx, sy) = game.slot_position(9);
         game.client.cursor = (ox + sx + 8.0, oy + sy + 8.0);
         assert_eq!(
-            game.slot_at(&batch, game.client.cursor.0, game.client.cursor.1),
+            game.slot_at(batch.size(), game.client.cursor.0, game.client.cursor.1),
             Some(9)
         );
         game.draw_slot_tooltip(&mut batch);
@@ -1147,7 +1147,7 @@ fn show_tooltip_with_item_in_hand_controls_carried_visibility() {
         let (ax, ay) = game.slot_position(10);
         game.client.cursor = (ox + ax + 8.0, oy + ay + 8.0);
         assert_eq!(
-            game.slot_at(&batch, game.client.cursor.0, game.client.cursor.1),
+            game.slot_at(batch.size(), game.client.cursor.0, game.client.cursor.1),
             Some(10)
         );
         game.draw_slot_tooltip(&mut batch);
@@ -2629,7 +2629,7 @@ fn only_hovered_slots_check_show_tooltip_with_item_in_hand() {
         game.carried = Some(ItemStack::new("minecraft:stone", 1));
 
         let mut batch = HudBatch::scratch([512, 512]);
-        let (ox, oy) = game.inventory_origin(&batch);
+        let (ox, oy) = game.inventory_origin(batch.size());
         // Find the inventory slot holding our stick in the station's slot table.
         let slot = (0..46)
             .find(|&i| {
@@ -2641,7 +2641,7 @@ fn only_hovered_slots_check_show_tooltip_with_item_in_hand() {
         let (sx, sy) = game.slot_position_any(slot).unwrap();
         game.client.cursor = (ox + sx + 8.0, oy + sy + 8.0);
         assert_eq!(
-            game.slot_at(&batch, game.client.cursor.0, game.client.cursor.1),
+            game.slot_at(batch.size(), game.client.cursor.0, game.client.cursor.1),
             Some(slot)
         );
 
@@ -2676,7 +2676,7 @@ fn only_hovered_slots_check_show_tooltip_with_item_in_hand() {
         station.stone.recipes = vec![recipe];
         game.carried = Some(ItemStack::new("minecraft:stone", 1));
         let mut batch = HudBatch::scratch([512, 512]);
-        let (ox, oy) = game.inventory_origin(&batch);
+        let (ox, oy) = game.inventory_origin(batch.size());
         game.client.cursor = (ox + 60.0, oy + 25.0);
         assert!(game.draw_station(&mut batch));
         assert_eq!(hand_calls.load(Ordering::Relaxed), 1);
@@ -2709,7 +2709,7 @@ fn only_hovered_slots_check_show_tooltip_with_item_in_hand() {
         );
         game.carried = Some(ItemStack::new("minecraft:stone", 1));
         let mut batch = HudBatch::scratch([512, 512]);
-        let (ox, oy) = game.inventory_origin(&batch);
+        let (ox, oy) = game.inventory_origin(batch.size());
         // Merchant screen is shifted left 50px; hover the first payment in the first offer.
         game.client.cursor = (ox - 40.0, oy + 26.0);
         assert!(game.draw_station(&mut batch));

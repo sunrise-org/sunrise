@@ -635,7 +635,7 @@ impl crate::game::ClientGame<'_> {
         // Over no item: an empty slot still gets the mod's hint (which fuel it takes).
         // A carried stack hides only slot tooltips, as AbstractContainerScreen's;
         // the screen's other parts keep theirs, as a vanilla widget's tooltip does.
-        let slot = self.slot_at(batch, self.client.cursor.0, self.client.cursor.1);
+        let slot = self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1);
         if slot.is_some_and(|i| self.slot_view(i).is_some()) {
             return;
         }
@@ -748,13 +748,17 @@ impl crate::game::ClientGame<'_> {
             return false;
         };
         if self
-            .slot_at(batch, self.client.cursor.0, self.client.cursor.1)
+            .slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1)
             .is_some()
         {
             return false;
         }
         let opening = (screen.menu.window, screen.menu.generation);
-        let frame = screen.frame(batch, self.inventory_origin(batch), self.client.cursor);
+        let frame = screen.frame(
+            batch,
+            self.inventory_origin(batch.size()),
+            self.client.cursor,
+        );
         let Some(button) = screen.screen.click(self, frame, right) else {
             return false;
         };
@@ -823,7 +827,11 @@ impl crate::game::ClientGame<'_> {
         let menu_slot = slot.and_then(|slot| {
             Self::menu_slot_index(&screen.menu.name, slot).map(|slot| slot as u32)
         });
-        let frame = screen.frame(batch, self.inventory_origin(batch), self.client.cursor);
+        let frame = screen.frame(
+            batch,
+            self.inventory_origin(batch.size()),
+            self.client.cursor,
+        );
         if screen.screen.tooltip(self, frame, menu_slot, &mut snapshot)
             && let Ok(replacement) = snapshot.try_into_engine(&())
         {
@@ -1455,7 +1463,7 @@ impl crate::game::ClientGame<'_> {
         }
         // The window the game itself draws (`container_image`): the merchant
         // and the beacon are wider and shifted, creative is its own size.
-        let image = self.container_image(batch);
+        let image = self.container_image(batch.size());
         [
             image.left as f32,
             image.top as f32,

@@ -3,7 +3,7 @@ use super::*;
 #[cfg(feature = "client")]
 impl crate::game::ClientGame<'_> {
     pub(super) fn draw_mod_book_ghosts(&mut self, batch: &mut HudBatch) {
-        let (ox, oy) = self.inventory_origin(batch);
+        let (ox, oy) = self.inventory_origin(batch.size());
         let ghosts: Vec<GhostView> = self
             .client
             .recipe_ui

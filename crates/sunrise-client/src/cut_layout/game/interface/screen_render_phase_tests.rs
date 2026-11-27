@@ -70,7 +70,7 @@ fn chest(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) -> (u32, u32)
         .block_entities
         .insert(POS, BlockEntity::Chest(items));
     let batch = HudBatch::scratch(SIZE);
-    let (x, y) = game.inventory_origin(&batch);
+    let (x, y) = game.inventory_origin(batch.size());
     let (sx, sy) = game.slot_position(300);
     assert_eq!((sx, sy), (8.0, 18.0));
     game.client.cursor = (x + sx + 8.0, y + sy + 8.0);

@@ -660,7 +660,7 @@ impl crate::game::ClientGame<'_> {
     /// The panel's parts: right of the window, from the top of the screen to
     /// the search box at its foot. None when the screen has no room for it.
     fn browser_layout(&self, batch: &HudBatch) -> Option<Layout> {
-        let image = self.container_image(batch);
+        let image = self.container_image(batch.size());
         let recipes = self
             .client
             .panel
@@ -668,7 +668,7 @@ impl crate::game::ClientGame<'_> {
             .as_ref()
             .is_some_and(|(owner, _)| owner.native_id() == "recipes");
         let window_right = if self.client.screen == Screen::Creative {
-            Self::creative_origin(batch).0 + 198.0
+            Self::creative_origin(batch.size()).0 + 198.0
         } else {
             (image.left + image.width) as f32
         };
@@ -1359,7 +1359,8 @@ impl crate::game::ClientGame<'_> {
                 return Some(self.browser_pointed_stack(&layout)?.0);
             }
             _ => {
-                let slot = self.slot_at(&batch, self.client.cursor.0, self.client.cursor.1)?;
+                let slot =
+                    self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1)?;
                 self.slot_view(slot)?
             }
         };

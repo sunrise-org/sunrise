@@ -169,10 +169,10 @@ impl crate::game::ClientGame<'_> {
                     && self.common.craft_size == 2
                     && !self.mount_active() =>
             {
-                (self.inventory_origin(batch).0, 176)
+                (self.inventory_origin(batch.size()).0, 176)
             }
             Screen::Creative => (
-                Self::creative_origin(batch).0,
+                Self::creative_origin(batch.size()).0,
                 sunrise_client::creative::Creative::WIDTH as i32,
             ),
             _ => return false,
@@ -206,8 +206,8 @@ impl crate::game::ClientGame<'_> {
         origin: (f32, f32),
         image_width: i32,
     ) -> Option<Vec<(Text, u32)>> {
-        let space = Self::effects_space(batch, [origin.0, origin.1], image_width as f32);
-        let layout = self.built_container(batch).map_or_else(
+        let space = Self::effects_space(batch.size(), [origin.0, origin.1], image_width as f32);
+        let layout = self.built_container(batch.size()).map_or_else(
             || inventory_effects::EffectsLayout::vanilla(space.available()),
             |layout| layout.effects_layout,
         );
@@ -241,12 +241,12 @@ impl crate::game::ClientGame<'_> {
     /// or too little room right of the window, laid out as `layout` says.
     pub(in crate::game::client_side) fn inventory_effects_rect(
         &self,
-        batch: &HudBatch,
+        gui: (f32, f32),
         origin: [f32; 2],
         image_width: f32,
         layout: &inventory_effects::EffectsLayout,
     ) -> Option<[f32; 4]> {
-        let space = Self::effects_space(batch, origin, image_width);
+        let space = Self::effects_space(gui, origin, image_width);
         let panels = self.effect_panels(&space, layout);
         let first = panels.first()?;
         let width = panels.iter().map(|p| p.width).max()?;
@@ -256,12 +256,12 @@ impl crate::game::ClientGame<'_> {
     /// The room the effect panels lay out in (`EffectsInInventory`'s space):
     /// the window's width, the container's origin and its image width.
     pub(in crate::game::client_side) fn effects_space(
-        batch: &HudBatch,
+        gui: (f32, f32),
         origin: [f32; 2],
         image_width: f32,
     ) -> inventory_effects::EffectsSpace {
         inventory_effects::EffectsSpace {
-            screen_width: batch.width as i32,
+            screen_width: gui.0 as i32,
             origin: [origin[0] as i32, origin[1] as i32],
             image_width: image_width as i32,
         }
@@ -706,7 +706,7 @@ pub(in crate::game) mod tests {
                                 // Layout hooks run at screen construction, not painting.
                                 game.client.frames += 1;
                                 let space = crate::game::ClientGame::effects_space(
-                                    &batch,
+                                    batch.size(),
                                     [origin.0, origin.1],
                                     image_width as f32,
                                 );

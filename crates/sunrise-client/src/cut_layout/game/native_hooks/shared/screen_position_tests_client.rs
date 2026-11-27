@@ -473,7 +473,7 @@ fn custom_menu_screens_route_by_menu_type_and_allow_cross_mod_slot_controls() {
                             let ids: Vec<_> = shown.iter().map(|i| base + i).collect();
                             assert_eq!(game.native_screen_slots(), Some(ids));
                             let mut batch = HudBatch::scratch([512, 512]);
-                            let (ox, oy) = game.inventory_origin(&batch);
+                            let (ox, oy) = game.inventory_origin(batch.size());
                             game.client.cursor = (ox + 90.0, oy + 105.0);
                             assert!(game.draw_native_screen(&mut batch, ox, oy));
                             assert!(game.native_screen_press_at(&batch, false));
@@ -620,7 +620,7 @@ fn slotless_screen_draw_sees_full_width_updates_only_for_its_window() {
                 assert_eq!(game.slot_count(), 0);
                 assert_eq!(crate::game::inventory_screen_slot(PACK, 0), None);
                 assert_eq!(
-                    game.slot_at(&HudBatch::scratch([200, 200]), 25.0, 40.0),
+                    game.slot_at(HudBatch::scratch([200, 200]).size(), 25.0, 40.0),
                     None
                 );
                 seen.lock().unwrap().cancel_opening = true;

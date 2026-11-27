@@ -132,9 +132,12 @@ fn a_bound_books_catalogue_survives_slot_moves_and_hides() {
                     [1280, 720],
                     game.client.settings.gui_scale_inputs(),
                 );
-                assert_eq!(game.slot_at(&batch, 582.0, 317.0), Some(MOD_MENU_SLOT_BASE));
+                assert_eq!(
+                    game.slot_at(batch.size(), 582.0, 317.0),
+                    Some(MOD_MENU_SLOT_BASE)
+                );
                 assert_ne!(
-                    game.slot_at(&batch, 632.0, 295.0),
+                    game.slot_at(batch.size(), 632.0, 295.0),
                     Some(MOD_MENU_SLOT_BASE + 1)
                 );
 
@@ -225,7 +228,7 @@ fn a_bound_books_catalogue_survives_slot_moves_and_hides() {
                         .contains(&(MOD_MENU_SLOT_BASE, [559.0, 294.0, 18.0, 18.0]))
                 );
                 assert_eq!(
-                    game.slot_at(&batch, 632.0, 295.0),
+                    game.slot_at(batch.size(), 632.0, 295.0),
                     Some(MOD_MENU_SLOT_BASE + 1)
                 );
             });
@@ -356,14 +359,14 @@ fn a_hidden_slot_leaves_the_screen_and_comes_back_where_put() {
                 [1280, 720],
                 game.client.settings.gui_scale_inputs(),
             );
-            assert_eq!(game.slot_at(&batch, 560.0, 295.0), Some(300));
+            assert_eq!(game.slot_at(batch.size(), 560.0, 295.0), Some(300));
 
             // Hidden by a render hook: still there this frame, gone from the next build.
             assert_eq!(game.set_screen_slot(MENU, 0, None), Ok(()));
             assert_eq!(ScreensClientHost::screen_slot(game, MENU, 0), None);
-            assert_eq!(game.slot_at(&batch, 560.0, 295.0), Some(300));
+            assert_eq!(game.slot_at(batch.size(), 560.0, 295.0), Some(300));
             game.build_screen();
-            assert_eq!(game.slot_at(&batch, 560.0, 295.0), None);
+            assert_eq!(game.slot_at(batch.size(), 560.0, 295.0), None);
             assert!(!geometry(game).1.iter().any(|(id, _)| *id == 300));
             assert_eq!(game.native_screen_slots(), Some(vec![301]));
             // The 36 player slots and the remaining visible container slot.
@@ -374,7 +377,7 @@ fn a_hidden_slot_leaves_the_screen_and_comes_back_where_put() {
             assert_eq!(game.set_screen_slot(MENU, 0, Some([48.0, 60.0])), Ok(()));
             assert_eq!(game.screen_slot(MENU, 0), Some([48.0, 60.0]));
             game.build_screen();
-            assert_eq!(game.slot_at(&batch, 600.0, 340.0), Some(300));
+            assert_eq!(game.slot_at(batch.size(), 600.0, 340.0), Some(300));
             assert_eq!(game.native_screen_slots(), Some(vec![300, 301]));
             assert_eq!(game.screen_slot(MENU, 1), Some([26.0, 18.0]));
 
@@ -476,8 +479,8 @@ fn hidden_player_slots_are_no_target_and_come_back_on_reopen() {
             );
             // Origin (552, 277): the main inventory's first slot (inventory slot 9) is at (8, 84)
             // and the hotbar's first (inventory slot 0) at (8, 142).
-            assert_eq!(game.slot_at(&batch, 561.0, 362.0), Some(9));
-            assert_eq!(game.slot_at(&batch, 561.0, 420.0), Some(0));
+            assert_eq!(game.slot_at(batch.size(), 561.0, 362.0), Some(9));
+            assert_eq!(game.slot_at(batch.size(), 561.0, 420.0), Some(0));
             assert_eq!(game.slot_count(), 38);
 
             // Two container slots, so menu slot 2 is the main inventory's first and 29 the hotbar's.
@@ -487,35 +490,35 @@ fn hidden_player_slots_are_no_target_and_come_back_on_reopen() {
             assert_eq!(game.set_screen_slot(MENU, 29, None), Ok(()));
             assert_eq!(ScreensClientHost::screen_slot(game, MENU, 2), None);
             // Still there this frame, gone from the next build.
-            assert_eq!(game.slot_at(&batch, 561.0, 362.0), Some(9));
+            assert_eq!(game.slot_at(batch.size(), 561.0, 362.0), Some(9));
             game.build_screen();
             // Hover, and with it the hit test of a click, of a drag across it (which adds the slot
             // under the pointer) and of a number key over it (which swaps the slot under it).
-            assert_eq!(game.slot_at(&batch, 561.0, 362.0), None);
-            assert_eq!(game.slot_at(&batch, 561.0, 420.0), None);
-            assert_eq!(game.slot_at(&batch, 579.0, 362.0), Some(10));
-            assert_eq!(game.slot_at(&batch, 579.0, 420.0), Some(1));
+            assert_eq!(game.slot_at(batch.size(), 561.0, 362.0), None);
+            assert_eq!(game.slot_at(batch.size(), 561.0, 420.0), None);
+            assert_eq!(game.slot_at(batch.size(), 579.0, 362.0), Some(10));
+            assert_eq!(game.slot_at(batch.size(), 579.0, 420.0), Some(1));
             assert!(!geometry(game).1.iter().any(|(id, _)| *id == 9 || *id == 0));
             assert!(!game.slots().contains(&9) && !game.slots().contains(&0));
             assert_eq!(game.slot_count(), 36);
             let pad: Vec<[f32; 4]> = game
-                .pad_slot_targets(&batch)
+                .pad_slot_targets(batch.size())
                 .iter()
                 .map(|t| t.rect)
                 .collect();
             assert!(!pad.contains(&[560.0, 361.0, 16.0, 16.0]));
             assert!(!pad.contains(&[560.0, 419.0, 16.0, 16.0]));
             // The container slots are untouched.
-            assert_eq!(game.slot_at(&batch, 560.0, 295.0), Some(300));
+            assert_eq!(game.slot_at(batch.size(), 560.0, 295.0), Some(300));
 
             // The hotbar's first slot shown elsewhere, the main inventory's where it was.
             assert_eq!(game.set_screen_slot(MENU, 29, Some([100.0, 20.0])), Ok(()));
             assert_eq!(game.set_screen_slot(MENU, 2, Some([8.0, 84.0])), Ok(()));
             game.build_screen();
             assert_eq!(game.slot_position(0), (100.0, 20.0));
-            assert_eq!(game.slot_at(&batch, 653.0, 298.0), Some(0));
-            assert_eq!(game.slot_at(&batch, 561.0, 420.0), None);
-            assert_eq!(game.slot_at(&batch, 561.0, 362.0), Some(9));
+            assert_eq!(game.slot_at(batch.size(), 653.0, 298.0), Some(0));
+            assert_eq!(game.slot_at(batch.size(), 561.0, 420.0), None);
+            assert_eq!(game.slot_at(batch.size(), 561.0, 362.0), Some(9));
 
             // Past the menu's slots there is nothing to move.
             assert_eq!(
@@ -527,13 +530,13 @@ fn hidden_player_slots_are_no_target_and_come_back_on_reopen() {
             assert_eq!(game.set_screen_slot(MENU, 2, None), Ok(()));
             assert_eq!(game.set_screen_slot(MENU, 29, None), Ok(()));
             game.build_screen();
-            assert_eq!(game.slot_at(&batch, 561.0, 362.0), None);
+            assert_eq!(game.slot_at(batch.size(), 561.0, 362.0), None);
             game.client.mod_screen.0 = Some(open());
             game.build_screen();
             assert_eq!(game.slot_count(), 38);
             assert_eq!(game.slot_position(0), (8.0, 142.0));
-            assert_eq!(game.slot_at(&batch, 561.0, 362.0), Some(9));
-            assert_eq!(game.slot_at(&batch, 561.0, 420.0), Some(0));
+            assert_eq!(game.slot_at(batch.size(), 561.0, 362.0), Some(9));
+            assert_eq!(game.slot_at(batch.size(), 561.0, 420.0), Some(0));
             assert_eq!(game.screen_slot(MENU, 2), Some([8.0, 84.0]));
             assert_eq!(game.screen_slot(MENU, 29), Some([8.0, 142.0]));
         });
@@ -664,14 +667,14 @@ fn a_moved_slot_takes_its_place_for_drawing_and_input_from_the_next_frame() {
                 [1280, 720],
                 game.client.settings.gui_scale_inputs(),
             );
-            assert_eq!(game.slot_at(&batch, 600.0, 340.0), None);
+            assert_eq!(game.slot_at(batch.size(), 600.0, 340.0), None);
 
             // A render hook moves it after this frame's build: drawing and
             // hit-testing both still use the old place this frame.
             assert!(game.set_screen_slot(MENU, 0, Some([48.0, 60.0])).is_ok());
             assert_eq!(game.slot_position(300), (8.0, 18.0));
-            assert_eq!(game.slot_at(&batch, 600.0, 340.0), None);
-            assert_eq!(game.slot_at(&batch, 560.0, 295.0), Some(300));
+            assert_eq!(game.slot_at(batch.size(), 600.0, 340.0), None);
+            assert_eq!(game.slot_at(batch.size(), 560.0, 295.0), Some(300));
             assert_eq!(geometry(game), before);
             // The next frame's build takes it for both.
             game.build_screen();
@@ -679,15 +682,15 @@ fn a_moved_slot_takes_its_place_for_drawing_and_input_from_the_next_frame() {
             let after = geometry(game);
             assert!(after.1.contains(&(300, [599.0, 336.0, 18.0, 18.0])));
             // The 18 by 18 box holds the pointer at its first pixel and not past its last.
-            assert_eq!(game.slot_at(&batch, 599.0, 336.0), Some(300));
-            assert_eq!(game.slot_at(&batch, 616.0, 353.0), Some(300));
-            assert_eq!(game.slot_at(&batch, 617.0, 340.0), None);
-            assert_ne!(game.slot_at(&batch, 560.0, 295.0), Some(300));
+            assert_eq!(game.slot_at(batch.size(), 599.0, 336.0), Some(300));
+            assert_eq!(game.slot_at(batch.size(), 616.0, 353.0), Some(300));
+            assert_eq!(game.slot_at(batch.size(), 617.0, 340.0), None);
+            assert_ne!(game.slot_at(batch.size(), 560.0, 295.0), Some(300));
             assert_eq!(game.slot_position(301), (26.0, 18.0));
 
             // The controller's slot targets read the same committed position.
             let pad: Vec<[f32; 4]> = game
-                .pad_slot_targets(&batch)
+                .pad_slot_targets(batch.size())
                 .iter()
                 .map(|t| t.rect)
                 .collect();
@@ -717,16 +720,16 @@ fn a_moved_slot_takes_its_place_for_drawing_and_input_from_the_next_frame() {
             assert!(game.set_screen_slot(MENU, 0, Some([8.0, 142.0])).is_ok());
             assert!(game.set_screen_slot(MENU, 1, Some([8.0, 84.0])).is_ok());
             game.build_screen();
-            assert_eq!(game.slot_at(&batch, 561.0, 420.0), Some(300));
-            assert_eq!(game.slot_at(&batch, 561.0, 362.0), Some(301));
+            assert_eq!(game.slot_at(batch.size(), 561.0, 420.0), Some(300));
+            assert_eq!(game.slot_at(batch.size(), 561.0, 362.0), Some(301));
 
             // A slot beyond the image takes the click instead of making it an outside click.
             assert!(game.set_screen_slot(MENU, 0, Some([200.0, 20.0])).is_ok());
             game.build_screen();
             game.client.cursor = (555.0 + 200.0, 277.0 + 22.0);
-            assert_eq!(game.target_at(&batch), (Some(300), false));
+            assert_eq!(game.target_at(batch.size()), (Some(300), false));
             game.client.cursor = (555.0 + 230.0, 277.0 + 22.0);
-            assert_eq!(game.target_at(&batch), (None, true));
+            assert_eq!(game.target_at(batch.size()), (None, true));
         });
     });
 }
@@ -846,7 +849,7 @@ fn a_reopened_window_uses_only_its_new_screen_instance() {
                     );
 
                     let mut batch = HudBatch::scratch([512, 512]);
-                    let (ox, oy) = game.inventory_origin(&batch);
+                    let (ox, oy) = game.inventory_origin(batch.size());
                     game.client.cursor = (ox + 17.0, oy + 25.0);
                     assert!(game.draw_native_screen(&mut batch, ox, oy));
                     assert!(game.native_screen_press_at(&batch, true));

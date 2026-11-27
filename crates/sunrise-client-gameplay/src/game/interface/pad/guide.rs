@@ -179,7 +179,9 @@ impl crate::game::ClientGame<'_> {
             }
         } else if self.recipe_book_under_pointer() {
             Under::Control
-        } else if let Some(slot) = self.slot_at(batch, self.client.cursor.0, self.client.cursor.1) {
+        } else if let Some(slot) =
+            self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1)
+        {
             let stack = self.slot_view(slot);
             let same = match (&stack, &self.common.carried) {
                 (Some(a), Some(b)) => a.same_item_same_components(b),
@@ -301,7 +303,9 @@ impl crate::game::ClientGame<'_> {
                 })
                 .collect()
         };
-        let view = self.gui_batch().map(|b| [b.width, b.height]);
+        let view = self
+            .renderer_gui_frame()
+            .map(|frame| frame.gui.size.map(|axis| axis as f32));
         json!({ "left": column(true), "right": column(false), "view": view })
     }
 

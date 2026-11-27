@@ -57,7 +57,9 @@ impl crate::game::ClientGame<'_> {
     /// The open screen's widgets: those the last frame drew, then the slots
     /// of an open inventory or menu (`slot-ID`, the ids of `click-slot`).
     pub(in crate::game::client_side) fn ui_nodes(&self) -> Vec<Node> {
-        let size = self.gui_batch().map(|b| [b.width, b.height]);
+        let size = self
+            .renderer_gui_frame()
+            .map(|frame| frame.gui.size.map(|axis| axis as f32));
         let mut nodes = widgets::tree(&widgets::last_labelled(), &widgets::last_targets(), size);
         if matches!(self.client.screen, Screen::Inventory | Screen::Creative)
             && self.client.title.0.is_none()
@@ -149,8 +151,8 @@ impl crate::game::ClientGame<'_> {
                 let nodes = self.ui_nodes();
                 let widgets: Vec<Value> = nodes.iter().map(|n| self.node_value(n)).collect();
                 let size = self
-                    .gui_batch()
-                    .map(|b| [b.width.round(), b.height.round()]);
+                    .renderer_gui_frame()
+                    .map(|frame| frame.gui.size.map(|axis| (axis as f32).round()));
                 Ok(Handled::Reply(json!({
                     "screen": self.screen_label(),
                     "gui_size": size,

@@ -75,10 +75,7 @@ impl crate::game::ClientGame<'_> {
             .as_ref()
             .map(|r| [r.config.width, r.config.height])
             .ok_or("no renderer yet")?;
-        Ok(self.inventory_origin(&sunrise_client::hud::HudBatch::new(
-            size,
-            self.client.settings.gui_scale_inputs(),
-        )))
+        Ok(self.inventory_origin(self.gui_frame_for(size).size()))
     }
     fn send_use_item_on_block(&mut self, pos: [i32; 3]) {
         let sequence = self.next_sequence();
