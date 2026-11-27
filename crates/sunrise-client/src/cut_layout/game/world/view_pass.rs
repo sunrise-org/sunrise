@@ -1,26 +1,23 @@
 #![cfg(test)]
 use sunrise_gameplay_common::game::Dim;
+#[path = "../../../test_resources.rs"]
+mod test_resources;
 #[cfg(test)]
 pub(crate) mod tests {
+    use super::test_resources::{SERVER_INPUTS, WORLDGEN_INPUTS, prepared_root};
     use sunrise_gameplay::game::server_side::lan::tracker_tests;
 
     #[test]
     #[ignore = "daily"]
     fn cached_tracker_states_match_full_rebuilds_across_ticks_and_levels() {
-        let root = crate::test_resources::prepared_root(&[
-            crate::test_resources::WORLDGEN_INPUTS,
-            crate::test_resources::SERVER_INPUTS,
-        ]);
+        let root = prepared_root(&[WORLDGEN_INPUTS, SERVER_INPUTS]);
         tracker_tests::cached_tracker_states_match_full_rebuilds_across_ticks_and_levels(root);
     }
 
     #[test]
     #[ignore = "daily"]
     fn two_effect_flushes_keep_hurt_death_and_swing_in_order() {
-        let root = crate::test_resources::prepared_root(&[
-            crate::test_resources::WORLDGEN_INPUTS,
-            crate::test_resources::SERVER_INPUTS,
-        ]);
+        let root = prepared_root(&[WORLDGEN_INPUTS, SERVER_INPUTS]);
         tracker_tests::two_effect_flushes_keep_hurt_death_and_swing_in_order(root);
     }
 
