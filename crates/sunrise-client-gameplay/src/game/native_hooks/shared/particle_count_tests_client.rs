@@ -1,8 +1,6 @@
 use super::super::pickups::{Collector, Taken};
 #[cfg(test)]
 use mod_api::ClientHost;
-#[cfg(test)]
-use std::time::Duration;
 use sunrise_client::particles::FireworkExplosion;
 use sunrise_core::geometry::Vec3;
 use sunrise_level::particle_options::{ParticleOptions, ParticleType};
