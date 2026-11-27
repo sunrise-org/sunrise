@@ -1026,7 +1026,7 @@ class CliTests(unittest.TestCase):
             self.assertEqual(identity, {"world_id": generation["world_id"], "save_sha256": generation["save_sha256"],
                                         "scene_hash": rp.scene_hash(scenes)})
             self.assertFalse((Path(out) / "g1" / "saves" / ss.WORLD / "session.lock").exists())
-            (Path(out) / "world" / ss.WORLD / "region" / "r.0.0.mca").write_bytes(b"edited")
+            (generation["save"] / "region" / "r.0.0.mca").write_bytes(b"edited")
             with self.assertRaises(SystemExit) as caught:
                 ss.copy_world(out, Path(out) / "g2", scenes)
             self.assertIn("is not the save", str(caught.exception))
@@ -1050,7 +1050,7 @@ class CliTests(unittest.TestCase):
         with tempfile.TemporaryDirectory() as out, contextlib.redirect_stdout(io.StringIO()):
             bins = self.build(out)
             ss.publish_world(out, self.save(Path(out) / "made"), scenes, bins)
-            before = (Path(out) / "world" / "generation.json").read_text()
+            before = (Path(out) / "world" / "current.json").read_text()
             resources = Path(out) / "res"
             resources.mkdir()
             (resources / "sunrise-resources.json").write_text(json.dumps({"data_version": 5023}))
@@ -1058,9 +1058,25 @@ class CliTests(unittest.TestCase):
             with mock.patch.object(ss, "Game", NoGame), self.assertRaises(SystemExit) as caught:
                 ss.run_world(args, scenes, bins)
             self.assertIn("world not published", str(caught.exception))
-            self.assertEqual((Path(out) / "world" / "generation.json").read_text(), before)
-            self.assertEqual(ss.copy_world(out, Path(out) / "g", scenes)["save_sha256"],
-                             json.loads(before)["save_sha256"])
+            self.assertEqual((Path(out) / "world" / "current.json").read_text(), before)
+            self.assertEqual(ss.copy_world(out, Path(out) / "g", scenes)["world_id"], json.loads(before)["world_id"])
+
+    def test_a_failed_publication_leaves_the_previous_world_published(self):
+        scenes = ss.parse_scenes(scene())
+        with tempfile.TemporaryDirectory() as out, contextlib.redirect_stdout(io.StringIO()):
+            bins = self.build(out)
+            ss.publish_world(out, self.save(Path(out) / "made"), scenes, bins)
+            first = ss.world_generation(out)
+            with mock.patch.object(ss.os, "replace", side_effect=OSError("disk full")), \
+                    self.assertRaises(OSError):
+                ss.publish_world(out, self.save(Path(out) / "made2", b"other"), scenes, bins)
+            self.assertEqual(ss.world_generation(out)["world_id"], first["world_id"])
+            self.assertEqual(ss.copy_world(out, Path(out) / "g1", scenes)["save_sha256"], first["save_sha256"])
+            ss.publish_world(out, self.save(Path(out) / "made3", b"third"), scenes, bins)
+            third = ss.world_generation(out)
+            self.assertNotEqual(third["world_id"], first["world_id"])
+            # The generation before stays whole, for a capture that was copying it.
+            self.assertEqual(ss.staged_digest(first["save"]), first["save_sha256"])
 
     def test_the_options_version_comes_from_the_prepared_resources_alone(self):
         scenes = ss.parse_scenes(scene(options={"renderDistance": "8"}))
@@ -1099,6 +1115,33 @@ class ExitStatusTests(unittest.TestCase):
             status, printed = self.run_main(["compare", "--scenes", str(scene_file), "--out", out])
             self.assertEqual(status, rp.SETUP_FAILED)
             self.assertIn("was not made by this tool", printed)
+
+    def test_filesystem_and_metadata_failures_are_setup_failures(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            scene_file = Path(tmp) / "scenes.json"
+            scene_file.write_text(json.dumps(scene()))
+            a_file = Path(tmp) / "a-file"
+            a_file.write_text("x")
+            status, printed = self.run_main(["compare", "--scenes", str(scene_file), "--out", str(a_file)])
+            self.assertEqual(status, rp.SETUP_FAILED)
+            self.assertIn("not a folder this tool can write in", printed)
+            out = Path(tmp) / "out"
+            resources = Path(tmp) / "res"
+            resources.mkdir()
+            (resources / "sunrise-resources.json").write_text(json.dumps({"data_version": 5023}))
+            pack = Path(tmp) / "BSL.zip"
+            pack.write_bytes(b"zip")
+            capture = ["capture", "--scenes", str(scene_file), "--out", str(out), "--side", "base", "--bin-dir",
+                       str(CliTests.build(tmp)), "--resources", str(resources), "--pack", str(pack)]
+            (out / "world").mkdir(parents=True)
+            (out / "world" / "current.json").write_text('{"world_id": "0123')  # cut short
+            status, printed = self.run_main(capture)
+            self.assertEqual(status, rp.SETUP_FAILED)
+            self.assertIn("the published world can't be read", printed)
+            (out / "world" / "current.json").write_text(json.dumps({"world_id": "0" * 32}))  # no such generation
+            status, printed = self.run_main(capture + ["--replace"])
+            self.assertEqual(status, rp.SETUP_FAILED)
+            self.assertIn("the published world can't be read", printed)
 
     def test_a_valid_difference_is_exit_one(self):
         with tempfile.TemporaryDirectory() as out:

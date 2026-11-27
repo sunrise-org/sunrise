@@ -18,13 +18,14 @@ python3 tools/shader_scenes.py run --out OUT --base-bin-dir BASE --head-bin-dir 
 copy both out of the target folder). Each side drives its game with its own `sunrise-ctl`.
 
 1. `world`: the base build creates the world from the scene's seed, visits every view so its chunks exist, goes back
-   to the first view and quits, which saves it. The save is published to `OUT/world/scenes` only when every view
-   loaded, the camera ended at the first view and the game exited with status 0; `OUT/world/generation.json` then
-   records a fresh generation id, the scene's hash, the build's sha256 and a digest of the published save (its files'
-   relative names and sha256, `session.lock` left out). The new world is built whole beside the old one and only
-   then replaces it, so a generation that fails leaves the published world as it was. Every capture loads a copy of
-   this one world, so both sides draw the same chunks and entities; the copy is hashed and must be the save
-   `generation.json` names, or the capture is refused.
+   to the first view and quits, which saves it. The save is published only when every view loaded, the camera
+   ended at the first view and the game exited with status 0, as a new generation:
+   `OUT/world/generations/<id>/scenes` and its `generation.json` (the generation id, the scene's hash, the build's
+   sha256 and a digest of the save: its files' relative names and sha256, `session.lock` left out), written whole,
+   then `OUT/world/current.json` is pointed at it by one atomic rename. Until then the previous generation stays the
+   published one, so a generation or a publication that fails leaves it as it was; earlier generations are kept.
+   Every capture loads a copy of the generation `current.json` names, so both sides draw the same chunks and
+   entities; the copy is hashed and must be the save its `generation.json` records, or the capture is refused.
 2. `capture --side base` and `--side head`: for each pack (`run` always adds `none`, no pack), a game with scratch
    home and XDG folders inside `OUT/<side>/<pack>/`, the scene's `options.txt` (its `version` line is the
    `data_version` of the prepared resources' `sunrise-resources.json`) and `sunrise-graphics.txt`, a copy of
@@ -32,7 +33,8 @@ copy both out of the target folder). Each side drives its game with its own `sun
    world before its first tick and makes what the frame shows of time follow the world's ticks
    ([docs/agent-control.md](../../docs/agent-control.md#repeatable-screenshots)). It runs the gamerules,
    `gamemode spectator @a` and `tick freeze`, hides the HUD (F1), then for each view places the camera, waits until
-   it is loaded (below), runs the setup, waits again, settles, reads the state back and captures it with
+   it is loaded (below), runs the setup (only once the view loaded: a view that never loads skips it), waits again,
+   settles, reads the state back and captures it with
    `screenshot-sequence FRAMES STEP_MS`: the pack starts over and draws `frames` frames on a clock `step_ms` apart,
    and the last is the picture. Nothing steps the world: no tick runs while a run captures.
 3. `compare`: every view of every pack, base against head, pixel for pixel. `OUT/report/` gets `index.html` (base,
@@ -85,39 +87,51 @@ first view in the End and any view after an End view in another dimension: End v
   frame count and step, and its last frame's clock must be the one `screenshot-sequence` gives frame FRAMES: counter
   FRAMES, elapsed (FRAMES - 1) x STEP_MS and delta STEP_MS, in seconds, compared exactly as f32s. The
   gamerules are queried after they are set.
+- A view whose setup did not run fully (skipped, or a command failed) leaves the world unlike the other side's:
+  every view after it is invalid.
 - The pack, for each capture: Sunrise loads a pack when the world opens and again at each change of dimension, and
-  logs each load that finishes (`shader pack <name>: N programs`) or fails (`... turned off: why`). Each dimension
-  change adds a load the run waits for, and it stays awaited until the log shows it, so a load that timed out is
-  still missing at the next capture in that dimension. The log is read before the camera moves: a load there that
-  no awaited load explains makes the capture before it and the next one invalid, since the log can't place it, and
-  it never stands in for the load the move asks for. Before a capture every awaited load must have come and the last
-  must be running; a load between a capture's start and its reply makes that capture invalid. The capture's reply names the pack that drew
+  logs each load that finishes (`shader pack <name>: N programs`) or fails (`... turned off: why`). The log is read
+  in order with each teleport's feedback line (`[CHAT] Teleported ...`), which the client logs after applying the
+  move. A view that changes dimension awaits one load logged after its own move line, so a load logged before it
+  (a reload of the dimension before, however late) never stands in for it. An awaited load stays awaited across
+  views of that dimension, so a load that timed out is still missing at the next capture there; a move to another
+  dimension while one is still awaited leaves the loads after it impossible to tell apart, and every capture in
+  that dimension is invalid. A load nothing awaits makes the capture before it and the next one invalid, since the
+  log can't place it. Before a capture its move line must be in the log, every awaited load must have come and the
+  last must be running; anything the log shows between a capture's start and its reply makes that capture invalid
+  (for `none` the moves are checked the same way). The capture's reply names the pack that drew
   (its kind and file, taken when the sequence starts; the sequence ends with an error if the pack, the world, the
   settings or the window change while it draws), which must be the staged one, or no pack for `none`.
 - A capture's picture is hashed (sha256) as soon as its reply says it is written, and recorded in `run.json` with
-  the view's checks. Each run records the world generation, the scene hash, the sha256 of the staged pack (hashed
-  from the copy the game loads) and of the `sunrise-client` it ran, and the environment its `--env` set.
+  the view's checks. Each run records the world generation and its save's digest, the scene hash, the sha256 of the
+  staged pack (hashed from the copy the game loads) and of the `sunrise-client` it ran, a digest of the prepared
+  resources (every file's relative name and sha256), the renderer the game picked (GPU, vendor, driver, device type
+  and graphics backend, from `sunrise-ctl status`) and the environment its `--env` set.
 - `compare` takes a view only from a record that carries the view's checks (its `problems`, a list) with none,
   names the view's own picture (`<view>.png`) and its sha256, whose file is there with that sha256 and is a whole
   PNG of the scene's size (one IHDR, first), and only when both sides were taken in the same world and save, for
-  the same scene definition (this scene file's), of the same staged pack. Anything else makes the view invalid: a
-  missing record (a capture that stopped before recording), a malformed `run.json`, a missing or changed file, a
-  damaged picture, a pack run on one side only. A picture no record names is listed and never compared.
+  the same scene definition (this scene file's), of the same staged pack, with the same prepared resources and on
+  the same renderer; the report names what each side drew on. Anything else makes the view invalid: a missing
+  record (a capture that stopped before recording), a malformed `run.json` or a field of the wrong type, a missing
+  or changed file, a damaged picture, a pack run on one side only. A picture no record names is listed and never
+  compared. `run` compares the packs it ran and only those; `compare` on its own compares every run folder under
+  `OUT`.
 - When a game stops answering, the run's note names each process and what it was doing before the tool's cleanup
   (the `gamescope` wrapper: running, or exited with its status; the `sunrise-client` in it: running or gone) and
   after it.
 - Exit status of `compare` and `run`: 0 when every view of every pack is valid and equal, 1 when the comparison
   completed with every view valid and some differ, 2 when any view is invalid or missing; `capture` exits 2 when a
   pack it ran has a view without a record. Every step exits 3 when it can't be set up or the command line is wrong
-  (a missing pack or build, a protected `--env` key, a scene file error, a published world or report folder it
-  can't use); nothing is compared then. Two packs whose names give the same folder name are refused before
+  (a missing pack or build, a protected `--env` key, a scene file error, an `--out` that is not a folder, a
+  published world that can't be read, a report folder it didn't make, a file it can't read or write); nothing is
+  compared then. Two packs whose names give the same folder name are refused before
   anything runs.
 
 ## Where it writes
 
 Everything a run makes goes under `OUT`: the world, each side's folder per pack (game folder, home, XDG folders,
-logs, pictures, `run.json`), the world's scratch folder (a fresh `OUT/build/world-run-*` each time), the world
-being published (`OUT/world-new-*`, renamed to `OUT/world`) and the report. An inherited `PERF_BENCH_TRACE` is
+logs, pictures, `run.json`), the world's scratch folder (a fresh `OUT/build/world-run-*` each time), the world's
+generations and their pointer (`OUT/world/generations/`, `OUT/world/current.json`) and the report. An inherited `PERF_BENCH_TRACE` is
 ignored: the readiness wait writes no trace.
 A side's folder for a pack, the world and the report are never overwritten unless this tool made them (they carry a
 mark), and the first two only with `--replace`. Outside `OUT`: Sunrise's control socket in a fresh `/tmp/ssc-*`
