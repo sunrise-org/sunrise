@@ -268,7 +268,10 @@ impl ClientGame<'_> {
         self.client.mod_gpu.as_ref()
     }
 
-    pub fn set_renderer(&mut self, renderer: Box<Renderer>) {
+    pub fn set_renderer(&mut self, mut renderer: Box<Renderer>) {
+        if let Some(previous) = self.client.renderer.0.as_deref() {
+            renderer.continue_from(previous.continuity());
+        }
         let gpu = renderer.mod_gpu();
         if let Some(previous) = &self.client.mod_gpu {
             gpu.continue_ids_from(previous);

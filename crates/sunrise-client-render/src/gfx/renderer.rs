@@ -545,6 +545,27 @@ pub struct Renderer {
     pub capture_result: Option<std::result::Result<serde_json::Value, String>>,
 }
 
+/// Monotonic state a replacement [`Renderer`] continues from the renderer it replaces, without
+/// retaining any GPU handles across device-loss recovery.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct RendererContinuity {
+    pack_generation: u32,
+}
+
+impl Renderer {
+    /// Capture the monotonic state a replacement renderer continues from.
+    pub fn continuity(&self) -> RendererContinuity {
+        RendererContinuity {
+            pack_generation: self.pack_generation,
+        }
+    }
+
+    /// Continue monotonic state from the renderer this one replaces.
+    pub fn continue_from(&mut self, previous: RendererContinuity) {
+        self.pack_generation = previous.pack_generation;
+    }
+}
+
 impl Drop for Renderer {
     /// Once the device is lost, the window's surfaces are left alive: wgpu refuses to present
     /// or discard a frame on a lost device and keeps that frame acquired, and destroying the

@@ -359,7 +359,7 @@ const BULK_REMOVAL_KEYS: usize = 256;
 const SHRINK_SETTLE: std::time::Duration = std::time::Duration::from_secs(1);
 const SHRINK_RETRY: std::time::Duration = std::time::Duration::from_secs(5);
 mod renderer;
-pub use renderer::Renderer;
+pub use renderer::{Renderer, RendererContinuity};
 /// Every layer's mip levels, layer major (`first` is the first layer's
 /// index into `settings`), made by `MipmapGenerator`.
 /// Block sprite layers per texture array at most: the
