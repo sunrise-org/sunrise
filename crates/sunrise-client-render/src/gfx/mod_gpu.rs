@@ -62,8 +62,8 @@ pub struct ModGpuResources {
     pub(crate) meshes: Arc<Mutex<ModMeshes>>,
     /// Retained GPU uniform buffers backing [`mod_api::UniformBufferRef`] and cached mod textures.
     pub(crate) uniforms: Arc<Mutex<ModUniformBuffers>>,
-    /// Retained GPU storage buffers backing [`mod_api::StorageBufferRef`]; they outlive a resource
-    /// reload and a world close.
+    /// Retained GPU storage buffers backing [`mod_api::StorageBufferRef`]; they outlive a
+    /// same-device resource reload and a world close.
     pub(crate) storage: Arc<Mutex<ModStorageBuffers>>,
     /// Pending readbacks of storage buffers backing [`mod_api::ReadbackTicket`].
     pub(crate) readbacks: Arc<Mutex<ModReadbacks>>,
@@ -81,6 +81,7 @@ impl ModGpuResources {
         queue: wgpu::Queue,
         dynamic_textures: crate::hud::dynamic_textures::Store,
         frame_views: ModFrameState,
+        previous: Option<&Self>,
     ) -> Self {
         Self {
             render_capabilities: probe_render_capabilities(&adapter, &device),
@@ -91,12 +92,26 @@ impl ModGpuResources {
             warned_frame_graph_cycles: Arc::default(),
             meshes: Arc::default(),
             uniforms: Arc::default(),
-            storage: Arc::default(),
-            readbacks: Arc::default(),
-            render_targets: Arc::default(),
+            storage: previous.map_or_else(Arc::default, |old| old.storage.clone()),
+            readbacks: previous.map_or_else(Arc::default, |old| old.readbacks.clone()),
+            render_targets: previous.map_or_else(Arc::default, |old| old.render_targets.clone()),
             dynamic_textures,
             frame_views: Arc::new(Mutex::new(frame_views)),
         }
+    }
+
+    /// Before publishing a replacement renderer, continue the old handle ID sequences in
+    /// any fresh stores. The retired allocations and pending work stay on the old device.
+    pub fn continue_ids_from(&self, previous: &Self) {
+        carry_counter(&self.meshes, &previous.meshes, |s| &mut s.next_generation);
+        carry_counter(&self.uniforms, &previous.uniforms, |s| {
+            &mut s.next_generation
+        });
+        carry_counter(&self.storage, &previous.storage, |s| &mut s.next_generation);
+        carry_counter(&self.readbacks, &previous.readbacks, |s| &mut s.next_id);
+        carry_counter(&self.render_targets, &previous.render_targets, |s| {
+            &mut s.next_generation
+        });
     }
 
     pub(crate) fn set_frame_views(&self, views: ModFrameState) {
@@ -154,6 +169,11 @@ impl ModGpuResources {
         self.render_capabilities.clone()
     }
 
+    /// `RenderCapabilities::float32_filterable`, without copying the rest.
+    pub fn float32_filterable(&self) -> bool {
+        self.render_capabilities.float32_filterable
+    }
+
     /// `RenderCapabilities::multi_draw_indirect_count`, without copying the rest.
     pub fn multi_draw_indirect_count(&self) -> bool {
         self.render_capabilities.multi_draw_indirect_count
@@ -172,6 +192,19 @@ impl ModGpuResources {
                 .max_storage_buffer_binding_size
                 .min(limits.max_buffer_size),
         )
+    }
+}
+
+fn carry_counter<T>(
+    new: &Arc<Mutex<T>>,
+    old: &Arc<Mutex<T>>,
+    counter: impl Fn(&mut T) -> &mut u64,
+) {
+    if !Arc::ptr_eq(new, old) {
+        // The old facade was still callable until publication. Read its final high-water mark
+        // now, and release its lock before taking the new table's lock.
+        let last = *counter(&mut old.lock().unwrap_or_else(|e| e.into_inner()));
+        *counter(&mut new.lock().unwrap_or_else(|e| e.into_inner())) = last;
     }
 }
 
@@ -224,17 +257,16 @@ forward! {
     pub fn render_capabilities(&self) -> RenderCapabilities;
     pub fn max_texture_dimension_2d(&self) -> u32;
     pub fn max_compute_workgroups_per_dimension(&self) -> u32;
-    pub fn float32_filterable(&self) -> bool;
     pub fn warn_frame_graph_cycle_once(&self, passes: &[String]);
     pub fn create_render_target(&self, owner: Option<&'static str>, desc: &RenderTargetDescriptor) -> Result<RenderTargetRef, RenderTargetError>;
     pub fn render_target_resize(&self, owner: Option<&'static str>, target: RenderTargetRef, size: [u32; 2]) -> Result<(), RenderTargetError>;
     pub fn render_target_size(&self, owner: Option<&'static str>, target: RenderTargetRef) -> Result<[u32; 2], RenderTargetError>;
     pub fn render_target_release(&self, owner: Option<&'static str>, target: RenderTargetRef) -> Result<(), RenderTargetError>;
     pub fn retire_unloaded_mod_render_targets(&self, unloaded: &BTreeSet<String>);
-    pub fn resolve_mod_render_target_color(&self, owner: Option<&'static str>, target: RenderTargetRef, attachment: u8, filterable: bool) -> Result<(u64, wgpu::TextureView, TargetMips), PipelineDrawError>;
-    pub fn resolve_mod_render_target_color_mips(&self, owner: Option<&'static str>, view: mod_api::RenderTargetMipView, filterable: bool) -> Result<(u64, wgpu::TextureView, TargetMips), PipelineDrawError>;
+    pub fn resolve_mod_render_target_color(&self, owner: Option<&'static str>, target: RenderTargetRef, attachment: u8) -> Result<(u64, wgpu::TextureView, TargetMips), PipelineDrawError>;
+    pub fn resolve_mod_render_target_color_mips(&self, owner: Option<&'static str>, view: mod_api::RenderTargetMipView) -> Result<(u64, wgpu::TextureView, TargetMips), PipelineDrawError>;
     pub fn resolve_mod_storage_image(&self, owner: Option<&'static str>, access: StorageImageAccess, image: StorageImageBinding) -> Result<(u64, wgpu::TextureView, wgpu::TextureFormat, TargetMips), PipelineDrawError>;
-    pub fn resolve_mod_render_target_depth(&self, owner: Option<&'static str>, target: RenderTargetRef, filterable: bool) -> Result<(u64, wgpu::TextureView), PipelineDrawError>;
+    pub fn resolve_mod_render_target_depth(&self, owner: Option<&'static str>, target: RenderTargetRef) -> Result<(u64, wgpu::TextureView), PipelineDrawError>;
     pub fn check_mod_render_target_level(&self, owner: Option<&'static str>, target: RenderTargetRef, mip_level: u32) -> Result<(), RenderTargetError>;
     pub fn resolve_mod_render_target(&self, owner: Option<&'static str>, target: RenderTargetRef, mip_level: u32) -> Result<ResolvedOffscreenTarget, RenderTargetError>;
     pub(super) fn take_released_mod_render_targets(&self) -> Vec<u64>;

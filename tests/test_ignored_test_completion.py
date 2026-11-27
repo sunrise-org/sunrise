@@ -535,8 +535,23 @@ class IgnoredTests(unittest.TestCase):
                         summary(passed=2))
         result, log = self.run_output(output)
         self.assertEqual(result, {"fixture::case": True, "other": True})
-        self.assertIn("example: test result: ok. 2 passed", log)
-        self.assertNotIn("example: test result: ok. 1 passed", log)
+        self.assertEqual([line for line in log.splitlines() if line.startswith("example: test result:")],
+                         ["example: test result: 2 passed; 0 failed; 0 ignored; 0 measured;"])
+
+    def test_a_completed_target_prints_the_parsed_counters(self):
+        completion = ("test result: SYNTHETIC_LABEL. 1 passed; 2 failed; 3 ignored; 4 measured; "
+                      "SYNTHETIC_TAIL\n")
+        output = target(10, "test good ... ok\ntest bad ... FAILED\ntest worse ... FAILED\n", completion)
+        result, log = self.run_output(output, 101)
+        self.assertEqual(result, {"good": True, "bad": False, "worse": False})
+        self.assertIn("example: test result: 1 passed; 2 failed; 3 ignored; 4 measured;\n", log)
+        self.assertNotIn("SYNTHETIC_", log)
+
+    def test_an_oversized_last_summary_does_not_complete_a_target(self):
+        result, log = self.run_output(target(1, "test good ... ok\n", summary(passed=1) + summary(passed="9" * 5000)))
+        self.assertIsNone(result)
+        self.assertIn("test target did not finish", log)
+        self.assertNotIn("example: test result:", log)
 
     def test_a_target_whose_last_summary_is_a_childs_did_not_complete(self):
         # The parent started two tests; only the child's one-test summary follows.
@@ -557,7 +572,7 @@ class IgnoredTests(unittest.TestCase):
         self.assertIsNone(result)
 
     def test_missing_summary_even_after_parsed_failure(self):
-        result, _ = self.run_output(target(2, "test bad ... FAILED\n", ""), 101)
+        result, _ = self.run_output(target(2, "test bad ... FAILED\ntest skipped ... ignored\n", ""), 101)
         self.assertIsNone(result)
 
     def test_child_summary_cannot_hide_aborted_parent(self):

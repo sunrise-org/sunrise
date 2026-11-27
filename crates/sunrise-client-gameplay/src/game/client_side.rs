@@ -887,6 +887,10 @@ pub(in crate::game) mod block_particles;
 #[path = "blocks/block_particles_client.rs"]
 pub(in crate::game) mod block_particles_client;
 #[cfg(feature = "client")]
+#[cfg(test)]
+#[path = "interface/boss_battle_tests.rs"]
+pub(in crate::game) mod boss_battle_tests;
+#[cfg(feature = "client")]
 #[path = "interface/bossbars_client.rs"]
 pub(in crate::game) mod bossbars_client;
 #[cfg(feature = "client")]

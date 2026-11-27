@@ -1,0 +1,2 @@
+sunrise-client cut_layout::game::creatures::retained_limits_tests::pending_pushes_deliver_once_and_do_not_cross_world_reset lib daily child-process
+sunrise-client cut_layout::game::server_side::creatures_server::retained_limits_tests::same_mob_guest_attack_survives_movement_panic lib daily child-process

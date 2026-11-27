@@ -56,9 +56,8 @@ revision disagrees, remove it to use the SDK's revision.
 
 A native build writes the revision into the package, not the project. For a mod that doesn't use mixins, the
 package keeps an explicit revision or records the SDK's revision if none was written, without requiring a match.
-A project in a game checkout uses the checkout's API surface instead of fetching one into the project, but its
-native compile and package revision still come from the pinned SDK. `cargo sunrise-mod pin` moves the Sunrise
-build pin after checking the destination SDK; it leaves any explicit mixins revision alone.
+`cargo sunrise-mod pin` moves the Sunrise build pin after checking the destination SDK; it leaves any explicit
+mixins revision alone.
 
 ### Build names
 
@@ -79,11 +78,13 @@ can't put another build under its name. A release whose build has no SDK says so
 
 ## `.sunrise/sdk/`
 
-In a code mod, commands such as `new`, `build`, `check` and `hooks` fetch the pinned build's SDK
+In a code mod, commands such as `new`, `build` and `check` fetch the pinned build's SDK
 into `.sunrise/sdk/` after the [checks](01-release.md#how-a-download-is-checked). It holds `sdk.json`,
 `surface.json`, the unpacked API source under `api/`, and `build`, a stamp written only after the fetch finishes.
 The tool fetches again if the stamp is missing or if the pinned build or trusted SDK keys have changed.
 Run `check` without `--build` after a fresh clone to fetch the SDK before Cargo or an editor reads the API path.
+`hooks` only reads: it searches the SDK already in `.sunrise/sdk/` once its stamp and signed files verify,
+and otherwise refuses, telling you to run `check`, without fetching, creating, removing or repairing anything.
 
 `sdk diff`, `check --build` and `pin` read other builds' small files (`sdk.json` and `surface.json`) into
 `.sunrise/cache/<build id>/`, with the same checks. A fit report needs no SDK for a mod made

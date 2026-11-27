@@ -108,8 +108,10 @@ const NOT_GIVEN_YET: [&str; 1] = ["currentRenderedItemId"];
 /// The `int` built-ins of Iris 1.11.7's custom uniforms (an int vector for `eyeBrightness`,
 /// `eyeBrightnessSmooth` and the `...PositionInt`s). Our probe packs of #9126 wrote each name
 /// alone into an `int`, a `float` and a `bool` uniform: Iris kept these in `int` and `float`.
-const INT_NAMES: [&str; 21] = [
+/// `bossBattle` was not probed: it is here because spec 5.2 gives it as an `int`.
+const INT_NAMES: [&str; 22] = [
     "bedrockLevel",
+    "bossBattle",
     "biome",
     "biome_category",
     "biome_precipitation",

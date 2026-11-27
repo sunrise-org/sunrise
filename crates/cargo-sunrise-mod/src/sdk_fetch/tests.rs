@@ -17,7 +17,11 @@ fn release_signed_by(nightly: Option<&str>, pair: &Ed25519KeyPair) -> tempfile::
     let base = tempfile::tempdir().unwrap();
     let folder = base.path().join(format!("sdk-{BUILD}"));
     fs::create_dir_all(&folder).unwrap();
-    fs::write(folder.join(SURFACE), r#"{"hash":"ab"}"#).unwrap();
+    fs::write(
+        folder.join(SURFACE),
+        format!(r#"{{"schema":{},"hash":"ab"}}"#, mod_surface::SCHEMA),
+    )
+    .unwrap();
     // Any archive the unpack reads stands in for the API source and the build data.
     for archive in [API_SOURCE, build_data::ARCHIVE] {
         fs::write(
@@ -118,21 +122,24 @@ fn a_linked_project_cache_is_refused_and_its_destination_left_alone() {
     assert_eq!(fs::read(outside.path().join("sentinel")).unwrap(), b"kept");
 }
 
-/// The names and contents of the files directly in `dir`, to show a refused read wrote nothing.
-#[cfg(unix)]
-fn listing(dir: &Path) -> Vec<(String, Vec<u8>)> {
-    let mut files: Vec<_> = fs::read_dir(dir)
-        .unwrap()
-        .map(|entry| {
-            let entry = entry.unwrap();
-            (
-                entry.file_name().into_string().unwrap(),
-                fs::read(entry.path()).unwrap(),
-            )
-        })
-        .collect();
-    files.sort();
-    files
+/// Every folder (no contents) and file under `dir` with its contents, to show a refused read
+/// wrote nothing.
+fn listing(dir: &Path) -> Vec<(PathBuf, Option<Vec<u8>>)> {
+    fn walk(dir: &Path, found: &mut Vec<(PathBuf, Option<Vec<u8>>)>) {
+        for entry in fs::read_dir(dir).unwrap() {
+            let path = entry.unwrap().path();
+            if path.is_dir() {
+                found.push((path.clone(), None));
+                walk(&path, found);
+            } else {
+                found.push((path.clone(), Some(fs::read(&path).unwrap())));
+            }
+        }
+    }
+    let mut found = Vec::new();
+    walk(dir, &mut found);
+    found.sort();
+    found
 }
 
 #[cfg(unix)]
@@ -212,6 +219,79 @@ fn a_stamp_behind_a_link_is_a_miss_and_its_referent_is_left_alone() {
     fetch(&base, &[key], BUILD, &dir, false).unwrap();
     assert!(stamp.matches(&dir));
     assert_eq!(fs::read(&referent).unwrap(), stamp.as_str().as_bytes());
+}
+
+#[test]
+fn a_prepared_sdk_is_read_without_fetching_or_writing() {
+    let (base, key) = release(Some("nightly-2026-11-13"));
+    let project = tempfile::tempdir().unwrap();
+    let base = Base::Folder(base.path().to_owned());
+    let fetched = fetch(&base, &[key], BUILD, &project.path().join(DIR), true).unwrap();
+    let before = listing(project.path());
+    let prepared = prepared_sdk_from(&[key], project.path(), BUILD).unwrap();
+    assert_eq!(prepared.build, BUILD);
+    assert_eq!(prepared.name, fetched.name);
+    assert_eq!(prepared.dir, project.path().join(DIR));
+    assert_eq!(crate::uses_table::surface_of(&prepared).unwrap().hash, "ab");
+    assert_eq!(listing(project.path()), before);
+}
+
+#[test]
+fn a_missing_stale_or_tampered_sdk_is_refused_to_prepare_and_nothing_changes() {
+    let (base, key) = release(None);
+    let (_, other) = release(None);
+    let project = tempfile::tempdir().unwrap();
+    // Nothing prepared: not even `.sunrise` is created.
+    let error = prepared_sdk_from(&[key], project.path(), BUILD).unwrap_err();
+    assert!(error.contains("cargo sunrise-mod check"), "{error}");
+    assert!(!project.path().join(".sunrise").exists());
+    let base = Base::Folder(base.path().to_owned());
+    fetch(&base, &[key], BUILD, &project.path().join(DIR), true).unwrap();
+    // Prepared under other trust, or for another build.
+    let before = listing(project.path());
+    let error = prepared_sdk_from(&[other], project.path(), BUILD).unwrap_err();
+    assert!(error.contains("cargo sunrise-mod check"), "{error}");
+    let error = prepared_sdk_from(&[key], project.path(), &"1".repeat(40)).unwrap_err();
+    assert!(error.contains("cargo sunrise-mod check"), "{error}");
+    assert_eq!(listing(project.path()), before);
+    // Stamped, but the surface is no longer the signed one: the diagnostic names it, and the
+    // folder is not repaired as `check` would.
+    let surface = project.path().join(DIR).join(SURFACE);
+    fs::write(&surface, b"{}").unwrap();
+    let before = listing(project.path());
+    let error = prepared_sdk_from(&[key], project.path(), BUILD).unwrap_err();
+    assert!(
+        error.contains("does not verify against its signed sums"),
+        "{error}"
+    );
+    assert!(error.contains("cargo sunrise-mod check"), "{error}");
+    assert_eq!(listing(project.path()), before);
+    assert_eq!(fs::read(&surface).unwrap(), b"{}");
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_prepared_sdk_is_refused_to_read_and_its_destination_left_alone() {
+    let (base, key) = release(None);
+    let base = Base::Folder(base.path().to_owned());
+    let outside = tempfile::tempdir().unwrap();
+    fetch(&base, &[key], BUILD, &outside.path().join(DIR), true).unwrap();
+    let before = listing(outside.path());
+    // The folder itself, and the `.sunrise` above it, each lead to a prepared, verified SDK.
+    let linked_folder = tempfile::tempdir().unwrap();
+    fs::create_dir(linked_folder.path().join(".sunrise")).unwrap();
+    std::os::unix::fs::symlink(outside.path().join(DIR), linked_folder.path().join(DIR)).unwrap();
+    let linked_parent = tempfile::tempdir().unwrap();
+    std::os::unix::fs::symlink(
+        outside.path().join(".sunrise"),
+        linked_parent.path().join(".sunrise"),
+    )
+    .unwrap();
+    for project in [&linked_folder, &linked_parent] {
+        let error = prepared_sdk_from(&[key], project.path(), BUILD).unwrap_err();
+        assert!(error.contains("is not a real directory"), "{error}");
+    }
+    assert_eq!(listing(outside.path()), before);
 }
 
 #[test]
@@ -532,51 +612,4 @@ fn a_nightly_name_is_only_nightly_or_a_dated_one() {
         let error = resolve(&base, &[], text).unwrap_err();
         assert!(error.contains("is not a build"), "{text}: {error}");
     }
-}
-
-#[test]
-fn a_project_inside_a_game_checkout_builds_against_it_and_a_pinned_one_does_not() {
-    let dir = tempfile::tempdir().unwrap();
-    let write = |path: &Path, text: &str| {
-        fs::create_dir_all(path.parent().unwrap()).unwrap();
-        fs::write(path, text).unwrap();
-    };
-    let workspace = "[workspace]\nmembers = ['crates/sunrise-mod-api']\n";
-    let dependency = |path: &str| {
-        format!(
-            "[package]\nname='m'\nversion='1.0.0'\n[dependencies]\nsunrise-mod-api = {{ path = '{path}' }}\n"
-        )
-    };
-    // The game's own fixture: a project inside the checkout, its dependency the checkout's crate.
-    let game = dir.path().join("game");
-    write(&game.join("Cargo.toml"), workspace);
-    write(&game.join("crates/sunrise-mod-api/Cargo.toml"), "");
-    let fixture = game.join("mods/fixture");
-    write(
-        &fixture.join("Cargo.toml"),
-        &dependency("../../crates/sunrise-mod-api"),
-    );
-    assert_eq!(
-        game_tree(&fixture).unwrap(),
-        Some(game.canonicalize().unwrap())
-    );
-    // A mod made from the template: its dependency is the fetched SDK's own workspace.
-    let project = dir.path().join("mod");
-    write(&project.join(".sunrise/sdk/api/Cargo.toml"), workspace);
-    write(
-        &project.join(".sunrise/sdk/api/crates/sunrise-mod-api/Cargo.toml"),
-        "",
-    );
-    write(
-        &project.join("Cargo.toml"),
-        &dependency(".sunrise/sdk/api/crates/sunrise-mod-api"),
-    );
-    assert_eq!(game_tree(&project).unwrap(), None);
-    // A project outside the checkout that names its crate is still pinned, not built against it.
-    let outside = dir.path().join("outside");
-    write(
-        &outside.join("Cargo.toml"),
-        &dependency("../game/crates/sunrise-mod-api"),
-    );
-    assert_eq!(game_tree(&outside).unwrap(), None);
 }

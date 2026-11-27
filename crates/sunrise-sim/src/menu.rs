@@ -886,6 +886,7 @@ impl Menu {
                 item_crafted: Vec::new(),
                 crafted_counts: Vec::new(),
                 merchant_remove_count: 0,
+                craft_remove_count: 0,
                 brewed: Vec::new(),
                 brewed_potion_hook: false,
                 brewed_potion_takes: Vec::new(),
@@ -2103,6 +2104,11 @@ impl Menu {
             let count = amount.min(self.slot(s).map_or(0, |stack| stack.count));
             self.state.merchant_remove_count =
                 self.state.merchant_remove_count.wrapping_add(count as i32);
+        }
+        // ResultSlot.remove counts what was asked for, not what removeItem hands over.
+        if slot.role == Role::CraftResult {
+            self.state.craft_remove_count +=
+                amount.min(self.slot(s).map_or(0, |stack| stack.count));
         }
         // ResultContainer.removeItem takes the whole stack; the loom's result
         // is a SimpleContainer slot and splits.

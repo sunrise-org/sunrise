@@ -475,31 +475,33 @@ impl PreparedModels {
 }
 
 #[cfg(feature = "test-support")]
-static SLOT_CAP: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(u64::MAX);
+thread_local! {
+    static SLOT_CAP: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };
+    /// `u64::MAX` means the test has not named an uploaded generation.
+    static UPLOADED_GENERATION: std::cell::Cell<u64> = const { std::cell::Cell::new(u64::MAX) };
+}
 
+/// Cap prepared instance slots for tests. This value is per thread, so code
+/// under test must run on the thread that sets it (for example not inside `run_with_game_stack`).
 #[cfg(feature = "test-support")]
 pub fn cap_prepared_instance_slots(slots: u64) {
-    SLOT_CAP.store(slots, std::sync::atomic::Ordering::Relaxed);
+    SLOT_CAP.with(|cell| cell.set(slots));
 }
-
-/// `u64::MAX` means the test has not named an uploaded generation.
-#[cfg(feature = "test-support")]
-static UPLOADED_GENERATION: std::sync::atomic::AtomicU64 =
-    std::sync::atomic::AtomicU64::new(u64::MAX);
 
 /// Pretend prepared geometry for `generation` is resident. `None` clears it.
+/// This value is per thread, so code under test must run on the thread that sets it
+/// (for example not inside `run_with_game_stack`).
 #[cfg(feature = "test-support")]
 pub fn set_test_prepared_generation(generation: Option<u64>) {
-    UPLOADED_GENERATION.store(
-        generation.unwrap_or(u64::MAX),
-        std::sync::atomic::Ordering::Relaxed,
-    );
+    UPLOADED_GENERATION.with(|cell| cell.set(generation.unwrap_or(u64::MAX)));
 }
 
-/// The generation `set_test_prepared_generation` published, if any.
+/// The generation `set_test_prepared_generation` published on this thread, if any.
+/// This value is per thread, so code under test must run on the thread that sets it
+/// (for example not inside `run_with_game_stack`).
 #[cfg(feature = "test-support")]
 pub fn test_prepared_generation() -> Option<u64> {
-    let generation = UPLOADED_GENERATION.load(std::sync::atomic::Ordering::Relaxed);
+    let generation = UPLOADED_GENERATION.with(std::cell::Cell::get);
     (generation != u64::MAX).then_some(generation)
 }
 
@@ -507,7 +509,7 @@ pub fn prepared_instance_room_for(already: u64, incoming: usize, max_buffer: u64
     let stride = std::mem::size_of::<PreparedModelInstance>() as u64;
     let device = max_instance_slots(stride, max_buffer);
     #[cfg(feature = "test-support")]
-    let slots = device.min(SLOT_CAP.load(std::sync::atomic::Ordering::Relaxed));
+    let slots = device.min(SLOT_CAP.with(std::cell::Cell::get));
     #[cfg(not(feature = "test-support"))]
     let slots = device;
     instance_room(already, incoming, slots)
@@ -515,7 +517,7 @@ pub fn prepared_instance_room_for(already: u64, incoming: usize, max_buffer: u64
 
 #[cfg(feature = "test-support")]
 pub fn capped_prepared_room(already: u64, incoming: usize) -> Option<usize> {
-    let cap = SLOT_CAP.load(std::sync::atomic::Ordering::Relaxed);
+    let cap = SLOT_CAP.with(std::cell::Cell::get);
     (cap != u64::MAX).then(|| prepared_instance_room_for(already, incoming, u64::MAX))
 }
 
@@ -829,5 +831,24 @@ mod tests {
         assert!(!stolen, "another thread consumed the forced upload failure");
         assert!(take_forced_failure());
         assert!(!take_forced_failure());
+    }
+
+    #[cfg(feature = "test-support")]
+    #[test]
+    fn cap_and_generation_stay_on_the_thread_that_set_them() {
+        cap_prepared_instance_slots(3);
+        set_test_prepared_generation(Some(42));
+        let (other_cap, other_gen) = std::thread::scope(|scope| {
+            scope
+                .spawn(|| (capped_prepared_room(0, 8), test_prepared_generation()))
+                .join()
+                .unwrap()
+        });
+        assert_eq!(other_cap, None);
+        assert_eq!(other_gen, None);
+        assert_eq!(capped_prepared_room(0, 8), Some(3));
+        assert_eq!(test_prepared_generation(), Some(42));
+        cap_prepared_instance_slots(u64::MAX);
+        set_test_prepared_generation(None);
     }
 }

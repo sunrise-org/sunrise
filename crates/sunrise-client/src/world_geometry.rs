@@ -884,6 +884,11 @@ impl WorldGeometry {
             }),
         }
     }
+    /// OIT draws use the engine's OIT pipeline, not a linked shader-pack program.
+    pub fn is_oit_pass(&self) -> bool {
+        matches!(self.active, ActiveTarget::Oit)
+    }
+
     /// Append inline uniform or push-constant bytes into the active target's per-frame byte pool.
     pub fn push_inline_uniform(&mut self, bytes: &[u8]) -> std::ops::Range<usize> {
         let pool = match self.active {

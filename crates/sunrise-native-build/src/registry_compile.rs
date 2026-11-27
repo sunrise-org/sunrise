@@ -156,16 +156,7 @@ pub(super) fn stage_and_cargo(
         .catalog
         .prepare(projects.iter().map(|project| &project.bundle.manifest))
         .map_err(|e| e.to_string())?;
-    // The last build's staging, kept aside until this one's is written: a file whose bytes didn't
-    // change gets its old modified time back, so cargo's fingerprints reuse what it built from it.
-    let previous = out.with_extension("old");
-    if previous.exists() {
-        fs::remove_dir_all(&previous).map_err(|e| e.to_string())?;
-    }
-    if out.exists() {
-        fs::rename(out, &previous).map_err(|e| e.to_string())?;
-    }
-    fs::create_dir_all(out).map_err(|e| e.to_string())?;
+    let previous = rotate_stage(out)?;
     let mut bindings = BTreeMap::new();
     let mut members = Vec::new();
     let mut wrapper_deps = toml::Table::new();
@@ -533,7 +524,10 @@ pub(super) fn stage_and_cargo(
         out.to_path_buf(),
         registry_rustc::Bindings { externs, link_args },
     );
-    if previous.exists() {
+    if existing_owned_stage(&previous)? {
+        if !existing_owned_stage(out)? {
+            return Err(format!("{}: registry stage disappeared", out.display()));
+        }
         keep_unchanged_times(out, &previous).map_err(|e| e.to_string())?;
         fs::remove_dir_all(&previous).map_err(|e| e.to_string())?;
     }
@@ -666,6 +660,34 @@ pub(super) fn stage_and_cargo(
     Ok(Some((binary, runtime)))
 }
 
+fn existing_owned_stage(stage: &Path) -> Result<bool, String> {
+    match fs::symlink_metadata(stage) {
+        Ok(_) => {
+            let parent = stage
+                .parent()
+                .ok_or_else(|| format!("{}: no folder above the stage", stage.display()))?;
+            prebuilt::own_folder(parent, stage)?;
+            Ok(true)
+        }
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => Ok(false),
+        Err(error) => Err(format!("{}: {error}", stage.display())),
+    }
+}
+
+/// Keep the last stage until its unchanged files and folders can supply their old mtimes.
+fn rotate_stage(out: &Path) -> Result<PathBuf, String> {
+    let previous = out.with_extension("old");
+    let current_exists = existing_owned_stage(out)?;
+    if existing_owned_stage(&previous)? {
+        fs::remove_dir_all(&previous).map_err(|e| format!("{}: {e}", previous.display()))?;
+    }
+    if current_exists {
+        fs::rename(out, &previous).map_err(|e| format!("{}: {e}", out.display()))?;
+    }
+    fs::create_dir_all(out).map_err(|e| format!("{}: {e}", out.display()))?;
+    Ok(previous)
+}
+
 /// Gives each file under `staged` whose bytes equal the file at the same place under `previous`
 /// that file's modified time, and each folder whose entries have the same names as the folder at
 /// the same place that folder's: a build script whose `rerun-if-changed` names a folder reruns
@@ -677,23 +699,26 @@ fn keep_unchanged_times(staged: &Path, previous: &Path) -> std::io::Result<()> {
         let kind = entry.file_type()?;
         let old = previous.join(entry.file_name());
         names.push(entry.file_name());
-        if kind.is_dir() {
-            if old.is_dir() {
-                keep_unchanged_times(&entry.path(), &old)?;
-            }
-        } else if kind.is_file() {
-            let Ok(meta) = fs::symlink_metadata(&old) else {
-                continue;
-            };
-            if meta.is_file()
-                && meta.len() == entry.metadata()?.len()
-                && fs::read(&old)? == fs::read(entry.path())?
-            {
-                fs::File::options()
-                    .write(true)
-                    .open(entry.path())?
-                    .set_modified(meta.modified()?)?;
-            }
+        let Ok(meta) = fs::symlink_metadata(&old) else {
+            continue;
+        };
+        // The file and directory checks below already exclude symlinks; Windows junctions
+        // can still report themselves as directories.
+        #[cfg(windows)]
+        if super::crates::is_link_or_junction(&meta) {
+            continue;
+        }
+        if kind.is_dir() && meta.is_dir() {
+            keep_unchanged_times(&entry.path(), &old)?;
+        } else if kind.is_file()
+            && meta.is_file()
+            && meta.len() == entry.metadata()?.len()
+            && fs::read(&old)? == fs::read(entry.path())?
+        {
+            fs::File::options()
+                .write(true)
+                .open(entry.path())?
+                .set_modified(meta.modified()?)?;
         }
     }
     let mut old_names = fs::read_dir(previous)?
@@ -713,6 +738,62 @@ fn keep_unchanged_times(staged: &Path, previous: &Path) -> std::io::Result<()> {
 
 #[cfg(test)]
 mod tests {
+    #[cfg(unix)]
+    #[test]
+    fn rotation_refuses_linked_current_and_previous_stages_before_mutating_either() {
+        use std::os::unix::fs::symlink;
+        for link_current in [true, false] {
+            let root = tempfile::tempdir().unwrap();
+            let stage = root.path().join("stage");
+            let previous = stage.with_extension("old");
+            let outside = root.path().join("outside");
+            let (linked, real) = if link_current {
+                (&stage, &previous)
+            } else {
+                (&previous, &stage)
+            };
+            fs::create_dir(real).unwrap();
+            fs::write(real.join("keep"), "stage").unwrap();
+            fs::create_dir(&outside).unwrap();
+            fs::write(outside.join("keep"), "outside").unwrap();
+            symlink(&outside, linked).unwrap();
+
+            let error = rotate_stage(&stage).unwrap_err();
+            assert!(
+                error.contains(&format!("{}: not a folder of its own", linked.display())),
+                "{error}"
+            );
+            assert_eq!(fs::read_link(linked).unwrap(), outside);
+            assert_eq!(fs::read_to_string(real.join("keep")).unwrap(), "stage");
+            assert_eq!(fs::read_to_string(outside.join("keep")).unwrap(), "outside");
+        }
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn timestamps_are_not_reused_through_a_linked_prior_directory() {
+        let root = tempfile::tempdir().unwrap();
+        let old = root.path().join("stage.old");
+        let new = root.path().join("stage");
+        let outside = root.path().join("outside");
+        for folder in [&old, &new.join("src"), &outside] {
+            fs::create_dir_all(folder).unwrap();
+        }
+        let file = new.join("src/lib.rs");
+        fs::write(&file, "same").unwrap();
+        fs::write(outside.join("lib.rs"), "same").unwrap();
+        let then = filetime::FileTime::from_unix_time(1_000_000, 0);
+        filetime::set_file_mtime(outside.join("lib.rs"), then).unwrap();
+        filetime::set_file_mtime(&outside, then).unwrap();
+        std::os::unix::fs::symlink(&outside, old.join("src")).unwrap();
+        let modified = |path: &Path| fs::metadata(path).unwrap().modified().unwrap();
+        let before = (modified(&new.join("src")), modified(&file));
+
+        keep_unchanged_times(&new, &old).unwrap();
+
+        assert_eq!((modified(&new.join("src")), modified(&file)), before);
+    }
+
     /// A restaged file whose bytes didn't change keeps its old modified time, so cargo reuses
     /// what it built from it; a changed or new file keeps its new one.
     #[test]
@@ -813,7 +894,7 @@ mod tests {
             // A second's gap, so a folder written again is newer than the last run even where
             // the filesystem keeps whole seconds.
             std::thread::sleep(std::time::Duration::from_secs(1));
-            fs::rename(&stage, &previous).unwrap();
+            assert_eq!(rotate_stage(&stage).unwrap(), previous);
             write_stage();
             keep_unchanged_times(&stage, &previous).unwrap();
             fs::remove_dir_all(&previous).unwrap();

@@ -32,8 +32,9 @@ impl crate::game::ServerGame<'_> {
             // What the blocks spawned (a dispensed minecart, a lit TNT, a
             // placed boat) joins before the entities tick.
             span("mods_joins_flush", || self.native_joins_flush(false, 0));
-            if self.dimension_type().has_ender_dragon_fight {
-                // ServerLevel.tick runs the fight before visiting the entity tick list.
+            if self.owns_fight(self.common.dim) && self.fight_ticks() {
+                // ServerLevel.tick runs the fight before visiting the entity tick list,
+                // while `emptyTime < 300`.
                 span("tick_dragon_fight", || self.tick_fight());
                 span("mods_joins_flush", || self.native_joins_flush(false, 0));
             }

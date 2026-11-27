@@ -34,7 +34,7 @@ struct CachedStandaloneTexture {
 /// Generational store of retained GPU [`UniformBufferRef`] buffers and cached mod pipeline
 /// textures owned by `Renderer`.
 pub struct ModUniformBuffers {
-    next_generation: u64,
+    pub(super) next_generation: u64,
     slots: Vec<Option<ModUniformBuffer>>,
     next_view_id: u64,
     standalone_textures: BTreeMap<Identifier, Option<CachedStandaloneTexture>>,

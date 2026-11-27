@@ -61,6 +61,32 @@ pub(crate) mod tests {
 
     use sunrise_sim::lan::PlayerSender;
 
+    /// `EntityType.getDimensions()` before any entity exists: zombie 0.6 x 1.95 with eyes at 1.74,
+    /// cow 0.9 x 1.4 with eyes at 1.3, `zombie` as `minecraft:zombie`, nothing for a type that
+    /// does not exist.
+    #[test]
+    #[ignore = "daily"]
+    fn entity_type_dimensions_read_the_registered_size_without_spawning() {
+        use mod_api::EntityTypeDimensions;
+        use sunrise_gameplay_common::game::native_components::NativeComponentsGameExt3 as _;
+        with_game(|game| {
+            let size = |width, height, eye_height| {
+                Some(EntityTypeDimensions::new(width, height, eye_height))
+            };
+            assert_eq!(
+                game.entity_type_dimensions("minecraft:zombie"),
+                size(0.6, 1.95, 1.74)
+            );
+            assert_eq!(game.entity_type_dimensions("zombie"), size(0.6, 1.95, 1.74));
+            assert_eq!(
+                mod_api::prelude::ItemsHost::entity_type_dimensions(&*game, "minecraft:cow"),
+                size(0.9, 1.4, 1.3)
+            );
+            assert_eq!(game.entity_type_dimensions("minecraft:no_such_mob"), None);
+            assert_eq!(game.entity_type_dimensions("nope:ghost"), None);
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn whole_stack_component_edit_preserves_slot_and_refuses_invalid_components() {

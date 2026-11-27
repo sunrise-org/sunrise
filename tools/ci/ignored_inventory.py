@@ -101,21 +101,48 @@ def target_roots(root=ROOT, tested=False):
                    folder.relative_to(root.resolve()).as_posix()) for package, target, path, folder in roots)
 
 
-@lru_cache(maxsize=None)
-def tests(root=ROOT):
-    """Canonical full identities and original ignore reasons, in one batched source-only invocation."""
-    root = Path(root).resolve()
+def discovery(root, arguments=(), targets=None):
+    """The lines sunrise-game-discovery writes for every tested target of the tree at `root`, one batched run;
+    with `targets` (a set of (package, target)), only for those."""
     binary = os.environ.get("SUNRISE_GAME_DISCOVERY")
     command = [binary] if binary else ["cargo", "run", "--quiet", "--locked", "-p", "sunrise-game-discovery",
                                       "--bin", "sunrise-game-discovery", "--"]
-    inputs = "".join("\t".join(row) + "\n" for row in target_roots(root, tested=True))
-    result = subprocess.run([*command, str(root)], input=inputs, capture_output=True, text=True, cwd=ROOT)
+    inputs = "".join("\t".join(row) + "\n" for row in target_roots(root, tested=True)
+                     if targets is None or row[:2] in targets)
+    result = subprocess.run([*command, str(root), *arguments], input=inputs, capture_output=True, text=True, cwd=ROOT)
     if result.returncode:
-        raise SystemExit(f"canonical Rust test inventory failed ({result.returncode}):\n{result.stderr}")
-    found = []
-    for line in result.stdout.splitlines():
-        found.append(Test(**json.loads(line)))
-    return tuple(found)
+        raise SystemExit(f"sunrise-game-discovery {' '.join(arguments)} failed ({result.returncode}):\n{result.stderr}")
+    return result.stdout.splitlines()
+
+
+@lru_cache(maxsize=None)
+def tests(root=ROOT):
+    """Canonical full identities and original ignore reasons, in one batched source-only invocation."""
+    return tuple(Test(**json.loads(line)) for line in discovery(Path(root).resolve()))
+
+
+def references_with_files(root, boundary, literals, fragments, targets=None):
+    """What each test target's functions reach (crates/sunrise-game-discovery/src/references.rs), and the source
+    files of every target that spells a seed: (records, {(package, target): files}). Records are of `kind`
+    `reaches` or `unresolved`, for the seeds `boundary` (`FILE::NAME`), string `literals` read in full and string
+    `fragments` they contain. `targets` limits the scan to those (package, target) pairs."""
+    arguments = ["--references", "--boundary", boundary]
+    for flag, values in (("--literal", literals), ("--fragment", fragments)):
+        for value in values:
+            arguments += [flag, value]
+    records, files = [], {}
+    for line in discovery(Path(root).resolve(), arguments, targets):
+        record = json.loads(line)
+        if record["kind"] == "target_files":
+            files[(record["package"], record["target"])] = tuple(record["files"])
+        else:
+            records.append(record)
+    return tuple(records), files
+
+
+def references(root, boundary, literals, fragments, targets=None):
+    """Only the `reaches` and `unresolved` records of `references_with_files`."""
+    return references_with_files(root, boundary, literals, fragments, targets)[0]
 
 
 if __name__ == "__main__":

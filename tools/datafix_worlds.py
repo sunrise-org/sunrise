@@ -495,11 +495,14 @@ def build(name, force=False):
         # change, so the grid cannot be cleared. The world is wanted for its level.dat alone: its spawn moves far from
         # the grid, the chunks of this first start are dropped, and the world is made again from there, so its saved
         # chunks never hold the grid.
-        out = server.run('setworldspawn -4000 70 -4000')
-        if not any('Set the world spawn point' in line for line in out):
-            server.stop()
-            raise RuntimeError(f'{name}: setworldspawn was refused, so the grid would be saved: {out}')
-        server.stop()
+        spawn_set = False
+        try:
+            out = server.run('setworldspawn -4000 70 -4000')
+            spawn_set = any('Set the world spawn point' in line for line in out)
+            if not spawn_set:
+                raise RuntimeError(f'{name}: setworldspawn was refused, so the grid would be saved: {out}')
+        finally:
+            server.stop(save=spawn_set)   # a failed run is not saved over (its stdin may be gone), only stopped
         shutil.rmtree(work / 'world' / 'region')
         server = Server(work, jar, port, scene.experiments(data_version), java_exe, props)
     problems = []

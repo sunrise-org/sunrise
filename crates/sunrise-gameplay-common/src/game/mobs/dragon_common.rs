@@ -540,6 +540,8 @@ pub struct Dragon {
     /// the target a mod set (`Mob.target`): kept for native mods, the
     /// dragon's own flight never reads them.
     pub aggressive: bool,
+    /// `Mob.isLeftHanded` (`LeftHanded`), also synced in the mob flags byte.
+    pub left_handed: bool,
     pub persistent: bool,
     pub target: Option<u32>,
     /// The phase left was `Flaming` (`DragonSittingFlamingPhase.end`) and its
@@ -694,6 +696,7 @@ impl Dragon {
             in_wall: false,
             phase: Phase::Hover { target: None },
             aggressive: false,
+            left_handed: false,
             persistent: false,
             target: None,
             flame_ended: false,
@@ -897,6 +900,8 @@ impl Dragon {
             if self.no_ai {
                 map.insert("NoAI".into(), Tag::Byte(1));
             }
+            // `Mob.addAdditionalSaveData` writes the flag either way.
+            map.insert("LeftHanded".into(), Tag::Byte(i8::from(self.left_handed)));
             map.insert(
                 "sitting_damage_received".into(),
                 Tag::Float(self.sitting_damage.to_bits()),
@@ -927,6 +932,7 @@ impl Dragon {
         if let Some(t) = nbt_value::number(tag.get("DragonDeathTime")) {
             self.death_time = t as i32;
         }
+        self.left_handed = sunrise_sim::entity_nbt::flag(tag, "LeftHanded");
         self.persistent = sunrise_sim::entity_nbt::flag(tag, "PersistenceRequired");
         if let Some(equipment) = tag.get("equipment") {
             self.equipment = sunrise_items::equipment::Equipment::read(equipment);
@@ -934,6 +940,36 @@ impl Dragon {
         self.live.load(tag.get("attributes"), |_| true);
         self.no_ai = matches!(tag.get("NoAI"), Some(Tag::Byte(b)) if *b != 0);
     }
+}
+
+/// `Mob.DATA_MOB_FLAGS_ID`: NoAI is bit 0, LeftHanded bit 1, aggressive bit 2.
+pub fn mob_flags(d: &Dragon) -> i8 {
+    i8::from(d.no_ai) | i8::from(d.left_handed) << 1 | i8::from(d.aggressive) << 2
+}
+
+/// The one `DATA_MOB_FLAGS_ID` entry, absent when every flag is clear; two
+/// pushes on index 15 would overwrite each other.
+pub fn mob_flags_meta(d: &Dragon) -> Option<(u8, i32, sunrise_protocol::entity_data::Value)> {
+    let flags = mob_flags(d);
+    (flags != 0).then_some((
+        15,
+        sunrise_protocol::entity_data::serializer::BYTE,
+        sunrise_protocol::entity_data::Value::Byte(flags),
+    ))
+}
+
+/// `Mob.setNoAi` and `Mob.setLeftHanded` from a synced flags byte. The
+/// aggressive bit stays a server-side flag.
+pub fn apply_mob_flags(d: &mut Dragon, flags: i8) {
+    d.no_ai = flags & 1 != 0;
+    d.left_handed = flags & 2 != 0;
+}
+
+/// `Mob.finalizeSpawn`: the follow range's triangle draw, then
+/// `setLeftHanded(nextFloat() < 0.05)`, in that order.
+pub fn finalize_spawn_left_handed(random: &mut impl RandomSource) -> bool {
+    let _ = random.triangle(0.0, 0.114_850_000_000_000_01);
+    random.next_float() < 0.05
 }
 
 pub fn saved_dragon_phase(tag: Option<&Tag>) -> Option<Phase> {
@@ -1038,5 +1074,58 @@ use crate::game::side_ops::modapi_hooks::ModapiHooksSideGameExt as _;
 impl Dragon {
     pub fn set_render_test_crystal(&mut self, crystal: Option<usize>) {
         self.nearest_crystal = crystal;
+    }
+}
+
+#[cfg(test)]
+mod left_handed_tests {
+    use super::*;
+
+    fn dragon() -> Dragon {
+        Dragon::new(Vec3::ZERO, 0.0, 0)
+    }
+
+    #[test]
+    fn a_dragons_left_handed_flag_survives_the_chunk_save() {
+        let mut d = dragon();
+        d.left_handed = true;
+        let saved = d.to_nbt([0; 4], None, &Default::default());
+        assert_eq!(saved.get("LeftHanded"), Some(&Tag::Byte(1)));
+        assert!(Dragon::from_nbt(&saved, 0).unwrap().left_handed);
+        // `Mob.addAdditionalSaveData` writes the flag either way.
+        let mut d = dragon();
+        d.left_handed = false;
+        let saved = d.to_nbt([0; 4], None, &Default::default());
+        assert_eq!(saved.get("LeftHanded"), Some(&Tag::Byte(0)));
+        assert!(!Dragon::from_nbt(&saved, 0).unwrap().left_handed);
+    }
+
+    #[test]
+    fn the_dragon_syncs_left_handed_in_the_mob_flags_byte() {
+        use sunrise_protocol::entity_data::{Value, serializer};
+        let mut d = dragon();
+        assert_eq!(mob_flags_meta(&d), None);
+        // LeftHanded is bit 1, NoAI bit 0 and aggressive bit 2, in one entry.
+        d.left_handed = true;
+        assert_eq!(
+            mob_flags_meta(&d),
+            Some((15, serializer::BYTE, Value::Byte(2)))
+        );
+        d.no_ai = true;
+        assert_eq!(
+            mob_flags_meta(&d),
+            Some((15, serializer::BYTE, Value::Byte(3)))
+        );
+        d.aggressive = true;
+        assert_eq!(
+            mob_flags_meta(&d),
+            Some((15, serializer::BYTE, Value::Byte(7)))
+        );
+        // The synced byte yields NoAI and LeftHanded; aggressive stays local.
+        let mut d = dragon();
+        apply_mob_flags(&mut d, 2);
+        assert!(d.left_handed && !d.no_ai);
+        apply_mob_flags(&mut d, 5);
+        assert!(d.no_ai && !d.left_handed);
     }
 }

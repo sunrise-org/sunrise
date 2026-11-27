@@ -28,7 +28,7 @@ on:
         type: boolean
         default: false
       pr:
-        description: Run the heavy checks on this pull request's test merge with its base (a fork's too) and post them on its head
+        description: Test a verified merge of this pull request (a fork's too) with its live base and post results on its head
         type: string
         default: ''
 defaults:
@@ -90,8 +90,8 @@ jobs:
       actions: read
       pull-requests: read
     outputs:
-      # Whether the heavy jobs run (tools/ci/pr_gate.py); a dispatch with `pr` runs them on that pull request's test
-      # merge with its base, and reports them on its head (`pr_sha`).
+      # Whether the heavy jobs run (tools/ci/pr_gate.py); a dispatch with `pr` verifies the test merge against the
+      # live base before handing it off (`pr_merge`), and reports on the head (`pr_sha`).
       heavy: ${{ steps.gate.outputs.heavy == 'false' && 'false' || 'true' }}
       pr_sha: ${{ steps.gate.outputs.pr_sha }}
       pr_merge: ${{ steps.gate.outputs.pr_merge }}
@@ -229,6 +229,8 @@ jobs:
       - env:
           GH_TOKEN: ${{ github.token }}
           RECOVERY_REF: ${{ github.head_ref || github.ref_name }}
+          # `changes` already validated this input. The replacement selects the PR's live test merge.
+          RECOVERY_PR: ${{ inputs.pr }}
         run: python3 tools/ci/boat_watch.py
 
   # The conflict-hotspot churn report (tools/hotspots/README.md), on the nightly schedule only, on GitHub's runner:
@@ -298,7 +300,7 @@ jobs:
       RUNNER_KIND: ${{ needs.changes.outputs.self_hosted == 'true' && needs.changes.outputs.trusted == 'true' && 'dyna' || startsWith(needs.changes.outputs.hosted_label, 'boat') && 'boat' || 'github' }}
     steps:
       - name: Require successful check selection
-        if: needs.changes.result != 'success'
+        if: needs.changes.result != 'success' || (github.event_name == 'workflow_dispatch' && inputs.pr != '' && needs.changes.outputs.pr_merge == '')
         run: exit 1
       - name: Documentation needs no Rust lint
         if: needs.changes.outputs.rust_required == 'false'
@@ -537,7 +539,7 @@ jobs:
       RUNNER_KIND: ${{ needs.changes.outputs.self_hosted == 'true' && 'dyna' || !inputs.github-fallback && needs.changes.outputs.forced_github != 'true' && vars.SELF_HOSTED_CI == 'all' && needs.changes.outputs.trusted == 'true' && 'other' || startsWith(needs.changes.outputs.hosted_label, 'boat') && 'boat' || 'github' }}
     steps:
       - name: Require successful check selection
-        if: needs.changes.result != 'success'
+        if: needs.changes.result != 'success' || (github.event_name == 'workflow_dispatch' && inputs.pr != '' && needs.changes.outputs.pr_merge == '')
         run: exit 1
       - uses: actions/checkout@v4
         with:
@@ -594,14 +596,15 @@ jobs:
             export PATH="$CARGO_HOME/bin:$PATH"
           fi
           bash tools/ci/rustup_install.sh --profile minimal --component rustfmt --component clippy
-      # Registry dependencies, from the snapshot ci-cache.yml publishes from main every 6 hours; pull requests only
-      # read it. The workspace crates are rebuilt: their snapshot was 3 GB of the repository's 10 GB of caches.
+      # Registry dependencies, from the snapshot ci-cache.yml publishes from main every 6 hours. The workspace
+      # crates are rebuilt: their snapshot was 3 GB of the repository's 10 GB of caches. A dispatch with `pr`
+      # checks out a PR merge even on ref main, so it can restore but must not save.
       # Profile overrides in Cargo.toml are part of rust-cache's key; unchanged dependencies still restore.
       - uses: Swatinem/rust-cache@v2
         if: needs.changes.outputs.rust_required != 'false' && (env.RUNNER_KIND == 'github' || env.RUNNER_KIND == 'boat')
         with:
           shared-key: verify-deps
-          save-if: ${{ github.ref == 'refs/heads/main' }}
+          save-if: ${{ github.ref == 'refs/heads/main' && inputs.pr == '' }}
       - name: Use persistent verify build artifacts
         if: needs.changes.outputs.rust_required != 'false' && needs.changes.outputs.self_hosted == 'true'
         run: |
@@ -783,6 +786,10 @@ jobs:
     # finishes in 8 to 11 minutes, so eight CPUs only took a large slot from the gate's compiling jobs.
     runs-on: ${{ needs.changes.outputs.heavy == 'false' && 'ubuntu-latest' || needs.changes.outputs.rust_required == 'false' && (needs.changes.outputs.self_hosted == 'true' && needs.changes.outputs.trusted == 'true' && 'dyna-small' || 'ubuntu-latest') || needs.changes.outputs.trusted != 'true' && 'ubuntu-latest' || needs.changes.outputs.self_hosted == 'true' && 'dyna-medium' || !inputs.github-fallback && needs.changes.outputs.forced_github != 'true' && vars.SELF_HOSTED_CI == 'all' && needs.changes.outputs.trusted == 'true' && fromJSON('["self-hosted", "linux", "playsunrise-ci"]') || needs.changes.outputs.hosted_label || 'ubuntu-latest' }}
     timeout-minutes: ${{ needs.changes.outputs.self_hosted == 'true' && needs.changes.outputs.trusted == 'true' && 20 || 45 }}
+    # pull-requests: read is for reading the live pull request body in `Launcher mirrors`; no write scope.
+    permissions:
+      contents: read
+      pull-requests: read
     # Use verify's hidden-GPU environment so a stray plain GPU test fails instead of silently skipping.
     env:
       VK_ICD_FILENAMES: /nonexistent/no-vulkan-in-verify.json
@@ -792,7 +799,7 @@ jobs:
       RUNNER_KIND: ${{ needs.changes.outputs.heavy == 'false' && 'github' || needs.changes.outputs.trusted != 'true' && 'github' || needs.changes.outputs.self_hosted == 'true' && 'dyna' || !inputs.github-fallback && needs.changes.outputs.forced_github != 'true' && vars.SELF_HOSTED_CI == 'all' && needs.changes.outputs.trusted == 'true' && 'other' || startsWith(needs.changes.outputs.hosted_label, 'boat') && 'boat' || 'github' }}
     steps:
       - name: Require successful check selection
-        if: needs.changes.result != 'success'
+        if: needs.changes.result != 'success' || (github.event_name == 'workflow_dispatch' && inputs.pr != '' && needs.changes.outputs.pr_merge == '')
         run: exit 1
       - uses: actions/checkout@v4
         id: checkout
@@ -846,15 +853,43 @@ jobs:
       - name: Check generated extension tag catalog
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         run: python3 tools/ci/surface_extension_tags.py --check
-      # The launcher's copies of game crates move only when the pull request says which copy must follow.
+      # Dyna's runner image has no GitHub CLI; the launcher mirror check below reads the pull request with it.
+      - name: GitHub CLI for the launcher mirror check
+        if: ${{ !cancelled() && steps.setup.outcome == 'success' && github.event_name == 'pull_request' }}
+        run: bash tools/ci/ensure_gh.sh
+      # The launcher's copies of game crates move only when the pull request says which copy must follow. A pull
+      # request's body is read live from the API, never from the event file, which keeps the body as it was at the
+      # push: editing the body then re-running the job decides, with no new push. A body that cannot be read fails the
+      # step; it never falls back to the event's. The body is only data, written to a file and read by the check.
       - name: Launcher mirrors
         id: launcher_mirrors
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         env:
+          GH_TOKEN: ${{ github.token }}
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
         run: |
           if [ -n "$BASE_SHA" ]; then
-            python3 tools/ci/check_launcher_mirrors.py --base "$BASE_SHA" --event "$GITHUB_EVENT_PATH"
+            response="$RUNNER_TEMP/launcher-mirrors-pull-request.json"
+            body="$RUNNER_TEMP/launcher-mirrors-pull-request-body.md"
+            if ! gh api "repos/$GITHUB_REPOSITORY/pulls/${PR_NUMBER:?}" > "$response"; then
+              echo "::error::Could not read pull request #$PR_NUMBER from the GitHub API, so its launcher-mirror: line cannot be checked. Re-run the job."
+              exit 1
+            fi
+            # A pull request with no description has `"body": null`: an empty body, not a failure.
+            if ! python3 - "$response" "$body" <<'PY'
+          import json, sys
+          from pathlib import Path
+          text = json.loads(Path(sys.argv[1]).read_text(encoding="utf-8"))["body"]
+          if text is not None and not isinstance(text, str):
+              raise SystemExit("the pull request body is not text")
+          Path(sys.argv[2]).write_text(text or "", encoding="utf-8")
+          PY
+            then
+              echo "::error::The GitHub API's answer for pull request #$PR_NUMBER has no readable body, so its launcher-mirror: line cannot be checked. Re-run the job."
+              exit 1
+            fi
+            python3 tools/ci/check_launcher_mirrors.py --base "$BASE_SHA" --pull-request-merge --pr-body-file "$body"
           else
             python3 tools/ci/check_launcher_mirrors.py
           fi
@@ -908,7 +943,9 @@ jobs:
       - name: Ignored-test policy files read cleanly
         id: ignored_test_policy_files_read_cleanly
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
-        run: python3 tools/ci/check_ignored_test_rows.py
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: python3 tools/ci/check_ignored_test_rows.py ${BASE_SHA:+--base "$BASE_SHA" --pull-request-merge}
       # Modules are plain mod items: a file under a crate's src/ that nothing declares is never compiled.
       - name: Every crate source file is compiled
         id: every_crate_source_file_is_compiled
@@ -921,7 +958,7 @@ jobs:
         if: ${{ !cancelled() && steps.setup.outcome == 'success' }}
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha }}
-        run: python3 tools/ci/check_port_map_paths.py ${BASE_SHA:+--base "$BASE_SHA"}
+        run: python3 tools/ci/check_port_map_paths.py ${BASE_SHA:+--base "$BASE_SHA" --pull-request-merge}
       - name: Fetch locked Cargo dependencies for the vanilla build check
         id: extras_fetch
         if: ${{ !cancelled() && steps.setup.outcome == 'success' && runner.os == 'Linux' && needs.changes.outputs.rust_required != 'false' }}
@@ -1022,7 +1059,9 @@ jobs:
   # alone holds the write permission, and only for commit statuses.
   pr-status:
     needs: [changes, lint, verify, verify-static]
-    if: always() && github.event_name == 'workflow_dispatch' && inputs.pr != '' && needs.changes.outputs.pr_sha != ''
+    if: >-
+      always() && github.event_name == 'workflow_dispatch' && inputs.pr != '' && needs.changes.result == 'success' &&
+      needs.changes.outputs.pr_sha != '' && needs.changes.outputs.pr_merge != ''
     # Five seconds of status posts after the gate: nothing waits on it, so it takes none of Dyna's counted runners.
     runs-on: ubuntu-latest
     timeout-minutes: 5

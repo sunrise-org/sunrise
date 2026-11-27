@@ -995,7 +995,7 @@ pub enum BuiltTexture {
 #[derive(Clone, Debug, Default)]
 pub struct Pipelines {
     keys: Vec<Identifier>,
-    built: Vec<Option<Built>>,
+    built: Vec<Option<Arc<Built>>>,
     /// The render assets' generation this set was loaded for; 0 for none.
     generation: u64,
     invalid: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
@@ -1169,7 +1169,7 @@ impl Pipelines {
                         Ok((built_program, oit, texture))
                     });
                 match loaded {
-                    Ok((built_program, oit, texture)) => Some(Built {
+                    Ok((built_program, oit, texture)) => Some(Arc::new(Built {
                         owner: pipeline.owner().to_owned(),
                         id: pipeline.id.clone(),
                         program: Arc::new(built_program.translated),
@@ -1186,7 +1186,7 @@ impl Pipelines {
                         texture,
                         bind_group_layout: pipeline.bind_group_layout.clone(),
                         push_constant_size: pipeline.push_constant_size,
-                    }),
+                    })),
                     Err(reason) => {
                         let refusal = format!(
                             "render pipeline {} from mod {} refused: {reason}",
@@ -1328,7 +1328,7 @@ impl Pipelines {
     }
 
     /// Every slot in order, with what the load built for it.
-    pub fn built(&self) -> &[Option<Built>] {
+    pub fn built(&self) -> &[Option<Arc<Built>>] {
         &self.built
     }
 
@@ -2517,6 +2517,7 @@ void main() {
             "shadowcolorimg0",
             "shadowcolorimg1",
             "cameraPosition",
+            "bossBattle",
         ] {
             let err = run(vec![ModEntry::new(
                 "mod_one",
@@ -2539,6 +2540,7 @@ void main() {
             "depthtex0",
             "colorimg0",
             "shadowcolorimg0",
+            "bossBattle",
         ] {
             let err = run(vec![ModEntry::new(
                 "mod_one",
@@ -2554,6 +2556,38 @@ void main() {
             .unwrap_err();
             assert!(err.contains(reserved_uniform), "{err}");
             assert!(err.contains("mod_one"), "{err}");
+        }
+        // A built-in uniform is refused in the other two positions too: an opaque depth sampler,
+        // and a frame uniform's previous-value name.
+        for reserved in ["cameraPosition", "bossBattle"] {
+            let opaque = run(vec![ModEntry::new(
+                "mod_one",
+                Box::new(Custom(Box::new(move |ev| {
+                    ev.register(pipeline("mod_one:p", "mod_one:p").pack_binding(
+                        PackBinding::new().depth_target(
+                            PackDepthTarget::new(id("mod_one:d")).opaque_depth_sampler(reserved),
+                        ),
+                    ));
+                }))),
+            )])
+            .unwrap_err();
+            assert!(opaque.contains(reserved), "{opaque}");
+            let previous = run(vec![ModEntry::new(
+                "mod_one",
+                Box::new(Custom(Box::new(move |ev| {
+                    ev.register(
+                        pipeline("mod_one:p", "mod_one:p").pack_binding(
+                            PackBinding::new().frame_uniform(
+                                PackUniformDecl::new("modProjection", PackUniformType::Mat4)
+                                    .with_previous(reserved),
+                            ),
+                        ),
+                    );
+                }))),
+            )])
+            .unwrap_err();
+            assert!(previous.contains(reserved), "{previous}");
+            assert!(previous.contains("mod_one"), "{previous}");
         }
 
         // Same identifier claimed as both a sampler and a uniform is refused (same-mod and cross-mod).

@@ -194,7 +194,11 @@ impl Package {
     /// The three slices as one folder at `into`, linked file by file (copied where a link can't
     /// be made): the folder the engine and registry routes build against.
     pub fn whole(&self, into: &Path) -> Result<PathBuf, String> {
-        let _ = fs::remove_dir_all(into);
+        match fs::remove_dir_all(into) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(format!("{}: {error}", into.display())),
+        }
         for slice in [&self.runtime, &self.api, &self.engine] {
             link_tree(slice, slice, into)?;
         }
@@ -741,11 +745,11 @@ impl Route {
     }
 }
 
-/// Creates `out`, a build folder directly under `builds`, itself directly under the native work
-/// folder, refusing either when it is a link (a symlink or a Windows junction) or resolves outside
-/// its parent: the build clears folders inside `out`, and must never reach a folder elsewhere
-/// through it.
-fn own_folder(builds: &Path, out: &Path) -> Result<(), String> {
+/// Creates or validates `out` directly under `builds`, whether for build output, a Cargo target,
+/// or a staging folder (including the previous registry stage). Both directories must be real
+/// directories, not symlinks or Windows junctions, and each must resolve directly under its
+/// parent so build writes, stage rotation, and timestamp reuse stay in the intended folders.
+pub(super) fn own_folder(builds: &Path, out: &Path) -> Result<(), String> {
     let work = builds
         .parent()
         .ok_or_else(|| format!("{}: no work folder above it", builds.display()))?;
@@ -755,7 +759,8 @@ fn own_folder(builds: &Path, out: &Path) -> Result<(), String> {
         let inside = || -> std::io::Result<bool> {
             Ok(fs::canonicalize(dir)?.parent() == Some(fs::canonicalize(parent)?.as_path()))
         };
-        if meta.file_type().is_symlink() || !meta.is_dir() || !inside().unwrap_or(false) {
+        if super::crates::is_link_or_junction(&meta) || !meta.is_dir() || !inside().unwrap_or(false)
+        {
             return Err(format!(
                 "{}: not a folder of its own under {}; remove it and build again",
                 dir.display(),
@@ -2203,6 +2208,27 @@ mod tests {
                 .is_file()
         );
         assert!(!kept.join("target").exists());
+    }
+
+    #[test]
+    fn combined_sdk_refuses_a_cleanup_error_before_linking_slices() {
+        let scratch = tempfile::tempdir().unwrap();
+        let package = Package::at(&scratch.path().join("sdk"));
+        for slice in [&package.runtime, &package.api, &package.engine] {
+            fs::create_dir_all(slice).unwrap();
+        }
+        fs::write(package.runtime.join("incoming"), "new SDK file").unwrap();
+        let into = scratch.path().join("prebuilt-package");
+        // A non-directory obstruction gives a cleanup failure without relying on permissions.
+        fs::write(&into, "stale").unwrap();
+        let cleanup = fs::remove_dir_all(&into).unwrap_err();
+        assert_ne!(cleanup.kind(), std::io::ErrorKind::NotFound);
+
+        let error = package.whole(&into).unwrap_err();
+
+        assert_eq!(error, format!("{}: {cleanup}", into.display()));
+        assert_eq!(fs::read_to_string(&into).unwrap(), "stale");
+        assert!(!into.join("incoming").exists());
     }
 
     #[test]

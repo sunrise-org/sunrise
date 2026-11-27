@@ -26,9 +26,15 @@ use sunrise_world::loot::PackOverlay;
 
 /// The keys under which a recipe lists what it makes.
 const OUTPUT_KEYS: [&str; 4] = ["result", "results", "output", "outputs"];
-/// Keys whose strings are never items: a type, a group, a category, the load
+/// Keys whose strings are never items: a type, a group, a category, either loader's load
 /// conditions.
-const NOT_ITEMS: [&str; 4] = ["type", "group", "category", "neoforge:conditions"];
+const NOT_ITEMS: [&str; 5] = [
+    "type",
+    "group",
+    "category",
+    sunrise_world::conditions::NEOFORGE_KEY,
+    sunrise_world::conditions::FABRIC_KEY,
+];
 
 #[derive(Clone, Debug, PartialEq)]
 enum Action {

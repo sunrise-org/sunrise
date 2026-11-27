@@ -11,7 +11,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from unittest.mock import patch
 
-from tests.os_support import needs_runner_shell
+from tests.os_support import BASH, needs_runner_shell
 from tools.ci import daily_fuzz as fuzz
 from tools.ci import vendored_yaml
 
@@ -168,7 +168,7 @@ class DailyWorkflowTests(unittest.TestCase):
             env = {key: value for key, value in os.environ.items() if key != 'DYNA_CI_KEEP'}
             env.update(DYNA_CI_BUILD=str(build), GITHUB_RUN_ID='3', GITHUB_RUN_ATTEMPT='1',
                        GITHUB_ENV=str(Path(temporary) / 'env'))
-            subprocess.run(['bash', '-ec', step['run']], env=env, check=True)
+            subprocess.run([BASH, '-ec', step['run']], env=env, check=True)
             self.assertFalse(old.exists())
             self.assertTrue(fresh.exists())
             self.assertTrue((build / 'keep/fuzz/3-1').is_dir())

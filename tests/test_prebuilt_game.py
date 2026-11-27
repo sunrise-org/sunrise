@@ -18,7 +18,7 @@ from pathlib import Path
 import tools
 from tests.git_fixture import isolated_git_env
 from tools import lab, prebuilt_game
-from tests.os_support import needs_runner_shell, needs_symlinks
+from tests.os_support import BASH, needs_runner_shell, needs_symlinks
 
 COMMIT = "c" * 40
 
@@ -1427,7 +1427,7 @@ class LauncherPinTests(unittest.TestCase):
             with patch.object(prebuilt_game, "LAUNCHER_PIN", pin):
                 for value, accepted in (("a" * 40, True), ("A" * 40, False), ("a" * 39, False), ("main", False), ("a" * 41, False)):
                     pin.write_text(value + "\n")
-                    shell = subprocess.run([str(script)], capture_output=True, text=True)
+                    shell = subprocess.run([BASH, str(script)], capture_output=True, text=True)
                     self.assertEqual(shell.returncode == 0, accepted, value)
                     if accepted:
                         self.assertEqual(prebuilt_game.launcher_pin(), value)
@@ -1437,7 +1437,7 @@ class LauncherPinTests(unittest.TestCase):
         # The tracked pin is read, never written: the script and the tool agree on it.
         tracked = prebuilt_game.LAUNCHER_PIN.read_text().strip()
         script = prebuilt_game.ROOT / "tools/ci/launcher_pin.sh"
-        self.assertEqual(subprocess.run([str(script)], capture_output=True, text=True).stdout.strip(), tracked)
+        self.assertEqual(subprocess.run([BASH, str(script)], capture_output=True, text=True).stdout.strip(), tracked)
         self.assertEqual(prebuilt_game.launcher_pin(), tracked)
 
 
@@ -1459,14 +1459,14 @@ class LauncherCheckoutTests(unittest.TestCase):
                 commits.append(subprocess.run(["git", "-C", str(source), "rev-parse", "HEAD"], env=env, check=True,
                                               capture_output=True, text=True).stdout.strip())
             pin_file.write_text(commits[0] + "\n")
-            done = subprocess.run([str(script), str(root / "out")], env=env, capture_output=True, text=True)
+            done = subprocess.run([BASH, str(script), str(root / "out")], env=env, capture_output=True, text=True)
             self.assertEqual(done.returncode, 0, done.stderr)
             self.assertEqual((root / "out/file").read_text(), "one")
             state = subprocess.run(["git", "-C", str(root / "out"), "symbolic-ref", "-q", "HEAD"], env=env,
                                    capture_output=True)
             self.assertNotEqual(state.returncode, 0)  # detached
             pin_file.write_text("f" * 40 + "\n")
-            done = subprocess.run([str(script), str(root / "out2")], env=env, capture_output=True, text=True)
+            done = subprocess.run([BASH, str(script), str(root / "out2")], env=env, capture_output=True, text=True)
             self.assertNotEqual(done.returncode, 0)
 
 

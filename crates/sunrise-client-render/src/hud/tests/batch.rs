@@ -261,3 +261,63 @@ fn an_inline_dynamic_texture_draws_as_its_own_texture_in_the_glyphs_box() {
     assert_eq!((w, h), (side, side), "one glyph box");
     assert_eq!(batch.blends, [(0..6, Blend::Dynamic(7))]);
 }
+
+#[test]
+fn visible_vertex_bounds_cuts_a_triangle_at_the_physical_scissor_edge() {
+    let mut batch = HudBatch::scratch([640, 480]);
+    batch.quad(
+        [[0.0, 0.0], [16.0, 0.0], [0.0, 16.0], [0.0, 16.0]],
+        [[0.0; 2]; 4],
+        u32::MAX,
+    );
+    batch.clip_since(0, 0.0, 4.4, 16.0, 16.0);
+    // At scale 2, ceil(4.4 * 2 - 0.5) = 9, so the top edge is y = 9/2.
+    // The diagonal x + y = 16 gives max x = 16 - 4.5 = 11.5; max y is 16.
+    assert_eq!(batch.visible_vertex_bounds(0), Some([0.0, 4.5, 11.5, 11.5]));
+}
+
+#[test]
+fn visible_vertex_bounds_omits_a_fully_clipped_run() {
+    let mut batch = HudBatch::scratch([320, 240]);
+    batch.quad(
+        [[0.0, 0.0], [16.0, 0.0], [16.0, 16.0], [0.0, 16.0]],
+        [[0.0; 2]; 4],
+        u32::MAX,
+    );
+    batch.clip_since(0, 17.0, 0.0, 32.0, 16.0);
+    // The quad ends at x = 16 and the scissor starts at x = 17.
+    assert_eq!(batch.visible_vertex_bounds(0), None);
+}
+
+#[test]
+fn visible_vertex_bounds_combines_runs_with_different_clips() {
+    let mut batch = HudBatch::scratch([320, 240]);
+    let quad = [[0.0, 0.0], [16.0, 0.0], [16.0, 16.0], [0.0, 16.0]];
+    batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
+    batch.clip_since(0, 2.0, 4.0, 6.0, 8.0);
+    let second = batch.vertices.len();
+    batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
+    batch.depth_since(second, [0.0, 0.0, 12.0, 12.0]);
+    batch.clip_since(second, 10.0, 2.0, 14.0, 10.0);
+    // First run: [2, 6] × [4, 8]. Second: [10, 12] × [2, 10], because
+    // its depth scissor stops at x = 12. Their union spans x = 2..12, y = 2..10.
+    assert_eq!(batch.visible_vertex_bounds(0), Some([2.0, 2.0, 10.0, 8.0]));
+}
+
+#[test]
+fn visible_vertex_bounds_intersects_nested_clips_within_a_run() {
+    let mut batch = HudBatch::scratch([320, 240]);
+    let quad = [[0.0, 0.0], [16.0, 0.0], [16.0, 16.0], [0.0, 16.0]];
+    batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
+    let inner = batch.vertices.len();
+    batch.quad(quad.map(|[x, y]| [x + 16.0, y]), [[0.0; 2]; 4], u32::MAX);
+    batch.clip_since(inner, 18.0, 2.0, 30.0, 10.0);
+    batch.clip_since(0, 4.0, 6.0, 26.0, 14.0);
+    // First quad meets just the outer clip: [4, 16] × [6, 14]. The second
+    // meets both: [18, 26] × [6, 10], so the bounds of both are [4, 26] × [6, 14].
+    assert_eq!(
+        batch.visible_vertex_bounds(inner),
+        Some([18.0, 6.0, 8.0, 4.0])
+    );
+    assert_eq!(batch.visible_vertex_bounds(0), Some([4.0, 6.0, 22.0, 8.0]));
+}

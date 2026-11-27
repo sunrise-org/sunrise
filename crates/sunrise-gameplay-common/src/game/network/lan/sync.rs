@@ -486,7 +486,7 @@ pub fn preload_sync_data(
             biomes.pack_file(name).is_some()
                 || biomes
                     .builtin_file(name)
-                    .is_some_and(|file| file.get("neoforge:conditions").is_some())
+                    .is_some_and(sunrise_world::conditions::has_conditions)
         })
     {
         return None;

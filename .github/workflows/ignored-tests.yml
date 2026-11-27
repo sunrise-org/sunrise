@@ -70,6 +70,20 @@ jobs:
     permissions:
       contents: read
     steps:
+      # Check the runner's seed before checking out any (possibly older) commit.
+      - name: Check runner prepared data
+        id: seed
+        env:
+          EVENT: ${{ github.event_name }}
+        run: |
+          for dir in minecraft datagen sunrise-client tools; do
+            path="/cache/sunrise-local/$dir"
+            if [[ ! -d "$path" || ! -r "$path" || ! -x "$path" ]]; then
+              echo "::error::prepared data unavailable on this runner: $dir"
+              echo "Prepared data unavailable: $dir ($EVENT)" >> "$GITHUB_STEP_SUMMARY"
+              exit 1
+            fi
+          done
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
@@ -116,20 +130,9 @@ jobs:
           }
           python3 tools/prepare_output.py check --server "$profile"
           echo "SUNRISE_TEST_SERVER_PROFILE=$profile" >> "$GITHUB_ENV"
-      # Missing data fails the leg.
       - name: Prepare checkout-keyed vanilla data
         id: data
-        env:
-          EVENT: ${{ github.event_name }}
-        run: |
-          for dir in minecraft datagen sunrise-client tools; do
-            if [ ! -d "/cache/sunrise-local/$dir" ]; then
-              echo "prepared data unavailable on this runner"
-              echo "Prepared data unavailable: $dir ($EVENT)" >> "$GITHUB_STEP_SUMMARY"
-              exit 1
-            fi
-          done
-          SUNRISE_DYNA_CACHE=true SUNRISE_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" SUNRISE_SHARED_SOURCE=/cache/sunrise-local bash tools/ci/vanilla-data.sh
+        run: SUNRISE_DYNA_CACHE=true SUNRISE_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" SUNRISE_SHARED_SOURCE=/cache/sunrise-local bash tools/ci/vanilla-data.sh
       - name: Retain typed preparation diagnostics only
         if: failure() && steps.data.outcome == 'failure'
         uses: actions/upload-artifact@v4
@@ -142,34 +145,34 @@ jobs:
           if-no-files-found: ignore
           retention-days: 3
       - name: Generate the fishing test's vanilla reference inputs
-        if: steps.data.outputs.present != 'false' && (matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#') || matrix.shard == 'sunrise-gameplay' || startsWith(matrix.shard, 'sunrise-gameplay#'))
+        if: matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#') || matrix.shard == 'sunrise-gameplay' || startsWith(matrix.shard, 'sunrise-gameplay#')
         run: |
           reference=$(mktemp -d "$RUNNER_TEMP/fishing-reference.XXXXXX")
           python3 tools/test_fishing_rng_parity.py --prepare-reference "$reference" --env-file "$GITHUB_ENV"
       - name: Generate the game-mode split tests' vanilla witness
-        if: steps.data.outputs.present != 'false' && (matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#'))
+        if: matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#')
         run: |
           witness=$(mktemp -d "$RUNNER_TEMP/gamemode-split-witness.XXXXXX")
           python3 tools/test_gamemode_split_parity.py --prepare-witness "$witness" --env-file "$GITHUB_ENV"
       - name: Generate the crosshair pick tests' vanilla witness
-        if: steps.data.outputs.present != 'false' && (matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#'))
+        if: matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#')
         run: |
           witness=$(mktemp -d "$RUNNER_TEMP/crosshair-pick-witness.XXXXXX")
           python3 tools/test_crosshair_pick_parity.py --prepare-witness "$witness" --env-file "$GITHUB_ENV"
       - name: Generate the network parity tests' vanilla witnesses
-        if: steps.data.outputs.present != 'false' && (matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#') || matrix.shard == 'sunrise-client-lib' || startsWith(matrix.shard, 'sunrise-client-lib#') || matrix.shard == 'sunrise-gameplay-common' || startsWith(matrix.shard, 'sunrise-gameplay-common#') || matrix.shard == 'daily-rows')
+        if: matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#') || matrix.shard == 'sunrise-client-lib' || startsWith(matrix.shard, 'sunrise-client-lib#') || matrix.shard == 'sunrise-gameplay-common' || startsWith(matrix.shard, 'sunrise-gameplay-common#') || matrix.shard == 'daily-rows'
         run: |
           witness=$(mktemp -d "$RUNNER_TEMP/network-witness.XXXXXX")
           python3 tools/ci/with_xvfb.py python3 tools/test_network_parity.py --prepare-witness "$witness" --env-file "$GITHUB_ENV"
       - name: Generate the item glint tests' vanilla witness
-        if: steps.data.outputs.present != 'false' && (matrix.shard == 'sunrise-client-lib' || startsWith(matrix.shard, 'sunrise-client-lib#') || matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#') || matrix.shard == 'sunrise-client-gameplay' || startsWith(matrix.shard, 'sunrise-client-gameplay#'))
+        if: matrix.shard == 'sunrise-client-lib' || startsWith(matrix.shard, 'sunrise-client-lib#') || matrix.shard == 'sunrise-client' || startsWith(matrix.shard, 'sunrise-client#') || matrix.shard == 'sunrise-client-gameplay' || startsWith(matrix.shard, 'sunrise-client-gameplay#')
         run: |
           python3 tools/ci/with_xvfb.py python3 tools/test_glint_parity.py --record-only
           echo "SUNRISE_ITEM_GLINT_WITNESS=$PWD/.local/witness/26.3/glint/witness.json" >> "$GITHUB_ENV"
       - name: Run the ignored tests that need prepared data
-        if: steps.data.outputs.present != 'false'
         env:
           SHARD: ${{ matrix.shard }}
+          SUNRISE_TOOL_CHANNEL: ${{ matrix.shard == 'daily-rows' && 'mod-tool' || '' }}
           SUNRISE_DATA_LEG_TIMING: '1'
           # The mesher and section-visibility tests read the prepared data from their own variable.
           SUNRISE_MESH_TEST_RESOURCES: ${{ github.workspace }}/.local/sunrise-client/26.3
@@ -180,7 +183,7 @@ jobs:
       # The public log withholds panic payloads (they can carry vanilla data); a failed run's full output is copied
       # into this host's keep, as parity.yml keeps a failed share's logs, with the same three-day retention.
       - name: Keep a failed run's full output beyond this slot
-        if: always()
+        if: always() && steps.seed.outcome == 'success'
         env:
           PRIVATE_LOGS: ${{ runner.temp }}/ignored-tests-private
           NAME: ${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}
@@ -196,7 +199,7 @@ jobs:
           [ -d "$root" ] && find "$root" -mindepth 1 -maxdepth 1 -type d -mmin +4320 -exec rm -rf {} + || true
       # The leg's verdict for the daily summary: test names, panic locations and policy only (ignored_tests.py --report).
       - name: Upload the leg report
-        if: always()
+        if: always() && steps.seed.outcome == 'success'
         uses: actions/upload-artifact@v4
         with:
           name: daily-report-shard-${{ strategy.job-index }}
@@ -204,7 +207,7 @@ jobs:
           if-no-files-found: ignore
           retention-days: 7
       - name: Record data-leg end and compiler cache
-        if: always()
+        if: always() && steps.seed.outcome == 'success'
         run: |
           date -u '+data-leg end utc=%Y-%m-%dT%H:%M:%SZ'
           # Whole-job cgroup high-water: compilation, tests and file cache, not per-test RSS
@@ -221,3 +224,4 @@ jobs:
             echo "data-leg $field=$value"
           done
           sccache --show-stats || echo 'data-leg compiler-cache statistics unavailable'
+          python3 tools/ci/cgroup_telemetry.py "/sys/fs/cgroup/" 2>/dev/null || true

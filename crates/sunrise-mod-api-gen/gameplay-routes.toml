@@ -484,6 +484,11 @@ borrow = "shared"
 kind = "shared_trait"
 owner = "::sunrise_gameplay_common::game::tables::WorldTablesExt<'_>"
 
+[host.client."ItemsHost::entity_type_dimensions"]
+borrow = "shared"
+kind = "shared_trait"
+owner = "::sunrise_gameplay_common::game::native_components::NativeComponentsGameExt3<'_>"
+
 [host.client."ItemsHost::entity_type_in_tag"]
 borrow = "shared"
 kind = "shared_trait"
@@ -1648,6 +1653,11 @@ owner = "::sunrise_gameplay_common::game::native_hooks::build_creative_mode_tab_
 borrow = "shared"
 kind = "shared_trait"
 owner = "::sunrise_gameplay_common::game::tables::WorldTablesExt<'_>"
+
+[host.server."ItemsHost::entity_type_dimensions"]
+borrow = "shared"
+kind = "shared_trait"
+owner = "::sunrise_gameplay_common::game::native_components::NativeComponentsGameExt3<'_>"
 
 [host.server."ItemsHost::entity_type_in_tag"]
 borrow = "shared"

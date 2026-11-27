@@ -1,0 +1,4 @@
+sunrise-client-render gfx::mod_pipelines::tests::a_default_sampler_reads_transient_depth_after_the_frame_graph_swaps_the_entry lib daily gpu
+sunrise-client-render gfx::mod_pipelines::tests::a_deferred_direct_pack_draw_reads_depth_with_default_sampler lib daily gpu
+sunrise-client-render gfx::mod_pipelines::tests::a_late_masked_oit_draw_gets_groups_for_the_existing_targets_and_draws lib daily gpu
+sunrise-client-render gfx::mod_pipelines::tests::r32float_sampler_blends_mips_only_when_the_device_enables_filtering lib daily gpu

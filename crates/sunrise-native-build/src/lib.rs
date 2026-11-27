@@ -640,11 +640,35 @@ mod tests {
 
     pub const A: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     pub const B: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
-    static LOG: std::sync::Mutex<()> = std::sync::Mutex::new(());
-
-    /// The one build log of this test process, held while a test reads it.
-    fn log_lock() -> std::sync::MutexGuard<'static, ()> {
-        LOG.lock().unwrap_or_else(|e| e.into_inner())
+    /// Run only this fixture in a fresh process so unrelated commands cannot touch its log.
+    /// The parent returns after checking the child; the child runs the fixture body.
+    pub(crate) fn log_test_child(test: &str) -> bool {
+        const ACTOR: &str = "SUNRISE_NATIVE_BUILD_LOG_TEST_ACTOR";
+        if std::env::var(ACTOR).as_deref() == Ok(test) {
+            return true;
+        }
+        let scratch = tempfile::tempdir().unwrap();
+        let mut command = Command::new(std::env::current_exe().unwrap());
+        command
+            .args(["--exact", test, "--include-ignored", "--nocapture"])
+            .env(ACTOR, test)
+            .env("SUNRISE_LAUNCHER_HOME", scratch.path());
+        // The unhosted build log lives under the child's temp dir and PID.
+        #[cfg(unix)]
+        command.env("TMPDIR", scratch.path());
+        #[cfg(windows)]
+        command
+            .env("TMP", scratch.path())
+            .env("TEMP", scratch.path());
+        let output = command.output().unwrap();
+        let stdout = String::from_utf8_lossy(&output.stdout);
+        let stderr = String::from_utf8_lossy(&output.stderr);
+        assert!(output.status.success(), "{test}: {stdout}\n{stderr}");
+        assert!(
+            stdout.contains("test result: ok. 1 passed;"),
+            "exact-name child did not run {test}:\n{stdout}\n{stderr}"
+        );
+        false
     }
 
     pub fn dir(name: &str) -> PathBuf {
@@ -944,7 +968,9 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_link_missing_udev_or_alsa_leads_with_what_to_install() {
-        let _guard = log_lock();
+        if !log_test_child("tests::a_link_missing_udev_or_alsa_leads_with_what_to_install") {
+            return;
+        }
         clear_log().unwrap();
         // rustc's output linking a native mod's patch library in a shell without either library
         // (Rust 1.99.1 with rust-lld, 2026-11-19), then more lines than the error's end keeps.
@@ -973,7 +999,9 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn a_build_smart_app_control_blocked_says_how_to_build() {
-        let _guard = log_lock();
+        if !log_test_child("tests::a_build_smart_app_control_blocked_says_how_to_build") {
+            return;
+        }
         clear_log().unwrap();
         // cargo's output on Windows 11 25H2 with Smart App Control on (the report in #5911).
         let mut cmd = Command::new("sh");
@@ -1003,28 +1031,7 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn malformed_stderr_does_not_hide_later_diagnostics() {
-        const ACTOR: &str = "SUNRISE_MALFORMED_STDERR_TEST_ACTOR";
-        if std::env::var_os(ACTOR).is_none() {
-            let scratch = tempfile::tempdir().unwrap();
-            let output = Command::new(std::env::current_exe().unwrap())
-                .args([
-                    "--exact",
-                    "tests::malformed_stderr_does_not_hide_later_diagnostics",
-                    "--include-ignored",
-                    "--nocapture",
-                ])
-                .env(ACTOR, "1")
-                // The unhosted build log lives under the child's temp dir and PID.
-                .env("TMPDIR", scratch.path())
-                .output()
-                .unwrap();
-            let stdout = String::from_utf8_lossy(&output.stdout);
-            let stderr = String::from_utf8_lossy(&output.stderr);
-            assert!(output.status.success(), "{stdout}\n{stderr}");
-            assert!(
-                stdout.contains("test result: ok. 1 passed;"),
-                "exact-name child did not run one test:\n{stdout}\n{stderr}"
-            );
+        if !log_test_child("tests::malformed_stderr_does_not_hide_later_diagnostics") {
             return;
         }
         clear_log().unwrap();
@@ -1051,7 +1058,9 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn build_commands_inherit_the_tools_process_group() {
-        let _guard = log_lock();
+        if !log_test_child("tests::build_commands_inherit_the_tools_process_group") {
+            return;
+        }
         clear_log().unwrap();
         // SAFETY: getpgrp only reads this process's group and takes no arguments.
         let group = unsafe { libc::getpgrp() }.to_string();
@@ -1070,7 +1079,9 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn each_command_logs_its_time() {
-        let _guard = log_lock();
+        if !log_test_child("tests::each_command_logs_its_time") {
+            return;
+        }
         clear_log().unwrap();
         // Its stdout, which goes to the log, does not end its line.
         let mut cmd = Command::new("sh");

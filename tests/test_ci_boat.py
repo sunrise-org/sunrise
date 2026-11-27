@@ -3,7 +3,7 @@ import importlib.util
 from pathlib import Path
 import unittest
 import sys
-from unittest.mock import patch
+from unittest.mock import call, patch
 import os
 import re
 import tempfile
@@ -108,21 +108,33 @@ class BoatHealthTests(unittest.TestCase):
                 for name in ("lint", "verify")]
         waiting = dict(job(name="verify-static"), created_at="2026-11-10T11:59:00Z")
         stale = job(name="verify-static")
-        with tempfile.TemporaryDirectory() as directory:
-            env = dict(GITHUB_REPOSITORY="repo", GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1",
-                       RECOVERY_REF="topic", GITHUB_STEP_SUMMARY=str(Path(directory) / "summary"))
-            with patch.dict(os.environ, env), patch.object(watch, "api", side_effect=[
-                    {"jobs": done + [waiting]}, {"jobs": done + [stale]}]) as api, \
-                    patch.object(watch.time, "monotonic", return_value=0), \
-                    patch.object(watch.time, "sleep") as sleep, \
-                    patch.object(watch, "datetime") as clock, patch.object(watch.subprocess, "run") as run:
-                clock.now.return_value = NOW
-                watch.main()
-            self.assertEqual(api.call_count, 2)
-            sleep.assert_called_once_with(30)
-            self.assertEqual(len(run.call_args_list), 2)
-            self.assertTrue(run.call_args_list[0].args[0][4].endswith("/dispatches"))
-            self.assertTrue(run.call_args_list[1].args[0][4].endswith("/cancel"))
+        for ref, pr, refused in (("topic", "", False), ("main", "6297", False), ("ci-branch", "6297", True)):
+            with self.subTest(ref=ref, pr=pr, refused=refused), tempfile.TemporaryDirectory() as directory:
+                env = dict(GITHUB_REPOSITORY="repo", GITHUB_RUN_ID="123", GITHUB_RUN_ATTEMPT="1",
+                           RECOVERY_REF=ref, RECOVERY_PR=pr, GITHUB_STEP_SUMMARY=str(Path(directory) / "summary"))
+                dispatch = ["gh", "api", "--method", "POST", "repos/repo/actions/workflows/dyna-ci.yml/dispatches",
+                            "-f", f"ref={ref}", "-F", "inputs[github-fallback]=true"]
+                if pr:
+                    dispatch += ["-f", "inputs[pr]=6297"]
+                with patch.dict(os.environ, env, clear=True), patch.object(watch, "api", side_effect=[
+                        {"jobs": done + [waiting]}, {"jobs": done + [stale]}]) as api, \
+                        patch.object(watch.time, "monotonic", return_value=0), \
+                        patch.object(watch.time, "sleep") as sleep, \
+                        patch.object(watch, "datetime") as clock, patch.object(watch.subprocess, "run") as run:
+                    clock.now.return_value = NOW
+                    if refused:
+                        run.side_effect = subprocess.CalledProcessError(1, dispatch)
+                        with self.assertRaises(subprocess.CalledProcessError):
+                            watch.main()
+                        run.assert_called_once_with(dispatch, check=True)
+                    else:
+                        watch.main()
+                        self.assertEqual(run.call_args_list, [
+                            call(dispatch, check=True),
+                            call(["gh", "api", "--method", "POST", "repos/repo/actions/runs/123/cancel"], check=True),
+                        ])
+                self.assertEqual(api.call_count, 2)
+                sleep.assert_called_once_with(30)
 
     def test_controller_limits_to_first_fork_attempt(self):
         run = dict(workflow_id=123, event="pull_request", run_attempt=1, status="queued", head_repository=dict(full_name="other/sunrise"))

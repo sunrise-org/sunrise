@@ -1,0 +1,4 @@
+# Daily rows for #6455: a blast gives the redirectable projectiles in its reach its causing entity as owner, the host's or an acting guest's.
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+sunrise-gameplay game::server_side::explosion::explosion_projectile_owner_tests::a_blast_gives_its_causing_entity_to_the_redirectable_projectiles_in_reach lib daily resources
+sunrise-gameplay game::server_side::explosion::explosion_projectile_owner_tests::an_acting_guests_blast_gives_the_projectile_the_guest lib daily resources

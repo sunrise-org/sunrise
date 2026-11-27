@@ -2,7 +2,7 @@ import os
 import tempfile
 import tomllib
 import unittest
-from pathlib import Path
+from pathlib import Path, PurePosixPath, PureWindowsPath
 from unittest.mock import patch
 
 from tools import sdk_api_source as api_source
@@ -316,6 +316,62 @@ class CollectTests(unittest.TestCase):
 
     def test_a_build_script_that_sets_cfgs_is_refused(self):
         self.assertEqual(self.refusal(self.messages("a", "", cfgs=("generated_hooks",))), "E_BUILD_SCRIPT")
+
+
+class SourceKeyTests(unittest.TestCase):
+    """What `collect_build` keeps of a dep-info path, with explicit path flavours on every host."""
+
+    CRATE = Crate("vocab", "crates/vocab", True)
+    KEY = "crates/vocab/src/host/advancements.rs"
+    # One place, spelled DOS and verbatim, on a drive and on a share.
+    SPELLINGS = ((r"D:\a\s", r"\\?\D:\a\s"), (r"\\srv\share\s", r"\\?\UNC\srv\share\s"))
+
+    def windows_key(self, read, root, out_dir=None):
+        return api_source.source_key(PureWindowsPath(read), PureWindowsPath(root), self.CRATE,
+                                     None if out_dir is None else PureWindowsPath(out_dir))
+
+    def test_dos_and_verbatim_spellings_of_one_root_are_the_same_path(self):
+        for dos, verbatim in self.SPELLINGS:
+            for read in (dos, verbatim):
+                for root in (dos, verbatim):
+                    with self.subTest(read=read, root=root):
+                        self.assertEqual(self.windows_key(rf"{read}\crates\vocab\src\host\advancements.rs", root),
+                                         self.KEY)
+
+    def test_a_file_in_out_dir_is_left_to_the_generated_files_in_either_spelling(self):
+        for dos, verbatim in self.SPELLINGS:
+            for read in (dos, verbatim):
+                for out_dir in (dos, verbatim):
+                    with self.subTest(read=read, out_dir=out_dir):
+                        self.assertIsNone(self.windows_key(rf"{read}\target\out\gen.rs", dos, rf"{out_dir}\target\out"))
+
+    def test_a_different_root_is_refused_in_every_spelling(self):
+        other = ((r"E:\a\s", r"\\?\E:\a\s"), (r"\\srv\other\s", r"\\?\UNC\srv\other\s"))
+        for (dos, verbatim), (other_dos, other_verbatim) in zip(self.SPELLINGS, other):
+            for read in (other_dos, other_verbatim):
+                for root in (dos, verbatim):
+                    with self.subTest(read=read, root=root), self.assertRaises(Refusal) as refused:
+                        self.windows_key(rf"{read}\crates\vocab\src\host\advancements.rs", root)
+                    self.assertEqual(refused.exception.code, "E_SOURCE_OUTSIDE_CRATE")
+
+    def test_a_different_root_is_no_out_dir_and_a_sibling_crate_is_outside(self):
+        with self.assertRaises(Refusal) as refused:
+            self.windows_key(r"\\?\E:\a\s\target\out\gen.rs", r"D:\a\s", r"D:\a\s\target\out")
+        self.assertEqual(refused.exception.code, "E_SOURCE_OUTSIDE_CRATE")
+        for read in (r"\\?\D:\a\s\crates\other\src\lib.rs", r"D:\a\s\crates\vocab2\src\lib.rs",
+                     r"\\?\D:\a\s\crates\vocab\..\other\src\lib.rs"):
+            with self.subTest(read), self.assertRaises(Refusal) as refused:
+                self.windows_key(read, r"D:\a\s")
+            self.assertEqual(refused.exception.code, "E_SOURCE_OUTSIDE_CRATE")
+
+    def test_posix_paths_are_kept_as_they_were(self):
+        root = PurePosixPath("/w")
+        self.assertEqual(api_source.source_key(root / "crates/vocab/src/lib.rs", root, self.CRATE, None),
+                         "crates/vocab/src/lib.rs")
+        out_dir = root / "target/out"
+        self.assertIsNone(api_source.source_key(out_dir / "gen.rs", root, self.CRATE, out_dir))
+        with self.assertRaises(Refusal):
+            api_source.source_key(PurePosixPath("/x/crates/vocab/src/lib.rs"), root, self.CRATE, None)
 
 
 class PackingTests(unittest.TestCase):

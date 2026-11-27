@@ -1024,7 +1024,7 @@ fn material_program(span: &EntitySpan, layer: u32, drawn: [bool; PROGRAMS]) -> O
 
 /// A native terrain quad of a translucent kind: a still fluid's or a translucent moving
 /// block's, which Sunrise's own draw sorts far to near on upload.
-fn native_translucent(layer: u32) -> bool {
+pub(crate) fn native_translucent(layer: u32) -> bool {
     matches!(
         layer & 0xffff,
         FLUID_OVERLAY | TERRAIN_MODEL_TRANSLUCENT_OVERLAY
@@ -1184,7 +1184,7 @@ impl BlockAtlas {
     }
 
     /// Whether this atlas holds `quad`'s sprite and its UVs are numbers.
-    fn holds(&self, quad: &[Vertex]) -> bool {
+    pub(crate) fn holds(&self, quad: &[Vertex]) -> bool {
         Self::sprite(&quad[0]).and_then(|l| self.rect(l)).is_some()
             && quad.iter().flat_map(|v| v.uv).all(f32::is_finite)
     }
@@ -1195,7 +1195,7 @@ impl BlockAtlas {
     /// - a terrain model's normal (a float z in the normal's bytes, x and y in `glint_uv`,
     ///   `vs_native_model`) as the entity vertex's signed bytes;
     /// - overlay 0 and no glint: no overlay colour, no HDR tier, no sprite layer left over.
-    fn place(&self, quads: &mut [Vertex]) {
+    pub(crate) fn place(&self, quads: &mut [Vertex]) {
         let scale = [1.0 / self.size[0] as f32, 1.0 / self.size[1] as f32];
         for quad in quads.as_chunks_mut::<4>().0 {
             let Some(([x, y], side)) = Self::sprite(&quad[0]).and_then(|l| self.rect(l)) else {

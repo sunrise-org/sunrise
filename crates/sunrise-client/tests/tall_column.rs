@@ -4,7 +4,6 @@
 extern crate sunrise_client_lib as sunrise_client;
 use std::{
     collections::HashMap,
-    path::Path,
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -25,13 +24,8 @@ use sunrise_client::{
 };
 use sunrise_core::biome::BiomeZoom;
 use sunrise_world::registry::BlockStateId;
-
-fn resources() -> Option<std::path::PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.local/sunrise-client")
-        .join(sunrise_core::VANILLA_VERSION);
-    root.join("items.json").exists().then_some(root)
-}
+#[path = "../src/test_resources.rs"]
+mod test_resources;
 
 /// Saved columns without their light: a stone spire to y 1799 in the middle
 /// of each, so light jobs and meshes reach far above vanilla's top.
@@ -60,10 +54,9 @@ impl ChunkGenerator for Spires {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_tall_column_streams_lights_and_meshes_to_its_top() {
-    let Some(root) = resources() else {
-        return;
-    };
+    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
     let shape = LevelShape::new(-64, 2096, 2096, true, false).unwrap();
     let layout = shape.column();
     let assets = Arc::new(Assets::load(&root).unwrap());

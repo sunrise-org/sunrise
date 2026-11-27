@@ -972,6 +972,10 @@ impl Menu {
             (None, Some(mut taken)) => {
                 if self.may_pickup(env, target) {
                     self.state.containers[PLAYER][inv_slot] = Some(taken.clone());
+                    // ResultSlot.onSwapCraft: the whole stack counts as crafted.
+                    if self.state.slots[target].role == Role::CraftResult {
+                        self.state.craft_remove_count += taken.count;
+                    }
                     self.set_by_player(env, target, None);
                     self.on_take(env, target, &mut taken);
                     if self.state.slots[target].role == Role::CraftResult {

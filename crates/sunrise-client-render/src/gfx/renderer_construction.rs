@@ -2292,6 +2292,7 @@ impl Renderer {
                 ),
                 pack_iris: false,
             },
+            previous.map(|renderer| renderer.mod_gpu()),
         );
         Ok(Self {
             display: None,

@@ -10,7 +10,7 @@ import sys
 import unittest
 from unittest.mock import patch
 
-from tests.os_support import needs_runner_shell
+from tests.os_support import BASH, needs_runner_shell
 from tools.ci import vendored_yaml
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -69,9 +69,9 @@ class BookErrorTests(unittest.TestCase):
             (folder / 'log').write_text(log)
             (folder / 'mdbook').write_text(f"#!/bin/sh\ncat '{folder / 'log'}' >&2\nexit {exit_code}\n")
             (folder / 'mdbook').chmod(0o755)
-            return subprocess.run(['bash', '--noprofile', '--norc', '-eo', 'pipefail', '-c', step['run']],
+            return subprocess.run([BASH, '--noprofile', '--norc', '-eo', 'pipefail', '-c', step['run']],
                                   capture_output=True, text=True,
-                                  env={**os.environ, 'PATH': f"{folder}:{os.environ['PATH']}", 'RUNNER_TEMP': directory})
+                                  env={**os.environ, 'PATH': f"{folder}{os.pathsep}{os.environ['PATH']}", 'RUNNER_TEMP': directory})
 
     def test_an_unresolved_include_fails_and_a_clean_build_passes(self):
         clean = ("2026-11-16 20:17:06 [INFO] (mdbook::book): Book building has started\n"
@@ -115,7 +115,7 @@ class BookGuardTests(unittest.TestCase):
                     folder.mkdir(parents=True)
                     (folder / 'page').write_text('__private' if path == token else 'public docs')
             result = subprocess.run(
-                ['bash', '-e', '-o', 'pipefail', '-c', guard_script()],
+                [BASH, '-e', '-o', 'pipefail', '-c', guard_script()],
                 cwd=root, env={**os.environ, 'BOOK_EVENT': event},
                 capture_output=True, text=True,
             )
@@ -152,7 +152,7 @@ class BookGuardTests(unittest.TestCase):
             try:
                 require_unreadable_file(unreadable, credentials, root)
                 result = subprocess.run(
-                    ['bash', '-e', '-o', 'pipefail', '-c', guard_script()],
+                    [BASH, '-e', '-o', 'pipefail', '-c', guard_script()],
                     cwd=root, env={**os.environ, 'BOOK_EVENT': 'pull_request', 'LC_ALL': 'C'},
                     capture_output=True, text=True, **credentials,
                 )
@@ -195,7 +195,7 @@ class BookGuardTests(unittest.TestCase):
             grep.write_text('#!/bin/sh\nexit 2\n')
             grep.chmod(0o755)
             result = subprocess.run(
-                ['bash', '-e', '-o', 'pipefail', '-c', guard_script()],
+                [BASH, '-e', '-o', 'pipefail', '-c', guard_script()],
                 cwd=root, env={**os.environ, 'BOOK_EVENT': 'pull_request',
                                'PATH': str(bin_dir) + os.pathsep + os.environ['PATH']},
                 capture_output=True, text=True,

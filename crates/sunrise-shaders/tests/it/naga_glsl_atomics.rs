@@ -42,3 +42,32 @@ fn shared_array_copied_out() {
          uint copy[4] = shared_counts; f[0] = float(copy[1]);",
     );
 }
+
+#[test]
+fn large_shared_array_over_64_scalars_copied_out() {
+    let source = "#version 450\nlayout(local_size_x = 1) in;\n\
+        layout(std430, binding = 1) buffer Out { float f[]; };\n\
+        shared uint big[80];\n\
+        void main() {\n\
+            big[gl_LocalInvocationIndex] = 0u; barrier();\n\
+            atomicAdd(big[1], 2u); barrier();\n\
+            uint copy[80] = big; f[0] = float(copy[1]);\n\
+        }\n";
+    let module = naga::front::glsl::Frontend::default()
+        .parse(
+            &naga::front::glsl::Options::from(naga::ShaderStage::Compute),
+            source,
+        )
+        .unwrap_or_else(|e| panic!("{source}\n{e:?}"));
+    naga::valid::Validator::new(
+        naga::valid::ValidationFlags::all(),
+        naga::valid::Capabilities::all(),
+    )
+    .validate(&module)
+    .unwrap_or_else(|e| panic!("{source}\n{e:?}"));
+}
+
+#[test]
+fn buffer_with_runtime_array_and_atomic_member_validates() {
+    validates("atomicAdd(buf.head, 1u); f[0] = float(buf.v[0]);");
+}

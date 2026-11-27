@@ -22,7 +22,7 @@ description and dependencies as needed (`reference/manifest.md`); do not write t
 or change the generated build pin by hand. For code mods, `cargo sunrise-mod pin` moves the build pin.
 
 - `cargo sunrise-mod help all` lists the commands; `reference/sdk/05-commands.md` describes the SDK commands.
-- Find a hook with `cargo sunrise-mod hooks <words>`, never by guessing a name.
+- Find a hook with `cargo sunrise-mod hooks <words>`, never by guessing a name. It fetches nothing: run `cargo sunrise-mod check` first so the pinned SDK is prepared.
 - The mod tools need no launcher. If a step seems to need one, that is a bug in the tool or the book: report it.
 - To try a mod in game, follow `AGENTS.md` for a scratch home and game directory, never an existing player
   install. Use resources prepared from the user's own Minecraft (`start/first-mod.md`, "Prepared resources").

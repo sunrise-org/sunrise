@@ -1300,7 +1300,7 @@ def install_package(folder: Path, mod: str, source: str, dependencies: str) -> N
     (sunrise-mod-package `runtime::Runtime::load`): the starter manifest with its DEPENDENCIES table and its
     [native] pins, and its source."""
     manifest = (ROOT / "crates/cargo-sunrise-mod/template/native/sunrise-mod.toml").read_text()
-    manifest = manifest.replace("{id}", mod).replace("{name}", mod) + dependencies
+    manifest = manifest.replace("{id}", mod).replace("{name}", json.dumps(mod)) + dependencies
     mixins = re.search(r'pub const REV: &str = "([0-9a-f]{40})";',
                        (ROOT / "crates/sunrise-mod-package/src/mixins_tool.rs").read_text())[1]
     game = re.search(r'pub const VERSION_ID: &str = "([^"]+)";',

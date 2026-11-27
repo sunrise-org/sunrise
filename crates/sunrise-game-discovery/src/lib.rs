@@ -4,6 +4,7 @@
 use std::{fs, path::Path};
 
 pub mod exports;
+pub mod references;
 
 /// The `*.rs` file stems of `directory` but `mod`, sorted, each checked to be a Rust identifier.
 pub fn module_files(directory: &Path) -> Result<Vec<String>, String> {

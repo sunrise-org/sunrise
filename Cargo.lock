@@ -541,6 +541,7 @@ name = "cargo-sunrise-mod"
 version = "0.1.0"
 dependencies = [
  "base64 0.22.1",
+ "cap-std",
  "dunce",
  "getrandom 0.4.3",
  "libc",

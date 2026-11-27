@@ -449,8 +449,6 @@ sunrise-client cut_layout::game::creatures::projectile_batch_tests::canceled_imp
 sunrise-client cut_layout::game::creatures::projectile_batch_tests::no_impact_expiration_retires_only_the_expired_owner lib daily resources
 sunrise-client cut_layout::game::creatures::pufferfish_player::pufferfish_sting_tests::a_silent_fish_damages_and_poisons_without_the_sting lib daily resources
 sunrise-client cut_layout::game::creatures::pufferfish_player::pufferfish_sting_tests::the_sting_event_goes_out_once_per_accepted_hit lib daily resources
-sunrise-client cut_layout::game::creatures::retained_limits_tests::pending_pushes_deliver_once_and_do_not_cross_world_reset lib daily child-process
-sunrise-client cut_layout::game::server_side::creatures_server::retained_limits_tests::same_mob_guest_attack_survives_movement_panic lib daily child-process
 sunrise-client cut_layout::game::creatures::revenge_home_tests::a_zombie_takes_revenge_only_on_a_cow_inside_its_home lib daily resources
 sunrise-client cut_layout::game::creatures::spawn_egg_mob_tests::a_mooshroom_egg_child_rolls_the_colour_flip lib daily resources
 sunrise-client cut_layout::game::creatures::spawn_egg_mob_tests::an_egg_used_on_a_mob_posts_entity_interact lib daily resources

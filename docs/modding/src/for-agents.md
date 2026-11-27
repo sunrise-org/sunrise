@@ -69,7 +69,7 @@ the hooks use. A build server uses the plan contract in
 Read the book's pages directly for the task you're working on.
 
 - `cargo sunrise-mod hooks <words>` searches the pinned build's hooks offline, by id, doc and counterpart name; every
-  word must match.
+  word must match. It reads the SDK `cargo sunrise-mod check` already prepared and fetches nothing.
 - [The mod API reference](reference/api.md) is the rustdoc of `mod_api`: start at `Hooks`, `Host`, `ServerHost` and
   `ClientHost`. Build it from a Sunrise checkout with `cargo doc -p sunrise-mod-api --no-deps --open`.
 - [Writing hooks](start/writing-hooks.md) gives the crate's shape, [Hooks and the Host](concepts/hooks-and-the-host.md)

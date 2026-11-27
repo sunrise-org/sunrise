@@ -416,6 +416,18 @@ mod tests {
         assert_eq!(get(&maps, "minecraft:kelp"), Some(&json!({"burn": 2})));
     }
 
+    /// A value's own conditions are NeoForge's element conditions: a Fabric key there is
+    /// ordinary data of the value, never evaluated (Fabric has no data maps).
+    #[test]
+    fn a_values_fabric_key_is_ordinary_data() {
+        let value = json!({"fabric:load_conditions": {"condition": "fabric:false"}, "burn": 4});
+        let f = files(&[(
+            "data_maps/mymod:item/fuel",
+            &[json!({"values": {"minecraft:cod": value}})],
+        )]);
+        assert_eq!(get(&load(&f), "minecraft:cod"), Some(&value));
+    }
+
     #[test]
     fn values_attach_to_entries_and_to_every_member_of_a_tag() {
         let f = files(&[(

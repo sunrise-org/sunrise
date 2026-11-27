@@ -10,8 +10,8 @@ pub trait LevelDragonFightBackend {
     /// The level's dragon fight (`EnderDragonFight`): whether it is won, whether a dragon of
     /// it was killed before, the respawn stage and the crystals on the pillars, whether or
     /// not its dragon lives. Sunrise runs the End's fight only; it reads whether the End is in
-    /// place or parked. None for a stale handle, a client, a level other than the End, and
-    /// before the fight first ticks.
+    /// place or parked, from the End's opening (`ServerLevel`'s constructor sets the fight up).
+    /// None for a stale handle, a client and a level other than the End.
     fn level_dragon_fight(&self, level: LevelRef) -> Option<DragonFightState>;
 }
 /// The handles' writes of the `level_dragon_fight` area, implemented by the game and reached through [`BackendMut`].

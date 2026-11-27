@@ -67,11 +67,11 @@ struct Recording {
     requests: Vec<RecordedReadback>,
 }
 
-/// The pending readbacks of one renderer, shared with the mod hooks that run while the renderer
-/// is out of the game.
+/// Pending readbacks shared with mod hooks while the renderer is out of the game and kept
+/// across same-device renderer rebuilds.
 #[derive(Default)]
 pub struct ModReadbacks {
-    next_id: u64,
+    pub(super) next_id: u64,
     tickets: HashMap<u64, Ticket>,
     recording: Option<Recording>,
 }
@@ -423,6 +423,7 @@ mod tests {
         let plain_buffer = store.resolve_buffer(None, plain).unwrap();
         let dispatch = |slot| RecordedDispatch {
             slot,
+            sampler_layout: Default::default(),
             entries: vec![ResolvedSet1Entry::StorageBuffer {
                 id: 1,
                 buffer: buffer.clone(),

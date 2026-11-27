@@ -1,15 +1,33 @@
-//! NeoForge's load conditions (`neoforge:conditions`): a data file that has
-//! the key loads only when every condition in it holds. A false condition
-//! silently omits the file; a decode or handler error goes to the owning loader.
+//! Data-file load conditions: NeoForge's (`neoforge:conditions`) and Fabric API's
+//! (`fabric:load_conditions`). A data file that has a key loads only when every condition
+//! in it holds; a file with both keys loads only when both hold, since each loader reads only
+//! its own key. A false condition silently omits the file; a NeoForge decode or handler error
+//! goes to the owning loader, while a Fabric key that does not decode is logged and the file
+//! loads, as Fabric's `ResourceConditionsImpl.applyResourceConditions` does.
 use serde_json::Value;
 use std::collections::{BTreeMap, BTreeSet};
 use std::sync::Arc;
 
+/// NeoForge's file conditions key (`ConditionalOps.DEFAULT_CONDITIONS_KEY`): a list.
+pub const NEOFORGE_KEY: &str = "neoforge:conditions";
+/// Fabric API's file conditions key (`ResourceConditions.CONDITIONS_KEY`): one condition, or a
+/// list that must all hold.
+pub const FABRIC_KEY: &str = "fabric:load_conditions";
+
+/// Whether a data file carries either loader's top-level conditions key.
+pub fn has_conditions(value: &Value) -> bool {
+    value.get(NEOFORGE_KEY).is_some() || value.get(FABRIC_KEY).is_some()
+}
+
 /// The value passed to the selected registry codec by NeoForge's
-/// `ConditionalOps.ConditionalDecoder`, after conditions have been evaluated.
+/// `ConditionalOps.ConditionalDecoder`, after conditions have been evaluated. Fabric's key is no
+/// schema field either (its codecs never read it), so it goes too.
 pub fn into_payload(mut value: Value) -> Value {
+    if let Some(fields) = value.as_object_mut() {
+        fields.remove(FABRIC_KEY);
+    }
     if let Some(fields) = value.as_object_mut()
-        && fields.remove("neoforge:conditions").is_some()
+        && fields.remove(NEOFORGE_KEY).is_some()
         && let Some(payload) = fields.remove("neoforge:value")
     {
         return payload;
@@ -40,6 +58,7 @@ impl LoadConditions {
                 feature_fingerprint: None,
                 registries: None,
                 tags: None,
+                bound_tags: None,
             },
             diagnostics: Diagnostics::new(),
         }
@@ -122,16 +141,29 @@ impl LoadConditions {
         self
     }
 
-    /// `IContext.getTag`: the tags this load has bound, as each registry's
-    /// tags holding at least one entry. Readers that run before the tags load
-    /// never get this view, so `neoforge:tag_empty` there omits the file
-    /// instead of answering from an older load's tags.
-    pub fn with_tags<'a, I>(&self, non_empty: impl IntoIterator<Item = (&'a str, I)>) -> Self
+    /// The tags this load has bound: each registry's tags, each with whether it holds an
+    /// entry. NeoForge's `neoforge:tag_empty` reads the ones holding an entry
+    /// (`ICondition.IContext.getTag`); Fabric's `fabric:tags_populated` reads every bound tag,
+    /// empty ones included (`HolderGetter.get(TagKey)` is present for a bound tag whatever it
+    /// holds). Readers that run before the tags load never get this view, so a tag condition
+    /// there omits the file instead of answering from an older load's tags.
+    pub fn with_tags<'a, I>(&self, tags: impl IntoIterator<Item = (&'a str, I)>) -> Self
     where
-        I: IntoIterator<Item = &'a str>,
+        I: IntoIterator<Item = (&'a str, bool)>,
     {
+        let tags: Vec<(&str, Vec<(&str, bool)>)> = tags
+            .into_iter()
+            .map(|(registry, tags)| (registry, tags.into_iter().collect()))
+            .collect();
         let mut view = self.clone();
-        view.context.tags = Some(Arc::new(Names::new(non_empty)));
+        view.context.tags = Some(Arc::new(Names::new(tags.iter().map(|(registry, tags)| {
+            let held = tags.iter().filter(|(_, held)| *held);
+            (*registry, held.map(|(tag, _)| *tag))
+        }))));
+        view.context.bound_tags =
+            Some(Arc::new(Names::new(tags.iter().map(|(registry, tags)| {
+                (*registry, tags.iter().map(|(tag, _)| *tag))
+            }))));
         view
     }
 
@@ -143,19 +175,22 @@ impl LoadConditions {
     /// `neoforge:conditions` key is ordinary data and is never evaluated.
     fn filter_list(&self, elements: &mut Vec<Value>, path: &dyn Fn() -> String) -> bool {
         let mut valid = true;
-        elements.retain_mut(|element| match self.registry_verdict(element, path) {
-            Some(true) => {
-                if let Some(fields) = element.as_object_mut() {
-                    fields.remove("neoforge:conditions");
+        // Element conditions are NeoForge's alone: Fabric reads its key on whole files only.
+        elements.retain_mut(
+            |element| match self.registry_verdict(element, Keys::NeoForge, path) {
+                Some(true) => {
+                    if let Some(fields) = element.as_object_mut() {
+                        fields.remove(NEOFORGE_KEY);
+                    }
+                    true
                 }
-                true
-            }
-            Some(false) => false,
-            None => {
-                valid = false;
-                false
-            }
-        });
+                Some(false) => false,
+                None => {
+                    valid = false;
+                    false
+                }
+            },
+        );
         valid
     }
 
@@ -233,18 +268,24 @@ impl LoadConditions {
     /// Return a file's error without adding it to registry diagnostics. The
     /// caller decides whether to skip the file or refuse its own candidate.
     pub fn allows_file_isolated(&self, file: &Value, path: &str) -> Result<bool, String> {
-        self.verdict(file, &|| path.to_owned())
+        self.verdict(file, Keys::Both, &|| path.to_owned())
             .map_err(|error| error.message().to_owned())
     }
 
     fn allows_context(&self, file: &Value, path: impl Fn() -> String) -> bool {
-        self.registry_verdict(file, &path).unwrap_or(false)
+        self.registry_verdict(file, Keys::Both, &path)
+            .unwrap_or(false)
     }
 
     /// A false condition omits the entry; a decode or handler error also
     /// invalidates the enclosing registry file (for example a loot table).
-    fn registry_verdict(&self, file: &Value, path: &dyn Fn() -> String) -> Option<bool> {
-        match self.verdict(file, path) {
+    fn registry_verdict(
+        &self,
+        file: &Value,
+        keys: Keys,
+        path: &dyn Fn() -> String,
+    ) -> Option<bool> {
+        match self.verdict(file, keys, path) {
             Ok(answer) => Some(answer),
             Err(error) => {
                 let diagnostic = format!("{}: {}", path(), error.message());
@@ -261,34 +302,72 @@ impl LoadConditions {
         }
     }
 
-    fn verdict(&self, file: &Value, path: &dyn Fn() -> String) -> Verdict {
-        self.decode_file(file)?.verdict(&self.context, path)
+    fn verdict(&self, file: &Value, keys: Keys, path: &dyn Fn() -> String) -> Verdict {
+        self.decode_file(file, keys, path)?
+            .verdict(&self.context, path)
     }
 
-    /// Decode the entire condition list without testing it or adding to registry diagnostics.
+    /// Decode the file's entire condition program (both keys) without testing it or adding to
+    /// registry diagnostics. `path` names the file in the log line of a Fabric key that does
+    /// not decode.
     pub fn decode_file_conditions<'a>(
         &'a self,
         file: &'a Value,
+        path: &str,
     ) -> Result<DecodedFileConditions<'a>, String> {
-        self.decode_file(file)
+        self.decode_file(file, Keys::Both, &|| path.to_owned())
             .map_err(|error| error.message().to_owned())
     }
 
+    /// The file's condition program: NeoForge's list, then Fabric's condition, all of which must
+    /// hold. A NeoForge decode error refuses the program. Fabric's key that does not decode is
+    /// logged and left out, as `ResourceConditionsImpl.applyResourceConditions` loads the file.
     fn decode_file<'a>(
         &'a self,
         file: &'a Value,
+        keys: Keys,
+        path: &dyn Fn() -> String,
     ) -> Result<DecodedFileConditions<'a>, ConditionError> {
-        let payload = file.get("neoforge:conditions");
-        let nodes = match payload {
-            Some(payload) => Condition::decode_list(
-                payload,
-                self.registered.as_ref().map(|lookup| &lookup.0.handlers),
-            )?,
+        let handlers = self.registered.as_ref().map(|lookup| &lookup.0.handlers);
+        let payload = file.get(NEOFORGE_KEY);
+        let mut nodes = match payload {
+            Some(payload) => Condition::decode_list(payload, handlers)?,
             None => Vec::new(),
         };
+        let fabric = match keys {
+            Keys::Both => file.get(FABRIC_KEY),
+            Keys::NeoForge => None,
+        };
+        let fabric =
+            fabric.filter(
+                |fabric| match Condition::decode_fabric_root(fabric, handlers) {
+                    Ok(condition) => {
+                        nodes.push(condition);
+                        true
+                    }
+                    Err(error) => {
+                        // Logged once per load candidate, as `applyResourceConditions` runs once per
+                        // file. A load without a candidate (`LoadConditions::vanilla`) keeps no record
+                        // and logs each evaluation.
+                        let line = format!(
+                            "{}: {FABRIC_KEY}: {error}; the file loads without its conditions",
+                            path()
+                        );
+                        let first =
+                            self.diagnostics.0.as_ref().is_none_or(|state| {
+                                state.lock().unwrap().logged.insert(line.clone())
+                            });
+                        if first {
+                            log::error!("{line}");
+                        }
+                        false
+                    }
+                },
+            );
         Ok(DecodedFileConditions {
             load: self,
             payload,
+            fabric,
             nodes,
         })
     }
@@ -326,6 +405,8 @@ type CachedVerdict = Arc<std::sync::OnceLock<Verdict>>;
 struct CandidateDiagnostics {
     cache: BTreeMap<(String, String, u64), CachedVerdict>,
     errors: BTreeSet<String>,
+    /// Fabric keys that did not decode and were logged, once per candidate load.
+    logged: BTreeSet<String>,
 }
 // Diagnostics do not contribute to a resource generation's cache identity.
 #[derive(Clone, Debug)]
@@ -358,14 +439,23 @@ struct Context {
     features: Option<Arc<BTreeSet<String>>>,
     feature_fingerprint: Option<u64>,
     registries: Option<Arc<Names>>,
+    /// The bound tags holding an entry.
     tags: Option<Arc<Names>>,
+    /// Every bound tag, empty ones included.
+    bound_tags: Option<Arc<Names>>,
 }
 impl Context {
     /// The cache key of answers given under this context.
     fn key(&self) -> u64 {
         use std::hash::{Hash, Hasher};
         let mut hasher = std::hash::DefaultHasher::new();
-        (&self.feature_fingerprint, &self.registries, &self.tags).hash(&mut hasher);
+        (
+            &self.feature_fingerprint,
+            &self.registries,
+            &self.tags,
+            &self.bound_tags,
+        )
+            .hash(&mut hasher);
         hasher.finish()
     }
 }
@@ -452,10 +542,20 @@ impl std::hash::Hash for RegisteredLookup {
     }
 }
 
-/// A file's decoded condition program, borrowing its payload and the load that knows its handlers.
+/// Which conditions keys an evaluation reads: a whole file reads both loaders', an element of a
+/// list NeoForge decodes with element conditions (a loot pool) only NeoForge's.
+#[derive(Clone, Copy)]
+enum Keys {
+    Both,
+    NeoForge,
+}
+
+/// A file's decoded condition program, borrowing its payloads and the load that knows its
+/// handlers. `fabric` is set only when the Fabric key decoded into the program.
 pub struct DecodedFileConditions<'a> {
     load: &'a LoadConditions,
     payload: Option<&'a Value>,
+    fabric: Option<&'a Value>,
     nodes: Vec<Condition<'a>>,
 }
 
@@ -520,6 +620,7 @@ impl<'program, 'load> ConditionEvaluation<'program, 'load> {
                     }
                     Condition::Registered { registry, .. }
                     | Condition::TagEmpty { registry, .. }
+                    | Condition::TagBound { registry, .. }
                         if pending(registry) =>
                     {
                         return Ok(ConditionProgress::NeedsRegistry(registry));
@@ -561,9 +662,9 @@ impl<'load> DecodedFileConditions<'load> {
     }
 
     fn verdict(&self, context: &Context, path: &dyn Fn() -> String) -> Verdict {
-        let Some(payload) = self.payload else {
+        if self.payload.is_none() && self.fabric.is_none() {
             return Ok(true);
-        };
+        }
         let evaluate = || match self.evaluation().advance_context(context, |_| false)? {
             ConditionProgress::Complete(allowed) => Ok(allowed),
             ConditionProgress::NeedsRegistry(_) => unreachable!("no pending registries"),
@@ -593,7 +694,12 @@ impl<'load> DecodedFileConditions<'load> {
             .cache
             .entry((
                 path.to_owned(),
-                payload.to_string(),
+                // Both payloads, so a file's answer is cached per the pair it carries.
+                format!(
+                    "{}\n{}",
+                    self.payload.map(Value::to_string).unwrap_or_default(),
+                    self.fabric.map(Value::to_string).unwrap_or_default()
+                ),
                 if reads_context { context.key() } else { 0 },
             ))
             .or_default()
@@ -602,10 +708,34 @@ impl<'load> DecodedFileConditions<'load> {
     }
 }
 
-/// Does the built-in evaluator already implement this condition ID?
+/// Fabric API's built-in condition types (`DefaultResourceConditionTypes`), which
+/// `Condition::decode_fabric` maps onto the evaluator's own nodes.
+const FABRIC_BUILTINS: [&str; 10] = [
+    "true",
+    "false",
+    "not",
+    "and",
+    "or",
+    "all_mods_loaded",
+    "any_mods_loaded",
+    "tags_populated",
+    "features_enabled",
+    "registry_contains",
+];
+
+/// Does the built-in evaluator already implement this condition ID (NeoForge's or Fabric's)?
 pub fn is_builtin_condition(id: &sunrise_core::identifier::Identifier) -> bool {
     BuiltinCondition::from_parts(id.namespace(), id.path()).is_some()
+        || (id.namespace() == "fabric" && FABRIC_BUILTINS.contains(&id.path()))
 }
+
+/// `FeatureFlags.REGISTRY`'s flags, which a feature condition may name.
+const KNOWN_FEATURE_FLAGS: [&str; 4] = [
+    "minecraft:vanilla",
+    "minecraft:trade_rebalance",
+    "minecraft:redstone_experiments",
+    "minecraft:minecart_improvements",
+];
 
 #[derive(Clone, Copy)]
 enum BuiltinCondition {
@@ -644,11 +774,27 @@ enum Condition<'a> {
     ModLoaded(&'a str),
     Literal(bool),
     FeatureFlags(Vec<String>),
-    Registered { registry: String, value: String },
-    TagEmpty { registry: String, tag: String },
+    Registered {
+        registry: String,
+        value: String,
+    },
+    TagEmpty {
+        registry: String,
+        tag: String,
+    },
+    /// Whether the load bound the tag at all, whatever it holds (Fabric's `tags_populated`).
+    TagBound {
+        registry: String,
+        tag: String,
+    },
     Not(Box<Self>),
-    Combinator { and: bool, children: Vec<Self> },
-    Custom(&'a ConditionHandler, &'a Value),
+    Combinator {
+        and: bool,
+        children: Vec<Self>,
+    },
+    /// A registered handler, the condition's node and the key that named it (`type` for
+    /// NeoForge, `condition` for Fabric), which the handler's arguments leave out.
+    Custom(&'a ConditionHandler, &'a Value, &'static str),
 }
 
 #[derive(Default)]
@@ -716,7 +862,7 @@ impl<'a> Condition<'a> {
             )),
         });
         if let Some(handler) = handler {
-            Some(Self::Custom(handler.as_ref(), node))
+            Some(Self::Custom(handler.as_ref(), node, "type"))
         } else {
             errors.unknown.insert(name);
             None
@@ -757,10 +903,7 @@ impl<'a> Condition<'a> {
                         let id = identifier(value, "flags")?;
                         // FeatureFlags.REGISTRY, not the enabled set in the condition context.
                         match id.as_str() {
-                            "minecraft:vanilla"
-                            | "minecraft:trade_rebalance"
-                            | "minecraft:redstone_experiments"
-                            | "minecraft:minecart_improvements" => Ok(id),
+                            known if KNOWN_FEATURE_FLAGS.contains(&known) => Ok(id),
                             _ => {
                                 errors.invalid.insert(format!(
                                     "neoforge:feature_flags_enabled: unknown flag {id}"
@@ -797,9 +940,145 @@ impl<'a> Condition<'a> {
         }))
     }
 
+    /// Fabric API's `ResourceCondition.CONDITION_CODEC`: one condition, or a list of them that
+    /// must all hold (`ResourceConditions.and`).
+    fn decode_fabric_root(
+        payload: &'a Value,
+        handlers: Option<&'a Handlers>,
+    ) -> Result<Self, String> {
+        match payload {
+            Value::Array(list) => Ok(Self::Combinator {
+                and: true,
+                children: list
+                    .iter()
+                    .map(|node| Self::decode_fabric(node, handlers))
+                    .collect::<Result<_, _>>()?,
+            }),
+            node => Self::decode_fabric(node, handlers),
+        }
+    }
+
+    /// One Fabric condition, dispatched on its `condition` id
+    /// (`ResourceCondition.CODEC`). The built-in types are fabric-resource-conditions-api-v1's
+    /// `DefaultResourceConditionTypes`, each mapped onto the evaluator's own nodes; any other id
+    /// goes to the handler registered under it, as a NeoForge `type` does.
+    fn decode_fabric(node: &'a Value, handlers: Option<&'a Handlers>) -> Result<Self, String> {
+        let name = node
+            .get("condition")
+            .and_then(Value::as_str)
+            .ok_or("load condition: missing or invalid condition")?;
+        let id = |value: &Value, field: &str| {
+            value
+                .as_str()
+                .and_then(|id| sunrise_core::identifier::Identifier::parse(id).ok())
+                .map(|id| id.to_string())
+                .ok_or_else(|| format!("{name}: invalid {field}"))
+        };
+        let list = |field: &str| {
+            node.get(field)
+                .and_then(Value::as_array)
+                .ok_or_else(|| format!("{name}: invalid {field}"))
+        };
+        // `fieldOf("registry").orElse(Registries.ITEM)`: a missing or invalid id is the item
+        // registry (DFU's `orElse` answers its value for any field error).
+        let registry = || -> Result<String, String> {
+            Ok(node
+                .get("registry")
+                .and_then(|value| id(value, "registry").ok())
+                .unwrap_or_else(|| "minecraft:item".to_owned()))
+        };
+        let qualified = sunrise_core::identifier::Identifier::parse(name)
+            .map_err(|_| format!("{name}: invalid condition id"))?
+            .to_string();
+        Ok(match qualified.as_str() {
+            "fabric:true" => Self::Literal(true),
+            "fabric:false" => Self::Literal(false),
+            "fabric:not" => Self::Not(Box::new(Self::decode_fabric(
+                node.get("value")
+                    .ok_or_else(|| format!("{name}: invalid value"))?,
+                handlers,
+            )?)),
+            kind @ ("fabric:and" | "fabric:or") => Self::Combinator {
+                and: kind == "fabric:and",
+                children: list("values")?
+                    .iter()
+                    .map(|child| Self::decode_fabric(child, handlers))
+                    .collect::<Result<_, _>>()?,
+            },
+            // `ResourceConditionsImpl.modsLoaded`: the ids are plain strings.
+            kind @ ("fabric:all_mods_loaded" | "fabric:any_mods_loaded") => Self::Combinator {
+                and: kind == "fabric:all_mods_loaded",
+                children: list("values")?
+                    .iter()
+                    .map(|id| {
+                        id.as_str()
+                            .map(Self::ModLoaded)
+                            .ok_or_else(|| format!("{name}: invalid values"))
+                    })
+                    .collect::<Result<_, _>>()?,
+            },
+            // `ResourceConditionsImpl.tagsPopulated`: every tag is bound (`HolderGetter.get`
+            // is present), even one that holds nothing.
+            "fabric:tags_populated" => {
+                let registry = registry()?;
+                Self::Combinator {
+                    and: true,
+                    children: list("values")?
+                        .iter()
+                        .map(|tag| {
+                            Ok(Self::TagBound {
+                                registry: registry.clone(),
+                                tag: id(tag, "values")?,
+                            })
+                        })
+                        .collect::<Result<_, String>>()?,
+                }
+            }
+            // `ResourceConditionsImpl.featuresEnabled`: an unknown flag is a failed test, not a
+            // decode error.
+            "fabric:features_enabled" => {
+                let flags = list("features")?
+                    .iter()
+                    .map(|flag| id(flag, "features"))
+                    .collect::<Result<Vec<_>, _>>()?;
+                if flags
+                    .iter()
+                    .all(|flag| KNOWN_FEATURE_FLAGS.contains(&flag.as_str()))
+                {
+                    Self::FeatureFlags(flags)
+                } else {
+                    Self::Literal(false)
+                }
+            }
+            // `ResourceConditionsImpl.registryContains`: every entry is registered.
+            "fabric:registry_contains" => {
+                let registry = registry()?;
+                Self::Combinator {
+                    and: true,
+                    children: list("values")?
+                        .iter()
+                        .map(|entry| {
+                            Ok(Self::Registered {
+                                registry: registry.clone(),
+                                value: id(entry, "values")?,
+                            })
+                        })
+                        .collect::<Result<_, String>>()?,
+                }
+            }
+            _ => handlers
+                .and_then(|handlers| handlers.get(&qualified))
+                .map(|handler| Self::Custom(handler.as_ref(), node, "condition"))
+                .ok_or_else(|| format!("unknown load condition {name}"))?,
+        })
+    }
+
     fn reads_context(&self) -> bool {
         match self {
-            Self::FeatureFlags(_) | Self::Registered { .. } | Self::TagEmpty { .. } => true,
+            Self::FeatureFlags(_)
+            | Self::Registered { .. }
+            | Self::TagEmpty { .. }
+            | Self::TagBound { .. } => true,
             Self::Not(child) => child.reads_context(),
             Self::Combinator { children, .. } => children.iter().any(Self::reads_context),
             Self::ModLoaded(_) | Self::Literal(_) | Self::Custom(..) => false,
@@ -839,8 +1118,19 @@ impl<'a> Condition<'a> {
                 };
                 !tags.contains(registry, tag)
             }
+            Self::TagBound { registry, tag } => {
+                let Some(tags) = &context.bound_tags else {
+                    return unavailable("fabric:tags_populated: tags not loaded yet");
+                };
+                tags.contains(registry, tag)
+            }
             Self::Not(_) | Self::Combinator { .. } => unreachable!("not an operand"),
-            Self::Custom(handler, args) => handler(args).map_err(ConditionError::Invalid)?,
+            Self::Custom(handler, node, key) => {
+                // The arguments are the node without the key that named the condition.
+                let mut args = node.as_object().cloned().unwrap_or_default();
+                args.remove(*key);
+                handler(&Value::Object(args)).map_err(ConditionError::Invalid)?
+            }
         })
     }
 }
@@ -1044,9 +1334,9 @@ mod tests {
         let tin = file(json!({"type": "neoforge:tag_empty", "tag": "c:ingots/tin"}));
         let before_tags = LoadConditions::new([]);
         assert!(!before_tags.allows(&tin), "no tag view yet: left out");
-        let empty = before_tags.with_tags([("minecraft:item", vec!["minecraft:planks"])]);
+        let empty = before_tags.with_tags([("minecraft:item", vec![("minecraft:planks", true)])]);
         assert!(empty.allows(&tin));
-        let with_tin = before_tags.with_tags([("minecraft:item", vec!["c:ingots/tin"])]);
+        let with_tin = before_tags.with_tags([("minecraft:item", vec![("c:ingots/tin", true)])]);
         assert!(!with_tin.allows(&tin));
         assert_ne!(empty, with_tin, "the tag view is part of cache identity");
     }
@@ -1055,7 +1345,7 @@ mod tests {
     fn an_unsupplied_registry_is_empty_without_a_diagnostic() {
         let conditions = LoadConditions::new([])
             .with_registries([("item", ["stone"])])
-            .with_tags([("item", ["planks"])]);
+            .with_tags([("item", [("planks", true)])]);
         for registry in ["minecraft:worldgen/biome", "test:missing"] {
             let registered = json!({"type": "neoforge:registered",
                 "registry": registry, "value": "test:entry"});
@@ -1073,8 +1363,8 @@ mod tests {
     fn a_retained_candidate_does_not_reuse_an_answer_across_tag_views() {
         let tin = file(json!({"type": "neoforge:tag_empty", "tag": "c:ingots/tin"}));
         let candidate = LoadConditions::new([]).with_lookup([("test:flag", |_: &Value| Ok(true))]);
-        let empty = candidate.with_tags([("minecraft:item", Vec::<&str>::new())]);
-        let with_tin = candidate.with_tags([("minecraft:item", vec!["c:ingots/tin"])]);
+        let empty = candidate.with_tags([("minecraft:item", Vec::<(&str, bool)>::new())]);
+        let with_tin = candidate.with_tags([("minecraft:item", vec![("c:ingots/tin", true)])]);
         assert!(empty.allows_file(&tin, "data/a/recipe/b.json"));
         assert!(!with_tin.allows_file(&tin, "data/a/recipe/b.json"));
     }
@@ -1210,3 +1500,7 @@ mod registry_tests;
 #[cfg(test)]
 #[path = "condition_log_tests.rs"]
 mod log_tests;
+
+#[cfg(test)]
+#[path = "condition_fabric_tests.rs"]
+mod fabric_tests;

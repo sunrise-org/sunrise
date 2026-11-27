@@ -1,0 +1,7 @@
+ids = [
+    "type:PipelineDrawError.PackSamplerLayout",
+    "type:PipelineDrawError.VariantBuildFailed",
+    "type:ComputeDispatchError.VariantBuildFailed",
+]
+why = "Standalone mod draws and compute dispatches use nearest texel and mip sampling for depth and unfilterable R32Float without changing the sampler declaration. Filterable textures keep vanilla mip blending. Linked shader-pack programs have a fixed layout, so submitting a draw that needs a different sampler layout returns PackSamplerLayout. If the GPU refuses a variant during preparation, the renderer skips the affected draw or dispatch and logs the pipeline and device error once."
+migrate = "No changes for standalone draws or compute. If a linked shader-pack draw needs an unfilterable texture, use a sampler with nearest minification and magnification and a max_lod of at most 0.25, or leave the draw unlinked."

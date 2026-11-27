@@ -71,7 +71,7 @@ pub(crate) enum Refusal {
 #[derive(Clone, Debug, Default)]
 pub struct ComputeSet {
     keys: Vec<Identifier>,
-    built: Vec<Option<BuiltCompute>>,
+    built: Vec<Option<Arc<BuiltCompute>>>,
     generation: u64,
     refused: Arc<Mutex<Vec<(usize, Refusal)>>>,
 }
@@ -95,7 +95,7 @@ impl ComputeSet {
             .map(|pipeline| {
                 let loaded = Self::translate(pipeline, &read, &include);
                 match loaded {
-                    Ok(built) => Some(built),
+                    Ok(built) => Some(Arc::new(built)),
                     Err(reason) => {
                         log::warn!(
                             "Sunrise: mod {} compute pipeline {} refused: {reason}",
@@ -177,7 +177,7 @@ impl ComputeSet {
     }
 
     /// Every slot in order, with what the load built for it.
-    pub fn built(&self) -> &[Option<BuiltCompute>] {
+    pub fn built(&self) -> &[Option<Arc<BuiltCompute>>] {
         &self.built
     }
 

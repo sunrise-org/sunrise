@@ -10,7 +10,7 @@ import textwrap
 import unittest
 from unittest import mock
 
-from tests.os_support import needs_runner_shell
+from tests.os_support import BASH, needs_runner_shell
 from tools.ci import nightly
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -88,7 +88,7 @@ class DryStateTests(unittest.TestCase):
                            "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "2", "GH_TOKEN": "test",
                            "GITHUB_API_URL": "https://api.github.com", "GITHUB_REPOSITORY": "arismoko/horizon",
                            "RUNNER_TEMP": folder, "CAPTURE": str(path / "request"), "STATUS": status, "LOOKUP": "200" if status == "204" else status}
-                    result = subprocess.run(["bash", "-euo", "pipefail", "-c", script], env=env, capture_output=True)
+                    result = subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True)
                     self.assertEqual(result.returncode == 0, success)
                     last_attempt = 2 if success else 1
                     endpoint = "refs" if status == "204" else "ref"
@@ -128,11 +128,11 @@ else:
                    "GITHUB_RUN_ID": "123", "GITHUB_RUN_ATTEMPT": "1", "GH_TOKEN": "test",
                    "GITHUB_API_URL": "https://api.github.com", "GITHUB_REPOSITORY": "arismoko/horizon",
                    "RUNNER_TEMP": folder}
-            first = subprocess.run(["bash", "-euo", "pipefail", "-c", script], env=env, capture_output=True)
+            first = subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True)
             self.assertNotEqual(first.returncode, 0)
             self.assertIn(original, json.loads((path / "refs").read_text()))
             # Successful pick was not rerun: only cleanup has a new attempt number.
             env["GITHUB_RUN_ATTEMPT"] = "2"
-            retry = subprocess.run(["bash", "-euo", "pipefail", "-c", script], env=env, capture_output=True)
+            retry = subprocess.run([BASH, "-euo", "pipefail", "-c", script], env=env, capture_output=True)
             self.assertEqual(retry.returncode, 0, retry.stderr)
             self.assertEqual(set(json.loads((path / "refs").read_text())), unrelated)

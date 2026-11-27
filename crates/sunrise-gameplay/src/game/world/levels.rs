@@ -1617,8 +1617,13 @@ impl crate::game::ServerGame<'_> {
         let mut result = Ok(());
         for phase in server_tick_phases(&dimensions, &order) {
             if let ServerTickPhase::IdleLevel(dim) = phase {
+                if let Some(runs) = running {
+                    self.count_fight_empty_time(dim, runs);
+                }
                 if running == Some(true) {
                     self.tick_level_environment(dim);
+                    // ServerLevel.tick: the fight still ticks while `emptyTime < 300`.
+                    self.tick_idle_fight(dim);
                 }
                 continue;
             }
@@ -1657,6 +1662,9 @@ impl crate::game::ServerGame<'_> {
             if let Err(e) = self.enter_level(dim) {
                 result = Err(e);
                 break;
+            }
+            if let Some(runs) = running {
+                self.count_fight_empty_time(dim, runs);
             }
             self.server.level_pass = Pass {
                 first: k == 0,
@@ -2173,6 +2181,9 @@ impl crate::game::ServerGame<'_> {
 
     /// The mods hear `dim`'s level open (`LevelEvent.Load`), on a server.
     pub fn native_level_opened(&mut self, dim: Dim) {
+        if self.common.is_logical_server() {
+            self.open_level_fight(dim);
+        }
         if dim == self.common.dim {
             self.server.levels.0.active_closed = false;
         }

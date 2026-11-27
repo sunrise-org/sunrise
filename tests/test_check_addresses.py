@@ -76,29 +76,47 @@ class CheckTests(unittest.TestCase):
                  ("crates/sunrise-client-render/src/skins.rs", "textures.minecraft.net"),
                  ("crates/sunrise-server/src/discord.rs", "discord.com"),
                  ("crates/sunrise-telemetry/src/lib.rs", "telemetry.playsunrise.net")]
-        self.assertEqual(self.run_check(found), ([], []))
+        self.assertEqual(self.run_check(found), [])
 
     def test_a_new_address_outside_the_home_fails_and_names_the_doc(self):
-        problems, _ = self.run_check([("crates/sunrise-client/src/net.rs", "relay.playsunrise.net")])
+        problems = self.run_check([("crates/sunrise-telemetry/src/lib.rs", "telemetry.playsunrise.net"),
+                                   ("crates/sunrise-client/src/net.rs", "relay.playsunrise.net")])
         self.assertIn("relay.playsunrise.net", problems[0])
         self.assertIn("docs/layers.md#built-in-addresses", problems[0])
 
     def test_non_address_identity_can_be_scoped_to_its_file(self):
         identity = "crates/verifier/src/lib.rs"
         client = "crates/downloader/src/lib.rs"
-        config = dict(CONFIG, not_addresses={f"{identity} github.com": "certificate identity"})
-        problems, _ = check_addresses.check(config, {(identity, "github.com"), (client, "github.com")})
+        config = dict(CONFIG, not_addresses={f"{identity} github.com": "certificate identity"}, allowed=[])
+        problems = check_addresses.check(config, {(identity, "github.com"), (client, "github.com")})
         self.assertEqual(len(problems), 1)
         self.assertIn(client, problems[0])
 
-    def test_an_address_that_left_its_file_is_a_note(self):
-        problems, notes = self.run_check([])
-        self.assertEqual(problems, [])
-        self.assertIn("telemetry.playsunrise.net", notes[0])
+    def test_an_unused_allowance_fails_the_checker(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            (root / "tools").mkdir()
+            (root / "tools/layers.json").write_text('{"crates": {}}')
+            config_path = root / "tools/addresses.json"
+            allowance = CONFIG["allowed"][0]
+            config = dict(CONFIG, _fork_baselines={allowance: "old baseline"})
+            config_path.write_text(json.dumps(config))
+            home = root / CONFIG["homes"][0]
+            home.parent.mkdir(parents=True)
+            home.write_text('pub const URL: &str = "https://telemetry.playsunrise.net";\n')
+            with mock.patch.object(check_addresses, "ROOT", root), \
+                    mock.patch("sys.stdout", new_callable=io.StringIO) as out:
+                self.assertEqual(check_addresses.main([]), 1)
+                self.assertIn(f"{allowance}: unused allowance", out.getvalue())
+                self.assertEqual(check_addresses.main(["--list"]), 0)
+                config_path.write_text(json.dumps(dict(config, allowed=[])))
+                self.assertEqual(check_addresses.main([]), 0)
 
     def test_the_list_may_not_take_new_hosts_or_grow(self):
         config = dict(CONFIG, allowed=CONFIG["allowed"] + ["crates/x/src/lib.rs relay.playsunrise.net"])
-        problems, _ = check_addresses.check(config, set(), {"allowed": CONFIG["allowed"]})
+        found = {("crates/sunrise-telemetry/src/lib.rs", "telemetry.playsunrise.net"),
+                 ("crates/x/src/lib.rs", "relay.playsunrise.net")}
+        problems = check_addresses.check(config, found, {"allowed": CONFIG["allowed"]})
         self.assertTrue(any("relay.playsunrise.net: added" in p for p in problems))
         self.assertTrue(any("grew from 1 to 2" in p for p in problems))
 
@@ -106,7 +124,7 @@ class CheckTests(unittest.TestCase):
         moved = {"allowed": ["crates/sunrise-telemetry/src/upload.rs telemetry.playsunrise.net"]}
         config = dict(CONFIG, allowed=moved["allowed"])
         found = {("crates/sunrise-telemetry/src/upload.rs", "telemetry.playsunrise.net")}
-        self.assertEqual(check_addresses.check(config, found, {"allowed": CONFIG["allowed"]}), ([], []))
+        self.assertEqual(check_addresses.check(config, found, {"allowed": CONFIG["allowed"]}), [])
 
 
 class PullRequestMergeTests(unittest.TestCase):

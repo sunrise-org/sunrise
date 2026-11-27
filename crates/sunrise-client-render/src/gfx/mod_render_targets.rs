@@ -10,8 +10,8 @@
 //! and storage usage; each mip level has its own single-level view (`GpuTextureView` with
 //! `baseMipLevel` and `mipLevels`) for rendering into, sampling and storage binding.
 //!
-//! Handles are generational and owner-checked. A target survives a resource reload and a world
-//! close: it is freed by [`mod_api::RenderTargetRef::release`] or when its mod unloads.
+//! Handles are generational and owner-checked. A target survives a same-device resource reload
+//! and a world close. It is freed on release, mod unload or device replacement.
 
 use mod_api::__private::game::Fields;
 use mod_api::{
@@ -157,7 +157,7 @@ struct ModRenderTarget {
 
 /// Generational store of mod-owned offscreen GPU render targets (`RenderTargetRef`).
 pub struct ModRenderTargets {
-    next_generation: u64,
+    pub(super) next_generation: u64,
     slots: Vec<Option<ModRenderTarget>>,
     next_view_id: u64,
     /// The textures of attachments freed since the last [`Self::take_released`].
@@ -428,8 +428,6 @@ impl ModRenderTargets {
         owner: Option<&'static str>,
         handle: RenderTargetRef,
         attachment: u8,
-        filterable: bool,
-        float32_filterable: bool,
     ) -> Result<(u64, wgpu::TextureView, TargetMips), PipelineDrawError> {
         let mip_levels = self
             .get_owned(owner, handle)
@@ -438,8 +436,6 @@ impl ModRenderTargets {
         self.resolve_color_mips(
             owner,
             mod_api::RenderTargetMipView::new(handle, attachment, 0, mip_levels),
-            filterable,
-            float32_filterable,
         )
     }
 
@@ -450,8 +446,6 @@ impl ModRenderTargets {
         &mut self,
         owner: Option<&'static str>,
         view: mod_api::RenderTargetMipView,
-        filterable: bool,
-        float32_filterable: bool,
     ) -> Result<(u64, wgpu::TextureView, TargetMips), PipelineDrawError> {
         let (handle, base, count) = (view.target, view.base_mip, view.mip_levels);
         let entry = self
@@ -468,9 +462,6 @@ impl ModRenderTargets {
             .colors
             .get(view.attachment as usize)
             .ok_or(PipelineDrawError::InvalidBinding)?;
-        if filterable && color.format == wgpu::TextureFormat::R32Float && !float32_filterable {
-            return Err(PipelineDrawError::InvalidBinding);
-        }
         let mips = TargetMips {
             texture: color.view_id,
             base_mip: base,
@@ -547,11 +538,7 @@ impl ModRenderTargets {
         &self,
         owner: Option<&'static str>,
         handle: RenderTargetRef,
-        filterable: bool,
     ) -> Result<(u64, wgpu::TextureView), PipelineDrawError> {
-        if filterable {
-            return Err(PipelineDrawError::InvalidBinding);
-        }
         let entry = self
             .get_owned(owner, handle)
             .map_err(|_| PipelineDrawError::InvalidBinding)?;
@@ -789,13 +776,6 @@ impl super::mod_gpu::ModGpuResources {
         self.device.limits().max_compute_workgroups_per_dimension
     }
 
-    /// Whether this renderer's GPU device supports linear filtering on `R32Float` textures.
-    pub fn float32_filterable(&self) -> bool {
-        self.device
-            .features()
-            .contains(wgpu::Features::FLOAT32_FILTERABLE)
-    }
-
     /// Record a distinct frame-graph cycle warning once per reload/world session.
     pub fn warn_frame_graph_cycle_once(&self, passes: &[String]) {
         let mut warned = self
@@ -816,16 +796,11 @@ impl super::mod_gpu::ModGpuResources {
         owner: Option<&'static str>,
         target: RenderTargetRef,
         attachment: u8,
-        filterable: bool,
     ) -> Result<(u64, wgpu::TextureView, TargetMips), PipelineDrawError> {
-        let float32_filterable = self
-            .device
-            .features()
-            .contains(wgpu::Features::FLOAT32_FILTERABLE);
         self.render_targets
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .resolve_color(owner, target, attachment, filterable, float32_filterable)
+            .resolve_color(owner, target, attachment)
     }
 
     /// Resolve a mip range of a mod render target colour attachment for set-1 sampling.
@@ -833,16 +808,11 @@ impl super::mod_gpu::ModGpuResources {
         &self,
         owner: Option<&'static str>,
         view: mod_api::RenderTargetMipView,
-        filterable: bool,
     ) -> Result<(u64, wgpu::TextureView, TargetMips), PipelineDrawError> {
-        let float32_filterable = self
-            .device
-            .features()
-            .contains(wgpu::Features::FLOAT32_FILTERABLE);
         self.render_targets
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .resolve_color_mips(owner, view, filterable, float32_filterable)
+            .resolve_color_mips(owner, view)
     }
 
     /// Resolve one mip level of a mod render target colour attachment as a set-1 storage image.
@@ -863,12 +833,11 @@ impl super::mod_gpu::ModGpuResources {
         &self,
         owner: Option<&'static str>,
         target: RenderTargetRef,
-        filterable: bool,
     ) -> Result<(u64, wgpu::TextureView), PipelineDrawError> {
         self.render_targets
             .lock()
             .unwrap_or_else(|e| e.into_inner())
-            .resolve_depth(owner, target, filterable)
+            .resolve_depth(owner, target)
     }
 
     /// [`ModRenderTargets::check_level`]: validate a pass's target and mip level without
@@ -991,7 +960,7 @@ mod tests {
         value: f64,
     ) -> f32 {
         let (_, view, _) = targets
-            .resolve_color_mips(None, View::single(rt, 0, mip), false, false)
+            .resolve_color_mips(None, View::single(rt, 0, mip))
             .unwrap();
         let mut encoder = device.create_command_encoder(&Default::default());
         drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -1121,18 +1090,14 @@ mod tests {
         // A range view is made once and keeps its id; a single level and the whole chain reuse
         // the views the target made.
         let id = |targets: &mut ModRenderTargets, view| {
-            targets
-                .resolve_color_mips(None, view, false, false)
-                .map(|(id, _, _)| id)
+            targets.resolve_color_mips(None, view).map(|(id, _, _)| id)
         };
         let range = id(&mut targets, View::new(rt, 0, 2, 3)).unwrap();
         assert_eq!(id(&mut targets, View::new(rt, 0, 2, 3)), Ok(range));
         assert_ne!(Some(range), id(&mut targets, View::single(rt, 0, 2)).ok());
         assert_eq!(
             id(&mut targets, View::new(rt, 0, 0, 7)),
-            targets
-                .resolve_color(None, rt, 0, false, false)
-                .map(|(id, _, _)| id)
+            targets.resolve_color(None, rt, 0).map(|(id, _, _)| id)
         );
         for bad in [
             View::new(rt, 0, 5, 3),

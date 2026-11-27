@@ -490,9 +490,7 @@ fn prepare(
     if registry && (update_lock || !lock.exists()) {
         println!("Pinning dependencies in Cargo.lock");
         // The lock names the SDK's packages, read from `.sunrise/sdk/` (`run` fetches no SDK before).
-        if sdk_fetch::game_tree(project)?.is_none() {
-            sdk_fetch::fetch_pinned(project, &build)?;
-        }
+        sdk_fetch::fetch_pinned(project, &build)?;
         let before = fs::read(&lock).ok();
         sunrise_native_build::registry_generate::generate(
             || Ok(rust.clone()),

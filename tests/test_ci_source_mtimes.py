@@ -8,6 +8,7 @@ import tempfile
 import unittest
 from unittest import mock
 
+from tests.os_support import needs_symlinks
 from tools.ci.source_mtimes import restore_and_snapshot
 from tests.test_ci_concurrency import ROOT
 import re
@@ -115,7 +116,7 @@ class SourceMtimesTests(unittest.TestCase):
         restore_and_snapshot(self.root, self.snapshot)
         self.assertNotEqual(self.snapshot.read_bytes(), previous)
 
-    @unittest.skipIf(os.name == "nt", "creating a symlink needs a privilege on Windows")
+    @needs_symlinks
     def test_modified_checkout_is_refused_and_symlinks_are_not_followed(self):
         external = self.root / "untracked.txt"
         external.write_text("not a source\n")

@@ -1293,7 +1293,8 @@ impl crate::game::ClientGame<'_> {
         let holders = TooltipHolders::Definitions(self.active_enchantment_definitions());
         let color = self.rarity_color(stack);
         let advanced = !nested && advanced;
-        let display = sunrise_client::item_tooltip::tooltip_display(stack);
+        let item_info = self.items().get(&stack.item);
+        let display = sunrise_client::item_tooltip::tooltip_display(stack, item_info);
         let mut lines = Vec::new();
         // `getTooltipLines`' own branch: a tooltip the stack doesn't hide.
         let shown = !nested && display.name_visible(creative);
@@ -1306,7 +1307,6 @@ impl crate::game::ClientGame<'_> {
             lines.push((sunrise_game_data::text::Text::legacy(&s), c));
         };
         let gray = rgba(170, 170, 170, 255);
-        let item_info = self.items().get(&stack.item);
         // SmithingTemplateItem.appendHoverText: `Item.appendHoverText` comes
         // before the components.
         for (text, c) in sunrise_client::item_tooltip::smithing_template_lines(stack, &translate) {
@@ -1319,6 +1319,7 @@ impl crate::game::ClientGame<'_> {
         lines.extend(
             item_tooltip::painting_lines(
                 stack,
+                item_info,
                 &display,
                 creative,
                 |id| {
@@ -1362,13 +1363,14 @@ impl crate::game::ClientGame<'_> {
         let mut details = sunrise_client::item_tooltip::DetailMarks::new(!appenders.is_empty());
         details.start("minecraft:tropical_fish/pattern", lines.len());
         // TropicalFish.Pattern.addToTooltip.
-        for text in sunrise_client::item_tooltip::tropical_fish_lines(stack, &display) {
+        for text in sunrise_client::item_tooltip::tropical_fish_lines(stack, item_info, &display) {
             lines.push((text, gray));
         }
         details.start("minecraft:instrument", lines.len());
         // InstrumentComponent.addToTooltip.
         if let Some(text) = item_tooltip::instrument_line(
             stack,
+            item_info,
             &display,
             Some(|id: &str| {
                 let key = format!("instrument.{}", id.replacen(':', ".", 1));
@@ -1391,7 +1393,9 @@ impl crate::game::ClientGame<'_> {
         }
         details.start("minecraft:bees", lines.len());
         // Bees.addToTooltip.
-        if let Some(text) = sunrise_client::item_tooltip::bees_line(stack, &display, &translate) {
+        if let Some(text) =
+            sunrise_client::item_tooltip::bees_line(stack, item_info, &display, &translate)
+        {
             push(&mut lines, text, gray);
         }
         details.start("minecraft:container_loot", lines.len());
@@ -1471,7 +1475,7 @@ impl crate::game::ClientGame<'_> {
         }
         // Fireworks and FireworkExplosion.addToTooltip.
         let (fireworks, explosion) =
-            sunrise_client::item_tooltip::firework_component_lines(stack, &translate);
+            sunrise_client::item_tooltip::firework_component_lines(stack, item_info, &translate);
         details.start("minecraft:fireworks", lines.len());
         for text in fireworks {
             push(&mut lines, text, rgba(170, 170, 170, 255));
@@ -1515,7 +1519,7 @@ impl crate::game::ClientGame<'_> {
         details.start("minecraft:trim", lines.len());
         if display.shows("minecraft:trim")
             && let Some((material, pattern)) = stack
-                .data()
+                .component_data(item_info, "minecraft:trim")
                 .and_then(|d| d.trim.as_ref())
                 .and_then(sunrise_items::item_data::trim::named)
         {
@@ -1547,9 +1551,9 @@ impl crate::game::ClientGame<'_> {
         }
         details.start("minecraft:dyed_color", lines.len());
         // DyedItemColor.addToTooltip.
-        if let Some((text, italic)) =
-            sunrise_client::item_tooltip::dyed_line(stack, &display, advanced, &translate)
-        {
+        if let Some((text, italic)) = sunrise_client::item_tooltip::dyed_line(
+            stack, item_info, &display, advanced, &translate,
+        ) {
             let text = sunrise_game_data::text::Text::legacy(&text);
             lines.push((if italic { text.italic() } else { text }, gray));
         }
@@ -1558,7 +1562,7 @@ impl crate::game::ClientGame<'_> {
         // ItemLore.addToTooltip: after the enchantments, before the attributes
         // (ItemStack.addDetailsToTooltip).
         if display.shows("minecraft:lore") {
-            for text in sunrise_client::item_tooltip::lore_texts(stack) {
+            for text in sunrise_client::item_tooltip::lore_texts(stack, item_info) {
                 lines.push((text, u32::MAX));
             }
         }
@@ -1581,7 +1585,7 @@ impl crate::game::ClientGame<'_> {
         details.start("minecraft:unbreakable", lines.len());
         // ItemStack.UNBREAKABLE_TOOLTIP.
         if let Some(text) =
-            sunrise_client::item_tooltip::unbreakable_line(stack, &display, &translate)
+            sunrise_client::item_tooltip::unbreakable_line(stack, item_info, &display, &translate)
         {
             push(&mut lines, text, rgba(85, 85, 255, 255));
         }
@@ -1604,7 +1608,9 @@ impl crate::game::ClientGame<'_> {
         }
         details.start("minecraft:block_state", lines.len());
         // BlockItemStateProperties.addToTooltip.
-        if let Some(text) = sunrise_client::item_tooltip::honey_line(stack, &display, &translate) {
+        if let Some(text) =
+            sunrise_client::item_tooltip::honey_line(stack, item_info, &display, &translate)
+        {
             push(&mut lines, text, gray);
         }
         details.start("minecraft:entity_data", lines.len());
@@ -1659,6 +1665,7 @@ impl crate::game::ClientGame<'_> {
             details.start(component, lines.len());
             for (text, c) in sunrise_client::item_tooltip::adventure_lines(
                 stack,
+                item_info,
                 component,
                 &display,
                 &|tag| {
@@ -1870,10 +1877,14 @@ impl crate::game::ClientGame<'_> {
     ) {
         let (mut background, mut border_top, mut border_bottom) =
             (0xf0100010, 0x505000ff, 0x5028007f);
-        // `itemStack.get(DataComponents.TOOLTIP_STYLE)`, the style the hook starts from.
+        // `itemStack.get(DataComponents.TOOLTIP_STYLE)`, the style the hook starts from: the
+        // stack's own, or the item's default.
         let mut texture = stack
-            .and_then(|s| s.data())
-            .and_then(|d| sunrise_sim::save::text(d.other("minecraft:tooltip_style")))
+            .and_then(|s| {
+                sunrise_sim::save::text(
+                    s.component(self.items().get(&s.item), "minecraft:tooltip_style"),
+                )
+            })
             .and_then(|style| mod_api::Identifier::parse(&style).ok());
         self.native_render_tooltip_texture(
             stack,
@@ -2098,7 +2109,11 @@ impl crate::game::ClientGame<'_> {
             let mut lines = self.stack_tooltip_lines(&stack, false, false);
             self.native_screen_tooltip_lines(batch, Some(slot), &mut lines);
             if lines.is_empty()
-                && !sunrise_client::item_tooltip::tooltip_display(&stack).name_visible(false)
+                && !sunrise_client::item_tooltip::tooltip_display(
+                    &stack,
+                    self.items().get(&stack.item),
+                )
+                .name_visible(false)
             {
                 return;
             }

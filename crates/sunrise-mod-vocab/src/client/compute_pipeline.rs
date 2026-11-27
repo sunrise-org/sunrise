@@ -228,7 +228,8 @@ pub enum ComputePipelineError {
     Stale,
 }
 
-/// Why a compute dispatch was refused; nothing was recorded.
+/// Why a compute dispatch was refused. Submit-time errors record nothing; renderer preparation
+/// logs a variant build refusal after submission.
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 // no wire: refusal of a local client compute dispatch.
@@ -239,6 +240,9 @@ pub enum ComputeDispatchError {
     Pipeline(ComputePipelineError),
     /// A binding is missing, of the wrong kind, stale, or not allowed for this dispatch.
     InvalidBinding,
+    /// The device refused the sampler pipeline variant in renderer preparation, after submission.
+    /// The dispatch is refused and the log names the pipeline and the device error.
+    VariantBuildFailed,
     /// A bound buffer range or an indirect argument buffer was refused.
     Buffer(BufferError),
     /// A workgroup count exceeds `max_compute_workgroups_per_dimension`.

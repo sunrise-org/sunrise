@@ -28,7 +28,19 @@ if [ -z "$LEASE" ]; then
   # A run's run_started_at is its latest attempt's start; GitHub keeps created_at from the first attempt.
   [ "${GITHUB_RUN_ATTEMPT:-1}" -gt 1 ] 2>/dev/null && FIELD=.run_started_at || FIELD=.created_at
   CREATED_AT=$(gh api "repos/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" -q "$FIELD" 2>/dev/null || true)
-  [ -z "$CREATED_AT" ] || CREATED=$(date -d "$CREATED_AT" +%s 2>/dev/null || true)
+  if [ -n "$CREATED_AT" ] && command -v python3 >/dev/null 2>&1; then
+    # Read the UTC ISO-8601 stamp with Python, which prints nothing for a malformed, numeric or zoneless one (the
+    # runner script then rejects the snapshot). BSD date (macOS) is never asked: its -d sets DST and succeeds on a
+    # number such as 0, so it would not fail closed. Without python3, only GNU date (which
+    # answers --version; BSD date exits 1) is asked, so the script still fails closed on macOS.
+    CREATED=$(python3 -c 'import sys
+from datetime import datetime
+stamp = datetime.fromisoformat(sys.argv[1].replace("Z", "+00:00"))
+if stamp.tzinfo is not None:
+    print(int(stamp.timestamp()))' "$CREATED_AT" 2>/dev/null || true)
+  elif [ -n "$CREATED_AT" ] && date --version >/dev/null 2>&1; then
+    CREATED=$(date -d "$CREATED_AT" +%s 2>/dev/null || true)
+  fi
 fi
 ENABLED=${ENABLED:-${VARS_ENABLED:-}} LEASE=${LEASE:-${VARS_LEASE:-}} LEASE_SOURCE=$SOURCE CREATED=$CREATED \
   exec bash "$(dirname "${BASH_SOURCE[0]}")/dyna_ci_runner.sh"

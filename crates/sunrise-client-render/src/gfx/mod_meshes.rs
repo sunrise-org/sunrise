@@ -48,7 +48,7 @@ pub struct ResolvedMeshDraw {
 /// Generational store of retained GPU [`MeshRef`] buffers owned by `Renderer`.
 #[derive(Default)]
 pub struct ModMeshes {
-    next_generation: u64,
+    pub(super) next_generation: u64,
     slots: Vec<Option<ModMesh>>,
 }
 

@@ -8,7 +8,8 @@ a mod builds against them with no game source and no generator run.
 
 `build` takes the generated files from the in-tree build scripts' own output (`cargo check` with the default
 features and all kept features) and refuses when they differ between those builds. Each crate
-carries exactly the source files rustc read for its library (its dep-info), its manifest with workspace keys
+carries exactly the source files rustc read for its library (its dep-info, whose paths are DOS or verbatim
+(`\\\\?\\`) on Windows: both spell the same path), its manifest with workspace keys
 resolved and no dev- or build-dependencies, and, for a crate whose build script runs the generator, a build script
 that copies `generated/` into `OUT_DIR`. The generated files name source files by absolute path; the checkout's
 root is written as ROOT_TOKEN and the build script puts the API source's own root in its place. `build` runs on
@@ -23,7 +24,9 @@ import hashlib
 import io
 import json
 import lzma
+import ntpath
 import os
+import posixpath
 import re
 import shutil
 import subprocess
@@ -33,7 +36,7 @@ import tempfile
 import time
 import tomllib
 from dataclasses import dataclass
-from pathlib import Path
+from pathlib import Path, PurePath, PurePosixPath, PureWindowsPath
 
 # Beside this file: a module of the `tools` package when imported, a plain module when run as a script.
 ROOT = Path(__file__).resolve().parent.parent
@@ -324,6 +327,28 @@ def relocate(code: str, forms: list[str]) -> str:
     return code
 
 
+def plain_path(path: os.PathLike | str) -> PurePath:
+    r"""`path` in its host's plain form, `normpath`ed. On Windows rustc names a file by its DOS path (`D:\a`) or its
+    verbatim one (`\\?\D:\a`, `\\?\UNC\host\share` for `\\host\share`): the prefix goes, so both compare as one path
+    and a different drive or share stays a different one. A Windows path is read as one on every host."""
+    text = re.sub(r"^\\\\\?\\(UNC\\)?", lambda prefix: "\\\\" if prefix[1] else "", os.fspath(path))
+    if re.match(r"[A-Za-z]:[\\/]|\\\\", text):
+        return PureWindowsPath(ntpath.normpath(text))
+    return PurePosixPath(posixpath.normpath(text))
+
+
+def source_key(read: PurePath, workspace_root: PurePath, crate: Crate, out_dir: PurePath | None) -> str | None:
+    """The API source's `/`-separated path of a file rustc read for `crate`'s library, or None for a file directly in
+    the build script's OUT_DIR, whose generated files the API source carries instead. A read outside the crate is
+    refused."""
+    path = plain_path(read)
+    if out_dir is not None and path.parent == plain_path(out_dir):
+        return None
+    if not path.is_relative_to(plain_path(workspace_root / crate.directory)):
+        raise Refusal("E_SOURCE_OUTSIDE_CRATE", f"{crate.name} reads {read}")
+    return path.relative_to(plain_path(workspace_root)).as_posix()
+
+
 def check_files(files: dict[str, bytes], crates: list[Crate], tracked: set[str], forbidden: list[str]) -> list[str]:
     """The packing list: every path relative and in its place, every source file tracked by git, no file naming
     a local folder. Sorted, so the same files always give the same list."""
@@ -434,11 +459,9 @@ def collect_build(messages: list[dict], label: str, by_directory: dict[Path, Cra
         info = artifact.parent / f"{message['target']['name'].replace('-', '_')}-{digest}.d"
         for read in dep_info(info):
             path = Path(os.path.normpath(workspace_root / read))
-            if out_dir is not None and path.parent == out_dir:
-                continue
-            if not path.is_relative_to(workspace_root / crate.directory):
-                raise Refusal("E_SOURCE_OUTSIDE_CRATE", f"{crate.name} reads {path}")
-            files[path.relative_to(workspace_root).as_posix()] = path.read_bytes()
+            key = source_key(path, workspace_root, crate, out_dir)
+            if key is not None:
+                files[key] = path.read_bytes()
     print(f"{label}: {len(files)} files so far", flush=True)
 
 
@@ -527,8 +550,7 @@ def starter_mod(folder: Path) -> None:
     """The native template as `cargo sunrise-mod new` writes it, with a path to the API source."""
 
     def fill(text: str) -> str:
-        # A native mod's manifest carries no SDK metadata block (cargo-sunrise-mod's `new`).
-        return text.replace("{id}", "starter").replace("{name}", "Starter").replace("{metadata}", "")
+        return text.replace("{id}", "starter").replace("{name}", "Starter")
 
     manifest, count = re.subn(r"^sunrise-mod-api = .*$", f'sunrise-mod-api = {{ path = "{MOD_PATH}/crates/{API}" }}',
                               fill((TEMPLATE / "api.toml").read_text()), flags=re.MULTILINE)

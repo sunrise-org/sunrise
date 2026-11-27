@@ -458,7 +458,10 @@ impl crate::game::ServerGame<'_> {
             ids: Default::default(),
             tags: items
                 .bound_tags()
-                .map(|(registry, tags)| (registry.to_owned(), tags.map(str::to_owned).collect()))
+                .map(|(registry, tags)| {
+                    let tags = tags.map(|(tag, held)| (tag.to_owned(), held));
+                    (registry.to_owned(), tags.collect())
+                })
                 .collect(),
         };
         use sunrise_sim::lan::data::{BIOME_REGISTRY, REGISTRY_KINDS, SyncData};
@@ -517,8 +520,7 @@ impl crate::game::ServerGame<'_> {
             view.tags.insert(
                 registry.to_owned(),
                 tags.iter()
-                    .filter(|(_, members)| !members.is_empty())
-                    .map(|(tag, _)| tag.clone())
+                    .map(|(tag, members)| (tag.clone(), !members.is_empty()))
                     .collect(),
             );
             if registry == "minecraft:banner_pattern" {
@@ -733,8 +735,7 @@ impl crate::game::ServerGame<'_> {
             "minecraft:damage_type".into(),
             damage_tags
                 .iter()
-                .filter(|(_, members)| !members.is_empty())
-                .map(|(tag, _)| tag.clone())
+                .map(|(tag, members)| (tag.clone(), !members.is_empty()))
                 .collect(),
         );
         pack_tags.insert("damage_type", damage_tags);
@@ -744,8 +745,7 @@ impl crate::game::ServerGame<'_> {
             view.tags.insert(
                 "minecraft:villager_trade".to_owned(),
                 tags.into_iter()
-                    .filter(|(_, members)| !members.is_empty())
-                    .map(|(tag, _)| tag)
+                    .map(|(tag, members)| (tag, !members.is_empty()))
                     .collect(),
             );
         }

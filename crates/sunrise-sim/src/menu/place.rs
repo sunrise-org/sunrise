@@ -225,12 +225,13 @@ impl Menu {
             }
             return self.on_take(env, index, stack);
         }
-        let left = if self.slots[index].role == super::Role::CraftResult {
-            stack.count
-        } else {
-            0
-        };
+        let craft = self.slots[index].role == super::Role::CraftResult;
+        let left = if craft { stack.count } else { 0 };
         clicked.count -= left;
+        // ResultSlot.onQuickCraft: the moved count joins removeCount.
+        if craft {
+            self.craft_remove_count += clicked.count;
+        }
         self.on_take(env, index, clicked);
         clicked.count += left;
     }

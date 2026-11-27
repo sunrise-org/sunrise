@@ -1,0 +1,1 @@
+sunrise-client-gameplay game::client_side::packs::retained_mod_gpu_tests::retained_mod_gpu_handles_follow_the_device_lifetime lib daily gpu # Prepared resources, X11 and Vulkan; two isolated child processes.

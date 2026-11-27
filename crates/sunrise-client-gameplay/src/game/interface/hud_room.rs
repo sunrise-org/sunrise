@@ -3,7 +3,6 @@
 //! world's HUD draws, into `ui.room`; the controller notice and radial menu read it. With it, the frame's `motion::Clock` (`hud_clock`), and whether an
 //! overlay holds the view (`overlay_holds_view`), which what vanilla draws there gives way to.
 use crate::game::ClientGame;
-use sunrise_client::hud::HudVertex;
 use sunrise_client::hud_kit::motion::Clock;
 use sunrise_client::hud_kit::room::{Keep, Room};
 use sunrise_client::{boss_overlay, hud_layout, hud_overlays};
@@ -52,10 +51,9 @@ impl ClientGame<'_> {
         room
     }
 
-    /// Reserve the highest painted status row, vanilla or replaced, down to the bottom
-    /// of the view. Measure only the installed body's paint, not the surrounding hook draws.
-    pub fn keep_status_rows(&mut self, vertices: &[HudVertex], w: f32, h: f32) {
-        let top = vertices.iter().map(|v| v.pos[1]).fold(h, f32::min);
+    /// Reserve from the visible top of a status layer's body, vanilla or replaced, down to
+    /// the bottom of the view. Surrounding hook draws do not count.
+    pub fn keep_status_rows(&mut self, top: f32, w: f32, h: f32) {
         if top < self.client.chat_ui.room.bottom() {
             let half = hud_overlays::HOTBAR_HALF_WIDTH;
             self.client.chat_ui.room.add(

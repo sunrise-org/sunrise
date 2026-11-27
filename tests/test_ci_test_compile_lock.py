@@ -8,11 +8,15 @@ import sys
 import tempfile
 import unittest
 
+from tests.os_support import needs_command, needs_fcntl, needs_runner_shell
+
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "tools/ci/test-compile-lock.sh"
 
 
-@unittest.skipIf(os.name == "nt", "requires Bash, flock and pipe readiness")
+@needs_runner_shell
+@needs_command("flock")
+@needs_fcntl
 class TestCompileLockTests(unittest.TestCase):
     def test_background_compiler_child_cannot_keep_the_lock_after_compiler_exit(self):
         import signal

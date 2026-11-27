@@ -926,7 +926,7 @@ fn unsynced_registry_admits_conditional_payloads_and_tags_without_worldgen_limit
         ]
     );
     assert_eq!(view.tags["test:spell"].len(), 8193);
-    assert!(view.tags["test:spell"].contains("test:t8192"));
+    assert_eq!(view.tags["test:spell"].get("test:t8192"), Some(&true));
 }
 
 #[test]
@@ -1297,8 +1297,11 @@ fn slot_source_and_extended_registry_tag_empty_conditions() {
     .unwrap();
 
     let conditions = sunrise_world::conditions::LoadConditions::vanilla().with_tags([
-        ("minecraft:damage_type", ["minecraft:bypasses_armor"]),
-        ("minecraft:worldgen/biome", ["minecraft:is_forest"]),
+        (
+            "minecraft:damage_type",
+            [("minecraft:bypasses_armor", true)],
+        ),
+        ("minecraft:worldgen/biome", [("minecraft:is_forest", true)]),
     ]);
     let overlay = sunrise_world::loot::PackOverlay {
         conditions: &conditions,

@@ -5,16 +5,20 @@ use crate::{
     bounded::{self, Symlinks},
     check::require_release_signer,
 };
+use cap_std::fs::{Dir, OpenOptions};
 use sha2::{Digest, Sha256};
 use std::{
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
 };
-use sunrise_mod_package::index::{
-    self,
-    registry::builds::MAX_SIGNATURE,
-    v2::{Index, Project, Release},
+use sunrise_mod_package::{
+    index::{
+        self,
+        registry::builds::MAX_SIGNATURE,
+        v2::{Index, Project, Release},
+    },
+    lock_file::open_nofollow,
 };
 
 /// The registry's index key, published as `registry/index-key.pub` in sunrise-org/sunrise-mods.
@@ -22,6 +26,9 @@ use sunrise_mod_package::index::{
 const KEY: &str = "RWTNJaFJ4AekHG/RgVrgmJpvy9B2EaeqbdSNuseKUx2XPxaOZkChLV0q";
 /// The highest serial this computer accepted, in the tool's cache: an older index is refused.
 const SERIAL: &str = "registry/v2-serial";
+/// The floor is a `u64` in decimal (at most 20 digits); the rest of the bound is room for
+/// whitespace around a hand-edited value.
+const SERIAL_LIMIT: u64 = 32;
 
 type Fetch = dyn Fn(&str, u64) -> Result<Vec<u8>, String>;
 type Attest = dyn Fn(&[u8], [u8; 32], &Project, &Release) -> Result<(), String>;
@@ -35,7 +42,7 @@ pub(crate) struct Registry {
 impl Registry {
     pub(crate) fn read(cache: &Path) -> Result<Self, String> {
         let url = test_url().unwrap_or_else(|| sunrise_addresses::MOD_REGISTRY_INDEX.into());
-        let index = read_index(cache, &url, &download, KEY)?;
+        let index = read_index(&cache.join(SERIAL), &url, &download, KEY)?;
         Ok(Self {
             index,
             fetch: Box::new(download),
@@ -112,19 +119,41 @@ impl Registry {
     }
 }
 
-fn read_index(cache: &Path, url: &str, fetch: &Fetch, key: &str) -> Result<Index, String> {
+fn read_index(path: &Path, url: &str, fetch: &Fetch, key: &str) -> Result<Index, String> {
     let signed = fetch(url, index::MAX_INDEX + MAX_SIGNATURE as u64)?;
     let index = Index::verify(&signed, key).map_err(|e| format!("{url}: {e}"))?;
-    let path = cache.join(SERIAL);
-    let last = match fs::read_to_string(&path) {
-        Ok(text) => Some(text.trim().parse::<u64>().map_err(|e| {
-            format!(
-                "{}: {e}; delete it to accept the live index",
-                path.display()
-            )
-        })?),
-        Err(e) if e.kind() == io::ErrorKind::NotFound => None,
-        Err(e) => return Err(format!("{}: {e}", path.display())),
+    let folder = path.parent().expect("serial file in the cache");
+    fs::create_dir_all(folder).map_err(|e| format!("{}: {e}", folder.display()))?;
+    let lock_path = path.with_added_extension("lock");
+    let directory = Dir::open_ambient_dir(folder, cap_std::ambient_authority())
+        .map_err(|e| format!("{}: {e}", folder.display()))?;
+    let mut options = OpenOptions::new();
+    options.create(true).read(true).write(true).truncate(false);
+    let lock_file = open_nofollow(
+        &directory,
+        lock_path.file_name().expect("serial lock name"),
+        options,
+    )
+    .map_err(|e| format!("{}: {e}", lock_path.display()))?
+    .into_std();
+    lock_file
+        .lock()
+        .map_err(|e| format!("{}: {e}", lock_path.display()))?;
+
+    let last = match bounded::read_bytes(path, SERIAL_LIMIT, Symlinks::Refuse) {
+        Ok(bytes) => Some(
+            String::from_utf8(bytes)
+                .map_err(|e| e.to_string())
+                .and_then(|text| text.trim().parse::<u64>().map_err(|e| e.to_string()))
+                .map_err(|e| {
+                    format!(
+                        "{}: {e}; delete it to accept the live index",
+                        path.display()
+                    )
+                })?,
+        ),
+        Err(e) if e.is_not_found() => None,
+        Err(e) => return Err(format!("{e}; delete it to accept the live index")),
     };
     if let Some(last) = last
         && index.serial < last
@@ -136,12 +165,10 @@ fn read_index(cache: &Path, url: &str, fetch: &Fetch, key: &str) -> Result<Index
     }
     if last.is_none_or(|last| index.serial > last) {
         // Replaced whole by a rename, so a stopped run never leaves a partial serial behind.
-        let folder = path.parent().expect("serial file in the cache");
-        fs::create_dir_all(folder)
-            .and_then(|()| tempfile::NamedTempFile::new_in(folder))
+        tempfile::NamedTempFile::new_in(folder)
             .and_then(|mut file| {
                 file.write_all(index.serial.to_string().as_bytes())?;
-                file.persist(&path).map_err(|e| e.error)?;
+                file.persist(path).map_err(|e| e.error)?;
                 Ok(())
             })
             .map_err(|e| format!("{}: {e}", path.display()))?;

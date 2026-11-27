@@ -118,8 +118,8 @@ fn only_typed_context_reads_partition_cached_conditions() {
     let empty = load
         .clone()
         .with_registries([("test:spells", ["test:flame"])])
-        .with_tags([("item", ["test:other"])]);
-    let filled = empty.with_tags([("item", ["test:fuels"])]);
+        .with_tags([("item", [("test:other", true)])]);
+    let filled = empty.with_tags([("item", [("test:fuels", true)])]);
     let missing_spell = filled
         .clone()
         .with_registries([("test:spells", ["test:spark"])]);
@@ -138,7 +138,7 @@ fn only_typed_context_reads_partition_cached_conditions() {
     assert!(filled.allows_file(&file, "nested.json"));
     assert_eq!(count.load(Ordering::SeqCst), 2);
 
-    let literal_program = load.decode_file_conditions(&literal).unwrap();
+    let literal_program = load.decode_file_conditions(&literal, "literal").unwrap();
     assert!(matches!(
         literal_program
             .evaluation()
@@ -147,7 +147,7 @@ fn only_typed_context_reads_partition_cached_conditions() {
             )),
         Ok(ConditionProgress::Complete(true))
     ));
-    let program = load.decode_file_conditions(&file).unwrap();
+    let program = load.decode_file_conditions(&file, "file").unwrap();
     let mut evaluation = program.evaluation();
     assert!(matches!(
         evaluation.advance(&load, |_| true),
