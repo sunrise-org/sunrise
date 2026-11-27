@@ -19,6 +19,14 @@ click that uses one is.
 Dragon eggs, which a click moves somewhere else nearby
 (`DragonEggBlock.useWithoutItem`).
 
+Redstone ore, lit or not, deepslate or not (`RedStoneOreBlock.useItemOn`): the
+click lights it (`interact`'s `setBlockAndUpdate`, which can break a plant
+standing on it), then answers PASS only to a `BlockItem` whose
+`new BlockPlaceContext(...).canPlace()` holds and SUCCESS to everything else.
+Those cases also print the hand whose click ended `startUseItem` and whether it
+failed (`ended`): a SUCCESS and a PASS whose `BlockItem.place` then fails leave
+the same level behind, so that line is the only trace of the gate's answer.
+
 Every case has a block at the origin, something above it, and a player three
 blocks south, survival or creative, hungry or full, sneaking or not, who
 right-clicks the top face of the origin (for pumpkins, any face, turned any
@@ -973,6 +981,99 @@ def placement_cases(facts, count, seed):
         yield case
 
 
+# Redstone ore clicks (`RedStoneOreBlock.useItemOn`). The face clicked and the block beside it,
+# which `BlockPlaceContext.canPlace` reads after the ore is lit.
+ORE_FACES = {'up': (0, 1, 0), 'down': (0, -1, 0), 'north': (0, 0, -1), 'south': (0, 0, 1),
+             'west': (-1, 0, 0), 'east': (1, 0, 0)}
+ORE_BESIDE = ['air', 'air', 'air', 'stone', 'glass', 'short_grass', 'short_grass', 'fern', 'oak_slab', 'oak_slab',
+              'snow', 'white_candle', 'water']
+ORE_ITEMS = ['cobblestone', 'cobblestone', 'stone', 'short_grass', 'fern', 'oak_slab', 'oak_slab', 'sweet_berries',
+             'glow_berries', 'redstone', 'torch', 'snow', 'white_candle', 'stick', 'apple', '-']
+
+
+def ore_case(states, cells, item, face='up', **use):
+    """A click on the redstone ore at the origin's `face` holding `item` (or nothing: '-'),
+    printing which hand ended the click and how."""
+    use = {'item': '-' if item == '-' else d.plain(item, use.pop('count', 2)), 'creative': False,
+           'sneaking': False, 'food': 20, 'face': face, 'result': True, **use}
+    return {**h.environment(random.Random(f'ore {item} {face}')), 'pos': [0, 0, 0], 'cells': cells,
+            'items': [], 'mode': 'dispense', 'use_item': use}
+
+
+def redstone_ore_named_cases(facts):
+    """The redstone ore gate's cases, every run: a free spot and a blocked one, short grass
+    into short grass (which it cannot replace) and an oak slab into a bottom slab (which it
+    merges into), a non-block item, a block item named apart from its block (`redstone`) and an
+    empty hand, and grass standing on the ore, which lighting the ore breaks before the gate
+    reads the spot above."""
+    states = d.States(facts)
+    ore = [0, 0, 0, states.get('redstone_ore', lit='false')]
+    deep = [0, 0, 0, states.get('deepslate_redstone_ore', lit='false')]
+
+    def above(name, **props):
+        return [0, 1, 0, states.get(name, **props)]
+    # Short grass beside the ore on dirt, clicked on the ore's east face: it survives the
+    # ore lighting, so `canPlace` reads it.
+    grounded = [[1, 0, 0, states.get('short_grass')], [1, -1, 0, states.get('dirt')]]
+    bottom = dict(type='bottom', waterlogged='false')
+    yield ore_case(states, [ore], 'cobblestone')
+    yield ore_case(states, [ore, above('stone')], 'cobblestone')
+    yield ore_case(states, [ore, above('stone')], 'cobblestone', creative=True)
+    yield ore_case(states, [deep, above('stone')], 'sweet_berries', food=6)
+    yield ore_case(states, [ore, *grounded], 'short_grass', 'east')
+    yield ore_case(states, [ore, *grounded], 'cobblestone', 'east')
+    yield ore_case(states, [ore, above('oak_slab', **bottom)], 'oak_slab')
+    yield ore_case(states, [ore, above('oak_slab', **bottom)], 'cobblestone')
+    yield ore_case(states, [ore, above('short_grass')], 'short_grass')
+    yield ore_case(states, [ore, above('short_grass')], 'cobblestone')
+    yield ore_case(states, [ore], 'stick')
+    yield ore_case(states, [ore], 'redstone')
+    yield ore_case(states, [ore], '-')
+    yield ore_case(states, [[0, 0, 0, states.get('redstone_ore', lit='true')], above('stone')], 'cobblestone')
+    # Sneaking with something in hand skips the ore's own use: the block goes straight to placement.
+    yield ore_case(states, [ore, above('stone')], 'cobblestone', sneaking=True)
+
+
+def redstone_ore_case(rng, states, case):
+    """A redstone ore clicked on any face with something, or nothing, beside it."""
+    name = rng.choice(['redstone_ore', 'redstone_ore', 'deepslate_redstone_ore'])
+    cells = [[0, 0, 0, states.get(name, lit=rng.choice(['false', 'false', 'true']))]]
+    face = rng.choice(['up', 'up', 'up', 'down', 'north', 'south', 'west', 'east'])
+    at = ORE_FACES[face]
+    beside = rng.choice(ORE_BESIDE)
+    if beside != 'air':
+        varied = beside in ('oak_slab', 'snow', 'white_candle', 'water')
+        cells.append([*at, states.any(rng, beside) if varied else states.get(beside)])
+        below = (at[0], at[1] - 1, at[2])
+        if beside in ('short_grass', 'fern') and below != (0, 0, 0) and rng.random() < 0.6:
+            # Ground the plant keeps standing on when the ore lights.
+            cells.append([*below, states.get(rng.choice(['dirt', 'grass_block', 'stone']))])
+    item = rng.choice(ORE_ITEMS)
+    use = {'item': '-' if item == '-' else d.plain(item, rng.choice([1, 2, 16])),
+           'creative': rng.random() < 0.2, 'sneaking': rng.random() < 0.15,
+           'food': rng.choice([20, 20, 6]), 'face': face, 'result': True}
+    if rng.random() < 0.2:
+        # The item in the off hand, something else or nothing in the main hand.
+        main = rng.choice(['-', 'stick', 'cobblestone'])
+        use.update(offhand=use['item'], item='-' if main == '-' else d.plain(main, 1))
+    case['use_item'] = use
+    case['cells'] = cells
+
+
+def redstone_ore_cases(facts, count, seed):
+    """`redstone_ore_case`s, from a stream of their own so the other cases stay as they were."""
+    rng = random.Random(f'ore {seed}')
+    states = d.States(facts)
+    for _ in range(count):
+        case = {**h.environment(rng), 'pos': [0, 0, 0]}
+        case.pop('raining', None)
+        case.pop('thundering', None)
+        redstone_ore_case(rng, states, case)
+        case['items'] = []
+        case['mode'] = 'dispense'
+        yield case
+
+
 def forced_respawn_cases(facts):
     """Non-bed forced points: Block.isPossibleToRespawnInThis at feet and head.
 
@@ -1021,7 +1122,8 @@ def main():
     all_cases = [*cases(facts, args.count, args.seed, not args.no_transformers),
                  *wake_cases(facts, max(args.count // 10, 1), args.seed),
                  *used_stat_cases(facts, max(args.count // 10, 1), args.seed),
-                 *placement_cases(facts, max(args.count // 10, 1), args.seed), *forced_respawn_cases(facts)]
+                 *placement_cases(facts, max(args.count // 10, 1), args.seed), *forced_respawn_cases(facts),
+                 *redstone_ore_named_cases(facts), *redstone_ore_cases(facts, max(args.count // 20, 1), args.seed)]
     (work / 'cases.jsonl').write_text(''.join(json.dumps(case) + '\n' for case in all_cases))
     classes = work / 'classes'
     classes.mkdir(exist_ok=True)

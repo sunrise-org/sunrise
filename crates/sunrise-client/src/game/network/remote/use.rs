@@ -399,19 +399,7 @@ impl Game<'_> {
         if !self.may_build() && !self.stack_can_place_on_in_adventure(stack, hit.pos) {
             return None;
         }
-        let ctx = sunrise_world::level::PlaceContext {
-            clicked_pos: sunrise_core::position::BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
-            face: sunrise_core::geometry::Direction::ALL[face_direction(hit.face) as usize],
-            hit: Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
-            inside: hit.inside,
-            source: sunrise_world::level::PlacementSource::Player {
-                yaw: self.yaw,
-                pitch: self.pitch,
-                sneaking: self.remote_shift_down(),
-            },
-            item: stack.item.to_string(),
-            can_use_game_master_blocks: self.can_use_game_master_blocks(),
-        };
+        let ctx = self.block_place_context(hit, &stack.item, self.remote_shift_down());
         let registry = self.pack.assets.registry;
         let stack_state = |state| {
             crate::game::block_items::item_block_state(

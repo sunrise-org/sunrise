@@ -1399,6 +1399,170 @@ pub(super) fn inert_support_fixture() -> Behaviours {
     }
 }
 
+/// Minimal in-memory behaviour tables for `Behaviours::can_place` unit tests
+/// (air, redstone ore, stone, replaceable short grass, slab, candle).
+#[cfg(test)]
+pub(super) fn can_place_fixture() -> (BlockRegistry, Behaviours) {
+    use serde_json::{Map, json};
+
+    let mut states = Vec::new();
+    let mut defaults = Map::new();
+    for &name in Named::TEST_NAMES.iter().chain(&[
+        "minecraft:redstone_ore",
+        "minecraft:stone",
+        "minecraft:short_grass",
+        "minecraft:oak_slab",
+        "minecraft:white_candle",
+    ]) {
+        if defaults.contains_key(name) {
+            continue;
+        }
+        defaults.insert(name.into(), json!(states.len()));
+        if matches!(name, "minecraft:water" | "minecraft:lava") {
+            for level in 0..16 {
+                states.push(json!([name, false, false, "", {
+                    "id": name, "properties": {"level": level.to_string()}
+                }]));
+            }
+        } else if name == "minecraft:oak_slab" {
+            for kind in ["bottom", "top", "double"] {
+                states.push(json!([name, false, false, "", {
+                    "id": name, "properties": {"type": kind}
+                }]));
+            }
+        } else if name == "minecraft:white_candle" {
+            for candles in 1..=4 {
+                states.push(json!([name, false, false, "", {
+                    "id": name, "properties": {"candles": candles.to_string()}
+                }]));
+            }
+        } else {
+            states.push(json!([name, false, false, "", name]));
+        }
+    }
+    let registry = BlockRegistry::from_facts_json(
+        json!({"defaults": defaults, "states": states})
+            .to_string()
+            .as_bytes(),
+    )
+    .unwrap();
+    let mut table = StateTable::new(&registry).unwrap();
+    let props = Props::resolve(&mut table);
+    let named = Named::resolve(&table).unwrap();
+    let slab = table.block_by_name("minecraft:oak_slab").unwrap();
+    let candle = table.block_by_name("minecraft:white_candle").unwrap();
+    let grass = table.block_by_name("minecraft:short_grass").unwrap();
+    let blocks = (0..table.block_count())
+        .map(|index| {
+            let block = BlockId(index as u16);
+            let name = table.info(block).name.clone();
+            let class = if block == slab {
+                Class::Slab
+            } else if block == candle {
+                Class::Candle
+            } else {
+                Class::Block
+            };
+            let item: Arc<str> = if matches!(
+                &*name,
+                "minecraft:redstone_ore"
+                    | "minecraft:stone"
+                    | "minecraft:short_grass"
+                    | "minecraft:oak_slab"
+                    | "minecraft:white_candle"
+            ) {
+                Arc::from(&*name)
+            } else {
+                "".into()
+            };
+            BlockData {
+                class,
+                chain: vec![class],
+                classes: ClassSet::default(),
+                interfaces: 0,
+                set_type: None,
+                gate_open: [None, None, None],
+                gate_close: [None, None, None],
+                open_sound: None,
+                close_sound: None,
+                ticks_to_stay_pressed: 0,
+                max_weight: 0,
+                link: None,
+                link2: None,
+                support_tag: None,
+                support_tag2: None,
+                feature: None,
+                grow_probability: 0.0,
+                growth_direction: Direction::Up,
+                schedule_fluid_ticks: false,
+                declared_waterlogged: false,
+                weather: 0,
+                ignite_odds: 0,
+                burn_odds: 0,
+                item,
+                dynamic_shape: false,
+                declared_vegetation: false,
+            }
+        })
+        .collect();
+    let silent = SoundEventKey::parse("").unwrap();
+    let facts = (0..table.state_count())
+        .map(|index| {
+            let block = table.block(BlockStateId(index as u32));
+            let flags = if block == named.air {
+                state_flags::AIR | state_flags::REPLACEABLE
+            } else if block == grass {
+                state_flags::REPLACEABLE
+            } else {
+                0
+            };
+            StateFacts {
+                flags,
+                sturdy: 0,
+                weak: 0,
+                strong: 0,
+                fluid: FluidState::EMPTY,
+                emission: 0,
+                dampening: 0,
+                hardness: 0.0,
+                placement_sound: BlockSound {
+                    event: silent.clone(),
+                    volume: 0.0,
+                    pitch: 0.0,
+                },
+                push: PushReaction::PushPull,
+                resolved_push: super::piston_reactions::CachedReaction::new(PushReaction::PushPull),
+                instrument: 0,
+                shape: -1,
+                collision_offset: None,
+            }
+        })
+        .collect();
+    let liquid_blocks = FluidBlockBindings::new(&registry).unwrap();
+    let behaviours = Behaviours {
+        table,
+        props,
+        named,
+        tags: Tags::default(),
+        all_tags: HashMap::new(),
+        facts,
+        shapes: Vec::new(),
+        shape_info: Vec::new(),
+        fluid_tags: FluidTags::default(),
+        fluid_definitions: HashMap::new(),
+        blocks,
+        items: HashMap::new(),
+        potted_by_content: HashMap::new(),
+        liquid_blocks,
+        dynamic: HashMap::new(),
+        occlusion_cache: Default::default(),
+        growth: Default::default(),
+        block_maps: Default::default(),
+        fluid_interactions: Default::default(),
+    };
+    (registry, behaviours)
+}
+
 impl GameplayStateSource for Value {
     fn flag(&self, name: &str) -> bool {
         self.get(name).and_then(Value::as_bool).unwrap_or(false)

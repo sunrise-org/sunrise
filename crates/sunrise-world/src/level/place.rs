@@ -1850,6 +1850,19 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
         Ok(ctx)
     }
 
+    /// `BlockPlaceContext.canPlace()` / `DirectionalPlaceContext.canPlace()` of a context
+    /// `resolve_context` made. A player's: `replaceClicked`, or the block at
+    /// `getClickedPos()` (the one beside the face) can be replaced. A directional one's is its
+    /// `replacingClickedOnBlock()`, which `resolve_context` settled from the level.
+    fn can_place_context(&self, ctx: &PlacementContext) -> bool {
+        match ctx.source {
+            PlacementSource::Directional { .. } => ctx.replace_clicked,
+            PlacementSource::Player { .. } => {
+                ctx.replace_clicked || self.can_be_replaced(self.state(ctx.pos), ctx)
+            }
+        }
+    }
+
     /// The item's `getPlacementState`: its block's `getStateForPlacement`, or for a
     /// `StandingAndWallBlockItem` the first of the wall and standing candidates, in
     /// `getNearestLookingDirections` order, that survives. `Err` when a candidate's rule
@@ -1919,13 +1932,7 @@ impl<L: LevelAccess + ?Sized> Sim<'_, L> {
             None => {
                 // The default keeps BlockPlaceContext.canPlace / DirectionalPlaceContext.canPlace
                 // before the item's rewrite.
-                let can_place = match ctx.source {
-                    PlacementSource::Directional { .. } => ctx.replace_clicked,
-                    PlacementSource::Player { .. } => {
-                        ctx.replace_clicked || self.can_be_replaced(self.state(ctx.pos), &ctx)
-                    }
-                };
-                if !can_place {
+                if !self.can_place_context(&ctx) {
                     return None;
                 }
                 if binding.kind == ItemKind::Scaffolding {
@@ -2280,6 +2287,25 @@ impl Behaviours {
     ) {
         self.sim(level, ticks).report_placement(placed, placer);
     }
+    /// `new BlockPlaceContext(...).canPlace()` for `input`, as `RedStoneOreBlock.useItemOn`
+    /// asks it before letting a `BlockItem` through: the context resolves as `BlockItem.place`
+    /// resolves it (the clicked block if it can be replaced, else the one beside the face),
+    /// with no `updatePlacementContext` rewrite. Reads the level only: `signal_reads` are the
+    /// live ticks, read and never scheduled into (as `state_for_resolved_placement` reads them),
+    /// so a placement preview level can answer it. A directional `input` answers
+    /// `DirectionalPlaceContext.canPlace()`; `Err` where vanilla throws for one.
+    pub fn can_place<L: LevelAccess + ?Sized>(
+        &self,
+        level: &mut L,
+        signal_reads: &Ticks,
+        input: &PlaceContext,
+    ) -> Result<bool, DirectionalRefusal> {
+        let mut ticks = Ticks::default();
+        let mut sim = self.sim(level, &mut ticks);
+        sim.signal_reads = Some(signal_reads);
+        let ctx = sim.resolve_context(input)?;
+        Ok(sim.can_place_context(&ctx))
+    }
     /// `DirectionalPlaceContext.canPlace`: whether the block at the clicked
     /// position can be replaced by the item (a dispenser places only there).
     /// `Err(ReplacingClickedCycle)` where vanilla never returns: the clicked
@@ -2318,6 +2344,137 @@ impl Behaviours {
         let mut sim = self.sim(level, ticks);
         let ctx = sim.resolve_context(input)?;
         sim.state_for_placement(block, &ctx)
+    }
+}
+
+#[cfg(test)]
+mod can_place_tests {
+    use super::*;
+    use crate::{
+        chunk::BlockState,
+        level::{data, tests::TestLevel},
+    };
+
+    fn place_ctx(
+        clicked_pos: BlockPos,
+        face: Direction,
+        item: &str,
+        sneaking: bool,
+    ) -> PlaceContext {
+        PlaceContext {
+            clicked_pos,
+            face,
+            hit: Vec3::new(
+                f64::from(clicked_pos.x) + 0.5,
+                f64::from(clicked_pos.y) + 1.0,
+                f64::from(clicked_pos.z) + 0.5,
+            ),
+            inside: false,
+            source: PlacementSource::Player {
+                yaw: 0.0,
+                pitch: 0.0,
+                sneaking,
+            },
+            item: item.to_owned(),
+            can_use_game_master_blocks: false,
+        }
+    }
+
+    #[test]
+    fn block_place_context_can_place_follows_vanilla_replaceability() {
+        let (registry, b) = data::can_place_fixture();
+        let default = |name: &str| registry.default_state(name).unwrap();
+        let with_prop = |name: &str, key: &str, value: &str| {
+            registry
+                .resolve(&BlockState {
+                    name: name.into(),
+                    properties: [(key.into(), value.into())].into_iter().collect(),
+                })
+                .unwrap()
+        };
+
+        let ore = default("minecraft:redstone_ore");
+        let stone = default("minecraft:stone");
+        let grass = default("minecraft:short_grass");
+        let bottom_slab = with_prop("minecraft:oak_slab", "type", "bottom");
+        let double_slab = with_prop("minecraft:oak_slab", "type", "double");
+        let one_candle = with_prop("minecraft:white_candle", "candles", "1");
+        let four_candles = with_prop("minecraft:white_candle", "candles", "4");
+
+        let mut level = TestLevel::new(&b);
+        let ticks = Ticks::new(0);
+        let can_place = |level: &mut TestLevel, ctx: &PlaceContext| {
+            b.can_place(level, &ticks, ctx)
+                .expect("a player's BlockPlaceContext always resolves")
+        };
+        let clicked = BlockPos::new(4, 64, 4);
+        let above_clicked = clicked.offset(0, 1, 0);
+        level.set_raw(clicked, ore);
+
+        // Air beside a non-replaceable block: canPlace is true.
+        assert!(can_place(
+            &mut level,
+            &place_ctx(clicked, Direction::Up, "minecraft:stone", false)
+        ));
+
+        // Solid non-replaceable block beside the clicked face: canPlace is false.
+        level.set_raw(above_clicked, stone);
+        assert!(!can_place(
+            &mut level,
+            &place_ctx(clicked, Direction::Up, "minecraft:stone", false)
+        ));
+
+        // Replaceable neighbour (short grass): another item can replace it, the same item cannot.
+        level.set_raw(above_clicked, grass);
+        assert!(can_place(
+            &mut level,
+            &place_ctx(clicked, Direction::Up, "minecraft:stone", false)
+        ));
+        assert!(!can_place(
+            &mut level,
+            &place_ctx(clicked, Direction::Up, "minecraft:short_grass", false)
+        ));
+
+        // Non-replaceable half-slab beside the clicked face: merging the same slab succeeds
+        // (!replacingClickedOnBlock), while another item or a double slab fails.
+        level.set_raw(above_clicked, bottom_slab);
+        assert!(can_place(
+            &mut level,
+            &place_ctx(clicked, Direction::Up, "minecraft:oak_slab", false)
+        ));
+        assert!(!can_place(
+            &mut level,
+            &place_ctx(clicked, Direction::Up, "minecraft:stone", false)
+        ));
+        level.set_raw(above_clicked, double_slab);
+        assert!(!can_place(
+            &mut level,
+            &place_ctx(clicked, Direction::Up, "minecraft:oak_slab", false)
+        ));
+
+        // Candle beside the clicked face: same item adds a candle only when not sneaking and < 4.
+        level.set_raw(above_clicked, one_candle);
+        assert!(can_place(
+            &mut level,
+            &place_ctx(clicked, Direction::Up, "minecraft:white_candle", false)
+        ));
+        assert!(!can_place(
+            &mut level,
+            &place_ctx(clicked, Direction::Up, "minecraft:white_candle", true)
+        ));
+        level.set_raw(above_clicked, four_candles);
+        assert!(!can_place(
+            &mut level,
+            &place_ctx(clicked, Direction::Up, "minecraft:white_candle", false)
+        ));
+
+        // Replaceable clicked block itself: replaceClicked is true even when the neighbour is solid.
+        level.set_raw(clicked, grass);
+        level.set_raw(above_clicked, stone);
+        assert!(can_place(
+            &mut level,
+            &place_ctx(clicked, Direction::Up, "minecraft:stone", false)
+        ));
     }
 }
 

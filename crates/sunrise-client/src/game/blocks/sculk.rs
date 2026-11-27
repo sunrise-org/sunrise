@@ -2278,29 +2278,27 @@ impl Game<'_> {
     }
 
     /// `RedStoneOreBlock.useItemOn`: a right-click lights the ore whatever the
-    /// hand holds. PASS when the hand holds a block item, which goes on
-    /// to be placed; SUCCESS otherwise.
+    /// hand holds. PASS when the hand holds a `BlockItem` whose
+    /// `BlockPlaceContext.canPlace()` is true; SUCCESS otherwise. The ore is lit
+    /// first (`interact`, with neighbour updates), so the gate reads the level as
+    /// that left it.
     pub(super) fn use_redstone_ore(
         &mut self,
-        pos: [i32; 3],
+        hit: &super::Hit,
         held: Option<&sunrise_client::items::ItemStack>,
     ) -> Result<Option<mod_api::InteractionResult>> {
         use mod_api::InteractionResult as Answer;
         if !matches!(
-            &*self.block_name(pos),
+            &*self.block_name(hit.pos),
             "minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore"
         ) {
             return Ok(None);
         }
-        self.redstone_ore_particles(pos);
-        self.attack_block(pos)?;
-        let block_item = held.is_some_and(|s| {
-            self.res
-                .items()
-                .get(&s.item)
-                .is_some_and(|i| i.block.is_some())
-        });
-        Ok(Some(if block_item {
+        self.redstone_ore_particles(hit.pos);
+        self.attack_block(hit.pos)?;
+        let passes =
+            self.redstone_ore_passes_to_placement(hit, held, self.held_mapping(Action::Sneak));
+        Ok(Some(if passes {
             Answer::Pass
         } else {
             Answer::Success
@@ -3360,3 +3358,7 @@ mod shriek_capture_tests {
 #[cfg(test)]
 #[path = "tests/farm_animal_interaction_tests.rs"]
 mod farm_animal_interaction_tests;
+
+#[cfg(test)]
+#[path = "tests/redstone_ore_use_tests.rs"]
+mod redstone_ore_use_tests;

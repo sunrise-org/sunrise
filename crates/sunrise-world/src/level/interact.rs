@@ -760,8 +760,21 @@ impl Behaviours {
             sim.note_play(pos, state, true);
             return true;
         }
-        if chain.contains(&Class::RedStoneOre) && !self.table.bool(state, self.props.lit) {
-            sim.set_block_and_update(pos, self.table.set_bool(state, self.props.lit, true));
+        if chain.contains(&Class::RedStoneOre) {
+            // RedStoneOreBlock.interact: spawnParticles first, lit or not. A server level's
+            // addParticle sends nothing, but every face (Direction.values() order) whose
+            // neighbour is not isSolidRender still draws the dust's two in-face offsets from
+            // the level random. The client's own dust is the game's (`redstone_ore_particles`).
+            for d in Direction::ALL {
+                let [dx, dy, dz] = d.normal();
+                if !self.solid_render(sim.state(pos.offset(dx, dy, dz))) {
+                    sim.random().next_float();
+                    sim.random().next_float();
+                }
+            }
+            if !self.table.bool(state, self.props.lit) {
+                sim.set_block_and_update(pos, self.table.set_bool(state, self.props.lit, true));
+            }
         }
         false
     }

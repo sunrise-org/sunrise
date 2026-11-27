@@ -329,13 +329,13 @@ impl Game<'_> {
     /// method requested by a canceled `BLOCK` phase's `TryWithEmptyHand`.
     /// The `useItemOn` answers a client level gives without changing a block, for either hand:
     /// - VaultBlock: something in the hand on an ACTIVE vault is SUCCESS_SERVER (no swing here);
-    /// - RedStoneOreBlock: SUCCESS, unless a block item goes in the cell beside it
-    ///   (`BlockPlaceContext.canPlace`), PASS;
+    /// - RedStoneOreBlock: PASS for a `BlockItem` whose `BlockPlaceContext.canPlace()` holds
+    ///   (`redstone_ore_passes_to_placement`, as on the server), else SUCCESS;
     /// - PumpkinBlock: shears are SUCCESS (only the server carves it);
     /// - WeatheringCopperGolemStatueBlock: an axe on an unaffected statue is SUCCESS (the server
     ///   lets the golem out).
     pub(super) fn client_block_answer(
-        &self,
+        &mut self,
         hit: &crate::game::Hit,
         held: Option<&ItemStack>,
     ) -> Option<InteractionResult> {
@@ -345,15 +345,11 @@ impl Game<'_> {
         let name = self.block_name(hit.pos);
         match &*name {
             "minecraft:redstone_ore" | "minecraft:deepslate_redstone_ore" => {
-                let beside = [0, 1, 2].map(|i| hit.pos[i] + hit.face[i]);
-                let takes = self
-                    .res
-                    .facts()
-                    .get(self.world.block(beside[0], beside[1], beside[2]))
-                    .replaceable;
-                let places =
-                    held.is_some_and(|s| self.res.items().block_items.contains_key(&*s.item));
-                Some(if places && takes {
+                // A client level only spawns the particles: the ore is not lit here,
+                // so the gate reads the level as it is.
+                let passes =
+                    self.redstone_ore_passes_to_placement(hit, held, self.remote_shift_down());
+                Some(if passes {
                     InteractionResult::Pass
                 } else {
                     InteractionResult::Success

@@ -160,7 +160,7 @@ impl Game<'_> {
                     self.swing_arm();
                     return Ok(true);
                 }
-                block_answer = self.use_redstone_ore(hit.pos, held.as_ref())?;
+                block_answer = self.use_redstone_ore(hit, held.as_ref())?;
                 match self.use_respawn_anchor(hit.pos, held.as_ref())? {
                     respawn_anchor::AnchorUse::Charged => {
                         self.swing_arm();
@@ -623,28 +623,8 @@ impl Game<'_> {
             // ItemStack.useOn passes in adventure mode; useItem eats.
             return Ok(!on_block && self.start_eating(&info));
         }
-        let face = match hit.face {
-            [0, 1, 0] => Direction::Up,
-            [0, -1, 0] => Direction::Down,
-            [0, 0, -1] => Direction::North,
-            [0, 0, 1] => Direction::South,
-            [-1, 0, 0] => Direction::West,
-            _ => Direction::East,
-        };
         // BlockItem.place through the vanilla placement rules.
-        let ctx = PlaceContext {
-            clicked_pos: BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
-            face,
-            hit: Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
-            inside: hit.inside,
-            source: sunrise_world::level::PlacementSource::Player {
-                yaw: self.yaw,
-                pitch: self.pitch,
-                sneaking: self.held_mapping(Mapping::Sneak),
-            },
-            item: stack.item.to_string(),
-            can_use_game_master_blocks: self.can_use_game_master_blocks(),
-        };
+        let ctx = self.block_place_context(hit, &stack.item, self.held_mapping(Mapping::Sneak));
         let Some(placed) = self.place_item_block(&ctx, true, &stack)? else {
             self.process_level_events()?;
             // BlockItem.useOn: a consumable that could not be placed is used,
@@ -669,6 +649,63 @@ impl Game<'_> {
         // after the successful placement and its hand replacement.
         self.apply_use_cooldown(&stack);
         Ok(true)
+    }
+
+    /// The `PlaceContext` of a player's click with `item`: what vanilla's
+    /// `new BlockPlaceContext(player, hand, stack, hit)` reads from the player
+    /// and the hit. `sneaking` is the side's own `isSecondaryUseActive`.
+    pub(in crate::game) fn block_place_context(
+        &self,
+        hit: &Hit,
+        item: &str,
+        sneaking: bool,
+    ) -> PlaceContext {
+        let face = match hit.face {
+            [0, 1, 0] => Direction::Up,
+            [0, -1, 0] => Direction::Down,
+            [0, 0, -1] => Direction::North,
+            [0, 0, 1] => Direction::South,
+            [-1, 0, 0] => Direction::West,
+            _ => Direction::East,
+        };
+        PlaceContext {
+            clicked_pos: BlockPos::new(hit.pos[0], hit.pos[1], hit.pos[2]),
+            face,
+            hit: Vec3::new(hit.point[0], hit.point[1], hit.point[2]),
+            inside: hit.inside,
+            source: sunrise_world::level::PlacementSource::Player {
+                yaw: self.yaw,
+                pitch: self.pitch,
+                sneaking,
+            },
+            item: item.to_owned(),
+            can_use_game_master_blocks: self.can_use_game_master_blocks(),
+        }
+    }
+
+    /// `RedStoneOreBlock.useItemOn`'s placement gate, on the server and in
+    /// client prediction: `stack.getItem() instanceof BlockItem &&
+    /// new BlockPlaceContext(player, hand, stack, hit).canPlace()`. The item's
+    /// `BlockItem` binding is `ItemInfo.block`; the item's own
+    /// `updatePlacementContext` (the `placement_context` hook) is not asked,
+    /// as vanilla builds a plain context here.
+    pub(in crate::game) fn redstone_ore_passes_to_placement(
+        &mut self,
+        hit: &Hit,
+        held: Option<&ItemStack>,
+        sneaking: bool,
+    ) -> bool {
+        let Some(stack) = held.filter(|s| {
+            self.res
+                .items()
+                .get(&s.item)
+                .is_some_and(|i| i.block.is_some())
+        }) else {
+            return false;
+        };
+        let ctx = self.block_place_context(hit, &stack.item, sneaking);
+        // A player's context always resolves (only a directional one can be refused).
+        self.preview_can_place(&ctx) == Ok(true)
     }
 }
 

@@ -1,0 +1,2 @@
+# RedStoneOreBlock.useItemOn: BlockPlaceContext.canPlace gate on server use_hand and client prediction.
+sunrise-client game::sculk::redstone_ore_use_tests::redstone_ore_use_checks_block_place_context_can_place lib daily child-process

@@ -753,14 +753,29 @@ public final class VanillaDispenserOracle {
             .add(face.getStepX() * 0.5, face.getStepY() * 0.5, face.getStepZ() * 0.5), face, pos, false);
         // Minecraft.startUseItem: each hand in turn clicks the block, then uses
         // its item unless the click succeeded or failed; a success ends it.
+        // `ended` is the hand whose click ended it and how: a block that answers
+        // SUCCESS and one that answers PASS to an item whose `useOn` then FAILs
+        // change nothing else a server can see (RedStoneOreBlock.useItemOn's gate).
+        String ended = "-";
         for (var hand : net.minecraft.world.InteractionHand.values()) {
+            String name = hand == net.minecraft.world.InteractionHand.MAIN_HAND ? "main" : "off";
             ItemStack held = player.getItemInHand(hand);
             var result = gameMode.useItemOn(player, w, held, hand, hit);
-            if (result instanceof net.minecraft.world.InteractionResult.Success
-                || result instanceof net.minecraft.world.InteractionResult.Fail) break;
-            if (!held.isEmpty() && gameMode.useItem(player, w, held, hand) instanceof net.minecraft.world.InteractionResult.Success) break;
+            if (result instanceof net.minecraft.world.InteractionResult.Success) {
+                ended = name + " success";
+                break;
+            }
+            if (result instanceof net.minecraft.world.InteractionResult.Fail) {
+                ended = name + " fail";
+                break;
+            }
+            if (!held.isEmpty() && gameMode.useItem(player, w, held, hand) instanceof net.minecraft.world.InteractionResult.Success) {
+                ended = name + " success";
+                break;
+            }
         }
         List<String> out = new ArrayList<>(player.stats);
+        if (use.has("result") && use.get("result").getAsBoolean()) out.add("ended " + ended);
         out.add("held " + ParityData.canon(player.hand) + " offhand " + ParityData.canon(player.offhand)
             + " using " + (player.using == null ? "-" : player.using));
         var respawn = player.getRespawnConfig();

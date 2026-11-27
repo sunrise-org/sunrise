@@ -710,12 +710,30 @@ impl Game<'_> {
             inside: false,
         });
         self.chat_capture = Some(Vec::new());
+        self.use_failed = false;
         let used = self.use_item_as_player();
         self.forced_hit = None;
         let messages = self.chat_capture.take().unwrap_or_default();
-        used?;
+        // The hand whose click ended `startUseItem` and whether it failed, which the
+        // oracle prints when the case asks (`result`): the only trace of a block's
+        // SUCCESS against its PASS to an item whose `useOn` then fails.
+        let ended = match used? {
+            Some(hand) => format!(
+                "ended {} {}",
+                if matches!(hand, sunrise_client::first_person::Hand::Main) {
+                    "main"
+                } else {
+                    "off"
+                },
+                if self.use_failed { "fail" } else { "success" }
+            ),
+            None => "ended -".to_owned(),
+        };
         self.process_level_events()?;
         let mut out = Vec::new();
+        if op["result"].as_bool().unwrap_or(false) {
+            out.push(ended);
+        }
         for m in messages {
             let key = m.component()["translate"]
                 .as_str()

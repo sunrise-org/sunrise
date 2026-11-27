@@ -134,3 +134,46 @@ fn a_cactus_flower_follows_a_shulker_boxs_live_support_shape() {
         w.level.events
     );
 }
+
+/// `RedStoneOreBlock.interact` calls `spawnParticles` before it lights the ore, lit or not. A
+/// server level's `addParticle` sends nothing, but each face whose neighbour is not
+/// `isSolidRender` still draws the dust's two in-face offsets from the level random, in
+/// `Direction.values()` order. The harness `tools/test_use_item_on_parity.py` compares the
+/// random this leaves with vanilla's after a right click.
+#[test]
+fn redstone_ore_interact_draws_its_dust_offsets_from_the_level_random() {
+    let mut w = world!();
+    let pos = BlockPos::new(0, 1, 0);
+    let stone = w.id("stone", &[]);
+    let glass = w.id("glass", &[]);
+    let air = w.id("air", &[]);
+    for lit in ["false", "true"] {
+        let ore = w.id("redstone_ore", &[("lit", lit)]);
+        for covered in 0..=6 {
+            w.put(pos, ore);
+            for (i, d) in Direction::ALL.into_iter().enumerate() {
+                let [dx, dy, dz] = d.normal();
+                // Glass is not `isSolidRender`: it draws as air does.
+                let neighbour = if i < covered {
+                    stone
+                } else if i % 2 == 0 {
+                    glass
+                } else {
+                    air
+                };
+                w.put(pos.offset(dx, dy, dz), neighbour);
+            }
+            let mut expected = w.level.random.clone();
+            for _ in 0..2 * (6 - covered) {
+                expected.next_float();
+            }
+            w.b().attack_block(&mut w.level, &mut w.ticks, pos);
+            assert_eq!(
+                w.level.random.next_long(),
+                expected.next_long(),
+                "lit={lit}, {covered} faces covered"
+            );
+            assert_eq!(w.get(pos), w.id("redstone_ore", &[("lit", "true")]));
+        }
+    }
+}

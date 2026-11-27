@@ -102,6 +102,21 @@ impl crate::game::Game<'_> {
         })
     }
 
+    /// `new BlockPlaceContext(...).canPlace()` (`Behaviours::can_place`) against the live
+    /// level. It reads block states only, so it takes the placement preview level (no trigger
+    /// snapshots, entity or container state, or effect drains) behind a scratch level whose
+    /// writes, of which it makes none, would be dropped.
+    pub(in crate::game) fn preview_can_place(
+        &mut self,
+        context: &sunrise_world::level::PlaceContext,
+    ) -> std::result::Result<bool, sunrise_world::level::DirectionalRefusal> {
+        self.with_placement_preview_level(|behaviours, level, ticks| {
+            let mut dry = DryLevel::new(level);
+            dry.reads = Some(ticks);
+            behaviours.can_place(&mut dry, ticks, context)
+        })
+    }
+
     /// Trace the optional initial write and state-level callback off the live world.
     /// Both steps use the same scratch level so the callback sees the write's shape updates.
     pub(in crate::game) fn preview_set_placed_by(
