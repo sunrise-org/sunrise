@@ -1567,4 +1567,12 @@ fn only_a_real_subgroup_operation_sets_uses_subgroup() {
         "#version 450\n#extension GL_KHR_shader_subgroup_basic : enable\n{body}void main() {{ values[gl_GlobalInvocationID.x] = gl_SubgroupSize; }}\n"
     );
     assert!(compute_uses_subgroup(&built_in));
+    let arithmetic = format!(
+        "#version 450\n#extension GL_KHR_shader_subgroup_arithmetic : enable\n{body}void main() {{ values[gl_GlobalInvocationID.x] = subgroupMax(gl_LocalInvocationID.x); }}\n"
+    );
+    assert!(compute_uses_subgroup(&arithmetic));
+    let barrier_only = format!(
+        "#version 450\n#extension GL_KHR_shader_subgroup_basic : enable\n{body}void main() {{ subgroupBarrier(); values[gl_GlobalInvocationID.x] = 1u; }}\n"
+    );
+    assert!(compute_uses_subgroup(&barrier_only));
 }

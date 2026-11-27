@@ -945,9 +945,8 @@ pub fn translate_compute(
     })
 }
 
-/// Whether `module` has a subgroup operation (each of the ballot, gather and collective
-/// statements yields a result expression, which is what is looked for, so no statement walk is
-/// needed) or an entry point that reads a subgroup built-in.
+/// Whether `module` has a subgroup operation (ballot, gather, collective), a subgroup barrier,
+/// or an entry point / helper reading a subgroup built-in.
 fn module_uses_subgroup(module: &naga::Module) -> bool {
     let operation = |expression: &naga::Expression| {
         matches!(
@@ -975,7 +974,40 @@ fn module_uses_subgroup(module: &naga::Module) -> bool {
         .any(|function| {
             function.expressions.iter().any(|(_, e)| operation(e))
                 || function.arguments.iter().any(built_in)
+                || block_uses_subgroup_barrier(&function.body)
         })
+}
+
+/// Whether any statement inside `body` is a subgroup control or memory barrier.
+fn block_uses_subgroup_barrier(body: &naga::Block) -> bool {
+    let mut blocks = vec![body];
+    while let Some(block) = blocks.pop() {
+        for statement in block.iter() {
+            match statement {
+                naga::Statement::ControlBarrier(flags) | naga::Statement::MemoryBarrier(flags)
+                    if flags.contains(naga::Barrier::SUB_GROUP) =>
+                {
+                    return true;
+                }
+                naga::Statement::Block(inner) => blocks.push(inner),
+                naga::Statement::If { accept, reject, .. } => {
+                    blocks.push(accept);
+                    blocks.push(reject);
+                }
+                naga::Statement::Loop {
+                    body, continuing, ..
+                } => {
+                    blocks.push(body);
+                    blocks.push(continuing);
+                }
+                naga::Statement::Switch { cases, .. } => {
+                    blocks.extend(cases.iter().map(|case| &case.body));
+                }
+                _ => {}
+            }
+        }
+    }
+    false
 }
 
 /// A bound on a program's includes, which are pasted every time.
@@ -2284,6 +2316,8 @@ fn compile(
         code.errors_in(stage, &e, |kind, line| format!("({}): {kind}", line.trim()))
     })?;
     let info = Validator::new(ValidationFlags::all(), Capabilities::all())
+        .subgroup_operations(naga::valid::SubgroupOperationSet::all())
+        .subgroup_stages(naga::valid::ShaderStages::all())
         .validate(&module)
         .map_err(|e| {
             // The innermost span naga gives (an expression inside the function the error names).
