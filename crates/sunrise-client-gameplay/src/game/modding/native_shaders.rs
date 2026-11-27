@@ -31,6 +31,7 @@ pub(in crate::game) fn refused(path: &Path, stamp: Option<u64>) -> bool {
 #[derive(Default)]
 pub(in crate::game) struct NativeShaders {
     pub picked: String,
+    pub running: String,
     pub translation: super::shader_packs::ShaderTranslation,
     /// The pick of a pack in the removed WGSL format that already got its note in the chat.
     pub noted: String,

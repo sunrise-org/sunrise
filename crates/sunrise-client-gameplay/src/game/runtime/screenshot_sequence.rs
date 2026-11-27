@@ -115,6 +115,7 @@ impl crate::game::ClientGame<'_> {
                 &self.client.settings,
                 (
                     &self.client.native_shaders.picked,
+                    &self.client.native_shaders.running,
                     renderer.shader_pack_kind()
                 ),
                 [renderer.config.width, renderer.config.height],
@@ -177,6 +178,7 @@ impl crate::game::ClientGame<'_> {
         if !picked.is_empty() && kind.is_none() {
             return Err("the shader pack isn't running (still loading, or it failed)".into());
         }
+        let running = self.client.native_shaders.running.clone();
         let scene = self.sequence_scene(renderer);
         let renderer = self.client.renderer.0.as_mut().ok_or("no renderer yet")?;
         renderer.reset_shader_pack_history();
@@ -190,7 +192,7 @@ impl crate::game::ClientGame<'_> {
             camera: None,
             pack: json!({
                 "kind": kind.unwrap_or("none"),
-                "name": (!picked.is_empty()).then_some(picked),
+                "name": (!running.is_empty()).then_some(running),
             }),
         });
         Ok(None)

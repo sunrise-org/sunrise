@@ -88,6 +88,9 @@ impl crate::game::ClientGame<'_> {
         if !native_shaders::linear_frame_switch() {
             return;
         }
+        if self.client.native_shaders.translation.is_building() {
+            return;
+        }
         let picked = shader_packs::picked_pack(&self.client.settings);
         if self
             .client
@@ -103,6 +106,15 @@ impl crate::game::ClientGame<'_> {
         {
             return;
         }
+        self.reconcile_shader_pack_frame();
+    }
+
+    #[inline(always)]
+    pub(super) fn reconcile_shader_pack_frame(&mut self) {
+        if !native_shaders::linear_frame_switch() {
+            return;
+        }
+        let picked = shader_packs::picked_pack(&self.client.settings);
         let dir = Self::shader_packs_dir();
         let path = dir.join(picked);
         let available = path.exists()
@@ -345,11 +357,11 @@ impl crate::game::ClientGame<'_> {
         // And has no wall for the world border. Its sections' sources are kept as the meshes
         // on their way carry them.
         self.client.border_renderer.invalidate();
-        renderer.keep_pack_sources(self.client.streaming.shader_pack);
         self.set_renderer(renderer);
         self.bind_dynamic_textures();
         self.forget_atlas_slots();
         if !world_kept {
+            self.settle_shader_layout_for_resource_reload();
             self.clear_lod();
             self.client.pending_uploads.0.clear();
             let context = self.worker_context();

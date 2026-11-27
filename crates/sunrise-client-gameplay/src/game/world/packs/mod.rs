@@ -836,6 +836,7 @@ impl crate::game::ClientGame<'_> {
             // A pack that may replace leaf models falls back to `Off` before the
             // reload marks every section dirty.
             game.client.streaming.leaf_culling = game.effective_leaf_culling();
+            game.settle_shader_layout_for_resource_reload();
             let context = game.worker_context();
             game.client
                 .streaming

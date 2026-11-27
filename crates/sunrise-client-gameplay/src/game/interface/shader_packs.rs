@@ -703,7 +703,6 @@ pub(in crate::game) struct ShaderTranslation {
     renderer_epoch: u64,
     world_generation: u64,
     pub(in crate::game) remesh: bool,
-    keep_running_after_failure: Option<u64>,
     pick_time: Option<(String, Instant)>,
     #[cfg(test)]
     gate: Option<std::sync::mpsc::Receiver<TranslationTestAction>>,
@@ -730,7 +729,6 @@ impl ShaderTranslation {
         old: Option<&mut sunrise_client_render::gfx::Renderer>,
     ) -> bool {
         self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        self.keep_running_after_failure = None;
         self.pick_time = None;
         self.cancel(old)
     }
@@ -764,18 +762,25 @@ impl ShaderTranslation {
 
     pub(super) fn hold_running_frame(&self, picked: &str, dimension: &str) -> bool {
         if picked.is_empty() {
-            return self.keep_running_after_failure == Some(self.pick_revision);
+            return false;
         }
         self.active.as_ref().is_none_or(|job| {
             let key = &job.key.selection;
-            !matches!(job.stage, LoadStage::Installed { .. })
-                || job.name != picked
-                || key.dimension != dimension
-                || key.options_revision != self.options_revision
-                || key.pick_revision != self.pick_revision
-                || key.resource_generation != self.resource_generation
-                || key.world_generation != self.world_generation
+            !matches!(job.stage, LoadStage::Finished)
+                && (!matches!(job.stage, LoadStage::Installed { .. })
+                    || job.name != picked
+                    || key.dimension != dimension
+                    || key.options_revision != self.options_revision
+                    || key.pick_revision != self.pick_revision
+                    || key.resource_generation != self.resource_generation
+                    || key.world_generation != self.world_generation)
         })
+    }
+
+    pub(super) fn is_building(&self) -> bool {
+        self.active
+            .as_ref()
+            .is_some_and(|job| matches!(job.stage, LoadStage::Building))
     }
 
     fn cancel_work(&mut self, renderer: Option<&mut sunrise_client_render::gfx::Renderer>) {
@@ -1026,17 +1031,9 @@ impl crate::game::ClientGame<'_> {
         translation.discard_obsolete_work();
         if !enabled {
             translation.pick_time = None;
-            if selected.is_empty()
-                && translation.keep_running_after_failure == Some(translation.pick_revision)
-                && self.client.pack_ids.is_some()
-            {
-                return true;
-            }
-            translation.keep_running_after_failure = None;
             self.drop_published_shader_pack();
             return false;
         }
-        translation.keep_running_after_failure = None;
         if translation
             .pick_time
             .as_ref()
@@ -1091,12 +1088,14 @@ impl crate::game::ClientGame<'_> {
         let stage = if super::native_shaders::linear_frame_switch()
             && refused(&key.selection.path, stamp)
         {
+            self.shader_pack_without_pack(dimension);
             LoadStage::Finished
         } else {
             let prepared = sunrise_level::crash::contain(|| {
                 self.preflight_shader_pack(&name, &key, dimension)
             });
             if fingerprint(&key.selection.path) != stamp {
+                self.shader_pack_without_pack(dimension);
                 LoadStage::Finished
             } else {
                 match prepared {
@@ -1107,10 +1106,12 @@ impl crate::game::ClientGame<'_> {
                     Ok(Err(error)) => {
                         log::warn!("shader pack {name}: {error}");
                         remember(&key.selection.path, stamp, false);
+                        self.shader_pack_without_pack(dimension);
                         LoadStage::Finished
                     }
                     Err(error) => {
-                        self.shader_translation_failed(&key, &name, &error);
+                        remember(&key.selection.path, stamp, false);
+                        self.shader_pack_failed(&name, dimension, &error);
                         LoadStage::Finished
                     }
                 }
@@ -1139,6 +1140,7 @@ impl crate::game::ClientGame<'_> {
         sunrise_shaders::PackError,
     > {
         let started = Instant::now();
+        let frame_hdr = self.picked_pack_shape().hdr;
         let renderer = self
             .client
             .renderer
@@ -1153,7 +1155,7 @@ impl crate::game::ClientGame<'_> {
             &pack,
             &mut macros,
             super::native_shaders::linear_frame_switch(),
-            renderer.pack_hdr,
+            frame_hdr,
             name,
             &mut self.client.native_shaders.pick_hdr.borrow_mut(),
         );
@@ -1252,7 +1254,9 @@ impl crate::game::ClientGame<'_> {
                     "shader pack {}: no thread to translate it on: {error}",
                     job.name
                 );
+                let dimension = job.dimension;
                 job.stage = LoadStage::Finished;
+                self.shader_pack_without_pack(dimension);
             }
         }
     }
@@ -1284,13 +1288,10 @@ impl crate::game::ClientGame<'_> {
         });
         if current_fingerprint != job.key.fingerprint {
             let mut job = translation.active.take().expect("stale shader pack job");
-            let was_building = matches!(job.stage, LoadStage::Building);
             translation.cancel_work(Some(renderer));
             job.stage = LoadStage::Finished;
+            self.shader_pack_without_pack(job.dimension);
             self.client.native_shaders.translation.active = Some(job);
-            if was_building {
-                self.drop_published_shader_pack();
-            }
         } else if build_ready {
             let mut job = translation.active.take().expect("building job");
             job.stage = LoadStage::Finished;
@@ -1298,6 +1299,8 @@ impl crate::game::ClientGame<'_> {
                 match report {
                     Ok(Some((programs, notes))) => {
                         remember(&job.key.selection.path, job.key.fingerprint, true);
+                        self.client.native_shaders.running =
+                            job.key.selection.path.to_string_lossy().into_owned();
                         job.stage = LoadStage::Installed { first_frame: true };
                         for note in notes {
                             log::warn!("shader pack {}: {note}", job.name);
@@ -1331,14 +1334,28 @@ impl crate::game::ClientGame<'_> {
             let worker = translation.worker.take().expect("finished translation");
             let mut job = translation.active.take().expect("translation job");
             let stage = std::mem::replace(&mut job.stage, LoadStage::Finished);
-            if let LoadStage::Translating { gpu, .. } = stage
-                && let Some(reply) = worker.finish().filter(|reply| reply.key == job.key)
+            let LoadStage::Translating { gpu, .. } = stage else {
+                unreachable!("a ready worker belongs to a translating pack");
+            };
+            match worker
+                .finish()
+                .filter(|reply| reply.key == job.key)
+                .map(|reply| reply.outcome)
             {
-                match reply.outcome {
-                    Ok(Some(pack)) => self.accept_translated_pack(&mut job, *pack, *gpu),
-                    Ok(None) => {}
-                    Err(error) => self.shader_translation_failed(&job.key, &job.name, &error),
+                Some(Ok(Some(pack))) => {
+                    self.reconcile_shader_pack_frame();
+                    if self.client.native_shaders.translation.renderer_epoch
+                        != job.key.selection.renderer_epoch
+                    {
+                        return;
+                    }
+                    self.accept_translated_pack(&mut job, *pack, *gpu);
                 }
+                Some(Err(error)) => {
+                    remember(&job.key.selection.path, job.key.fingerprint, false);
+                    self.shader_pack_failed(&job.name, job.dimension, &error);
+                }
+                Some(Ok(None)) | None => self.shader_pack_without_pack(job.dimension),
             }
             self.client.native_shaders.translation.active = Some(job);
         }
@@ -1369,7 +1386,10 @@ impl crate::game::ClientGame<'_> {
             .0
             .as_mut()
             .expect("translated pack needs a renderer");
+        job.key.selection.renderer_layout = renderer.shader_pack_input_layout();
+        renderer.refresh_prepared_shader_pack_atlases(&gpu);
         renderer.apply_prepared_shader_pack(gpu);
+        self.client.native_shaders.running.clear();
         renderer.load_shader_pack(
             job.dimension,
             pack.post,
@@ -1470,8 +1490,7 @@ impl crate::game::ClientGame<'_> {
 
     #[inline(always)]
     fn shader_pack_without_pack(&mut self, dimension: i32) {
-        self.client.native_shaders.translation.remesh |= self.client.pack_ids.take().is_some();
-        self.set_translucent_layers(Vec::new());
+        self.clear_published_shader_metadata();
         if let Some(renderer) = &mut self.client.renderer.0 {
             let _ = renderer.set_shader_pack(dimension, None, &[]);
         }
@@ -1479,14 +1498,42 @@ impl crate::game::ClientGame<'_> {
 
     #[inline(always)]
     pub(in crate::game) fn drop_published_shader_pack(&mut self) {
-        let had_metadata = self.client.pack_ids.take().is_some();
-        self.client.native_shaders.translation.remesh |= had_metadata;
-        self.set_translucent_layers(Vec::new());
+        let had_metadata = self.client.pack_ids.is_some();
+        self.clear_published_shader_metadata();
         if let Some(renderer) = &mut self.client.renderer.0
             && (had_metadata || renderer.shader_pack_dimension().is_some())
         {
             renderer.drop_shader_packs();
         }
+    }
+
+    #[inline(always)]
+    fn clear_published_shader_metadata(&mut self) {
+        self.client.native_shaders.running.clear();
+        let had_metadata = self.client.pack_ids.take().is_some();
+        let streaming = &mut self.client.streaming;
+        self.client.native_shaders.translation.remesh |= had_metadata
+            || streaming.shader_pack
+            || streaming.shader_pack_lighting
+            || streaming.separate_ao
+            || !streaming.layer_overrides.is_empty();
+        streaming.shader_pack = false;
+        streaming.shader_pack_lighting = false;
+        streaming.separate_ao = false;
+        streaming.layer_overrides = Arc::from([]);
+        self.set_translucent_layers(Vec::new());
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn settle_shader_layout_for_resource_reload(&mut self) {
+        if let Some(renderer) = &mut self.client.renderer.0 {
+            renderer.keep_pack_sources(false);
+            let layout_changed = renderer.follow_shader_pack_layout();
+            if self.client.native_shaders.translation.remesh || layout_changed {
+                renderer.clear_sections(self.common.world.layout());
+            }
+        }
+        self.client.native_shaders.translation.remesh = false;
     }
 
     /// Loads the pack for the current dimension when it changed, and returns this frame's
@@ -1793,20 +1840,11 @@ impl crate::game::ClientGame<'_> {
     }
 
     #[inline(always)]
-    fn shader_translation_failed(&mut self, key: &TranslationKey, name: &str, error: &str) {
-        remember(&key.selection.path, key.fingerprint, false);
-        if self.client.settings.sunrise.shader_pack == name && self.client.pack_ids.is_some() {
-            let translation = &mut self.client.native_shaders.translation;
-            translation.keep_running_after_failure = Some(translation.pick_revision);
-        }
-        self.report_shader_pack_failure(name, error);
-    }
-
-    #[inline(always)]
     fn report_shader_pack_failure(&mut self, name: &str, error: &str) {
         log::error!("shader pack {name}: turned off: {error}");
         if self.client.settings.sunrise.shader_pack == name {
             self.client.settings.sunrise.shader_pack.clear();
+            self.client.native_shaders.picked.clear();
             self.client
                 .settings
                 .save(&sunrise_gameplay_common::game::options_path());
