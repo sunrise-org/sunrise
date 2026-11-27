@@ -11,6 +11,7 @@
 //! lists the game is walking. A container vehicle spills before its logical removal;
 //! only taking the row out of its list waits for the sweep.
 use super::commands::Target;
+use crate::game::server_side::lan_entities::candidate_entity_id;
 use mod_api::{EntityRef, LevelWriteError, RemovalReason};
 use sunrise_core::geometry::Vec3;
 use sunrise_items::items::ItemStack;
@@ -174,7 +175,7 @@ impl crate::game::ServerGame<'_> {
             _ => at,
         };
         // Found by its id: the hooks the spawn runs may add entities after it.
-        let id = self.server.next_entity + 1;
+        let id = candidate_entity_id(self.server.next_entity);
         self.spawn_at_location(Vec3::new(x, y, z), f64::from(y_offset), stack);
         self.common
             .dropped

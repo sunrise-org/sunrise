@@ -2,6 +2,7 @@
 //! reputation, sharing food and wares, picking up dropped items, making
 //! babies, calling iron golems and the prices they ask.
 use crate::game::ServerGame;
+use crate::game::server_side::lan_entities::candidate_entity_id;
 use sunrise_core::{geometry::Vec3, position::BlockPos};
 use sunrise_items::items::ItemStack;
 use sunrise_sim::{
@@ -195,7 +196,7 @@ impl ServerGame<'_> {
         else {
             return false;
         };
-        let id = self.server.next_entity + 1;
+        let id = candidate_entity_id(self.server.next_entity);
         let mut random = self.common.world.random.clone();
         let golem = villager::summon_golem(
             &self.mob_world_base(&[]),

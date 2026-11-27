@@ -7,6 +7,7 @@
 
 use super::native_pending_children::{BabyChildSlot, ChildConstraint, PendingMob, SplitChildList};
 use crate::game::ServerGame;
+use crate::game::server_side::lan_entities::commit_next_entity_id;
 use mod_api::{BabyEntitySpawnChild, MobSplitChildren, UnspawnedMob, UnspawnedMobError};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -132,10 +133,7 @@ impl ServerGame<'_> {
             .map(|(_, id)| id);
         mob.id = match reused {
             Some(id) => id,
-            None => {
-                self.server.next_entity += 1;
-                self.server.next_entity
-            }
+            None => commit_next_entity_id(&mut self.server.next_entity),
         };
         let id = mob.id;
         if let Some(uuid) = uuid {
@@ -165,7 +163,7 @@ impl ServerGame<'_> {
         action: u64,
         kind: &str,
     ) -> PendingMob {
-        self.server.next_entity += 1;
+        commit_next_entity_id(&mut self.server.next_entity);
         let (random, uuid) = sunrise_sim::mobs::living_random();
         let mut child = Mob::with_random(
             self.server.next_entity,

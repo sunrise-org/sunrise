@@ -142,6 +142,14 @@ pub(in crate::game::server_side) fn armor_stand_cart_shove(
     })
 }
 impl crate::game::ServerGame<'_> {
+    #[inline(always)]
+    fn install_player_stand_after_stack_config(
+        &mut self,
+        stand: sunrise_sim::entities::ArmorStand,
+    ) {
+        self.common.armor_stands.push(stand);
+    }
+
     /// `ArmorStandItem.useOn`.
     pub(in crate::game::server_side) fn place_armor_stand(
         &mut self,
@@ -209,7 +217,7 @@ impl crate::game::ServerGame<'_> {
             .world
             .modified
             .insert((pos[0] >> 4, pos[2] >> 4));
-        self.common.armor_stands.push(stand);
+        self.install_player_stand_after_stack_config(stand);
         if !self.common.creative {
             self.consume_held();
         }

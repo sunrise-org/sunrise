@@ -1141,7 +1141,7 @@ impl crate::game::ServerGame<'_> {
             return None;
         }
         // The root of the stack is the first entity spawned.
-        let id = before + 1;
+        let id = crate::game::server_side::lan_entities::candidate_entity_id(before);
         if self
             .common
             .resident_entities

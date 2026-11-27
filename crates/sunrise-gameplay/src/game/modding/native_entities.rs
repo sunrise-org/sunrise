@@ -5,6 +5,7 @@
 use super::commands::Target;
 #[cfg(test)]
 use super::commands::{data::summon_position_ok, place_summoned};
+use crate::game::server_side::lan_entities::candidate_entity_id;
 use mod_api::{EntityRef, LevelRef, LevelWriteError};
 use sunrise_core::geometry::Vec3;
 use sunrise_core::nbt::Compound;
@@ -58,7 +59,7 @@ impl crate::game::ServerGame<'_> {
                 if !game.common.world.chunks.contains_key(&chunk) {
                     return Ok(None);
                 }
-                let first = game.server.next_entity + 1;
+                let first = candidate_entity_id(game.server.next_entity);
                 let deferred = (
                     game.common.tnts.len(),
                     game.common.falling.len(),

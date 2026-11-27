@@ -55,6 +55,10 @@ pub(in crate::game::server_side) fn commit_dragon_and_part_ids(next: &mut u32) {
     *next += 9;
 }
 
+fn commit_pending_dragon_part_ids(next: &mut u32) {
+    *next += 8;
+}
+
 /// `HealOrHarmMobEffect.applyInstantaneousEffect` at an `AreaEffectCloud`'s
 /// 0.5 scale: `(int) (scale * (6 << amplifier) + 0.5)`.
 pub(in crate::game::server_side) fn harm_amount(amplifier: u32) -> f32 {
@@ -1286,7 +1290,7 @@ impl crate::game::ServerGame<'_> {
             && d.id == 0
         {
             super::entity_server::assign_stored_id(&mut self.server.next_entity, &mut d.id, None);
-            self.server.next_entity += 8;
+            commit_pending_dragon_part_ids(&mut self.server.next_entity);
             self.common.dragon.id_assigned();
         }
     }

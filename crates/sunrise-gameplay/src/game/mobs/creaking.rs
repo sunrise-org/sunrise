@@ -1,6 +1,7 @@
 //! The creaking heart block entity in the game: `mobs::creaking_heart`
 //! ticks each heart (spawning, letting go of and bleeding for its creaking)
 //! and this applies what it reports to the world, the mobs and the speakers.
+use crate::game::server_side::lan_entities::commit_next_entity_id;
 use std::sync::Arc;
 use sunrise_core::{
     geometry::Vec3,
@@ -68,7 +69,7 @@ impl HeartHost for Host<'_> {
         self.creaking.clone()
     }
     fn create_mob(&mut self, kind: Arc<MobType>, at: Vec3) -> Mob {
-        *self.next_entity += 1;
+        commit_next_entity_id(self.next_entity);
         // A new entity's random is its own (Mob::new seeds it).
         Mob::new(*self.next_entity, kind, at, 0.0)
     }

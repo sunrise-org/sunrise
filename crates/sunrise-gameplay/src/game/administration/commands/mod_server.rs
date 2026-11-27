@@ -10,6 +10,7 @@ use crate::game::commands::target_entity_mut;
 use crate::game::commands::texts;
 use crate::game::commands::without_knots;
 use crate::game::commands::wrap_degrees;
+use crate::game::server_side::lan_entities::commit_next_entity_id;
 use mod_api::CommandFeedback;
 use sunrise_command::{
     Arg, CommandError, Context,
@@ -874,8 +875,7 @@ impl crate::game::ServerGame<'_> {
                 "experience_orb" => {
                     // `EntityType`'s factory, `new ExperienceOrb(EntityType, Level)`,
                     // which only `snapTo`s: the position is kept, even in a block.
-                    self.server.next_entity += 1;
-                    let id = self.server.next_entity;
+                    let id = commit_next_entity_id(&mut self.server.next_entity);
                     let uuid = sunrise_sim::save::insecure_uuid(
                         &mut sunrise_level::random_source::entity(),
                     );
@@ -898,8 +898,7 @@ impl crate::game::ServerGame<'_> {
                 "end_crystal" => {
                     // EndCrystal's constructor takes an id from the entity
                     // counter, and the crystal is shown with its base.
-                    self.server.next_entity += 1;
-                    let id = self.server.next_entity;
+                    let id = commit_next_entity_id(&mut self.server.next_entity);
                     let at = Vec3::new(pos[0], pos[1], pos[2]);
                     let (drawn, uuid) =
                         sunrise_gameplay_common::game::dragon_common::Crystal::own_draws();
@@ -922,7 +921,7 @@ impl crate::game::ServerGame<'_> {
                 _ if super::minecarts::CartKind::from_id(&kind).is_some() => {
                     let cart_kind = super::minecarts::CartKind::from_id(&kind)
                         .unwrap_or(super::minecarts::CartKind::Rideable);
-                    self.server.next_entity += 1;
+                    commit_next_entity_id(&mut self.server.next_entity);
                     let mut cart = super::minecarts::Minecart::new(
                         self.server.next_entity,
                         cart_kind,

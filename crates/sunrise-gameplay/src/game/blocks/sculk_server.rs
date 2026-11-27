@@ -2,6 +2,7 @@
 //! sensors, shriekers and wardens (`GameEventDispatcher`), the vibration
 //! ticker, redstone output, resonance, shrieks, warden summoning, and catalysts.
 use super::Result;
+use crate::game::server_side::lan_entities::commit_next_entity_id;
 use mod_api::client::particles::PositionSource;
 use std::collections::HashSet;
 use sunrise_core::{
@@ -750,7 +751,7 @@ impl crate::game::ServerGame<'_> {
             let yaw = mod_api::client::camera::wrap_degrees(
                 self.common.world.random.next_float() * 360.0,
             );
-            self.server.next_entity += 1;
+            commit_next_entity_id(&mut self.server.next_entity);
             let mut mob = Mob::new(
                 self.server.next_entity,
                 kind.clone(),

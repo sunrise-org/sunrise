@@ -3,8 +3,9 @@
 //! entities for. A behaviour returns what is left in the slot and the level
 //! event it plays (`DefaultDispenseItemBehavior.dispense` then plays that
 //! event and the smoke animation, event 2000).
-#[allow(unused_imports)]
 use super::{Dim, item_abilities::ability};
+#[allow(unused_imports)]
+use crate::game::server_side::lan_entities::commit_next_entity_id;
 #[allow(unused_imports)]
 use mod_api::{LevelRef, LevelWriteError, SoundSource};
 #[allow(unused_imports)]
@@ -1105,7 +1106,19 @@ impl crate::game::ServerGame<'_> {
         );
         // EntityType.create rolls a yaw from the level random before the stack config turns it.
         let _ = self.common.world.random.next_float();
-        self.server.next_entity += 1;
+        self.install_dispensed_stand_before_stack_config(front, foot, facing, &stack);
+        (shrink(stack), CLICK)
+    }
+
+    #[inline(always)]
+    fn install_dispensed_stand_before_stack_config(
+        &mut self,
+        front: Pos,
+        foot: Vec3,
+        facing: Direction,
+        stack: &ItemStack,
+    ) {
+        commit_next_entity_id(&mut self.server.next_entity);
         let (stand, uuid) = sunrise_sim::entities::ArmorStand::new_with_uuid(
             self.server.next_entity,
             foot,
@@ -1125,10 +1138,9 @@ impl crate::game::ServerGame<'_> {
         self.apply_item_stack_config(
             super::commands::Target::Stand(self.server.next_entity),
             "minecraft:armor_stand",
-            &stack,
+            stack,
             false,
         );
-        (shrink(stack), CLICK)
     }
     /// A tame donkey, mule or llama in front without a chest gets it.
     pub(in crate::game::server_side) fn dispense_chest(
@@ -1189,7 +1201,7 @@ impl crate::game::ServerGame<'_> {
         } else {
             return (self.dispense_default_in_level(pos, facing, stack), CLICK);
         };
-        self.server.next_entity += 1;
+        commit_next_entity_id(&mut self.server.next_entity);
         let mut boat = sunrise_gameplay_common::game::boats_common::Boat::new(
             self.server.next_entity,
             wood.into(),
@@ -1252,7 +1264,7 @@ impl crate::game::ServerGame<'_> {
                 -0.9
             }
         };
-        self.server.next_entity += 1;
+        commit_next_entity_id(&mut self.server.next_entity);
         let cart = super::minecarts::Minecart::new(
             self.server.next_entity,
             kind,
