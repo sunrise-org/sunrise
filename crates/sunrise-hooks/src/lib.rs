@@ -112,6 +112,11 @@ pub trait Hooks: Sync {
         None
     }
 
+    /// The physical pixels reserved at the edges of this frame's target.
+    fn safe_area(&self, _target: [u32; 2]) -> Option<Insets> {
+        None
+    }
+
     /// How this client presents itself to the server it is joining: the brand it reports
     /// (`ClientBrandRetriever.getClientModName`, the `minecraft:brand` payload) and the custom
     /// payloads it sends in the configuration phase after it. `server` is the session target before
@@ -147,6 +152,20 @@ pub trait Hooks: Sync {
     /// first hook that answers is used; with none the screen offers nothing, as vanilla's.
     fn retry(&self) -> Option<connection::Retry> {
         None
+    }
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct Insets {
+    pub left: u32,
+    pub top: u32,
+    pub right: u32,
+    pub bottom: u32,
+}
+
+impl Insets {
+    pub fn edges(self) -> [u32; 4] {
+        [self.left, self.top, self.right, self.bottom]
     }
 }
 
@@ -365,6 +384,10 @@ pub mod engine {
         all().iter().find_map(|hooks| hooks.tunnel())
     }
 
+    pub fn safe_area(target: [u32; 2]) -> Option<Insets> {
+        all().iter().find_map(|hooks| hooks.safe_area(target))
+    }
+
     /// [`Hooks::get_the_game`]: the first registered hook's answer.
     pub fn get_the_game() -> Option<GetTheGame> {
         all().iter().find_map(|hooks| hooks.get_the_game())
@@ -453,6 +476,12 @@ mod tests {
         fn retry(&self) -> Option<connection::Retry> {
             Some(connection::Retry::Wait("in 5 s".into()))
         }
+        fn safe_area(&self, target: [u32; 2]) -> Option<Insets> {
+            (target[0] == 853).then_some(Insets {
+                left: 7,
+                ..Insets::default()
+            })
+        }
         fn get_the_game(&self) -> Option<GetTheGame> {
             Some(GetTheGame {
                 address: "https://example.org",
@@ -476,6 +505,12 @@ mod tests {
     /// Registered after the recorder: answers for two servers, one the recorder answers too.
     struct Later;
     impl Hooks for Later {
+        fn safe_area(&self, target: [u32; 2]) -> Option<Insets> {
+            (target[1] == 479).then_some(Insets {
+                right: 11,
+                ..Insets::default()
+            })
+        }
         fn retry(&self) -> Option<connection::Retry> {
             Some(connection::Retry::Now(connection::Server::new(
                 "b", "P", false,
@@ -525,6 +560,9 @@ mod tests {
             engine::get_the_game().map(|g| g.address),
             Some("https://example.org")
         );
+        assert_eq!(engine::safe_area([853, 479]).unwrap().left, 7);
+        assert_eq!(engine::safe_area([851, 479]).unwrap().right, 11);
+        assert_eq!(engine::safe_area([851, 481]), None);
         // The first answer wins, a later hook answers what the first leaves, none gives vanilla.
         let first = engine::client_identity("first.example");
         assert_eq!(first.brand, "first");

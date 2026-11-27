@@ -60,6 +60,7 @@ pub struct PointerSpace {
     screen: [i32; 2],
     backing_scale: f64,
     wayland: bool,
+    gui_target: Option<([u32; 2], [u32; 2])>,
 }
 
 impl PointerSpace {
@@ -69,6 +70,7 @@ impl PointerSpace {
                 .map(|extent| ((f64::from(extent) / backing_scale).round() as i32).max(1)),
             backing_scale,
             wayland: false,
+            gui_target: None,
         }
     }
 
@@ -189,17 +191,68 @@ pub struct GuiFrame {
     pub target: [u32; 2],
     pub gui: GuiSize,
     origin: [u32; 2],
+    clip: Option<[u32; 4]>,
     window: Option<PointerSpace>,
 }
 
 impl GuiFrame {
     pub fn new(target: [u32; 2], max_scale: u32, enforce_unicode: bool) -> Self {
-        Self {
+        Self::from_insets(target, max_scale, enforce_unicode, None)
+    }
+
+    pub fn from_insets(
+        target: [u32; 2],
+        max_scale: u32,
+        enforce_unicode: bool,
+        insets: Option<[u32; 4]>,
+    ) -> Self {
+        let mut frame = Self {
             target,
             gui: GuiSize::new(target, max_scale, enforce_unicode),
             origin: [0; 2],
+            clip: None,
             window: None,
-        }
+        };
+        let Some([left, top, right, bottom]) = insets.filter(|edges| *edges != [0; 4]) else {
+            return frame;
+        };
+
+        let clamp = |extent: u32, near: u32, far: u32| {
+            let budget = extent.saturating_sub(1);
+            let near = near.min(budget);
+            (near, far.min(budget - near))
+        };
+        let (left, right) = clamp(target[0], left, right);
+        let (top, bottom) = clamp(target[1], top, bottom);
+        let inner = [target[0] - left - right, target[1] - top - bottom];
+        let scale = GuiSize::new(inner, max_scale, enforce_unicode).scale;
+        let round = |extent: u32, near: u32, far: u32| {
+            let origin = near.div_ceil(scale).min(extent.saturating_sub(1) / scale);
+            let start = origin * scale;
+            let trim = far.div_ceil(scale).saturating_mul(scale);
+            let end = extent.saturating_sub(trim).max((start + 1).min(extent));
+            (origin, start, end)
+        };
+        let (x, l, r) = round(target[0], left, right);
+        let (y, t, b) = round(target[1], top, bottom);
+        frame.gui = GuiSize {
+            scale,
+            size: [(r - l).div_ceil(scale), (b - t).div_ceil(scale)],
+        };
+        frame.origin = [x, y];
+        frame.clip = Some([l, t, r, b]);
+        frame
+    }
+
+    pub fn clip(self) -> Option<[u32; 4]> {
+        self.clip
+    }
+
+    pub fn contains(self, point: (f32, f32)) -> bool {
+        self.clip.is_none_or(|[l, t, r, b]| {
+            let [x, y] = self.gui_to_target([point.0, point.1]);
+            x >= l as f32 && x < r as f32 && y >= t as f32 && y < b as f32
+        })
     }
 
     pub fn with_pointer_space(self, window: PointerSpace) -> Self {
@@ -223,7 +276,10 @@ impl GuiFrame {
 
     /// Rasterization uses integer scale even when the rounded GUI extent overhangs the target.
     pub fn gui_to_target(self, position: [f32; 2]) -> [f32; 2] {
-        position.map(|axis| axis * self.scale())
+        if self.origin == [0; 2] {
+            return position.map(|axis| axis * self.scale());
+        }
+        std::array::from_fn(|axis| (position[axis] + self.origin[axis] as f32) * self.scale())
     }
 
     pub fn pointer_to_gui(self, sample: PointerSample) -> GuiPointer {
@@ -243,23 +299,39 @@ impl PointerProjection {
     pub fn new(frame: GuiFrame) -> Self {
         Self {
             gui: frame.gui,
-            window: frame
-                .window
-                .unwrap_or_else(|| PointerSpace::new(frame.target, 1.0)),
+            window: PointerSpace {
+                gui_target: frame.clip.map(|_| (frame.target, frame.origin)),
+                ..frame
+                    .window
+                    .unwrap_or_else(|| PointerSpace::new(frame.target, 1.0))
+            },
         }
     }
 
     fn project_axis(self, screen: f64, axis: usize) -> f64 {
-        scaled_pos(screen, self.gui.size[axis] as i32, self.window.screen[axis])
+        if let Some((target, _)) = self.window.gui_target {
+            screen * f64::from(target[axis])
+                / f64::from(self.window.screen[axis])
+                / f64::from(self.gui.scale)
+        } else {
+            scaled_pos(screen, self.gui.size[axis] as i32, self.window.screen[axis])
+        }
     }
 
     /// `MouseHandler` projects window coordinates before dispatching mouse input.
     pub fn project_pointer(self, sample: PointerSample) -> GuiPointer {
         let position = sample.screen_position();
         GuiPointer(
-            self.project_axis(position.x, 0),
-            self.project_axis(position.y, 1),
+            self.project_point(position.x, 0),
+            self.project_point(position.y, 1),
         )
+    }
+
+    fn project_point(self, screen: f64, axis: usize) -> f64 {
+        let value = self.project_axis(screen, axis);
+        self.window
+            .gui_target
+            .map_or(value, |(_, origin)| value - f64::from(origin[axis]))
     }
 
     /// Measure motion in the current GUI units, even if the scale changed
@@ -280,13 +352,21 @@ impl PointerProjection {
             if gui == 0 {
                 return 0.0;
             }
-            let mut raw = scaled_pos(f64::from(pos), self.window.screen[axis], gui)
-                * self.window.backing_scale;
+            let mut raw = if let Some((target, origin)) = self.window.gui_target {
+                (f64::from(pos) + f64::from(origin[axis]))
+                    * f64::from(self.gui.scale)
+                    * f64::from(self.window.screen[axis])
+                    / f64::from(target[axis])
+                    * self.window.backing_scale
+            } else {
+                scaled_pos(f64::from(pos), self.window.screen[axis], gui)
+                    * self.window.backing_scale
+            };
             // Keep the round trip on the intended side of a hit-test edge.
             // A negative integer instead keeps the render pixel (truncation
             // is toward zero), even when it lies outside the window.
             let target = f64::from(pos);
-            let project = |raw| self.project_axis(raw / self.window.backing_scale, axis);
+            let project = |raw| self.project_point(raw / self.window.backing_scale, axis);
             if pos < 0.0 && pos.fract() == 0.0 {
                 while project(raw) > target {
                     raw = raw.next_down();
@@ -1126,6 +1206,37 @@ mod tests {
                     assert_eq!(projected.pixel(), expected.pixel());
                 }
             }
+        }
+    }
+
+    #[test]
+    fn safe_area_preserves_none_and_projects_uneven_edges() {
+        let target = [853, 481];
+        let plain = GuiFrame::new(target, 2, false);
+        let none = GuiFrame::from_insets(target, 2, false, None);
+        assert_eq!(plain.gui, none.gui);
+        assert_eq!(plain.clip(), none.clip());
+        assert_eq!(
+            plain.gui_to_target([17.25, -0.0]),
+            none.gui_to_target([17.25, -0.0])
+        );
+
+        let space = PointerSpace::new([857, 483], 1.25);
+        let frame =
+            GuiFrame::from_insets(target, 2, true, Some([15, 9, 7, 3])).with_pointer_space(space);
+        assert_eq!(frame.origin(), [8, 5]);
+        assert_eq!(frame.clip(), Some([16, 10, 845, 477]));
+        let projection = PointerProjection::new(frame);
+        let at = (17.25, 22.5);
+        let sample = space.physical_sample(projection.window_pointer(at));
+        assert_eq!(projection.project_pointer(sample).subpixel(), at);
+        assert!(frame.contains(at));
+        assert!(!frame.contains((-0.25, 2.0)));
+
+        for target in [[1, 1], [3, 2], [0, 1]] {
+            let tiny = GuiFrame::from_insets(target, 0, true, Some([u32::MAX; 4]));
+            let [l, t, r, b] = tiny.clip().unwrap();
+            assert_eq!([r - l, b - t], target.map(|axis| axis.min(1)));
         }
     }
 

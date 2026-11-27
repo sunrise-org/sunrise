@@ -51,8 +51,8 @@ pub use sunrise_java_properties as java_properties;
 /// in"). The engine's dispatch side is not part of the API.
 pub mod hooks {
     pub use sunrise_hooks::{
-        Activity, Client, ClientIdentity, Dimension, GameMode, GetTheGame, Hooks, Play, Started,
-        TooLate, connection, perf, register, seat, tunnel,
+        Activity, Client, ClientIdentity, Dimension, GameMode, GetTheGame, Hooks, Insets, Play,
+        Started, TooLate, connection, perf, register, seat, tunnel,
     };
 }
 
