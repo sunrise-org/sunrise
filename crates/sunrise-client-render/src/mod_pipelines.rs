@@ -3028,6 +3028,58 @@ void main() {
                 ..
             })
         ));
+
+        // Optional `bool sunrise_pack_fragment_discard()` in fragment_prelude is accepted.
+        let valid_discard = pipeline("example:discard_ok", "example:discard_ok").pack_binding(
+            PackBinding::new()
+                .fragment_prelude("bool sunrise_pack_fragment_discard() { return false; }\n"),
+        );
+        assert!(validate_pack_bindings(&[valid_discard]).is_ok());
+
+        // Bad signature or placement in vertex_prelude -> typed InvalidFragmentDiscard error.
+        let bad_discard_sig = pipeline("example:discard_sig", "example:discard_sig").pack_binding(
+            PackBinding::new().fragment_prelude("void sunrise_pack_fragment_discard() {}\n"),
+        );
+        assert!(matches!(
+            validate_pack_bindings(&[bad_discard_sig]),
+            Err(RegistrationError::InvalidPackPrelude {
+                error: sunrise_shaders::PreludeError::InvalidFragmentDiscard {
+                    stage: "fragment",
+                    ..
+                },
+                ..
+            })
+        ));
+
+        let discard_in_vertex = pipeline("example:discard_vs", "example:discard_vs").pack_binding(
+            PackBinding::new().vertex_prelude(
+                "void sunrise_pack_vertex_init() {}\n\
+                 bool sunrise_pack_fragment_discard() { return false; }\n",
+            ),
+        );
+        assert!(matches!(
+            validate_pack_bindings(&[discard_in_vertex]),
+            Err(RegistrationError::InvalidPackPrelude {
+                error: sunrise_shaders::PreludeError::InvalidFragmentDiscard {
+                    stage: "vertex",
+                    ..
+                },
+                ..
+            })
+        ));
+
+        // Using the reserved entry-point name for a variable -> typed ReservedIdentifier error.
+        let reserved_discard_var = pipeline("example:discard_var", "example:discard_var")
+            .pack_binding(
+                PackBinding::new().fragment_prelude("bool sunrise_pack_fragment_discard;\n"),
+            );
+        assert!(matches!(
+            validate_pack_bindings(&[reserved_discard_var]),
+            Err(RegistrationError::InvalidPackPrelude {
+                error: sunrise_shaders::PreludeError::ReservedIdentifier { .. },
+                ..
+            })
+        ));
     }
 
     #[test]

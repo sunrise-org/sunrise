@@ -44,8 +44,9 @@ mod varyings;
 
 pub use geometry::{GeometryInputs, translate_geometry};
 pub use prelude::{
-    MOD_SET_BASE, PackPrelude, PreludeBinding, PreludeError, PreludeImageAccess, PreludeLayout,
-    PreludeResourceKind, PreludeStages, PreludeVertexInput, VERTEX_INIT_FN, validate_pack_prelude,
+    FRAGMENT_DISCARD_FN, MOD_SET_BASE, PackPrelude, PreludeBinding, PreludeError,
+    PreludeImageAccess, PreludeLayout, PreludeResourceKind, PreludeStages, PreludeVertexInput,
+    VERTEX_INIT_FN, validate_pack_prelude,
 };
 
 use scan::Stage;
@@ -218,7 +219,9 @@ pub struct GbuffersInputs {
     /// Optional mod-supplied GLSL preludes (`PackBinding::{vertex_prelude, fragment_prelude}`).
     /// When `vertex` is `Some`, the pipeline's real vertex inputs are solely those declared in the
     /// vertex prelude (possibly none), every pack-declared attribute stays a private global, and
-    /// `sunrise_pack_vertex_init()` runs before the pack's `main`.
+    /// `sunrise_pack_vertex_init()` runs before the pack's `main`. When `fragment` defines
+    /// `bool sunrise_pack_fragment_discard()`, non-shadow passes call it before the pack's
+    /// fragment `main` and apply `discard` last (after output copies and alpha test).
     pub prelude: Option<PackPrelude>,
 }
 
@@ -918,6 +921,18 @@ fn translate(
         )
         .unwrap();
     }
+    let run_fragment_discard = !shadow
+        && merged_f_prelude
+            .as_ref()
+            .is_some_and(|fp| fp.fragment_discard_fn.is_some());
+    if run_fragment_discard {
+        writeln!(
+            fragment_main,
+            "    bool hz_prelude_discard = {}();",
+            prelude::FRAGMENT_DISCARD_FN
+        )
+        .unwrap();
+    }
     fragment_main.push_str("    hz_main();\n");
     for copy in &f.out_copies {
         writeln!(fragment_main, "    {copy}").unwrap();
@@ -938,6 +953,9 @@ fn translate(
             None => fragment_main.push_str(&alpha_test(g.alpha_test)),
         }
     }
+    if run_fragment_discard {
+        fragment_main.push_str("    if (hz_prelude_discard) { discard; }\n");
+    }
     fragment_main.push_str("}\n");
 
     let (v_header, f_header) = (header(&v), header(&f));
@@ -954,11 +972,19 @@ fn translate(
         .and_then(|vp| vp.vertex_init_fn.as_deref())
         .map(|f| format!("\n{f}\n"))
         .unwrap_or_default();
+    let f_discard_suffix = merged_f_prelude
+        .as_ref()
+        .and_then(|fp| fp.fragment_discard_fn.as_deref())
+        .map(|f| format!("\n{f}\n"))
+        .unwrap_or_default();
     let v_code = format!(
         "{}{v_init_suffix}{vertex_main}",
         v.rewrite(&v_all_samplers, &uniforms)
     );
-    let f_code = format!("{}{fragment_main}", f.rewrite(&f_all_samplers, &uniforms));
+    let f_code = format!(
+        "{}{f_discard_suffix}{fragment_main}",
+        f.rewrite(&f_all_samplers, &uniforms)
+    );
     if !errors.is_empty() {
         return Err(errors);
     }
@@ -974,6 +1000,31 @@ fn translate(
         (Ok(v), Ok(f)) => (v, f),
         (a, b) => return Err(a.err().into_iter().chain(b.err()).flatten().collect()),
     };
+    // A pack fragment shader that writes storage or forces `early_fragment_tests` cannot safely
+    // combine with a post-`main` prelude discard; leave that mod pipeline unbound without
+    // rejecting the pack.
+    if run_fragment_discard {
+        if writes_storage(&fragment) {
+            return Err(vec![Error::new(
+                f.pp.file(),
+                0,
+                format!(
+                    "fragment prelude defines `{}` but the pack fragment shader writes storage images or buffers; leaving mod pipeline unbound",
+                    prelude::FRAGMENT_DISCARD_FN
+                ),
+            )]);
+        }
+        if uses_early_depth_test(&fragment) {
+            return Err(vec![Error::new(
+                f.pp.file(),
+                0,
+                format!(
+                    "fragment prelude defines `{}` but the pack fragment shader declares `early_fragment_tests`; leaving mod pipeline unbound",
+                    prelude::FRAGMENT_DISCARD_FN
+                ),
+            )]);
+        }
+    }
     let (initial_values, notes) = defaults::merge([(&v, &vertex), (&f, &fragment)])?;
     let (uniform_size, members) = block_layout(&fragment);
     let uniforms = members
@@ -1072,6 +1123,14 @@ fn writes_storage(module: &naga::Module) -> bool {
     (module.functions.iter().map(|(_, f)| f))
         .chain(module.entry_points.iter().map(|e| &e.function))
         .any(|f| block(module, f, &f.body))
+}
+
+/// Whether any entry point in `module` declares `layout(early_fragment_tests) in;`.
+fn uses_early_depth_test(module: &naga::Module) -> bool {
+    module
+        .entry_points
+        .iter()
+        .any(|ep| ep.early_depth_test.is_some())
 }
 
 /// Images an atomic function uses (naga gave them atomic access) are bound for atomics.

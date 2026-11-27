@@ -429,7 +429,17 @@ outputs — while your prelude supplies what the pack expects:
   attribute the pack declares becomes a private global rather than a vertex input.
 - **`fragment_prelude`** may declare varyings `in`, mod bind-group resources (`set = 0` /
   `set = 1`), loose pack uniforms/samplers, constants, and helper functions. It must not define
-  `sunrise_pack_vertex_init`.
+  `sunrise_pack_vertex_init`. It may optionally define `bool sunrise_pack_fragment_discard()`:
+  in non-shadow passes the translated pack fragment `main` calls it before the pack's `main` and
+  keeps the answer, runs the pack's `main`, output copies and alpha test unchanged, and applies
+  `discard` last when the answer was `true`. Because the answer is computed before the pack's
+  `main`, any `gl_FragDepth` written by the pack does not feed it. Inside a pack program,
+  `gl_FragCoord` is standard-Z (`[0, 1]`, near = `0`, far = `1`) and GL rows (`y = 0.5` at the
+  bottom), so a prelude reading a reversed-Z, top-down depth texture does its own `1.0 - z` and
+  row flip. The engine never calls `sunrise_pack_fragment_discard()` in `PackPassSlot::Shadow`.
+  If the prelude defines it and the pack fragment writes storage or declares
+  `early_fragment_tests`, the mod pipeline is left unbound (logged once) while the pack stays
+  loaded.
 - **Registration & collision rules:** Preludes are parsed and validated on their own at startup;
   invalid GLSL, reserved pack/engine/implicit names, bad sets or bindings, and stage-visibility
   mismatches refuse registration with a typed error. When binding a pack program, an identical

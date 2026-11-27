@@ -5,7 +5,9 @@
 //! mod bind-group resources (`set = 0` and `set = 1`, mapped to `MOD_SET_BASE` = 6 and
 //! `MOD_SET_BASE + 1` = 7), globals, varyings, loose pack uniforms/samplers, constants, and
 //! helper functions. A vertex prelude must define `void sunrise_pack_vertex_init()`, which the
-//! engine calls first in the pack's vertex `main`; a fragment prelude must not define it.
+//! engine calls first in the pack's vertex `main`; a fragment prelude must not define it, and may
+//! optionally define `bool sunrise_pack_fragment_discard()`, which non-shadow passes call before
+//! the pack's fragment `main` and apply with `discard` last (after output copies and alpha test).
 
 use std::collections::{BTreeMap, BTreeSet, HashMap, HashSet};
 use std::fmt::Write;
@@ -29,6 +31,10 @@ pub const MOD_SET_BASE: u32 = 6;
 /// Name of the required vertex prelude entry point called before the pack's vertex `main`.
 pub const VERTEX_INIT_FN: &str = "sunrise_pack_vertex_init";
 
+/// Name of the optional fragment prelude entry point called before the pack's fragment `main` in
+/// non-shadow passes, with its boolean answer discarded last (after output copies and alpha test).
+pub const FRAGMENT_DISCARD_FN: &str = "sunrise_pack_fragment_discard";
+
 /// Optional GLSL preludes attached to a mod pipeline's shader-pack binding.
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 pub struct PackPrelude {
@@ -36,7 +42,8 @@ pub struct PackPrelude {
     /// `void sunrise_pack_vertex_init()`.
     pub vertex: Option<String>,
     /// GLSL prepended into the matched pack program's fragment stage; must not define
-    /// `sunrise_pack_vertex_init`.
+    /// `sunrise_pack_vertex_init`, and may optionally define
+    /// `bool sunrise_pack_fragment_discard()`.
     pub fragment: Option<String>,
 }
 
@@ -152,6 +159,9 @@ pub enum PreludeError {
     /// `sunrise_pack_vertex_init` had a bad signature, appeared more than once, or appeared in
     /// `fragment_prelude`.
     InvalidVertexInit { stage: &'static str, reason: String },
+    /// `sunrise_pack_fragment_discard` had a bad signature, appeared more than once, was declared
+    /// without a definition, or appeared in `vertex_prelude`.
+    InvalidFragmentDiscard { stage: &'static str, reason: String },
     /// A mod resource binding had an invalid set, omitted `set`, or named an unknown/mismatched
     /// binding in the pipeline's layout.
     InvalidBinding {
@@ -201,6 +211,9 @@ impl std::fmt::Display for PreludeError {
             }
             Self::InvalidVertexInit { stage, reason } => {
                 write!(f, "{stage} prelude: `{VERTEX_INIT_FN}` {reason}")
+            }
+            Self::InvalidFragmentDiscard { stage, reason } => {
+                write!(f, "{stage} prelude: `{FRAGMENT_DISCARD_FN}` {reason}")
             }
             Self::InvalidBinding { stage, message } => {
                 write!(f, "{stage} prelude: {message}")
@@ -258,6 +271,13 @@ enum ParsedModResourceKind {
     StorageImage { access: PreludeImageAccess },
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+enum PreludeFnRole {
+    Helper,
+    VertexInit,
+    FragmentDiscard,
+}
+
 #[derive(Clone, Debug)]
 enum PreludeItem {
     Struct {
@@ -299,7 +319,7 @@ enum PreludeItem {
     },
     Function {
         name: String,
-        is_vertex_init: bool,
+        role: PreludeFnRole,
         raw: String,
     },
 }
@@ -307,6 +327,7 @@ enum PreludeItem {
 pub(super) struct ParsedStagePrelude {
     stage: ShaderStage,
     items: Vec<PreludeItem>,
+    has_fragment_discard: bool,
     uses_frag_coord: bool,
     writes_texcoord1: bool,
     writes_texcoord2: bool,
@@ -321,6 +342,8 @@ pub(super) struct MergedStagePrelude {
     pub header_decls: String,
     /// Rewritten `void sunrise_pack_vertex_init() { ... }` placed after the pack's code.
     pub vertex_init_fn: Option<String>,
+    /// Rewritten `bool sunrise_pack_fragment_discard() { ... }` placed after the pack's code.
+    pub fragment_discard_fn: Option<String>,
     /// Mod set 6/7 combined samplers so `Stage::rewrite` also splits calls inside pack code.
     pub extra_samplers: Vec<Sampler>,
     /// Pack `v.attributes` names shadowed by a matching-type `VertexInput` from the prelude.
@@ -673,6 +696,8 @@ impl ParsedStagePrelude {
 
         let mut items = Vec::new();
         let mut init_defs = 0usize;
+        let mut discard_defs = 0usize;
+        let mut has_discard_proto = false;
         let mut uses_frag_coord = false;
         let mut writes_texcoord1 = false;
         let mut writes_texcoord2 = false;
@@ -840,19 +865,31 @@ impl ParsedStagePrelude {
                 }
 
                 // Function definition.
-                let (fn_name, is_vertex_init) = parse_function_header(&rest, stage, label, true)?;
-                if is_vertex_init {
-                    init_defs += 1;
-                    if init_defs > 1 {
-                        return Err(PreludeError::InvalidVertexInit {
-                            stage: label,
-                            reason: "may be defined only once".to_owned(),
-                        });
+                let (fn_name, role) = parse_function_header(&rest, stage, label)?;
+                match role {
+                    PreludeFnRole::VertexInit => {
+                        init_defs += 1;
+                        if init_defs > 1 {
+                            return Err(PreludeError::InvalidVertexInit {
+                                stage: label,
+                                reason: "may be defined only once".to_owned(),
+                            });
+                        }
                     }
+                    PreludeFnRole::FragmentDiscard => {
+                        discard_defs += 1;
+                        if discard_defs > 1 {
+                            return Err(PreludeError::InvalidFragmentDiscard {
+                                stage: label,
+                                reason: "may be defined only once".to_owned(),
+                            });
+                        }
+                    }
+                    PreludeFnRole::Helper => {}
                 }
                 items.push(PreludeItem::Function {
                     name: fn_name,
-                    is_vertex_init,
+                    role,
                     raw: item.concat(),
                 });
                 continue;
@@ -878,10 +915,13 @@ impl ParsedStagePrelude {
                     .iter()
                     .any(|w| STORAGE.contains(w));
             if is_proto {
-                let (fn_name, is_vertex_init) = parse_function_header(&rest, stage, label, false)?;
+                let (fn_name, role) = parse_function_header(&rest, stage, label)?;
+                if role == PreludeFnRole::FragmentDiscard {
+                    has_discard_proto = true;
+                }
                 items.push(PreludeItem::Function {
                     name: fn_name,
-                    is_vertex_init,
+                    role,
                     raw: item.concat(),
                 });
                 continue;
@@ -1122,10 +1162,17 @@ impl ParsedStagePrelude {
         if stage == ShaderStage::Vertex && init_defs == 0 {
             return Err(PreludeError::MissingVertexInit);
         }
+        if stage == ShaderStage::Fragment && has_discard_proto && discard_defs == 0 {
+            return Err(PreludeError::InvalidFragmentDiscard {
+                stage: label,
+                reason: "was declared without a definition".to_owned(),
+            });
+        }
 
         Ok(Self {
             stage,
             items,
+            has_fragment_discard: discard_defs > 0,
             uses_frag_coord,
             writes_texcoord1,
             writes_texcoord2,
@@ -1321,6 +1368,12 @@ impl ParsedStagePrelude {
             body.push_str(
                 "void main() { hz_vertex_index = gl_VertexIndex; sunrise_pack_vertex_init(); gl_Position = vec4(0.0); }\n",
             );
+        } else if self.has_fragment_discard {
+            writeln!(
+                body,
+                "void main() {{ bool hz_prelude_discard = {FRAGMENT_DISCARD_FN}(); if (hz_prelude_discard) {{ discard; }} }}"
+            )
+            .unwrap();
         } else {
             body.push_str("void main() {}\n");
         }
@@ -1373,6 +1426,7 @@ impl ParsedStagePrelude {
         let mut other_decls: Vec<String> = Vec::new();
         let mut helper_fns: Vec<String> = Vec::new();
         let mut vertex_init_raw: Option<String> = None;
+        let mut fragment_discard_raw: Option<String> = None;
 
         // First collect all prelude-declared combined samplers (pack samplers + mod set-6/7
         // combined samplers) so function bodies can rewrite every sampler call consistently.
@@ -1647,11 +1701,7 @@ impl ParsedStagePrelude {
                         ));
                     }
                 }
-                PreludeItem::Function {
-                    name,
-                    is_vertex_init,
-                    raw,
-                } => {
+                PreludeItem::Function { name, role, raw } => {
                     if pack_decl_of(stage, name).is_some() {
                         errors.push(Error::new(
                             stage_file,
@@ -1662,16 +1712,26 @@ impl ParsedStagePrelude {
                         ));
                         continue;
                     }
-                    if *is_vertex_init {
-                        // Keep prototypes out of `vertex_init_raw`, store the definition for
-                        // placement after the pack's rewritten code.
-                        if raw.contains('{') {
-                            vertex_init_raw = Some(raw.clone());
-                        } else {
+                    match role {
+                        PreludeFnRole::VertexInit => {
+                            // Keep prototypes out of `vertex_init_raw`, store the definition for
+                            // placement after the pack's rewritten code.
+                            if raw.contains('{') {
+                                vertex_init_raw = Some(raw.clone());
+                            } else {
+                                helper_fns.push(raw.clone());
+                            }
+                        }
+                        PreludeFnRole::FragmentDiscard => {
+                            if raw.contains('{') {
+                                fragment_discard_raw = Some(raw.clone());
+                            } else {
+                                helper_fns.push(raw.clone());
+                            }
+                        }
+                        PreludeFnRole::Helper => {
                             helper_fns.push(raw.clone());
                         }
-                    } else {
-                        helper_fns.push(raw.clone());
                     }
                 }
             }
@@ -1720,10 +1780,13 @@ impl ParsedStagePrelude {
 
         let vertex_init_fn = vertex_init_raw
             .map(|raw| rewrite_prelude_code(&raw, self.stage, &combined_samplers, &bool_uniforms));
+        let fragment_discard_fn = fragment_discard_raw
+            .map(|raw| rewrite_prelude_code(&raw, self.stage, &combined_samplers, &bool_uniforms));
 
         MergedStagePrelude {
             header_decls,
             vertex_init_fn,
+            fragment_discard_fn,
             extra_samplers,
             shadowed_pack_attributes,
             uses_frag_coord: self.uses_frag_coord,
@@ -1747,8 +1810,7 @@ fn parse_function_header(
     rest: &[&str],
     stage: ShaderStage,
     label: &'static str,
-    is_definition: bool,
-) -> Result<(String, bool), PreludeError> {
+) -> Result<(String, PreludeFnRole), PreludeError> {
     let open = rest
         .iter()
         .position(|&w| w == "(")
@@ -1808,16 +1870,27 @@ fn parse_function_header(
                 reason: "must have signature `void sunrise_pack_vertex_init()`".to_owned(),
             });
         }
-        if !is_definition {
-            // Allow a forward prototype if it matches the signature; definition count is checked
-            // separately.
-            return Ok((fn_name.to_owned(), true));
+        return Ok((fn_name.to_owned(), PreludeFnRole::VertexInit));
+    }
+
+    if fn_name == FRAGMENT_DISCARD_FN {
+        if stage != ShaderStage::Fragment {
+            return Err(PreludeError::InvalidFragmentDiscard {
+                stage: label,
+                reason: "is only allowed in `fragment_prelude`, not `vertex_prelude`".to_owned(),
+            });
         }
-        return Ok((fn_name.to_owned(), true));
+        if return_ty != "bool" || param_count != 0 {
+            return Err(PreludeError::InvalidFragmentDiscard {
+                stage: label,
+                reason: format!("must have signature `bool {FRAGMENT_DISCARD_FN}()`"),
+            });
+        }
+        return Ok((fn_name.to_owned(), PreludeFnRole::FragmentDiscard));
     }
 
     check_ident(fn_name, label)?;
-    Ok((fn_name.to_owned(), false))
+    Ok((fn_name.to_owned(), PreludeFnRole::Helper))
 }
 
 struct Declarator {
@@ -2519,5 +2592,476 @@ mod tests {
             "expected geometry-stage note: {:?}",
             post.notes
         );
+    }
+
+    fn stmt_contains_kill(stmt: &naga::Statement) -> bool {
+        match stmt {
+            naga::Statement::Kill => true,
+            naga::Statement::Block(b) => block_contains_kill(b),
+            naga::Statement::If { accept, reject, .. } => {
+                block_contains_kill(accept) || block_contains_kill(reject)
+            }
+            naga::Statement::Switch { cases, .. } => {
+                cases.iter().any(|c| block_contains_kill(&c.body))
+            }
+            naga::Statement::Loop {
+                body, continuing, ..
+            } => block_contains_kill(body) || block_contains_kill(continuing),
+            _ => false,
+        }
+    }
+
+    fn block_contains_kill(block: &naga::Block) -> bool {
+        block.iter().any(stmt_contains_kill)
+    }
+
+    fn wrapper_main(module: &naga::Module) -> &naga::Function {
+        module
+            .functions
+            .iter()
+            .map(|(_, f)| f)
+            .chain([&module.entry_points[0].function])
+            .find(|f| {
+                f.body.iter().any(|s| match *s {
+                    naga::Statement::Call { function, .. } => {
+                        module.functions[function].name.as_deref() == Some("hz_main")
+                    }
+                    _ => false,
+                })
+            })
+            .expect("wrapper main calling hz_main")
+    }
+
+    #[test]
+    fn fragment_discard_calls_before_pack_main_and_discards_after_alpha_test() {
+        let (v, f) = make_pack(
+            "#version 150\nvoid main() { gl_Position = gl_Vertex; }\n",
+            "#version 150\n/* DRAWBUFFERS:0 */\nvoid main() { gl_FragData[0] = vec4(1.0, 0.0, 0.0, 0.75); }\n",
+        );
+        let alpha = Some(crate::AlphaTest {
+            op: ">",
+            reference: 0.5,
+        });
+        let base_vertex = Some("void sunrise_pack_vertex_init() {}\n".to_owned());
+
+        // Control: a fragment prelude without `sunrise_pack_fragment_discard` leaves the wrapper
+        // identical in structure to no fragment prelude (only the alpha-test discard after
+        // `hz_main`, no discard entry call).
+        for fragment in [
+            None,
+            Some("float customBias() { return 0.5; }\n".to_owned()),
+        ] {
+            let inputs = GbuffersInputs {
+                alpha_test: alpha,
+                prelude: Some(PackPrelude {
+                    vertex: base_vertex.clone(),
+                    fragment,
+                }),
+                ..Default::default()
+            };
+            let prog = translate_gbuffers(
+                &v,
+                &f,
+                Target::Buffers,
+                &inputs,
+                crate::DEVICELESS_INTERFACE_LIMITS,
+            )
+            .expect("control translation");
+            let main_fn = wrapper_main(&prog.fragment);
+            let has_discard_call = main_fn.body.iter().any(|s| match *s {
+                naga::Statement::Call { function, .. } => {
+                    prog.fragment.functions[function].name.as_deref() == Some(FRAGMENT_DISCARD_FN)
+                }
+                _ => false,
+            });
+            assert!(
+                !has_discard_call,
+                "control must not call {FRAGMENT_DISCARD_FN}"
+            );
+            let hz_main_idx = main_fn
+                .body
+                .iter()
+                .position(|s| match *s {
+                    naga::Statement::Call { function, .. } => {
+                        prog.fragment.functions[function].name.as_deref() == Some("hz_main")
+                    }
+                    _ => false,
+                })
+                .expect("hz_main call");
+            let kill_positions: Vec<usize> = main_fn
+                .body
+                .iter()
+                .enumerate()
+                .filter_map(|(i, s)| stmt_contains_kill(s).then_some(i))
+                .collect();
+            assert_eq!(kill_positions.len(), 1, "only alpha test should discard");
+            assert!(hz_main_idx < kill_positions[0]);
+        }
+
+        // With `bool sunrise_pack_fragment_discard()` reading `gl_FragCoord` and a mod set-1
+        // texture: `hz_FragCoord` is initialized first, then `sunrise_pack_fragment_discard()`
+        // runs before `hz_main()`, then the alpha test, then the prelude `discard` last.
+        let inputs = GbuffersInputs {
+            alpha_test: alpha,
+            prelude: Some(PackPrelude {
+                vertex: base_vertex,
+                fragment: Some(
+                    "layout(set = 1, binding = 1) uniform sampler2D coverageDepth;\n\
+                     bool sunrise_pack_fragment_discard() {\n\
+                         ivec2 sz = textureSize(coverageDepth, 0);\n\
+                         ivec2 px = ivec2(int(gl_FragCoord.x), sz.y - 1 - int(gl_FragCoord.y));\n\
+                         return (1.0 - gl_FragCoord.z) < texelFetch(coverageDepth, px, 0).r;\n\
+                     }\n"
+                    .to_owned(),
+                ),
+            }),
+            ..Default::default()
+        };
+        let prog = translate_gbuffers(
+            &v,
+            &f,
+            Target::Buffers,
+            &inputs,
+            crate::DEVICELESS_INTERFACE_LIMITS,
+        )
+        .expect("prelude with sunrise_pack_fragment_discard translates");
+        let main_fn = wrapper_main(&prog.fragment);
+        let (frag_coord_handle, _) = prog
+            .fragment
+            .global_variables
+            .iter()
+            .find(|(_, g)| g.name.as_deref() == Some("hz_FragCoord"))
+            .expect("hz_FragCoord global");
+        let frag_coord_store_idx = main_fn
+            .body
+            .iter()
+            .position(|s| match *s {
+                naga::Statement::Store { pointer, .. } => matches!(
+                    main_fn.expressions[pointer],
+                    naga::Expression::GlobalVariable(h) if h == frag_coord_handle
+                ),
+                _ => false,
+            })
+            .expect("hz_FragCoord store before discard call");
+        let discard_call_idx = main_fn
+            .body
+            .iter()
+            .position(|s| match *s {
+                naga::Statement::Call { function, .. } => {
+                    prog.fragment.functions[function].name.as_deref() == Some(FRAGMENT_DISCARD_FN)
+                }
+                _ => false,
+            })
+            .expect("sunrise_pack_fragment_discard call");
+        let hz_main_idx = main_fn
+            .body
+            .iter()
+            .position(|s| match *s {
+                naga::Statement::Call { function, .. } => {
+                    prog.fragment.functions[function].name.as_deref() == Some("hz_main")
+                }
+                _ => false,
+            })
+            .expect("hz_main call");
+        let kill_positions: Vec<usize> = main_fn
+            .body
+            .iter()
+            .enumerate()
+            .filter_map(|(i, s)| stmt_contains_kill(s).then_some(i))
+            .collect();
+        assert_eq!(
+            kill_positions.len(),
+            2,
+            "expected alpha-test discard followed by prelude discard: {kill_positions:?}"
+        );
+        assert!(
+            frag_coord_store_idx < discard_call_idx
+                && discard_call_idx < hz_main_idx
+                && hz_main_idx < kill_positions[0]
+                && kill_positions[0] < kill_positions[1],
+            "expected hz_FragCoord ({frag_coord_store_idx}) < {FRAGMENT_DISCARD_FN} ({discard_call_idx}) < hz_main ({hz_main_idx}) < alpha ({}) < prelude discard ({})",
+            kill_positions[0],
+            kill_positions[1],
+        );
+        assert!(
+            main_fn.body[kill_positions[1] + 1..]
+                .iter()
+                .all(|s| matches!(s, naga::Statement::Return { .. })),
+            "prelude discard must be the last operation in main"
+        );
+    }
+
+    #[test]
+    fn shadow_pass_never_calls_fragment_discard() {
+        let (v, f) = make_pack(
+            "#version 150\nvoid main() { gl_Position = gl_Vertex; }\n",
+            "#version 150\n/* DRAWBUFFERS:0 */\nvoid main() { gl_FragData[0] = vec4(1.0); }\n",
+        );
+        let inputs = GbuffersInputs {
+            prelude: Some(PackPrelude {
+                vertex: Some("void sunrise_pack_vertex_init() {}\n".to_owned()),
+                fragment: Some(
+                    "bool sunrise_pack_fragment_discard() { return true; }\n".to_owned(),
+                ),
+            }),
+            ..Default::default()
+        };
+        let prog = crate::translate_shadow(&v, &f, &inputs, crate::DEVICELESS_INTERFACE_LIMITS)
+            .expect("shadow pass translates");
+        let main_fn = wrapper_main(&prog.fragment);
+        let calls_discard = main_fn.body.iter().any(|s| match *s {
+            naga::Statement::Call { function, .. } => {
+                prog.fragment.functions[function].name.as_deref() == Some(FRAGMENT_DISCARD_FN)
+            }
+            _ => false,
+        });
+        assert!(
+            !calls_discard,
+            "shadow pass must never call {FRAGMENT_DISCARD_FN}"
+        );
+        let has_kill = prog
+            .fragment
+            .functions
+            .iter()
+            .map(|(_, f)| f)
+            .chain([&prog.fragment.entry_points[0].function])
+            .any(|f| block_contains_kill(&f.body));
+        assert!(!has_kill, "shadow pass must not inject prelude discard");
+    }
+
+    #[test]
+    fn refuses_invalid_fragment_discard_signatures_stages_and_reserved_uses() {
+        let valid = PackPrelude {
+            vertex: None,
+            fragment: Some(
+                "layout(set = 1, binding = 1) uniform sampler2D cov;\n\
+                 bool sunrise_pack_fragment_discard() {\n\
+                     return texelFetch(cov, ivec2(gl_FragCoord.xy), 0).r > (1.0 - gl_FragCoord.z);\n\
+                 }\n"
+                .to_owned(),
+            ),
+        };
+        validate_pack_prelude(&valid, &default_layout()).expect("valid fragment discard");
+
+        let valid_with_proto = PackPrelude {
+            vertex: None,
+            fragment: Some(
+                "bool sunrise_pack_fragment_discard();\n\
+                 bool sunrise_pack_fragment_discard() { return false; }\n"
+                    .to_owned(),
+            ),
+        };
+        validate_pack_prelude(&valid_with_proto, &default_layout())
+            .expect("prototype plus definition");
+
+        for bad_frag in [
+            "void sunrise_pack_fragment_discard() {}\n",
+            "int sunrise_pack_fragment_discard() { return 0; }\n",
+            "bool sunrise_pack_fragment_discard(float z) { return z > 0.5; }\n",
+            "bool sunrise_pack_fragment_discard() { return false; }\n\
+             bool sunrise_pack_fragment_discard() { return true; }\n",
+            "bool sunrise_pack_fragment_discard();\n",
+        ] {
+            let prelude = PackPrelude {
+                vertex: None,
+                fragment: Some(bad_frag.to_owned()),
+            };
+            assert!(
+                matches!(
+                    validate_pack_prelude(&prelude, &default_layout()),
+                    Err(PreludeError::InvalidFragmentDiscard {
+                        stage: "fragment",
+                        ..
+                    })
+                ),
+                "expected InvalidFragmentDiscard for `{bad_frag}`"
+            );
+        }
+
+        let in_vertex = PackPrelude {
+            vertex: Some(
+                "void sunrise_pack_vertex_init() {}\n\
+                 bool sunrise_pack_fragment_discard() { return false; }\n"
+                    .to_owned(),
+            ),
+            fragment: None,
+        };
+        assert!(matches!(
+            validate_pack_prelude(&in_vertex, &default_layout()),
+            Err(PreludeError::InvalidFragmentDiscard {
+                stage: "vertex",
+                ..
+            })
+        ));
+
+        for bad_reserved in [
+            "bool sunrise_pack_fragment_discard;\n",
+            "uniform float sunrise_pack_fragment_discard;\n",
+            "struct sunrise_pack_fragment_discard { float x; };\n",
+            "in float sunrise_pack_fragment_discard;\n",
+        ] {
+            let prelude = PackPrelude {
+                vertex: None,
+                fragment: Some(bad_reserved.to_owned()),
+            };
+            assert!(
+                matches!(
+                    validate_pack_prelude(&prelude, &default_layout()),
+                    Err(PreludeError::ReservedIdentifier {
+                        stage: "fragment",
+                        ref name,
+                        ..
+                    }) if name == FRAGMENT_DISCARD_FN
+                ),
+                "expected ReservedIdentifier for `{bad_reserved}`"
+            );
+        }
+    }
+
+    #[test]
+    fn pack_collision_storage_write_or_early_depth_under_fragment_discard_is_unbound_once() {
+        use std::io::{Cursor, Write};
+
+        let cases = [
+            (
+                "pack declares sunrise_pack_fragment_discard",
+                "#version 150\n/* DRAWBUFFERS:0 */\n\
+                 bool sunrise_pack_fragment_discard() { return false; }\n\
+                 void main() { gl_FragData[0] = vec4(sunrise_pack_fragment_discard() ? 0.0 : 1.0); }\n",
+                FRAGMENT_DISCARD_FN,
+                false,
+            ),
+            (
+                "pack fragment writes storage image",
+                "#version 420\n/* DRAWBUFFERS:0 */\n\
+                 layout(rgba16f) uniform writeonly image2D colorimg4;\n\
+                 void main() { imageStore(colorimg4, ivec2(0), vec4(1.0)); gl_FragData[0] = vec4(1.0); }\n",
+                "writes storage",
+                true,
+            ),
+            (
+                "pack fragment writes storage buffer",
+                "#version 430\n/* DRAWBUFFERS:0 */\n\
+                 layout(std430, binding = 0) buffer OutBuf { uint data[]; };\n\
+                 void main() { data[0] = 1u; gl_FragData[0] = vec4(1.0); }\n",
+                "writes storage",
+                true,
+            ),
+            (
+                "pack fragment declares early_fragment_tests",
+                "#version 420\n/* DRAWBUFFERS:0 */\n\
+                 layout(early_fragment_tests) in;\n\
+                 void main() { gl_FragData[0] = vec4(1.0); }\n",
+                "early_fragment_tests",
+                true,
+            ),
+        ];
+
+        for (case_name, dh_fsh, expected_note, control_should_bind) in cases {
+            let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
+            let opts = zip::write::SimpleFileOptions::default();
+            for (path, body) in [
+                ("shaders/shaders.properties", "bufferObject.0 = 64\n"),
+                (
+                    "shaders/dh_terrain.vsh",
+                    "#version 150\nvoid main() { gl_Position = gl_Vertex; }\n",
+                ),
+                ("shaders/dh_terrain.fsh", dh_fsh),
+                (
+                    "shaders/gbuffers_terrain.vsh",
+                    "#version 150\nvoid main() { gl_Position = gl_Vertex; }\n",
+                ),
+                (
+                    "shaders/gbuffers_terrain.fsh",
+                    "#version 150\n/* DRAWBUFFERS:0 */\nvoid main() { gl_FragData[0] = vec4(1.0); }\n",
+                ),
+                (
+                    "shaders/final.vsh",
+                    "#version 120\nvoid main() { gl_Position = gl_Vertex; }\n",
+                ),
+                (
+                    "shaders/final.fsh",
+                    "#version 120\nvoid main() { gl_FragColor = vec4(1.0); }\n",
+                ),
+            ] {
+                zip.start_file(path, opts).unwrap();
+                zip.write_all(body.as_bytes()).unwrap();
+            }
+            let pack = Pack::from_zip_bytes(
+                "fragment-discard-refusal-test",
+                zip.finish().unwrap().into_inner(),
+            )
+            .unwrap();
+            let mut macros = Macros::standard();
+            let (props, _) = crate::read_properties(&pack, &mut macros);
+
+            // With `sunrise_pack_fragment_discard()`: slot 0 is unbound (no fallback to
+            // `gbuffers_terrain`), logged once, and the pack itself still loads `final`.
+            let inputs = crate::GameInputs {
+                mod_programs: vec![crate::ModPackProgramRequest {
+                    slot: 0,
+                    programs: vec!["dh_terrain".into(), "gbuffers_terrain".into()],
+                    group: crate::Group::Gbuffers,
+                    default_blend: None,
+                    inputs: GbuffersInputs {
+                        prelude: Some(PackPrelude {
+                            vertex: Some("void sunrise_pack_vertex_init() {}\n".to_owned()),
+                            fragment: Some(
+                                "bool sunrise_pack_fragment_discard() { return false; }\n"
+                                    .to_owned(),
+                            ),
+                        }),
+                        ..Default::default()
+                    },
+                }],
+                ..Default::default()
+            };
+            let post = crate::load_post(&pack, "", &props, &macros, &inputs);
+            assert!(
+                post.mod_programs[0].program.is_none(),
+                "{case_name}: mod pipeline must be left unbound without fallback"
+            );
+            assert!(
+                post.programs.iter().any(|p| p.name == "final"),
+                "{case_name}: pack itself must stay loaded"
+            );
+            let matching_notes = post
+                .notes
+                .iter()
+                .filter(|n| n.contains(FRAGMENT_DISCARD_FN) && n.contains(expected_note))
+                .count();
+            assert_eq!(
+                matching_notes, 1,
+                "{case_name}: expected exactly one diagnostic naming `{expected_note}`: {:?}",
+                post.notes
+            );
+
+            // Without `sunrise_pack_fragment_discard()`: pack shaders using storage writes or
+            // `early_fragment_tests` continue to bind normally.
+            if control_should_bind {
+                let control_inputs = crate::GameInputs {
+                    mod_programs: vec![crate::ModPackProgramRequest {
+                        slot: 0,
+                        programs: vec!["dh_terrain".into()],
+                        group: crate::Group::Gbuffers,
+                        default_blend: None,
+                        inputs: GbuffersInputs {
+                            prelude: Some(PackPrelude {
+                                vertex: Some("void sunrise_pack_vertex_init() {}\n".to_owned()),
+                                fragment: None,
+                            }),
+                            ..Default::default()
+                        },
+                    }],
+                    ..Default::default()
+                };
+                let control = crate::load_post(&pack, "", &props, &macros, &control_inputs);
+                assert!(
+                    control.mod_programs[0].program.is_some(),
+                    "{case_name}: without {FRAGMENT_DISCARD_FN}, pack program must still bind: {:?}",
+                    control.notes
+                );
+            }
+        }
     }
 }

@@ -290,6 +290,9 @@ pub fn reserved_prelude_identifier(name: &str) -> Option<&'static str> {
     if name == "main" {
         return Some("reserved shader entry point");
     }
+    if name == crate::VERTEX_INIT_FN || name == crate::FRAGMENT_DISCARD_FN {
+        return Some("reserved shader-pack prelude entry point");
+    }
     None
 }
 
@@ -312,6 +315,8 @@ mod tests {
         assert!(reserved_prelude_identifier("HzUniforms").is_some());
         assert!(reserved_prelude_identifier("sunrisePatchPos").is_some());
         assert!(reserved_prelude_identifier("main").is_some());
+        assert!(reserved_prelude_identifier("sunrise_pack_vertex_init").is_some());
+        assert!(reserved_prelude_identifier("sunrise_pack_fragment_discard").is_some());
 
         // Pack-declared attributes and mod-owned identifiers remain free to declare.
         assert!(reserved_prelude_identifier("mc_Entity").is_none());

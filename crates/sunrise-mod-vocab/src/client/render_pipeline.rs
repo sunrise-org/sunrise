@@ -713,6 +713,19 @@ pub struct PackBinding {
     /// (`layout(set = 0, binding = N)` / `layout(set = 1, binding = N)`), loose pack
     /// uniforms/samplers, constants, and helper functions. Must not define
     /// `sunrise_pack_vertex_init`.
+    ///
+    /// May optionally define one `bool sunrise_pack_fragment_discard()`. In non-shadow passes, the
+    /// translated pack fragment `main` calls it before the pack's `main` and keeps the boolean
+    /// answer; the pack's `main` then runs whole and unchanged, followed by output copies and the
+    /// alpha test; last, if the answer was `true`, the fragment is discarded. Because the function
+    /// runs before the pack's `main`, any `gl_FragDepth` written by the pack does not feed it.
+    /// Inside a pack program, `gl_FragCoord` uses standard-Z (`[0, 1]`, near = `0`, far = `1`) and
+    /// GL rows (`y = 0.5` at the bottom), so a prelude comparing against a reversed-Z, top-down
+    /// texture performs its own `1.0 - gl_FragCoord.z` and row flip. The engine never calls
+    /// `sunrise_pack_fragment_discard()` in [`PackPassSlot::Shadow`]. If the prelude defines it
+    /// and the matched pack fragment shader writes storage images/buffers or declares
+    /// `early_fragment_tests`, this mod pipeline is left unbound (logged once) without rejecting
+    /// the pack.
     pub fragment_prelude: Option<String>,
 }
 

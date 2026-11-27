@@ -72,10 +72,10 @@ pub use textures::{
     decode_png, load_textures, resolve_resources,
 };
 pub use translate::{
-    AlphaTest, ComputeProgram, DRAW_UNIFORMS, Error, GbuffersInputs, GeometryInputs, Image,
-    Interface, MOD_SET_BASE, PackPrelude, Parts, PreludeBinding, PreludeError, PreludeImageAccess,
-    PreludeLayout, PreludeResourceKind, PreludeStages, PreludeVertexInput, Program, Sampler,
-    Target, Uniform, VERTEX_INIT_FN, WATER_MASK, WATER_PATCHES, translate_composite,
-    translate_compute, translate_gbuffers, translate_geometry, translate_shadow,
-    validate_pack_prelude,
+    AlphaTest, ComputeProgram, DRAW_UNIFORMS, Error, FRAGMENT_DISCARD_FN, GbuffersInputs,
+    GeometryInputs, Image, Interface, MOD_SET_BASE, PackPrelude, Parts, PreludeBinding,
+    PreludeError, PreludeImageAccess, PreludeLayout, PreludeResourceKind, PreludeStages,
+    PreludeVertexInput, Program, Sampler, Target, Uniform, VERTEX_INIT_FN, WATER_MASK,
+    WATER_PATCHES, translate_composite, translate_compute, translate_gbuffers, translate_geometry,
+    translate_shadow, validate_pack_prelude,
 };
