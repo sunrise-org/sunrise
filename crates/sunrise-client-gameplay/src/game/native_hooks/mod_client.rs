@@ -2086,6 +2086,10 @@ impl crate::game::ClientGame<'_> {
             self.client.settings.mods.installed.push(row);
         }
     }
+    #[cfg(feature = "test-support")]
+    pub fn test_list_native_mods(&mut self) {
+        self.list_native_mods();
+    }
     /// The settings a mod registered, with values from the live client store.
     pub(in crate::game) fn native_page_settings(&self, mod_id: &str) -> Vec<NativeSetting> {
         mod_api::__private::settings()

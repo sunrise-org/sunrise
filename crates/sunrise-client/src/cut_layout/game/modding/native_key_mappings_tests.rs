@@ -51,6 +51,26 @@ fn heard() -> Vec<String> {
     std::mem::take(&mut *HEARD.lock().unwrap())
 }
 
+fn options_click(
+    game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
+    (width, height): (f32, f32),
+    x: f32,
+    y: f32,
+) -> Vec<sunrise_client::options_ui::Event> {
+    let events = game.client.chat_ui.options.click(
+        &mut game.client.settings,
+        &game.client.gui.atlas,
+        x,
+        y,
+        (width, height),
+        [(width * 2.0) as i32, (height * 2.0) as i32],
+        false,
+        false,
+    );
+    game.handle_option_events(events.clone()).unwrap();
+    events
+}
+
 #[test]
 #[ignore = "daily"]
 fn a_control_socket_key_counts_as_a_window_key() {
@@ -272,6 +292,39 @@ fn a_mod_rebinds_and_resets_its_own_mapping() {
         with_client_game(|game| {
             game.apply_settings();
             game.set_screen(Screen::Playing);
+            game.client.settings.mods.installed = vec![sunrise_mod_package::mod_list::Installed {
+                id: "keys".into(),
+                title: "Keys".into(),
+                description: String::new(),
+                problem: None,
+                dev: false,
+                native: None,
+            }];
+            game.test_list_native_mods();
+            let native_page = game.client.settings.mods.installed[0]
+                .native
+                .as_ref()
+                .unwrap();
+            assert_eq!(native_page.mappings.len(), 3);
+            assert!(native_page.settings.is_empty());
+
+            // Open the generated Config page through Options > Mods after filtering to the
+            // registered fixture mod. It has key mappings only and no settings.
+            let mods_size = (427.0, 240.0);
+            game.open_options_at(false, sunrise_client::options_ui::Page::Mods);
+            options_click(game, mods_size, 50.0, 16.0);
+            game.client
+                .chat_ui
+                .options
+                .type_text(&game.client.gui.atlas, "keys");
+            options_click(game, mods_size, 30.0, 46.0);
+            let config_events = options_click(game, mods_size, 375.0, 192.0);
+            assert!(config_events.contains(&sunrise_client::options_ui::Event::NativeSettings(0)));
+            assert_eq!(
+                game.client.chat_ui.options.page(),
+                sunrise_client::options_ui::Page::NativeMod(0)
+            );
+
             let zoom = ClientInputClientHost::mod_key_mapping(game, "keys", "zoom").unwrap();
             let boost = ClientInputClientHost::mod_key_mapping(game, "keys", "boost").unwrap();
             let grab = ClientInputClientHost::mod_key_mapping(game, "keys", "grab").unwrap();
@@ -314,7 +367,8 @@ fn a_mod_rebinds_and_resets_its_own_mapping() {
 
             // Reset: the declared default is back, Z counts again, and the saved list holds no
             // binding of it any more (the default answers).
-            assert_eq!(zoom.reset_binding(game), Ok(()));
+            let reset_events = options_click(game, (480.0, 270.0), 282.5, 99.0);
+            assert!(reset_events.contains(&sunrise_client::options_ui::Event::Changed));
             assert_eq!(
                 zoom.binding(game),
                 Ok(("key.keyboard.z", ClientModifiers::default()))
@@ -325,6 +379,21 @@ fn a_mod_rebinds_and_resets_its_own_mapping() {
             );
             line(game, "key z tap");
             assert!(zoom.consume_click(game).unwrap());
+            assert_eq!(saved("zoom"), ("default".to_owned(), 99));
+
+            // A Host rebind and reset while Config stays open update the cached Reset state.
+            assert_eq!(
+                zoom.set_binding(game, "key.keyboard.x", ClientModifiers::default()),
+                Ok(())
+            );
+            assert_eq!(saved("zoom"), ("key.keyboard.x".to_owned(), 0));
+            assert_eq!(zoom.reset_binding(game), Ok(()));
+            let reset_events = options_click(game, (480.0, 270.0), 282.5, 99.0);
+            assert!(!reset_events.contains(&sunrise_client::options_ui::Event::Changed));
+            assert_eq!(
+                zoom.binding(game),
+                Ok(("key.keyboard.z", ClientModifiers::default()))
+            );
             assert_eq!(saved("zoom"), ("default".to_owned(), 99));
 
             // Refusals change nothing, in the game or in the saved list.

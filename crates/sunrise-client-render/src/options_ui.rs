@@ -6125,7 +6125,7 @@ mod tests {
                 mappings: vec![KeyMapping {
                     id: "zoom".into(),
                     label: "key.zoom".into(),
-                    key: "key.keyboard.w".into(),
+                    key: "key.keyboard.x".into(),
                     context: KeyConflictContext::Universal,
                     ..Default::default()
                 }],
@@ -6133,6 +6133,14 @@ mod tests {
             }),
         });
         let mapping = settings.mods.installed[0].native.as_ref().unwrap().mappings[0].clone();
+        let (_, _, _, conflict) = mod_key_presentation(&settings, "sample", &mapping, false);
+        assert!(
+            !conflict.plain().starts_with("[ "),
+            "default pairs do not conflict"
+        );
+        settings
+            .mods
+            .set_binding("sample", "zoom", "key.keyboard.w", 0);
         let (_, _, _, conflict) = mod_key_presentation(&settings, "sample", &mapping, false);
         assert!(conflict.plain().starts_with("[ "));
         let (_, _, _, capturing) = mod_key_presentation(&settings, "sample", &mapping, true);
