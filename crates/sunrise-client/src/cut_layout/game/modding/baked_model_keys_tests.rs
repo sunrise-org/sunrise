@@ -1,5 +1,6 @@
 //! A client mod borrows a block state's baked variants and quads in `model_baking_completed`.
 //! It keeps keys, and a reload supersedes them.
+#![cfg(feature = "client")]
 use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use mod_api::{
     AtlasSpriteError, BakedModelKey, ClientHost, Hooks, ModEntry, ModelBakingCompletedEvent,

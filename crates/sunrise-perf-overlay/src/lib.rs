@@ -256,3 +256,96 @@ impl Page for Section {
         ))
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    struct MockCanvas {
+        fills: Vec<(f32, f32, f32, f32, u32)>,
+        texts: Vec<String>,
+    }
+
+    impl MockCanvas {
+        fn new() -> Self {
+            Self {
+                fills: Vec::new(),
+                texts: Vec::new(),
+            }
+        }
+    }
+
+    impl Canvas for MockCanvas {
+        fn size(&self) -> (f32, f32) {
+            (800.0, 600.0)
+        }
+        fn text_width(&self, text: &str) -> f32 {
+            text.len() as f32 * 6.0
+        }
+        fn fill(&mut self, x: f32, y: f32, w: f32, h: f32, color: u32) {
+            self.fills.push((x, y, w, h, color));
+        }
+        fn text(&mut self, _x: f32, _y: f32, text: &str, _color: u32, _shadow: bool) {
+            self.texts.push(text.to_owned());
+        }
+        fn tr(&self, key: &str) -> String {
+            key.to_owned()
+        }
+        fn place(
+            &mut self,
+            _corner: sunrise_platform::hud::Corner,
+            _w: f32,
+            _h: f32,
+        ) -> Option<(f32, f32)> {
+            None
+        }
+    }
+
+    #[test]
+    fn frame_graph_records_and_evicts_past_history() {
+        let mut graph = FrameGraph::default();
+        for i in 0..(HISTORY + 10) {
+            graph.record(i as f32, 1.0, if i == 0 { Some(4.0) } else { None });
+        }
+        assert_eq!(graph.frames.len(), HISTORY);
+        assert_eq!(graph.frames.front().unwrap().0, 10.0);
+        // None gpu_ms reuses previous gpu_ms (4.0)
+        assert_eq!(graph.frames.back().unwrap().2, 4.0);
+    }
+
+    #[test]
+    fn draw_off_or_empty_is_noop() {
+        let mut graph = FrameGraph::default();
+        let mut canvas = MockCanvas::new();
+        graph.draw(Overlay::Fps, &mut canvas);
+        assert!(canvas.fills.is_empty());
+        assert!(canvas.texts.is_empty());
+
+        graph.record(16.6, 5.0, Some(8.0));
+        graph.draw(Overlay::Off, &mut canvas);
+        assert!(canvas.fills.is_empty());
+        assert!(canvas.texts.is_empty());
+    }
+
+    #[test]
+    fn draw_fps_and_graph_modes() {
+        let mut graph = FrameGraph {
+            dynamic_scale: Some(75),
+            ..Default::default()
+        };
+        graph.record(10.0, 4.0, Some(6.0));
+        graph.record(20.0, 8.0, Some(12.0));
+
+        let mut fps = MockCanvas::new();
+        graph.draw(Overlay::Fps, &mut fps);
+        assert_eq!(fps.fills.len(), 1);
+        assert_eq!(fps.texts.len(), 3);
+        assert!(fps.texts[0].contains("res 75%"));
+
+        let mut full = MockCanvas::new();
+        graph.draw(Overlay::Graph, &mut full);
+        // 1 background + 2*(frame+cpu bars) + 2 target lines = 7 fills
+        assert_eq!(full.fills.len(), 7);
+        assert_eq!(full.texts.len(), 3);
+    }
+}

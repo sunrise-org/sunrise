@@ -330,6 +330,9 @@ mod normalized_image_tests;
 mod work_group_fold_tests;
 
 #[cfg(test)]
+mod indirect_dispatch_tests;
+
+#[cfg(test)]
 mod forced_flip_tests;
 
 #[cfg(test)]
@@ -361,6 +364,9 @@ mod translucent_color_tests;
 
 #[cfg(test)]
 mod water_blend_tests;
+
+#[cfg(test)]
+mod per_buffer_blending_tests;
 
 #[cfg(test)]
 mod noise_resolution_tests;

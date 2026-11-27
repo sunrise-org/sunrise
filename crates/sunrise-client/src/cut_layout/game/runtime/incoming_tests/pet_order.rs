@@ -1,6 +1,7 @@
 //! `Wolf.mobInteract` for the owner of a tame wolf (#12939): an item of
 //! `#wolf_collar_dyes` only ever dyes the collar, so one of the colour the collar
 //! already has does nothing, while another item still makes it sit or stand.
+#![cfg(feature = "client")]
 use super::*;
 
 pub(crate) const WOLF: u32 = 50;

@@ -275,7 +275,8 @@ pub struct Renderer {
     pub(crate) lightmap_view: wgpu::TextureView,
     pub(crate) lightmap_sampler: wgpu::Sampler,
     pub(crate) animations: animate::SpriteAnimator,
-    pub(crate) material_animations: Vec<SpriteAnimation>,
+    /// The animations with LabPBR maps, and which of their frames `pbr_maps` holds.
+    pub(crate) material_animations: material_animation::MaterialAnimations,
     pub(crate) active_animated_layers: Vec<u64>,
     pub(crate) uploads: upload::Uploads,
     /// Section meshes are staged through their own belt into

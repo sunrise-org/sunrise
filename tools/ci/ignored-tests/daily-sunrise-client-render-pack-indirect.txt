@@ -1,0 +1,6 @@
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+# A shaders/ pack's indirect.<pass> compute dispatches on the GPU (#340).
+sunrise-client-render gfx::pack_post::indirect_dispatch_tests::a_dispatch_runs_the_counts_an_earlier_pass_wrote_at_the_offset lib daily gpu
+sunrise-client-render gfx::pack_post::indirect_dispatch_tests::counts_over_the_device_limit_run_nothing lib daily gpu
+sunrise-client-render gfx::pack_post::indirect_dispatch_tests::counts_past_a_relative_buffer_run_nothing_until_it_holds_them lib daily gpu
+sunrise-client-render gfx::pack_post::indirect_dispatch_tests::the_shadow_cache_reruns_a_shader_read_indirectly lib daily gpu

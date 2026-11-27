@@ -2,19 +2,27 @@
 
 #[cfg(test)]
 mod tests {
-    use mod_api::{
-        Hooks, HostSide, LevelTickPreEvent, ModEntry, ServerHost, ServerTickEvent, ServerTickPhase,
-    };
+    #[cfg(feature = "client")]
+    use mod_api::{Hooks, HostSide, LevelTickPreEvent, ServerHost, ServerTickEvent};
+    #[cfg(feature = "client")]
+    use mod_api::{ModEntry, ServerTickPhase};
+    #[cfg(feature = "client")]
     use std::sync::{Arc, Mutex};
+    #[cfg(feature = "client")]
     use std::time::{Duration, Instant};
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_hooks::base::GameHooks;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt4;
+    #[cfg(feature = "client")]
     use {
         crate::game::server_side::native_entity_refs::tests::with_client_game,
         sunrise_gameplay::game::native_entity_refs::tests::with_game,
     };
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_server_has_time_until_its_tick_deadline_passes() {
@@ -28,6 +36,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_client_level_always_has_time() {
@@ -37,7 +46,9 @@ mod tests {
     }
 
     /// What `host.server_has_time()` answered inside each listener the docs name.
+    #[cfg(feature = "client")]
     struct Spare(Arc<Mutex<Vec<(&'static str, bool)>>>);
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Spare {
         fn server_tick(&self, host: &mut dyn ServerHost, _: &mut ServerTickEvent<'_>) {
@@ -56,6 +67,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn the_tick_listeners_see_the_deadline_through_the_host() {

@@ -1,0 +1,15 @@
+ids = [
+    "method:WorldDrawContext::text",
+    "method:WorldDrawContext::text_width",
+    "type:WorldTextOptions",
+    "handle:WorldTextOptions::with_at",
+    "handle:WorldTextOptions::with_color",
+    "handle:WorldTextOptions::with_shadow",
+    "handle:WorldTextOptions::with_glowing",
+    "handle:WorldTextOptions::with_outline",
+    "handle:WorldTextOptions::with_background",
+    "handle:WorldTextOptions::with_light",
+    "handle:WorldTextOptions::with_see_through",
+]
+why = "A world draw can draw text under a pose of the mod's own (#6173), as Java mods turn the PoseStack in RenderLevelStageEvent before Font.drawInBatch: WorldDrawContext::text takes a row-major 3x4 pose (as ModelInstance::transform) at a world origin, so a line can be rolled, tilted, laid flat or fixed to a direction, and draws it through BlockEntityDrawContext::text's own glyph path. WorldTextOptions (Default plus builders) carries Font.drawInBatch's colour, shadow, backdrop colour, light and see-through display mode, full-bright glowing text and the ringed outline of glowing sign text (Font.drawInBatch8xOutline). WorldDrawContext::text_width measures a line (Font.width) to centre it. A non-finite origin, pose or start is refused with DrawError::NonFinite."
+migrate = "Nothing to change for native mods: the methods are new, with defaults, and WorldTextOptions is #[non_exhaustive]."

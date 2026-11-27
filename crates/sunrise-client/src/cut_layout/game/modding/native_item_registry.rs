@@ -2,14 +2,21 @@
 
 #[cfg(test)]
 mod tests {
-    use mod_api::{Hooks, Identifier, Item, ItemsEvent, ModEntry, RegistrationContext};
+    #[cfg(feature = "client")]
+    use mod_api::{Hooks, Item, ItemsEvent, RegistrationContext};
+    #[cfg(feature = "client")]
+    use mod_api::{Identifier, ModEntry};
+    #[cfg(feature = "client")]
     use sunrise_protocol::registry::Builtin;
+    #[cfg(feature = "client")]
     use {
         sunrise_gameplay::game::native_entity_refs::tests as fixture,
         sunrise_gameplay_common::game::execution_role::ExecutionRole,
     };
 
+    #[cfg(feature = "client")]
     struct Probe;
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Probe {
         fn items(&self, _: &RegistrationContext, event: &mut ItemsEvent<'_>) {
@@ -21,6 +28,7 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn item_numbers_follow_the_prepared_content_plan_for_api_and_scatter() {

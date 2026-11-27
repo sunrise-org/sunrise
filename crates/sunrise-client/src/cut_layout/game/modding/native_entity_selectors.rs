@@ -7,8 +7,11 @@ mod tests {
         Arc,
         atomic::{AtomicUsize, Ordering},
     };
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1;
-    use sunrise_gameplay_common::game::native_entity_selectors::{SelectorToken, selector_tokens};
+    #[cfg(feature = "client")]
+    use sunrise_gameplay_common::game::native_entity_selectors::SelectorToken;
+    use sunrise_gameplay_common::game::native_entity_selectors::selector_tokens;
 
     #[test]
     fn panicking_selector_base_disables_only_that_selector_and_emits_panic_notice() {
@@ -93,6 +96,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn synced_selector_tokens_survive_client_registry_refresh() {

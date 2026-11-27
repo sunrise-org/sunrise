@@ -1,18 +1,30 @@
 #![cfg(test)]
 #[cfg(test)]
 pub(crate) mod tests {
+    #[cfg(feature = "client")]
     use crate::game::server_side::native_entity_refs::tests::with_client_game;
+    #[cfg(feature = "client")]
     use mod_api::BlockSoundCause::{Break, Dig, Fall, Place, Step};
+    #[cfg(feature = "client")]
     use std::sync::Arc;
+    #[cfg(feature = "client")]
     use sunrise_core::{geometry::Vec3, position::BlockPos};
-    use sunrise_gameplay::game::native_entity_refs::tests::{run_fresh_cases, with_game};
+    #[cfg(feature = "client")]
+    use sunrise_gameplay::game::native_entity_refs::tests::run_fresh_cases;
+    #[cfg(feature = "client")]
+    use sunrise_gameplay::game::native_entity_refs::tests::with_game;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::GameGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_block_sounds::NativeBlockSoundsGameExt1 as _;
+    #[cfg(feature = "client")]
     use sunrise_sim::mobs::{Mob, MobEvent, equine};
+    #[cfg(feature = "client")]
     use sunrise_world::level::LevelAccess;
 
     // The executable installs its client callback table once per process, so the fixture runs
     // in a fresh child: this returns true there, and false in the parent once the child passed.
+    #[cfg(feature = "client")]
     pub(crate) fn install_sound_fixture_in_child(test: &str) -> bool {
         const CHILD: &str = "SUNRISE_BLOCK_SOUND_TEST_CHILD";
         if run_fresh_cases(test, CHILD, &["child"]) {
@@ -22,6 +34,7 @@ pub(crate) mod tests {
         true
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_block_part_answers_the_sound_type_a_block_plays() {

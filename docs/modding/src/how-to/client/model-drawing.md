@@ -444,9 +444,10 @@ reload context. The scoped contexts do not lend a world.
   drawing, the two feature stages follow the pack's own opaque and translucent groups. They run
   only if the pack's world color buffer can blend engine geometry. `AfterSky` and `AfterLevel` lend no
   pass, and stages skipped by the renderer are not replayed later.
-  Drawing values (`WorldLine`, `WorldQuad`, `WorldDepth`, `NameTagOptions`, and `DrawError`)
-  and stage selectors (`RenderLevelStage` and `OitStage`) are client-local. To synchronize a
-  draw effect, send only its data in your own typed payload and choose the stage on the client.
+  Drawing values (`WorldLine`, `WorldQuad`, `WorldDepth`, `NameTagOptions`, `WorldTextOptions`,
+  and `DrawError`) and stage selectors (`RenderLevelStage` and `OitStage`) are client-local. To
+  synchronize a draw effect, send only its data in your own typed payload and choose the stage on
+  the client.
 
 Per-view draw storage grows dynamically without fixed per-view or per-mod copy caps,
 and copies past GPU instance buffer room fall back to CPU baking. Culled copies are

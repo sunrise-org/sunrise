@@ -445,6 +445,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_clients_dragon_parts_resolve_through_its_own_copy() {

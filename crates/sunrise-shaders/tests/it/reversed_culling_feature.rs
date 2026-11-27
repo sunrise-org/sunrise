@@ -7,7 +7,7 @@ fn requested_reversed_culling_loads_and_packs_take_their_base_path() {
         "iris.features.optional=REVERSED_CULLING\niris.features.required=REVERSED_CULLING\n",
         &Macros::standard(),
     );
-    let notes = Macros::feature_notes(&properties);
+    let notes = Macros::standard().feature_notes(&properties);
     assert!(
         notes.is_empty(),
         "supported reversed culling must not be rejected: {notes:?}"

@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use mod_api::{Flow, Hooks, HostSide, LivingEntityUseItemTickEvent, ModEntry, Mods};
 use std::sync::{Arc, Mutex};
 use sunrise_items::items::ItemStack;

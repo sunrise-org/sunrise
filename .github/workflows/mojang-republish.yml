@@ -27,6 +27,8 @@ jobs:
     timeout-minutes: 10
     steps:
       - uses: actions/checkout@v7
+        with:
+          ref: main
       - name: Check the manifest
         env:
           GH_TOKEN: ${{ github.token }}

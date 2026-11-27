@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use crate::game::remote::passage_cross_tests::scene;
 use crate::game::remote::passage_cross_tests::sent;
 use crate::game::server_side::native_entity_refs::tests::with_client_game;

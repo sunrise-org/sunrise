@@ -1,16 +1,24 @@
 //! `Player.giveExperiencePoints` with a negative amount, through the game's own walk:
 //! the loss goes down a level at a time through `Player.giveExperienceLevels(-1)`.
+#[cfg(feature = "client")]
 use crate::game::client_side::viewed_worlds::tests::client;
+#[cfg(feature = "client")]
 use sunrise_core::geometry::Vec3;
 use sunrise_gameplay::game::game_tests::tests::server_game;
+use sunrise_gameplay_common::game::GameGameExt1;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::{
-    GameGameExt1, Screen,
+    Screen,
     server_side::native_sound_refs::tests::{guest, packets},
 };
+#[cfg(feature = "client")]
 use sunrise_protocol::packets::play::{self, Clientbound as C};
-use sunrise_sim::{entities::Experience, motion::PlayerMotion};
+use sunrise_sim::entities::Experience;
+#[cfg(feature = "client")]
+use sunrise_sim::motion::PlayerMotion;
 
 /// The death screen's score arrives through player metadata, not the XP total packet.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn the_death_screen_receives_the_signed_player_score() {

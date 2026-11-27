@@ -6,7 +6,7 @@ use std::{
     io::{self, BufRead},
     path::{Path, PathBuf},
 };
-use syn::{Attribute, Expr, Item, Lit, Meta, parse::Parser};
+use syn::{Attribute, Expr, Item, Lit, Meta};
 
 fn literal(attribute: &Attribute) -> Option<String> {
     let Meta::NameValue(value) = &attribute.meta else {
@@ -47,63 +47,34 @@ fn expand_items(
         if let Item::Macro(included) = &mut item
             && included.mac.path.is_ident("include")
         {
-            let tokens = included.mac.tokens.to_string();
-            if tokens.contains(sunrise_game_discovery::exports::PREFIX) {
+            if let Some(path) = sunrise_game_discovery::exports::env_concat_include(
+                included.mac.tokens.clone(),
+                "OUT_DIR",
+                Path::new(""),
+            )? && let Some(file_name) = path.file_name().and_then(|n| n.to_str())
+                && file_name.starts_with(sunrise_game_discovery::exports::PREFIX)
+            {
                 let sources =
                     exports.ok_or("vocabulary exports include without its source fragments")?;
-                let (_, source) = sources
-                    .iter()
-                    .find(|(name, _)| tokens.contains(name.as_str()))
-                    .ok_or_else(|| format!("unknown vocabulary export include: {tokens}"))?;
+                let source = sources.get(file_name).ok_or_else(|| {
+                    format!("unknown vocabulary export include: {}", path.display())
+                })?;
                 items.extend(syn::parse_file(source).map_err(|e| e.to_string())?.items);
                 continue;
             }
-            if let Some(path) = manifest_include(included.mac.tokens.clone(), manifest)? {
-                let path = syn::LitStr::new(&path, included.mac.path.segments[0].ident.span());
+            if let Some(path) = sunrise_game_discovery::exports::env_concat_include(
+                included.mac.tokens.clone(),
+                "CARGO_MANIFEST_DIR",
+                manifest,
+            )? {
+                let path = path.to_str().ok_or("manifest include path is not UTF-8")?;
+                let path = syn::LitStr::new(path, included.mac.path.segments[0].ident.span());
                 included.mac.tokens = quote::quote!(#path);
             }
         }
         items.push(item);
     }
     Ok(items)
-}
-
-// Evaluate only the compiler's literal concat!(env!("CARGO_MANIFEST_DIR"), "...") form.
-// Other build-time includes are not arbitrary code for this source-only tool to execute.
-fn manifest_include(
-    tokens: proc_macro2::TokenStream,
-    manifest: &Path,
-) -> Result<Option<String>, String> {
-    let Ok(Expr::Macro(expression)) = syn::parse2::<Expr>(tokens) else {
-        return Ok(None);
-    };
-    if !expression.mac.path.is_ident("concat") {
-        return Ok(None);
-    }
-    let arguments = syn::punctuated::Punctuated::<Expr, syn::Token![,]>::parse_terminated
-        .parse2(expression.mac.tokens)
-        .map_err(|e| e.to_string())?;
-    let mut path = String::new();
-    for argument in arguments {
-        match argument {
-            Expr::Lit(syn::ExprLit {
-                lit: Lit::Str(value),
-                ..
-            }) => {
-                path.push_str(&value.value());
-            }
-            Expr::Macro(value) if value.mac.path.is_ident("env") => {
-                let name =
-                    syn::parse2::<syn::LitStr>(value.mac.tokens).map_err(|e| e.to_string())?;
-                if name.value() != "CARGO_MANIFEST_DIR" {
-                    return Ok(None);
-                }
-                path.push_str(manifest.to_str().ok_or("manifest directory is not UTF-8")?);
-            }
-            _ => return Ok(None),
-        }
-    }
-    Ok(Some(path))
 }
 
 fn emit(
@@ -246,5 +217,79 @@ fn main() {
     if let Err(error) = run() {
         eprintln!("{error}");
         std::process::exit(1);
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn static_include_with_prefix_in_filename_is_not_treated_as_generated() {
+        let prefix = sunrise_game_discovery::exports::PREFIX;
+        let source = format!("include!(\"{prefix}custom.rs\");");
+        let parsed = syn::parse_file(&source).expect("parse source");
+        let items = expand_items(Path::new("/tmp/crate"), None, parsed.items)
+            .expect("static include should not require exports");
+        assert_eq!(items.len(), 1);
+        assert!(matches!(items[0], Item::Macro(_)));
+    }
+
+    #[test]
+    fn out_dir_concat_include_with_prefix_expands_vocabulary_export() {
+        let name = format!("{}sample.rs", sunrise_game_discovery::exports::PREFIX);
+        let source = format!("include!(concat!(env!(\"OUT_DIR\"), \"/{name}\"));");
+        let parsed = syn::parse_file(&source).expect("parse source");
+        let mut exports = BTreeMap::new();
+        exports.insert(name, "fn exported_stub() {}".to_string());
+        let items = expand_items(Path::new("/tmp/crate"), Some(&exports), parsed.items)
+            .expect("out_dir concat include should expand");
+        assert_eq!(items.len(), 1);
+        assert!(matches!(items[0], Item::Fn(_)));
+    }
+
+    #[test]
+    fn unsupported_out_dir_includes_do_not_require_export_fragments() {
+        for source in [
+            r#"include!(concat!("/mod_api_exports_root.rs/", env!("OUT_DIR")));"#,
+            r#"include!(concat!(env!("OUT_DIR"), env!("OUT_DIR"), "/mod_api_exports_root.rs"));"#,
+            r#"include!(concat!(env!("OUT_DIR"), "mod_api_exports_root.rs"));"#,
+        ] {
+            let parsed = syn::parse_file(source).expect("parse source");
+            let items = expand_items(Path::new("/tmp/crate"), None, parsed.items)
+                .expect("unsupported include should not require exports");
+            assert!(
+                matches!(items.as_slice(), [Item::Macro(mac)] if mac.mac.path.is_ident("include"))
+            );
+        }
+    }
+
+    #[test]
+    fn unknown_vocabulary_export_include_errors() {
+        let name = format!("{}unknown.rs", sunrise_game_discovery::exports::PREFIX);
+        let source = format!("include!(concat!(env!(\"OUT_DIR\"), \"/{name}\"));");
+        let parsed = syn::parse_file(&source).expect("parse source");
+        let exports = BTreeMap::new();
+        let Err(err) = expand_items(Path::new("/tmp/crate"), Some(&exports), parsed.items) else {
+            panic!("unknown vocabulary export include should error");
+        };
+        assert!(
+            err.contains("unknown vocabulary export include"),
+            "unexpected error: {err}"
+        );
+    }
+
+    #[test]
+    fn out_dir_fragment_include_without_sources_errors() {
+        let name = format!("{}root.rs", sunrise_game_discovery::exports::PREFIX);
+        let source = format!("include!(concat!(env!(\"OUT_DIR\"), \"/{name}\"));");
+        let parsed = syn::parse_file(&source).expect("parse source");
+        let Err(err) = expand_items(Path::new("/tmp/crate"), None, parsed.items) else {
+            panic!("out_dir fragment include without sources should error");
+        };
+        assert!(
+            err.contains("without its source fragments"),
+            "unexpected error: {err}"
+        );
     }
 }

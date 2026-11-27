@@ -2,24 +2,38 @@
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "client")]
     use mod_api::*;
+    #[cfg(feature = "client")]
     use std::sync::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     };
+    #[cfg(feature = "client")]
     use sunrise_client_gameplay::game::client_side::remote_client::session_state::RemoteDimensionEntry;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_block_entity_read::NativeBlockEntityReadGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_hooks::block_entity_on_load::BlockEntityOnLoadGameExt1;
-    use sunrise_level::{chunk::Chunk, containers::BlockEntity};
+    #[cfg(feature = "client")]
+    use sunrise_level::chunk::Chunk;
+    #[cfg(feature = "client")]
+    use sunrise_level::containers::BlockEntity;
+    #[cfg(feature = "client")]
     use {
         crate::game::server_side::native_entity_refs::tests::with_game_role_client,
         sunrise_gameplay::game::native_entity_refs::tests::run_fresh_cases,
         sunrise_gameplay::game::native_entity_refs::tests::with_game_role,
     };
+    #[cfg(feature = "client")]
     type Log = Arc<Mutex<Vec<(&'static str, i32)>>>;
+    #[cfg(feature = "client")]
     type Payloads = Arc<Mutex<Vec<(BlockEntityRef, i32, [i32; 3], LevelRef)>>>;
+    #[cfg(feature = "client")]
     struct Listener {
         pub air: BlockKey,
         replacement: BlockKey,
@@ -27,8 +41,10 @@ mod tests {
         replace: Arc<AtomicBool>,
         report_payload: bool,
     }
+    #[cfg(feature = "client")]
     #[mod_api::sunrise_part]
     impl BlockPart for Listener {}
+    #[cfg(feature = "client")]
     #[mod_api::sunrise_part]
     impl BlockEntityPart for Listener {
         fn block_entity(&self, _: LevelSide<'_>, _: &mut BlockEntityEvent<'_>) -> Option<Compound> {
@@ -92,9 +108,12 @@ mod tests {
             }
         }
     }
+    #[cfg(feature = "client")]
     struct PayloadPeer(Payloads);
+    #[cfg(feature = "client")]
     #[mod_api::sunrise_part]
     impl BlockPart for PayloadPeer {}
+    #[cfg(feature = "client")]
     #[mod_api::sunrise_part]
     impl BlockEntityPart for PayloadPeer {
         fn block_entity_load_additional(&self, event: &mut BlockEntityLoadAdditionalEvent<'_>) {
@@ -109,11 +128,13 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "client")]
     struct User {
         pub log: Log,
         replace: Arc<AtomicBool>,
         payloads: Option<Payloads>,
     }
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for User {
         fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
@@ -153,6 +174,7 @@ mod tests {
             }
         }
     }
+    #[cfg(feature = "client")]
     fn with_fixture(
         replace: bool,
         f: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>, Log, Arc<AtomicBool>),
@@ -163,6 +185,7 @@ mod tests {
             f,
         );
     }
+    #[cfg(feature = "client")]
     fn with_fixture_role(
         replace: bool,
         role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
@@ -173,6 +196,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     fn with_fixture_role_client(
         replace: bool,
         role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
@@ -182,6 +206,7 @@ mod tests {
             f(game, log, replace)
         });
     }
+    #[cfg(feature = "client")]
     fn with_fixture_options(
         replace: bool,
         role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
@@ -225,6 +250,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     fn with_fixture_options_client(
         replace: bool,
         role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
@@ -257,6 +283,7 @@ mod tests {
             f(game, log, replace, payloads);
         });
     }
+    #[cfg(feature = "client")]
     fn place(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
         let level = game.level("minecraft:overworld").unwrap();
         let state = game.pack.assets.registry.default_state("test:a").unwrap();
@@ -269,6 +296,7 @@ mod tests {
             Some(BlockEntity::Mod(_))
         ));
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn block_entity_on_load_reentrant_replacement_is_bounded() {
@@ -293,6 +321,7 @@ mod tests {
             assert_eq!(game.world.block_entities.pending_on_load_len(), 0);
         });
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn block_entity_on_load_shared_type_replacement_has_fresh_handle() {
@@ -331,6 +360,7 @@ mod tests {
             );
         });
     }
+    #[cfg(feature = "client")]
     fn assert_first_two_ticks(
         game: &mut sunrise_gameplay::game::ServerGame<'_>,
         log: &Log,
@@ -345,6 +375,7 @@ mod tests {
             [("load", count), ("tick", -1), ("tick", -1)]
         );
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn saved_payload_notices_distinguish_loads_from_attachment_and_api_edits() {
@@ -414,6 +445,7 @@ mod tests {
             },
         );
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn block_entity_on_load_command_placement() {
@@ -428,6 +460,7 @@ mod tests {
             assert_first_two_ticks(game, &log, 7);
         });
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn block_entity_on_load_dispenser_placement() {
@@ -451,6 +484,7 @@ mod tests {
             assert_first_two_ticks(game, &log, 7);
         });
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn block_entity_on_load_falling_block_placement() {
@@ -487,6 +521,7 @@ mod tests {
             assert_first_two_ticks(game, &log, 29);
         });
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn block_entity_on_load_stale_queued_identity_is_skipped() {
@@ -510,6 +545,7 @@ mod tests {
             assert_eq!(*log.lock().unwrap(), [("load", 7), ("tick", -1)]);
         });
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn block_entity_on_load_real_client_chunk_receive() {

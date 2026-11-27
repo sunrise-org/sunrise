@@ -736,6 +736,17 @@ pub(crate) fn check_mod(
     with: &[&Path],
     release: Option<&str>,
 ) -> Result<(), String> {
+    check_mod_with_fetch(entry, root, show_uses, with, release, &fetch_pinned)
+}
+
+fn check_mod_with_fetch(
+    entry: ChildEntry,
+    root: &Path,
+    show_uses: bool,
+    with: &[&Path],
+    release: Option<&str>,
+    fetch: crate::FetchSdk<'_>,
+) -> Result<(), String> {
     let package = Package::read(root)?;
     let files = package.directory_files(root)?;
     let prepared_resources = std::env::var_os("SUNRISE_RESOURCES")
@@ -777,14 +788,17 @@ pub(crate) fn check_mod(
             "a native mod releases with its Cargo.lock committed beside sunrise-mod.toml".into(),
         );
     }
-    // The mod's `sunrise-mod-api` is a path into `.sunrise/sdk/`: fetch it before Cargo looks.
-    let sdk = fetch_pinned(root, &native.sunrise)?;
+    // Validate the SDK declaration before fetching the SDK it names. Cargo needs the files,
+    // but checking the declaration does not.
+    let bundle = crate::dev::project_bundle(root, &package)?;
+    let cargo = sunrise_native_build::api::Project::read(&bundle).map_err(|e| e.to_string())?;
+    let sdk = fetch(root, &native.sunrise)?;
     let surface = surface_of(&sdk)?;
     let built = if release.is_some() {
         let rust = crate::dev::native_sdk(&crate::dev::cache_dir()?, &native.sunrise)?.rust;
         crate::dev::check_lock(&rust, root, &native.sunrise)?;
         crate::dev::build(
-            root,
+            &cargo,
             &package,
             with,
             false,
@@ -793,7 +807,7 @@ pub(crate) fn check_mod(
         )
         .map(|_| ())
     } else {
-        crate::dev::check(root, &package, with)
+        crate::dev::check(&cargo, &package, with)
     };
     if let Err(error) = built {
         // The compiler's error stands; the notes of the changes that may explain it follow it.
@@ -914,6 +928,53 @@ mod tests {
 
     const BUILD: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
     const OTHER_BUILD: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
+
+    #[test]
+    fn check_refuses_an_invalid_sdk_source_before_fetching() {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path();
+        std::fs::write(
+            root.join(MANIFEST),
+            format!("id='greeter'\nname='Greeter'\nversion='0.1.0'\n[native]\ngame='26.3'\nsunrise='{BUILD}'\n"),
+        )
+        .unwrap();
+        std::fs::create_dir(root.join("src")).unwrap();
+        std::fs::write(root.join("src/lib.rs"), "").unwrap();
+        let calls = std::cell::Cell::new(0);
+        let fetch = |project: &Path, build: &str| {
+            assert_eq!(project, root);
+            assert_eq!(build, BUILD);
+            calls.set(calls.get() + 1);
+            Err("no signed SDK available".to_owned())
+        };
+        let check = |source: &str| {
+            std::fs::write(
+                root.join("Cargo.toml"),
+                format!("[package]\nname='greeter'\nversion='0.1.0'\n[dependencies]\nsunrise-mod-api = {{ {source} }}\n"),
+            )
+            .unwrap();
+            check_mod_with_fetch(
+                mod_surface::child::child_entry(),
+                root,
+                false,
+                &[],
+                None,
+                &fetch,
+            )
+            .unwrap_err()
+        };
+
+        let error = check("git = 'https://example.invalid/sdk'");
+        assert!(error.contains("E_SDK_SOURCE"), "{error}");
+        assert_eq!(calls.get(), 0);
+
+        let path = sunrise_native_build::api::sdk_path("sunrise-mod-api");
+        assert_eq!(
+            check(&format!("path = '{path}'")),
+            "no signed SDK available"
+        );
+        assert_eq!(calls.get(), 1);
+    }
 
     fn packed_subject(kind: &str, sdk: Option<&str>, made_for: &str) -> Subject {
         let manifest = format!(

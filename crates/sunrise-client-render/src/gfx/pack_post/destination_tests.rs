@@ -165,7 +165,23 @@ impl Fixture {
 
     /// [`Self::new`] with `features` turned on; `None` when the adapter lacks one.
     pub(super) fn with_features(features: wgpu::Features) -> Option<Self> {
-        let Some(adapter) = crate::gfx::test_gpu::adapter() else {
+        Self::on(crate::gfx::test_gpu::adapter(), features)
+    }
+
+    /// [`Self::new`] on an instance without wgpu's validation of indirect calls, as release
+    /// builds make it (`gfx::device::instance_descriptor`).
+    pub(super) fn without_indirect_validation() -> Option<Self> {
+        let mut descriptor = wgpu::InstanceDescriptor::new_without_display_handle().with_env();
+        descriptor
+            .flags
+            .remove(wgpu::InstanceFlags::VALIDATION_INDIRECT_CALL);
+        let instance = wgpu::Instance::new(descriptor);
+        let adapter = crate::gfx::test_gpu::request_adapter(&instance, &Default::default());
+        Self::on(adapter, wgpu::Features::empty())
+    }
+
+    fn on(adapter: Option<wgpu::Adapter>, features: wgpu::Features) -> Option<Self> {
+        let Some(adapter) = adapter else {
             eprintln!("Post destination test skipped: no GPU adapter");
             return None;
         };

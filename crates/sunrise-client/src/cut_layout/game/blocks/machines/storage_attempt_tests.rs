@@ -418,6 +418,7 @@ fn place<'g>(game: &mut impl sunrise_gameplay_common::game::SideGame<'g>, pos: P
     game.world.set(pos.0, pos.1, pos.2, state).unwrap();
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn item_capability_presence_does_not_open_loot_or_load_chunks() {
@@ -649,6 +650,7 @@ fn a_committed_pot_write_in_another_level_survives_the_parent_abort() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn block_capabilities_contain_panics_under_the_provider_owner() {

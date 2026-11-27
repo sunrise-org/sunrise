@@ -26,7 +26,7 @@ pub(crate) mod passage_cross_tests;
 #[cfg(test)]
 pub(crate) mod respawn_motion_tests;
 
-#[cfg(test)]
+#[cfg(all(test, feature = "client"))]
 pub(crate) mod tests {
     use sunrise_gameplay_common::game::tables::GameItems;
     pub(crate) mod client_explosion_tests {
@@ -762,10 +762,14 @@ pub(crate) mod smoke_source_tests;
 #[cfg(test)]
 pub(crate) mod swim_start_tests;
 
+#[cfg(all(test, feature = "client"))]
 pub(crate) mod tables;
 
+#[cfg(all(test, feature = "client"))]
 pub(crate) mod general;
 
+#[cfg(all(test, feature = "client"))]
 pub(crate) mod fall_sound;
 
+#[cfg(all(test, feature = "client"))]
 pub(crate) mod abilities;

@@ -1,4 +1,5 @@
 //! Production residency regressions for projectile ownership.
+#![cfg(feature = "client")]
 #![cfg(test)]
 use std::sync::{Arc, Mutex};
 use sunrise_core::geometry::Vec3;

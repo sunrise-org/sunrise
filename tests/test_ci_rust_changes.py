@@ -342,6 +342,25 @@ class RustChangesTests(unittest.TestCase):
             self.assertTrue(selections([("M", "docs/generated.txt")])["rust_required"])
             self.assertFalse(selections([("M", "docs/other.md")])["rust_required"])
 
+    def test_includes_are_found_at_the_line_start_and_mid_line_but_not_inside_longer_names(self):
+        sources = {
+            "src/a.rs": 'include_str!("../docs/a.md");\n',
+            "src/b.rs": 'const B: &[u8] = include_bytes!("../docs/b.bin");\n',
+            "src/c.rs": 'include!("../docs/c.txt");\n',
+            "src/d.rs": 'mod d { #[path = "../docs/d.txt"] mod inner; }\n',
+            "src/e.rs": '#[path = "../docs/e.txt"]\nmod e;\n',
+            "src/f.rs": 'my_include_str!("../docs/f.md");\n',
+            "src/g.rs": 'include_bytes_extra!("../docs/g.bin");\n',
+            "src/h.rs": 'let other_path = "../docs/h.txt";\n',
+        }
+        files = {name: "x\n" for name in ("docs/a.md", "docs/b.bin", "docs/c.txt", "docs/d.txt", "docs/e.txt",
+                                          "docs/f.md", "docs/g.bin", "docs/h.txt")}
+        with fixture_repository({**sources, **files}):
+            exact, patterns = rust_changes.rust_includes()
+            self.assertEqual(patterns, [])
+            self.assertEqual({path for path in exact if path.startswith("docs/")},
+                             {"docs/a.md", "docs/b.bin", "docs/c.txt", "docs/d.txt", "docs/e.txt"})
+
     def test_out_dir_after_another_piece_is_not_a_build_output_path(self):
         with fixture_repository({"src/lib.rs": 'const C: &str = include_str!(concat!(env!("A"), env!("OUT_DIR"), "/../docs/x.md"));',
                                  "docs/x.md": ""}):

@@ -1,13 +1,19 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use sunrise_core::geometry::Vec3;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[cfg(feature = "client")]
     use super::*;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::remote::general::tests::Declare;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::remote::general::tests::spawn;
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_shown_pickable_general_row_receives_the_named_use_and_attack() {

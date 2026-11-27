@@ -37,11 +37,11 @@ extern "C" fn enter() {
 pub fn install() {
     static INSTALLED: std::sync::Once = std::sync::Once::new();
     INSTALLED.call_once(|| {
-        engine_platform::install(EngineTestPlatform {
-            register_game_keys: super::part_tests::register_game_keys,
-            install_parts_fixture: super::part_tests::install_parts_fixture,
-            with_mods: |mods, run| crate::testing::with_mods(mods, run),
-        });
+        engine_platform::install(EngineTestPlatform::new(
+            super::part_tests::register_game_keys,
+            super::part_tests::install_parts_fixture,
+            |mods, run| crate::testing::with_mods(mods, run),
+        ));
         let result = install_platform(Platform {
             install_packages,
             install_registration_data,

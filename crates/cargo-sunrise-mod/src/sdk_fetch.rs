@@ -61,8 +61,15 @@ impl CacheStamp {
         &policy[..16]
     }
 
+    /// The cache can come from the checkout, so the stamp is read as the signed files beside it
+    /// are: refusing a link or a non-file, and never past the one length a match can have.
     fn matches(&self, dir: &Path) -> bool {
-        fs::read_to_string(dir.join(STAMP)).is_ok_and(|stamp| stamp == self.0)
+        crate::bounded::read_bytes(
+            &dir.join(STAMP),
+            self.0.len() as u64,
+            crate::bounded::Symlinks::Refuse,
+        )
+        .is_ok_and(|stamp| stamp == self.0.as_bytes())
     }
 
     pub(crate) fn write(&self, dir: &Path) -> Result<(), String> {
@@ -691,20 +698,24 @@ fn fetch_index_only_from(
 /// `text` (a release tag or a sha)'s build, its small files only (`sdk.json`, `surface.json`),
 /// in the project's `.sunrise/cache/<build>/`, verified as the pinned SDK is, without repinning.
 pub(crate) fn fetch_build(project: &Path, text: &str) -> Result<PinnedSdk, String> {
+    fetch_build_from(&Base::from_env(), &keys(), project, text)
+}
+
+fn fetch_build_from(
+    base: &Base,
+    keys: &[PublicKey],
+    project: &Path,
+    text: &str,
+) -> Result<PinnedSdk, String> {
     // A linked `.sunrise` or `.sunrise/cache` would send the cache's writes outside the project.
     for folder in [project.join(".sunrise"), project.join(CACHE)] {
         crate::internals::check_output_dir(&folder)?;
     }
-    let base = Base::from_env();
-    let build = resolve(&base, &release_keys(), text)?;
-    fetch(
-        &base,
-        &keys(),
-        &build,
-        &project.join(CACHE).join(&build),
-        false,
-    )
-    .map_err(|e| named(text, &build, e))
+    let build = resolve(base, &release_keys(), text)?;
+    let dir = project.join(CACHE).join(&build);
+    // A linked build folder would be read as a warm hit and replaced outside the project.
+    crate::internals::check_output_dir(&dir)?;
+    fetch(base, keys, &build, &dir, false).map_err(|e| named(text, &build, e))
 }
 
 /// The folder holding `build`'s build data, from its signed SDK's `build-data.tar.xz`, unpacked
@@ -722,11 +733,17 @@ fn build_data_from(
     build: &str,
 ) -> Result<PathBuf, String> {
     let dir = project.join(CACHE).join(build);
-    // A linked folder on the way would send the cache's removal and writes outside the project.
-    for folder in [project.join(".sunrise"), project.join(CACHE), dir.clone()] {
+    let into = dir.join(BUILD_DATA);
+    // A linked folder on the way, or a linked `build-data` that a warm hit would return as the
+    // catalog's folder, would send the cache's reads, removal and writes outside the project.
+    for folder in [
+        project.join(".sunrise"),
+        project.join(CACHE),
+        dir.clone(),
+        into.clone(),
+    ] {
         crate::internals::check_output_dir(&folder)?;
     }
-    let into = dir.join(BUILD_DATA);
     // The stamp is written only after the folder's SDK verified, and the build data is renamed
     // into place only after it unpacked whole from a verified archive.
     if CacheStamp::new(build, keys).matches(&dir) && into.is_dir() {

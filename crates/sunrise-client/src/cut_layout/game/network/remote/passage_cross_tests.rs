@@ -1,6 +1,7 @@
 //! A window crossing a passage its server told it of (#3775): it moves itself through,
 //! tells the server, and the server's all-relative zero position packet leaves it where it
 //! is with its velocity, and stops its mining.
+#![cfg(feature = "client")]
 use super::tests::connect_menu_test;
 use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use mod_api::{PassageCrossError, PassageCrossRefusal, PassageId};

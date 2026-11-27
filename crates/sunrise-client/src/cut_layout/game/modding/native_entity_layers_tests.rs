@@ -2,6 +2,7 @@
 //! built and refuses a target that is no living entity type by name; a living type's layers draw
 //! over it in the order they were added, a player's are its model's, a type with none draws none,
 //! an `Err` skips only that draw, and a panic disables only that layer for the session.
+#![cfg(feature = "client")]
 use mod_api::{
     ArmorLayerPass, ArmorLayerSlot, BlockEntityDrawContext, EntityLayers, EntityRenderLayer,
     EntityRenderState, EntityRenderer, FrameModel, Hand, Hooks, LayerTarget, PlayerModel,

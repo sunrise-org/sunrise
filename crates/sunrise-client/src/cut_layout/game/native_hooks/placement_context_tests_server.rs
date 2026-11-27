@@ -1,8 +1,10 @@
 use crate::game::native_hooks::placement_context_tests::Notice;
 use crate::game::native_hooks::placement_context_tests::PlacementSubstitution;
+#[cfg(feature = "client")]
 use crate::game::native_hooks::placement_context_tests::SourceSpy;
 use crate::game::native_hooks::placement_context_tests::VetoProbe;
 use crate::game::native_hooks::placement_context_tests::VetoTrace;
+#[cfg(feature = "client")]
 use mod_api::PlacementSource;
 use std::sync::{Arc, Mutex};
 use sunrise_core::{
@@ -159,6 +161,7 @@ fn player_and_dispenser_apply_only_the_context_seen_by_the_veto() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn state_for_placement_distinguishes_player_and_dispenser_sources() {

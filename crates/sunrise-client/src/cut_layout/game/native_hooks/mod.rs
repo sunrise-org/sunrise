@@ -115,6 +115,7 @@ pub(crate) mod block_entity_on_load_tests;
 
 pub(crate) mod block_entity_on_load_routes_tests;
 
+#[cfg(all(test, feature = "client"))]
 pub(crate) mod base;
 
 #[cfg(test)]

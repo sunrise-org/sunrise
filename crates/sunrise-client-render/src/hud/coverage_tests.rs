@@ -5,7 +5,7 @@ use crate::gfx::hud_coverage;
 #[ignore = "daily"]
 fn repeated_partial_scissors_preserve_the_unclipped_gradient_pixels() {
     let _gpu = crate::gfx::test_gpu::lock();
-    let Some(gpu) = Gpu::new() else { return };
+    let gpu = Gpu::new().expect("HUD scissor test requires the GPU fixture");
     let mut atlas = HudAtlas::build(&ResourceSource::directory(
         "/nonexistent/sunrise-test-assets".into(),
     ))
@@ -23,16 +23,15 @@ fn repeated_partial_scissors_preserve_the_unclipped_gradient_pixels() {
         let mut batch = HudBatch::scratch([4, 2]);
         for x in 0..4 {
             let start = batch.vertices.len();
-            // At y=1 the red interpolant is about 1.2; rounding it there would darken
-            // the surviving pixel at y=1.5 compared with drawing the original gradient.
             batch.fill_gradient(
                 &atlas,
-                (x as f32, -1.0, 1.0, 4.9),
+                (x as f32, -0.5, 1.0, 4.0),
                 rgba(0, 0, 0, 255),
-                rgba(3, 0, 0, 255),
+                rgba(128, 0, 0, 255),
             );
             if scissor {
-                batch.clip_since(start, 0.0, 1.0, 4.0, 2.0);
+                let top = if x < 2 { 1.0 } else { 0.25 };
+                batch.clip_since(start, 0.0, top, 4.0, 2.0);
             }
         }
         if scissor {
@@ -42,22 +41,36 @@ fn repeated_partial_scissors_preserve_the_unclipped_gradient_pixels() {
     };
     let whole = draw(false);
     let clipped = draw(true);
-    assert_eq!(
-        &clipped[..20],
-        &[0; 20],
-        "entire first row and the second row's first pixel"
-    );
-    for pixel in whole[20..].as_chunks::<4>().0 {
-        assert_eq!(*pixel, [2, 0, 0, 255]);
+    // At the first row's centre (y = 0.5), red is exactly 128 / 4 = 32 in
+    // byte units. At the second row's centre (y = 1.5, t = 0.5), red is exactly
+    // 128 * 0.5 = 64 in byte units. Neither is a rounding tie. For the scissor
+    // comparison use this adapter's own unclipped pixels.
+    let (whole, []) = whole.as_chunks::<4>() else {
+        panic!("partial texel in unclipped readback");
+    };
+    let (clipped, []) = clipped.as_chunks::<4>() else {
+        panic!("partial texel in clipped readback");
+    };
+    assert_eq!(whole.len(), 8);
+    assert_eq!(clipped.len(), 8);
+    assert_eq!(whole[..4], [[32, 0, 0, 255]; 4]);
+    assert_eq!(whole[4..], [[64, 0, 0, 255]; 4]);
+    for (i, (&pixel, &reference)) in clipped.iter().zip(whole).enumerate() {
+        let expected = if matches!(i, 0 | 1 | 4) {
+            [0; 4]
+        } else {
+            reference
+        };
+        assert_eq!(pixel, expected, "pixel {i}");
     }
-    assert_eq!(&clipped[20..], &whole[20..]);
 }
 
 #[test]
 #[ignore = "daily"]
 fn standalone_picture_draw_order_and_screen_exit_release() {
     let _gpu = crate::gfx::test_gpu::lock();
-    let Some(mut gpu) = Gpu::new() else { return };
+    let mut gpu = Gpu::new()
+        .expect("standalone_picture_draw_order_and_screen_exit_release requires the GPU fixture");
     let image = Arc::new(pictures::Picture {
         id: u64::MAX,
         width: 1,
@@ -280,12 +293,10 @@ impl Gpu {
         let (plain, _) = self.draw(batch, 0.3, initial, false);
         let (color, mask) = self.draw(batch, 0.3, initial, true);
         assert_eq!(color, plain, "coverage changed the primary colour or alpha");
-        for (got, want) in mask.iter().zip(expected.repeat(2)) {
-            assert!(
-                got.abs_diff(want) <= 1,
-                "coverage {mask:?}, expected {expected:?}"
-            );
-        }
+        // The 4 x 2 target's two rows of `expected`: no shorter readback may compare less.
+        let want = expected.repeat(2);
+        assert_eq!(mask.len(), want.len(), "coverage readback length");
+        assert_eq!(mask, want, "coverage bytes");
     }
 }
 
@@ -303,16 +314,30 @@ pub(super) fn quad(batch: &mut HudBatch, blend: Blend, color: u32, x: f32, uv: f
 #[ignore = "daily"]
 fn coverage_follows_hud_blends_discard_scissor_and_depth_without_changing_colour() {
     let _gpu = crate::gfx::test_gpu::lock();
-    let Some(gpu) = Gpu::new() else {
-        return;
-    };
+    let gpu = Gpu::new().expect("HUD coverage test requires the GPU fixture");
+    // Every expected byte is derived from the coverage target alone (R8, cleared to `initial`/255;
+    // each draw is stored as 8 bits before the next reads it). `wrap` in gfx/hud_coverage.rs
+    // gives each pipeline a coverage `c` and the target blends it as `c + dst * (1 - c)`
+    // (One, OneMinusSrc), writing RED only, and nothing for an additive primary blend. Every
+    // `initial`, alpha and result below is an integer byte, and each real-number result is an
+    // integer number of bytes before any rounding, so no rounding mode can change it.
     for (blend, color, initial, count, expected) in [
-        (Blend::Alpha, rgba(255, 255, 255, 128), 0.0, 2, 192),
-        (Blend::Additive, rgba(255, 255, 255, 128), 0.3, 1, 77),
-        (Blend::Invert, rgba(255, 255, 255, 32), 0.0, 1, 255),
-        (Blend::EndPortal, rgba(255, 255, 255, 255), 0.0, 1, 255),
-        (Blend::Vignette, rgba(102, 102, 102, 255), 0.0, 1, 102),
+        // Alpha (SrcAlpha, OneMinusSrcAlpha): c = a = 51/255 = 1/5, so each draw maps
+        // d to 51 + d * 204/255 = 51 + 0.8 d bytes. 30 -> 75 -> 111 over the two quads.
+        (Blend::Alpha, rgba(255, 255, 255, 51), 30u8, 2, 111u8),
+        // Additive (One, One): the coverage target's write mask is empty, so it keeps its
+        // clear value, 77/255, whatever the quad's alpha.
+        (Blend::Additive, rgba(255, 255, 255, 51), 77, 1, 77),
+        // Invert (OneMinusDst, OneMinusSrc): no scalar reproduces it, so c = 1 whatever the
+        // alpha (32/255) or the clear value: 1 + d * 0 = 255 bytes.
+        (Blend::Invert, rgba(255, 255, 255, 32), 30, 1, 255),
+        // EndPortal (REPLACE, One/Zero): not an alpha blend, c = 1: 255 bytes.
+        (Blend::EndPortal, rgba(255, 255, 255, 255), 30, 1, 255),
+        // Vignette (Zero, OneMinusSrc): c = max(r, g, b) = 102/255 = 2/5 (the white texel's
+        // centre is sampled), so d -> 102 + d * 153/255 = 102 + 0.6 * 30 = 120 bytes.
+        (Blend::Vignette, rgba(102, 102, 102, 255), 30, 1, 120),
     ] {
+        let backdrop = f64::from(initial) / 255.0;
         let mut batch = HudBatch::new(
             [4, 2],
             crate::hud::GuiScale {
@@ -327,16 +352,8 @@ fn coverage_follows_hud_blends_discard_scissor_and_depth_without_changing_colour
         if blend == Blend::Invert {
             quad(&mut batch, blend, color, 2.0, 0.75);
         }
-        gpu.check(
-            &batch,
-            initial,
-            [
-                expected,
-                expected,
-                (initial * 255.0).round() as u8,
-                (initial * 255.0).round() as u8,
-            ],
-        );
+        // The quad covers pixels 0 and 1 of each row; pixels 2 and 3 keep the clear value.
+        gpu.check(&batch, backdrop, [expected, expected, initial, initial]);
     }
     let mut batch = HudBatch::new(
         [4, 2],
@@ -346,20 +363,18 @@ fn coverage_follows_hud_blends_discard_scissor_and_depth_without_changing_colour
         },
     );
     for depth in [0.25, 0.75] {
-        quad(
-            &mut batch,
-            Blend::Alpha,
-            rgba(255, 255, 255, 128),
-            0.0,
-            0.25,
-        );
+        quad(&mut batch, Blend::Alpha, rgba(255, 255, 255, 51), 0.0, 0.25);
         let start = batch.vertices.len() - 6;
         for vertex in &mut batch.vertices[start..] {
             vertex.depth = depth;
         }
     }
     batch.blends.push((0..12, Blend::Depth([1, 0, 2, 2])));
-    gpu.check(&batch, 0.0, [0, 128, 0, 0]);
+    // Depth tests LessEqual: the 0.25 quad draws and writes depth, the 0.75 one then fails.
+    // The scissor x 1..3 leaves pixel 0 alone, pixels 2 and 3 lie outside the quads. One
+    // Alpha draw with c = 51/255 over a clear of 30/255: 51 + 0.8 * 30 = 75 bytes (a second
+    // blend would give 111).
+    gpu.check(&batch, 30.0 / 255.0, [30, 75, 30, 30]);
 }
 
 /// The HUD's target is 8-bit as vanilla's frame is, so each draw clips at white before the
@@ -368,9 +383,8 @@ fn coverage_follows_hud_blends_discard_scissor_and_depth_without_changing_colour
 #[ignore = "daily"]
 fn each_hud_draw_clips_at_white_as_on_an_8_bit_frame() {
     let _gpu = crate::gfx::test_gpu::lock();
-    let Some(gpu) = Gpu::new() else {
-        return;
-    };
+    let gpu = Gpu::new()
+        .expect("each_hud_draw_clips_at_white_as_on_an_8_bit_frame requires the GPU fixture");
     let mut batch = HudBatch::scratch([4, 2]);
     quad(
         &mut batch,
@@ -408,10 +422,20 @@ fn each_hud_draw_clips_at_white_as_on_an_8_bit_frame() {
 #[ignore = "daily"]
 fn coverage_preserves_each_cit_blend_and_its_destination_alpha() {
     let _gpu = crate::gfx::test_gpu::lock();
-    let Some(mut gpu) = Gpu::new() else {
-        return;
-    };
+    let mut gpu = Gpu::new().expect(
+        "coverage_preserves_each_cit_blend_and_its_destination_alpha requires the GPU fixture",
+    );
     use sunrise_optifine::cit::parse_blend;
+    // Derivation of the expected bytes. In `fs_cit_glint` each glint RGB is 102/255 and alpha
+    // 128/255 (the slot's rgba and the vertex alpha are 1). Over a zero clear, coverage equals
+    // 255 * c after saturation, with c from `wrap` in gfx/hud_coverage.rs:
+    // - alpha and `770 771 772 773` (SrcAlpha, OneMinusSrcAlpha): c = a, 128.
+    // - add, dodge, glint: an additive primary blend, so coverage writes are masked off, 0.
+    // - burn (Zero, OneMinusSrcColor): c = max rgb, 102.
+    // - multiply (DstColor, OneMinusSrcAlpha): c = a - min rgb, 128 - 102 = 26.
+    // - overlay (DstColor, SrcColor): c = 1 - 2 * min rgb, 255 - 204 = 51.
+    // - screen, subtract, replace: fully covering, 255.
+    // - `0 768` (Zero, SrcColor) and `774 0` (DstColor, Zero): c = 1 - min rgb, 255 - 102 = 153.
     for (name, expected) in [
         ("alpha", 128),
         ("add", 0),
@@ -470,13 +494,12 @@ fn coverage_preserves_each_cit_blend_and_its_destination_alpha() {
 #[ignore = "daily"]
 fn coverage_uses_pack_texts_final_alpha_and_discard() {
     let _gpu = crate::gfx::test_gpu::lock();
-    let Some(mut gpu) = Gpu::new() else {
-        return;
-    };
+    let mut gpu = Gpu::new()
+        .expect("coverage_uses_pack_texts_final_alpha_and_discard requires the GPU fixture");
     // A translated-style struct result and early return; no dependency on game resources.
     let program = crate::core_shader::validated(
         naga::front::wgsl::parse_str("@vertex fn main(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> { return vec4(p.x / 2.0 - 1.0, 1.0 - p.y, 0.0, 1.0); }").unwrap(),
-        naga::front::wgsl::parse_str("struct Result { @location(0) color: vec4<f32> } @fragment fn main(@builtin(position) p: vec4<f32>) -> Result { if p.x > 2.0 { discard; } return Result(vec4(0.4, 0.2, 0.1, 0.5)); }").unwrap(),
+        naga::front::wgsl::parse_str("struct Result { @location(0) color: vec4<f32> } @fragment fn main(@builtin(position) p: vec4<f32>) -> Result { if p.x > 2.0 { discard; } return Result(vec4(0.4, 0.2, 0.1, 51.0 / 255.0)); }").unwrap(),
         Vec::new(),
     );
     gpu.hud
@@ -496,16 +519,17 @@ fn coverage_uses_pack_texts_final_alpha_and_discard() {
     for v in &mut batch.vertices {
         v.text = 1;
     }
-    gpu.check(&batch, 0.0, [191, 191, 0, 0]);
+    // Coverage uses the shader's final alpha, 51/255, not the opaque vertices' alpha.
+    // In R8 byte units each draw stores 51 + d * 204/255: 30 -> 75 -> 111, all
+    // exact integers. The discarded fragments leave the right half at 30.
+    gpu.check(&batch, 30.0 / 255.0, [111, 111, 30, 30]);
 }
 
 #[test]
 #[ignore = "daily"]
 fn a_pack_text_shader_without_a_colour_output_is_dropped_not_wrapped() {
     let _gpu = crate::gfx::test_gpu::lock();
-    let Some(mut gpu) = Gpu::new() else {
-        return;
-    };
+    let mut gpu = Gpu::new().expect("a_pack_text_shader_without_a_colour_output_is_dropped_not_wrapped requires the GPU fixture");
     let program = crate::core_shader::validated(
         naga::front::wgsl::parse_str("@vertex fn main(@location(0) p: vec2<f32>) -> @builtin(position) vec4<f32> { return vec4(p, 0.0, 1.0); }").unwrap(),
         naga::front::wgsl::parse_str("@fragment fn main() -> @location(1) vec4<f32> { return vec4(1.0); }").unwrap(),
@@ -541,7 +565,8 @@ fn prepare(gpu: &mut Gpu, batch: &HudBatch) {
 #[ignore = "daily"]
 fn a_repeating_picture_past_u_2_draws_itself_not_a_glint() {
     let _gpu = crate::gfx::test_gpu::lock();
-    let Some(mut gpu) = Gpu::new() else { return };
+    let mut gpu = Gpu::new()
+        .expect("a_repeating_picture_past_u_2_draws_itself_not_a_glint requires the GPU fixture");
     let image = red_green();
     // The harness's frame is 4 x 2 GUI pixels.
     let mut batch = HudBatch::scratch([4, 2]);
@@ -569,7 +594,9 @@ fn a_repeating_picture_past_u_2_draws_itself_not_a_glint() {
 #[ignore = "daily"]
 fn a_held_picture_keeps_its_texture_between_frames_until_released() {
     let _gpu = crate::gfx::test_gpu::lock();
-    let Some(mut gpu) = Gpu::new() else { return };
+    let mut gpu = Gpu::new().expect(
+        "a_held_picture_keeps_its_texture_between_frames_until_released requires the GPU fixture",
+    );
     // `held` is the atlas's strong reference to a standalone texture.
     let held = red_green();
     let mut batch = HudBatch::scratch([2, 1]);

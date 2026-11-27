@@ -1,18 +1,29 @@
 #![cfg(test)]
 #[cfg(test)]
 mod component_hover_tests {
+    #[cfg(feature = "client")]
+    use mod_api::ModEntry;
+    #[cfg(feature = "client")]
     use mod_api::text::{TextContent, TextHover};
-    use mod_api::{ComponentHoverEvent, Hooks, ModEntry};
+    #[cfg(feature = "client")]
+    use mod_api::{ComponentHoverEvent, Hooks};
+    #[cfg(feature = "client")]
     use mod_platform::testing::with_mods;
+    #[cfg(feature = "client")]
     use std::sync::Mutex;
+    #[cfg(feature = "client")]
     use sunrise_client::hud::HudBatch;
+    #[cfg(feature = "client")]
     use sunrise_game_data::text::{Style, Text};
 
     /// Every hover the mod was asked about, in order.
+    #[cfg(feature = "client")]
     static SEEN: Mutex<Vec<TextHover>> = Mutex::new(Vec::new());
 
     /// Records each hover and cancels the ones whose text reads `secret`, drawing a square.
+    #[cfg(feature = "client")]
     struct Hovers;
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Hovers {
         fn component_hover(
@@ -31,10 +42,12 @@ mod component_hover_tests {
         }
     }
 
+    #[cfg(feature = "client")]
     fn style(hover: serde_json::Value) -> Style {
         let text = Text::from(serde_json::json!({ "text": "x", "hover_event": hover }));
         text.spans[0].style.clone()
     }
+    #[cfg(feature = "client")]
     fn drawn(
         game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
         style: &Style,
@@ -47,6 +60,7 @@ mod component_hover_tests {
     /// `componentHoverEffect`: a listening mod is asked once for each hovered component with its
     /// typed hover (text, item, and an entity whose UUID came as an int array), the default
     /// drawing is unchanged when it doesn't cancel, and a cancel draws only what the mod drew.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_mod_sees_each_hover_and_may_draw_its_own() {

@@ -1,21 +1,24 @@
 use mod_api::*;
+use std::sync::{Arc, atomic::Ordering};
+#[cfg(feature = "client")]
 use std::{
     collections::HashMap,
-    sync::{
-        Arc,
-        atomic::{AtomicBool, AtomicU8, Ordering},
-    },
+    sync::atomic::{AtomicBool, AtomicU8},
 };
+#[cfg(feature = "client")]
 use sunrise_core::{
     geometry::Direction,
     position::{BlockPos, ChunkPos},
     random::LegacyRandom,
 };
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::GameGameExt1;
-use sunrise_world::{
-    level::{Behaviours, BlockEntityNeighbors, LevelAccess, PushReaction as EngineReaction, Ticks},
-    registry::{BlockRegistry, BlockStateId},
-};
+#[cfg(feature = "client")]
+use sunrise_world::level::PushReaction as EngineReaction;
+#[cfg(feature = "client")]
+use sunrise_world::level::{Behaviours, BlockEntityNeighbors, LevelAccess, Ticks};
+use sunrise_world::registry::{BlockRegistry, BlockStateId};
+#[cfg(feature = "client")]
 use {
     crate::game::server_side::native_entity_refs::tests::with_game_role_client,
     sunrise_gameplay::game::native_entity_refs::tests::run_fresh_cases,
@@ -23,11 +26,13 @@ use {
     sunrise_gameplay_common::game::execution_role::ExecutionRole,
 };
 
+#[cfg(feature = "client")]
 pub(crate) struct ReactionPart {
     pub enabled: Arc<AtomicBool>,
     pub(crate) reaction: Option<PushReaction>,
     pub(crate) unbreakable: Option<Arc<AtomicU8>>,
 }
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for ReactionPart {
     fn piston_push_reaction(&self, event: &mut PistonPushReactionEvent) -> Option<PushReaction> {
@@ -53,11 +58,13 @@ impl BlockPart for ReactionPart {
         })
     }
 }
+#[cfg(feature = "client")]
 pub(crate) struct User {
     pub enabled: Arc<AtomicBool>,
     pub(crate) parts: bool,
     pub(crate) unbreakable: Arc<AtomicU8>,
 }
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for User {
     fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
@@ -92,13 +99,16 @@ impl Hooks for User {
         event.register(fixed).unwrap();
     }
 }
+#[cfg(feature = "client")]
 pub(crate) struct Level {
     pub blocks: HashMap<BlockPos, BlockStateId>,
     pub(crate) air: BlockStateId,
     pub(crate) time: i64,
     pub(crate) random: LegacyRandom,
 }
+#[cfg(feature = "client")]
 impl BlockEntityNeighbors for Level {}
+#[cfg(feature = "client")]
 impl LevelAccess for Level {
     fn block_state(&self, pos: BlockPos) -> BlockStateId {
         self.blocks.get(&pos).copied().unwrap_or(self.air)
@@ -127,6 +137,7 @@ pub(crate) fn state(registry: &BlockRegistry, name: &str, props: &[(&str, &str)]
         })
         .unwrap()
 }
+#[cfg(feature = "client")]
 pub(crate) fn exercise(
     b: &Behaviours,
     registry: &BlockRegistry,
@@ -227,6 +238,7 @@ pub(crate) fn exercise(
         }
     }
 }
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn piston_push_reaction_parts_cache_reload_and_replay() {
@@ -492,6 +504,7 @@ impl Hooks for PayloadUser {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn piston_push_reaction_real_block_entity_payload_lifecycle() {
@@ -689,7 +702,9 @@ fn piston_push_reaction_real_block_entity_payload_lifecycle() {
     });
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct TagUser;
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for TagUser {
     fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
@@ -703,6 +718,7 @@ impl Hooks for TagUser {
         );
     }
 }
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn piston_push_reaction_client_received_tags_refresh_the_cache() {
@@ -774,6 +790,7 @@ fn piston_push_reaction_client_received_tags_refresh_the_cache() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn piston_push_reaction_unowned_vanilla_data_stays_refused() {
@@ -834,4 +851,5 @@ fn piston_push_reaction_unowned_vanilla_data_stays_refused() {
     });
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::tables::WorldTablesExt as _;

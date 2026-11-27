@@ -179,7 +179,7 @@ impl BlockEntityDrawContext for GameBlockEntityDrawContext<'_, '_, '_> {
     #[inline]
     fn text_width(&self, text: &Text) -> f32 {
         let text = sunrise_sim::api_text::to_engine_inprocess(text);
-        self.game.native_draw_text_width(&*self.surface, &text)
+        self.game.native_styled_text_width(&text)
     }
     #[inline]
     fn model_part(&mut self, part: &ModelPart, sprite: &str, tint: u32) -> bool {
@@ -321,6 +321,20 @@ impl WorldDrawContext for GameWorldDrawContext<'_, '_> {
     ) -> Result<(), DrawError> {
         self.game
             .native_world_name_tag(&mut *self.surface, at, text, options)
+    }
+    fn text(
+        &mut self,
+        origin: [f64; 3],
+        pose: [f32; 12],
+        text: &Text,
+        options: WorldTextOptions,
+    ) -> Result<f32, DrawError> {
+        self.game
+            .native_world_text(&mut *self.surface, origin, pose, text, options)
+    }
+    fn text_width(&self, text: &Text) -> f32 {
+        let text = sunrise_sim::api_text::to_engine_inprocess(text);
+        self.game.native_styled_text_width(&text)
     }
     fn draw_model_instances(
         &mut self,

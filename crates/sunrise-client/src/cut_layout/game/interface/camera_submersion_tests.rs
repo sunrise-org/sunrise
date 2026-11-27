@@ -1,5 +1,6 @@
 //! The mods replace the fluid the camera is in (`camera_submersion`), each listener seeing the
 //! answer of the one before, and the camera's fluid readers follow the last answer.
+#![cfg(feature = "client")]
 use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use mod_api::{CameraSubmersionEvent, ClientHost, Hooks, ModEntry};
 use mod_platform::testing::with_mods;

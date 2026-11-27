@@ -6,13 +6,28 @@ use std::sync::OnceLock;
 pub type RegisterGameKeys =
     fn(Vec<String>, &[&str], &RuleSchema<'_>, fn(&DimensionSettings) -> bool);
 
+#[non_exhaustive]
 pub struct EngineTestPlatform {
-    pub register_game_keys: RegisterGameKeys,
-    pub install_parts_fixture: fn(&[ModEntry]) -> Result<(), Vec<String>>,
-    pub with_mods: fn(Mods, Box<dyn FnOnce() + '_>),
+    register_game_keys: RegisterGameKeys,
+    install_parts_fixture: fn(&[ModEntry]) -> Result<(), Vec<String>>,
+    with_mods: fn(Mods, Box<dyn FnOnce() + '_>),
 }
 
-#[cfg(feature = "testing")]
+impl EngineTestPlatform {
+    pub fn new(
+        register_game_keys: RegisterGameKeys,
+        install_parts_fixture: fn(&[ModEntry]) -> Result<(), Vec<String>>,
+        with_mods: fn(Mods, Box<dyn FnOnce() + '_>),
+    ) -> Self {
+        Self {
+            register_game_keys,
+            install_parts_fixture,
+            with_mods,
+        }
+    }
+}
+
+#[cfg(any(test, feature = "testing"))]
 static PLATFORM: OnceLock<EngineTestPlatform> = OnceLock::new();
 
 pub fn install(platform: EngineTestPlatform) {

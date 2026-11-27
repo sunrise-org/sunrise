@@ -1,20 +1,29 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "client")]
     use super::*;
+    #[cfg(feature = "client")]
     use mod_api::EntityRef;
+    #[cfg(feature = "client")]
     use sunrise_core::geometry::Vec3;
+    #[cfg(feature = "client")]
     use sunrise_sim::entities::ArmorStand;
+    #[cfg(feature = "client")]
     use sunrise_sim::mobs::Mob;
+    #[cfg(feature = "client")]
     use {
         crate::game::server_side::native_entity_refs::tests::with_client_game,
         sunrise_gameplay::game::native_entity_refs::tests::with_resident_game,
     };
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn piston_reaction_and_hanging_class_follow_server_and_client_entities() {

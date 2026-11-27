@@ -118,6 +118,102 @@ fn a_linked_project_cache_is_refused_and_its_destination_left_alone() {
     assert_eq!(fs::read(outside.path().join("sentinel")).unwrap(), b"kept");
 }
 
+/// The names and contents of the files directly in `dir`, to show a refused read wrote nothing.
+#[cfg(unix)]
+fn listing(dir: &Path) -> Vec<(String, Vec<u8>)> {
+    let mut files: Vec<_> = fs::read_dir(dir)
+        .unwrap()
+        .map(|entry| {
+            let entry = entry.unwrap();
+            (
+                entry.file_name().into_string().unwrap(),
+                fs::read(entry.path()).unwrap(),
+            )
+        })
+        .collect();
+    files.sort();
+    files
+}
+
+#[cfg(unix)]
+#[test]
+fn a_warm_signed_cache_behind_a_linked_build_folder_is_refused_and_left_alone() {
+    let (base, key) = release(None);
+    let base = Base::Folder(base.path().to_owned());
+    let outside = tempfile::tempdir().unwrap();
+    let referent = outside.path().join("sdk");
+    // Signed, stamped and complete: only the link makes it unacceptable.
+    fetch(&base, &[key], BUILD, &referent, false).unwrap();
+    let before = listing(&referent);
+    let project = tempfile::tempdir().unwrap();
+    let cache = project.path().join(CACHE);
+    fs::create_dir_all(&cache).unwrap();
+    std::os::unix::fs::symlink(&referent, cache.join(BUILD)).unwrap();
+    let gone = Base::Folder(project.path().join("nowhere"));
+    let error = fetch_build_from(&gone, &[key], project.path(), BUILD).unwrap_err();
+    assert!(error.contains("is not a real directory"), "{error}");
+    assert_eq!(listing(&referent), before);
+}
+
+#[cfg(unix)]
+#[test]
+fn warm_build_data_behind_a_linked_folder_is_refused_and_left_alone() {
+    let (base, key) = release(None);
+    let base = Base::Folder(base.path().to_owned());
+    let project = tempfile::tempdir().unwrap();
+    let into = build_data_from(&base, &[key], project.path(), BUILD).unwrap();
+    // The build's stamp still matches, but `build-data` now leads to a folder nothing verified.
+    let outside = tempfile::tempdir().unwrap();
+    fs::write(outside.path().join("internals.json"), b"unverified").unwrap();
+    fs::remove_dir_all(&into).unwrap();
+    std::os::unix::fs::symlink(outside.path(), &into).unwrap();
+    let before = listing(outside.path());
+    let gone = Base::Folder(project.path().join("nowhere"));
+    let error = build_data_from(&gone, &[key], project.path(), BUILD).unwrap_err();
+    assert!(error.contains("is not a real directory"), "{error}");
+    assert_eq!(listing(outside.path()), before);
+}
+
+#[test]
+fn a_stamp_longer_than_the_expected_one_is_a_miss_and_is_repaired() {
+    let (base, key) = release(None);
+    let base = Base::Folder(base.path().to_owned());
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path().join(DIR);
+    fetch(&base, &[key], BUILD, &dir, false).unwrap();
+    let stamp = CacheStamp::new(BUILD, &[key]);
+    assert!(stamp.matches(&dir));
+    // One byte past the exact stamp is beyond the read's bound.
+    fs::write(dir.join(STAMP), format!("{}\n", stamp.as_str())).unwrap();
+    assert!(!stamp.matches(&dir));
+    fetch(&base, &[key], BUILD, &dir, false).unwrap();
+    assert!(stamp.matches(&dir));
+}
+
+#[cfg(unix)]
+#[test]
+fn a_stamp_behind_a_link_is_a_miss_and_its_referent_is_left_alone() {
+    let (base, key) = release(None);
+    let base = Base::Folder(base.path().to_owned());
+    let project = tempfile::tempdir().unwrap();
+    let dir = project.path().join(DIR);
+    fetch(&base, &[key], BUILD, &dir, false).unwrap();
+    let stamp = CacheStamp::new(BUILD, &[key]);
+    // The linked file holds exactly the right stamp, beside signed files that all verify.
+    let outside = tempfile::tempdir().unwrap();
+    let referent = outside.path().join("stamp");
+    fs::rename(dir.join(STAMP), &referent).unwrap();
+    std::os::unix::fs::symlink(&referent, dir.join(STAMP)).unwrap();
+    assert!(!stamp.matches(&dir));
+    let gone = Base::Folder(project.path().join("nowhere"));
+    assert!(fetch(&gone, &[key], BUILD, &dir, false).is_err());
+    assert_eq!(fs::read(&referent).unwrap(), stamp.as_str().as_bytes());
+    // With a base it is fetched again into the folder itself, not through the link.
+    fetch(&base, &[key], BUILD, &dir, false).unwrap();
+    assert!(stamp.matches(&dir));
+    assert_eq!(fs::read(&referent).unwrap(), stamp.as_str().as_bytes());
+}
+
 #[test]
 fn a_cached_local_sdk_is_refused_under_release_only_trust() {
     let (base, key) = release(None);

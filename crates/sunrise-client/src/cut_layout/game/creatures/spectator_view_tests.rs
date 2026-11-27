@@ -1,5 +1,6 @@
 //! `Entity.isInvisibleTo`: a spectator sees an invisible body as the translucent
 //! one (`LivingEntityRenderer.submit`'s `forceTransparent`), anyone else not at all.
+#![cfg(feature = "client")]
 use crate::game::{Audio, Settings, load_resources};
 use std::sync::Arc;
 use sunrise_command::args::GameMode;

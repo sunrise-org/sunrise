@@ -18,6 +18,7 @@ pub(crate) fn item_observer() -> (Observer, mod_api::Mods) {
     (observer, mods)
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn the_item_event_names_this_client_on_a_predicted_use() {

@@ -3,6 +3,7 @@
 //! frame; the mods' layers and the render hook pair still run around it, a canceled
 //! `render_living_pre` skips it, and a failing renderer leaves the type its own model until a
 //! resource reload resolves it again.
+#![cfg(feature = "client")]
 use mod_api::{
     BlockEntityDrawContext, EntityRenderLayer, EntityRenderState, EntityRenderer, FrameModel,
     Hooks, LayerTarget, Pose, RegisterEntityLayersEvent, RegisterEntityRenderersEvent,

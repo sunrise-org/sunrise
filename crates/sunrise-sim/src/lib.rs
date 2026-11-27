@@ -38,7 +38,6 @@ pub use sunrise_world::json_folder;
 pub use sunrise_world::moving_colliders;
 
 // --- lowered level re-exports ---
-#[cfg(target_os = "linux")]
 pub use sunrise_level::api_context;
 pub use sunrise_level::assets;
 pub use sunrise_level::audio_capture;
@@ -75,6 +74,7 @@ pub use sunrise_level::pack_meta;
 pub use sunrise_level::pack_tags;
 pub use sunrise_level::par;
 pub use sunrise_level::particle_options;
+#[cfg(target_os = "linux")]
 pub use sunrise_level::perf_capture;
 pub use sunrise_level::poi_sections;
 pub use sunrise_level::potent_sulfur_level;

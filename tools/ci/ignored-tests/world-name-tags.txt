@@ -1,12 +1,23 @@
-# World-space name tags with prepared resources.
+# World-space name tags and posed world text with prepared resources.
 sunrise-client-gameplay game::client_side::world_name_tag_tests::a_deep_label_renders_and_non_finite_is_refused lib daily resources
 sunrise-client-gameplay game::client_side::world_name_tag_tests::a_label_hides_behind_a_wall_unless_it_is_see_through lib daily resources
 sunrise-client-gameplay game::client_side::world_name_tag_tests::a_label_keeps_the_name_tag_styles lib daily resources
+sunrise-client-gameplay game::client_side::world_name_tag_tests::a_labels_scale_sizes_its_text_and_the_default_is_a_name_tags lib daily child-process
 sunrise-client-gameplay game::client_side::world_name_tag_tests::a_render_hook_can_add_labels_to_both_depth_passes lib daily resources
 sunrise-client-gameplay game::client_side::world_name_tag_tests::a_see_through_label_is_lit_at_least_2_in_the_world_and_unlit_over_it lib daily resources
 sunrise-client-gameplay game::client_side::world_name_tag_tests::labels_four_times_as_far_are_a_quarter_the_size_on_screen lib daily resources
 sunrise-client-gameplay game::client_side::world_name_tag_tests::labels_grow_past_initial_quad_hint_and_upload_glyphs lib daily resources
 sunrise-client-gameplay game::client_side::world_name_tag_tests::the_text_background_opacity_sets_the_backdrop_and_the_faded_text lib daily resources
 sunrise-client-gameplay game::client_side::world_name_tag_tests::without_see_through_a_label_is_one_translucent_copy_in_the_callers_light lib daily resources
+sunrise-client-gameplay game::client_side::world_text_tests::a_backdrop_spans_a_pixel_round_the_advance_and_ten_pixels_down lib daily resources
+sunrise-client-gameplay game::client_side::world_text_tests::a_colour_keeps_its_alpha lib daily resources
+sunrise-client-gameplay game::client_side::world_text_tests::a_drop_shadow_is_a_quarter_bright_copy_a_pixel_right_and_down_and_none_with_an_outline lib daily resources
+sunrise-client-gameplay game::client_side::world_text_tests::an_outline_and_a_backdrop_keep_their_depth_order_at_name_tag_distance lib daily resources
+sunrise-client-gameplay game::client_side::world_text_tests::an_outline_rings_each_glyph_in_its_colour_and_a_backdrop_goes_behind lib daily resources
+sunrise-client-gameplay game::client_side::world_text_tests::glowing_outlined_text_is_full_bright_in_its_rings_and_its_text lib daily resources
+sunrise-client-gameplay game::client_side::world_text_tests::glowing_text_is_full_bright_and_see_through_text_is_unlit_over_everything lib daily resources
+sunrise-client-gameplay game::client_side::world_text_tests::posed_text_shows_the_side_it_reads_from_as_a_name_tag_shows_the_camera lib daily resources
+sunrise-client-gameplay game::client_side::world_text_tests::posed_text_turns_and_rolls_as_its_pose_says_and_non_finite_is_refused lib daily resources
+sunrise-client-gameplay game::client_side::world_text_tests::see_through_text_keeps_its_backdrop_and_its_outline_over_everything lib daily resources
 sunrise-client-render gfx::entity_pixel_test::see_through_tests::graded_light_shows_on_lit_quads_and_not_on_unlit_see_through_ones lib daily slow
 sunrise-client-render gfx::entity_pixel_test::see_through_tests::see_through_quads_draw_over_the_wall_that_hides_entity_quads lib daily slow

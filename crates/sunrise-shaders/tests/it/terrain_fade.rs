@@ -10,7 +10,7 @@ fn requested_fade_feature_loads() {
         "iris.features.optional=FADE_VARIABLE\niris.features.required=FADE_VARIABLE\n",
         &Macros::standard(),
     );
-    let notes = Macros::feature_notes(&properties);
+    let notes = Macros::standard().feature_notes(&properties);
     assert!(notes.is_empty(), "requested fade rejected: {notes:?}");
 }
 
@@ -126,7 +126,10 @@ fn fade_feature_negotiation_ignores_case_and_defines_no_macro() {
     ] {
         let macros = Macros::standard();
         let properties = Properties::parse(request, &macros);
-        assert_eq!(!Macros::feature_notes(&properties).is_empty(), rejected);
+        assert_eq!(
+            !Macros::standard().feature_notes(&properties).is_empty(),
+            rejected
+        );
         // No `IRIS_FEATURE_*` (spec OQ-2): the pack keeps its base path.
         let selected = Properties::parse(
             "#ifdef IRIS_FEATURE_fade_variable\nprobe=transition\n#else\nprobe=opaque\n#endif\n",

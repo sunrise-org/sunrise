@@ -3,7 +3,9 @@
 pub(crate) mod tests {
 
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_lifecycle_common::NativeLifecycleCommonGameExt1 as _;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_passages::tests::RemoveOnSecondSent;
 
     use sunrise_gameplay_common::game::native_passages::tests::doorway;
@@ -16,19 +18,25 @@ pub(crate) mod tests {
 
     use sunrise_gameplay::game::native_passages::tests::listen;
 
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_passages::HeldRefusal;
 
+    #[cfg(feature = "client")]
     use sunrise_protocol::passage_sync::PassageForm;
 
+    #[cfg(feature = "client")]
     use mod_api::PassageRegistrationError as Refused;
 
     use crate::game::Dim;
 
+    #[cfg(feature = "client")]
     use crate::game::native_entity_refs::tests::{with_client_game, with_game};
 
     use crate::game::native_guest_turn_tests::with_guests;
 
-    use mod_api::{DimensionKey, LevelRef, Passage, PassageId, Vec3, WorldEpoch};
+    use mod_api::{DimensionKey, Passage, PassageId};
+    #[cfg(feature = "client")]
+    use mod_api::{LevelRef, Vec3, WorldEpoch};
 
     use std::sync::{Arc, mpsc};
 
@@ -38,11 +46,13 @@ pub(crate) mod tests {
 
     use sunrise_protocol::passage_sync::Message;
 
+    #[cfg(feature = "client")]
     use sunrise_protocol::passage_sync::encode;
 
     /// Passages are numbered from 1 in order; a chunk takes 8 and a level 256, and the next
     /// is refused with nothing registered; a removal frees its place once. A stale handle
     /// and a client register nothing.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_level_numbers_its_passages_and_refuses_past_its_caps() {
@@ -105,6 +115,7 @@ pub(crate) mod tests {
     /// A level's passages and their untold changes go when it closes: reopened, it starts
     /// with no passage and its whole caps, and numbering goes on (1 is not given again).
     /// A failed open retires everything, the window's copy too.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn passages_go_with_their_level_and_world() {
@@ -131,6 +142,7 @@ pub(crate) mod tests {
     /// A destination in another level is registered only while that level is open: one that
     /// is not open, and the passage's own level, are refused `UnknownLevel`, with nothing
     /// registered.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_destination_level_must_be_open_and_another_level() {
@@ -443,6 +455,7 @@ pub(crate) mod tests {
     /// chunk, and the mod removes it at the second, before the tick's end told it to the
     /// rest. The removal still reaches 12, which ends with no passage, and 13 is told
     /// only the removal.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_passage_sent_with_its_chunk_and_removed_in_the_same_tick_leaves_no_ghost() {
@@ -519,6 +532,7 @@ pub(crate) mod tests {
     /// server removes it or the window forgets the chunk. It refuses by name a passage the
     /// server could not have registered, one for a chunk it does not hold, and a 257th,
     /// across packets; a number sent again replaces its passage.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn the_window_keeps_only_passages_it_can_hold() {

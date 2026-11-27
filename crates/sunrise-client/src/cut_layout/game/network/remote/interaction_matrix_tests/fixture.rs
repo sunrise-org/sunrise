@@ -2,11 +2,15 @@
 //! Control data: [use_block, use_item, before, block, after, right_click]. Switches are
 //! Default/True/False = 0/1/2; answers are Continue/Pass/Fail/Success/
 //! SuccessServer/Consume/TryWithEmptyHand = 0/1/2/3/4/5/6.
+#[cfg(feature = "client")]
 use mod_api::{Flow, Hand, HostSide, InteractionResult, LogicalSide, TriState, UsePhase};
+#[cfg(feature = "client")]
 use std::sync::Mutex;
 
+#[cfg(feature = "client")]
 static STATE: Mutex<([u8; 6], Vec<u8>)> = Mutex::new(([0; 6], Vec::new()));
 
+#[cfg(feature = "client")]
 fn answer(value: u8) -> Option<InteractionResult> {
     Some(match value {
         0 => return None,
@@ -20,6 +24,7 @@ fn answer(value: u8) -> Option<InteractionResult> {
     })
 }
 
+#[cfg(feature = "client")]
 fn switch(value: u8) -> TriState {
     match value {
         0 => TriState::Default,
@@ -29,6 +34,7 @@ fn switch(value: u8) -> TriState {
     }
 }
 
+#[cfg(feature = "client")]
 fn record(trace: &mut Vec<u8>, phase: u8, hand: Hand, side: LogicalSide, empty: bool) {
     trace.extend([
         phase,
@@ -38,6 +44,7 @@ fn record(trace: &mut Vec<u8>, phase: u8, hand: Hand, side: LogicalSide, empty: 
     ]);
 }
 
+#[cfg(feature = "client")]
 pub fn right_click_block(_: HostSide<'_>, event: &mut mod_api::RightClickBlockEvent<'_>) -> Flow {
     let mut state = STATE.lock().unwrap();
     *event.use_block = switch(state.0[0]);
@@ -57,6 +64,7 @@ pub fn right_click_block(_: HostSide<'_>, event: &mut mod_api::RightClickBlockEv
     }
 }
 
+#[cfg(feature = "client")]
 pub fn use_item_on_block(_: HostSide<'_>, event: &mut mod_api::UseItemOnBlockEvent<'_>) -> Flow {
     let phase = match event.phase {
         UsePhase::ItemBeforeBlock => 1,
@@ -79,12 +87,14 @@ pub fn use_item_on_block(_: HostSide<'_>, event: &mut mod_api::UseItemOnBlockEve
     Flow::Cancel
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn begin(controls: [u8; 6]) {
     let mut state = STATE.lock().unwrap();
     state.0 = controls;
     state.1.clear();
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn finish() -> Vec<u8> {
     std::mem::take(&mut STATE.lock().unwrap().1)
 }

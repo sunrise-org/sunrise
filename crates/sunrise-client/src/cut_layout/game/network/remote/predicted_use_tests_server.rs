@@ -1,6 +1,8 @@
+#![cfg(feature = "client")]
 use super::*;
 use crate::game::remote::interaction_event_tests::predicted_use_tests::*;
 
+#[cfg(feature = "client")]
 pub(crate) fn matrix(mods: mod_api::Mods) {
     mod_platform::testing::with_mods(mods.clone(), || {
         sunrise_gameplay_common::game::api_values::install_parts(&mods).unwrap();

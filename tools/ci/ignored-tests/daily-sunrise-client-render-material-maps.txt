@@ -1,0 +1,7 @@
+# Animated LabPBR maps uploaded with their box-mean mips and copied into a shader pack's material
+# atlases only where written, and those atlases freed with the pack (#355); the renderer fixtures
+# re-run themselves in a child process with throwaway homes.
+sunrise-client-render gfx::material_animation::tests::uploads_write_every_level_of_the_due_layers lib daily gpu
+sunrise-client-render gfx::material_animation_renderer_tests::an_animated_map_reaches_only_its_own_atlas_layer lib daily child-process
+sunrise-client-render gfx::material_animation_renderer_tests::an_animated_map_reaches_only_its_own_grid_atlas_layer lib daily child-process
+sunrise-client-render pack_material_atlases_go_with_the_pack test:pack_material_maps daily child-process

@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 #![cfg(test)]
 //! Full-context and canvas gradients through the game's generated dispatch: vanilla's colour
 //! order with a clip or pose. Zero area, one-axis inversion and non-finite input draw nothing;

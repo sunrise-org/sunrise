@@ -19,7 +19,16 @@ fi
 mkdir -p .local "$shared/prepared"
 
 # SUNRISE_PREPARE_KEY: the same key, computed where the Git history is (tools/pr_ready.py on another machine).
-sha256() { if command -v shasum > /dev/null; then shasum -a 256; else sha256sum; fi; }
+# shasum is macOS's; sha256sum is GNU's; Python's hashlib is the fallback where neither exists.
+sha256() {
+  if command -v shasum > /dev/null; then
+    shasum -a 256
+  elif command -v sha256sum > /dev/null; then
+    sha256sum
+  else
+    python3 -c 'import hashlib, sys; print(hashlib.sha256(sys.stdin.buffer.read()).hexdigest() + "  -")'
+  fi
+}
 key=${SUNRISE_PREPARE_KEY:-$(git ls-files -s crates/sunrise-prepare mods/sunrise/src/test/java research-lock.json tools/ci/vanilla-data.sh tools/ci/seed_prepared_extras.py tools/prepare_output.py | sha256 | cut -c1-16)}
 prepared="$shared/prepared/$key"
 # .entries stores output names only, not a digest of the preparation that made them.
@@ -46,16 +55,48 @@ else
 fi
 # Dyna keeps $prepared on the slot between jobs, so a job must never change it: it is only ever read here,
 # against the digest of its files written when its preparation finished, and the job gets a private copy.
-# Each file's digest, then one digest of the list; .manifest* themselves are left out.
+# Each file's digest, then one digest of the list; .manifest* themselves are left out. Python, because stock macOS has
+# no sha256sum, its sort has no -z and its xargs no -r. Regular files only (symbolic links are not followed), in byte
+# order of their paths, one `<sha256>  ./<path>` line each, exactly as GNU sha256sum prints them (a name with a
+# backslash, newline or carriage return gets a leading backslash and is escaped, so each file stays one line). The
+# walk fails closed: os.walk ignores unreadable directories unless told otherwise, and a partial list must never
+# pass for a fresh cache, so the first error ends the script with a nonzero status, as the old find pipeline did.
+# On Windows (Git Bash) the walk's directory separator is normalized to /, so it is never mistaken for a name's backslash.
 file_digests() {
-  (cd "$1" && find . -type f ! -name '.manifest*' -print0 | LC_ALL=C sort -z | xargs -0 -r sha256sum)
+  python3 -c '
+import hashlib, os, stat, sys
+def fail(error):
+    raise error
+os.chdir(sys.argv[1])
+found = []
+for top, _, names in os.walk(".", followlinks=False, onerror=fail):
+    for name in names:
+        path = os.path.join(top, name)
+        if not name.startswith(".manifest") and stat.S_ISREG(os.lstat(path).st_mode):
+            rel = path[2:]
+            if os.sep != "/":
+                rel = rel.replace(os.sep, "/")
+            found.append(rel)
+for rel in sorted(found, key=os.fsencode):
+    digest = hashlib.sha256()
+    with open(rel, "rb") as file:
+        for chunk in iter(lambda: file.read(65536), b""):
+            digest.update(chunk)
+    raw = b"./" + os.fsencode(rel)
+    if any(b in raw for b in (b"\\", b"\n", b"\r")):
+        esc = raw.replace(b"\\", b"\\\\").replace(b"\n", b"\\n").replace(b"\r", b"\\r")
+        line = b"\\" + digest.hexdigest().encode() + b"  " + esc + b"\n"
+    else:
+        line = digest.hexdigest().encode() + b"  " + raw + b"\n"
+    sys.stdout.buffer.write(line)
+' "$1"
 }
 digest() { file_digests "$1" | sha256 | cut -c1-16; }
 # The job's own copy (reflinks where the file system has them): what tests write stays out of the kept tree.
 use_private_copy() {
   local work="$shared/job"
   rm -rf "$work"
-  cp -a --reflink=auto "$prepared" "$work"
+  if [ "$(uname)" = Darwin ]; then cp -cRpP "$prepared" "$work"; else cp -a --reflink=auto "$prepared" "$work"; fi
   for name in minecraft tools; do ln -sfn "$source/$name" ".local/$name"; done
   while read -r name; do ln -sfn "$work/$name" ".local/$name"; done < "$work/.entries"
   echo "prepared key $key: private copy for this job ($(find "$work" -type f | wc -l) files)"

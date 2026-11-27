@@ -80,6 +80,7 @@ pub(crate) mod tests {
     }
     /// A Part that reads `ItemStack::use_animation` of its own stack from inside its callback
     /// gets the item's own answer: the read does not ask the Part again (which never ended).
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_use_animation_read_inside_the_part_is_not_asked_again() {
@@ -139,6 +140,7 @@ pub(crate) mod tests {
     }
     /// Inside a Part, reading another stack's effective animation still asks that stack's Part:
     /// only a read of the stack being asked is answered without its Part.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn another_stacks_part_is_asked_from_inside_a_part() {
@@ -205,6 +207,7 @@ pub(crate) mod tests {
     /// A Part that reads the animation of a transformed copy of its own stack (one more in the
     /// count, each time) is not asked again: the copy gets the item's own answer, and the Part
     /// runs once per read instead of re-entering itself with each new count.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_part_reading_a_transformed_copy_is_not_asked_again() {
@@ -254,6 +257,7 @@ pub(crate) mod tests {
             },
         );
     }
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn patched_bow_keeps_vanilla_animation_without_listener() {
@@ -295,6 +299,7 @@ pub(crate) mod tests {
 #[cfg(test)]
 pub(crate) mod interact_vibration_tests {
     use super::*;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::GameGameExt1;
 
     use sunrise_gameplay::game::server_side::item_use::interact_vibrations;
@@ -394,6 +399,7 @@ pub(crate) mod interact_vibration_tests {
         assert!(lines.is_empty(), "{lines:?}");
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn cake_context_uses_can_eat_instead_of_raw_hunger() {
@@ -566,6 +572,7 @@ pub(crate) mod interact_vibration_tests {
 
     /// The listener sees the logged-in remote player on a client, and a food
     /// stack with no resolvable eater keeps vanilla's answer without asking it.
+    #[cfg(feature = "client")]
     fn can_eat_player_on_client_and_without_eater() {
         use mod_api::{CanEatEvent, Hooks};
         use std::sync::{
@@ -946,6 +953,7 @@ pub(crate) mod interact_vibration_tests {
 }
 use sunrise_gameplay_common::game::tables::GameItems as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::cake_eligibility::CakeEligibilityGameExt1 as _;
 
 use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;

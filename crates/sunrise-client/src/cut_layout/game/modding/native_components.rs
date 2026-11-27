@@ -133,8 +133,11 @@ pub(crate) mod enchantment_conflict_tests {
 
 #[cfg(test)]
 pub(crate) mod item_resource_property_tests {
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::api_values::test_snapshot;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::tables::GameItems;
     pub(crate) fn engine(
         resource: &mod_api::ItemResource,
@@ -161,12 +164,14 @@ pub(crate) mod item_resource_property_tests {
     #[allow(unused_imports)]
 pub(crate) use crate::game::server_side::native_components_server::item_resource_property_tests::run_effective_resource_properties_match_vanilla;
     /// Changed defaults and a patched mod consumable exercise the real game consumers.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn item_resource_changed_defaults_and_consumption() {
         run_item_resource_changed_defaults_and_consumption();
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn run_item_resource_changed_defaults_and_consumption() {
         use mod_api::{ComponentId, ItemResource, Tag};
         use serde_json::json;

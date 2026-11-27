@@ -1,4 +1,5 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use sunrise_client::hud::HudBatch;
 #[cfg(feature = "client")]
 #[cfg(test)]

@@ -1,6 +1,7 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use sunrise_client::hud::HudBatch;
-#[cfg(test)]
+#[cfg(all(test, feature = "client"))]
 mod tests {
     use super::*;
 

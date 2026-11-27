@@ -58,6 +58,18 @@ impl Gpu {
         world: World<'_>,
         inputs: sunrise_shaders::GameInputs,
     ) -> PackPost {
+        self.load_with(files, world, inputs, sunrise_shaders::Macros::standard())
+            .0
+    }
+    /// [`Self::load`] with `macros` as the game's load starts with them, and the notes
+    /// `read_properties` gives for the pack's feature flags.
+    pub(super) fn load_with(
+        &self,
+        files: Vec<(String, String)>,
+        world: World<'_>,
+        inputs: sunrise_shaders::GameInputs,
+        mut macros: sunrise_shaders::Macros,
+    ) -> (PackPost, Vec<String>) {
         use std::io::{Cursor, Write};
         let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
         for (name, contents) in files {
@@ -73,8 +85,7 @@ impl Gpu {
             zip.finish().unwrap().into_inner(),
         )
         .unwrap();
-        let mut macros = sunrise_shaders::Macros::standard();
-        let (properties, _) = sunrise_shaders::read_properties(&pack, &mut macros);
+        let (properties, feature_notes) = sunrise_shaders::read_properties(&pack, &mut macros);
         let post = sunrise_shaders::load_post(&pack, "", &properties, &macros, &inputs);
         assert!(
             post.programs.iter().any(|p| p.name == "final"),
@@ -96,7 +107,7 @@ impl Gpu {
             "{:?}",
             built.notes
         );
-        built
+        (built, feature_notes)
     }
     pub(super) fn clear(
         &self,

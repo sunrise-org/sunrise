@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use mod_api::{
     BlockPart, BounceOnEvent, BounceRestitutionEvent, Flow, Hooks, LevelRandomHost, LevelSide,
     Registrar, RegistrationContext,

@@ -1,4 +1,5 @@
 //! Standalone upgrades through a mod callback on each logical side.
+#![cfg(feature = "client")]
 use mod_api::{
     Compound, Hooks, HostSide, LevelTickPreEvent, LogicalSide, ModEntry, NbtDataType,
     NbtUpgradeError, Tag,

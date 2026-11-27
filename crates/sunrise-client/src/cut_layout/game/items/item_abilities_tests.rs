@@ -294,17 +294,22 @@ fn without_parts_the_vanilla_item_checks_stand() {
 }
 
 /// The abilities [`Lights`] heard `block_tool_modification` ask, and whether a player acted.
+#[cfg(feature = "client")]
 static HEARD: std::sync::Mutex<Vec<(mod_api::ToolAbility, bool)>> =
     std::sync::Mutex::new(Vec::new());
 /// What `host.item_abilities()` answered [`Lights`].
+#[cfg(feature = "client")]
 static LISTED: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
 /// Where [`Lights`] takes every tool's answer away.
+#[cfg(feature = "client")]
 const REFUSED: [i32; 3] = [6, 64, 8];
 
 /// Parts as [`Mod`] attaches them, and a `block_tool_modification` listener that records
 /// the ability and keeps the block at [`REFUSED`] as it is.
+#[cfg(feature = "client")]
 struct Lights(Vec<Abilities>);
 
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for Lights {
     fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
@@ -332,6 +337,7 @@ impl Hooks for Lights {
 
 /// A grounded player with a full charge at (0.5, 64, 0.5), its speed the base
 /// `movement_speed` its first tick would set, so standing still passes the sweep's speed bound.
+#[cfg(feature = "client")]
 fn grounded(game: &mut sunrise_gameplay_common::game::CommonGame<'_>) {
     let start = Vec3::new(0.5, 64.0, 0.5);
     let mut player = sunrise_sim::motion::PlayerMotion::new(game.motion, start).unwrap();
@@ -340,6 +346,7 @@ fn grounded(game: &mut sunrise_gameplay_common::game::CommonGame<'_>) {
     game.player = Some(player);
 }
 
+#[cfg(feature = "client")]
 fn sweeps<'g, G>(game: &mut G) -> [bool; 3]
 where
     G: sunrise_gameplay_common::game::GameGameExt1<'g>,
@@ -362,6 +369,7 @@ where
 /// starter lighting a campfire by hand or from a dispenser asks `block_tool_modification` with
 /// `FirestarterLight`, a fire charge denied `firestarter_light` lights nothing, and the host
 /// lists the fourteen abilities.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn parts_answer_the_abilities_at_every_site() {
@@ -371,6 +379,7 @@ fn parts_answer_the_abilities_at_every_site() {
     );
 }
 
+#[cfg(feature = "client")]
 fn parts_answer_the_abilities_at_every_site_isolated() {
     use sunrise_client_gameplay::game::native_entity_refs::tests::with_client_game;
     use sunrise_gameplay::game::native_entity_refs::tests::with_game;
@@ -516,4 +525,5 @@ fn parts_answer_the_abilities_at_every_site_isolated() {
 
 use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::tool_modification::ToolModificationGameExt1 as _;

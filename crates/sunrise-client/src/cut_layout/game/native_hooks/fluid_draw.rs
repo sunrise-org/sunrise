@@ -1,8 +1,10 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use sunrise_client::hud::rgba;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::native_hooks::{FluidStack, Text, mod_api};
 
-#[cfg(test)]
+#[cfg(all(test, feature = "client"))]
 mod tests {
     use super::*;
     use mod_api::{ClientHost, FluidTooltipEvent, Hooks, ModEntry, Mods};

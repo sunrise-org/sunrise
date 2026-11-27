@@ -1,5 +1,6 @@
 //! A summoned bolt reaches a shader pack's `lightningBoltPosition` through the frame's bolts
 //! (`bolt_instances`, Sunrise's draw list): the last in the list, camera-relative, w = 1.
+#![cfg(feature = "client")]
 use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use sunrise_client::gfx::pack_uniforms::lightning_bolt_position;
 

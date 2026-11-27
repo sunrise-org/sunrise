@@ -1751,6 +1751,7 @@ pub fn build_compute(
         pack,
     )?;
     let local = c.module.entry_points[0].workgroup_size;
+    let indirect = c.indirect;
     let created = checked(device, || {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some(&name),
@@ -1788,6 +1789,22 @@ pub fn build_compute(
             return None;
         }
     };
+    let dispatch = match indirect {
+        None => Dispatch::Direct {
+            groups: c.work_groups,
+            render: c.work_groups_render,
+            local,
+        },
+        Some(i) => match checked(device, || {
+            crate::pack_post::indirect::IndirectDispatch::new(device, &name, i)
+        }) {
+            Ok(dispatch) => Dispatch::Indirect(Box::new(dispatch)),
+            Err(e) => {
+                notes.push(format!("{name}: skipped: {e}"));
+                return None;
+            }
+        },
+    };
     let written = image_buffers(&images);
     let image_copies = image_copies(&samplers, &images);
     let (before_colors, snapshots) = befores(&images);
@@ -1810,12 +1827,7 @@ pub fn build_compute(
         mod_uniforms,
         name,
         group,
-        pipeline: Pipeline::Compute {
-            pipeline,
-            groups: c.work_groups,
-            render: c.work_groups_render,
-            local,
-        },
+        pipeline: Pipeline::Compute { pipeline, dispatch },
         sky_parts: None,
         water_mask: None,
         polygon_offset: None,
@@ -2010,7 +2022,8 @@ pub struct PackPost {
     /// are cleared every frame.
     pub shadow_writes: u16,
     /// A shadow program, or a compute stage attached to one, binds the pack's storage buffers
-    /// (`bufferObject.*`, set 4): they are zeroed once and then kept between frames, and the
+    /// (`bufferObject.*`, set 4) or reads its work-group counts from one (`indirect.<pass>`,
+    /// `Pass::reads_buffers`): they are zeroed once and then kept between frames, and the
     /// cache key doesn't hold them, so the Shadow Cache never keeps such a pass.
     pub shadow_buffers: bool,
     /// Set 5 of programs with a geometry stage.
@@ -2500,7 +2513,7 @@ impl PackPost {
                 if in_shadow {
                     shadow_pass_images |= own | before;
                     shadow_writes |= p.written | p.flip | own;
-                    shadow_buffers |= p.buffers;
+                    shadow_buffers |= p.reads_buffers();
                 } else {
                     shadow_images_outside |= own | before;
                 }

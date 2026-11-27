@@ -14,7 +14,9 @@ mod tests {
     use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1;
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
     use sunrise_gameplay_common::game::native_level_refs_common::NativeLevelRefsCommonGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game_side;
+    #[cfg(feature = "client")]
     use sunrise_level::chunk::Chunk;
 
     /// Read the recorded generator, including absence and stale-handle cases.
@@ -70,6 +72,7 @@ mod tests {
     }
 
     /// A chunk of air with `biome` in every cell: full sky light everywhere.
+    #[cfg(feature = "client")]
     fn chunk_in(game: &sunrise_gameplay::game::ServerGame<'_>, x: i32, biome: &str) -> Arc<Chunk> {
         let id = game.res.biomes().id(biome);
         let mut chunk = Chunk::empty(x, 0);
@@ -81,6 +84,7 @@ mod tests {
         Arc::new(chunk)
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn rain_at_a_position_checks_sky_roof_and_biome() {
@@ -666,6 +670,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn weather_read_resolves_levels_and_refuses_stale_or_unavailable_handles() {

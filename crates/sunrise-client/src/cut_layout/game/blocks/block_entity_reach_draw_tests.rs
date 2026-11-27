@@ -3,6 +3,7 @@
 //! render distance (and the server's view distance, when the case has one) and asks the frame's
 //! own geometry whether anything is drawn from that camera. The End gateway, which draws through
 //! the frame's renderer, is asked the frame's off-screen selection instead.
+#![cfg(feature = "client")]
 use std::sync::Arc;
 use sunrise_items::items::ItemStack;
 use sunrise_level::{

@@ -6,6 +6,7 @@ pub(crate) mod tests {
     /// own cell while the feet rest on its 1.5-block collision; on a full block
     /// it is the block below the feet. Reading 0.2 below the feet, as the dust
     /// used to, lands in air on all three.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn the_ground_of_a_breeze_is_the_fence_wall_or_gate_it_stands_on() {
@@ -56,10 +57,14 @@ pub(crate) mod tests {
         assert_eq!(common.breeze_ground(&common.mobs[0]), ([8, 64, 8], stone));
     }
 
+    #[cfg(feature = "client")]
     use sunrise_core::geometry::Vec3;
+    #[cfg(feature = "client")]
     use sunrise_core::random::LegacyRandom;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::entity::Entity;
 
+    #[cfg(feature = "client")]
     #[allow(unused_imports)]
     pub(crate) use {
         crate::game::client_side::breezes_client::tests::game_with_breeze,
@@ -71,6 +76,7 @@ pub(crate) mod tests {
     /// supporting block, so the crumbs are the fence's. Every one of them is
     /// made by the particle's own generator (`Particle.random`), so the
     /// client level's random is where it was before the tick.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn the_dust_of_a_breeze_on_a_fence_keeps_the_client_level_random() {
@@ -122,6 +128,7 @@ pub(crate) mod tests {
 
     /// The control: a breeze standing on a full block's top also crumbles it,
     /// and its constructor's draws still leave the client level's random alone.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn the_dust_of_a_breeze_on_a_full_block_keeps_the_client_level_random() {

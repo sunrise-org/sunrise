@@ -14,6 +14,7 @@ pub fn start_dedicated_game(
     res: &Arc<Resources>,
     pack: PackResources,
     options: Options,
+    vanilla_root: std::path::PathBuf,
     mut settings: SimSettings,
     started: Instant,
     prepared: Option<ServerCpuResources>,
@@ -37,6 +38,7 @@ pub fn start_dedicated_game(
     };
     let mut game =
         crate::game::ServerGame::new(res, pack, options, settings, prepared, profile_resolver)?;
+    game.ui.vanilla_root = vanilla_root;
     game.server.ticket_activation = Some(ticket_activation);
     game.server.dedicated_services = Some(services);
     if game.options.benchmark.is_some() {

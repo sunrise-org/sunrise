@@ -83,6 +83,7 @@ pub(crate) fn enchanted(item: &str, count: u32, levels: &[(&str, u32)]) -> ItemS
     stack
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn sound(name: &str) -> Value {
     json!({"type": "minecraft:play_sound", "sound": name,
         "volume": {"type": "minecraft:uniform", "min_inclusive": 0.5, "max_exclusive": 1.0},

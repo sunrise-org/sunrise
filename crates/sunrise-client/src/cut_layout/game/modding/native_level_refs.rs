@@ -1,19 +1,31 @@
 #![cfg(test)]
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "client")]
     use super::super::native_entity_refs::tests::{run_fresh_cases, with_client_game, with_game};
+    #[cfg(feature = "client")]
     use core::ops::ControlFlow;
-    use mod_api::{ChunkRef, LevelReadError, LevelRef, LightLayer, WorldEpoch};
+    #[cfg(feature = "client")]
+    use mod_api::{ChunkRef, LightLayer, WorldEpoch};
+    #[cfg(feature = "client")]
+    use mod_api::{LevelReadError, LevelRef};
+    #[cfg(feature = "client")]
     use sunrise_core::position::BlockPos;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::Dim;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::GameGameExt1;
     use sunrise_gameplay_common::game::api_values::TryIntoApi;
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_level_refs_common::NativeLevelRefsCommonGameExt1;
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::transactions::TransactionsGameExt;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::weather::WeatherGameExt;
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn review_climate_literals() {
@@ -48,6 +60,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_level_with_its_own_clock_counts_apart_from_the_overworlds() {
@@ -71,6 +84,7 @@ mod tests {
 
     /// A logical server with its worker queue running rather than the
     /// title-screen streamer's paused placeholder.
+    #[cfg(feature = "client")]
     fn with_chunk_streaming(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
         with_game(|game| {
             game.options.headless = true;
@@ -192,6 +206,7 @@ mod tests {
         assert_eq!(*heard.lock().unwrap(), vec![true, false]);
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn shared_level_signal_dispatches_and_clamps_part_output() {
@@ -223,6 +238,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn shared_level_signal_reads_live_comparator_and_refuses_other_levels() {
@@ -267,6 +283,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn respawn_data_maps_and_ticks_write_through_the_handle_and_refuse_others() {
@@ -405,6 +422,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     fn collect_chunks<T>(
         enumerate: impl FnOnce(
             &mut dyn FnMut(T) -> ControlFlow<()>,
@@ -421,6 +439,7 @@ mod tests {
         Ok(entries)
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn loaded_chunks_lists_the_level_in_order_without_loading() {
@@ -463,6 +482,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn bounds_reads_follow_the_level_without_loading_chunks() {
@@ -494,6 +514,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn world_border_reads_refuse_stale_and_unopened_levels() {
@@ -512,6 +533,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn height_reads_server_levels_and_the_joined_client_level() {
@@ -555,6 +577,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn block_state_reads_stored_ids_and_refuses_unloaded_positions() {
@@ -592,6 +615,7 @@ mod tests {
     /// `FlowingFluid.getFlow`: water one level below a source beside it flows away from the
     /// source, normalized; so does the source, toward it; a source with only air on stone
     /// around it, and air, have none.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn fluid_flow_reads_the_current_that_pushes_entities() {
@@ -631,6 +655,7 @@ mod tests {
     /// A stone floor under chunk (0, 0) at `y - 1` and the standing level `y` returned, with
     /// `fluids` placed `dy` blocks above it: each a block id and its `level` property (0 is a
     /// source).
+    #[cfg(feature = "client")]
     fn pool(
         game: &mut sunrise_gameplay::game::ServerGame<'_>,
         fluids: &[([i32; 3], &str, &str)],
@@ -666,6 +691,7 @@ mod tests {
     /// and lava's 30 ticks (10 where lava flows fast), an empty fluid's 0, a source 8/9 high
     /// under air and a full block under water, flowing water of level 5 a third high, the
     /// camera's full block under a sturdy ceiling, and what water and lava replace.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn fluid_queries_answer_vanilla_values_at_a_position() {
@@ -765,6 +791,7 @@ mod tests {
     }
 
     /// Lava flows fast in the Nether: the delay follows the level's own dimension.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn lava_ticks_every_ten_in_a_fast_lava_level() {
@@ -785,6 +812,7 @@ mod tests {
     /// An explicit fluid tick runs the flow step: a water source on a floor fills its four
     /// neighbours with flowing water of level 1 (amount 7), once; an empty cell, an unloaded
     /// column, a position below the world, a stale handle and a level not in place do nothing.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn an_explicit_fluid_tick_spreads_a_source_and_refuses_other_positions() {
@@ -820,6 +848,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn forced_chunks_set_clear_and_query_like_forceload() {
@@ -885,6 +914,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn paused_forced_loads_are_queued_and_stopped_generation_refuses_adds() {
@@ -961,6 +991,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn forced_chunk_changes_the_ticket_sources_and_the_saved_set() {
@@ -998,6 +1029,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn forced_chunks_of_a_parked_level_and_stale_handles() {
@@ -1049,6 +1081,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_level_ref_draws_from_its_levels_own_stream() {
@@ -1115,11 +1148,13 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     fn level_random_state(random: &sunrise_core::random::LegacyRandom) -> (u64, Option<u64>) {
         let (seed, gaussian) = <(u64, Option<f64>)>::from(random);
         (seed, gaussian.map(f64::to_bits))
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_level_rng_draws_survive_transaction_abort_on_active_and_parked_levels() {
@@ -1242,6 +1277,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     fn collect_mod_tickets(
         game: &sunrise_gameplay::game::ServerGame<'_>,
         level: LevelRef,
@@ -1254,6 +1290,7 @@ mod tests {
         })
     }
 
+    #[cfg(feature = "client")]
     fn in_mod(id: &'static str) -> mod_api::content::crash::ModGuard {
         mod_platform::content::crash::enter_native_mod(mod_api::content::crash::ModCall {
             id,
@@ -1262,21 +1299,27 @@ mod tests {
         })
     }
 
+    #[cfg(feature = "client")]
     fn record_validation(controller: &'static str, validation: &dyn TicketValidation) {
         let blocks = validation.block_tickets().keys().copied().collect();
         SEEN.with_borrow_mut(|seen| seen.push((controller, blocks)));
     }
 
-    use mod_api::{
-        self, ChunkLoadError, Hooks, ModEntry, Registrar, ServerHost, TicketController,
-        TicketValidation,
-    };
+    #[cfg(feature = "client")]
+    use mod_api::ChunkLoadError;
+    use mod_api::{self, TicketController};
+    #[cfg(feature = "client")]
+    use mod_api::{Hooks, ModEntry, Registrar, ServerHost, TicketValidation};
+    #[cfg(feature = "client")]
     use std::sync::Arc;
+    #[cfg(feature = "client")]
     use sunrise_level::mod_chunk_tickets::{ModTicket, TicketOwner};
 
     /// Registers three controllers: `quarry` and `drill` validate, `plain` doesn't. `quarry`'s
     /// validation prunes the block at [1, 64, 1]; each validation tells what it was shown.
+    #[cfg(feature = "client")]
     struct Machines;
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Machines {
         fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
@@ -1306,7 +1349,9 @@ mod tests {
         }
     }
     /// Registers one validating controller, and prunes everything it is shown.
+    #[cfg(feature = "client")]
     struct Other;
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Other {
         fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
@@ -1333,6 +1378,7 @@ mod tests {
             std::cell::RefCell::new(std::collections::HashMap::new());
     }
 
+    #[cfg(feature = "client")]
     fn mods() -> mod_api::Mods {
         vec![
             ModEntry::new("machines", Box::new(Machines)),
@@ -1340,17 +1386,21 @@ mod tests {
         ]
         .into()
     }
+    #[cfg(feature = "client")]
     fn controller(id: &str) -> TicketController {
         ISSUED.with_borrow(|issued| *issued.get(id).unwrap())
     }
     /// The save-deserialization slot of a registered controller id.
+    #[cfg(feature = "client")]
     fn known_slot(id: &str) -> Option<u32> {
         mod_api::__private::game::ticket_controller_slot_by_id(id)
     }
+    #[cfg(feature = "client")]
     fn quarry() -> TicketController {
         controller("machines:quarry")
     }
     /// A game whose mods are `Machines` and `Other`, with their controllers registered.
+    #[cfg(feature = "client")]
     fn with_machines(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
         mod_platform::testing::with_mods(mods(), || {
             with_chunk_streaming(|game| {
@@ -1359,6 +1409,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn water_tickets_hydrate_real_farmland_and_preserve_vanilla_water_and_rain() {
@@ -1445,6 +1496,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn water_ticket_handles_isolate_dimensions_owners_and_unload_lifetimes() {
@@ -1595,6 +1647,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn water_tickets_are_not_restored_with_saved_farmland() {
@@ -1657,6 +1710,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn mod_tickets_are_scoped_by_owner_and_share_the_forceload_store() {
@@ -1814,6 +1868,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn mod_tickets_save_apart_from_vanillas_tickets_and_release_with_the_world() {
@@ -1879,6 +1934,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_mod_ticket_keeps_a_parked_level_active() {
@@ -1904,6 +1960,7 @@ mod tests {
     }
 
     /// The result `/forceload query` gives: the chunks listed, or 0 when it reports none.
+    #[cfg(feature = "client")]
     fn query_result(
         game: &mut sunrise_gameplay::game::ServerGame<'_>,
         command: &str,
@@ -1915,6 +1972,7 @@ mod tests {
         game.run_chain(&root, &ctx).ok()
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn forceload_add_returns_with_each_new_column_loaded() {
@@ -1939,7 +1997,9 @@ mod tests {
     }
 
     /// Hears `chunk_load`, noting whether the chunk was resident when it heard it.
+    #[cfg(feature = "client")]
     struct Loads;
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Loads {
         fn chunk_load(&self, host: &mut dyn ServerHost, event: &mut mod_api::ChunkLoadEvent<'_>) {
@@ -1964,6 +2024,7 @@ mod tests {
     /// `UNKNOWN` ticket keeps it through the next tick's unload sweep and expires at the one
     /// after (a timeout of 1, removed below zero), whose sweep unloads it as any chunk with no
     /// ticket. A parked level loads the same way, without switching levels.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn load_chunk_brings_a_lit_full_chunk_under_a_ticket_that_expires_after_a_tick() {
@@ -2066,6 +2127,7 @@ mod tests {
     /// the same tick answers from them and leaves the `UNKNOWN` ticket as the first load placed
     /// it: it expires at the second purge, whose sweep unloads the chunk. Without the read's entry
     /// the second load would set the ticket again and the chunk would stay.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_resident_read_lets_load_chunk_answer_without_a_new_ticket() {
@@ -2106,6 +2168,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn forceload_query_lists_only_command_tickets() {
@@ -2128,6 +2191,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn natural_spawning_tickets_and_plain_ones_save_and_load_apart() {
@@ -2184,6 +2248,7 @@ mod tests {
     /// The flag adds a chunk to the spawning chunks (inhabited time, a spawn
     /// attempt); the local mob cap still wants a non-spectator within 128
     /// blocks of its centre.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_natural_spawning_ticket_far_from_every_player_runs_the_attempt_but_the_local_cap_refuses()
@@ -2233,6 +2298,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     fn saved(controller: &str, pos: [i32; 3], chunk: (i32, i32)) -> ModTicket {
         ModTicket {
             controller: controller_slot(controller),
@@ -2241,10 +2307,12 @@ mod tests {
             natural_spawning: false,
         }
     }
+    #[cfg(feature = "client")]
     fn controller_slot(id: &str) -> u32 {
         known_slot(id).unwrap()
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn validation_drops_a_removed_ticket_and_leaves_the_rest() {
@@ -2294,6 +2362,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn validation_panic_disables_only_its_controller_for_the_session() {
@@ -2392,6 +2461,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn validation_runs_when_a_parked_level_opens_and_not_without_a_listener() {
@@ -2449,6 +2519,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn validation_sees_the_saved_tickets_not_ones_added_after_the_load() {
@@ -2480,6 +2551,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     fn with_night_client_game(
         test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
     ) {
@@ -2513,6 +2585,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn light_and_loaded_reads_match_the_games_query_and_load_nothing() {
@@ -2596,6 +2669,7 @@ mod tests {
     /// `check_light` queues the cell with the level's light edits, its state set to itself,
     /// where the next update asks a `dynamic_light` block again and relights it; a stale
     /// handle and a position that isn't loaded queue nothing.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn check_light_queues_the_cell_with_the_light_edits() {
@@ -2625,18 +2699,26 @@ mod tests {
 
 #[cfg(test)]
 pub(crate) mod environment_read_tests {
+    #[cfg(feature = "client")]
     use mod_api::{BiomeSearch, LevelRef, WorldEpoch};
+    #[cfg(feature = "client")]
     use std::sync::Arc;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::weather::WeatherGameExt;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::world_biomes;
+    #[cfg(feature = "client")]
     use sunrise_level::chunk::Chunk;
+    #[cfg(feature = "client")]
     use {
         crate::game::server_side::native_entity_refs::tests::with_client_game,
         sunrise_gameplay::game::native_entity_refs::tests::with_game,
         sunrise_gameplay_common::game::Dim,
     };
 
+    #[cfg(feature = "client")]
     fn paint_biome(game: &mut sunrise_gameplay_common::game::CommonGame<'_>, name: &str) {
         let biome = world_biomes!(game).id(name);
         let mut chunk = Chunk::empty(0, 0);
@@ -2650,12 +2732,14 @@ pub(crate) mod environment_read_tests {
         game.world.chunks.insert((0, 0), Arc::new(chunk));
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn biome_reads_follow_live_cells_parked_levels_and_client_login_without_loading() {
         run_biome_reads_follow_live_cells_parked_levels_and_client_login_without_loading();
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn run_biome_reads_follow_live_cells_parked_levels_and_client_login_without_loading()
     {
         use sunrise_protocol::connection::Pipe;
@@ -2727,12 +2811,14 @@ pub(crate) mod environment_read_tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn floor_reads_real_collision_shapes_and_refuses_unloaded_positions() {
         run_floor_reads_real_collision_shapes_and_refuses_unloaded_positions();
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn run_floor_reads_real_collision_shapes_and_refuses_unloaded_positions() {
         with_game(|game| {
             game.world
@@ -2777,12 +2863,14 @@ pub(crate) mod environment_read_tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn sky_and_logical_height_read_the_named_dimension_and_client_state() {
         run_sky_and_logical_height_read_the_named_dimension_and_client_state();
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn run_sky_and_logical_height_read_the_named_dimension_and_client_state() {
         use sunrise_level::chunk::LevelShape;
         use sunrise_protocol::connection::Pipe;
@@ -2866,12 +2954,14 @@ pub(crate) mod environment_read_tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn closest_biome_uses_the_named_generator_without_loading_resident_chunks() {
         run_closest_biome_uses_the_named_generator_without_loading_resident_chunks();
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn run_closest_biome_uses_the_named_generator_without_loading_resident_chunks() {
         use sunrise_sim::vanillagen::{TerrainResources, VanillaTerrain};
 
@@ -2983,12 +3073,14 @@ pub(crate) mod environment_read_tests {
     /// `4 * 32 + (nextDouble - 0.5) * 32 * 2.5` chunks from the origin, 88 to 168
     /// (`ConcentricRingsStructurePlacement` with distance 32), each then moved
     /// to a biome it may start in within 112 blocks.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn nearest_structure_uses_the_named_generator_without_loading_resident_chunks() {
         run_nearest_structure_uses_the_named_generator_without_loading_resident_chunks();
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn run_nearest_structure_uses_the_named_generator_without_loading_resident_chunks() {
         use mod_api::StructureSearch;
         use sunrise_sim::vanillagen::{TerrainResources, VanillaTerrain};
@@ -3111,6 +3203,7 @@ pub(crate) mod environment_read_tests {
     /// builds: inside a piece both name it, between its pieces only the bounding box does, a tag
     /// and a bare id name it too, another structure is not there, and an unloaded chunk or a
     /// stale level gives no answer.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn structures_at_reads_the_loaded_chunks_references() {
@@ -3216,12 +3309,14 @@ pub(crate) mod environment_read_tests {
     }
 
     /// API results over original fixture worlds, compared with independently recorded vanilla calls.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn level_environment_reads_match_vanilla_vectors() {
         run_level_environment_reads_match_vanilla_vectors();
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn run_level_environment_reads_match_vanilla_vectors() {
         use serde_json::{Value, json};
         use std::collections::HashMap;

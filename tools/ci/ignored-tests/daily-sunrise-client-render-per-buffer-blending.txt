@@ -1,0 +1,6 @@
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+# A required PER_BUFFER_BLENDING answered by the device (#343): the GPU test of the answer and its draw, and the
+# real Renderer's pack macros against the adapter it opened, re-running itself in a child process with throwaway
+# homes (with_xvfb.py).
+sunrise-client-render gfx::pack_post::per_buffer_blending_tests::a_device_that_draws_per_buffer_blends_supports_the_required_flag lib daily gpu
+sunrise-client-render gfx::pack_post::per_buffer_blending_tests::the_renderers_macros_answer_per_buffer_blending lib daily child-process

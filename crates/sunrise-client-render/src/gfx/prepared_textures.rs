@@ -13,7 +13,7 @@ pub struct PreparedTextures {
 
 /// Every level of `layers` square RGBA layers of `size`, each the mean of four texels of the
 /// one above, layer major: the LabPBR maps' mips (their channels are data, not colour).
-fn box_mip_chain(pixels: &[u8], size: u32, layers: u32) -> Vec<u8> {
+pub(super) fn box_mip_chain(pixels: &[u8], size: u32, layers: u32) -> Vec<u8> {
     let layer_bytes = (size * size * 4) as usize;
     let mut out = Vec::new();
     for layer in pixels.chunks_exact(layer_bytes).take(layers as usize) {

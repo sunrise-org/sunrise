@@ -52,6 +52,7 @@ pub(crate) fn assert_block_item_before_fallthrough(
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn block_pass_falls_through_but_fail_and_success_stop_the_apple() {
@@ -182,6 +183,7 @@ fn server_use_item_packet_fires_once_after_use_item_on_with_block_crosshair() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn targeted_item_fallthrough_keeps_hand_and_fail_vetoes_item_action() {

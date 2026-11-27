@@ -80,7 +80,7 @@ class RunTestBinariesTests(unittest.TestCase):
             # Arguments after cargo's own -- go to every binary, not to the listing.
             self.assertEqual((root / "cargo-args").read_text().split(),
                              ["test", "--workspace", "--no-run", "--message-format=json-render-diagnostics"])
-            self.assertIn(f"cwd={package} pkg=sunrise-world args=--ignored", output)
+            self.assertIn(f"cwd={package.resolve()} pkg=sunrise-world args=--ignored", output)
             self.assertIn("ran 3 test binaries", output)
             # std's directory beside the toolchain: a proc-macro crate's test binary links it dynamically.
             self.assertIn(f"{root}/sysroot/lib/rustlib/x86_64-unknown-linux-gnu/lib", output)

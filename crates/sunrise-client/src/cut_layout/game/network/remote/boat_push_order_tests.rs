@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use sunrise_gameplay_common::game::remote::Vec3;
 use sunrise_sim::motion::PlayerMotion;
 

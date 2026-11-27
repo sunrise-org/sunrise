@@ -17,6 +17,15 @@ class ModGpuAccessTests(unittest.TestCase):
         )
         self.assertEqual([n for n, _ in check.offenders(source)], [1, 3, 5, 6])
 
+    def test_test_import_does_not_hide_production_before_test_support_module(self):
+        source = (
+            "#[cfg(test)]\nuse mod_api::prelude::*;\n"
+            "fn draw(&self) { self.client.renderer.take(); }\n"
+            '#[cfg(any(test, feature = "test-support"))]\n'
+            "pub mod tests { fn setup(&self) { self.client.renderer.take(); } }\n"
+        )
+        self.assertEqual([n for n, _ in check.offenders(source)], [3])
+
     def test_the_guarded_files_are_clean(self):
         for name in check.GUARDED:
             self.assertEqual(check.offenders((check.ROOT / name).read_text()), [], name)

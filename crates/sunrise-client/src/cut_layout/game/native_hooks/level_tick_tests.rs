@@ -2,13 +2,19 @@
 
 #[cfg(test)]
 mod tests {
-    use mod_api::{Hooks, HostSide, LevelRef, LevelTickPostEvent, LevelTickPreEvent, ModEntry};
+    use mod_api::{Hooks, HostSide, LevelTickPreEvent, ModEntry};
+    #[cfg(feature = "client")]
+    use mod_api::{LevelRef, LevelTickPostEvent};
     use std::sync::{Arc, Mutex};
+    #[cfg(feature = "client")]
     use sunrise_client::level_loading::Reason;
+    #[cfg(feature = "client")]
     use sunrise_client_gameplay::game::client_side::remote_client::session_state::RemoteDimensionEntry;
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
     use sunrise_gameplay_common::game::native_hooks::base::GameHooks;
+    #[cfg(feature = "client")]
     use sunrise_protocol::{connection::Pipe, packets::play::SpawnInfo};
+    #[cfg(feature = "client")]
     use {
         crate::game::server_side::native_entity_refs::tests::with_client_game,
         sunrise_gameplay_common::game::native_lifecycle_common::NativeLifecycle,
@@ -100,7 +106,9 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     struct Moments(Arc<Mutex<Vec<(&'static str, LevelRef, Option<i64>)>>>);
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Moments {
         fn level_tick_pre(&self, host: HostSide, event: &mut LevelTickPreEvent) {
@@ -121,6 +129,7 @@ mod tests {
 
     /// One pre then one post for each client level tick, naming the level in
     /// place, and nothing before a tick or for a client with no level.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn client_level_tick_fires_pre_then_post_around_each_tick() {

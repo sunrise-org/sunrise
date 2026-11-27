@@ -8,6 +8,12 @@ use sunrise_shaders::Post;
 
 const VERTEX: &str = "#version 120\nvoid main() { gl_Position=ftransform(); }\n";
 
+/// The colour `composite1` writes, as 8-bit values over 255 (`64/255`, `128/255`, `191/255`
+/// to nine digits) so that the `Rgba8Unorm` colortex0 and the `Rgba8Unorm` screen hold exactly
+/// these bytes on every adapter: `[64, 128, 191, 255]` (see the assertion in the test).
+const COMPOSITE1: &str = "#version 120\n/* DRAWBUFFERS:0 */\n\
+     void main() { gl_FragData[0] = vec4(0.250980392, 0.501960784, 0.749019608, 1.0); }\n";
+
 /// A pack whose `composite` fragment stage is `fragment`, whose `composite1` writes a known
 /// colour to colortex0, and whose `final` shows colortex0.
 fn pack(fragment: &str) -> Post {
@@ -23,10 +29,7 @@ fn pack(fragment: &str) -> Post {
     add("composite.vsh", VERTEX);
     add("composite.fsh", fragment);
     add("composite1.vsh", VERTEX);
-    add(
-        "composite1.fsh",
-        "#version 120\n/* DRAWBUFFERS:0 */\nvoid main() { gl_FragData[0] = vec4(0.25, 0.5, 0.75, 1.0); }\n",
-    );
+    add("composite1.fsh", COMPOSITE1);
     add(
         "final.vsh",
         "#version 120\nvarying vec2 uv;\nvoid main() { uv=gl_MultiTexCoord0.xy; gl_Position=ftransform(); }\n",
@@ -78,6 +81,12 @@ fn an_output_far_past_the_buffers_does_not_size_the_targets() {
             post.notes
         );
         // The rest of the pack draws: composite1's colour reached colortex0, which `final` shows.
+        // Expected bytes, from the source values k/255 for k = 64, 128, 191 (alpha 1.0 = 255/255):
+        // colortex0 and the screen are `Rgba8Unorm` (the pack declares no format; `final` only
+        // samples and returns the texel), so the bytes are k. The float source is k/255 within
+        // 1e-7 relative, so f*255 is k within 1e-4 of a unit, half a unit from any rounding tie:
+        // no stage (store into colortex0, sample back as k/255, store into the screen) can round
+        // to another byte.
         let pixels = gpu.render(&mut post, [4, 4]);
         assert_eq!(
             pixels[0],

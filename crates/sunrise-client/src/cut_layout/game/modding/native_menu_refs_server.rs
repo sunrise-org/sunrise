@@ -1,25 +1,38 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use mod_api::EntityRef;
+#[cfg(feature = "client")]
 use mod_api::MenuSlotBacking;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
+#[cfg(feature = "client")]
 use sunrise_items::items::ItemStack;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::native_menu_refs_common::NativeMenuRefsCommonGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::native_server::NativeServerGameExt1 as _;
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[cfg(feature = "client")]
     use super::*;
+    #[cfg(feature = "client")]
     use sunrise_client_gameplay::game::client_side::native_menu_refs::tests::guest;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::api_values::TryIntoApi;
+    #[cfg(feature = "client")]
     use sunrise_sim::lan::menu::VEHICLE_KEY_Y;
+    #[cfg(feature = "client")]
     use sunrise_sim::lan::{NetConfig, hub::HubConfig};
+    #[cfg(feature = "client")]
     use {
         crate::game::server_side::native_entity_refs::tests::with_game,
         sunrise_gameplay::game::server_side::lan::LanSettings,
     };
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_server_closes_a_guests_menu_and_sets_their_selected_slot() {
@@ -133,6 +146,7 @@ pub(crate) mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn menus_read_storage_and_invalidate_on_replacement_wrap_and_reconnect() {

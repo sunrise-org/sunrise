@@ -1,4 +1,29 @@
+use crate::prelude::BlockEntitiesHost;
 use crate::testing::FakeHost;
+
+#[test]
+fn abort_restores_the_fake_resident_without_reusing_its_replacements_handle() {
+    let mut host = FakeHost::new();
+    let level = host.level.level();
+    let pos = [0, 64, 0];
+    host.level.block_entity(pos);
+    let original = host.block_entity(level, pos).unwrap();
+
+    let discarded = host.with_test_transaction(|host, _| {
+        host.level.remove_block_entity(pos).unwrap();
+        host.level.block_entity(pos);
+        let tentative = host.block_entity(level, pos).unwrap();
+        assert_ne!(tentative, original);
+        (false, tentative)
+    });
+    assert_eq!(host.block_entity(level, pos), Some(original));
+
+    host.level.remove_block_entity(pos).unwrap();
+    host.level.block_entity(pos);
+    let replacement = host.block_entity(level, pos).unwrap();
+    assert_ne!(replacement, original);
+    assert_ne!(replacement, discarded);
+}
 
 #[test]
 fn fake_level_declines_to_lend_a_random_stream() {

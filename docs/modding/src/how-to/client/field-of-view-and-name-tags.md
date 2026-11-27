@@ -91,17 +91,18 @@ let _ = draw.name_tag([x + 0.5, y + 1.0, z + 0.5], &Text::literal("Furnace"), op
 | `light` | The light at the label: sky light in the high four bits, block light in the low four (`0xF0` full sky, `0x0F` full block) |
 | `faded_alpha` | `Some(a)` (`with_faded_alpha(a)`) sets the alpha byte of the faded text, in either copy, in place of the value derived from the text background opacity. An alpha under 26 draws no text |
 | `exact_light` | `with_exact_light()`: with `see_through`, the copy in the world is drawn in `light` exactly, without the floor of 2 |
+| `scale` | `with_scale(s)`: the world size of one text pixel, `NameTagOptions::NAME_TAG_SCALE` (a name tag's 0.025) by default. `0.05` draws text twice a name tag's size, `0.0125` half; the label stays 0.5 above the position, and the backdrop's gap behind the text scales with it. A scale that is not finite, or is zero or negative, is refused (`DrawError::InvalidScale`) |
 
 Without `see_through` the label is drawn in exactly `light`. With it, the copy in the world raises the sky and block
 levels to at least 2 each (unless `exact_light`), and the copy over everything is unlit. The backdrop's alpha is 255 times the player's text
 background opacity (0.25 when the background is for chat only), and the faded text's is 255 times the larger of
 (opacity + 0.75) / 2 and 0.5: 0x3F and 0x7F at the defaults. Labels are drawn with the world's name tags, far to near.
 
-A label is 0.025 blocks a font pixel, so it shrinks with distance; scale by distance yourself for a constant size.
+A label is `scale` blocks a font pixel (0.025, a name tag's, by default), so it shrinks with distance; scale by distance yourself for a constant size.
 Backing storage grows dynamically with no per-view quad cap, and in-memory `Text` components impose no
 component-tree depth limit. Labels ignore click events, hover events, and opaque metadata; NBT limits
-apply when serializing text, not when drawing labels. A non-finite position (`DrawError::NonFinite`)
-draws nothing. The
+apply when serializing text, not when drawing labels. A non-finite position, or a scale so large the text positions overflow f32
+(`DrawError::NonFinite`), draws nothing. The
 [hook notes](../../reference/hook-notes.md#custom-world-geometry) give the details.
 
 ## The client session

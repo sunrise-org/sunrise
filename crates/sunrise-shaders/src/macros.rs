@@ -4,8 +4,9 @@
 
 pub(crate) use sunrise_glsl::macros::lex;
 
-/// The feature flags of `iris.features.*` (spec 3.2) Sunrise has. A pack that requires one of
-/// them loads; one it lacks is noted. Sunrise defines no `IRIS_FEATURE_<name>` macro for them
+/// The feature flags of `iris.features.*` (spec 3.2) Sunrise has on every device (and
+/// [`PER_BUFFER_BLENDING`] on some). A pack that requires one of them loads; one it lacks is
+/// noted. Sunrise defines no `IRIS_FEATURE_<name>` macro for them
 /// (spec OQ-2, docs/cleanroom/README.md): that macro family names another loader, so packs take
 /// the path they take without it. `BLOCK_EMISSION_ATTRIBUTE`: terrain's
 /// `at_midBlock.w` is the light its block gives. `SEPARATE_HARDWARE_SAMPLERS` (ShaderDoc,
@@ -31,6 +32,13 @@ fn is_feature(name: &str) -> bool {
     FEATURES.iter().any(|f| f.eq_ignore_ascii_case(name))
 }
 
+/// The feature flag of `iris.features.*` (spec 3.2) Sunrise has only on a device that can draw
+/// it: `PER_BUFFER_BLENDING`, a `blend.<program>.<buffer>` that differs from the program's other
+/// buffers. wgpu creates a pipeline whose colour targets differ in blend or write mask only on a
+/// device with `DownlevelFlags::INDEPENDENT_BLEND` ("Supports different blend operations per
+/// color attachment"); the renderer gives its device's answer (`Macros::set_per_buffer_blending`).
+const PER_BUFFER_BLENDING: &str = "PER_BUFFER_BLENDING";
+
 /// `MC_VERSION` of the version Sunrise plays: 26.3 → 260300.
 pub const MC_VERSION: u32 = mc_version(sunrise_core::version::VERSION_ID);
 
@@ -52,7 +60,16 @@ pub const fn mc_version(id: &str) -> u32 {
 
 /// The macros at a point of a pack's file: `sunrise-glsl`'s, with the pack's own starting set.
 #[derive(Clone, Debug, Default, PartialEq)]
-pub struct Macros(sunrise_glsl::Macros);
+pub struct Macros(sunrise_glsl::Macros, Device);
+
+/// What the device the pack's programs run on can do, as far as a pack's feature flags ask
+/// (spec 3.2). No macro: it decides which flags are supported. Without a renderer (the
+/// standard set alone) the device can do none of it.
+#[derive(Clone, Copy, Debug, Default, PartialEq)]
+struct Device {
+    /// [`PER_BUFFER_BLENDING`].
+    per_buffer_blending: bool,
+}
 
 impl std::ops::Deref for Macros {
     type Target = sunrise_glsl::Macros;
@@ -221,14 +238,29 @@ impl Macros {
         }
     }
 
-    /// A note for each feature `iris.features.required` names that Sunrise lacks; a name matches
-    /// in any case. Optional features need nothing: no macro is defined for them (see `FEATURES`).
-    pub fn feature_notes(properties: &crate::Properties) -> Vec<String> {
+    /// Whether the device the pack's programs run on draws a `blend.<program>.<buffer>` that
+    /// differs from the program's other buffers ([`PER_BUFFER_BLENDING`]): the renderer's
+    /// answer, from its device. Defines no macro.
+    pub fn set_per_buffer_blending(&mut self, supported: bool) {
+        self.1.per_buffer_blending = supported;
+    }
+
+    /// Whether Sunrise has feature flag `name` (spec 3.2) with these macros' device, in any
+    /// case: one of [`FEATURES`], or [`PER_BUFFER_BLENDING`] on a device that draws it.
+    fn supports(&self, name: &str) -> bool {
+        is_feature(name)
+            || self.1.per_buffer_blending && PER_BUFFER_BLENDING.eq_ignore_ascii_case(name)
+    }
+
+    /// A note for each feature `iris.features.required` names that Sunrise lacks with these
+    /// macros' device (`supports`); a name matches in any case. Optional features need nothing:
+    /// no macro is defined for them (see `FEATURES`).
+    pub fn feature_notes(&self, properties: &crate::Properties) -> Vec<String> {
         properties
             .get("iris.features.required")
             .unwrap_or_default()
             .split_whitespace()
-            .filter(|f| !is_feature(f))
+            .filter(|f| !self.supports(f))
             .map(|f| format!("the pack requires `{f}`, which is not supported yet"))
             .collect()
     }
@@ -308,13 +340,54 @@ mod tests {
             &Macros::standard(),
         );
         assert_eq!(
-            Macros::feature_notes(&properties),
+            Macros::standard().feature_notes(&properties),
             ["the pack requires `Not_A_Feature`, which is not supported yet"]
         );
         let mut m = Macros::standard();
         m.define_renderer(4);
         let iris: Vec<_> = m.names().filter(|name| name.contains("IRIS")).collect();
         assert!(iris.is_empty(), "{iris:?}");
+    }
+
+    /// A required `PER_BUFFER_BLENDING`, in any case, is supported where the device draws it
+    /// and noted where it does not, as written; the other flags keep their answers, and the
+    /// device's answer defines no macro.
+    #[test]
+    fn per_buffer_blending_follows_the_device() {
+        let properties = crate::Properties::parse(
+            "iris.features.optional = PER_BUFFER_BLENDING
+             iris.features.required = SSBO PER_BUFFER_BLENDING per_Buffer_blending NOT_A_FEATURE
+",
+            &Macros::standard(),
+        );
+        let mut able = Macros::standard();
+        able.define_renderer(4);
+        let mut unable = able.clone();
+        able.set_per_buffer_blending(true);
+        unable.set_per_buffer_blending(false);
+        assert_eq!(
+            able.feature_notes(&properties),
+            ["the pack requires `NOT_A_FEATURE`, which is not supported yet"]
+        );
+        assert_eq!(
+            unable.feature_notes(&properties),
+            [
+                "the pack requires `PER_BUFFER_BLENDING`, which is not supported yet",
+                "the pack requires `per_Buffer_blending`, which is not supported yet",
+                "the pack requires `NOT_A_FEATURE`, which is not supported yet",
+            ]
+        );
+        // Without a renderer's answer the device draws none of it.
+        assert_eq!(
+            Macros::standard().feature_notes(&properties),
+            unable.feature_notes(&properties)
+        );
+        assert!(able.names().eq(unable.names()));
+        // The answer reaches every file's macros and the properties' read.
+        assert_eq!(
+            able.for_file().feature_notes(&properties),
+            able.feature_notes(&properties)
+        );
     }
 
     #[test]

@@ -7,6 +7,7 @@
 //! `PiglinAi` flow by hand; the world is ticked for real. `admireGoldItem` sets `ADMIRING_ITEM`
 //! for `ADMIRE_DURATION` (119) ticks: `MemorySlot.tick` counts it down in the next 119 brain
 //! ticks, and clears it in the 120th, whose `StopHoldingItemIfNoLongerAdmiring` barters.
+#![cfg(feature = "client")]
 use mod_api::{Hooks, Host, IsPiglinCurrencyEvent, ItemPart, Registrar, RegistrationContext};
 use std::sync::Arc;
 use sunrise_core::nbt::{Compound, JavaString, Tag};

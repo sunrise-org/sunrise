@@ -2,10 +2,12 @@
 #[cfg(test)]
 mod tests {
 
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::api_values::TryIntoEngine;
 
     /// `Language.isDefaultRightToLeft` (#5354): false for English, true once a pack's language
     /// marked `bidirectional` is applied, on a game with no logged-in world.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn the_active_languages_direction_reads_outside_a_world() {
@@ -32,6 +34,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn plain_text_reads_resolve_current_language_arguments_keys_and_siblings() {
@@ -75,6 +78,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn styled_text_reads_use_live_font_language_and_wrapping_outside_drawing() {

@@ -1,36 +1,55 @@
+#[cfg(feature = "client")]
 use mod_api::{Collider, ColliderBox, ColliderPose};
+#[cfg(feature = "client")]
 use std::sync::Arc;
 use sunrise_core::geometry::Vec3;
+#[cfg(feature = "client")]
 use sunrise_core::nbt::Tag;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::GameGameExt1;
 use sunrise_gameplay_common::game::piston_push::carrying::shoving::cancel_shove_velocity;
+#[cfg(feature = "client")]
 use sunrise_items::items::ItemStack;
+#[cfg(feature = "client")]
 use sunrise_level::chunk::Chunk;
+#[cfg(feature = "client")]
 use sunrise_protocol::connection::Connection;
+#[cfg(feature = "client")]
 use sunrise_protocol::packets::play::{self, Clientbound, Serverbound};
-use sunrise_sim::{entities::ItemEntity, motion::PlayerMotion};
+#[cfg(feature = "client")]
+use sunrise_sim::entities::ItemEntity;
+#[cfg(feature = "client")]
+use sunrise_sim::motion::PlayerMotion;
+#[cfg(feature = "client")]
 #[cfg(test)]
 use sunrise_world::moving_colliders;
+#[cfg(feature = "client")]
 use {
     crate::game::server_side::native_entity_refs::tests::with_client_game,
     sunrise_gameplay::game::native_entity_refs::tests::bind_acting_guest,
     sunrise_gameplay::game::native_entity_refs::tests::with_game,
 };
+#[cfg(feature = "client")]
 use {
     sunrise_client_gameplay::game::client_side::native_client_session::tests::finish_login,
     sunrise_client_gameplay::game::client_side::native_client_session::tests::logged_client,
 };
 
+#[cfg(feature = "client")]
 const PLAYER: u32 = 42;
+#[cfg(feature = "client")]
 const CONN: u32 = 1;
+#[cfg(feature = "client")]
 const PIG_Y: f64 = 73.0;
 
+#[cfg(feature = "client")]
 fn empty_chunk<'g, G: sunrise_gameplay_common::game::SideGame<'g>>(game: &mut G) {
     game.world
         .chunks
         .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
 }
 
+#[cfg(feature = "client")]
 fn shape() -> Collider {
     Collider::new(vec![ColliderBox {
         min: [-0.25, -3.0, -0.75],
@@ -38,6 +57,7 @@ fn shape() -> Collider {
     }])
 }
 
+#[cfg(feature = "client")]
 fn holder(game: &mut sunrise_gameplay::game::ServerGame<'_>, x: f64) -> u32 {
     game.options.dedicated = Some(Vec::new());
     game.native_level_opened(game.dim);
@@ -50,6 +70,7 @@ fn holder(game: &mut sunrise_gameplay::game::ServerGame<'_>, x: f64) -> u32 {
     id
 }
 
+#[cfg(feature = "client")]
 fn pig(game: &mut sunrise_gameplay::game::ServerGame<'_>, at: [f64; 3]) -> u32 {
     let level = game.level(game.dim.id()).unwrap();
     level
@@ -69,6 +90,7 @@ fn pig(game: &mut sunrise_gameplay::game::ServerGame<'_>, at: [f64; 3]) -> u32 {
         .id()
 }
 
+#[cfg(feature = "client")]
 fn turn(game: &mut sunrise_gameplay::game::ServerGame<'_>, holder: u32, degrees: f32) {
     let start = game.placed_moving_colliders();
     let half = degrees.to_radians() / 2.0;
@@ -82,6 +104,7 @@ fn turn(game: &mut sunrise_gameplay::game::ServerGame<'_>, holder: u32, degrees:
     game.carry_pass(&start);
 }
 
+#[cfg(feature = "client")]
 fn shove(game: &mut sunrise_gameplay::game::ServerGame<'_>, holder: u32, x: f64) {
     let start = game.placed_moving_colliders();
     let i = game.mobs.iter().position(|m| m.id == holder).unwrap();
@@ -89,6 +112,7 @@ fn shove(game: &mut sunrise_gameplay::game::ServerGame<'_>, holder: u32, x: f64)
     game.carry_pass(&start);
 }
 
+#[cfg(feature = "client")]
 fn item(id: u32, x: f64, z: f64, velocity: Vec3) -> ItemEntity {
     ItemEntity::new(
         id,
@@ -99,6 +123,7 @@ fn item(id: u32, x: f64, z: f64, velocity: Vec3) -> ItemEntity {
     )
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_collider_shoves_a_body_crossed_only_mid_sweep() {
@@ -125,6 +150,7 @@ fn a_collider_shoves_a_body_crossed_only_mid_sweep() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_collider_shove_stops_at_a_wall_without_impact_damage() {
@@ -153,6 +179,7 @@ fn a_collider_shove_stops_at_a_wall_without_impact_damage() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_later_shove_collides_with_a_holder_already_displaced() {
@@ -187,6 +214,7 @@ fn a_later_shove_collides_with_a_holder_already_displaced() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_cancelled_turning_shove_leaves_velocity_alone() {
@@ -218,6 +246,7 @@ fn a_cancelled_turning_shove_leaves_velocity_alone() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn an_upward_shove_leaves_the_colliders_vertical_speed() {
@@ -263,6 +292,7 @@ fn an_upward_shove_leaves_the_colliders_vertical_speed() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_server_side_turning_shove_never_moves_the_local_player() {
@@ -284,6 +314,7 @@ fn a_server_side_turning_shove_never_moves_the_local_player() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_client_side_turning_shove_moves_the_local_player() {
@@ -325,6 +356,7 @@ fn a_client_side_turning_shove_moves_the_local_player() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_rider_on_a_turning_collider_is_carried_and_not_shoved_again() {
@@ -355,6 +387,7 @@ fn a_rider_on_a_turning_collider_is_carried_and_not_shoved_again() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_vanilla_piston_shove_leaves_the_players_velocity_alone() {
@@ -420,6 +453,7 @@ fn a_vanilla_piston_shove_leaves_the_players_velocity_alone() {
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_predicted_collider_shove_passes_the_server_move_check() {
@@ -562,8 +596,11 @@ fn a_descending_collider_does_not_set_a_downward_vertical_speed_on_a_rising_body
     assert_eq!(cancel_shove_velocity(away, normal, 0.6, -0.25), away);
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::side_ops::player::PlayerSideGameExt as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::piston_push::carrying::CarryingGameExt1 as _;

@@ -1,4 +1,5 @@
 //! The host's build metadata agrees with the chunk writer, before any world is open.
+#![cfg(feature = "client")]
 use mod_api::{ClientHost, Host, ServerHost};
 use std::sync::Arc;
 use sunrise_core::nbt::{Limits, Tag};

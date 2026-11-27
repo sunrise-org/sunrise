@@ -1,7 +1,9 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use std::sync::Arc;
+#[cfg(feature = "client")]
 use sunrise_client::hud::HudBatch;
-#[cfg(test)]
+#[cfg(all(test, feature = "client"))]
 pub(crate) mod tests {
     use crate::game::native_hooks::register_preset_editors::*;
     use mod_api::{

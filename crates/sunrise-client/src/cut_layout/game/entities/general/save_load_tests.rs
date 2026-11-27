@@ -176,6 +176,7 @@ fn bare_level_feature_enables_host_query_and_general_spawn() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn bare_pack_feature_enables_host_query_and_general_spawn_on_first_open() {

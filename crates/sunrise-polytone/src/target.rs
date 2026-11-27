@@ -44,9 +44,39 @@ pub fn implicit_id(path: &str, kind: &str) -> Option<String> {
     parse_id(&format!("{namespace}:{name}"))
 }
 
+/// Error returned when parsing a `Target` or `Targets` specification.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum TargetError {
+    InvalidPattern { pattern: String, message: String },
+    MissingId,
+    InvalidEntry(String),
+    MissingTargets,
+}
+
+impl std::fmt::Display for TargetError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            Self::InvalidPattern { pattern, message } => {
+                write!(f, "target {pattern:?} is no id, tag or pattern: {message}")
+            }
+            Self::MissingId => write!(f, "target without an id"),
+            Self::InvalidEntry(v) => write!(f, "target {v} is neither a string nor an object"),
+            Self::MissingTargets => write!(f, "no targets field and no implicit target"),
+        }
+    }
+}
+
+impl std::error::Error for TargetError {}
+
+impl From<TargetError> for String {
+    fn from(err: TargetError) -> Self {
+        err.to_string()
+    }
+}
+
 impl Target {
     /// A string is an id first, then a `#tag`, then a regular expression.
-    fn parse(s: &str) -> Result<Self, String> {
+    fn parse(s: &str) -> Result<Self, TargetError> {
         if let Some(id) = parse_id(s) {
             return Ok(Self::Id(id));
         }
@@ -55,30 +85,33 @@ impl Target {
         }
         Regex::new(&format!("^(?:{s})$"))
             .map(Self::Pattern)
-            .map_err(|e| format!("target {s:?} is no id, tag or pattern: {e}"))
+            .map_err(|e| TargetError::InvalidPattern {
+                pattern: s.to_owned(),
+                message: e.to_string(),
+            })
     }
 }
 
 impl Targets {
     /// The `targets` field (a string, an object or a list of them), else the file's implicit id.
-    pub fn parse(field: Option<&Value>, implicit: Option<&str>) -> Result<Self, String> {
+    pub fn parse(field: Option<&Value>, implicit: Option<&str>) -> Result<Self, TargetError> {
         let entry = |v: &Value| match v {
             Value::String(s) => Ok((Target::parse(s)?, true)),
             Value::Object(o) => {
                 let id = o
                     .get("id")
                     .and_then(Value::as_str)
-                    .ok_or("target without an id")?;
+                    .ok_or(TargetError::MissingId)?;
                 let required = o.get("required").and_then(Value::as_bool).unwrap_or(true);
                 Ok((Target::parse(id)?, required))
             }
-            _ => Err(format!("target {v} is neither a string nor an object")),
+            _ => Err(TargetError::InvalidEntry(v.to_string())),
         };
         match field {
             Some(Value::Array(list)) => list.iter().map(entry).collect::<Result<_, _>>().map(Self),
             Some(v) => Ok(Self(vec![entry(v)?])),
             None => {
-                let id = implicit.ok_or("no targets field and no implicit target")?;
+                let id = implicit.ok_or(TargetError::MissingTargets)?;
                 Ok(Self(vec![(Target::parse(id)?, true)]))
             }
         }

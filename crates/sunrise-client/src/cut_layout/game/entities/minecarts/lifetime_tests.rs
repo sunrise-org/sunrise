@@ -8,6 +8,7 @@ use sunrise_mod_runtime::attachments::{
     AttachmentType, Attachments, HasAttachmentLifetime, Holder, index::AttachmentIndex,
 };
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn lifecycle_carts_keep_registrations_through_commands_unload_park_and_remote() {
@@ -72,6 +73,7 @@ fn lifecycle_carts_keep_registrations_through_commands_unload_park_and_remote() 
     );
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn connecting_to_a_remote_level_clears_the_existing_cart_list() {

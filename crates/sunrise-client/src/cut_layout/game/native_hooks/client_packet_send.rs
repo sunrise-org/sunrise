@@ -1,16 +1,23 @@
 #![cfg(test)]
 #[cfg(test)]
 mod client_packet_send_tests {
-    use mod_api::{ClientHost, ClientPacketSendEvent, Flow, Hooks, ModEntry};
+    #[cfg(feature = "client")]
+    use mod_api::ModEntry;
+    #[cfg(feature = "client")]
+    use mod_api::{ClientHost, ClientPacketSendEvent, Flow, Hooks};
+    #[cfg(feature = "client")]
     use mod_platform::testing::with_mods;
+    #[cfg(feature = "client")]
     use std::sync::{Arc, Mutex};
-    use sunrise_protocol::packets::{
-        configuration::CustomPayload,
-        play::{Serverbound, SetCarriedItem},
-    };
+    #[cfg(feature = "client")]
+    use sunrise_protocol::packets::play::SetCarriedItem;
+    #[cfg(feature = "client")]
+    use sunrise_protocol::packets::{configuration::CustomPayload, play::Serverbound};
 
     /// Drops payloads on `example:secret`, logging every packet it hears.
+    #[cfg(feature = "client")]
     struct Filter(Arc<Mutex<Vec<String>>>);
+    #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Filter {
         fn client_packet_send(
@@ -26,6 +33,7 @@ mod client_packet_send_tests {
         }
     }
 
+    #[cfg(feature = "client")]
     fn payload(channel: &str) -> Serverbound {
         Serverbound::CustomPayload(CustomPayload {
             channel: channel.into(),
@@ -35,6 +43,7 @@ mod client_packet_send_tests {
 
     /// `Connection.send`: the mod hears each packet the game sends and cancels the one it
     /// filters; without a listener nothing is cancelled.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_client_mod_hears_and_cancels_packets_the_game_sends() {

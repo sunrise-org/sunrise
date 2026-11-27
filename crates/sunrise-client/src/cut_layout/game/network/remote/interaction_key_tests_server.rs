@@ -1,8 +1,13 @@
+#[cfg(feature = "client")]
 use super::*;
+#[cfg(feature = "client")]
 use crate::game::remote::interaction_event_tests::interaction_key_tests::FirstSilent;
+#[cfg(feature = "client")]
 use crate::game::remote::interaction_event_tests::interaction_key_tests::KeyControl;
+#[cfg(feature = "client")]
 use mod_api::{InteractionAttempt, InteractionKey};
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn interaction_key_literal_matrix_preserves_actions_and_swing_independently() {
@@ -105,6 +110,7 @@ fn interaction_key_literal_matrix_preserves_actions_and_swing_independently() {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn no_interaction_listener_attack_mining_offhand_and_pick() {
@@ -162,6 +168,7 @@ fn no_interaction_listener_attack_mining_offhand_and_pick() {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn no_listener_preserves_natural_swing_and_unsuccessful_use_stays_quiet() {
@@ -214,6 +221,7 @@ fn no_listener_preserves_natural_swing_and_unsuccessful_use_stays_quiet() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn pick_keeps_packet_veto_and_never_swings() {
@@ -258,6 +266,7 @@ fn pick_keeps_packet_veto_and_never_swings() {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn silent_policy_does_not_leak_into_next_ordinary_use() {
@@ -299,4 +308,5 @@ fn silent_policy_does_not_leak_into_next_ordinary_use() {
     });
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::pick_ray::PickRayGameExt1 as _;

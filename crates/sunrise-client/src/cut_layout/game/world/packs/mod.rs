@@ -1,7 +1,9 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use crate::packs;
 use std::path::Path;
 use std::path::PathBuf;
+#[cfg(feature = "client")]
 use sunrise_client_gameplay::game::client_side::packs::{
     OVERLAY_HOLD, PackReload, ReloadKind, StageResult, reload_waits, startup_root,
 };

@@ -1404,31 +1404,38 @@ impl PackPost {
         pass: &mut Pass,
         size: [u32; 2],
     ) {
-        let Pipeline::Compute {
-            pipeline,
-            groups,
-            render,
-            local,
-        } = &pass.pipeline
-        else {
+        let Pipeline::Compute { pipeline, dispatch } = &mut pass.pipeline else {
             return;
         };
-        let pipeline = pipeline.get().expect("compiled with its pack");
-        let groups = groups.unwrap_or_else(|| {
-            let n = |k: usize| (size[k] as f32 * render[k] / local[k] as f32).ceil() as u32;
-            [n(0), n(1), 1]
-        });
-        let (pipeline, groups) = (pipeline.clone(), groups);
-        // wgpu panics on a dispatch over its limit. The translator reshapes a large
-        // `workGroups`; a `workGroupsRender` that large is not run.
-        let most = device.limits().max_compute_workgroups_per_dimension;
-        if groups.iter().any(|&n| n > most) {
-            log::warn!(
-                "shader pack: {}: {groups:?} work groups is over {most} per dimension; not run",
-                pass.name
-            );
-            return;
-        }
+        let pipeline = pipeline.get().expect("compiled with its pack").clone();
+        let run = match dispatch {
+            Dispatch::Direct {
+                groups,
+                render,
+                local,
+            } => {
+                let groups = groups.unwrap_or_else(|| {
+                    let n = |k: usize| (size[k] as f32 * render[k] / local[k] as f32).ceil() as u32;
+                    [n(0), n(1), 1]
+                });
+                // wgpu panics on a dispatch over its limit. The translator reshapes a large
+                // `workGroups`; a `workGroupsRender` that large is not run.
+                let most = device.limits().max_compute_workgroups_per_dimension;
+                if groups.iter().any(|&n| n > most) {
+                    log::warn!(
+                        "shader pack: {}: {groups:?} work groups is over {most} per dimension; not run",
+                        pass.name
+                    );
+                    return;
+                }
+                Run::Groups(groups)
+            }
+            // The counts, copied and checked, after every pass before this one wrote them.
+            Dispatch::Indirect(indirect) => match indirect.record(device, encoder, &self.buffers) {
+                Some(counts) => Run::Counts(counts),
+                None => return,
+            },
+        };
         for image in (0..self.images.len()).filter(|k| pass.snapshots & 1 << k != 0) {
             pack_images::snapshot(encoder, &self.images[image]);
         }
@@ -1447,7 +1454,10 @@ impl PackPost {
         {
             cp.set_bind_group(4, g, &[]);
         }
-        cp.dispatch_workgroups(groups[0], groups[1], groups[2]);
+        match &run {
+            Run::Groups([x, y, z]) => cp.dispatch_workgroups(*x, *y, *z),
+            Run::Counts(counts) => cp.dispatch_workgroups_indirect(counts, 0),
+        }
         drop(cp);
         self.mips_valid &= !pass.written;
     }
@@ -2588,7 +2598,7 @@ impl PackPost {
         for pass in passes {
             pass.forget_groups();
             for c in &mut pass.compute {
-                c.groups.clear();
+                c.forget_groups();
             }
         }
     }
@@ -2603,7 +2613,10 @@ impl PackPost {
         if pack_images::resize_images(device, &mut self.images, size) {
             self.forget_groups();
         }
-        self.buffers.resize(device, size);
+        // The storage buffers made again: the passes reading counts from them bind the old ones.
+        if self.buffers.resize(device, size) {
+            self.forget_groups();
+        }
         if self.targets.as_ref().is_some_and(|t| t.size == size) {
             return Ok(());
         }
@@ -3140,4 +3153,10 @@ fn bind_atlas(
         rp.set_bind_group(0, group, &[]);
         *bound = wanted;
     }
+}
+
+/// What a compute pass dispatches this frame: its own counts, or the buffer holding them.
+enum Run {
+    Groups([u32; 3]),
+    Counts(wgpu::Buffer),
 }

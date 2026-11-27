@@ -9,8 +9,8 @@ use mod_api::{
 };
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex};
-use sunrise_client_gameplay::game::native_hooks::enchantments::EnchantmentsGameExt1;
 use sunrise_core::random::LegacyRandom;
+use sunrise_gameplay_common::game::native_hooks::enchantments::EnchantmentsGameExt1;
 use sunrise_items::items::ItemStack;
 
 const SHARPNESS: &str = "minecraft:sharpness";
@@ -616,6 +616,7 @@ fn short_enchantment_item_holders_bind_for_both_selectors() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn support_resolves_once_against_the_tags_published_by_world_open_and_play_packets() {

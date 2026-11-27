@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use mod_api::{EntityRef, MobRef, WorldEpoch};
 use sunrise_core::geometry::Vec3;
 use sunrise_gameplay_common::game::GameGameExt1;

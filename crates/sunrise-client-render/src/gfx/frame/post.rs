@@ -116,6 +116,9 @@ impl Renderer {
         } = args;
 
         let mut fg_made = false;
+        // Read while the pack is in `self.pack_post`, which the pass below takes out: as
+        // `follow_arena_layout` read it at the start of the frame.
+        let pack_reads_pages = self.pack_reads_pages();
 
         if let Some((color, depth)) = &scaled
             && pack_post
@@ -167,9 +170,15 @@ impl Renderer {
             post.set_weather(weather);
             let flat = self.flat.as_ref().filter(|_| flat_frame);
             self.pack_pages.clear();
-            // The pack's terrain programs read their pages: flat, or per section where vertex
-            // shaders read storage (`pack_terrain_draws`).
-            let reads_pages = flat.is_some() || self.pack_terrain_draws().reads_pages();
+            // The pack's terrain programs read their pages where this frame draws flat (`flat`),
+            // or per section where vertex shaders read storage and a program of the pack draws
+            // the sections (`pack_reads_pages`). `follow_arena_layout` made the pages storage in
+            // both (`arena_storage`): wherever flat draws' resources exist (`self.flat`, kept
+            // when flat draws are switched off), so in every flat frame, and else where
+            // `pack_reads_pages` holds. A pack with no such program (terrain left undrawn, or a
+            // shadow pass another renderer asks for) binds none of them in per-section frames,
+            // whose pages may be vertex buffers alone (#6542).
+            let reads_pages = flat.is_some() || pack_reads_pages;
             if reads_pages && (pack_draws_terrain || pack_draws_shadow) {
                 self.pack_pages.extend(
                     self.arena

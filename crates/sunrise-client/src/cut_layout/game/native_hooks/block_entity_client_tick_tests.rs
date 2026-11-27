@@ -30,9 +30,12 @@ pub(crate) const CHUNK: (i32, i32) = (100, 100);
 pub(crate) const HUMS: [[i32; 3]; 2] = [[1610, 70, 1613], [1601, 64, 1602]];
 pub(crate) const QUIET_AT: [i32; 3] = [1605, 64, 1605];
 /// A hum in the next column, which stays.
+#[cfg(feature = "client")]
 pub(crate) const OTHER: [i32; 3] = [1620, 64, 1600];
+#[cfg(feature = "client")]
 pub(crate) const CRATE_AT: [i32; 3] = [1621, 64, 1600];
 /// A spawner that arrives after the second hum and before the first.
+#[cfg(feature = "client")]
 pub(crate) const SPAWNER_AT: [i32; 3] = [1603, 64, 1608];
 
 /// What the probe heard, in order: the client tick's and level's brackets, each client tick
@@ -79,7 +82,7 @@ pub(crate) fn record(event: &mut BlockEntityClientTickEvent<'_>) {
     TICK_PARTICLES
         .lock()
         .unwrap()
-        .push(sunrise_client::particles::requested_count());
+        .push(sunrise_client_render::particles::requested_count());
     note(format!("tick {pos:?} {rpm}"));
 }
 
@@ -171,6 +174,7 @@ pub(crate) fn prepared_root() -> PathBuf {
         .to_path_buf()
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn rpm(rpm: i32) -> Compound {
     let mut nbt = Compound::new();
     nbt.insert("rpm".into(), Tag::Int(rpm));
@@ -179,6 +183,7 @@ pub(crate) fn rpm(rpm: i32) -> Compound {
 
 /// One frame: what the server sent is handled (`update_world`, which a frame runs before its
 /// ticks), then `steps` client ticks. Returns what the probe heard.
+#[cfg(feature = "client")]
 pub(crate) fn frame(
     game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
     steps: u32,
@@ -189,6 +194,7 @@ pub(crate) fn frame(
 }
 
 /// The events of one client tick that ticks the level, its client ticks being `ticks`.
+#[cfg(feature = "client")]
 pub(crate) fn ticked(ticks: &[([i32; 3], i32)]) -> Vec<String> {
     let mut events = vec!["client_pre".to_owned(), "level_pre".to_owned()];
     events.extend(ticks.iter().map(|(pos, rpm)| format!("tick {pos:?} {rpm}")));

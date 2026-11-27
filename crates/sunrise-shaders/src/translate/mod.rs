@@ -99,6 +99,9 @@ pub struct ComputeProgram {
     pub notes: Vec<Error>,
     pub work_groups: Option<[u32; 3]>,
     pub work_groups_render: [f32; 2],
+    /// `indirect.<pass>`: the counts come from a storage buffer instead, and `work_groups`
+    /// is `None`.
+    pub indirect: Option<crate::post::Indirect>,
 }
 
 /// The uniforms a gbuffers program reads per draw (5.3's "D"), in a block of their own
@@ -988,6 +991,16 @@ fn resources(
 
 /// Translates a compute program (`.csh`).
 pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<Error>> {
+    translate_compute_with(compute, None)
+}
+
+/// [`translate_compute`] for a program dispatched as `indirect` says, when it is `Some`: its
+/// `workGroups` is not what runs, so it is not folded into a dispatch wgpu takes (that would
+/// fix `gl_NumWorkGroups` and `gl_WorkGroupID` to its counts).
+pub(crate) fn translate_compute_with(
+    compute: &Preprocessed,
+    indirect: Option<crate::post::Indirect>,
+) -> Result<ComputeProgram, Vec<Error>> {
     let named = anonymous_structs::name(compute.code()).map(|code| compute.with_code(code));
     let compute = named.as_ref().unwrap_or(compute);
     let split = atomic_vectors::rewrite(compute);
@@ -1016,8 +1029,12 @@ pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<E
         .collect();
     let mut images = bind_images([&c, &c], samplers.len());
     // `workGroups` is an ivec3, `workGroupsRender` a vec2 (a third number, the depth of a 2D
-    // render, is taken as 1); anything else is not understood rather than guessed.
+    // render, is taken as 1); anything else is not understood rather than guessed. A shader
+    // read indirectly runs neither, so neither is read or checked.
     let mut sizes = |name: &str, counts: &[usize]| {
+        if indirect.is_some() {
+            return None;
+        }
         let v = constant(&c, name)?;
         if !counts.contains(&v.len()) {
             errors.push(Error::new(
@@ -1129,6 +1146,7 @@ pub fn translate_compute(compute: &Preprocessed) -> Result<ComputeProgram, Vec<E
         interface,
         work_groups,
         work_groups_render,
+        indirect,
     })
 }
 

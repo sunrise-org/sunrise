@@ -28,7 +28,10 @@ fn floored_game<'a>(
         &settings,
         std::time::Instant::now(),
         false,
+        #[cfg(feature = "client")]
         sunrise_gameplay_common::game::execution_role::ExecutionRole::Client,
+        #[cfg(not(feature = "client"))]
+        sunrise_gameplay_common::game::execution_role::ExecutionRole::IntegratedServer,
         &Progress::new(),
         &mut |_, _| unreachable!(),
     )

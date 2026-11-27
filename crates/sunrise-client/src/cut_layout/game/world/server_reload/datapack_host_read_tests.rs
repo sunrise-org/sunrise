@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use super::*;
 use mod_api::Host;
 use mod_api::{

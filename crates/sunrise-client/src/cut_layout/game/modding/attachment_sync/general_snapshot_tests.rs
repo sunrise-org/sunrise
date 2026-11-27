@@ -130,6 +130,7 @@ fn a_general_row_always_has_a_first_snapshot_holding_what_it_holds_now() {
 
 /// Matching NeoForge `ClientPayloadHandler.handleSyncAttachments`: an attachment sync for an
 /// unknown entity logs a warning and does not mutate `remote.attachments`.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn remote_attachment_sync_ignores_unknown_entity() {
@@ -173,6 +174,7 @@ fn remote_attachment_sync_ignores_unknown_entity() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn remote_player_attachments_only_apply_while_the_foreign_player_is_tracked() {

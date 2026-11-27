@@ -6,7 +6,10 @@ pub trait Hooks {
     /// loop exits normally and before `stopServer`), before network shutdown,
     /// player disconnect and save, final world save, level unloads, and
     /// `server_stopped`. Worlds are still loaded and players are still
-    /// connected so a mod can save its own data or notify them. Not fired on a
+    /// connected so a mod can save its own data or notify them. The shutdown waits
+    /// for each listener, so one that blocks here delays the world save and the player
+    /// disconnects: keep it short, and put joins and flushes of the mod's own threads in
+    /// `server_stopped`. Not fired on a
     /// failed startup or when the tick loop exits with an error or panic: those
     /// paths jump directly to `stopServer` teardown and `server_stopped`.
     #[hook(

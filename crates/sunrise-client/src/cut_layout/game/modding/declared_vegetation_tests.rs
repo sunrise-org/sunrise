@@ -1,4 +1,5 @@
 //! Explicit vegetation behaves the same on different templates and is not inferred from Parts.
+#![cfg(feature = "client")]
 use mod_api::{BlockPart, Hooks, LevelSide, MayPlaceOnEvent, Registrar};
 use std::sync::{
     Arc,

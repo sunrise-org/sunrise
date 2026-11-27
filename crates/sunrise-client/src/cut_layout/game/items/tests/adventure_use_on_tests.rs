@@ -6,6 +6,7 @@ use sunrise_command::args::GameMode;
 use sunrise_core::nbt::Tag;
 use sunrise_gameplay::game::game_tests::tests::server_game;
 use sunrise_items::items::ItemStack;
+#[cfg(feature = "client")]
 use sunrise_protocol::packets::configuration::{RegistryData, RegistryEntry};
 use sunrise_sim::first_person_sim::Hand;
 use sunrise_world::registry::BlockStateId;
@@ -329,6 +330,7 @@ fn a_builder_use_on_is_unaffected() {
     assert_eq!(held(&game), None, "the egg is used up");
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn an_adventure_use_on_is_not_predicted_on_the_client() {

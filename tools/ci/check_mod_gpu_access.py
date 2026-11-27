@@ -18,19 +18,25 @@ GUARDED = (
     "crates/sunrise-client-gameplay/src/game/modding/native_custom_geometry.rs",
     "crates/sunrise-client-gameplay/src/game/host/draw.rs",
     "crates/sunrise-client-gameplay/src/game/host/draw_client.rs",
+    # The deleted gameplay-common copy had no draw code of its own.
     "crates/sunrise-client-gameplay/src/game/modding/native_block_entity_draw.rs",
-    "crates/sunrise-gameplay-common/src/game/modding/native_block_entity_draw.rs",
 )
 ACCESS = re.compile(r"\bself\s*\.\s*(?:game\s*\.\s*)?(?:client\s*\.\s*)?renderer\b")
 COMMENT = re.compile(r"//[^\n]*|/\*.*?\*/", re.S)
+TEST_MODULE = re.compile(
+    r'^#\[cfg\((?:test|any\(test, feature = "test-support"\))\)\]\n'
+    r'(?:pub(?:\(crate\))? )?mod tests\s*\{',
+    re.M,
+)
 
 
 def offenders(text):
     """(line, text) of each `self[.game][.client].renderer` outside comments and the test module."""
-    tests = re.search(r"^#\[cfg\(test\)\]", text, re.M)
-    body = text[: tests.start()] if tests else text
-    blanked = COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), body)
-    lines = body.splitlines()
+    blanked = COMMENT.sub(lambda m: re.sub(r"[^\n]", " ", m.group()), text)
+    tests = TEST_MODULE.search(blanked)
+    if tests:
+        blanked = blanked[:tests.start()]
+    lines = text.splitlines()
     return [
         (n, lines[n - 1].strip())
         for n in (blanked.count("\n", 0, m.start()) + 1 for m in ACCESS.finditer(blanked))

@@ -1,12 +1,19 @@
+#[cfg(feature = "client")]
+use mod_api::Compound;
+use mod_api::CreativeTabPermissions;
+#[cfg(feature = "client")]
 use mod_api::LogicalSide;
+use mod_api::Tag;
 use mod_api::prelude::ItemsHost;
+#[cfg(feature = "client")]
 use mod_api::{BuildCreativeModeTabContentsEvent, Hooks, HostSide};
-use mod_api::{Compound, Tag};
+#[cfg(feature = "client")]
 use mod_api::{
-    CreativeModeTabs, CreativeTabEditError, CreativeTabList, CreativeTabPermissions,
-    CreativeTabPlacement, CreativeTabReadError, CreativeTabVisibility,
+    CreativeModeTabs, CreativeTabEditError, CreativeTabList, CreativeTabPlacement,
+    CreativeTabReadError, CreativeTabVisibility,
 };
 use std::sync::Arc;
+#[cfg(feature = "client")]
 use std::sync::Mutex;
 use sunrise_gameplay_common::game::execution_role::ExecutionRole;
 #[cfg(test)]
@@ -17,17 +24,20 @@ use {
     sunrise_gameplay::game::native_entity_refs::tests::with_game_role,
 };
 
+#[cfg(feature = "client")]
 #[derive(Default)]
 pub(crate) struct Seen {
     pub(in crate::game) events: Vec<(LogicalSide, CreativeTabPermissions, String)>,
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct Edit(pub(crate) Arc<Mutex<Seen>>);
 
 pub(crate) fn stack(id: &str, count: u32) -> mod_api::ItemStack {
     mod_api::ItemStack::new(mod_api::__private::item_key(id).unwrap(), count).unwrap()
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn stone_key(max_stack: i32) -> mod_api::ItemStack {
     let mut stone = stack("minecraft:stone", 42);
     stone
@@ -39,6 +49,7 @@ pub(crate) fn stone_key(max_stack: i32) -> mod_api::ItemStack {
     stone
 }
 
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for Edit {
     fn build_creative_mode_tab_contents(
@@ -144,8 +155,10 @@ impl Hooks for Edit {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct Observe;
 
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for Observe {
     fn build_creative_mode_tab_contents(
@@ -244,6 +257,7 @@ pub(crate) fn definition(max_level: i32) -> serde_json::Value {
 #[allow(unused_imports)]
 pub(crate) use crate::game::server_side::native_hooks_server::build_creative_mode_tab_contents::tests::install_dedicated_holders;
 
+#[cfg(feature = "client")]
 pub(crate) fn replace_client_definition(
     game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
     max_level: i32,
@@ -261,6 +275,7 @@ pub(crate) fn replace_client_definition(
     game.set_registries(Arc::new(registries)).unwrap();
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn book_level(snapshot: &CreativeModeTabs) -> i32 {
     let books = &snapshot.tab("test:holders").unwrap().display_items;
     let levels: Vec<_> = books

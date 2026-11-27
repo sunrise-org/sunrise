@@ -1,4 +1,5 @@
 //! Full stack and hand proofs at real consumption and durability write paths.
+#![cfg(feature = "client")]
 use mod_api::{Hooks, HostSide, PlayerDestroyItemEvent};
 use std::sync::{Arc, Mutex};
 #[cfg(test)]

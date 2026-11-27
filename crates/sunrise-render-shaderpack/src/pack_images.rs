@@ -448,14 +448,14 @@ impl Buffers {
     }
 
     /// Makes the buffers (again, when one depends on the render size and it changed): their
-    /// contents start zeroed and persist across frames.
-    pub fn resize(&mut self, device: &wgpu::Device, size: [u32; 2]) {
+    /// contents start zeroed and persist across frames. Whether they were made.
+    pub fn resize(&mut self, device: &wgpu::Device, size: [u32; 2]) -> bool {
         let relative = self
             .objects
             .values()
             .any(|o| matches!(o, BufferObject::PerPixel { .. }));
         if self.group.is_some() && (!relative || self.made_for == size) {
-            return;
+            return false;
         }
         let limits = device.limits();
         let largest = limits
@@ -511,11 +511,18 @@ impl Buffers {
             entries: &entries,
         }));
         self.made_for = size;
+        true
     }
 
     /// Whether the pack declares buffer `binding`.
     pub fn has(&self, binding: u32) -> bool {
         self.objects.contains_key(&binding)
+    }
+
+    /// Buffer `binding`, once made.
+    pub fn get(&self, binding: u32) -> Option<&wgpu::Buffer> {
+        let at = self.objects.keys().position(|&b| b == binding)?;
+        self.buffers.get(at)
     }
 }
 

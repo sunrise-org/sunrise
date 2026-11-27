@@ -1,6 +1,7 @@
 //! `registry_protocol_id` on a server and on a client, with the ids written out: those of the
 //! pinned 26.3 registries report, a native mod's block after vanilla's, and a data registry in the
 //! order a server synced it.
+#![cfg(feature = "client")]
 use super::native_entity_refs::tests::{declared_part_root, with_client_game, with_game_at};
 use sunrise_core::identifier::Identifier;
 use sunrise_gameplay::game::server_side::lan::LanSettings;

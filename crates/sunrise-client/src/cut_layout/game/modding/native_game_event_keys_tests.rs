@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 #![cfg(test)]
 use mod_api::{DataMap, DataMapError, Tag};
 struct Frequencies;

@@ -402,6 +402,11 @@ impl PackAtlas {
             .collect()
     }
 
+    /// The atlas's texture, every level (memory reports).
+    pub fn texture(&self) -> &wgpu::Texture {
+        &self.texture
+    }
+
     /// The atlas's size in pixels (`atlasSize`).
     pub fn size(&self) -> [u32; 2] {
         [self.texture.width(), self.texture.height()]

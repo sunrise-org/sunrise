@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use crate::game::server_side::native_entity_refs::tests::with_game_role_client;
 use mod_api::{BlockPart, Hooks, LevelSide, Registrar, SmokeSourceEvent};
 use std::sync::Arc;

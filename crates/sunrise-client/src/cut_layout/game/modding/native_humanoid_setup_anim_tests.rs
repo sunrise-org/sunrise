@@ -1,4 +1,5 @@
 //! The real client-host adapter through CPU, skinned and layer-only setup routes.
+#![cfg(feature = "client")]
 use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use mod_api::{Hooks, HumanoidPart, HumanoidSetupAnimEvent};
 use std::sync::{Arc, Mutex};

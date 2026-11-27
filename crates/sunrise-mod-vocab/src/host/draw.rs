@@ -713,15 +713,18 @@ pub trait WorldDrawContext {
     }
     /// A label at world position `at`, drawn as vanilla draws a name tag
     /// (`SubmitNodeCollection.submitNameTag`): 0.5 blocks above `at`, facing the camera,
-    /// 0.025 blocks per font pixel (so it shrinks with distance; scale by distance yourself
-    /// for a constant screen size), centred, in `text`'s styles. Without
+    /// [`NameTagOptions::scale`] blocks per font pixel, a name tag's 0.025 unless
+    /// [`NameTagOptions::with_scale`] sets another (so it shrinks with distance; scale by
+    /// distance yourself for a constant screen size), centred, in `text`'s styles. Without
     /// [`NameTagOptions::see_through`] it is drawn once, as a sneaking name: depth tested and
     /// translucent, the faded text on the backdrop, in [`NameTagOptions::light`] as given. With
     /// it, twice, as an unsneaking name: opaque in the world (sky and block light each at least
     /// 2, or exactly [`NameTagOptions::light`] with [`NameTagOptions::exact_light`]), and
     /// faded on the backdrop over everything, walls included, unlit. Labels draw with the
     /// world's name tags, far to near, whatever the stage.
-    /// Refuses a non-finite `at` ([`DrawError::NonFinite`]); on `Err` nothing is drawn.
+    /// Refuses a non-finite `at`, or text positions that overflow f32 at a huge scale
+    /// ([`DrawError::NonFinite`]), and a scale that is not finite, or is zero or negative
+    /// ([`DrawError::InvalidScale`]); on `Err` nothing is drawn.
     /// Only visible text and styles are used, not click, hover or opaque metadata.
     fn name_tag(
         &mut self,
@@ -730,6 +733,41 @@ pub trait WorldDrawContext {
         options: NameTagOptions,
     ) -> Result<(), DrawError> {
         unimplemented!("WorldDrawContext::name_tag")
+    }
+    /// Draws `text` as [`BlockEntityDrawContext::text`] does, through the same glyph path, under
+    /// a pose of the mod's own: `pose` (row-major 3×4, as [`ModelInstance::transform`]) placed
+    /// at world position `origin`, the camera subtracted in `f64`. The line lies in the pose's
+    /// x-y plane, one unit a font pixel, y down, its left end at [`WorldTextOptions::at`],
+    /// read from +z: a sign's `scale(1/64, -1/64, 1/64)` for letters 8 pixels high, a name
+    /// tag's camera rotation ([`WorldRenderView::camera_rotation`]) and
+    /// `scale(0.025, -0.025, 0.025)` for a camera-facing line, then any roll, tilt or fixed
+    /// facing of the mod's own (`PoseStack.mulPose`, as `RenderLevelStageEvent` mods turn
+    /// their pose before `Font.drawInBatch`). Styles are drawn as name tags and text displays
+    /// draw them: each span's colour, bold, italic, underline, strikethrough, obfuscated, its
+    /// font, inline objects and `§` codes, right-to-left text in visual order. `options` are
+    /// `Font.drawInBatch`'s colour, shadow, backdrop, light and display mode, plus
+    /// [`WorldTextOptions::glowing`] and [`WorldTextOptions::outline`] as glowing sign text
+    /// (`Font.drawInBatch8xOutline`). Depth-tested text draws with the world's name tags, far to
+    /// near by `origin`, and see-through text over everything after them, whatever the stage.
+    /// Only the side the line reads from shows: seen from its -z side it draws nothing, as
+    /// vanilla's back-face culled text pipelines (and a pack's `core/text`) draw nothing.
+    /// Returns the width drawn, in font pixels (`Font.width`, rounded up).
+    /// Refuses a non-finite `origin`, `pose` or `options.at`, or a finite one that overflows a
+    /// corner to infinity or NaN ([`DrawError::NonFinite`]); on `Err` nothing is drawn. Only visible text and styles are used, not click, hover or
+    /// opaque metadata.
+    fn text(
+        &mut self,
+        origin: [f64; 3],
+        pose: [f32; 12],
+        text: &Text,
+        options: WorldTextOptions,
+    ) -> Result<f32, DrawError> {
+        unimplemented!("WorldDrawContext::text")
+    }
+    /// The width of `text` in font pixels as [`Self::text`] draws it, styles included
+    /// (`Font.width`), to lay a line out (centre it at minus half its width) before drawing it.
+    fn text_width(&self, text: &Text) -> f32 {
+        unimplemented!("WorldDrawContext::text_width")
     }
     /// Draw every valid visible copy in `instances` of the resolved `model`.
     ///

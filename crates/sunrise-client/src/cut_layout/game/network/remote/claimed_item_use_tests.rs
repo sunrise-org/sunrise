@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use mod_api::{ClientHost, ClientItemUseBehavior, Hooks, ItemKey, Registrar, RegistrationContext};
 use std::sync::{Arc, Mutex};
 use sunrise_client::interaction_input::Button;

@@ -11,6 +11,7 @@ use sunrise_world::food::Difficulty;
 use {sunrise_gameplay_common::game::Options, sunrise_gameplay_common::game::Progress};
 
 pub(crate) const BREEZE_BURST: &str = "minecraft:entity.breeze.wind_burst";
+#[cfg(feature = "client")]
 pub(crate) const WIND_CHARGE_BURST: &str = "minecraft:entity.wind_charge.wind_burst";
 
 /// A windowless integrated-server game on normal difficulty (a level.dat would

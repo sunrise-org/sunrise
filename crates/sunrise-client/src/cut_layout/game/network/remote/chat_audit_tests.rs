@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use sunrise_protocol::rsa::{RsaPrivateKey, RsaPublicKey, SignatureHash};
 use sunrise_protocol::secure_chat;
 use {

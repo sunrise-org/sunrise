@@ -75,11 +75,12 @@ def names(base=None):
 
 def verify(base):
     before, after = names(base), names()
-    assert after - OWN_FILES == {destination(path) for path in before - OWN_FILES}, "unexpected file inventory"
-    assert not (ROOT / OLD_PATH).exists(), "old crate directory still exists"
-    changed = set(run("git", "diff", "--name-only", "--no-renames", base).decode().splitlines())
+    if after - OWN_FILES != {destination(path) for path in before - OWN_FILES}:
+        raise SystemExit("unexpected file inventory")
+    if (ROOT / OLD_PATH).exists():
+        raise SystemExit("old crate directory still exists")
+    changed = {name for name in run("git", "diff", "--name-only", "-z", "--no-renames", base).decode().split("\0") if name}
     text = text_paths(base)
-    removed, added = Counter(), Counter()
     files = 0
     for path in sorted(before - OWN_FILES):
         target = destination(path)
@@ -92,14 +93,12 @@ def verify(base):
         if not changed_file and expected == original:
             continue
         if path in LOCKS:
-            assert Counter(expected.splitlines()) == Counter(actual.splitlines()), f"lockfile changed dependencies: {path}"
-        else:
-            assert actual == expected, f"unexpected content change: {target}"
-        removed.update(expected.splitlines())
-        added.update(actual.splitlines())
+            if Counter(expected.splitlines()) != Counter(actual.splitlines()):
+                raise SystemExit(f"lockfile changed dependencies: {path}")
+        elif actual != expected:
+            raise SystemExit(f"unexpected content change: {target}")
         files += 1
-    assert removed == added, "rename-normalized removed/added payload multisets differ"
-    print(f"Verified {files} files; {sum(removed.values())} rename-normalized payload lines; removed/added multisets equal")
+    print(f"Verified {files} rename-normalized files")
     print("Declared normalization: crate-only mappings; rustfmt; lockfile ordering; exact 8-line staging regression excluded. Player paths and registry URLs unchanged.")
 
 
@@ -122,7 +121,8 @@ def main():
     args = parser.parse_args()
     if args.apply:
         move = (ROOT / OLD_PATH).is_dir()
-        assert move != (ROOT / NEW_PATH).is_dir(), "expected exactly one crate directory"
+        if move == (ROOT / NEW_PATH).is_dir():
+            raise SystemExit("expected exactly one crate directory")
         for path in sorted(text_paths() - OWN_FILES):
             original = (ROOT / path).read_bytes()
             updated = normalized(path, original)

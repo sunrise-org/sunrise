@@ -814,7 +814,9 @@ impl crate::game::ClientGame<'_> {
         // right way from where it is seen.
         let orientation = self.camera_orientation();
         let [right, up] = billboard_axes(orientation);
-        let away = orientation * glam::Vec3::NEG_Z * 0.002;
+        // The backdrop's layer gap is in text space, so it scales with the text: a name tag's
+        // 0.002 at its own unit (a ratio of exactly 1).
+        let away = orientation * glam::Vec3::NEG_Z * (0.002 * (unit / NAME_TAG_UNIT));
         let mut batch = HudBatch::new(
             [1, 1],
             sunrise_client::hud::GuiScale {

@@ -1,6 +1,7 @@
 """tools/ci/check_game_boot_tests.py: an unignored test may not boot the game (tools/ci/rust_tests.py reads the source)."""
 import contextlib
 import io
+import re
 import subprocess
 import tempfile
 import textwrap
@@ -97,12 +98,35 @@ class GameBootCheck(unittest.TestCase):
             with self.assertRaises(SystemExit):
                 check.fixtures(path)
 
+    def defined(self, root, names):
+        """Which of `names` some tracked crates/**/*.rs under `root` defines as a function."""
+        # One search for every name: a search per name read the whole tree once each. POSIX ERE has no `\b`: the
+        # trailing class stands for it, and the matching lines are read for the names they define.
+        found = subprocess.run(["git", "grep", "-h", "-E", rf"fn ({'|'.join(sorted(set(names)))})([^[:alnum:]_]|$)",
+                                "--", "crates/*.rs"], cwd=root, capture_output=True, text=True)
+        self.assertIn(found.returncode, (0, 1), found.stderr)
+        return set(re.findall(r"\bfn ([A-Za-z0-9_]+)\b", found.stdout))
+
+    def test_a_longer_name_does_not_define_a_fixture_but_a_call_form_does(self):
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory)
+            (root / "crates").mkdir()
+            subprocess.check_call(["git", "-C", directory, "init", "--quiet"])
+            for text, expected in [
+                ("fn with_game_extra() {}\n", set()),
+                ("fn with_games() {}\n", set()),
+                ("fn with_game(a: u8) {}\n", {"with_game"}),
+                ("pub fn with_game<T>(a: T) {}\n", {"with_game"}),
+                ("fn with_game", {"with_game"}),
+            ]:
+                with self.subTest(text=text):
+                    (root / "crates/a.rs").write_text(text)
+                    subprocess.check_call(["git", "-C", directory, "add", "."])
+                    self.assertEqual(self.defined(root, ["with_game"]), expected)
+
     def test_the_committed_list_names_fixtures_that_exist(self):
         functions = {name: name.rsplit("::", 1)[-1] for name in check.fixtures()}
-        # One search for every name: a search per name read the whole tree once each.
-        found = subprocess.run(["git", "grep", "-h", "-o", "-E", rf"fn ({'|'.join(set(functions.values()))})\b",
-                                "--", "crates/*.rs"], cwd=check.ROOT, capture_output=True, text=True)
-        defined = {line.split()[1] for line in found.stdout.splitlines()}
+        defined = self.defined(check.ROOT, functions.values())
         for name, function in functions.items():
             self.assertIn(function, defined, f"{name} is not defined anywhere under crates/")
 

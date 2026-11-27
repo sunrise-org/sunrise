@@ -218,6 +218,7 @@ Use `PieceContext` to work directly within the chunk:
 |---|---|
 | `chunk`, `chunk_box` | Identify the chunk and writable box. |
 | `set_block` | Write a `BlockState` immediately; positions outside `chunk_box` return `false` silently, and invalid states or world write failures log the position and cause and return `false`. |
+| `set_block_raw` | `WorldGenLevel.setBlock(pos, state, 2)`: `set_block`'s write and clipping without `StructurePiece.placeBlock`'s extras. It schedules no fluid tick for a fluid at the position and makes no piece-level post-processing mark of a shape-check block (torch, fence, ladder, iron bars). The level still applies the state's own post-processing rule (soul sand still marks the position above it), and queued ticks stay. |
 | `block`, `height` | Read current blocks and heightmap heights. |
 | `state`, `state_with` | Resolve a registered `BlockKey` to an API-owned `BlockState`. |
 | `random` | Draw from the piece's `RandomSource`. |

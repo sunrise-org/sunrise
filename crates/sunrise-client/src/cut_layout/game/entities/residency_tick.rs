@@ -1,12 +1,18 @@
 #![cfg(test)]
 #[cfg(test)]
 mod tests {
+    #[cfg(feature = "client")]
     use crate::game::server_side::native_entity_refs::tests::with_client_game;
+    #[cfg(feature = "client")]
     use sunrise_core::geometry::Vec3;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::GameGameExt1;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::residency_tick::ResidencyTickGameExt as _;
+    #[cfg(feature = "client")]
     use sunrise_sim::mobs::Mob;
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn client_tick_drains_actual_bound_owner_events_without_a_lookup() {

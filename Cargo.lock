@@ -4636,6 +4636,7 @@ dependencies = [
  "socket2",
  "sunrise-assets",
  "sunrise-bench",
+ "sunrise-client",
  "sunrise-client-gameplay",
  "sunrise-client-input",
  "sunrise-client-lib",

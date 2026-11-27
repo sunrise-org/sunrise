@@ -587,6 +587,7 @@ fn a_cursor_cleared_outside_a_click_is_sent_once_on_the_next_broadcast() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn owned_click_prediction_applies_caps_and_the_server_corrects_an_override() {

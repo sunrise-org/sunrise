@@ -2,12 +2,16 @@
 //! entity to the item model, so a framed compass's needle reads the frame's
 //! position and yaw; and only `CompassItem.inventoryTick` ticks a
 //! `LodestoneTracker`, so any other item carrying the component keeps it.
+#[cfg(feature = "client")]
 use crate::game::{Audio, Settings, load_resources};
 use sunrise_core::nbt::Tag;
+#[cfg(feature = "client")]
 use sunrise_core::random::LegacyRandom;
 use sunrise_gameplay::game::game_tests::tests::server_game;
 use sunrise_items::items::ItemStack;
+#[cfg(feature = "client")]
 use sunrise_sim::entities::ItemFrame;
+#[cfg(feature = "client")]
 use {
     sunrise_gameplay_common::game::Options, sunrise_gameplay_common::game::Progress,
     sunrise_gameplay_common::game::execution_role,
@@ -25,6 +29,7 @@ fn tracker(pos: [i32; 3]) -> Tag {
 }
 
 /// A frame holding a lodestone compass aimed at `5 70 16`.
+#[cfg(feature = "client")]
 fn framed_compass(id: u32, pos: [i32; 3], facing: u8, rotation: i8) -> ItemFrame {
     let mut compass = ItemStack::new("minecraft:compass", 1);
     compass
@@ -51,6 +56,7 @@ fn framed_compass(id: u32, pos: [i32; 3], facing: u8, rotation: i8) -> ItemFrame
 
 /// A game with the client's item definitions and atlas: resolving a stack to
 /// its model needs both, and `server_game` loads neither.
+#[cfg(feature = "client")]
 fn client_game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
 ) -> sunrise_client_gameplay::game::ClientGame<'a> {
@@ -99,6 +105,7 @@ fn client_game<'a>(
 /// The `item/compass_NN` sprite the renderer draws for the frame's item: the
 /// item quad's four atlas corners fall inside exactly one of the 32 compass
 /// sprites `compass.json` dispatches over.
+#[cfg(feature = "client")]
 fn drawn_needle(
     game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
     frame: ItemFrame,
@@ -136,6 +143,7 @@ fn drawn_needle(
     drawn[0].to_owned()
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_framed_lodestone_compass_needle_turns_with_its_frame() {

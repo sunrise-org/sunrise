@@ -192,6 +192,27 @@ pub(crate) fn boot(
     (server, port, read, log, console)
 }
 
+#[test]
+#[ignore = "daily"]
+fn dedicated_console_translates_command_feedback_with_arguments() {
+    let Some(resources) = resources() else {
+        return;
+    };
+    let scratch = tempfile::tempdir().unwrap();
+    let (_server, _, read, mut log, mut console) = boot(scratch.path(), &resources);
+    writeln!(console, "time query gametime").unwrap();
+
+    let marker = "[Server thread/INFO]: System chat: ";
+    wait_for_log(&read, &mut log, Duration::from_secs(10), marker);
+    let line = log.last().unwrap().split_once(marker).unwrap().1;
+    assert!(
+        line.strip_prefix("The game time is ")
+            .and_then(|line| line.strip_suffix(" tick(s)"))
+            .is_some_and(|ticks| ticks.parse::<u64>().is_ok()),
+        "Unexpected console feedback: {line:?}"
+    );
+}
+
 /// The dedicated server keeps running while a player walks through freshly generated terrain and
 /// sand falls and lands near it:
 /// the whole level tick (entities, falling blocks, the entity residency pass) runs every tick

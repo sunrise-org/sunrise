@@ -1,6 +1,7 @@
 //! `contained_fluid`: a mod's own container item says which fluid a stack holds, and its
 //! `neoforge:fluid_container` model draws it as a held stack of that fluid. Run alone with
 //! prepared resources: installs process-wide trait mods.
+#![cfg(feature = "client")]
 use mod_api::{
     ClientHost, ContainedFluidEvent, FluidKey, Hooks, ItemPart, Registrar, RegistrationContext,
 };

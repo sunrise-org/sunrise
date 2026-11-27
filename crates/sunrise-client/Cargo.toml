@@ -114,6 +114,7 @@ default = ["client", "audio", "controllers", "sunrise-extras"]
 client = ["dep:cap-fs-ext", "dep:cap-std", "dep:chrono", "dep:cipher", "dep:crypto-common", "dep:digest", "dep:flate2", "dep:fnv", "dep:fs4", "dep:glam", "dep:indexmap", "dep:libc", "dep:png", "dep:sha1", "dep:sha2", "dep:socket2", "dep:sunrise-client-gameplay", "dep:sunrise-client-input", "dep:sunrise-client-lib", "dep:sunrise-client-render", "dep:sunrise-narrator", "dep:ureq", "dep:winit", "dep:zip", "sunrise-client-gameplay/client"]
 # Scoped trait-mod installation for a mod's own tests.
 testing = []
+test-support = ["sunrise-client-gameplay?/test-support"]
 # Per-level-tick state digest for determinism checks (game/world/state_digest.rs).
 state-digest = ["sunrise-gameplay/state-digest"]
 # Sound output. Without it (and `controllers`) the program links neither libasound nor libudev on
@@ -153,7 +154,8 @@ workspace = true
 
 [dev-dependencies]
 sunrise-gameplay-common = { path = "../sunrise-gameplay-common", features = ["test-support"] }
-sunrise-client-gameplay = { path = "../sunrise-client-gameplay", default-features = false, features = ["test-support"] }
+# Forward test support only when the optional client gameplay dependency is active.
+sunrise-client = { path = ".", default-features = false, features = ["test-support"] }
 sunrise-gameplay = { path = "../sunrise-gameplay", features = ["test-support"] }
 sunrise-hooks = { path = "../sunrise-hooks", features = ["test-support"] }
 # `runtime_files` tests pack a mod folder.
@@ -161,6 +163,8 @@ sunrise-mod-package = { path = "../sunrise-mod-package", default-features = fals
 sunrise-game-data = { path = "../sunrise-game-data", features = ["test-language-publication", "test-effect-registry"] }
 sunrise-client-lib = { path = "../sunrise-client-lib", default-features = false, features = ["test-menu-validity", "test-payload-probe", "test-publication-scope", "test-residency-observer", "test-dry-side", "test-tooltip-factories", "test-pack-feedback", "test-resource-cache", "test-still-clock", "test-support"] }
 tempfile = "3"
+png = "0.18"
+zip = { version = "9.1.3", default-features = false, features = ["deflate-flate2-zlib-rs"] }
 bytemuck = { version = "1.24", features = ["derive"] }
 sunrise-mod-runtime = { path = "../sunrise-mod-runtime", features = ["test-work-count"] }
 sunrise-threads = { path = "../sunrise-threads", features = ["test-allocation-count", "test-game-dir"] }

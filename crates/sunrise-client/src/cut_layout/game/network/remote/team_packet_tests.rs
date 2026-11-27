@@ -1,3 +1,4 @@
+#![cfg(feature = "client")]
 use sunrise_core::nbt::Tag;
 use sunrise_game_data::scoreboard::comp_text;
 use sunrise_protocol::packets::play::{Clientbound, SetPlayerTeam, TeamParameters};

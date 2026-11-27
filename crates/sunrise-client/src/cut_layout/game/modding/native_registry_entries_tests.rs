@@ -1,4 +1,5 @@
 //! Real server/client Game owners, world publication and negotiated client registry limits.
+#![cfg(feature = "client")]
 use mod_api::{
     DatapackField, DatapackFieldKind, DatapackRegistrySync, Hooks, ModEntry, Registrar,
     RegistrationContext,

@@ -18,13 +18,25 @@ pub mod entry;
 // dylib, and the allocator must be the one its code and the mods' executable share. The Windows and macOS archives
 // build with `system-allocator`: their loaders bind each library to std's own allocator, which everything then
 // shares (#2394, #3877).
-#[cfg(not(feature = "system-allocator"))]
+
+// The unit-test crate uses the allocator from its self dev-dependency.
+#[cfg(all(not(test), not(feature = "system-allocator")))]
 #[global_allocator]
 static ALLOCATOR: sunrise_threads::GameAllocator = sunrise_threads::GAME_ALLOCATOR;
 mod cut_layout;
 pub mod game_facade;
 pub use cut_layout::game;
-pub use sunrise_sim::orb_limits;
+#[cfg(all(test, not(feature = "client")))]
+pub(crate) use sunrise_client_lib::settings;
+#[cfg(all(test, not(feature = "client")))]
+pub(crate) use sunrise_game_data::scoreboard;
+#[cfg(all(test, not(feature = "client")))]
+pub(crate) use sunrise_items::items;
+#[cfg(all(test, not(feature = "client")))]
+pub(crate) use sunrise_level::chunk;
+#[cfg(all(test, not(feature = "client")))]
+pub(crate) use sunrise_sim::{datapack_net, entities, motion, raw_payloads};
+pub use sunrise_sim::{lan, orb_limits, save};
 #[cfg(test)]
 mod test_game_dir;
 

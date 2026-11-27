@@ -32,6 +32,7 @@ pub(crate) mod tests {
         game.mob(game.entity(id).unwrap()).unwrap()
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn fox_enderman_and_zombified_piglin_take_targets_with_their_side_effects() {
@@ -204,6 +205,7 @@ pub(crate) mod tests {
         })
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn leash_holder_reads_live_state() {

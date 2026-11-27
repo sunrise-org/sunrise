@@ -92,6 +92,7 @@ mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_client_sets_its_own_players_and_a_respawn_or_another_level_clears_them() {

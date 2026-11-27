@@ -1,4 +1,4 @@
-use sunrise_client_gameplay::game::native_hooks::enchantments::EnchantmentsGameExt1;
+use sunrise_gameplay_common::game::native_hooks::enchantments::EnchantmentsGameExt1;
 #[test]
 #[ignore = "daily"]
 fn enchantment_registry_returns_records_and_unknown_cost() {
@@ -34,6 +34,7 @@ fn enchantment_registry_returns_records_and_unknown_cost() {
 
 /// On a server, the reads answer from the registry it synced
 /// (`ClientboundRegistryDataPacket`), which holds a data pack's enchantments.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_servers_synced_enchantment_reaches_the_registry_reads() {
@@ -98,6 +99,7 @@ fn translate_gives_the_text_of_a_defined_key_and_none_otherwise() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_trait_mod_measures_text_through_its_draw_context() {
@@ -158,4 +160,5 @@ fn a_server_host_reads_enchantment_definitions() {
     );
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::tables::GameItems as _;

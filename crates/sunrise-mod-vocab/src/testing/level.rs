@@ -12,12 +12,19 @@ use std::collections::{BTreeMap, HashMap};
 pub struct FakeLevel {
     level: LevelRef,
     blocks: HashMap<[i32; 3], String>,
-    block_entities: BTreeMap<[i32; 3], FakeBlockEntity>,
+    block_entities: BTreeMap<[i32; 3], ResidentBlockEntity>,
+    last_block_entity_generation: u64,
     pub(super) entities: BTreeMap<u32, FakeEntity>,
     /// Bucket sounds and game events queued for the outermost commit
     /// ([`LevelRef::play_fluid_effects`](crate::LevelRef::play_fluid_effects)): kept with the
     /// level, so an abort drops them.
     pub(super) fluid_effects: Vec<QueuedFluidEffects>,
+}
+
+#[derive(Clone, Debug)]
+struct ResidentBlockEntity {
+    generation: u64,
+    entity: FakeBlockEntity,
 }
 
 /// A bucket's sound and game event waiting for the outermost commit.
@@ -46,6 +53,7 @@ impl FakeLevel {
             ),
             blocks: HashMap::new(),
             block_entities: BTreeMap::new(),
+            last_block_entity_generation: 0,
             entities: BTreeMap::new(),
             fluid_effects: Vec::new(),
         }
@@ -63,16 +71,37 @@ impl FakeLevel {
         self
     }
     /// The block entity at `pos`, a vanilla one with no storage put there if none stands there.
+    /// Editing an existing resident keeps its handle; inserting after removal creates a new one.
     pub fn block_entity(&mut self, pos: [i32; 3]) -> &mut FakeBlockEntity {
-        self.block_entities.entry(pos).or_default()
+        let last = &mut self.last_block_entity_generation;
+        &mut self
+            .block_entities
+            .entry(pos)
+            .or_insert_with(|| {
+                *last = last
+                    .checked_add(1)
+                    .expect("fake block entity generation exhausted");
+                ResidentBlockEntity {
+                    generation: *last,
+                    entity: FakeBlockEntity::default(),
+                }
+            })
+            .entity
     }
-    /// Takes the block entity at `pos` away, as breaking its block does.
+    /// Takes the block entity at `pos` away, invalidating its handle.
     pub fn remove_block_entity(&mut self, pos: [i32; 3]) -> Option<FakeBlockEntity> {
-        self.block_entities.remove(&pos)
+        self.block_entities.remove(&pos).map(|entry| entry.entity)
     }
     /// The block entity at `pos`, if one stands there.
     pub fn block_entity_at(&self, pos: [i32; 3]) -> Option<&FakeBlockEntity> {
-        self.block_entities.get(&pos)
+        self.block_entities.get(&pos).map(|entry| &entry.entity)
+    }
+    pub(super) fn restore_snapshot(&mut self, mut snapshot: Self) {
+        // Restore the residents, but never reuse a generation issued in the aborted scope.
+        snapshot.last_block_entity_generation = snapshot
+            .last_block_entity_generation
+            .max(self.last_block_entity_generation);
+        *self = snapshot;
     }
     /// Entity `id` of type `kind` (`minecraft:pig`) in this level, put there if missing; its
     /// UUID is its id until set. After explicit entity-type resolution, an undeclared kind
@@ -128,10 +157,18 @@ impl FakeLevel {
         self.blocks.insert(pos, id.to_owned());
         true
     }
-    pub(super) fn standing(&self, level: LevelRef, pos: [i32; 3]) -> Option<&FakeBlockEntity> {
+    pub(super) fn standing_entry(
+        &self,
+        level: LevelRef,
+        pos: [i32; 3],
+    ) -> Option<(u64, &FakeBlockEntity)> {
         (level == self.level)
             .then(|| self.block_entities.get(&pos))
             .flatten()
+            .map(|entry| (entry.generation, &entry.entity))
+    }
+    pub(super) fn standing(&self, level: LevelRef, pos: [i32; 3]) -> Option<&FakeBlockEntity> {
+        self.standing_entry(level, pos).map(|(_, entity)| entity)
     }
     pub(super) fn standing_mut(
         &mut self,
@@ -141,6 +178,7 @@ impl FakeLevel {
         (level == self.level)
             .then(|| self.block_entities.get_mut(&pos))
             .flatten()
+            .map(|entry| &mut entry.entity)
     }
     pub(super) fn entity_at(&self, id: u32) -> Option<&FakeEntity> {
         self.entities.get(&id)

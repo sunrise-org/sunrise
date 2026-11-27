@@ -158,6 +158,7 @@ fn a_hanging_entity_turned_back_to_south_is_sent_south() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_client_turns_its_painting_with_the_servers_direction() {

@@ -2,6 +2,7 @@
 //! packet adopts a column and tells its load once the blocks are in; every route that frees a
 //! column (eviction, a radius shrink, the forget packet, level close) tells its unload, and the
 //! view centre moving away hides slots untold.
+#![cfg(feature = "client")]
 use mod_api::{ClientChunkLoadEvent, ClientChunkUnloadEvent, ClientHost, Hooks};
 use std::sync::Mutex;
 use sunrise_client_gameplay::game::client_side::remote_client::session_state::RemoteDimensionEntry;

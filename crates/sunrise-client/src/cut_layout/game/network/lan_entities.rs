@@ -10,6 +10,7 @@ pub(crate) mod tests {
         }};
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn tracking_ids_preserve_all_family_interleaving() {

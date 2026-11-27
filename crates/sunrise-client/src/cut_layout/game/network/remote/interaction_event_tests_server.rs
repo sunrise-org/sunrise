@@ -5,13 +5,17 @@ use crate::game::remote::interaction_event_tests::hit;
 use crate::game::remote::interaction_event_tests::*;
 use mod_api::InteractionResult as Answer;
 use mod_api::{self, LogicalSide, TriState, UsePhase};
+#[cfg(feature = "client")]
+use std::sync::Mutex;
 use std::sync::{
-    Arc, Mutex,
+    Arc,
     atomic::{AtomicI32, AtomicUsize},
 };
-use sunrise_client_gameplay::game::native_hooks::item_fallthrough::ItemFallthroughGameExt1;
 use sunrise_core::geometry::Vec3;
+#[cfg(feature = "client")]
 use sunrise_core::nbt::Tag;
+#[cfg(feature = "client")]
+use sunrise_gameplay_common::game::native_hooks::item_fallthrough::ItemFallthroughGameExt1;
 use sunrise_protocol::packets::configuration::ClientInformation;
 use {
     crate::game::server_side::native_entity_refs::tests::with_game,
@@ -45,11 +49,13 @@ pub(crate) mod use_item_result_tests;
 #[path = "interaction_key_tests_server.rs"]
 pub(crate) mod interaction_key_tests;
 
+#[cfg(feature = "client")]
 #[path = "mapping_press_tests_server.rs"]
 pub(crate) mod mapping_press_tests;
 
 /// `SolidBucketItem.getPlaceSound` changes only the event: both sides use
 /// the contextual sound type's levels, even with a no-op level-sound listener.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn powder_snow_placement_uses_the_bucket_event_and_contextual_levels() {
@@ -190,6 +196,7 @@ fn powder_snow_placement_uses_the_bucket_event_and_contextual_levels() {
 /// something in the off hand. The client runs the Part too, so `Minecraft.startUseItem` stops
 /// at the main hand: one request goes out and the off hand gets no turn. The server runs the
 /// Part once for that request. The lever stays put on both sides: the Part replaced its toggle.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_successful_block_part_runs_once_per_click_on_both_sides() {
@@ -256,6 +263,7 @@ fn a_successful_block_part_runs_once_per_click_on_both_sides() {
 /// `SolidBucketItem.useOn`: a powder snow bucket placed on a block leaves an empty bucket in the
 /// hand that placed it, on the server and in the client's own prediction, so the client's next
 /// click in the same tick uses the bucket (`use_item`) as vanilla's does.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_placed_powder_snow_bucket_leaves_a_bucket_in_hand_on_both_sides() {
@@ -289,6 +297,7 @@ fn a_placed_powder_snow_bucket_leaves_a_bucket_in_hand_on_both_sides() {
 /// A spectator's click fires `right_click_block` on the client like anyone's, and a cancel
 /// answers in place of the server's menu turn: SUCCESS swings and ends the click, FAIL ends it,
 /// PASS goes on to the other hand.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_spectator_fires_right_click_block_on_the_client_and_its_cancel_answers() {
@@ -341,6 +350,7 @@ fn a_spectator_fires_right_click_block_on_the_client_and_its_cancel_answers() {
 }
 
 /// A cancelled block PASS tries both hands, but neither may send or predict item use.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_spectators_passing_block_click_skips_item_use_for_both_hands() {
@@ -408,6 +418,7 @@ fn a_spectators_passing_block_click_skips_item_use_for_both_hands() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn air_event_skips_the_item_and_consuming_results_end_the_click() {
@@ -664,6 +675,7 @@ fn an_item_used_from_the_off_hand_reaches_the_use_hooks_on_the_server() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn before_block_cancellation_pass_continues_but_fail_and_consuming_results_stop() {
@@ -747,6 +759,7 @@ fn before_block_cancellation_pass_continues_but_fail_and_consuming_results_stop(
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn canceled_item_results_keep_the_stack_wrappers_side_effects() {
@@ -970,6 +983,7 @@ fn item_use_overlap_matrix_on_the_server() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn on_item_use_first_runs_before_the_block_and_ends_the_click() {
@@ -1056,6 +1070,7 @@ fn on_item_use_first_runs_before_the_block_and_ends_the_click() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn phase_events_replace_the_behaviour_before_its_part_on_both_sides() {
@@ -1268,6 +1283,7 @@ fn phase_events_replace_the_behaviour_before_its_part_on_both_sides() {
 /// Item.useOn without item behavior or a BLOCK_TRANSFORMER is PASS, and
 /// MultiPlayerGameMode.performUseItemOn returns it without a swing. An unknown
 /// item must keep that inert fallback even when RightClickBlock forces use.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn resource_gated_unknown_held_item_forced_use_predicts_pass_without_a_swing() {
@@ -1333,6 +1349,7 @@ fn resource_gated_unknown_held_item_forced_use_predicts_pass_without_a_swing() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn right_click_block_explicit_allow_overrides_sneak_skip_on_both_sides() {
@@ -1392,6 +1409,7 @@ fn right_click_block_explicit_allow_overrides_sneak_skip_on_both_sides() {
     });
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn right_click_block_forced_item_use_reaches_empty_hand_on_both_sides() {
@@ -1519,8 +1537,11 @@ pub(crate) fn setup_interaction_guest(
 }
 
 impl<'g> InteractionSide<'g> for sunrise_gameplay::game::ServerGame<'g> {
+    #[cfg(feature = "client")]
     const IS_CLIENT: bool = false;
+    #[cfg(feature = "client")]
     const LOGICAL_SIDE: LogicalSide = LogicalSide::Server;
+    #[cfg(feature = "client")]
     fn set_interaction_mode(game: &mut Self, mode: sunrise_command::args::GameMode) {
         use sunrise_command::args::GameMode;
         let id = match mode {
@@ -1535,23 +1556,29 @@ impl<'g> InteractionSide<'g> for sunrise_gameplay::game::ServerGame<'g> {
         game.server.guest_use = Some(sunrise_gameplay_common::game::GuestUse::on_block(hand));
         game.with_hand(hand, |g| g.use_hand(Some(&hit()))).unwrap()
     }
+    #[cfg(feature = "client")]
     fn interaction_use_air_hand(game: &mut Self, hand: Hand) -> bool {
         game.with_hand(hand, |g| g.use_hand(None)).unwrap()
     }
+    #[cfg(feature = "client")]
     fn interaction_use_item_as_player(game: &mut Self) -> bool {
         game.use_item_as_player().unwrap().is_some()
     }
+    #[cfg(feature = "client")]
     fn interaction_set_sneak(game: &mut Self, sneak: bool) {
         game.server_set_acting_sneak(sneak);
     }
+    #[cfg(feature = "client")]
     fn interaction_clear_guest_use(game: &mut Self) {
         game.server.guest_use = None;
     }
+    #[cfg(feature = "client")]
     fn interaction_reset_use_failed(game: &mut Self) {
         game.server.use_failed = false;
     }
 }
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::tables::GameItems as _;
 
 use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;

@@ -194,6 +194,7 @@ impl Hooks for BounceProbe {
     }
 }
 
+#[cfg(feature = "client")]
 fn client_item(
     id: u32,
     stack: ItemStack,
@@ -233,6 +234,7 @@ fn client_item(
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn item_restitution_uses_the_legacy_contact_on_both_simulating_sides() {
@@ -582,13 +584,16 @@ fn item_support_survives_idle_then_clears_on_an_airborne_move() {
     );
 }
 
+#[cfg(feature = "client")]
 type StepCall = (bool, i32, [i32; 3], bool);
 
+#[cfg(feature = "client")]
 #[derive(Clone, Default)]
 struct StepProbe {
     calls: Arc<Mutex<Vec<StepCall>>>,
 }
 
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for StepProbe {
     fn step_on(&self, level: mod_api::LevelRandomSide<'_>, event: &mut mod_api::StepOnEvent<'_>) {
@@ -640,6 +645,7 @@ impl BlockPart for StepProbe {
     }
 }
 
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for StepProbe {
     fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
@@ -650,6 +656,7 @@ impl Hooks for StepProbe {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn step_on_edits_grounded_bodies_before_inside_effects_and_settle() {
@@ -868,12 +875,14 @@ fn step_on_edits_grounded_bodies_before_inside_effects_and_settle() {
     );
 }
 
+#[cfg(feature = "client")]
 #[derive(Clone, Default)]
 struct StepWrites(
     Arc<Mutex<Vec<[[f64; 3]; 2]>>>,
     Option<mod_api::DamageTypeKey>,
 );
 
+#[cfg(feature = "client")]
 #[mod_api::sunrise_part]
 impl BlockPart for StepWrites {
     fn step_on(&self, level: mod_api::LevelRandomSide<'_>, event: &mut mod_api::StepOnEvent<'_>) {
@@ -896,6 +905,7 @@ impl BlockPart for StepWrites {
     }
 }
 
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for StepWrites {
     fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
@@ -905,6 +915,7 @@ impl Hooks for StepWrites {
     }
 }
 
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn step_on_hurts_the_stepping_body_and_guards_its_block_writes() {

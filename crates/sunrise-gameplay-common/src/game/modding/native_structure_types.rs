@@ -356,6 +356,57 @@ impl<'a> Placing<'a> {
             type_id,
         })
     }
+    /// `StructurePiece.placeBlock` (`raw` false) or `WorldGenLevel.setBlock(pos, state, 2)` (`raw`
+    /// true) at `pos`, clipped to the chunk box.
+    fn write(&mut self, pos: [i32; 3], state: BlockState, raw: bool) -> bool {
+        let op = if raw { "set_block_raw" } else { "set_block" };
+        CallbackOwner::call_engine(|| {
+            if !self.chunk_box.is_inside(pos) {
+                #[cfg(debug_assertions)]
+                log::debug!(
+                    "mod structure piece write at {:?} outside the chunk box",
+                    pos
+                );
+                return false;
+            }
+            let state = match self.worker.index.to_engine(state) {
+                Ok(state) => state,
+                Err(error) => {
+                    log::error!(
+                        "mod {}: structure piece {} {op} at {pos:?} in chunk ({}, {}) failed: {error}",
+                        self.mod_id,
+                        self.type_id,
+                        self.chunk.x,
+                        self.chunk.z,
+                    );
+                    return false;
+                }
+            };
+            let written = if raw {
+                self.world.set(pos, state, 2)
+            } else {
+                sunrise_world::worldgen::structure::legacy::write_block(
+                    self.world,
+                    self.resources,
+                    pos,
+                    state,
+                )
+            };
+            match written {
+                Ok(written) => written,
+                Err(error) => {
+                    log::error!(
+                        "mod {}: structure piece {} {op} at {pos:?} in chunk ({}, {}) failed: {error}",
+                        self.mod_id,
+                        self.type_id,
+                        self.chunk.x,
+                        self.chunk.z,
+                    );
+                    false
+                }
+            }
+        })
+    }
 }
 
 impl PieceContext for Placing<'_> {
@@ -392,47 +443,10 @@ impl PieceContext for Placing<'_> {
         })
     }
     fn set_block(&mut self, pos: [i32; 3], state: BlockState) -> bool {
-        CallbackOwner::call_engine(|| {
-            if !self.chunk_box.is_inside(pos) {
-                #[cfg(debug_assertions)]
-                log::debug!(
-                    "mod structure piece write at {:?} outside the chunk box",
-                    pos
-                );
-                return false;
-            }
-            let state = match self.worker.index.to_engine(state) {
-                Ok(state) => state,
-                Err(error) => {
-                    log::error!(
-                        "mod {}: structure piece {} set_block at {pos:?} in chunk ({}, {}) failed: {error}",
-                        self.mod_id,
-                        self.type_id,
-                        self.chunk.x,
-                        self.chunk.z,
-                    );
-                    return false;
-                }
-            };
-            match sunrise_world::worldgen::structure::legacy::write_block(
-                self.world,
-                self.resources,
-                pos,
-                state,
-            ) {
-                Ok(written) => written,
-                Err(error) => {
-                    log::error!(
-                        "mod {}: structure piece {} set_block at {pos:?} in chunk ({}, {}) failed: {error}",
-                        self.mod_id,
-                        self.type_id,
-                        self.chunk.x,
-                        self.chunk.z,
-                    );
-                    false
-                }
-            }
-        })
+        self.write(pos, state, false)
+    }
+    fn set_block_raw(&mut self, pos: [i32; 3], state: BlockState) -> bool {
+        self.write(pos, state, true)
     }
     fn height(&mut self, kind: HeightmapType, x: i32, z: i32) -> Option<i32> {
         CallbackOwner::call_engine(|| self.world.height(engine_heightmap(kind), x, z).ok())

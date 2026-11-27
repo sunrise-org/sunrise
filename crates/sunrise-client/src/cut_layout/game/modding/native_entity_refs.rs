@@ -133,6 +133,10 @@ pub(crate) mod tests {
         bind_local_player, collect_all_entities, collect_entities_in, collect_game_entities_in,
         lever_on, piston_pulls_above, prepare_entity_ticking_neighborhood,
     };
+    #[cfg(not(feature = "client"))]
+    pub use sunrise_gameplay::game::native_entity_refs::tests::{
+        with_game, with_game_at, with_game_role, with_resident_game,
+    };
     use sunrise_gameplay_common::game::GameGameExt1;
     use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1;
     use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2;
@@ -145,9 +149,12 @@ pub(crate) mod tests {
     use sunrise_gameplay_common::game::native_player_food::NativePlayerFoodGameExt1;
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt1;
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt3;
+    #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1;
+    #[cfg(feature = "client")]
+    pub use sunrise_gameplay_common::game::test_fixtures::{fixture_facts_mut, resolve_parts};
     pub use sunrise_gameplay_common::game::test_fixtures::{
-        fixture_facts_mut, fixture_root, record_key, resolve_parts, run_fresh_cases,
+        fixture_root, record_key, run_fresh_cases,
     };
     use sunrise_gameplay_common::{game_side, world_biomes};
 
@@ -200,11 +207,13 @@ pub(crate) mod tests {
         Some(root)
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn with_game(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
         with_game_at(fixture_root(), test);
     }
 
     /// Boots a server with the origin's entity-ticking neighbourhood loaded.
+    #[cfg(feature = "client")]
     pub(crate) fn with_resident_game(
         test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
     ) {
@@ -214,6 +223,7 @@ pub(crate) mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn with_game_at(
         root: std::path::PathBuf,
         test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
@@ -225,6 +235,7 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn with_client_game(
         test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
     ) {
@@ -235,6 +246,7 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn with_uncached_client_game(
         test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
     ) {
@@ -247,6 +259,7 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn with_game_role(
         root: std::path::PathBuf,
         role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
@@ -255,6 +268,7 @@ pub(crate) mod tests {
         with_game_role_and_facts(root, role, None, test);
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn with_game_role_client(
         root: std::path::PathBuf,
         role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
@@ -264,6 +278,7 @@ pub(crate) mod tests {
     }
 
     /// Configure the fixture's owned gameplay facts before constructing the game.
+    #[cfg(feature = "client")]
     pub(crate) fn with_game_role_and_facts(
         root: std::path::PathBuf,
         role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
@@ -275,6 +290,7 @@ pub(crate) mod tests {
         with_game_role_and_facts_with(root, role, configure, configure.is_none(), test);
     }
 
+    #[cfg(feature = "client")]
     pub(crate) fn with_game_role_and_facts_client(
         root: std::path::PathBuf,
         role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
@@ -286,6 +302,7 @@ pub(crate) mod tests {
         with_game_role_and_facts_with_client(root, role, configure, configure.is_none(), test);
     }
 
+    #[cfg(feature = "client")]
     fn with_game_role_and_facts_with(
         root: std::path::PathBuf,
         role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
@@ -372,6 +389,7 @@ pub(crate) mod tests {
         test(&mut game);
     }
 
+    #[cfg(feature = "client")]
     fn with_game_role_and_facts_with_client(
         root: std::path::PathBuf,
         role: sunrise_gameplay_common::game::execution_role::ExecutionRole,
@@ -1432,6 +1450,7 @@ pub(crate) mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn side_guards_agree_across_integrated_dedicated_and_client() {
@@ -4816,6 +4835,7 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_client_finds_the_entities_it_tracks_and_its_own_player_in_a_box() {
@@ -4890,6 +4910,7 @@ pub(crate) mod tests {
     /// A client's `visit_entities_in` visits another player standing in the box (added through the
     /// real `AddEntity` packet), after the entities the server tracks and before the window's
     /// own player; a player outside the box, and one the server removed, are not listed.
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_client_lists_another_player_in_the_box_after_the_tracked_entities() {
@@ -4985,6 +5006,7 @@ pub(crate) mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_client_refuses_a_box_with_a_bound_that_is_not_finite_and_swaps_an_inverted_one() {

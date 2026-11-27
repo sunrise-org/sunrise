@@ -1,16 +1,27 @@
 #![cfg(test)]
+#[cfg(feature = "client")]
 use mod_api::prelude::BlockStatesHost;
+#[cfg(feature = "client")]
 use std::sync::atomic::Ordering;
+#[cfg(feature = "client")]
 use std::sync::mpsc::channel;
+#[cfg(feature = "client")]
 use std::time::Duration;
+#[cfg(feature = "client")]
 use std::time::Instant;
+#[cfg(feature = "client")]
 use sunrise_client_gameplay::game::client_side::integrated_client::Integrated;
+#[cfg(feature = "client")]
 use sunrise_gameplay::game::server_side::integrated::{LoadPhase, Serving, server_game};
+#[cfg(feature = "client")]
 use sunrise_gameplay::game::world_loading::WorldRequest;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::execution_role::ExecutionRole;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::integrated_link::Flags;
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::owner_link::OwnerRequest;
-#[cfg(test)]
+#[cfg(all(test, feature = "client"))]
 pub(crate) mod tests {
     use mod_api::prelude::{EntitiesHost, LivingHost, ServicesClientHost};
     use std::sync::{Arc, Mutex};

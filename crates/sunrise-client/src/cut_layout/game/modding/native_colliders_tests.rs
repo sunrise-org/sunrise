@@ -6,8 +6,10 @@ use sunrise_core::{
     geometry::Vec3,
     nbt::{Compound, Tag},
 };
+use sunrise_gameplay_common::game::Dim;
+#[cfg(feature = "client")]
+use sunrise_gameplay_common::game::GameGameExt1 as _;
 use sunrise_gameplay_common::game::native_collider_state::SAVE_KEY;
-use sunrise_gameplay_common::game::{Dim, GameGameExt1 as _};
 use sunrise_items::items::ItemStack;
 use sunrise_level::chunk::Chunk;
 use sunrise_sim::entities::ItemEntity;
@@ -1195,6 +1197,7 @@ fn teleport_to_and_set_collider_pose_in_one_tick_sweep_and_carry_in_either_order
 }
 
 /// Steps one client tick and drains its packets up to `ClientTickEnd`.
+#[cfg(feature = "client")]
 fn tick_client(
     game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
     wire: &mut sunrise_protocol::connection::Connection,
@@ -1214,6 +1217,7 @@ fn tick_client(
 
 /// A collider that turns in place via `collider_sync::Message::Pose` arriving before each
 /// client tick carries the local player standing 1.2 blocks off its axis around it (#5584).
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_client_collider_turning_before_the_tick_carries_the_local_player() {
@@ -1315,6 +1319,7 @@ fn a_client_collider_turning_before_the_tick_carries_the_local_player() {
 /// A collider descending 0.03125/tick (moved by `teleport_to` / `EntityPositionSync`, and again
 /// by the entity's own move / `MoveEntityPos`) carries the local player down with no x/z drift
 /// over 40 ticks, and `closest_space_nudge` ignores mod collider boxes (#5585).
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_client_descending_collider_carries_the_local_player_without_sideways_drift() {
@@ -1500,4 +1505,5 @@ use sunrise_gameplay_common::game::passengers_common::PassengersCommonGameExt1 a
 
 use sunrise_gameplay_common::game::piston_push::carrying::CarryingGameExt1 as _;
 
+#[cfg(feature = "client")]
 use sunrise_gameplay_common::game::tables::GameItems as _;

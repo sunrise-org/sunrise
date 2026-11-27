@@ -216,12 +216,18 @@ use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;
 
 #[cfg(test)]
 pub(crate) mod source_tests {
+    #[cfg(feature = "client")]
     use std::{io::Write, path::PathBuf};
+    #[cfg(feature = "client")]
     use sunrise_assets::resource_source::{Resource, ResourceSource};
+    #[cfg(feature = "client")]
     use sunrise_core::nbt::{self, Limits, Tag};
+    #[cfg(feature = "client")]
     use sunrise_gameplay::game::server_side::commands::place::read_template_data;
+    #[cfg(feature = "client")]
     use sunrise_world::compression::Compression;
 
+    #[cfg(feature = "client")]
     #[test]
     fn template_tags_read_archives_below_saved_world_structures() {
         let root = std::env::temp_dir().join(format!(

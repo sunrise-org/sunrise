@@ -15,15 +15,20 @@ pub(crate) mod post_effects_parity_tests;
 
 #[cfg(test)]
 pub(crate) mod tests {
+    #[cfg(feature = "client")]
     use super::super::tests::{connect_play_test, spawn_menu_test};
     use super::*;
+    #[cfg(feature = "client")]
     use crate::game::server_side::native_entity_refs::tests::with_client_game;
     use mod_api::{ClientHost, ClientPacketEvent, EntityRef, Hooks, ModEntry};
     use std::sync::mpsc;
+    #[cfg(feature = "client")]
     use sunrise_client_gameplay::game::client_side::remote_client::ingress_state::ListenerTurn;
+    #[cfg(feature = "client")]
     use sunrise_client_gameplay::remote::chunks::Received;
     use sunrise_client_lib::net::Event;
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn executor_sees_entity_removal_published_during_packet_dispatch() {
@@ -86,6 +91,7 @@ pub(crate) mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_bundled_long_debug_sample_applies_only_the_prefix_before_packet_error() {
@@ -198,6 +204,7 @@ pub(crate) mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     fn push_events(
         game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
         events: impl IntoIterator<Item = Event>,
@@ -269,6 +276,7 @@ pub(crate) mod tests {
         std::sync::Arc::new(registries)
     }
 
+    #[cfg(feature = "client")]
     fn assert_disconnected_with_generic_reason(
         game: &sunrise_client_gameplay::game::ClientGame<'_>,
     ) {
@@ -295,6 +303,7 @@ pub(crate) mod tests {
         ));
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn invalid_biome_registry_disconnects_before_join_or_reconfigured_play() {
@@ -386,6 +395,7 @@ pub(crate) mod tests {
         });
     }
 
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn malformed_trim_material_registry_disconnects_before_join() {

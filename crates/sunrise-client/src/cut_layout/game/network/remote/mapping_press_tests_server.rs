@@ -8,6 +8,7 @@ pub(crate) mod input_burst_tests;
 /// Q in creative mode: `MultiPlayerGameMode.dropItem` sends the drop and nothing else, so the
 /// end of the tick sends no creative slot edit for the stack it left (only the creative screen
 /// sends those).
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_creative_drop_sends_no_creative_slot() {
@@ -45,6 +46,7 @@ fn a_creative_drop_sends_no_creative_slot() {
 /// A creative toolbar load and Q in one tick (`handleKeybinds`: the number keys' loop, then
 /// key.drop): the load sends the new stack at once (`handleCreativeModeItemAdd`), so the drop
 /// that follows drops what the server now holds, and the end of the tick sends nothing more.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn a_toolbar_load_goes_out_before_a_drop_in_its_tick() {
@@ -113,6 +115,7 @@ fn clicking_attack_on_nothing_punches_and_waits_out_the_miss_cooldown() {
     });
 }
 
+#[cfg(feature = "client")]
 pub(crate) fn stone_under_the_crosshair(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) {
     let stone = game
         .pack

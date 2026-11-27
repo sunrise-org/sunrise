@@ -1046,10 +1046,13 @@ fn block_drops_ignores_a_replacement_block_entity_placed_after_removal() {
 
 /// What the client listener heard: whether the host was the client's, the position, the state's
 /// block name and whether a block entity came with it.
+#[cfg(feature = "client")]
 type HeardOnClient = (bool, [i32; 3], String, bool);
 
+#[cfg(feature = "client")]
 struct ClientProbe(Arc<Mutex<Vec<HeardOnClient>>>);
 
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for ClientProbe {
     fn player_destroyed_block(&self, host: HostSide<'_>, event: &mut PlayerDestroyedBlockEvent) {
@@ -1068,6 +1071,7 @@ impl Hooks for ClientProbe {
 
 /// The local player's survival break of a torch, which is instant: through the real attack
 /// click, so the restriction checks that come before the prediction apply.
+#[cfg(feature = "client")]
 #[test]
 #[ignore = "daily"]
 fn the_breaking_client_hears_its_predicted_break_with_a_client_host() {

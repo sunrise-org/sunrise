@@ -1,6 +1,9 @@
+#[cfg(feature = "client")]
 use super::*;
+#[cfg(feature = "client")]
 use mod_api::{ClientHost, InteractionKeyMappingTriggeredEvent};
 
+#[cfg(feature = "client")]
 pub(crate) struct KeyControl {
     pub(crate) cancel: bool,
     pub(crate) swing: bool,
@@ -8,6 +11,7 @@ pub(crate) struct KeyControl {
     pub(crate) calls: Arc<Mutex<Vec<Hand>>>,
     pub(crate) packets: Arc<Mutex<Vec<String>>>,
 }
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for KeyControl {
     fn client_packet_send(
@@ -34,7 +38,9 @@ impl Hooks for KeyControl {
     }
 }
 
+#[cfg(feature = "client")]
 pub(crate) struct FirstSilent(pub(crate) std::sync::atomic::AtomicBool);
+#[cfg(feature = "client")]
 #[mod_api::__subscriptions]
 impl Hooks for FirstSilent {
     fn interaction_key_mapping_triggered(

@@ -42,7 +42,7 @@ read). It keeps them only while the pass would draw the same again: the shadow p
 entity casts a shadow, while the pack has `image.*` images, while a shadow program draws into, flips or stores into a
 shadowcolor buffer that isn't cleared every frame (`shadowcolorNClear=false`: the program builds on the frame
 before), while a shadow program or a compute stage attached to one binds the pack's `bufferObject.*` storage buffers
-(they keep their contents between frames, so it may read or write something new each frame), and while a program
+or reads its work-group counts from one (`indirect.<pass>`) (they keep their contents between frames, so it may read or write something new each frame), and while a program
 outside the shadow pass binds `shadowcolorimg0` or `shadowcolorimg1`, since its stores would otherwise pile up in the
 kept buffers.
 
