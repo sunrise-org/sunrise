@@ -560,11 +560,13 @@ struct TranslatedPack {
     old_lighting: bool,
     separate_ao: bool,
     resource_notes: Vec<String>,
+    #[cfg(test)]
+    game_inputs: String,
 }
 
 struct TranslationReply {
     key: TranslationKey,
-    outcome: Result<Option<TranslatedPack>, String>,
+    outcome: Result<Option<Box<TranslatedPack>>, String>,
 }
 
 const _: fn() = || {
@@ -577,6 +579,14 @@ struct TranslationWorker {
     key: TranslationKey,
     cancel: Arc<AtomicBool>,
     thread: Option<std::thread::JoinHandle<TranslationReply>>,
+    #[cfg(test)]
+    ready: Option<std::thread::Result<TranslationReply>>,
+}
+
+#[cfg(test)]
+pub(super) enum TranslationTestAction {
+    Complete,
+    Fail,
 }
 
 impl Drop for TranslationWorker {
@@ -586,7 +596,10 @@ impl Drop for TranslationWorker {
 }
 
 impl TranslationWorker {
-    fn spawn(request: TranslationRequest) -> std::io::Result<Self> {
+    fn spawn(
+        request: TranslationRequest,
+        #[cfg(test)] gate: Option<std::sync::mpsc::Receiver<TranslationTestAction>>,
+    ) -> std::io::Result<Self> {
         let key = request.key.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancelled = cancel.clone();
@@ -594,6 +607,24 @@ impl TranslationWorker {
             .name("Shader translation".into())
             .spawn(move || {
                 let key = request.key.clone();
+                #[cfg(test)]
+                if let Some(gate) = gate {
+                    match gate.recv() {
+                        Ok(TranslationTestAction::Complete) => {}
+                        Ok(TranslationTestAction::Fail) => {
+                            return TranslationReply {
+                                key,
+                                outcome: Err("forced translation failure".into()),
+                            };
+                        }
+                        Err(_) => {
+                            return TranslationReply {
+                                key,
+                                outcome: Ok(None),
+                            };
+                        }
+                    }
+                }
                 let outcome = sunrise_level::crash::contain(|| translate_pack(request, &cancelled))
                     .map_err(|panic| format!("translating it panicked: {panic}"));
                 TranslationReply { key, outcome }
@@ -602,16 +633,26 @@ impl TranslationWorker {
             key,
             cancel,
             thread: Some(thread),
+            #[cfg(test)]
+            ready: None,
         })
     }
 
     fn is_finished(&self) -> bool {
+        #[cfg(test)]
+        if self.ready.is_some() {
+            return true;
+        }
         self.thread
             .as_ref()
             .is_some_and(|thread| thread.is_finished())
     }
 
     fn finish(mut self) -> Option<TranslationReply> {
+        #[cfg(test)]
+        if let Some(ready) = self.ready.take() {
+            return ready.ok();
+        }
         self.thread.take()?.join().ok()
     }
 }
@@ -643,6 +684,8 @@ pub(in crate::game) struct ShaderTranslation {
     world_generation: u64,
     pub(super) remesh: bool,
     pick_time: Option<(String, Instant)>,
+    #[cfg(test)]
+    gate: Option<std::sync::mpsc::Receiver<TranslationTestAction>>,
 }
 
 impl ShaderTranslation {
@@ -718,7 +761,24 @@ impl ShaderTranslation {
     }
 }
 
-fn translate_pack(request: TranslationRequest, cancel: &Arc<AtomicBool>) -> Option<TranslatedPack> {
+#[cfg(test)]
+impl ShaderTranslation {
+    pub(super) fn block_next(&mut self) -> std::sync::mpsc::Sender<TranslationTestAction> {
+        let (release, wait) = std::sync::mpsc::channel();
+        self.gate = Some(wait);
+        release
+    }
+
+    pub(super) fn wait_for_translation(&mut self) {
+        let worker = self.worker.as_mut().expect("a translation worker");
+        worker.ready = Some(worker.thread.take().expect("worker running").join());
+    }
+}
+
+fn translate_pack(
+    request: TranslationRequest,
+    cancel: &Arc<AtomicBool>,
+) -> Option<Box<TranslatedPack>> {
     let _span = sunrise_level::spans::guard("shader_pack_translate");
     let started = Instant::now();
     let TranslationRequest {
@@ -804,7 +864,7 @@ fn translate_pack(request: TranslationRequest, cancel: &Arc<AtomicBool>) -> Opti
     if cancel.load(Ordering::Relaxed) {
         return None;
     }
-    Some(TranslatedPack {
+    Some(Box::new(TranslatedPack {
         post,
         folder,
         blocks,
@@ -812,6 +872,8 @@ fn translate_pack(request: TranslationRequest, cancel: &Arc<AtomicBool>) -> Opti
         terrain_states,
         block_items,
         resource_notes,
+        #[cfg(test)]
+        game_inputs: format!("{inputs:?}"),
         item_file: text.is_some(),
         items: items.plain(),
         entities: entities.plain(),
@@ -825,7 +887,7 @@ fn translate_pack(request: TranslationRequest, cancel: &Arc<AtomicBool>) -> Opti
             .get("oldLighting")
             .is_some_and(|v| v.trim() == "true"),
         separate_ao: properties.separate_ao(),
-    })
+    }))
 }
 
 impl crate::game::ClientGame<'_> {
@@ -1054,7 +1116,11 @@ impl crate::game::ClientGame<'_> {
         let Some(request) = request.take() else {
             return;
         };
-        match TranslationWorker::spawn(*request) {
+        match TranslationWorker::spawn(
+            *request,
+            #[cfg(test)]
+            translation.gate.take(),
+        ) {
             Ok(worker) => translation.worker = Some(worker),
             Err(error) => {
                 log::error!(
@@ -1137,7 +1203,7 @@ impl crate::game::ClientGame<'_> {
             let mut job = translation.active.take().expect("translation job");
             match worker.finish() {
                 Some(reply) if reply.key == job.key => match reply.outcome {
-                    Ok(Some(pack)) => self.accept_translated_pack(&mut job, pack),
+                    Ok(Some(pack)) => self.accept_translated_pack(&mut job, *pack),
                     Ok(None) => {}
                     Err(error) => {
                         remember(&job.key.selection.path, job.key.fingerprint, false);
@@ -1205,6 +1271,69 @@ impl crate::game::ClientGame<'_> {
             block_states: RefCell::default(),
         });
         job.stage = LoadStage::Building;
+    }
+
+    #[cfg(test)]
+    #[inline(always)]
+    pub(super) fn assert_shader_translation_matches_preflight(&mut self, folder: &str) {
+        let translation = &self.client.native_shaders.translation;
+        let job = translation.active.as_ref().expect("a job");
+        let (name, key, dimension) = (job.name.clone(), job.key.clone(), job.dimension);
+        let request = self.preflight_shader_pack(&name, &key, dimension).unwrap();
+        let reference = sunrise_shaders::load_post(
+            &request.pack,
+            &request.folder,
+            &request.properties,
+            &request.macros,
+            &request.inputs,
+        );
+        let worker = self
+            .client
+            .native_shaders
+            .translation
+            .worker
+            .as_ref()
+            .unwrap();
+        let report = worker.ready.as_ref().unwrap().as_ref().unwrap();
+        let actual = report.outcome.as_ref().unwrap().as_ref().unwrap();
+        assert_eq!(actual.folder, folder);
+        assert_eq!(actual.folder, request.folder);
+        assert_eq!(actual.post.folder, reference.folder);
+        assert_eq!(actual.game_inputs, format!("{:?}", request.inputs));
+        assert_eq!(actual.post.notes, reference.notes);
+        let programs = |post: &sunrise_shaders::Post| {
+            post.every_program()
+                .map(|p| {
+                    let stages = p
+                        .program
+                        .as_ref()
+                        .map(|program| format!("{:?}{:?}", program.vertex, program.fragment));
+                    (p.name.clone(), p.buffers.clone(), stages)
+                })
+                .collect::<Vec<_>>()
+        };
+        assert_eq!(programs(&actual.post), programs(&reference));
+        assert_eq!(actual.separate_ao, request.properties.separate_ao());
+        assert_eq!(
+            actual.old_lighting,
+            request
+                .properties
+                .get("oldLighting")
+                .is_some_and(|v| v.trim() == "true")
+        );
+        let states = request
+            .pack
+            .read_text("block.properties")
+            .unwrap_or_default();
+        let states = Properties::parse(&states, &request.macros);
+        assert_eq!(
+            actual.terrain_states,
+            terrain_state_ids(request.registry, &BlockIds::parse(&states))
+        );
+        assert_eq!(
+            actual.layers.subjects().collect::<Vec<_>>(),
+            BlockLayers::parse(&states).subjects().collect::<Vec<_>>()
+        );
     }
 
     #[inline(always)]

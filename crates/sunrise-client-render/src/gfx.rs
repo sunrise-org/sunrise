@@ -1048,16 +1048,7 @@ pub(crate) struct PackLoading {
     dimension: i32,
     /// Held to be dropped with it: that cancels the build.
     _cancel: CancelOnDrop,
-    #[allow(clippy::type_complexity)]
-    thread: std::thread::JoinHandle<
-        std::result::Result<
-            (
-                std::result::Result<pack_post::PackPost, pack_post::Refused>,
-                Vec<i32>,
-            ),
-            String,
-        >,
-    >,
+    task: PackBuildTask,
     label: String,
     started: std::time::Instant,
     /// What its terrain and shadow programs will draw from the game's sections, as the built
@@ -1066,11 +1057,43 @@ pub(crate) struct PackLoading {
     draws: PackDraws,
 }
 
+type PackBuildOutput = std::result::Result<
+    (
+        std::result::Result<pack_post::PackPost, pack_post::Refused>,
+        Vec<i32>,
+    ),
+    String,
+>;
+
+enum PackBuildTask {
+    Running(std::thread::JoinHandle<PackBuildOutput>),
+    #[cfg(feature = "test-support")]
+    Ready(Box<std::thread::Result<PackBuildOutput>>),
+}
+
+impl PackBuildTask {
+    fn is_finished(&self) -> bool {
+        match self {
+            Self::Running(thread) => thread.is_finished(),
+            #[cfg(feature = "test-support")]
+            Self::Ready(_) => true,
+        }
+    }
+
+    fn join(self) -> std::thread::Result<PackBuildOutput> {
+        match self {
+            Self::Running(thread) => thread.join(),
+            #[cfg(feature = "test-support")]
+            Self::Ready(result) => *result,
+        }
+    }
+}
+
 pub struct PackBuildDrain(PackLoading);
 
 impl PackBuildDrain {
     pub fn is_finished(&self) -> bool {
-        self.0.thread.is_finished()
+        self.0.task.is_finished()
     }
 }
 

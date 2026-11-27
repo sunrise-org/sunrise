@@ -30,6 +30,7 @@ fn terrain_sources_are_kept_only_while_a_pack_is_loaded() {
         std::fs::write(shaders.join(name), text).unwrap();
     }
     with_client_game(|game| {
+        sunrise_client::sprites::set_labpbr_maps(true);
         let _event_loop = frame_scene(game);
         let sky = sunrise_level::environment::Sky::default();
         let camera = glam::DVec3::new(0.5, 65.5, 0.5);
@@ -41,10 +42,7 @@ fn terrain_sources_are_kept_only_while_a_pack_is_loaded() {
             return;
         }
         assert!(!renderer.keeps_pack_sources(), "no pack yet");
-        let kept_after = |game: &mut crate::game::ClientGame<'_>, frames: usize| {
-            for _ in 0..frames {
-                game.shader_pack_inputs(camera, camera, 0.0, &sky);
-            }
+        let kept = |game: &crate::game::ClientGame<'_>| {
             game.client
                 .renderer
                 .0
@@ -52,16 +50,42 @@ fn terrain_sources_are_kept_only_while_a_pack_is_loaded() {
                 .unwrap()
                 .keeps_pack_sources()
         };
-        // The first frame turns the resource packs' material maps on and reloads them, the
-        // next loads the pack, and the one after meshes with its sources.
+        let frame = |game: &mut crate::game::ClientGame<'_>| {
+            game.shader_pack_inputs(camera, camera, 0.0, &sky);
+        };
         game.client.settings.sunrise.shader_pack = pack.to_str().unwrap().to_owned();
-        assert!(kept_after(game, 3), "loaded");
+        frame(game);
+        assert!(!kept(game), "translating");
+        game.client
+            .native_shaders
+            .translation
+            .wait_for_translation();
+        frame(game);
+        assert!(kept(game), "translated, while the pipelines build");
         assert!(game.client.streaming.shader_pack);
-        // Dropped: the next frame unloads it, the one after meshes without sources.
-        game.client.settings.sunrise.shader_pack = String::new();
-        assert!(!kept_after(game, 2), "dropped");
+        game.client
+            .renderer
+            .0
+            .as_mut()
+            .unwrap()
+            .wait_shader_pack_build_for_test();
+        game.client.settings.sunrise.shader_pack.clear();
+        frame(game);
+        assert!(!kept(game), "dropped");
         assert!(!game.client.streaming.shader_pack);
         game.client.settings.sunrise.shader_pack = pack.to_str().unwrap().to_owned();
-        assert!(kept_after(game, 3), "loaded again");
+        frame(game);
+        game.client
+            .native_shaders
+            .translation
+            .wait_for_translation();
+        frame(game);
+        assert!(kept(game), "loaded again");
+        game.client
+            .renderer
+            .0
+            .as_mut()
+            .unwrap()
+            .wait_shader_pack_build_for_test();
     });
 }

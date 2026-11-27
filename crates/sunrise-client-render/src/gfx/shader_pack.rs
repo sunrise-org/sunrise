@@ -329,7 +329,7 @@ impl Renderer {
                 self.pack_post = None;
                 self.pack_loading = Some(PackLoading {
                     dimension,
-                    thread,
+                    task: PackBuildTask::Running(thread),
                     label,
                     started,
                     _cancel: CancelOnDrop(cancel),
@@ -368,11 +368,11 @@ impl Renderer {
         std::time::Instant,
         std::result::Result<Option<(Vec<String>, Vec<String>)>, pack_post::Refused>,
     )> {
-        if !self.pack_loading.as_ref()?.thread.is_finished() {
+        if !self.pack_loading.as_ref()?.task.is_finished() {
             return None;
         }
         let loading = self.pack_loading.take()?;
-        let (built, block_ids) = match loading.thread.join() {
+        let (built, block_ids) = match loading.task.join() {
             Ok(Ok(built)) => built,
             // A pack that doesn't run keeps no ids.
             Ok(Err(panic)) => (
@@ -396,7 +396,28 @@ impl Renderer {
     pub fn shader_pack_build_ready(&self) -> bool {
         self.pack_loading
             .as_ref()
-            .is_some_and(|build| build.thread.is_finished())
+            .is_some_and(|build| build.task.is_finished())
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn wait_shader_pack_build_for_test(&mut self) {
+        let build = self.pack_loading.take().expect("a pending GPU build");
+        let PackLoading {
+            dimension,
+            _cancel,
+            task,
+            label,
+            started,
+            draws,
+        } = build;
+        self.pack_loading = Some(PackLoading {
+            dimension,
+            _cancel,
+            task: PackBuildTask::Ready(Box::new(task.join())),
+            label,
+            started,
+            draws,
+        });
     }
 
     pub fn shader_pack_build_pending(&self) -> bool {
