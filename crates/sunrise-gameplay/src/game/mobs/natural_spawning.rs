@@ -4496,13 +4496,13 @@ mod tests {
         }
     }
 
-    struct PassTestLevel {
-        facts: BlockFacts,
-        data: MobData,
-        spawns: HashMap<String, Vec<SpawnEntry>>,
-        structures: StructureSpawns,
-        types: HashMap<String, std::sync::Arc<MobType>>,
-        players: Vec<[f64; 3]>,
+    struct PassTestLevel<'a> {
+        facts: &'a BlockFacts,
+        data: &'a MobData,
+        spawns: &'a HashMap<String, Vec<SpawnEntry>>,
+        structures: &'a StructureSpawns,
+        types: &'a HashMap<String, std::sync::Arc<MobType>>,
+        players: &'a [[f64; 3]],
         mobs: std::cell::RefCell<sunrise_sim::join_seq::ResidentList<Mob>>,
         boxes: std::cell::RefCell<MobBoxes>,
         use_index: bool,
@@ -4515,7 +4515,7 @@ mod tests {
         unobstructed_false: std::cell::Cell<usize>,
     }
 
-    impl SpawnLevel for PassTestLevel {
+    impl SpawnLevel for PassTestLevel<'_> {
         fn state(&self, _x: i32, y: i32, _z: i32) -> BlockStateId {
             if y <= 63 {
                 BlockStateId(1)
@@ -4524,10 +4524,10 @@ mod tests {
             }
         }
         fn facts(&self) -> &BlockFacts {
-            &self.facts
+            self.facts
         }
         fn mob_data(&self) -> &MobData {
-            &self.data
+            self.data
         }
         fn block_tag(&self, _tag: &str, _block: &str) -> bool {
             false
@@ -4570,7 +4570,7 @@ mod tests {
         }
     }
 
-    impl NaturalLevel for PassTestLevel {
+    impl NaturalLevel for PassTestLevel<'_> {
         fn min_y(&self) -> i32 {
             63
         }
@@ -4592,7 +4592,7 @@ mod tests {
             _y: i32,
             _z: i32,
         ) -> Option<&HashMap<String, Vec<SpawnEntry>>> {
-            Some(&self.spawns)
+            Some(self.spawns)
         }
         fn spawn_cost(&self, _entity: &str, _x: i32, _y: i32, _z: i32) -> Option<SpawnCost> {
             None
@@ -4610,10 +4610,10 @@ mod tests {
             Vec::new()
         }
         fn structure_spawns(&self) -> &StructureSpawns {
-            &self.structures
+            self.structures
         }
         fn nearest_player_positions(&self) -> &[[f64; 3]] {
-            &self.players
+            self.players
         }
         fn respawn(&self) -> Option<[i32; 3]> {
             None
@@ -4787,6 +4787,8 @@ mod tests {
             list
         };
 
+        let structures = StructureSpawns::default();
+        let player_positions = [[-20.0, 64.0, 16.0]];
         let chunks = [(0, 0), (1, 0), (0, 1), (1, 1)];
         let run_pass = |seed: i64, use_index: bool| {
             let mobs = build_mobs();
@@ -4796,12 +4798,12 @@ mod tests {
                 boxes.rebuild(&mobs, Some(mobs.stamp()));
             }
             let level = PassTestLevel {
-                facts: facts.clone(),
-                data: data.clone(),
-                spawns: spawns.clone(),
-                structures: StructureSpawns::default(),
-                types: types.clone(),
-                players: vec![[-20.0, 64.0, 16.0]],
+                facts: &facts,
+                data: &data,
+                spawns: &spawns,
+                structures: &structures,
+                types: &types,
+                players: &player_positions,
                 mobs: std::cell::RefCell::new(mobs),
                 boxes: std::cell::RefCell::new(boxes),
                 use_index,
@@ -4823,7 +4825,7 @@ mod tests {
             let mut admitted = Vec::new();
             let mut cross_chunk_spawns = 0usize;
             for chunk in chunks {
-                let mut spawn = |l: &PassTestLevel, r: &SpawnRequest, _: &mut LegacyRandom| {
+                let mut spawn = |l: &PassTestLevel<'_>, r: &SpawnRequest, _: &mut LegacyRandom| {
                     let kind = l.types.get(r.entity)?.clone();
                     let before_len = l.mobs.borrow().len();
                     let id = 10_000 + before_len as u32;
