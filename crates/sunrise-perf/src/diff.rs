@@ -390,7 +390,11 @@ impl Diff {
     /// The text report; `a` and `b` are the files' names.
     pub fn text(&self, a: &str, b: &str) -> String {
         let what = match &self.thread {
-            Some(t) => format!("{} {t} thread", side_name(self.side)),
+            Some(t) => format!(
+                "{} {} thread",
+                side_name(self.side),
+                t.strip_suffix(" thread").unwrap_or(t)
+            ),
             None => side_name(self.side).to_string(),
         };
         let mut out = self.workload_lines(a, b).join("\n");
