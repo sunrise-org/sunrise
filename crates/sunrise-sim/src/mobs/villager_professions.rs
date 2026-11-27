@@ -314,6 +314,13 @@ impl ResolvedProfessions {
         self.by_name.get(id).copied()
     }
 
+    /// Canonical qualified id of a resolved profession, borrowing from this table.
+    pub fn canonical_id(&self, id: &str) -> Option<&str> {
+        self.by_name
+            .get_key_value(id)
+            .map(|(name, _)| name.as_str())
+    }
+
     /// Metadata by an index scoped to this table.
     pub fn entry(&self, index: usize) -> Option<&Profession> {
         self.entries.get(index)

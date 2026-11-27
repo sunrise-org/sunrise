@@ -116,6 +116,7 @@ Their files are `data/neoforge/data_maps/<registry path>/<name>.json`:
 | Name | Registry path | Codec field |
 | --- | --- | --- |
 | `acceptable_villager_distances` | `entity_type` | `acceptable_villager_distance` |
+| `monster_room_mobs` | `entity_type` | `weight` |
 | `parrot_imitations` | `entity_type` | `sound` |
 | `villager_types` | `worldgen/biome` | `villager_type` |
 | `raid_hero_gifts` | `villager_profession` | `loot_table` |
@@ -130,17 +131,22 @@ value, even for an unknown target, refuses the whole file. Valid unknown targets
 removals are skipped. Tags use the target registry, including profession and game-event tags.
 
 Distances parse the original decimal directly to `f32`, including negative values,
-signed zero and overflow to infinity (`1e500`). Frequencies truncate the exact decimal,
-retain the low 32 bits as a signed integer, then require 1 through 15: `4294967297`
-becomes 1, `4294967311` becomes 15, and `15.999999999999999999999` becomes 15.
+signed zero and overflow to infinity (`1e500`). Monster-room mob weights and vibration
+frequencies truncate the exact decimal and retain the low 32 bits as a signed integer: weights
+require `0..=i32::MAX` (`ExtraCodecs.NON_NEGATIVE_INT`), and frequencies require 1 through 15
+(`4294967297` becomes 1, `4294967311` becomes 15, and `15.999999999999999999999` becomes 15).
+When the merged `neoforge:monster_room_mobs` map equals vanilla's starting entries (`skeleton`
+100, `spider` 100, `zombie` 200), dungeon generation keeps vanilla's exact `Util.getRandom(MOBS)`
+draw for worldgen RNG parity; any other merged table draws from the weighted list.
 Sound and villager-type values must name registered sounds and supported villager types;
 loot tables are resource identifiers. Compostability is boolean.
 
 Builtin reads return canonical NBT compounds with the field above, rather than the
-input's shorthand: distances are `Float`, frequencies `Int`, compostability `Byte`, and
-identifiers `String`. Infinity remains an NBT Float, never JSON null. Use `BiomeKey`
-to query biome values and `GameEventKey` to query game-event values. All nine built-in NeoForge
-maps (these six and the three block maps below) are optional synced maps (`DataMapSync::Optional`)
+input's shorthand: distances are `Float`, weights and frequencies `Int`, compostability `Byte`,
+and identifiers `String`. Infinity remains an NBT Float, never JSON null. Use `BiomeKey`
+to query biome values, `ProfessionKey` to query villager professions (unregistered professions
+return `DataMapError::InvalidKey`), and `GameEventKey` to query game-event values. The built-in
+NeoForge maps listed in these two sections are optional synced maps (`DataMapSync::Optional`)
 sent to Sunrise clients on join and on every `/reload`.
 
 The gameplay readers and structure generation use immutable world-owned snapshots.
@@ -185,7 +191,19 @@ keep vanilla's own lists. A block the maps don't name keeps vanilla's behaviour.
 Oxidation and waxing targets must be registered blocks. If `generate_block_transform` is present,
 it must be a boolean. An invalid target or flag skips the whole file layer, even with `replace`.
 Sunrise still derives its axe steps from the inverse maps, not from `generate_block_transform`.
-`neoforge:transformables` and `block_transform_appenders` are not read.
+
+The game also reads `neoforge:transformables` (`data/neoforge/data_maps/block/transformables.json`)
+and `neoforge:block_transform_appenders`
+(`data/neoforge/data_maps/block_transformer/block_transform_appenders.json`) and appends their
+entries to each `minecraft:block_transformer` after its base transforms (`block_transform_appenders`
+first, then `transformables`):
+
+- `neoforge:transformables` attaches `{ "transformer": "<id>", "transform_data": ... }` or
+  `{ "transformers": { "<id>": ... } }` to individual blocks (`supports_tags = false`; `#tag`
+  entries are ignored), merges layers by transformer id, and supports partial removal by
+  transformer id.
+- `neoforge:block_transform_appenders` attaches a list of `BlockTransformData` entries to a
+  `minecraft:block_transformer` id (or tag) and concatenates entries across layers.
 
 `BiomeKey` is the persistent registered biome identifier in `minecraft:worldgen/biome`
 (vanilla's `ResourceKey<Biome>`). Construct one with `BiomeKey::new(identifier)` or

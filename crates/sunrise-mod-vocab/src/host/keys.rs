@@ -146,4 +146,8 @@ pub trait KeysBackend {
     /// Pins the canonical enchantment id without borrowing the host.
     /// Returns `None` if the host has no backend or no name for the slot.
     fn enchantment_key_id(&self, key: EnchantmentKey) -> Option<RegistryName>;
+    /// Side: both.
+    /// Borrows the canonical villager profession id from the installed profession table.
+    /// `None` if the host has no backend or the profession is not registered.
+    fn profession_key_id(&self, key: &ProfessionKey) -> Option<&str>;
 }

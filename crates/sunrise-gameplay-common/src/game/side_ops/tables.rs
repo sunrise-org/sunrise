@@ -34,6 +34,11 @@ pub trait TablesSideGameExt<'__sg>: crate::game::SideGame<'__sg> {
     }
 
     #[inline(always)]
+    fn side_professions(&self) -> &sunrise_sim::mobs::villager::ResolvedProfessions {
+        <Self::State as SideOps>::side_professions(self)
+    }
+
+    #[inline(always)]
     fn side_acting_player_uuid(&self) -> Option<u128> {
         <Self::State as SideOps>::side_acting_player_uuid(self)
     }
@@ -100,6 +105,9 @@ pub trait SideOps: Sized {
     fn side_data_maps<'__side_g>(
         game: &'__side_g Self::Game<'_>,
     ) -> Option<&'__side_g crate::game::native_data_maps_common::DataMaps>;
+    fn side_professions<'__side_g>(
+        game: &'__side_g Self::Game<'_>,
+    ) -> &'__side_g sunrise_sim::mobs::villager::ResolvedProfessions;
     fn side_acting_player_uuid(game: &Self::Game<'_>) -> Option<u128>;
     fn side_tags_ready(game: &Self::Game<'_>) -> bool;
     fn side_resolve_enchant_particles(game: &Self::Game<'_>);

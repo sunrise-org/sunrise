@@ -59,6 +59,15 @@ impl SideOps for crate::game::client_side::ClientState {
             .filter(|remote| remote.client_data_maps_received)
             .map(|remote| &remote.client_data_maps)
     }
+    fn side_professions<'__side_g>(
+        game: &'__side_g Self::Game<'_>,
+    ) -> &'__side_g sunrise_sim::mobs::villager::ResolvedProfessions {
+        if let Some(remote) = &game.client.remote {
+            &remote.professions
+        } else {
+            &game.common.res.stations().professions
+        }
+    }
     fn side_acting_player_uuid(game: &Self::Game<'_>) -> Option<u128> {
         game.client_acting_player_uuid()
     }
