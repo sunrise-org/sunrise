@@ -203,7 +203,7 @@ impl MotionResources {
             definitions.apply_json(&name, "vanilla", &text)?;
         }
         let built = definitions
-            .build(|name, _| assets.registry.default_state(name).map(|_| name.to_owned()))?;
+            .bind(|name, _| assets.registry.default_state(name).map(|_| name.to_owned()));
         if !built.missing.is_empty() {
             return Err("unresolved motion block tags".into());
         }

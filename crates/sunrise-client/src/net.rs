@@ -6371,7 +6371,7 @@ mod tests {
         let mut waypoint_extra = play::Clientbound::TrackedWaypoint(play::TrackedWaypoint {
             operation: 1,
             id: play::WaypointId::Uuid(1),
-            style: "minecraft:default".into(),
+            style: sunrise_core::identifier::Identifier::parse("minecraft:default").unwrap(),
             color: None,
             target: play::WaypointTarget::Empty,
         })

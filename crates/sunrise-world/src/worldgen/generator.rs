@@ -3057,6 +3057,36 @@ mod tests {
             .is_err()
         );
     }
+
+    #[test]
+    fn worldgen_block_tag_bundle_binds_more_than_8192_definitions() {
+        let mut raw: BTreeMap<_, _> = (0..8192)
+            .map(|i| {
+                (
+                    format!("test:block_{i}"),
+                    r#"{"values":["minecraft:stone"]}"#.to_owned(),
+                )
+            })
+            .collect();
+        raw.insert(
+            "test:terminal".to_owned(),
+            r##"{"values":["#test:block_0"]}"##.to_owned(),
+        );
+        let mut dropped = Vec::new();
+        let tags = build_tags(
+            TagDefinitions::default(),
+            &raw,
+            &WorldgenOverrides::default(),
+            "block_tags",
+            &mut dropped,
+            |id| id == "minecraft:stone",
+        )
+        .expect("valid worldgen block tags bind without a definition count limit");
+        assert_eq!(tags.len(), 8193);
+        assert_eq!(tags["test:terminal"], ["minecraft:stone"]);
+        assert!(dropped.is_empty(), "{dropped:?}");
+    }
+
     #[test]
     fn invalid_biome_identifier_refuses_worldgen_data() {
         let dir = std::env::temp_dir().join(format!(

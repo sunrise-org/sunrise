@@ -334,7 +334,7 @@ fn unknown_vanilla_tag_references_do_not_break_mod_tags() {
                 for (id, text) in bundle {
                     tags.apply_json(&id, name, &text).unwrap();
                 }
-                let built = tags.build(|id, _| Some(id.to_owned())).unwrap();
+                let built = tags.bind(|id, _| Some(id.to_owned()));
                 assert!(built.missing.is_empty(), "{name}: {:?}", built.missing);
                 assert_eq!(built.tags["testmod:combined"], ["minecraft:stone"]);
             }

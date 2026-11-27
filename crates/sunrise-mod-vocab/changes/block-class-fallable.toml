@@ -1,0 +1,3 @@
+ids = ["type:BlockClass"]
+why = "A mod that clears a region at once (a large explosion, a mass break) asks which edge blocks can fall, as Java's block instanceof Fallable answers (#6576). BlockClass::Fallable reads the engine's own interface list: every FallingBlock (sand, gravel, concrete powder, anvils, the dragon egg), BrushableBlock and SpeleothemBlock (pointed dripstone and sulfur spikes), and a mod block on one of their templates."
+migrate = "A mod that matches BlockClass exhaustively adds the Fallable arm."

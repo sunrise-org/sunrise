@@ -710,13 +710,13 @@ fn tags_probe(
         }
     }
     let mut trace = Vec::new();
-    let result = definitions.build(|id, required| {
+    let result = definitions.bind(|id, required| {
         trace.push(format!("tag lookup {id} {required}"));
         fixture["elements"]
             .get(id)
             .and_then(|v| v.as_str())
             .map(str::to_owned)
-    })?;
+    });
     for event in trace {
         writeln!(out, "{event}")?;
     }

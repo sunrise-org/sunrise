@@ -66,7 +66,7 @@ impl MaterialConditionRegistry {
     pub fn from_json(definitions: &BTreeMap<String, String>) -> Result<Self, DecodeError> {
         Self::load(definitions, None)
     }
-    /// Bind resolved biome tags, such as `TagDefinitions::build().tags`.
+    /// Bind resolved biome tags, such as the `tags` from `TagDefinitions::bind`.
     /// Names and memberships remain immutable for the lifetime of this registry.
     pub fn from_json_with_biome_tags(
         definitions: &BTreeMap<String, String>,

@@ -362,7 +362,7 @@ impl AnimateTables {
             definitions.apply_json(&name, "vanilla", &text)?;
         }
         let built =
-            definitions.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
+            definitions.bind(|name, _| registry.default_state(name).map(|_| name.to_owned()));
         let by_state = |tag: &str| -> Vec<bool> {
             let names = built.tags.get(tag);
             (0..registry.len() as u32)

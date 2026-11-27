@@ -275,7 +275,7 @@ impl crate::game::ServerGame<'_> {
     /// `/waypoint modify <entity> style` sets it: a player's reaches the
     /// players it transmits to. False for the dragon.
     pub fn living_set_waypoint_style(&mut self, living: LivingRef, style: &Identifier) -> bool {
-        self.native_edit_waypoint_icon(living, |icon| icon.style = style.to_string())
+        self.native_edit_waypoint_icon(living, |icon| icon.style = style.clone())
     }
     /// `Waypoint.Icon.color` of the waypoint a handle names: the RGB colour,
     /// or none to show a player in their team's colour. False for the dragon.

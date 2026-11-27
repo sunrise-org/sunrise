@@ -805,9 +805,7 @@ fn build_with_gameplay<G: GameplayStateSource>(
             )
             .map_err(|e| invalid(e.to_string()))?;
     }
-    let built = definitions
-        .build(|name, _| table.block_by_name(name).map(|_| name.to_owned()))
-        .map_err(|e| invalid(e.to_string()))?;
+    let built = definitions.bind(|name, _| table.block_by_name(name).map(|_| name.to_owned()));
     let mut all_tags = HashMap::new();
     for (name, members) in &built.tags {
         let mut set = BlockSet::with_capacity(table.block_count());
@@ -868,8 +866,7 @@ fn build_with_gameplay<G: GameplayStateSource>(
             .map_err(|e| invalid(e.to_string()))?;
     }
     let fluid_built = fluid_definitions
-        .build(|name, _| FluidKind::from_name(name).and_then(FluidKind::vanilla_index))
-        .map_err(|e| invalid(e.to_string()))?;
+        .bind(|name, _| FluidKind::from_name(name).and_then(FluidKind::vanilla_index));
     let fluid_mask = |name: &str| -> u8 {
         fluid_built
             .tags

@@ -96,7 +96,7 @@ fn track_block(
     game.handle_waypoint(&TrackedWaypoint {
         operation: waypoint_operation::TRACK,
         id: WaypointId::Uuid(uuid),
-        style: "minecraft:test".into(),
+        style: sunrise_core::identifier::Identifier::parse("minecraft:test").unwrap(),
         color: Some(-16_777_216 | color),
         target: WaypointTarget::Block(position),
     });

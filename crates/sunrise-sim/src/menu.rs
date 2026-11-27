@@ -4708,6 +4708,7 @@ pub(crate) mod tests {
             assert_eq!(craft.left, before.0);
             assert_eq!(craft.right, before.1);
             assert_eq!(craft.output, before.2.clone().unwrap());
+            assert_eq!(craft.cost, 3);
             assert_eq!(menu.slot(2), None);
             // Skipping menu.anvil_take (cancelled AnvilCraftEvent.Pre) keeps the
             // moved result with the player and leaves inputs, cost and levels intact.

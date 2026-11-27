@@ -575,20 +575,15 @@ impl WorldOptions {
                     .cloned(),
             )
             .collect();
-        self.preset_order = match tags.build(|id, _| {
+        let mut built = tags.bind(|id, _| {
             (crate::save::WorldPreset::of_id(id).is_some() || self.presets.contains_key(id))
                 .then(|| id.to_owned())
-        }) {
-            Ok(mut built) => built
-                .tags
-                .remove("minecraft:normal")
-                .filter(|ids| !ids.is_empty())
-                .unwrap_or(all_presets),
-            Err(error) => {
-                log::warn!("Invalid world preset tags: {error}");
-                all_presets
-            }
-        };
+        });
+        self.preset_order = built
+            .tags
+            .remove("minecraft:normal")
+            .filter(|ids| !ids.is_empty())
+            .unwrap_or(all_presets);
         // Re-Create retains Debug even when the normal tag hides it.
         if self.preset_id() != crate::save::WorldPreset::Debug.id()
             && !self.preset_order.iter().any(|id| id == self.preset_id())

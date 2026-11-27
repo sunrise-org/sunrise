@@ -267,9 +267,7 @@ pub(super) fn build_tags(
             .apply_json(id, pack, json)
             .map_err(|e| resource(format!("{pack}: tag {id}: {e}")))?;
     }
-    let built = definitions
-        .build(|id, _| known(id).then(|| id.to_owned()))
-        .map_err(|e| resource(format!("tags: {e:?}")))?;
+    let built = definitions.bind(|id, _| known(id).then(|| id.to_owned()));
     if overrides.tags(name).next().is_none() && !built.missing.is_empty() {
         return Err(resource(format!(
             "unresolved tag entries in {:?}",

@@ -9,9 +9,6 @@ autobins = false
 autoexamples = false
 autotests = false
 
-[build-dependencies]
-sunrise-mod-api-gen = { path = "../sunrise-mod-api-gen" }
-
 [dependencies]
 sunrise-hooks = { path = "../sunrise-hooks" }
 sunrise-mod-runtime = { path = "../sunrise-mod-runtime" }

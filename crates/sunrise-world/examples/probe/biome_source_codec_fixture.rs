@@ -40,7 +40,7 @@ pub fn main() -> Result<(), Box<dyn std::error::Error>> {
     for (name, raw) in read("biome_tags")? {
         tags.apply_json(&name, "vanilla", &raw)?;
     }
-    let tags = tags.build(|name, _| biomes.contains(name).then(|| name.to_owned()))?;
+    let tags = tags.bind(|name, _| biomes.contains(name).then(|| name.to_owned()));
     assert!(tags.missing.is_empty());
     let catalog = BiomeSourceCatalog::new(&biomes, &tags.tags, &presets.keys().cloned().collect())?;
     let positions: Vec<[i32; 3]> =

@@ -43,7 +43,7 @@ properties calls nothing; metadata that cannot enumerate returns `Unavailable`. 
 | `is_redstone_conductor(state) -> Option<bool>` | `BlockState.isRedstoneConductor` when it depends only on the block state; `None` when a position is needed |
 | `map_color(state) -> Option<u8>` | `BlockState.getMapColor`: the `MapColor.id` a map item colours a column by, 0 for none |
 | `map_color_rgba(packed) -> Option<[u8; 4]>` | `MapColor.getColorFromPackedId`: decode a map pixel to `[red, green, blue, alpha]`; ID 0 and undefined IDs decode to transparent RGBA; `None` means no game backend |
-| `block_class(state, class: BlockClass) -> Result<Option<bool>, LevelReadError>` | Java `instanceof` on the block's vanilla class, subclasses included: `Stair`, `Entity` (`EntityBlock`), `IronBars`, `StainedGlassPane`, `TrapDoor`, `Bonemealable` (`BonemealableBlock`), `Slab`, `Wall`, `Fence`. See below |
+| `block_class(state, class: BlockClass) -> Result<Option<bool>, LevelReadError>` | Java `instanceof` on the block's vanilla class, subclasses included: `Stair`, `Entity` (`EntityBlock`), `IronBars`, `StainedGlassPane`, `TrapDoor`, `Bonemealable` (`BonemealableBlock`), `Slab`, `Wall`, `Fence`, `Fallable`. See below |
 | `is_liquid_block_container(state) -> Option<bool>` | `instanceof LiquidBlockContainer`: the waterloggable blocks and kelp, seagrass |
 | `is_simple_waterlogged(state) -> Option<bool>` | `instanceof SimpleWaterloggedBlock`; a container that is not one holds water without a `waterlogged` property |
 | `piston_push_reaction(state) -> Result<Option<PushReaction>, LevelReadError>` | `BlockState.getPistonPushReaction()`: the resolved reaction used by pistons, including Part answers. See [piston push reactions](piston-push-reactions.md) |
@@ -188,8 +188,11 @@ mod that changes it belongs on both sides.
 ## Block classes
 
 `block_class(state, class)` answers what a mod would ask with `instanceof StairBlock`, `EntityBlock`,
-`IronBarsBlock`, `StainedGlassPaneBlock`, `TrapDoorBlock`, `BonemealableBlock`, `SlabBlock`, `WallBlock` or
-`FenceBlock`. It reads the engine's own class of the
+`IronBarsBlock`, `StainedGlassPaneBlock`, `TrapDoorBlock`, `BonemealableBlock`, `SlabBlock`, `WallBlock`,
+`FenceBlock` or `Fallable`. `Fallable` is the `instanceof Fallable` check, not a claim about whether a
+block will fall at a particular position: every `FallingBlock`, suspicious sand and gravel, and the
+speleothems (pointed dripstone and sulfur spikes), which are `Fallable` without being a
+`FallingBlock`; ask it of the blocks left on the edge of a cleared region. It reads the engine's own class of the
 block, so a subclass counts (a waxed copper stair is a `Stair`) and a mod block declared on a vanilla
 behaviour template belongs to that template's classes. It never reads tags: a pack that adds a block
 to `minecraft:stairs` does not make it a `Stair`. An unknown state answers `Ok(None)`; a host with no game

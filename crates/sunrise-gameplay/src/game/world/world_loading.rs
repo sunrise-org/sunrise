@@ -566,16 +566,24 @@ fn level_shapes(
     (shapes, stems.into_iter().map(Dim::from_id).collect())
 }
 
-/// The sea levels of the levels whose stem the mods or the data packs give: a mod's own
-/// (`DimensionSettings::sea_level`), else the `sea_level` of the noise settings their stem names,
-/// the packs' over the game's. The game's spawning, weather and maps then use them. A level of a
-/// generator that reads no noise settings has its built-in level's, and the three built-in levels
-/// too unless the packs replace their stem or their noise settings.
 fn set_level_sea_levels(
     overrides: &sunrise_world::worldgen::overrides::WorldgenOverrides,
     mods: &[sunrise_world::worldgen::overrides::ModDimension],
     resources: &std::path::Path,
 ) {
+    sunrise_world::level::set_sea_levels(resolve_level_sea_levels(overrides, mods, resources));
+}
+
+/// Resolves sea levels from level stems, preferring their noise settings (pack settings over
+/// game settings). If those supply no sea level, use the mod's explicit
+/// `DimensionSettings::sea_level`, if any; otherwise, superflat defaults to -63.
+/// For built-in levels still unresolved, use any pack replacement of their default noise
+/// settings. Unlisted levels fall back to their vanilla sea level at lookup.
+fn resolve_level_sea_levels(
+    overrides: &sunrise_world::worldgen::overrides::WorldgenOverrides,
+    mods: &[sunrise_world::worldgen::overrides::ModDimension],
+    resources: &std::path::Path,
+) -> Vec<(sunrise_core::LevelKey, i32)> {
     use sunrise_world::worldgen::overrides::{DIMENSIONS, NOISE_SETTINGS, stem_sea_level};
     let read = |id: &str| -> Option<serde_json::Value> {
         if let Some((_, json)) = overrides
@@ -632,7 +640,7 @@ fn set_level_sea_levels(
             levels.push((key, sea));
         }
     }
-    sunrise_world::level::set_sea_levels(levels);
+    levels
 }
 
 /// The levels' shapes the mods' and packs' worldgen entries give.
@@ -1909,7 +1917,7 @@ mod tests {
             level(
                 "test:inline",
                 r#"{"type":"test:inline","generator":{"type":"minecraft:noise","settings":{"sea_level":20}}}"#,
-                None,
+                Some(99),
             ),
             level(
                 "test:plain",
@@ -1922,15 +1930,19 @@ mod tests {
             &Default::default(),
             &sunrise_world::conditions::LoadConditions::vanilla(),
         );
-        set_level_sea_levels(&overrides, &mods, std::path::Path::new("."));
-        let sea = |id: &str| {
-            sunrise_world::level::sea_level_of(sunrise_core::LevelKey::parse(id).unwrap())
+        let levels = resolve_level_sea_levels(&overrides, &mods, std::path::Path::new("."));
+        let entry = |id: &str| {
+            let key = sunrise_core::LevelKey::parse(id).unwrap();
+            levels
+                .iter()
+                .find(|(level, _)| *level == key)
+                .map(|&(_, sea)| sea)
         };
-        assert_eq!(sea("test:own"), 10);
-        assert_eq!(sea("test:inline"), 20);
-        assert_eq!(sea("test:plain"), 63);
-        assert_eq!(sea("minecraft:the_nether"), 32);
-        sunrise_world::level::set_sea_levels(Vec::new());
+        // The noise settings the terrain is built with win over the mod's explicit 99.
+        assert_eq!(entry("test:own"), Some(10));
+        assert_eq!(entry("test:inline"), Some(20));
+        assert_eq!(entry("test:plain"), None);
+        assert_eq!(entry("minecraft:the_nether"), None);
     }
 
     #[test]

@@ -322,7 +322,7 @@ fn tracked_waypoint_bytes() {
     let track = Clientbound::TrackedWaypoint(TrackedWaypoint {
         operation: waypoint_operation::TRACK,
         id: WaypointId::Uuid(0x0102_0304_0506_0708_090a_0b0c_0d0e_0f10),
-        style: "minecraft:default".into(),
+        style: sunrise_core::identifier::Identifier::parse("minecraft:default").unwrap(),
         color: Some(0xFFFF_5555_u32 as i32),
         target: WaypointTarget::Block([1, -2, 300]),
     });
@@ -343,13 +343,24 @@ fn tracked_waypoint_bytes() {
         let packet = Clientbound::TrackedWaypoint(TrackedWaypoint {
             operation: waypoint_operation::UPDATE,
             id: WaypointId::Name("spawn".into()),
-            style: "minecraft:bowtie".into(),
+            style: sunrise_core::identifier::Identifier::parse("minecraft:bowtie").unwrap(),
             color: None,
             target,
         });
         let bytes = packet.encode();
         assert_eq!(Clientbound::decode(141, &bytes[2..]).unwrap(), packet);
     }
+    // `Identifier.STREAM_CODEC` refuses a style that is no identifier (#6064): the packet is
+    // refused at decode, so a reader never sees an unchecked style.
+    let mut bad = vec![0, 1];
+    bad.extend(1..=16u8);
+    bad.push(10);
+    bad.extend(b"Bad Style!");
+    bad.extend([0, 0]);
+    assert!(Clientbound::decode(141, &bad).is_err());
+    let mut good = bad.clone();
+    good[19..29].copy_from_slice(b"mod:flag_1");
+    assert!(Clientbound::decode(141, &good).is_ok());
 }
 
 #[test]

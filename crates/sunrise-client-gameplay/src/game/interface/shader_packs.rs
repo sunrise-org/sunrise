@@ -435,7 +435,8 @@ fn running_block_state_id(
 /// geometry.
 #[cfg_attr(any(test, feature = "test-support"), derive(Default))]
 pub struct PackIds {
-    pub(in crate::game) entities: HashMap<String, i32>,
+    /// `entity.properties` and `item.properties`.
+    pub(in crate::game) named: NamedIds,
     pub(in crate::game) blocks: BlockIds,
     /// `block.properties`' `layer.*` rules (4.2), as the terrain meshes them.
     pub(in crate::game::client_side) layers: super::pack_layers::PackLayers,
@@ -444,18 +445,10 @@ pub struct PackIds {
     pub(in crate::game) terrain_states: Vec<i32>,
     /// `blockEntityId` by block state, filled as states are drawn.
     pub(in crate::game) block_states: RefCell<HashMap<u32, i32>>,
-    /// The id of a name the file lacks: 65535, or 0 without the file.
-    pub(in crate::game) missing_entity: i32,
     pub(in crate::game) missing_block: i32,
-    /// `item.properties` (4.1) and the id of a held item the file lacks, or of an empty hand:
-    /// −1, or 0 without the file (5.3).
-    pub(in crate::game) items: HashMap<String, i32>,
-    pub(in crate::game) missing_item: i32,
     /// `currentRenderedItemId` of each block item (`StateFacts::item` of its block's default
     /// state): that state's `block.properties` id, or 0.
     pub(in crate::game) block_items: HashMap<String, i32>,
-    /// Whether the pack has `item.properties` (`currentRenderedItemId` of an item it lacks).
-    pub(in crate::game) item_file: bool,
     /// `oldHandLight` (3.2): the first held item and light are those of the brighter hand.
     pub(in crate::game) old_hand_light: bool,
     /// `vignette`: `false` hides the game's vignette over the pack's image.
@@ -464,6 +457,59 @@ pub struct PackIds {
     pub(in crate::game) old_lighting: bool,
     /// `separateAo`: `true` passes AO factor in vertex alpha and keeps pure tint in RGB.
     pub(in crate::game) separate_ao: bool,
+}
+
+/// The ids `entity.properties` and `item.properties` give names (4.1), and what a name each
+/// file lacks reads (5.3). Each file decides its own default: `entityId` follows
+/// `entity.properties` alone, `heldItemId` `item.properties` alone.
+#[cfg_attr(any(test, feature = "test-support"), derive(Default))]
+pub struct NamedIds {
+    /// `entity.properties` (4.1).
+    pub(in crate::game) entities: HashMap<String, i32>,
+    /// The `entityId` of an entity `entity.properties` lacks: 65535, or 0 without the file.
+    pub(in crate::game) missing_entity: i32,
+    /// `item.properties` (4.1).
+    pub(in crate::game) items: HashMap<String, i32>,
+    /// Whether the pack has `item.properties` (`currentRenderedItemId` of an item it lacks).
+    pub(in crate::game) item_file: bool,
+    /// The id of a held item `item.properties` lacks, or of an empty hand: −1, or 0 without
+    /// the file.
+    pub(in crate::game) missing_item: i32,
+}
+
+impl NamedIds {
+    /// Reads the pack's `entity.properties` and `item.properties` with `macros`. Whether the
+    /// pack has a file decides its default, even when the file can't be read (a zipped file past
+    /// the size cap): such a file gives no ids.
+    pub(in crate::game) fn read(pack: &Pack, macros: &Macros) -> Self {
+        let read = |kind: &str| {
+            let path = format!("{kind}.properties");
+            let text = pack.read_text(&path);
+            // A successful read proves the file is there; only a failed one needs the lookup.
+            let present = text.is_some() || pack.exists(&path);
+            let ids = text.map_or_else(HashMap::new, |text| {
+                BlockIds::parse_kind(&Properties::parse(&text, macros), kind).plain()
+            });
+            (ids, present)
+        };
+        let (entities, entity_file) = read("entity");
+        let (items, item_file) = read("item");
+        Self {
+            entities,
+            missing_entity: if entity_file { 65535 } else { 0 },
+            items,
+            item_file,
+            missing_item: if item_file { -1 } else { 0 },
+        }
+    }
+
+    /// The `entityId` of entity type `name` (5.3).
+    pub(in crate::game) fn entity_id(&self, name: &str) -> i32 {
+        self.entities
+            .get(name)
+            .copied()
+            .unwrap_or(self.missing_entity)
+    }
 }
 
 impl PackIds {
@@ -482,10 +528,13 @@ impl PackIds {
 impl PackIds {
     pub fn with_entity_ids<'a>(ids: impl IntoIterator<Item = (&'a str, i32)>) -> Self {
         Self {
-            entities: ids
-                .into_iter()
-                .map(|(name, id)| (name.into(), id))
-                .collect(),
+            named: NamedIds {
+                entities: ids
+                    .into_iter()
+                    .map(|(name, id)| (name.into(), id))
+                    .collect(),
+                ..Default::default()
+            },
             ..Default::default()
         }
     }
@@ -674,16 +723,6 @@ impl crate::game::ClientGame<'_> {
                         for note in ids.notes.iter().chain(&layers.notes) {
                             log::warn!("shader pack {name}: block.properties: {note}");
                         }
-                        let text = pack.read_text("entity.properties");
-                        let entities = BlockIds::parse_kind(
-                            &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
-                            "entity",
-                        );
-                        let text = pack.read_text("item.properties");
-                        let items = BlockIds::parse_kind(
-                            &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
-                            "item",
-                        );
                         let block_items = block_item_ids(
                             self.common.res.facts(),
                             self.common.pack.assets.registry,
@@ -691,9 +730,7 @@ impl crate::game::ClientGame<'_> {
                         );
                         self.client.pack_ids = Some(PackIds {
                             block_items,
-                            item_file: text.is_some(),
-                            items: items.plain(),
-                            missing_item: if text.is_some() { -1 } else { 0 },
+                            named: NamedIds::read(&pack, &macros),
                             // OQ-21: on unless the pack turns it off.
                             old_hand_light: properties
                                 .get("oldHandLight")
@@ -707,8 +744,6 @@ impl crate::game::ClientGame<'_> {
                                 .get("oldLighting")
                                 .is_some_and(|v| v.trim() == "true"),
                             separate_ao,
-                            entities: entities.plain(),
-                            missing_entity: if text.is_some() { 65535 } else { 0 },
                             missing_block: if ids.is_empty() { 0 } else { 65535 },
                             blocks: ids.clone(),
                             layers: super::pack_layers::PackLayers::new(name, layers),
@@ -1040,8 +1075,8 @@ impl crate::game::ClientGame<'_> {
         self.client.pack_ids.as_ref().map_or(0, |ids| {
             rendered_item_id(
                 ids.block_items.get(item).copied(),
-                ids.items.get(item).copied(),
-                ids.item_file,
+                ids.named.items.get(item).copied(),
+                ids.named.item_file,
             )
         })
     }
@@ -1061,9 +1096,9 @@ impl crate::game::ClientGame<'_> {
         ]
         .map(|slot| {
             let item = self.common.stack_in(slot).map(|s| &*s.item);
-            let id = item.and_then(|i| ids.items.get(i).copied());
+            let id = item.and_then(|i| ids.named.items.get(i).copied());
             (
-                id.unwrap_or(ids.missing_item),
+                id.unwrap_or(ids.named.missing_item),
                 item.map_or(0, |i| i32::from(lum.of(i))),
             )
         });
@@ -1106,11 +1141,7 @@ impl crate::game::ClientGame<'_> {
         translucent: bool,
     ) -> Option<EntitySpan> {
         let id = match &self.client.pack_ids {
-            Some(ids) => ids
-                .entities
-                .get(name)
-                .copied()
-                .unwrap_or(ids.missing_entity),
+            Some(ids) => ids.named.entity_id(name),
             None if native_spans() => name_id(name),
             None => return None,
         };
@@ -1902,3 +1933,99 @@ pub(in crate::game) mod toggle_tests {
 use sunrise_gameplay_common::game::weather::WeatherGameExt as _;
 
 use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;
+
+#[cfg(test)]
+pub(in crate::game) mod named_id_tests {
+    use super::NamedIds;
+    use sunrise_shaders::{Macros, Pack};
+
+    /// The ids of a pack folder `name` whose `shaders/` holds `files` (path, text), read as the
+    /// loader reads them.
+    fn named_ids_of(name: &str, files: &[(&str, &str)]) -> NamedIds {
+        let dir = tempfile::tempdir().unwrap();
+        let root = dir.path().join(name);
+        std::fs::create_dir_all(root.join("shaders")).unwrap();
+        std::fs::write(root.join("shaders/shaders.properties"), "").unwrap();
+        for (path, text) in files {
+            std::fs::write(root.join("shaders").join(path), text).unwrap();
+        }
+        NamedIds::read(&Pack::open(&root).unwrap(), &Macros::standard())
+    }
+
+    /// 5.3: an entity `entity.properties` lacks reads 65535, and 0 when the pack has no
+    /// `entity.properties`, whatever `item.properties` holds; held items follow their own file.
+    #[test]
+    fn the_missing_entity_id_follows_entity_properties_alone() {
+        let entity_only = named_ids_of(
+            "entity-only",
+            &[("entity.properties", "entity.37=minecraft:zombie\n")],
+        );
+        assert_eq!(entity_only.entity_id("minecraft:zombie"), 37);
+        assert_eq!(entity_only.entity_id("minecraft:creeper"), 65535);
+        assert!(!entity_only.item_file);
+        assert_eq!(entity_only.missing_item, 0);
+
+        let item_only = named_ids_of(
+            "item-only",
+            &[("item.properties", "item.53=minecraft:stick\n")],
+        );
+        assert_eq!(item_only.entity_id("minecraft:creeper"), 0);
+        assert_eq!(item_only.items.get("minecraft:stick"), Some(&53));
+        assert!(item_only.item_file);
+        assert_eq!(item_only.missing_item, -1);
+
+        // An empty file is still the pack's file.
+        let empty_entity = named_ids_of("empty-entity", &[("entity.properties", "")]);
+        assert_eq!(empty_entity.entity_id("minecraft:creeper"), 65535);
+
+        let both = named_ids_of(
+            "both",
+            &[
+                ("entity.properties", "entity.37=minecraft:zombie\n"),
+                ("item.properties", "item.53=minecraft:stick\n"),
+            ],
+        );
+        assert_eq!(both.entity_id("minecraft:zombie"), 37);
+        assert_eq!(both.entity_id("minecraft:creeper"), 65535);
+        assert_eq!(both.missing_item, -1);
+
+        let neither = named_ids_of("neither", &[]);
+        assert_eq!(neither.entity_id("minecraft:creeper"), 0);
+        assert!(!neither.item_file);
+        assert_eq!(neither.missing_item, 0);
+    }
+
+    /// A zipped `entity.properties` or `item.properties` past the pack's 64 MiB read cap
+    /// (`MAX_FILE` in `sunrise-shaders`' `pack.rs`) gives no ids, but the pack still has the
+    /// file: an entity it lacks reads 65535 and a held item −1 (5.3).
+    #[test]
+    fn a_file_past_the_read_cap_still_counts_as_the_packs() {
+        use std::io::Write;
+        let oversized = |file: &str| {
+            let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+            let options = zip::write::SimpleFileOptions::default()
+                .compression_method(zip::CompressionMethod::Deflated);
+            w.start_file("shaders/shaders.properties", options).unwrap();
+            w.start_file(format!("shaders/{file}"), options).unwrap();
+            let mut text = b"entity.37=minecraft:zombie\nitem.53=minecraft:stick\n".to_vec();
+            text.resize((64 << 20) + 1, b' ');
+            w.write_all(&text).unwrap();
+            let bytes = w.finish().unwrap().into_inner();
+            NamedIds::read(
+                &Pack::from_zip_bytes("P.zip", bytes).unwrap(),
+                &Macros::standard(),
+            )
+        };
+        let entity = oversized("entity.properties");
+        assert_eq!(entity.entity_id("minecraft:zombie"), 65535);
+        assert_eq!(entity.entity_id("minecraft:creeper"), 65535);
+        assert!(!entity.item_file);
+        assert_eq!(entity.missing_item, 0);
+
+        let item = oversized("item.properties");
+        assert_eq!(item.entity_id("minecraft:creeper"), 0);
+        assert!(item.items.is_empty());
+        assert!(item.item_file);
+        assert_eq!(item.missing_item, -1);
+    }
+}

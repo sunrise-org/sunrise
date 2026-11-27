@@ -33,36 +33,26 @@ fn ndc_quad([x0, y0, x1, y1]: [f32; 4], reverse_z: f32, rgb: [u8; 3]) -> [Vertex
     })
 }
 
-/// Runs a shader pack whose `gbuffers_terrain` paints the left half (`x in [-1, 0]`) green at
-/// GL depth `0.5` and whose `final` swaps R and B of `colortex0`. When `inside_pack` is true,
-/// `quads` draw at `WorldBoundary::AfterOpaqueBlocks` against `colortex0` + `depthtex0`; when
-/// false, `quads` draw onto `screen` against the exported reversed-Z `world_depth` after `final`.
-/// Returns the screen pixels `[r, g, b]` at top-left `(2, 2)`, bottom-left `(2, 12)`, and
-/// bottom-right `(12, 12)`.
-fn render_stage_quads(inside_pack: bool, quads: &[Vertex]) -> Option<[[u8; 3]; 3]> {
-    let Some(gpu) = Gpu::new() else {
-        eprintln!("MOD_STAGE_NO_ADAPTER");
-        return None;
-    };
-    let files = vec![
-        (
-            "gbuffers_terrain.vsh".to_owned(),
-            "#version 120\nvoid main(){gl_Position=vec4(gl_Vertex.xy,0.0,1.0);}".to_owned(),
-        ),
-        (
-            "gbuffers_terrain.fsh".to_owned(),
-            "#version 120\n/* DRAWBUFFERS:0 */\nvoid main(){gl_FragData[0]=vec4(0.0,1.0,0.0,1.0);}"
-                .to_owned(),
-        ),
-        ("final.vsh".to_owned(), VERTEX.to_owned()),
-        (
-            "final.fsh".to_owned(),
-            "#version 120\nuniform sampler2D colortex0;varying vec2 uv;\
-             const vec4 colortex0ClearColor = vec4(0.0, 0.0, 0.0, 1.0);\
-             void main(){vec4 c=texture2D(colortex0,uv);gl_FragColor=vec4(c.b,c.g,c.r,1.0);}"
-                .to_owned(),
-        ),
-    ];
+/// What every mod stage test draws against: a device (required: a missing adapter fails the
+/// test rather than passing it), cleared `colortex0`/depth inputs, the pack `files` loaded with
+/// solid terrain, one solid terrain quad over the left half of the frame (`x in [-1, 0]`) and a
+/// white 1x1 atlas.
+struct StageFixture {
+    gpu: Gpu,
+    color: wgpu::TextureView,
+    depth: wgpu::TextureView,
+    post: PackPost,
+    terrain_buf: wgpu::Buffer,
+    atlas_view: wgpu::TextureView,
+    screen: wgpu::TextureView,
+    read: wgpu::Buffer,
+}
+
+/// Bytes per row of the readback buffer, aligned as texture copies require.
+const READBACK_STRIDE: u32 = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
+
+fn stage_fixture(files: Vec<(String, String)>) -> StageFixture {
+    let gpu = Gpu::new().expect("graphics adapter required for the mod stage tests");
     let terrain_inputs = sunrise_shaders::GbuffersInputs {
         declarations: "layout(location=0)in vec3 fixture_position;\n\
                        layout(location=2)in uint hz_v_layer;\n\
@@ -84,7 +74,7 @@ fn render_stage_quads(inside_pack: bool, quads: &[Vertex]) -> Option<[[u8; 3]; 3
     let color = gpu.texture(T::Rgba8Unorm);
     let depth = gpu.texture(T::Depth32Float);
     gpu.clear(&color, &depth, 0.0);
-    let mut post = gpu.load(
+    let post = gpu.load(
         files,
         World {
             atlas: None,
@@ -154,6 +144,61 @@ fn render_stage_quads(inside_pack: bool, quads: &[Vertex]) -> Option<[[u8; 3]; 3
         &[255, 255, 255, 255],
     );
     let atlas_view = atlas.create_view(&Default::default());
+    let screen = gpu.texture(T::Rgba8Unorm);
+    let read = gpu.device.create_buffer(&wgpu::BufferDescriptor {
+        label: Some("Mod stage readback"),
+        size: u64::from(READBACK_STRIDE * SIZE[1]),
+        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+        mapped_at_creation: false,
+    });
+    StageFixture {
+        gpu,
+        color,
+        depth,
+        post,
+        terrain_buf,
+        atlas_view,
+        screen,
+        read,
+    }
+}
+
+/// Runs a shader pack whose `gbuffers_terrain` paints the left half (`x in [-1, 0]`) green at
+/// GL depth `0.5` and whose `final` swaps R and B of `colortex0`. When `inside_pack` is true,
+/// `quads` draw at `WorldBoundary::AfterOpaqueBlocks` against `colortex0` + `depthtex0`; when
+/// false, `quads` draw onto `screen` against the exported reversed-Z `world_depth` after `final`.
+/// Returns the screen pixels `[r, g, b]` at top-left `(2, 2)`, bottom-left `(2, 12)`, and
+/// bottom-right `(12, 12)`.
+fn render_stage_quads(inside_pack: bool, quads: &[Vertex]) -> [[u8; 3]; 3] {
+    let files = vec![
+        (
+            "gbuffers_terrain.vsh".to_owned(),
+            "#version 120\nvoid main(){gl_Position=vec4(gl_Vertex.xy,0.0,1.0);}".to_owned(),
+        ),
+        (
+            "gbuffers_terrain.fsh".to_owned(),
+            "#version 120\n/* DRAWBUFFERS:0 */\nvoid main(){gl_FragData[0]=vec4(0.0,1.0,0.0,1.0);}"
+                .to_owned(),
+        ),
+        ("final.vsh".to_owned(), VERTEX.to_owned()),
+        (
+            "final.fsh".to_owned(),
+            "#version 120\nuniform sampler2D colortex0;varying vec2 uv;\
+             const vec4 colortex0ClearColor = vec4(0.0, 0.0, 0.0, 1.0);\
+             void main(){vec4 c=texture2D(colortex0,uv);gl_FragColor=vec4(c.b,c.g,c.r,1.0);}"
+                .to_owned(),
+        ),
+    ];
+    let StageFixture {
+        gpu,
+        color,
+        depth,
+        mut post,
+        terrain_buf,
+        atlas_view,
+        screen,
+        read,
+    } = stage_fixture(files);
     let mut primitives = WorldPrimitives::new(&gpu.device, (T::Rgba8Unorm, false));
 
     let quad_count = (quads.len() / 4) as u32;
@@ -188,14 +233,6 @@ fn render_stage_quads(inside_pack: bool, quads: &[Vertex]) -> Option<[[u8; 3]; 3
         primitives: [0..quad_count, 0..0, 0..0, 0..0],
         ..Default::default()
     }];
-    let screen = gpu.texture(T::Rgba8Unorm);
-    let stride = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let read = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Mod stage readback"),
-        size: u64::from(stride * SIZE[1]),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
     let hud = HudBatch::scratch(SIZE);
     let frame = fixture_frame(&hud);
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
@@ -264,7 +301,7 @@ fn render_stage_quads(inside_pack: bool, quads: &[Vertex]) -> Option<[[u8; 3]; 3
             buffer: &read,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(stride),
+                bytes_per_row: Some(READBACK_STRIDE),
                 rows_per_image: None,
             },
         },
@@ -280,13 +317,13 @@ fn render_stage_quads(inside_pack: bool, quads: &[Vertex]) -> Option<[[u8; 3]; 3
     rx.recv().unwrap().unwrap();
     let mapped = slice.get_mapped_range().unwrap();
     let sample = |x: usize, y: usize| -> [u8; 3] {
-        let base = y * stride as usize + x * 4;
+        let base = y * READBACK_STRIDE as usize + x * 4;
         [mapped[base], mapped[base + 1], mapped[base + 2]]
     };
     let out = [sample(2, 2), sample(2, 12), sample(12, 12)];
     drop(mapped);
     read.unmap();
-    Some(out)
+    out
 }
 
 #[test]
@@ -299,9 +336,7 @@ fn after_opaque_blocks_depth_tests_against_pack_terrain_and_runs_before_final() 
     let mut quads = Vec::new();
     quads.extend_from_slice(&ndc_quad([-1.0, -1.0, 1.0, 1.0], 0.25, RED));
     quads.extend_from_slice(&ndc_quad([-1.0, 0.0, 1.0, 1.0], 0.75, RED));
-    let Some([top_left, bottom_left, bottom_right]) = render_stage_quads(true, &quads) else {
-        return;
-    };
+    let [top_left, bottom_left, bottom_right] = render_stage_quads(true, &quads);
     assert_eq!(
         top_left, BLUE,
         "nearer AfterOpaqueBlocks quad must draw in front of pack terrain and pass through final"
@@ -325,9 +360,7 @@ fn post_pack_world_depth_export_depth_tests_against_pack_terrain() {
     let mut quads = Vec::new();
     quads.extend_from_slice(&ndc_quad([-1.0, -1.0, 1.0, 1.0], 0.25, RED));
     quads.extend_from_slice(&ndc_quad([-1.0, 0.0, 1.0, 1.0], 0.75, RED));
-    let Some([top_left, bottom_left, bottom_right]) = render_stage_quads(false, &quads) else {
-        return;
-    };
+    let [top_left, bottom_left, bottom_right] = render_stage_quads(false, &quads);
     assert_eq!(
         top_left, RED,
         "nearer post-pack quad must draw in front of exported pack depth without final's swap"
@@ -350,10 +383,6 @@ fn pack_boundaries_fire_in_order_and_draw_pack_custom_depth_tests_mod_pipelines(
     use mod_api::{Identifier, PipelineBlend, RenderPipeline, WorldDepth};
 
     let _gpu = crate::gfx::test_gpu::lock();
-    let Some(gpu) = Gpu::new() else {
-        eprintln!("MOD_STAGE_NO_ADAPTER");
-        return;
-    };
     let files = vec![
         (
             "gbuffers_terrain.vsh".to_owned(),
@@ -373,95 +402,16 @@ fn pack_boundaries_fire_in_order_and_draw_pack_custom_depth_tests_mod_pipelines(
                 .to_owned(),
         ),
     ];
-    let terrain_inputs = sunrise_shaders::GbuffersInputs {
-        declarations: "layout(location=0)in vec3 fixture_position;\n\
-                       layout(location=2)in uint hz_v_layer;\n\
-                       layout(location=3)in vec4 hz_v_color;\n"
-            .into(),
-        body: "hz_Vertex=vec4(fixture_position,1.0);hz_Color=vec4(1.0);hz_MultiTexCoord0=vec4(0.0);\
-               hz_MultiTexCoord1=vec4(240.0);hz_MultiTexCoord2=vec4(240.0);hz_Normal=vec3(0.0,0.0,1.0);\n"
-            .into(),
-        ..Default::default()
-    };
-    let inputs = crate::gfx::pack_atlas::game_terrain(Some(terrain_inputs), &[]);
-    const ATTRS: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0=>Float32x3,2=>Uint32,3=>Unorm8x4];
-    let layouts = [Some(wgpu::VertexBufferLayout {
-        array_stride: 20,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &ATTRS,
-    })];
-    let color = gpu.texture(T::Rgba8Unorm);
-    let depth = gpu.texture(T::Depth32Float);
-    gpu.clear(&color, &depth, 0.0);
-    let mut post = gpu.load(
-        files,
-        World {
-            atlas: None,
-            material_maps: None,
-            lightmap: color.clone(),
-            terrain: Some(Geometry {
-                buffers: &layouts,
-                table: None,
-                depth_write: true,
-                atlas: None,
-                material_maps: false,
-                ids: None,
-                cull: false,
-                pages: false,
-            }),
-            block_ids: &[],
-            sprite_rects: &[],
-            celestial: None,
-            gui_size: SIZE,
-            clouds: None,
-            weather: false,
-            hand: false,
-        },
-        inputs,
-    );
-    assert!(post.has_terrain(), "pack terrain refused: {:?}", post.notes);
-
-    let opaque = u32::from(crate::mesher::OPAQUE_LAYER) | 1;
-    let corners = [[-1.0f32, -1.0], [0.0, -1.0], [0.0, 1.0], [-1.0, 1.0]];
-    let mut terrain_verts: Vec<u32> = Vec::new();
-    for c in [0, 1, 2, 0, 2, 3] {
-        let [x, y] = corners[c];
-        terrain_verts.extend([
-            x.to_bits(),
-            y.to_bits(),
-            0f32.to_bits(),
-            opaque,
-            0xFFFF_FFFFu32,
-        ]);
-    }
-    let terrain_buf = gpu
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Mod stage terrain fixture"),
-            contents: bytemuck::cast_slice(&terrain_verts),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-    let atlas = gpu.device.create_texture_with_data(
-        &gpu.queue,
-        &wgpu::TextureDescriptor {
-            label: Some("Mod stage white atlas"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: T::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        },
-        wgpu::util::TextureDataOrder::LayerMajor,
-        &[255, 255, 255, 255],
-    );
-    let atlas_view = atlas.create_view(&Default::default());
+    let StageFixture {
+        gpu,
+        color,
+        depth,
+        mut post,
+        terrain_buf,
+        atlas_view,
+        screen,
+        read,
+    } = stage_fixture(files);
 
     let id = Identifier::parse("test:pack_custom").unwrap();
     let shader = Identifier::parse("test:core/pack_custom").unwrap();
@@ -524,14 +474,6 @@ fn pack_boundaries_fire_in_order_and_draw_pack_custom_depth_tests_mod_pipelines(
     ));
     primitives.prepare_pack_pass(&gpu.device, post.formats[0], post.rgb & 1 != 0, false);
 
-    let screen = gpu.texture(T::Rgba8Unorm);
-    let stride = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let read = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Mod stage custom readback"),
-        size: u64::from(stride * SIZE[1]),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
     let hud = HudBatch::scratch(SIZE);
     let frame = fixture_frame(&hud);
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
@@ -621,7 +563,7 @@ fn pack_boundaries_fire_in_order_and_draw_pack_custom_depth_tests_mod_pipelines(
             buffer: &read,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(stride),
+                bytes_per_row: Some(READBACK_STRIDE),
                 rows_per_image: None,
             },
         },
@@ -637,7 +579,7 @@ fn pack_boundaries_fire_in_order_and_draw_pack_custom_depth_tests_mod_pipelines(
     rx.recv().unwrap().unwrap();
     let mapped = slice.get_mapped_range().unwrap();
     let sample = |x: usize, y: usize| -> [u8; 3] {
-        let base = y * stride as usize + x * 4;
+        let base = y * READBACK_STRIDE as usize + x * 4;
         [mapped[base], mapped[base + 1], mapped[base + 2]]
     };
     assert_eq!(
@@ -670,10 +612,6 @@ fn pack_composite_inverts_mod_glsl_quad_drawn_once_after_opaque_blocks() {
     use mod_api::{Identifier, PipelineBlend, RenderPipeline, WorldDepth};
 
     let _gpu = crate::gfx::test_gpu::lock();
-    let Some(gpu) = Gpu::new() else {
-        eprintln!("MOD_STAGE_NO_ADAPTER");
-        return;
-    };
     let files = vec![
         (
             "gbuffers_terrain.vsh".to_owned(),
@@ -700,95 +638,16 @@ fn pack_composite_inverts_mod_glsl_quad_drawn_once_after_opaque_blocks() {
                 .to_owned(),
         ),
     ];
-    let terrain_inputs = sunrise_shaders::GbuffersInputs {
-        declarations: "layout(location=0)in vec3 fixture_position;\n\
-                       layout(location=2)in uint hz_v_layer;\n\
-                       layout(location=3)in vec4 hz_v_color;\n"
-            .into(),
-        body: "hz_Vertex=vec4(fixture_position,1.0);hz_Color=vec4(1.0);hz_MultiTexCoord0=vec4(0.0);\
-               hz_MultiTexCoord1=vec4(240.0);hz_MultiTexCoord2=vec4(240.0);hz_Normal=vec3(0.0,0.0,1.0);\n"
-            .into(),
-        ..Default::default()
-    };
-    let inputs = crate::gfx::pack_atlas::game_terrain(Some(terrain_inputs), &[]);
-    const ATTRS: [wgpu::VertexAttribute; 3] =
-        wgpu::vertex_attr_array![0=>Float32x3,2=>Uint32,3=>Unorm8x4];
-    let layouts = [Some(wgpu::VertexBufferLayout {
-        array_stride: 20,
-        step_mode: wgpu::VertexStepMode::Vertex,
-        attributes: &ATTRS,
-    })];
-    let color = gpu.texture(T::Rgba8Unorm);
-    let depth = gpu.texture(T::Depth32Float);
-    gpu.clear(&color, &depth, 0.0);
-    let mut post = gpu.load(
-        files,
-        World {
-            atlas: None,
-            material_maps: None,
-            lightmap: color.clone(),
-            terrain: Some(Geometry {
-                buffers: &layouts,
-                table: None,
-                depth_write: true,
-                atlas: None,
-                material_maps: false,
-                ids: None,
-                cull: false,
-                pages: false,
-            }),
-            block_ids: &[],
-            sprite_rects: &[],
-            celestial: None,
-            gui_size: SIZE,
-            clouds: None,
-            weather: false,
-            hand: false,
-        },
-        inputs,
-    );
-    assert!(post.has_terrain(), "pack terrain refused: {:?}", post.notes);
-
-    let opaque = u32::from(crate::mesher::OPAQUE_LAYER) | 1;
-    let corners = [[-1.0f32, -1.0], [0.0, -1.0], [0.0, 1.0], [-1.0, 1.0]];
-    let mut terrain_verts: Vec<u32> = Vec::new();
-    for c in [0, 1, 2, 0, 2, 3] {
-        let [x, y] = corners[c];
-        terrain_verts.extend([
-            x.to_bits(),
-            y.to_bits(),
-            0f32.to_bits(),
-            opaque,
-            0xFFFF_FFFFu32,
-        ]);
-    }
-    let terrain_buf = gpu
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Mod composite test terrain"),
-            contents: bytemuck::cast_slice(&terrain_verts),
-            usage: wgpu::BufferUsages::VERTEX,
-        });
-    let atlas = gpu.device.create_texture_with_data(
-        &gpu.queue,
-        &wgpu::TextureDescriptor {
-            label: Some("Mod composite white atlas"),
-            size: wgpu::Extent3d {
-                width: 1,
-                height: 1,
-                depth_or_array_layers: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: T::Rgba8Unorm,
-            usage: wgpu::TextureUsages::TEXTURE_BINDING,
-            view_formats: &[],
-        },
-        wgpu::util::TextureDataOrder::LayerMajor,
-        &[255, 255, 255, 255],
-    );
-    let atlas_view = atlas.create_view(&Default::default());
+    let StageFixture {
+        gpu,
+        color,
+        depth,
+        mut post,
+        terrain_buf,
+        atlas_view,
+        screen,
+        read,
+    } = stage_fixture(files);
 
     // Additive red (100, 0, 0) quad: drawn once over black gives (100, 0, 0), inverted by
     // composite to (155, 255, 255); drawn twice would give (200, 0, 0) -> (55, 255, 255).
@@ -852,14 +711,6 @@ fn pack_composite_inverts_mod_glsl_quad_drawn_once_after_opaque_blocks() {
     ));
     primitives.prepare_pack_pass(&gpu.device, post.formats[0], post.rgb & 1 != 0, false);
 
-    let screen = gpu.texture(T::Rgba8Unorm);
-    let stride = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
-    let read = gpu.device.create_buffer(&wgpu::BufferDescriptor {
-        label: Some("Mod composite readback"),
-        size: u64::from(stride * SIZE[1]),
-        usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-        mapped_at_creation: false,
-    });
     let hud = HudBatch::scratch(SIZE);
     let frame = fixture_frame(&hud);
     let mut encoder = gpu.device.create_command_encoder(&Default::default());
@@ -911,7 +762,7 @@ fn pack_composite_inverts_mod_glsl_quad_drawn_once_after_opaque_blocks() {
             buffer: &read,
             layout: wgpu::TexelCopyBufferLayout {
                 offset: 0,
-                bytes_per_row: Some(stride),
+                bytes_per_row: Some(READBACK_STRIDE),
                 rows_per_image: None,
             },
         },
@@ -927,7 +778,7 @@ fn pack_composite_inverts_mod_glsl_quad_drawn_once_after_opaque_blocks() {
     rx.recv().unwrap().unwrap();
     let mapped = slice.get_mapped_range().unwrap();
     let sample = |x: usize, y: usize| -> [u8; 3] {
-        let base = y * stride as usize + x * 4;
+        let base = y * READBACK_STRIDE as usize + x * 4;
         [mapped[base], mapped[base + 1], mapped[base + 2]]
     };
     assert_eq!(

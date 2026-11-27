@@ -367,11 +367,11 @@ pub fn load_visibility(
                 text.as_str().ok_or("invalid block tag text")?,
             )?;
         }
-        let built = tag_defs.build(|block_name, _| {
+        let built = tag_defs.bind(|block_name, _| {
             registry
                 .default_state(block_name)
                 .map(|_| block_name.to_owned())
-        })?;
+        });
         let block_tags: BTreeMap<String, BTreeSet<String>> = built
             .tags
             .into_iter()

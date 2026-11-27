@@ -141,7 +141,7 @@ impl Assets {
             )?;
         }
         let built =
-            definitions.build(|name, _| registry.default_state(name).map(|_| name.to_owned()))?;
+            definitions.bind(|name, _| registry.default_state(name).map(|_| name.to_owned()));
         if !built.missing.is_empty() {
             return Err(invalid("unresolved block tags").into());
         }

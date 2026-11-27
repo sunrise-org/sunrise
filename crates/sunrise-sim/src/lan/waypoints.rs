@@ -50,14 +50,23 @@ pub fn team_rgb(color: &str) -> Option<i32> {
 /// Waypoint.Icon.
 #[derive(Clone, Debug, PartialEq)]
 pub struct Icon {
-    pub style: String,
+    /// The `waypoint_style_asset` key, an identifier from wherever it was set.
+    pub style: sunrise_core::identifier::Identifier,
     pub color: Option<i32>,
+}
+
+impl Icon {
+    /// `WaypointStyleAssets.DEFAULT`.
+    pub fn default_style() -> sunrise_core::identifier::Identifier {
+        sunrise_core::identifier::Identifier::parse("minecraft:default")
+            .expect("a valid identifier literal")
+    }
 }
 
 impl Default for Icon {
     fn default() -> Self {
         Self {
-            style: "minecraft:default".into(),
+            style: Self::default_style(),
             color: None,
         }
     }
@@ -935,7 +944,7 @@ mod tests {
         out.iter()
             .filter(|(c, _)| *c == conn)
             .map(|(_, p)| match p {
-                C::TrackedWaypoint(w) => (w.operation, w.style.clone(), w.color),
+                C::TrackedWaypoint(w) => (w.operation, w.style.to_string(), w.color),
                 other => panic!("{other:?}"),
             })
             .collect()
@@ -957,7 +966,7 @@ mod tests {
         assert!(w.tick(&[a.clone(), b.clone()], &[], true).is_empty());
 
         b.icon = Icon {
-            style: "example:flag".into(),
+            style: sunrise_core::identifier::Identifier::parse("example:flag").unwrap(),
             color: Some(0x12_34AB),
         };
         let out = w.tick(&[a.clone(), b.clone()], &[], true);
@@ -1003,7 +1012,7 @@ mod tests {
         b.transmitting = false;
         let mut w = Waypoints::default();
         w.tick(&[a.clone(), b.clone()], &[], true);
-        b.icon.style = "example:flag".into();
+        b.icon.style = sunrise_core::identifier::Identifier::parse("example:flag").unwrap();
         assert!(w.tick(&[a.clone(), b.clone()], &[], true).is_empty());
         // Showing again carries the new style.
         b.transmit_range = PLAYER_RANGE;

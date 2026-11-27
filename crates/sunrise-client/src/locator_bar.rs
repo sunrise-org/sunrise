@@ -491,7 +491,7 @@ impl ClientWaypoints {
                 continue;
             }
             let middle = ((view.gui_width - 9) as f32 / 2.0).ceil() as i32;
-            let style = view.styles.get(&w.style);
+            let style = view.styles.get(w.style.as_str());
             let distance = (distance_sq as f32).sqrt();
             let color = w.color.map_or_else(
                 || {
@@ -577,7 +577,7 @@ mod tests {
         TrackedWaypoint {
             operation,
             id: WaypointId::Uuid(id),
-            style: "minecraft:default".into(),
+            style: sunrise_core::identifier::Identifier::parse("minecraft:default").unwrap(),
             color: None,
             target,
         }
