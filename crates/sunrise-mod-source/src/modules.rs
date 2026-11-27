@@ -494,12 +494,16 @@ pub fn may_compile(conditions: &[String], include_tests: bool) -> bool {
 /// A bare `include!` is the standard macro except in a module that imports a name `include` and
 /// below a `macro_rules! include` (or an inline `#[macro_use]` module that holds one): there it
 /// names that macro and opens nothing. A definition or import behind a `cfg` shadows only in the
-/// builds that have it: one no considered build has (a test-only one unless `include_tests`)
-/// shadows nothing, and a conditional one adds the negated condition to the `cfg`s of the files
-/// the later standard `include!`s name, which only the builds without it read (with `every_build`
-/// those files are left out). A definition in an included fragment or a `#[macro_use]` module
-/// file reaches back into items already walked, so one that some considered build compiles is an
-/// error.
+/// builds that have it: one no considered build has (a test-only one unless `include_tests`, or
+/// one whose own gates exclude each other) shadows nothing, and a conditional one adds the
+/// negated condition to the `cfg`s of the files the later standard `include!`s name, which only
+/// the builds without it read (with `every_build` those files are left out). A definition in an
+/// included fragment or in a module file whose macros reach its declaring module (`#[macro_use]`
+/// on the declaration, or an inner `#![macro_use]` in the file, either also through `cfg_attr`)
+/// reaches back into items already walked, so one that some considered build compiles, together
+/// with the `cfg`s that lead to the file and the ones that export the macro, is an error. A
+/// literal `include!` of a file that does not exist is an error too, reported after any such
+/// refusal: a local macro that shadows the `include!` is what makes the missing file irrelevant.
 pub fn walk_module_files(
     module: String,
     path: PathBuf,
@@ -543,6 +547,7 @@ pub fn walk_module_variants(
         }],
         variants: Vec::new(),
     };
+    let mut missing: Option<String> = None;
     while let Some(Pending {
         mut file,
         dir,
@@ -560,10 +565,17 @@ pub fn walk_module_variants(
         if !file.included && !file.path.is_file() {
             continue;
         }
-        let physical = file
-            .path
-            .canonicalize()
-            .map_err(|e| format!("{}: {e}", file.path.display()))?;
+        let physical = match file.path.canonicalize() {
+            Ok(physical) => physical,
+            // A local `include` macro that shadows the standard one makes the file it is called
+            // with irrelevant, so it need not exist. Say it is missing only if the rest of the
+            // walk does not refuse that macro, which explains it better.
+            Err(e) if file.included => {
+                missing.get_or_insert_with(|| format!("{}: {e}", file.path.display()));
+                continue;
+            }
+            Err(e) => return Err(format!("{}: {e}", file.path.display())),
+        };
         if ancestors.contains(&physical) {
             return Err(format!("{}: source inclusion cycle", file.path.display()));
         }
@@ -574,19 +586,33 @@ pub fn walk_module_variants(
         if !walker.keep(&parsed.attrs) {
             continue;
         }
+        file.cfg.extend(walker.conditions(&parsed.attrs));
         // An included fragment's `macro_rules!` macros stay in scope in the file that includes it,
-        // and a `#[macro_use]` module file's in the module that declares it, below that line. The
-        // walk has already read those items, so it refuses a definition some build compiles
-        // rather than miss source; one that no build compiles (a disabled `cfg`) changes nothing.
-        if (file.included
-            || exports_macros
-                .as_ref()
-                .is_some_and(|exported| walker.may_exist(exported)))
+        // and those of a module file in the module that declares it, below that line, when the
+        // declaration or an inner `#![macro_use]` of the file says `#[macro_use]`. The walk has
+        // already read those items, so it refuses a definition that some build compiles, rather
+        // than miss source. That takes one build that satisfies, all at once, the `cfg`s that lead
+        // to the file, the ones that export its macros and the definition's own: where they
+        // exclude each other nothing is shadowed.
+        let exported = if file.included {
+            Some(Cfg::all_of(Vec::new()))
+        } else {
+            exports_macros.map(|declared| {
+                let mut alternatives = vec![declared];
+                alternatives.extend(macro_use_guard(&parsed.attrs));
+                Cfg::any_of(alternatives)
+            })
+        };
+        if let Some(exported) = exported
             && parsed
                 .items
                 .iter()
                 .filter_map(definition_guard)
-                .any(|guard| walker.may_exist(&guard))
+                .any(|defined| {
+                    let mut builds = file.cfg.clone();
+                    builds.extend([exported.written.clone(), defined.written]);
+                    may_compile(&builds, include_tests)
+                })
         {
             return Err(format!(
                 "{}: a `macro_rules! include` that some build compiles here would shadow `include!` \
@@ -599,7 +625,6 @@ pub fn walk_module_variants(
                 },
             ));
         }
-        file.cfg.extend(walker.conditions(&parsed.attrs));
         let here = file.path.parent().expect("a source file has a folder");
         walker.children(
             &file,
@@ -614,6 +639,9 @@ pub fn walk_module_variants(
             file,
             inline: Vec::new(),
         });
+    }
+    if let Some(error) = missing {
+        return Err(error);
     }
     walker
         .variants
@@ -638,9 +666,10 @@ struct Shadow {
 }
 
 /// A file to read, the directory Rust uses for its conventional children, its physical
-/// ancestors, which builds a bare `include!` reaching it names a shadowing macro in, and the
-/// condition under which its `macro_rules!` macros reach the module that declares it
-/// (`#[macro_use]`, also through `cfg_attr`), if it has one.
+/// ancestors, which builds a bare `include!` reaching it names a shadowing macro in, and, for a
+/// module file, the condition under which the `#[macro_use]` on its declaration applies (also
+/// through `cfg_attr`; false when there is none), which its own inner `#![macro_use]` adds to
+/// when the file is read. `None` for a file no module declares: the root and included fragments.
 struct Pending {
     file: ModuleFile,
     dir: PathBuf,
@@ -668,20 +697,23 @@ impl Walker {
         guard.evaluate(|atom| (!self.include_tests && atom == "test").then_some(false))
     }
 
-    /// Whether something that exists under `guard` exists in some build the walk considers.
+    /// Whether something that exists under `guard` exists in some build the walk considers. The
+    /// atoms of `guard` are tried together, so `all(a, not(a))` is as impossible as `false`.
     fn may_exist(&self, guard: &Cfg) -> bool {
-        self.holds(guard) != Some(false)
+        may_compile(std::slice::from_ref(&guard.written), self.include_tests)
     }
 
     /// Record in `shadow` an import or a definition of `include` that exists under `guard`.
     fn shadow_by(&self, shadow: &mut Shadow, guard: Cfg) {
-        match self.holds(&guard) {
-            Some(false) => {}
-            Some(true) => shadow.always = true,
-            // `every_build` keeps what every build compiles, and the build that has the macro
-            // does not compile the file the standard `include!` names.
-            None if self.every_build => shadow.always = true,
-            None => shadow.when.push(guard),
+        if !self.may_exist(&guard) {
+            return;
+        }
+        // `every_build` keeps what every build compiles, and the build that has the macro
+        // does not compile the file the standard `include!` names.
+        if self.every_build || self.holds(&guard) == Some(true) {
+            shadow.always = true;
+        } else {
+            shadow.when.push(guard);
         }
     }
 
@@ -819,7 +851,11 @@ impl Walker {
                         dir: child_dir,
                         ancestors: ancestors.to_vec(),
                         shadowed: shadowed.clone(),
-                        exports_macros: macro_use_guard(&declared.attrs),
+                        // The file's own `#![macro_use]` is read when it is opened.
+                        exports_macros: Some(
+                            macro_use_guard(&declared.attrs)
+                                .unwrap_or_else(|| Cfg::any_of(Vec::new())),
+                        ),
                     });
                 }
             }
@@ -900,6 +936,43 @@ fn main() {
 compile_error!("the standard include! expanded where a macro shadows it");
 pub fn generated() {}
 "#;
+
+    /// A local `include` macro that expands to nothing: the body of the fixtures' `defs.rs`.
+    const NO_OP_INCLUDE: &str = "macro_rules! include { ($name:literal) => {} }\n";
+
+    /// A module file whose `cfg` and the `cfg_attr` that would give it `#[macro_use]` exclude each
+    /// other, with `NO_OP_INCLUDE` as `defs.rs`: it never exports its macros, so the standard
+    /// `include!` below it expands in every build.
+    const DISJOINT_EXPORT: &str = r#"
+#[cfg(feature = "fast")]
+#[cfg_attr(not(feature = "fast"), macro_use)]
+mod defs;
+include!("gen.rs");
+fn main() { generated(); }
+"#;
+
+    /// The same through an included fragment: `defs.rs` is included only with `fast`, and its
+    /// macro, behind `cfg(not(feature = "fast"))`, exists only without it.
+    const DISJOINT_FRAGMENT: &str = r#"
+#[cfg(feature = "fast")]
+include!("defs.rs");
+include!("gen.rs");
+fn main() { generated(); }
+"#;
+
+    /// The same through an inline module, whose export the walk reads from the items above the
+    /// `include!`.
+    const DISJOINT_INLINE: &str = r#"
+#[cfg(feature = "fast")]
+#[cfg_attr(not(feature = "fast"), macro_use)]
+mod defs { macro_rules! include { ($name:literal) => {} } }
+include!("gen.rs");
+fn main() { generated(); }
+"#;
+
+    /// With `#![macro_use]` before `NO_OP_INCLUDE` in `defs.rs`, the local macro handles the call
+    /// below `mod defs;`, so `never-read.rs` does not exist.
+    const INNER_MACRO_USE: &str = "mod defs;\ninclude!(\"never-read.rs\");\nfn main() {}\n";
 
     /// A fragment no build can compile under its gates is never opened, tests or not; only the
     /// standard `include!` is followed, written bare or as `std::include!`.
@@ -1044,6 +1117,113 @@ mod shadow {
         );
     }
 
+    /// The export, the definition and the file's own `cfg` are read together: a definition that
+    /// no build both compiles and exports shadows nothing, so the walk neither refuses the module
+    /// file or the fragment that holds it nor drops the `include!` below an inline module that
+    /// would export it (also in an every-build walk). Gates that can hold together still refuse.
+    #[test]
+    fn mutually_exclusive_cfgs_do_not_export_an_include_macro() {
+        let root = tempfile::tempdir().unwrap();
+        let put = |name: &str, text: &str| fs::write(root.path().join(name), text).unwrap();
+        put("gen.rs", GENERATED);
+
+        put("lib.rs", DISJOINT_EXPORT);
+        put("defs.rs", NO_OP_INCLUDE);
+        assert_eq!(
+            walk(root.path(), false).unwrap(),
+            ["defs.rs", "gen.rs", "lib.rs"]
+        );
+
+        put("lib.rs", DISJOINT_FRAGMENT);
+        put(
+            "defs.rs",
+            &format!("#[cfg(not(feature = \"fast\"))]\n{NO_OP_INCLUDE}"),
+        );
+        assert_eq!(
+            walk(root.path(), false).unwrap(),
+            ["defs.rs", "gen.rs", "lib.rs"]
+        );
+        put(
+            "defs.rs",
+            &format!("#[cfg(feature = \"fast\")]\n{NO_OP_INCLUDE}"),
+        );
+        let error = walk(root.path(), false).unwrap_err();
+        assert!(
+            error.contains("defs.rs") && error.contains("includes"),
+            "{error}"
+        );
+
+        put("lib.rs", DISJOINT_INLINE);
+        for every_build in [false, true] {
+            let files = discover(root.path(), every_build, false).unwrap();
+            assert_eq!(names(root.path(), &files), ["gen.rs", "lib.rs"]);
+            let generated = files
+                .iter()
+                .find(|file| file.path.ends_with("gen.rs"))
+                .unwrap();
+            assert!(generated.cfg.is_empty(), "{:?}", generated.cfg);
+        }
+    }
+
+    /// A module file's inner `#![macro_use]` exports its macros like the attribute on its
+    /// declaration: the call below `mod defs;` names the local macro and opens nothing (this
+    /// layout compiles), so the walk refuses it rather than open `never-read.rs`. A conditional
+    /// inner attribute counts in the builds that apply it, together with the `cfg` of the
+    /// declaration.
+    #[test]
+    fn an_inner_macro_use_exports_a_local_include_macro_from_a_module_file() {
+        let root = tempfile::tempdir().unwrap();
+        let put = |name: &str, text: &str| fs::write(root.path().join(name), text).unwrap();
+        put("gen.rs", GENERATED);
+
+        put("lib.rs", INNER_MACRO_USE);
+        put("defs.rs", &format!("#![macro_use]\n{NO_OP_INCLUDE}"));
+        let error = walk(root.path(), false).unwrap_err();
+        assert!(
+            error.contains("defs.rs")
+                && error.contains("declares")
+                && !error.contains("never-read.rs"),
+            "{error}"
+        );
+
+        put("lib.rs", "mod defs;\ninclude!(\"gen.rs\");\n");
+        put(
+            "defs.rs",
+            &format!("#![cfg_attr(test, macro_use)]\n{NO_OP_INCLUDE}"),
+        );
+        assert_eq!(
+            walk(root.path(), false).unwrap(),
+            ["defs.rs", "gen.rs", "lib.rs"]
+        );
+        let error = walk(root.path(), true).unwrap_err();
+        assert!(
+            error.contains("defs.rs") && error.contains("declares"),
+            "{error}"
+        );
+
+        put(
+            "lib.rs",
+            "#[cfg(feature = \"fast\")]\nmod defs;\ninclude!(\"gen.rs\");\n",
+        );
+        put(
+            "defs.rs",
+            &format!("#![cfg_attr(not(feature = \"fast\"), macro_use)]\n{NO_OP_INCLUDE}"),
+        );
+        assert_eq!(
+            walk(root.path(), false).unwrap(),
+            ["defs.rs", "gen.rs", "lib.rs"]
+        );
+        put(
+            "defs.rs",
+            &format!("#![cfg_attr(feature = \"fast\", macro_use)]\n{NO_OP_INCLUDE}"),
+        );
+        let error = walk(root.path(), false).unwrap_err();
+        assert!(
+            error.contains("defs.rs") && error.contains("declares"),
+            "{error}"
+        );
+    }
+
     /// A definition that only some builds have shadows `include!` in those builds alone: the walk
     /// keeps the file the standard `include!` names under the condition of the builds without the
     /// macro (and, for the files every build compiles, leaves it out). A conditional definition in
@@ -1124,7 +1304,10 @@ mod shadow {
     /// The fixtures above, compiled: `rustc` follows `include!` the way the walk does. In the
     /// first, `early` reads `gen.rs` and `late` reads nothing (there is no `never-read.rs`). In
     /// the second, a normal build expands the standard `include!` and a test build, where the
-    /// local macro is on, never reads `gen.rs`, which would stop on its `compile_error!`.
+    /// local macro is on, never reads `gen.rs`, which would stop on its `compile_error!`. In the
+    /// third, an inner `#![macro_use]` in the module file makes its macro handle the call below
+    /// the declaration. In the last, the macro's `cfg` and the one that exports it exclude each
+    /// other, so every build with and without `fast` expands the standard `include!`.
     #[test]
     #[ignore = "daily"]
     fn rustc_compiles_the_include_order_fixtures_the_walk_follows() {
@@ -1155,6 +1338,26 @@ mod shadow {
         compile(&[]);
         compile(&["--test"]);
         assert_eq!(walk(root.path(), false).unwrap(), ["gen.rs", "lib.rs"]);
+
+        put("lib.rs", INNER_MACRO_USE);
+        put("defs.rs", &format!("#![macro_use]\n{NO_OP_INCLUDE}"));
+        compile(&[]);
+        assert!(walk(root.path(), false).unwrap_err().contains("defs.rs"));
+
+        let fast = ["--cfg", "feature=\"fast\""];
+        let fragment_defs = format!("#[cfg(not(feature = \"fast\"))]\n{NO_OP_INCLUDE}");
+        for (lib, defs) in [
+            (DISJOINT_EXPORT, NO_OP_INCLUDE),
+            (DISJOINT_FRAGMENT, fragment_defs.as_str()),
+            (DISJOINT_INLINE, ""),
+        ] {
+            put("lib.rs", lib);
+            put("defs.rs", defs);
+            compile(&[]);
+            compile(&fast);
+            let walked = walk(root.path(), false).unwrap();
+            assert!(walked.iter().any(|name| name.as_str() == "gen.rs"));
+        }
     }
 
     #[test]
