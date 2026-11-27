@@ -80,7 +80,8 @@ impl ClientGame<'_> {
                     let (level, item) = brighter(
                         lum,
                         [m.extra.main_hand_id(), m.extra.off_hand_id()],
-                        m.fire_ticks > 0 && !m.mod_fire_immune,
+                        (m.fire_ticks > 0 || self.tracked_entity_on_fire(m.id))
+                            && !m.mod_fire_immune,
                     );
                     if level == 0 {
                         return None;
@@ -98,7 +99,7 @@ impl ClientGame<'_> {
                 let (level, item) = brighter(
                     lum,
                     [Some(&*dropped.stack.item), None],
-                    dropped.fire_ticks > 0,
+                    dropped.fire_ticks > 0 || self.tracked_entity_on_fire(dropped.id),
                 );
                 if level == 0 {
                     return None;
