@@ -1,4 +1,4 @@
-use super::tests::{CHANGED, CLICK, FB, NONE, SIZE, press, row, ui};
+use super::tests::{CHANGED, CLICK, FB, NONE, press, row, ui};
 use super::*;
 
 struct TestDescriptorsGuard(Option<&'static [&'static RowDescriptor]>);
@@ -1274,7 +1274,8 @@ fn ordered_rows_snapshot_without_descriptors_matches_vanilla() {
 #[cfg(feature = "sunrise-extras")]
 #[test]
 fn undo_restores_all_three_extras_including_hidden_fullbright() {
-    use crate::settings_shell::{Columns, Hosted};
+    use super::tests::SIZE;
+    use crate::settings_shell::Columns;
 
     let mut s = Settings::default();
     let mut ui = ui();
@@ -1340,4 +1341,276 @@ fn presets_leave_the_three_extras_alone() {
         item.cycle(&mut s, false, FB, &NONE);
         assert_eq!(s.sunrise.preset, Preset::Balanced, "{item:?}");
     }
+}
+
+#[test]
+fn rejected_descriptors_never_participate_in_lookup_stamps_or_undo() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+
+    static REJECTED_SHOWN: AtomicBool = AtomicBool::new(false);
+    static REJECTED_GET: AtomicBool = AtomicBool::new(false);
+    static REJECTED_SET: AtomicBool = AtomicBool::new(false);
+    static REJECTED_UNDO: AtomicBool = AtomicBool::new(false);
+    static WINNER_UNDO: AtomicBool = AtomicBool::new(false);
+    static DUP_WINNER_UNDO: AtomicBool = AtomicBool::new(false);
+
+    fn bad_shown(_: &Settings) -> bool {
+        REJECTED_SHOWN.store(true, Ordering::SeqCst);
+        true
+    }
+    fn bad_get(_: &Settings) -> bool {
+        REJECTED_GET.store(true, Ordering::SeqCst);
+        true
+    }
+    fn bad_set(_: &mut Settings, _: bool) {
+        REJECTED_SET.store(true, Ordering::SeqCst);
+    }
+    fn bad_undo(_: &mut Settings, _: &Settings) {
+        REJECTED_UNDO.store(true, Ordering::SeqCst);
+    }
+    fn track_winner_undo(s: &mut Settings, b: &Settings) {
+        WINNER_UNDO.store(true, Ordering::SeqCst);
+        undo_sky(s, b);
+    }
+    fn track_dup_winner_undo(s: &mut Settings, b: &Settings) {
+        DUP_WINNER_UNDO.store(true, Ordering::SeqCst);
+        undo_weather(s, b);
+    }
+
+    static INVALID_GROUP_FIRST: RowDescriptor = RowDescriptor {
+        id: RowId("test:winner"),
+        placement: Placement {
+            page: Page::Performance,
+            group: GroupId("performance.unknown"),
+            after: None,
+        },
+        caption_key: "test.rejected_invalid",
+        caption_fallback: None,
+        description_key: "test.desc",
+        chosen_description: None,
+        cost: Cost::None,
+        control: RowControl::Switch {
+            get: bad_get,
+            set: bad_set,
+        },
+        shown: bad_shown,
+        blocked: None,
+        affects_preset: false,
+        undo: bad_undo,
+    };
+    static VALID_SECOND: RowDescriptor = RowDescriptor {
+        id: RowId("test:winner"),
+        placement: Placement {
+            page: Page::Performance,
+            group: GroupId::POWER,
+            after: Some(H::BatteryMode.row_id()),
+        },
+        caption_key: "test.accepted_after_invalid",
+        caption_fallback: None,
+        description_key: "test.desc",
+        chosen_description: None,
+        cost: Cost::None,
+        control: RowControl::Switch {
+            get: get_sky,
+            set: set_sky,
+        },
+        shown: always_shown,
+        blocked: None,
+        affects_preset: false,
+        undo: track_winner_undo,
+    };
+    static VALID_FIRST: RowDescriptor = RowDescriptor {
+        id: RowId("test:dup_winner"),
+        placement: Placement {
+            page: Page::Performance,
+            group: GroupId::POWER,
+            after: Some(RowId("test:winner")),
+        },
+        caption_key: "test.accepted_first",
+        caption_fallback: None,
+        description_key: "test.desc",
+        chosen_description: None,
+        cost: Cost::None,
+        control: RowControl::Switch {
+            get: get_weather,
+            set: set_weather,
+        },
+        shown: always_shown,
+        blocked: None,
+        affects_preset: false,
+        undo: track_dup_winner_undo,
+    };
+    static DUPLICATE_SECOND: RowDescriptor = RowDescriptor {
+        id: RowId("test:dup_winner"),
+        placement: Placement {
+            page: Page::General,
+            group: GroupId::INTERFACE,
+            after: None,
+        },
+        caption_key: "test.rejected_dup",
+        caption_fallback: None,
+        description_key: "test.desc",
+        chosen_description: None,
+        cost: Cost::None,
+        control: RowControl::Switch {
+            get: bad_get,
+            set: bad_set,
+        },
+        shown: bad_shown,
+        blocked: None,
+        affects_preset: false,
+        undo: bad_undo,
+    };
+    static ENGINE_COLLISION: RowDescriptor = RowDescriptor {
+        id: RowId("vanilla:particles"),
+        placement: Placement {
+            page: Page::Performance,
+            group: GroupId::POWER,
+            after: None,
+        },
+        caption_key: "test.rejected_engine",
+        caption_fallback: None,
+        description_key: "test.desc",
+        chosen_description: None,
+        cost: Cost::None,
+        control: RowControl::Switch {
+            get: bad_get,
+            set: bad_set,
+        },
+        shown: bad_shown,
+        blocked: None,
+        affects_preset: false,
+        undo: bad_undo,
+    };
+    static ROWS: [&RowDescriptor; 5] = [
+        &INVALID_GROUP_FIRST,
+        &VALID_SECOND,
+        &VALID_FIRST,
+        &DUPLICATE_SECOND,
+        &ENGINE_COLLISION,
+    ];
+
+    REJECTED_SHOWN.store(false, Ordering::SeqCst);
+    REJECTED_GET.store(false, Ordering::SeqCst);
+    REJECTED_SET.store(false, Ordering::SeqCst);
+    REJECTED_UNDO.store(false, Ordering::SeqCst);
+    WINNER_UNDO.store(false, Ordering::SeqCst);
+    DUP_WINNER_UNDO.store(false, Ordering::SeqCst);
+
+    let _guard = with_test_descriptors(&ROWS);
+    let mut screen = GraphicsScreen::default();
+    let baseline = Settings::default();
+    let mut s = baseline.clone();
+
+    let winner = Item::Described(RowId("test:winner"));
+    let dup_winner = Item::Described(RowId("test:dup_winner"));
+    let collided = Item::Described(RowId("vanilla:particles"));
+
+    assert_eq!(
+        descriptor(RowId("test:winner")).map(|d| d.caption_key),
+        Some("test.accepted_after_invalid")
+    );
+    assert_eq!(
+        descriptor(RowId("test:dup_winner")).map(|d| d.caption_key),
+        Some("test.accepted_first")
+    );
+    assert!(descriptor(RowId("vanilla:particles")).is_none());
+
+    let stamp_before = screen.stamp(&s);
+    let _ = screen.sheets(&s);
+    assert_eq!(winner.switch(&s, &NONE), Some(true));
+    assert_eq!(dup_winner.switch(&s, &NONE), Some(true));
+    assert_eq!(collided.switch(&s, &NONE), None);
+
+    winner.cycle(&mut s, false, FB, &NONE);
+    dup_winner.cycle(&mut s, false, FB, &NONE);
+    collided.cycle(&mut s, false, FB, &NONE);
+    assert!(!s.sunrise.sky);
+    assert!(!s.sunrise.weather);
+    assert_ne!(screen.stamp(&s), stamp_before);
+
+    screen.undo(&mut s, &baseline);
+    assert!(s.sunrise.sky);
+    assert!(s.sunrise.weather);
+    assert!(WINNER_UNDO.load(Ordering::SeqCst));
+    assert!(DUP_WINNER_UNDO.load(Ordering::SeqCst));
+    assert!(!REJECTED_SHOWN.load(Ordering::SeqCst));
+    assert!(!REJECTED_GET.load(Ordering::SeqCst));
+    assert!(!REJECTED_SET.load(Ordering::SeqCst));
+    assert!(!REJECTED_UNDO.load(Ordering::SeqCst));
+}
+
+#[test]
+fn described_row_uses_language_separator_under_value_first_template() {
+    struct ValueFirst;
+    impl lang::ResourceSource for ValueFirst {
+        fn read(&self, path: &str) -> Option<Vec<u8>> {
+            (path == "assets/minecraft/lang/en_ud.json")
+                .then(|| br#"{"options.generic_value":"%2$s :%1$s"}"#.to_vec())
+        }
+    }
+    static SWITCH: RowDescriptor = RowDescriptor {
+        id: RowId("test:value_first_switch"),
+        placement: Placement {
+            page: Page::Performance,
+            group: GroupId::POWER,
+            after: Some(H::BatteryMode.row_id()),
+        },
+        caption_key: "test.value_first",
+        caption_fallback: Some("Sample Switch"),
+        description_key: "test.value_first.desc",
+        chosen_description: None,
+        cost: Cost::None,
+        control: RowControl::Switch {
+            get: get_fog,
+            set: set_fog,
+        },
+        shown: always_shown,
+        blocked: None,
+        affects_preset: false,
+        undo: undo_fog,
+    };
+    static ROWS: [&RowDescriptor; 1] = [&SWITCH];
+    let _guard = with_test_descriptors(&ROWS);
+
+    let s = Settings::default();
+    let setting = setting_of(&SWITCH);
+    let (built, _) = lang::scoped(lang::Language::load(&[&ValueFirst], "en_ud"), || {
+        super::row(setting, &s, &NONE)
+    });
+    assert_eq!(built.name, "On :Sample Switch");
+    assert_eq!(built.value, Value::Switch(true));
+}
+
+#[cfg(feature = "sunrise-extras")]
+#[test]
+fn stamp_changes_on_extras_and_fullbright_held_when_extras_enabled() {
+    let screen = GraphicsScreen::default();
+    let mut s = Settings::default();
+    let base = screen.stamp(&s);
+
+    s.extras.own_name_tag = true;
+    let after_unrelated = screen.stamp(&s);
+    assert_ne!(after_unrelated, base);
+
+    s.extras.wheel_cycles_settings = true;
+    let after_wheel = screen.stamp(&s);
+    assert_ne!(after_wheel, after_unrelated);
+
+    s.fullbright_held = true;
+    assert_ne!(screen.stamp(&s), after_wheel);
+}
+
+#[cfg(not(feature = "sunrise-extras"))]
+#[test]
+fn stamp_ignores_extras_and_fullbright_held_when_extras_disabled() {
+    let screen = GraphicsScreen::default();
+    let mut s = Settings::default();
+    let base = screen.stamp(&s);
+
+    s.extras.own_name_tag = true;
+    s.extras.wheel_cycles_settings = true;
+    s.extras.fullbright = true;
+    s.fullbright_held = true;
+    assert_eq!(screen.stamp(&s), base);
 }

@@ -890,10 +890,14 @@ mod graphics_rows {
 
     pub(crate) const GRAPHICS_ROWS: &[&RowDescriptor] =
         &[&HIDE_BLOCK_PARTICLES, &DYNAMIC_LIGHTS, &FULLBRIGHT];
+
+    pub(crate) fn graphics_stamp(s: &Settings) -> u64 {
+        crate::settings_shell::stamp_of(&(&s.extras, s.fullbright_held))
+    }
 }
 
 #[cfg(feature = "sunrise-extras")]
-pub(crate) use graphics_rows::GRAPHICS_ROWS;
+pub(crate) use graphics_rows::{GRAPHICS_ROWS, graphics_stamp};
 
 #[cfg(test)]
 mod tests {

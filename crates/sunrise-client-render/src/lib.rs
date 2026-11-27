@@ -223,6 +223,18 @@ pub(crate) fn described_graphics_rows() -> &'static [&'static graphics_ui::RowDe
     }
 }
 
+pub(crate) fn described_graphics_stamp(s: &settings::Settings) -> u64 {
+    #[cfg(feature = "sunrise-extras")]
+    {
+        extras::graphics_stamp(s)
+    }
+    #[cfg(not(feature = "sunrise-extras"))]
+    {
+        let _ = s;
+        0
+    }
+}
+
 #[cfg(test)]
 mod glsl_spirv_dump_tests;
 #[cfg(test)]

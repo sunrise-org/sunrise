@@ -336,8 +336,22 @@ fn active_descriptors() -> &'static [&'static RowDescriptor] {
     crate::described_graphics_rows()
 }
 
+fn accepted_descriptors() -> std::borrow::Cow<'static, [&'static RowDescriptor]> {
+    #[cfg(test)]
+    if let Some(rows) = TEST_DESCRIPTORS.get() {
+        let pages = base_pages(cfg!(target_os = "macos"));
+        return std::borrow::Cow::Owned(accept_descriptors(&pages, rows).accepted);
+    }
+    static ACCEPTED: OnceLock<Vec<&'static RowDescriptor>> = OnceLock::new();
+    let accepted = ACCEPTED.get_or_init(|| {
+        let pages = base_pages(cfg!(target_os = "macos"));
+        accept_descriptors(&pages, crate::described_graphics_rows()).accepted
+    });
+    std::borrow::Cow::Borrowed(accepted.as_slice())
+}
+
 fn descriptor(id: RowId) -> Option<&'static RowDescriptor> {
-    active_descriptors().iter().copied().find(|d| d.id == id)
+    accepted_descriptors().iter().copied().find(|d| d.id == id)
 }
 
 #[derive(Clone, Copy)]
@@ -952,15 +966,21 @@ fn emit_children(
     }
 }
 
-fn resolve_rows_with_issues(
-    macos: bool,
-    descriptors: &[&RowDescriptor],
-) -> (Vec<(Page, Vec<ResolvedGroup>)>, Vec<OrderIssue>) {
-    let mut pages = base_pages(macos);
+struct AcceptedDescriptors<'a> {
+    row_groups: HashMap<RowId, (Page, GroupId)>,
+    per_group: HashMap<(Page, GroupId), Vec<&'a RowDescriptor>>,
+    accepted: Vec<&'a RowDescriptor>,
+    issues: Vec<OrderIssue>,
+}
+
+fn accept_descriptors<'a>(
+    pages: &[(Page, Vec<ResolvedGroup>)],
+    descriptors: &[&'a RowDescriptor],
+) -> AcceptedDescriptors<'a> {
     let mut issues = Vec::new();
     let mut valid_groups: HashSet<(Page, GroupId)> = HashSet::new();
     let mut row_groups: HashMap<RowId, (Page, GroupId)> = HashMap::new();
-    for (page, groups) in &pages {
+    for (page, groups) in pages {
         for group in groups {
             valid_groups.insert((*page, group.id));
             for row in &group.rows {
@@ -969,7 +989,8 @@ fn resolve_rows_with_issues(
         }
     }
 
-    let mut per_group: HashMap<(Page, GroupId), Vec<&RowDescriptor>> = HashMap::new();
+    let mut per_group: HashMap<(Page, GroupId), Vec<&'a RowDescriptor>> = HashMap::new();
+    let mut accepted = Vec::new();
     for &d in descriptors {
         if row_groups.contains_key(&d.id) {
             issues.push(OrderIssue::DuplicateId(d.id));
@@ -986,7 +1007,28 @@ fn resolve_rows_with_issues(
         }
         row_groups.insert(d.id, target);
         per_group.entry(target).or_default().push(d);
+        accepted.push(d);
     }
+
+    AcceptedDescriptors {
+        row_groups,
+        per_group,
+        accepted,
+        issues,
+    }
+}
+
+fn resolve_rows_with_issues(
+    macos: bool,
+    descriptors: &[&RowDescriptor],
+) -> (Vec<(Page, Vec<ResolvedGroup>)>, Vec<OrderIssue>) {
+    let mut pages = base_pages(macos);
+    let AcceptedDescriptors {
+        row_groups,
+        mut per_group,
+        mut issues,
+        ..
+    } = accept_descriptors(&pages, descriptors);
 
     for (page, groups) in &mut pages {
         for group in groups {
@@ -1849,12 +1891,6 @@ fn shown(item: Item, s: &Settings) -> bool {
 }
 /// A control's label as its name and its value ("Render Distance" and "12 chunks").
 fn parts(item: Item, s: &Settings, out: &EffectiveOutput) -> (String, Option<String>) {
-    if let Item::Described(id) = item {
-        return match descriptor(id) {
-            Some(d) => described_parts(d, s, out),
-            None => (id.as_str().to_owned(), None),
-        };
-    }
     shell::name_and_value(&item.label(s, out).plain())
 }
 
@@ -1931,22 +1967,19 @@ fn control_stamp(control: RowControl, s: &Settings, out: &EffectiveOutput) -> u6
     }
 }
 
-fn described_stamps(
-    s: &Settings,
-    out: &EffectiveOutput,
-) -> Vec<(RowId, bool, Option<&'static str>, Option<&'static str>, u64)> {
-    active_descriptors()
-        .iter()
-        .map(|d| {
-            (
-                d.id,
-                (d.shown)(s),
-                d.blocked.and_then(|f| f(s, out)),
-                d.chosen_description.and_then(|f| f(s, out)),
-                control_stamp(d.control, s, out),
-            )
-        })
-        .collect()
+fn described_rows_stamp(s: &Settings, out: &EffectiveOutput) -> u64 {
+    use std::hash::{Hash, Hasher};
+    let mut hasher = std::collections::hash_map::DefaultHasher::new();
+    for &d in accepted_descriptors().as_ref() {
+        d.id.hash(&mut hasher);
+        (d.shown)(s).hash(&mut hasher);
+        d.blocked.and_then(|f| f(s, out)).hash(&mut hasher);
+        d.chosen_description
+            .and_then(|f| f(s, out))
+            .hash(&mut hasher);
+        control_stamp(d.control, s, out).hash(&mut hasher);
+    }
+    hasher.finish()
 }
 
 /// What the screen's rows read from the settings: what Undo puts back (`GraphicsScreen::undo`),
@@ -1998,7 +2031,8 @@ fn read<'a>(s: &'a Settings, out: &EffectiveOutput) -> impl std::fmt::Debug + 'a
         frames,
         picture,
         window,
-        described_stamps(s, out),
+        crate::described_graphics_stamp(s),
+        described_rows_stamp(s, out),
     )
 }
 
@@ -2141,7 +2175,7 @@ impl Screen for GraphicsScreen {
             }
         }
         s.file.fullscreen_resolution = b.file.fullscreen_resolution.clone();
-        for d in active_descriptors() {
+        for &d in accepted_descriptors().as_ref() {
             (d.undo)(s, b);
         }
         Vec::new()
@@ -3531,24 +3565,69 @@ mod tests {
         let mut s = Settings::default();
         s.sunrise.leaf_culling = LeafCullingMode::Hollow;
         s.sunrise.resolution_scale = 75;
-        for (code, leaf, scale) in [
-            ("en_us", "Leaf Culling: Hollow", "Resolution Scale: 75%"),
+        for (code, leaf, scale, leaf_row_name) in [
+            (
+                "en_us",
+                "Leaf Culling: Hollow",
+                "Resolution Scale: 75%",
+                "Leaf Culling",
+            ),
             (
                 "fr_fr",
                 "Occlusion feuillage : Creux",
                 "Échelle de résolution : 75 %",
+                "Occlusion feuillage",
             ),
-            ("zh_cn", "树叶剔除：镂空", "渲染比例：75%"),
+            ("zh_cn", "树叶剔除：镂空", "渲染比例：75%", "树叶剔除"),
             // Value first.
-            ("en_ud", "Hollow :Leaf Culling", "Resolution Scale: 75%"),
+            (
+                "en_ud",
+                "Hollow :Leaf Culling",
+                "Resolution Scale: 75%",
+                "Hollow :Leaf Culling",
+            ),
         ] {
             let (shown, _) = lang::scoped(lang::Language::load(&[&Vanilla], code), || {
+                let leaf_setting = h(H::LeafCulling, Cost::None, "");
                 (
                     Item::Sunrise(H::LeafCulling).label(&s, &NONE).plain(),
                     Item::Sunrise(H::ResolutionScale).label(&s, &NONE).plain(),
+                    super::row(leaf_setting, &s, &NONE).name,
                 )
             });
-            assert_eq!(shown, (leaf.into(), scale.into()), "{code}");
+            assert_eq!(
+                shown,
+                (leaf.into(), scale.into(), leaf_row_name.into()),
+                "{code}"
+            );
+        }
+        #[cfg(feature = "sunrise-extras")]
+        for (code, fullbright_label, fullbright_row_name) in [
+            ("en_us", "Fullbright: Off", "Fullbright"),
+            ("fr_fr", "Pleine luminosité : Non", "Pleine luminosité"),
+            ("zh_cn", "全亮：关", "全亮"),
+            ("en_ud", "Off :Fullbright", "Off :Fullbright"),
+        ] {
+            let fullbright = Item::Described(RowId("sunrise:fullbright"));
+            let fullbright_setting = Setting {
+                id: RowId("sunrise:fullbright"),
+                item: fullbright,
+                cost: Cost::None,
+                text: "",
+            };
+            let (shown, _) = lang::scoped(lang::Language::load(&[&Vanilla], code), || {
+                let built = super::row(fullbright_setting, &s, &NONE);
+                (fullbright.label(&s, &NONE).plain(), built.name, built.value)
+            });
+            assert_eq!(
+                shown,
+                (
+                    fullbright_label.into(),
+                    fullbright_row_name.into(),
+                    Value::Switch(false),
+                ),
+                "{code}"
+            );
         }
     }
     /// Leaf Culling, Frame Generation and Shadow Cache came with English captions only (#1927).
