@@ -8,7 +8,7 @@ pub use client::render_pipeline::{
 pub use client::render_pipeline::{
     ColorTargetState, ColorWrite, DepthCompare, DepthState, DrawBindings, DrawRange, IndexFormat,
     LayeringTransform, MAX_COLOR_TARGETS, MAX_PUSH_CONSTANT_SIZE, MAX_VERTEX_BINDINGS,
-    MAX_VERTEX_ELEMENTS,
+    MAX_VERTEX_ELEMENTS, StencilOperation, StencilPerFaceTest, StencilTest,
 };
 pub use client::render_pipeline::{
     MeshBackendRef, MeshBufferInit, MeshContext, MeshDescriptor, MeshDraw, MeshError,

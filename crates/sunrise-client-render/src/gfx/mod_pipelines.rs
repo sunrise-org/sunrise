@@ -17,6 +17,7 @@ use super::mod_render_targets::{TargetMips, TargetUse};
 use super::world_primitives::{PreparedPass, Upload, VertexPages};
 use crate::mod_pipelines::{
     Built, BuiltTexture, ModifierStacks, Pipelines, wgpu_compare, wgpu_depth_bias,
+    wgpu_stencil_state,
 };
 use glam::Mat4;
 use mod_api::{
@@ -459,6 +460,8 @@ pub struct OffscreenPassData<'a> {
     pub transient_indices: &'a [u8],
     pub inline_uniforms: &'a [u8],
     pub texel_data: &'a [u8],
+    pub modifiers: Option<&'a ModifierStacks>,
+    pub modifier_defs: Option<&'a [mod_api::PipelineModifier]>,
 }
 
 /// Target attachment and Z-direction state for [`ModPipelines::build_render_pipeline`].
@@ -1532,11 +1535,18 @@ impl ModPipelines {
                 } else {
                     ds.compare
                 };
+                // Targets without a stencil plane (e.g. Depth32Float, main world pass) ignore
+                // stencil state rather than refusing the pipeline, matching NeoForge.
+                let stencil = if format.has_stencil_aspect() {
+                    wgpu_stencil_state(ds.stencil_test)
+                } else {
+                    wgpu::StencilState::default()
+                };
                 Some(wgpu::DepthStencilState {
                     format,
                     depth_write_enabled: Some(ds.write),
                     depth_compare: Some(wgpu_compare(compare)),
-                    stencil: Default::default(),
+                    stencil,
                     bias: wgpu_depth_bias(ds, target.standard_z),
                 })
             }
@@ -2486,24 +2496,31 @@ impl ModPipelines {
         id
     }
 
-    /// Lazily compile a modified variant for `(slot, variant id)` if not cached yet.
-    fn ensure_modifier_variant(
+    /// Lazily compile a modified variant for `(compiled, variant id)` targeting `target` if not
+    /// cached yet, returning the effective [`PipelineState`].
+    #[allow(clippy::too_many_arguments)]
+    fn ensure_target_modifier_variant(
         device: &wgpu::Device,
-        color_format: wgpu::TextureFormat,
         compiled: &mut Compiled,
+        target: TargetState<'_>,
+        raw_fragment: bool,
         variant: u32,
         slots: &[u32],
         defs: &[mod_api::PipelineModifier],
-    ) {
+    ) -> PipelineState {
         let idx = variant as usize;
         if idx == 0 {
-            return;
+            return compiled.source.recipe.state;
         }
         if compiled.variants.len() <= idx {
             compiled.variants.resize_with(idx + 1, || None);
         }
         if compiled.variants[idx].is_some() {
-            return;
+            return compiled
+                .variant_states
+                .get(idx)
+                .and_then(Option::as_ref)
+                .map_or(compiled.source.recipe.state, |(state, _)| *state);
         }
         let modified = ModifierStacks::apply_slots(slots, compiled.source.recipe.state, defs);
         let label =
@@ -2514,25 +2531,27 @@ impl ModPipelines {
         compiled.variant_states[idx] = Some((modified, label.clone()));
         if modified == compiled.source.recipe.state {
             compiled.variants[idx] = Some(CachedVariant::Base);
-            return;
+            return modified;
         }
-        let color_formats = [color_format];
+        let frag = if raw_fragment {
+            compiled
+                .source
+                .pack_fragment_shader
+                .as_ref()
+                .unwrap_or(&compiled.source.fragment_shader)
+        } else {
+            &compiled.source.fragment_shader
+        };
         match Self::build_render_pipeline(
             device,
             &label,
             &compiled.pipeline_layout,
             &compiled.source.vertex_shader,
-            &compiled.source.fragment_shader,
+            frag,
             &compiled.source.vertex_layouts,
             modified,
             &compiled.source.recipe.color_targets,
-            TargetState {
-                color_formats: &color_formats,
-                depth_format: Some(wgpu::TextureFormat::Depth32Float),
-                force_depth_attachment: false,
-                standard_z: false,
-                write_mask: wgpu::ColorWrites::ALL,
-            },
+            target,
         ) {
             Ok(pipeline) => compiled.variants[idx] = Some(CachedVariant::Compiled(pipeline)),
             Err(error) => {
@@ -2540,6 +2559,34 @@ impl ModPipelines {
                 compiled.variants[idx] = Some(CachedVariant::Refused);
             }
         }
+        modified
+    }
+
+    /// Lazily compile a modified variant for `(slot, variant id)` if not cached yet.
+    fn ensure_modifier_variant(
+        device: &wgpu::Device,
+        color_format: wgpu::TextureFormat,
+        compiled: &mut Compiled,
+        variant: u32,
+        slots: &[u32],
+        defs: &[mod_api::PipelineModifier],
+    ) {
+        let color_formats = [color_format];
+        let _ = Self::ensure_target_modifier_variant(
+            device,
+            compiled,
+            TargetState {
+                color_formats: &color_formats,
+                depth_format: Some(wgpu::TextureFormat::Depth32Float),
+                force_depth_attachment: false,
+                standard_z: false,
+                write_mask: wgpu::ColorWrites::ALL,
+            },
+            false,
+            variant,
+            slots,
+            defs,
+        );
     }
 
     /// Lazily compile a modified OIT variant for `(slot, oit_stage, variant id)` if not cached yet.
@@ -2964,8 +3011,19 @@ impl ModPipelines {
         use wgpu::util::DeviceExt;
         let upload: Upload<'_> = &mut |buffer, bytes| queue.write_buffer(buffer, 0, bytes);
         let mut max_fan_verts = 0u32;
+        let modifier_defs = match data.modifier_defs {
+            Some(defs) => defs,
+            None => crate::mod_pipelines::registered_modifiers(),
+        };
         let target =
             VariantTarget::Offscreen(data.target.color_formats.clone(), data.target.depth_format);
+        let offscreen_target_state = TargetState {
+            color_formats: &data.target.color_formats,
+            depth_format: data.target.depth_format,
+            force_depth_attachment: data.target.depth_format.is_some(),
+            standard_z: false,
+            write_mask: wgpu::ColorWrites::ALL,
+        };
         let mut ready = Vec::with_capacity(data.draws.len());
         for cmd in data.draws {
             let slot = cmd.slot as usize;
@@ -2974,15 +3032,47 @@ impl ModPipelines {
                 self.warn_prepare_error(slot, error);
                 continue;
             }
-            let compiled = self.variants[&key]
-                .as_ref()
-                .expect("prepared offscreen variant");
-            if compiled.source.recipe.state.topology == PrimitiveTopology::TriangleFan
+            let (variant, topology) = match data.modifiers {
+                _ if cmd.modifier_stack == ModifierStacks::EMPTY => {
+                    let compiled = self.variants[&key]
+                        .as_ref()
+                        .expect("prepared offscreen variant");
+                    (ModifierStacks::EMPTY, compiled.source.recipe.state.topology)
+                }
+                Some(stacks) => {
+                    let slots = stacks.get(cmd.modifier_stack);
+                    let variant = Self::variant_id(&mut self.variant_ids, slots);
+                    let compiled = self
+                        .variants
+                        .get_mut(&key)
+                        .expect("prepared offscreen variant")
+                        .as_mut()
+                        .expect("prepared offscreen variant");
+                    let state = Self::ensure_target_modifier_variant(
+                        device,
+                        compiled,
+                        offscreen_target_state,
+                        true,
+                        variant,
+                        slots,
+                        modifier_defs,
+                    );
+                    (variant, state.topology)
+                }
+                // A stack with no table to resolve it draws nothing.
+                None => {
+                    let compiled = self.variants[&key]
+                        .as_ref()
+                        .expect("prepared offscreen variant");
+                    (u32::MAX, compiled.source.recipe.state.topology)
+                }
+            };
+            if topology == PrimitiveTopology::TriangleFan
                 && let DrawRange::Vertices(ref range) = cmd.draw.range
             {
                 max_fan_verts = max_fan_verts.max(range.end.saturating_sub(range.start));
             }
-            ready.push((cmd, key));
+            ready.push((cmd, key, variant, topology));
         }
         if max_fan_verts >= 3 {
             self.fan_indices
@@ -3026,7 +3116,7 @@ impl ModPipelines {
         let mut staged_meta: Vec<Option<(Vec<(u32, u64)>, Vec<(u64, u64)>)>> =
             Vec::with_capacity(ready.len());
 
-        for (cmd, key) in &ready {
+        for (cmd, key, _, _) in &ready {
             let compiled = self.variants[key]
                 .as_ref()
                 .expect("prepared offscreen variant");
@@ -3128,7 +3218,7 @@ impl ModPipelines {
         // binding the same storage buffer both read-only and read-write in this offscreen pass.
         self.storage_uses.clear();
         self.storage_conflicts.clear();
-        for (cmd, key) in &ready {
+        for (cmd, key, _, _) in &ready {
             let Some(bindings) = &cmd.bindings else {
                 continue;
             };
@@ -3162,7 +3252,8 @@ impl ModPipelines {
         }
 
         let mut prepared_draws = Vec::with_capacity(ready.len());
-        for (submitted_index, ((cmd, key), meta)) in ready.into_iter().zip(staged_meta).enumerate()
+        for (submitted_index, ((cmd, key, variant, topology), meta)) in
+            ready.into_iter().zip(staged_meta).enumerate()
         {
             let compiled = self.variants[&key]
                 .as_ref()
@@ -3333,8 +3424,8 @@ impl ModPipelines {
                     submitted_index,
                     slot: cmd.slot as usize,
                     stage: cmd.stage as usize,
-                    modifier_stack: cmd.modifier_stack,
-                    topology: compiled.source.recipe.state.topology,
+                    modifier_stack: variant,
+                    topology,
                     draw: cmd.draw.clone(),
                     source: match &cmd.source {
                         PipelineDrawSource::Transient {
@@ -3439,7 +3530,29 @@ impl ModPipelines {
                 ..Default::default()
             });
             for (compiled, cmd) in &prepared_draws {
-                rpass.set_pipeline(&compiled.pipeline);
+                let (pipeline, state) = if cmd.modifier_stack == ModifierStacks::EMPTY {
+                    (&compiled.pipeline, compiled.source.recipe.state)
+                } else {
+                    let idx = cmd.modifier_stack as usize;
+                    let Some((modified, _)) =
+                        compiled.variant_states.get(idx).and_then(Option::as_ref)
+                    else {
+                        continue;
+                    };
+                    match compiled.variants.get(idx) {
+                        Some(Some(CachedVariant::Base)) => (&compiled.pipeline, *modified),
+                        Some(Some(CachedVariant::Compiled(p))) => (p, *modified),
+                        _ => continue,
+                    }
+                };
+                rpass.set_pipeline(pipeline);
+                if data.target.has_stencil {
+                    let stencil_ref = state
+                        .depth_stencil
+                        .and_then(|ds| ds.stencil_test)
+                        .map_or(0, |st| st.reference_value);
+                    rpass.set_stencil_reference(stencil_ref);
+                }
                 rpass.set_bind_group(0, &compiled.source.group, &[]);
                 if compiled.set1_layout.is_some() {
                     let Some((ref bg, ref offsets)) = cmd.set1_bind_group else {
@@ -9140,6 +9253,8 @@ void main() {
                 transient_indices: &[],
                 inline_uniforms: &[],
                 texel_data: &[],
+                modifiers: None,
+                modifier_defs: None,
             },
         );
         // Pass 2: LoadOp::Load (no clear) with zero draws — pixels must persist!
@@ -9156,6 +9271,8 @@ void main() {
                 transient_indices: &[],
                 inline_uniforms: &[],
                 texel_data: &[],
+                modifiers: None,
+                modifier_defs: None,
             },
         );
         queue.submit([enc.finish()]);
@@ -9445,6 +9562,8 @@ void main() {
                     transient_indices: &[],
                     inline_uniforms: &[],
                     texel_data: &[],
+                    modifiers: None,
+                    modifier_defs: None,
                 },
             );
         }
@@ -9840,6 +9959,302 @@ void main() {
             at(32, 32),
             expected_linear_rgba,
             "world HDR target must match explicit GPU linear_fragment_finish decode bit-exactly"
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn stencil_test_masks_offscreen_target_ignores_non_stencil_target_and_modifier_disables_it() {
+        use mod_api::{
+            DepthState, PipelineModifier, StencilOperation, StencilPerFaceTest, StencilTest,
+        };
+
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            return;
+        };
+
+        let stamp_id = Identifier::parse("test:stencil_stamp_zero").unwrap();
+        let eq_one_id = Identifier::parse("test:stencil_draw_eq_one").unwrap();
+        let plain_id = Identifier::parse("test:stencil_plain_green").unwrap();
+        let red_fsh = "#version 330\n\
+            out vec4 fragColor;\n\
+            void main() {\n\
+                fragColor = vec4(1.0, 0.0, 0.0, 1.0);\n\
+            }\n";
+        let green_fsh = "#version 330\n\
+            out vec4 fragColor;\n\
+            void main() {\n\
+                fragColor = vec4(0.0, 1.0, 0.0, 1.0);\n\
+            }\n";
+
+        let stamp_stencil = StencilTest::both(
+            StencilPerFaceTest::new(
+                StencilOperation::Keep,
+                StencilOperation::Keep,
+                StencilOperation::Replace,
+                DepthCompare::Always,
+            ),
+            u32::MAX,
+            u32::MAX,
+            0,
+        );
+        let eq_one_stencil = StencilTest::both(
+            StencilPerFaceTest::new(
+                StencilOperation::Keep,
+                StencilOperation::Keep,
+                StencilOperation::Keep,
+                DepthCompare::Equal,
+            ),
+            u32::MAX,
+            0,
+            1,
+        );
+
+        let pipelines = [
+            RenderPipeline::new(
+                stamp_id.clone(),
+                stamp_id,
+                PipelineBlend::Opaque,
+                mod_api::WorldDepth::ThroughWalls,
+            )
+            .depth_stencil(Some(
+                DepthState::new(DepthCompare::Always, false).stencil_test(Some(stamp_stencil)),
+            )),
+            RenderPipeline::new(
+                eq_one_id.clone(),
+                eq_one_id,
+                PipelineBlend::Opaque,
+                mod_api::WorldDepth::ThroughWalls,
+            )
+            .depth_stencil(Some(
+                DepthState::new(DepthCompare::Always, false).stencil_test(Some(eq_one_stencil)),
+            )),
+            RenderPipeline::new(
+                plain_id.clone(),
+                plain_id,
+                PipelineBlend::Opaque,
+                mod_api::WorldDepth::ThroughWalls,
+            )
+            .depth_stencil(Some(DepthState::new(DepthCompare::Always, false))),
+        ];
+        let set = Pipelines::build(&pipelines, 1, |file| {
+            if file.ends_with(".vsh") {
+                Ok(Some(VSH.to_owned()))
+            } else if file.contains("stencil_stamp_zero") && file.ends_with(".fsh") {
+                Ok(Some(red_fsh.to_owned()))
+            } else if file.ends_with(".fsh") {
+                Ok(Some(green_fsh.to_owned()))
+            } else {
+                Ok(stub_asset(file))
+            }
+        })
+        .expect("stencil test pipelines must translate");
+
+        let mut targets = crate::gfx::mod_render_targets::ModRenderTargets::default();
+        let stencil_rt = targets
+            .create(
+                &device,
+                Some("test_mod"),
+                &mod_api::RenderTargetDescriptor::rgba8(
+                    [4, 4],
+                    mod_api::RenderTargetDepth::Depth24PlusStencil8,
+                ),
+            )
+            .expect("create 4x4 Depth24PlusStencil8 offscreen target");
+        let depth_only_rt = targets
+            .create(
+                &device,
+                Some("test_mod"),
+                &mod_api::RenderTargetDescriptor::rgba8(
+                    [4, 4],
+                    mod_api::RenderTargetDepth::Depth32Float,
+                ),
+            )
+            .expect("create 4x4 Depth32Float offscreen target");
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut primitives = WorldPrimitives::new(&device, (format, false));
+        primitives
+            .pipelines
+            .build(&device, &set, None)
+            .expect("build stencil test pipelines");
+
+        let vertices: Vec<PipelineVertex> =
+            [offscreen_quad_4x4(0.0, 2.0), offscreen_quad_4x4(0.0, 4.0)].concat();
+        let vbytes = bytemuck::cast_slice(&vertices);
+        let stride = 4 * std::mem::size_of::<PipelineVertex>() as u64;
+        let make_draw = |slot: u32, quad_idx: u64, modifier_stack: u32| PipelineDraw {
+            slot,
+            stage: 0,
+            modifier_stack,
+            draw: MeshDraw::vertices(0..4),
+            source: PipelineDrawSource::Transient {
+                vertex_ranges: vec![(0, quad_idx * stride..(quad_idx + 1) * stride)],
+                index_range: None,
+            },
+            bindings: None,
+        };
+
+        let ortho4 = Mat4::orthographic_rh(0.0, 4.0, 4.0, 0.0, -1.0, 1.0).to_cols_array();
+        let identity = Mat4::IDENTITY.to_cols_array();
+        let run_pass = |primitives: &mut WorldPrimitives,
+                        rt: mod_api::RenderTargetRef,
+                        clear_stencil: Option<u32>,
+                        draws: &[PipelineDraw],
+                        modifiers: Option<&ModifierStacks>,
+                        modifier_defs: Option<&[PipelineModifier]>|
+         -> Vec<u8> {
+            let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let resolved = targets.resolve_target(Some("test_mod"), rt, 0).unwrap();
+            let mut pass = mod_api::OffscreenPass::new(rt)
+                .clear_color_0([0.0, 0.0, 0.0, 1.0])
+                .clear_depth(0.0)
+                .projection(ortho4)
+                .view(identity);
+            if let Some(s) = clear_stencil {
+                pass = pass.clear_stencil(s);
+            }
+            let mut encoder = device.create_command_encoder(&Default::default());
+            primitives.execute_offscreen_pass(
+                &device,
+                &queue,
+                &mut encoder,
+                &OffscreenPassData {
+                    pass: &pass,
+                    target: &resolved,
+                    draws,
+                    transient_vertices: vbytes,
+                    transient_indices: &[],
+                    inline_uniforms: &[],
+                    texel_data: &[],
+                    modifiers,
+                    modifier_defs,
+                },
+            );
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 1024,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: targets.color_texture(rt, 0).unwrap(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(256),
+                        rows_per_image: None,
+                    },
+                },
+                wgpu::Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth_or_array_layers: 1,
+                },
+            );
+            queue.submit([encoder.finish()]);
+            assert!(
+                pollster::block_on(validation.pop()).is_none(),
+                "stencil offscreen pass must not raise a wgpu validation error"
+            );
+            readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let bytes = readback.slice(..).get_mapped_range().unwrap().to_vec();
+            readback.unmap();
+            bytes
+        };
+        let pixel = |bytes: &[u8], x: usize, y: usize| -> [u8; 4] {
+            let i = y * 256 + x * 4;
+            [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+        };
+
+        // 1. On Depth24PlusStencil8: clear stencil to 1, stamp left half to 0 (red), then draw
+        // green full-screen with stencil Equal 1 -> left stays red, right turns green.
+        let masked = run_pass(
+            &mut primitives,
+            stencil_rt,
+            Some(1),
+            &[make_draw(0, 0, 0), make_draw(1, 1, 0)],
+            None,
+            None,
+        );
+        assert_eq!(
+            pixel(&masked, 0, 1),
+            [255, 0, 0, 255],
+            "left half stamped to stencil 0 must reject Equal 1 draw"
+        );
+        assert_eq!(
+            pixel(&masked, 3, 1),
+            [0, 255, 0, 255],
+            "right half kept at stencil 1 must pass Equal 1 draw"
+        );
+
+        // 2. A PipelineModifier with `stencil_test(None)` (`Some(None)`) disables stencil testing
+        // on the same Depth24PlusStencil8 target, so green overwrites the stamped left half too.
+        let modifier_defs =
+            [
+                PipelineModifier::new(Identifier::parse("test:disable_stencil").unwrap())
+                    .stencil_test(None),
+            ];
+        let mut stacks = ModifierStacks::new();
+        let disable_stencil = stacks.intern(&[0]);
+        let unmasked = run_pass(
+            &mut primitives,
+            stencil_rt,
+            Some(1),
+            &[make_draw(0, 0, 0), make_draw(1, 1, disable_stencil)],
+            Some(&stacks),
+            Some(&modifier_defs),
+        );
+        assert_eq!(
+            pixel(&unmasked, 0, 1),
+            [0, 255, 0, 255],
+            "modifier Some(None) must disable stencil test on left half"
+        );
+        assert_eq!(
+            pixel(&unmasked, 3, 1),
+            [0, 255, 0, 255],
+            "modifier Some(None) must still draw right half"
+        );
+
+        // 3. On Depth32Float (no stencil plane): the stencil pipeline is not refused and renders
+        // identically to the same pipeline with `stencil_test: None`.
+        let with_stencil = run_pass(
+            &mut primitives,
+            depth_only_rt,
+            None,
+            &[make_draw(1, 1, 0)],
+            None,
+            None,
+        );
+        let without_stencil = run_pass(
+            &mut primitives,
+            depth_only_rt,
+            None,
+            &[make_draw(2, 1, 0)],
+            None,
+            None,
+        );
+        for y in 0..4 {
+            for x in 0..4 {
+                assert_eq!(
+                    pixel(&with_stencil, x, y),
+                    pixel(&without_stencil, x, y),
+                    "Depth32Float pixel ({x}, {y}) must match pipeline without stencil"
+                );
+            }
+        }
+        assert_eq!(
+            pixel(&with_stencil, 1, 1),
+            [0, 255, 0, 255],
+            "stencil pipeline on Depth32Float must draw green"
         );
     }
 }

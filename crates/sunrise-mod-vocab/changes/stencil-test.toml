@@ -1,0 +1,11 @@
+ids = [
+    "type:StencilOperation",
+    "type:StencilPerFaceTest",
+    "type:StencilTest",
+    "type:DepthState.stencil_test",
+    "type:PipelineModifier.stencil_test",
+    "handle:DepthState::stencil_test",
+    "handle:PipelineModifier::stencil_test",
+]
+why = "Add NeoForge-named stencil test state (StencilTest, StencilPerFaceTest, StencilOperation) to DepthState::stencil_test (Option<StencilTest>, None = off) and PipelineModifier::stencil_test (Option<Option<StencilTest>>, Some(None) clears). Stencil applies on offscreen targets with a stencil plane (Depth24PlusStencil8) with dynamic reference set from StencilTest::reference_value on bind; targets without a stencil plane ignore stencil cleanly without refusal."
+migrate = "A DepthState literal without `..DepthState::DEFAULT` adds `stencil_test: None`. Set stencil state with `DepthState::new(compare, write).stencil_test(Some(StencilTest::both(face, read_mask, write_mask, reference_value)))` and clear it in a modifier with `PipelineModifier::new(id).stencil_test(None)`."

@@ -946,6 +946,8 @@ impl super::Renderer {
                 transient_indices,
                 inline_uniforms,
                 texel_data,
+                modifiers: None,
+                modifier_defs: None,
             },
         );
         Ok(())
