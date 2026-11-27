@@ -84,4 +84,4 @@ surface = "sha256:b0e4c01feaf3bd1484c95a815b3d5686bcd8d5970e2d011a85d633d6a48bbf
 launcher = "bench"
 sources = ["crates/sunrise-bench/src", "crates/sunrise-perf-format/src"]
 note = "the benchmark report format"
-surface = "sha256:aae5f52fc053dc329efb53a93c3cb456e22c4bfb92ba8589781f13c31fefdb31"
+surface = "sha256:521751fa026028738fe699d223effa79f44f5a98da7020f01ffc82fb2d13f99f"
