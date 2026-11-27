@@ -4124,6 +4124,9 @@ pub mod native_resources;
 #[cfg(any(test, feature = "test-support"))]
 pub mod test_fixtures;
 
+#[cfg(any(test, feature = "test-support"))]
+pub mod test_resource_cache;
+
 #[cfg(test)]
 mod native_entity_refs {
     #[cfg(test)]

@@ -2,14 +2,12 @@
 use crate::settings::Settings;
 use std::sync::Arc;
 use std::time::Instant;
-use sunrise_client_gameplay::game::client_side::resource_load_client::{
-    UiPublishArg, load_resources_for_mods,
-};
+use sunrise_client_gameplay::game::client_side::resource_load_client::UiPublishArg;
 use sunrise_client_gameplay::game::client_side::resource_loader::Loaded;
 use sunrise_client_gameplay::game::packs;
 use sunrise_game_data::Result;
 use sunrise_gameplay_common::game::mods;
-use sunrise_gameplay_common::game::resource_load::{Progress, with_skip_facts_memo};
+use sunrise_gameplay_common::game::resource_load::Progress;
 #[cfg(test)]
 #[path = "resource_load/test_cache.rs"]
 pub(crate) mod test_cache;
@@ -29,6 +27,7 @@ pub(crate) fn load_resources(
     progress: &Progress,
     publish: &mut dyn FnMut(UiPublishArg, &std::path::Path),
 ) -> Result<Loaded> {
+    mod_platform::__private::test_platform::install();
     test_cache::load(
         roots.into(),
         additional_data,
@@ -58,6 +57,7 @@ pub(crate) fn load_resources_skip_lang(
     progress: &Progress,
     publish: &mut dyn FnMut(UiPublishArg, &std::path::Path),
 ) -> Result<Loaded> {
+    mod_platform::__private::test_platform::install();
     test_cache::load(
         roots.into(),
         additional_data,
@@ -88,36 +88,18 @@ pub(crate) fn load_resources_uncached(
     progress: &Progress,
     publish: &mut dyn FnMut(UiPublishArg, &std::path::Path),
 ) -> Result<Loaded> {
-    let _permit = test_cache::acquire_in_process_load_permit();
-    let load_role: mods::LoadRole = role.into();
-    let loaded = with_skip_facts_memo(|| {
-        load_resources_for_mods(
-            roots.into(),
-            additional_data,
-            launch_world,
-            vanilla_root,
-            settings,
-            started,
-            menu,
-            load_role,
-            progress,
-            publish,
-            &mut || unreachable!("fixture without pack recovery"),
-            &mods::ModsState::default(),
-        )
-    })?;
-    #[cfg(feature = "client")]
-    let loaded = {
-        let mut loaded = loaded;
-        if !menu && load_role.execution.is_client() {
-            if let Some(gui) = loaded.gui.as_mut() {
-                gui.atlas.pack_pixels_sync();
-            }
-            if let Some(client_pack) = &loaded.client_pack {
-                client_pack.render.pixels.pack_sync();
-            }
-        }
-        loaded
-    };
-    Ok(loaded)
+    mod_platform::__private::test_platform::install();
+    test_cache::load_uncached(
+        roots.into(),
+        additional_data,
+        launch_world,
+        vanilla_root,
+        settings,
+        started,
+        menu,
+        false,
+        role.into(),
+        progress,
+        publish,
+    )
 }

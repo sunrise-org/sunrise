@@ -1,5 +1,8 @@
+use crate::game::server_side::resource_load_server::load_resources_for_role;
 use mod_api::{EntityRef, LevelReadError, LevelRef};
-use std::ops::ControlFlow;
+use std::{ops::ControlFlow, path::Path, sync::Arc, time::Instant};
+use sunrise_assets::resource_source::ResourceRoot;
+use sunrise_game_data::lang;
 pub use sunrise_gameplay_common::game::test_fixtures::{
     FRESH_CASE_LIMIT, fixture_block_names, fixture_resident_column, fixture_root, output_within,
     ran_one_test, record_key, resolve_parts, run_fresh_cases, run_fresh_cases_at_once,
@@ -8,13 +11,18 @@ pub use sunrise_gameplay_common::game::test_fixtures::{
 use sunrise_gameplay_common::game::{
     GameGameExt1 as _, PackResources, Resources,
     execution_role::ExecutionRole,
+    mods::LoadRole,
     native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _,
     player_identity::PlayerIdentityGameExt1 as _,
-    resource_load::Progress,
+    resource_load::{Progress, with_skip_facts_memo},
     test_fixtures::{
         acquire_in_process_load_permit, fixture_facts_mut, offline_profiles, tempfile,
     },
+    test_resource_cache::{
+        CacheKey, get_or_build, hydrate_common_hit, is_plain_directory_resource_root,
+    },
 };
+use sunrise_level::datapack::DataPack;
 
 pub fn collect_all_entities(
     host: &dyn mod_api::Host,
@@ -180,7 +188,13 @@ pub fn with_game_at(root: std::path::PathBuf, test: impl FnOnce(&mut crate::game
 }
 
 pub fn with_uncached_game(test: impl FnOnce(&mut crate::game::ServerGame<'_>)) {
-    with_game(test);
+    with_fixture_game(
+        fixture_root(),
+        ExecutionRole::IntegratedServer,
+        false,
+        None,
+        test,
+    );
 }
 
 pub fn with_game_role(
@@ -200,17 +214,36 @@ pub fn with_game_role_and_facts(
     >,
     test: impl FnOnce(&mut crate::game::ServerGame<'_>),
 ) {
+    with_fixture_game(root, role, configure.is_none(), configure, test);
+}
+
+fn with_fixture_game(
+    root: std::path::PathBuf,
+    role: ExecutionRole,
+    cached: bool,
+    configure: Option<
+        fn(&sunrise_world::registry::BlockRegistry, &mut sunrise_items::blocks::BlockFacts),
+    >,
+    test: impl FnOnce(&mut crate::game::ServerGame<'_>),
+) {
     use mod_api::Authority;
     use sunrise_gameplay_common::game::Options;
     use sunrise_level::sim_settings::SimSettings;
 
+    #[cfg(test)]
+    mod_platform::__private::test_platform::install();
     sunrise_gameplay_common::game::test_fixtures::prepare_game_boot(
         &root,
         mod_api::testing::engine_platform::register_game_keys,
     );
     let saves = tempfile::tempdir().unwrap();
     let settings = SimSettings::default();
-    let (mut resources, pack) = load_fixture_server_resources(&root, role);
+    let load = if cached {
+        load_fixture_server_resources
+    } else {
+        load_fixture_server_resources_uncached
+    };
+    let (mut resources, pack) = load(&root, role);
     if let Some(configure) = configure {
         configure(pack.assets.registry, fixture_facts_mut(&mut resources));
     }
@@ -239,23 +272,131 @@ pub fn with_game_role_and_facts(
     test(&mut game);
 }
 
-pub(in crate::game) fn load_fixture_server_resources(
-    root: &std::path::Path,
+pub fn load_fixture_server_resources(
+    root: &Path,
     role: ExecutionRole,
-) -> (std::sync::Arc<Resources>, PackResources) {
-    let _permit = acquire_in_process_load_permit();
-    crate::game::server_side::resource_load_server::load_resources_for_role(
-        sunrise_assets::resource_source::ResourceRoot::directory(root.to_path_buf()),
+) -> (Arc<Resources>, PackResources) {
+    load_server_resources_cached(
+        ResourceRoot::directory(root.to_path_buf()),
         Vec::new(),
         root,
         role.into(),
         1,
-        std::time::Instant::now(),
-        &Default::default(),
+        Instant::now(),
+        false,
         &Progress::new(),
         true,
     )
     .unwrap()
+}
+
+pub fn load_fixture_server_resources_uncached(
+    root: &Path,
+    role: ExecutionRole,
+) -> (Arc<Resources>, PackResources) {
+    load_server_resources_uncached(
+        ResourceRoot::directory(root.to_path_buf()),
+        Vec::new(),
+        root,
+        role.into(),
+        1,
+        Instant::now(),
+        false,
+        &Progress::new(),
+        true,
+    )
+    .unwrap()
+}
+
+pub fn load_server_resources_cached(
+    root: ResourceRoot,
+    additional_data: Vec<Arc<DataPack>>,
+    vanilla_root: &Path,
+    role: LoadRole,
+    threads: usize,
+    started: Instant,
+    skip_lang: bool,
+    progress: &Progress,
+    validate_entity_part_state: bool,
+) -> sunrise_game_data::Result<(Arc<Resources>, PackResources)> {
+    #[cfg(test)]
+    mod_platform::__private::test_platform::install();
+
+    // Server-role client loads validate entity part state too. Don't let loads that
+    // opt out populate a slot shared with a loader that requires validation.
+    if validate_entity_part_state
+        && !role.execution.is_client()
+        && additional_data.is_empty()
+        && let Some(raw_root) = is_plain_directory_resource_root(&root)
+        && let Some(key) = CacheKey::for_vanilla_root(&raw_root, vanilla_root, role, threads, None)
+    {
+        let cached = get_or_build(key.clone(), move |key| {
+            let (resources, pack) = with_skip_facts_memo(|| {
+                load_resources_for_role(
+                    ResourceRoot::directory(key.root.clone()),
+                    Vec::new(),
+                    &key.vanilla_root,
+                    role,
+                    key.worker_threads,
+                    Instant::now(),
+                    &Default::default(),
+                    &Progress::new(),
+                    validate_entity_part_state,
+                )
+            })
+            .map_err(|e| e.to_string())?;
+            Ok((resources, pack, None))
+        })?;
+        if let Some((resources, pack, _)) =
+            hydrate_common_hit(&cached, &key, lang::DEFAULT, true, skip_lang)?
+        {
+            progress.set(9);
+            return Ok((resources, pack));
+        }
+    }
+    load_server_resources_uncached(
+        root,
+        additional_data,
+        vanilla_root,
+        role,
+        threads,
+        started,
+        skip_lang,
+        progress,
+        validate_entity_part_state,
+    )
+}
+
+pub fn load_server_resources_uncached(
+    root: ResourceRoot,
+    additional_data: Vec<Arc<DataPack>>,
+    vanilla_root: &Path,
+    role: LoadRole,
+    threads: usize,
+    started: Instant,
+    skip_lang: bool,
+    progress: &Progress,
+    validate_entity_part_state: bool,
+) -> sunrise_game_data::Result<(Arc<Resources>, PackResources)> {
+    #[cfg(test)]
+    mod_platform::__private::test_platform::install();
+
+    let _permit = acquire_in_process_load_permit();
+    let _language =
+        skip_lang.then(|| lang::isolate_publication(lang::Language::of(lang::DEFAULT, [])));
+    with_skip_facts_memo(|| {
+        load_resources_for_role(
+            root,
+            additional_data,
+            vanilla_root,
+            role,
+            threads,
+            started,
+            &Default::default(),
+            progress,
+            validate_entity_part_state,
+        )
+    })
 }
 
 /// A world with block `support` at (5, 64, 5) and a powered lever on its east face.
