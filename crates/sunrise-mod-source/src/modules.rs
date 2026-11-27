@@ -5,6 +5,7 @@
 use proc_macro2::TokenStream;
 use quote::{ToTokens, quote};
 use std::{
+    collections::HashMap,
     fs,
     path::{Path, PathBuf},
 };
@@ -48,7 +49,8 @@ enum Predicate {
     All(Vec<Cfg>),
     Any(Vec<Cfg>),
     Not(Box<Cfg>),
-    Atom(Meta),
+    /// An atom and the key a set of cfg facts looks it up by ([`atom_key`]), made once.
+    Atom(Meta, String),
 }
 
 impl Parse for Cfg {
@@ -74,7 +76,10 @@ impl Parse for Cfg {
             Meta::List(list) if list.path.is_ident("not") => {
                 Predicate::Not(Box::new(list.parse_args_with(cfg_arg)?))
             }
-            _ => Predicate::Atom(meta),
+            _ => {
+                let key = atom_key(&meta);
+                Predicate::Atom(meta, key)
+            }
         };
         Ok(Self { predicate, written })
     }
@@ -87,7 +92,7 @@ impl ToTokens for Cfg {
             Predicate::All(args) => quote!(all(#(#args),*)),
             Predicate::Any(args) => quote!(any(#(#args),*)),
             Predicate::Not(arg) => quote!(not(#arg)),
-            Predicate::Atom(meta) => meta.to_token_stream(),
+            Predicate::Atom(meta, _) => meta.to_token_stream(),
         });
     }
 }
@@ -140,7 +145,7 @@ impl Cfg {
             match &cfg.predicate {
                 Predicate::Bool(value) => Some(*value),
                 Predicate::Not(arg) => eval(arg, atom).map(|value| !value),
-                Predicate::Atom(meta) => atom(&atom_key(meta)),
+                Predicate::Atom(_, key) => atom(key.as_str()),
                 Predicate::All(args) | Predicate::Any(args) => {
                     let all = matches!(&cfg.predicate, Predicate::All(_));
                     let mut unknown = false;
@@ -205,7 +210,7 @@ fn attr_cfg(attr: &Meta) -> Option<Cfg> {
         list.parse_args_with(cfg_arg).ok()
     } else if attr.path().is_ident("test") || attr.path().is_ident("bench") {
         Some(Cfg {
-            predicate: Predicate::Atom(syn::parse_quote!(test)),
+            predicate: Predicate::Atom(syn::parse_quote!(test), "test".into()),
             written: "test".into(),
         })
     } else {
@@ -443,48 +448,100 @@ fn definition_guard(item: &Item) -> Option<Cfg> {
     }
 }
 
+/// The most steps the walk spends on one search for a build ([`may_compile_within`]).
+const CFG_SEARCH_LIMIT: usize = 1 << 12;
+
 /// Whether some build can hold every predicate in `conditions` at once: an assignment of the
 /// atoms they test (a name or `key = "value"`) under which none of them is false. Atoms vary
-/// independently; `test` is false unless `include_tests`.
+/// independently; `test` is false unless `include_tests`. The search tries every combination of
+/// the atoms in the worst case: the module walk bounds it.
 pub fn may_compile(conditions: &[String], include_tests: bool) -> bool {
+    search_builds(conditions, include_tests, usize::MAX).unwrap_or(true)
+}
+
+/// [`may_compile`] for the module walk, which spends at most [`CFG_SEARCH_LIMIT`] steps on it and
+/// answers `None` if that is not enough to tell. A few predicates can take every combination of
+/// their atoms to refute, as `all(any(a, not(a)), any(b, not(b)), ..., z, not(z))` does with its
+/// last two.
+fn may_compile_within(conditions: &[String], include_tests: bool) -> Option<bool> {
+    search_builds(conditions, include_tests, CFG_SEARCH_LIMIT)
+}
+
+/// The search of [`may_compile`], over at most `limit` partial assignments of the atoms; `None`
+/// when it has not settled by then.
+fn search_builds(conditions: &[String], include_tests: bool, limit: usize) -> Option<bool> {
+    // Each predicate is read once: the search weighs all of them at every step.
+    let predicates: Vec<Cfg> = conditions
+        .iter()
+        .filter_map(|condition| cfg_arg.parse_str(condition).ok())
+        .collect();
     let mut atoms: Vec<String> = Vec::new();
-    for condition in conditions {
-        evaluate_cfg(condition, |atom| {
+    for predicate in &predicates {
+        predicate.evaluate(|atom| {
             if !(atoms.iter().any(|known| known == atom) || (!include_tests && atom == "test")) {
                 atoms.push(atom.to_owned());
             }
             None
         });
     }
-    fn search(
-        conditions: &[String],
-        atoms: &[String],
-        values: &mut Vec<bool>,
+    struct Search<'a> {
+        predicates: &'a [Cfg],
+        atoms: &'a [String],
         include_tests: bool,
-    ) -> bool {
-        let refuted = conditions.iter().any(|condition| {
-            evaluate_cfg(condition, |atom| {
-                if !include_tests && atom == "test" {
-                    return Some(false);
-                }
-                let at = atoms.iter().position(|known| known == atom)?;
-                values.get(at).copied()
-            }) == Some(false)
-        });
-        if refuted {
-            return false;
-        }
-        if values.len() == atoms.len() {
-            return true;
-        }
-        [true, false].into_iter().any(|value| {
-            values.push(value);
-            let found = search(conditions, atoms, values, include_tests);
-            values.pop();
-            found
-        })
+        limit: usize,
+        steps: usize,
     }
-    search(conditions, &atoms, &mut Vec::new(), include_tests)
+    impl Search<'_> {
+        /// Whether some values of the atoms after the first `values.len()` of them leave no
+        /// predicate false, given those first values; `None` once the search is out of steps.
+        fn extend(&mut self, values: &mut Vec<bool>) -> Option<bool> {
+            self.steps = self.steps.saturating_add(1);
+            if self.steps > self.limit {
+                return None;
+            }
+            let refuted = self.predicates.iter().any(|predicate| {
+                predicate.evaluate(|atom| {
+                    if !self.include_tests && atom == "test" {
+                        return Some(false);
+                    }
+                    let at = self.atoms.iter().position(|known| known == atom)?;
+                    values.get(at).copied()
+                }) == Some(false)
+            });
+            if refuted {
+                return Some(false);
+            }
+            if values.len() == self.atoms.len() {
+                return Some(true);
+            }
+            for value in [true, false] {
+                values.push(value);
+                let found = self.extend(values);
+                values.pop();
+                if found != Some(false) {
+                    return found;
+                }
+            }
+            Some(false)
+        }
+    }
+    Search {
+        predicates: &predicates,
+        atoms: &atoms,
+        include_tests,
+        limit,
+        steps: 0,
+    }
+    .extend(&mut Vec::new())
+}
+
+/// The error for a search for a build that ran out of steps ([`CFG_SEARCH_LIMIT`]).
+fn search_gave_up(path: &str) -> String {
+    format!(
+        "{path}: the `cfg`s of a `macro_rules! include` or an import of `include` that a bare \
+         `include!` could name have too many combinations to settle (the search stopped after \
+         {CFG_SEARCH_LIMIT} steps)"
+    )
 }
 
 /// The files of `module` read from `path`, with conventional children in `dir`. With `every_build`,
@@ -500,10 +557,15 @@ pub fn may_compile(conditions: &[String], include_tests: bool) -> bool {
 /// the builds without it read (with `every_build` those files are left out). A definition in an
 /// included fragment or in a module file whose macros reach its declaring module (`#[macro_use]`
 /// on the declaration, or an inner `#![macro_use]` in the file, either also through `cfg_attr`)
-/// reaches back into items already walked, so one that some considered build compiles, together
-/// with the `cfg`s that lead to the file and the ones that export the macro, is an error. A
-/// literal `include!` of a file that does not exist is an error too, reported after any such
-/// refusal: a local macro that shadows the `include!` is what makes the missing file irrelevant.
+/// reaches back into items already walked. That is an error only where a bare literal `include!`
+/// follows the declaration or the `include!` of that file, in its module, in a module declared
+/// after it, or, where the module's own macros are exported in turn, further up (`std::include!`
+/// and `core::include!` name the standard macro in any case), and only if some considered build
+/// compiles the definition together with the `cfg`s that lead to the file and the ones that
+/// export the macro. A literal `include!` of a file that does not exist is an error too, reported
+/// after any such refusal: a local macro that shadows the `include!` is what makes the missing
+/// file irrelevant. The `cfg`s of a definition are weighed only when a bare `include!` can be
+/// affected by it, and a search that needs more than a few thousand steps is an error.
 pub fn walk_module_files(
     module: String,
     path: PathBuf,
@@ -544,8 +606,14 @@ pub fn walk_module_variants(
             ancestors: Vec::new(),
             shadowed: Shadow::default(),
             exports_macros: None,
+            origin: None,
         }],
         variants: Vec::new(),
+        scopes: Vec::new(),
+        calls: Vec::new(),
+        leaks: Vec::new(),
+        settled: HashMap::new(),
+        error: None,
     };
     let mut missing: Option<String> = None;
     while let Some(Pending {
@@ -554,6 +622,7 @@ pub fn walk_module_variants(
         mut ancestors,
         shadowed,
         exports_macros,
+        origin,
     }) = walker.pending.pop()
     {
         // A target with only conditional paths need not have a conventional file. A literal
@@ -591,9 +660,10 @@ pub fn walk_module_variants(
         // and those of a module file in the module that declares it, below that line, when the
         // declaration or an inner `#![macro_use]` of the file says `#[macro_use]`. The walk has
         // already read those items, so it refuses a definition that some build compiles, rather
-        // than miss source. That takes one build that satisfies, all at once, the `cfg`s that lead
-        // to the file, the ones that export its macros and the definition's own: where they
-        // exclude each other nothing is shadowed.
+        // than miss source, once the walk is done and knows whether a bare `include!` follows it
+        // (`refuse_reaching_definitions`). That takes one build that satisfies, all at once, the
+        // `cfg`s that lead to the file, the ones that export its macros and the definition's own:
+        // where they exclude each other nothing is shadowed.
         let exported = if file.included {
             Some(Cfg::all_of(Vec::new()))
         } else {
@@ -603,27 +673,32 @@ pub fn walk_module_variants(
                 Cfg::any_of(alternatives)
             })
         };
-        if let Some(exported) = exported
-            && parsed
+        let scope = walker.scopes.len();
+        walker.scopes.push(Scope {
+            parent: origin,
+            exports: exported.clone(),
+        });
+        if let Some(exported) = &exported
+            && let Some(at) = origin
+        {
+            let builds: Vec<Vec<String>> = parsed
                 .items
                 .iter()
                 .filter_map(definition_guard)
-                .any(|defined| {
+                .map(|defined| {
                     let mut builds = file.cfg.clone();
                     builds.extend([exported.written.clone(), defined.written]);
-                    may_compile(&builds, include_tests)
+                    builds
                 })
-        {
-            return Err(format!(
-                "{}: a `macro_rules! include` that some build compiles here would shadow `include!` \
-                 in the file that {} it, which the module walk does not follow",
-                file.path.display(),
-                if file.included {
-                    "includes"
-                } else {
-                    "declares"
-                },
-            ));
+                .collect();
+            if !builds.is_empty() {
+                walker.leaks.push(Leak {
+                    at,
+                    file: file.path.display().to_string(),
+                    included: file.included,
+                    builds,
+                });
+            }
         }
         let here = file.path.parent().expect("a source file has a folder");
         walker.children(
@@ -634,12 +709,17 @@ pub fn walk_module_variants(
             &mut Vec::new(),
             &ancestors,
             &shadowed,
+            scope,
         );
+        if let Some(error) = walker.error.take() {
+            return Err(error);
+        }
         walker.variants.push(ModuleVariant {
             file,
             inline: Vec::new(),
         });
     }
+    walker.refuse_reaching_definitions()?;
     if let Some(error) = missing {
         return Err(error);
     }
@@ -654,15 +734,50 @@ struct Walker {
     include_tests: bool,
     pending: Vec<Pending>,
     variants: Vec<ModuleVariant>,
+    /// The lists of items the walk has read, in the order it opened them.
+    scopes: Vec<Scope>,
+    /// The bare literal `include!`s the walk follows, each as its scope and its item in it.
+    calls: Vec<(usize, usize)>,
+    /// The `macro_rules! include` that module files and fragments define for the items already
+    /// walked, until the walk knows whether a bare `include!` can reach them.
+    leaks: Vec<Leak>,
+    /// Whether some build has what a `cfg` guards, by the condition as written.
+    settled: HashMap<String, Option<bool>>,
+    /// The first search for a build that ran out of steps, which ends the walk.
+    error: Option<String>,
+}
+
+/// A list of items the walk reads in order: a file's, or an inline module's.
+struct Scope {
+    /// The scope and the item in it (a `mod` or an `include!`) that this one is read under; `None`
+    /// for the file the walk starts from.
+    parent: Option<(usize, usize)>,
+    /// The condition under which the macros this scope defines stay in scope below that item
+    /// (`#[macro_use]` on the module, or any `include!`), or `None` if they never do.
+    exports: Option<Cfg>,
+}
+
+/// A `macro_rules! include` in a module file or a fragment whose macros stay in scope below `at`,
+/// the item of an earlier scope that declares or includes it.
+struct Leak {
+    at: (usize, usize),
+    file: String,
+    included: bool,
+    /// For each definition, the conditions that hold all at once in a build that has it: the
+    /// `cfg`s that lead to the file, the ones that export its macros and its own.
+    builds: Vec<Vec<String>>,
 }
 
 /// When a bare `include!` names a macro other than the standard one: in every build the walk
 /// considers, or in the builds that satisfy one of `when`. Everywhere else the standard `include!`
-/// applies, so a file it names is read there.
+/// applies, so a file it names is read there. `undecided` holds the definitions and imports of
+/// `include` whose builds the walk has not yet looked up: it does so, in `Walker::settle`, only
+/// when a bare `include!` is read with them.
 #[derive(Clone, Default)]
 struct Shadow {
     always: bool,
     when: Vec<Cfg>,
+    undecided: Vec<Cfg>,
 }
 
 /// A file to read, the directory Rust uses for its conventional children, its physical
@@ -670,12 +785,14 @@ struct Shadow {
 /// module file, the condition under which the `#[macro_use]` on its declaration applies (also
 /// through `cfg_attr`; false when there is none), which its own inner `#![macro_use]` adds to
 /// when the file is read. `None` for a file no module declares: the root and included fragments.
+/// `origin` is the scope and the item in it that declare or include the file, `None` for the root.
 struct Pending {
     file: ModuleFile,
     dir: PathBuf,
     ancestors: Vec<PathBuf>,
     shadowed: Shadow,
     exports_macros: Option<Cfg>,
+    origin: Option<(usize, usize)>,
 }
 
 impl Walker {
@@ -697,24 +814,101 @@ impl Walker {
         guard.evaluate(|atom| (!self.include_tests && atom == "test").then_some(false))
     }
 
-    /// Whether something that exists under `guard` exists in some build the walk considers. The
-    /// atoms of `guard` are tried together, so `all(a, not(a))` is as impossible as `false`.
-    fn may_exist(&self, guard: &Cfg) -> bool {
-        may_compile(std::slice::from_ref(&guard.written), self.include_tests)
+    /// Whether something that exists under `guard`, in the file at `path`, exists in some build the
+    /// walk considers. The atoms of `guard` are tried together, so `all(a, not(a))` is as
+    /// impossible as `false`. `None`, with the error recorded, when the search runs out of steps.
+    fn may_exist(&mut self, guard: &Cfg, path: &Path) -> Option<bool> {
+        let include_tests = self.include_tests;
+        let found = *self
+            .settled
+            .entry(guard.written.clone())
+            .or_insert_with(|| {
+                may_compile_within(std::slice::from_ref(&guard.written), include_tests)
+            });
+        if found.is_none() {
+            self.error
+                .get_or_insert_with(|| search_gave_up(&path.display().to_string()));
+        }
+        found
     }
 
-    /// Record in `shadow` an import or a definition of `include` that exists under `guard`.
-    fn shadow_by(&self, shadow: &mut Shadow, guard: Cfg) {
-        if !self.may_exist(&guard) {
-            return;
+    /// Record in `shadow` the imports and definitions of `include` it has seen but not weighed,
+    /// those that exist in some build the walk considers. A bare `include!` in the file at `path`
+    /// is about to be read with them.
+    fn settle(&mut self, shadow: &mut Shadow, path: &Path) {
+        for guard in std::mem::take(&mut shadow.undecided) {
+            let exists = match self.holds(&guard) {
+                Some(decided) => decided,
+                None => self.may_exist(&guard, path).unwrap_or(false),
+            };
+            if !exists {
+                continue;
+            }
+            // `every_build` keeps what every build compiles, and the build that has the macro
+            // does not compile the file the standard `include!` names.
+            if self.every_build || self.holds(&guard) == Some(true) {
+                shadow.always = true;
+            } else {
+                shadow.when.push(guard);
+            }
         }
-        // `every_build` keeps what every build compiles, and the build that has the macro
-        // does not compile the file the standard `include!` names.
-        if self.every_build || self.holds(&guard) == Some(true) {
-            shadow.always = true;
-        } else {
-            shadow.when.push(guard);
+    }
+
+    /// Whether the item `call` of a scope is below the item `at` of another, as Rust reads them:
+    /// in that scope after it, or in a scope that is read under a later item of it.
+    fn is_below(&self, mut call: (usize, usize), at: (usize, usize)) -> bool {
+        loop {
+            if call.0 == at.0 {
+                return call.1 > at.1;
+            }
+            match self.scopes[call.0].parent {
+                Some(parent) => call = parent,
+                None => return false,
+            }
         }
+    }
+
+    /// Refuse a `macro_rules! include` of a module file or fragment that reaches back into items
+    /// already walked, when a bare literal `include!` below it could name it and some build has
+    /// it. The macros of a scope stay in scope further up, below its own declaration, where it
+    /// exports them in turn; the conditions of those exports join the builds that must hold.
+    fn refuse_reaching_definitions(&self) -> Result<(), String> {
+        for leak in &self.leaks {
+            let mut at = leak.at;
+            let mut exports: Vec<String> = Vec::new();
+            loop {
+                if self.calls.iter().any(|&call| self.is_below(call, at)) {
+                    for defined in &leak.builds {
+                        let builds: Vec<String> = defined.iter().chain(&exports).cloned().collect();
+                        match may_compile_within(&builds, self.include_tests) {
+                            Some(true) => {
+                                return Err(format!(
+                                    "{}: a `macro_rules! include` that some build compiles here \
+                                     would shadow the `include!` that follows in the file that {} \
+                                     it, which the module walk does not follow",
+                                    leak.file,
+                                    if leak.included {
+                                        "includes"
+                                    } else {
+                                        "declares"
+                                    },
+                                ));
+                            }
+                            Some(false) => {}
+                            None => return Err(search_gave_up(&leak.file)),
+                        }
+                    }
+                    break;
+                }
+                let scope = &self.scopes[at.0];
+                let (Some(exported), Some(parent)) = (&scope.exports, scope.parent) else {
+                    break;
+                };
+                exports.push(exported.written.clone());
+                at = parent;
+            }
+        }
+        Ok(())
     }
 
     /// Look through inline modules and literal `include!`s as well as regular file declarations.
@@ -727,18 +921,26 @@ impl Walker {
         inline: &mut Vec<usize>,
         ancestors: &[PathBuf],
         inherited: &Shadow,
+        scope: usize,
     ) {
         let mut shadowed = inherited.clone();
         // An import of `include` binds in the whole module; a `macro_rules! include` only below it.
-        for guard in items.iter().filter_map(import_guard) {
-            self.shadow_by(&mut shadowed, guard);
-        }
+        // Whether some build has either matters only to a bare `include!` read with them.
+        shadowed
+            .undecided
+            .extend(items.iter().filter_map(import_guard));
         for (index, item) in items.iter().enumerate() {
-            if let Some(guard) = index
-                .checked_sub(1)
-                .and_then(|previous| definition_guard(&items[previous]))
+            shadowed.undecided.extend(
+                index
+                    .checked_sub(1)
+                    .and_then(|previous| definition_guard(&items[previous])),
+            );
+            let bare = matches!(item, Item::Macro(invoked) if is_bare_include(&invoked.mac.path));
+            if bare
+                && let Some((_, attrs)) = literal_include(item, false)
+                && self.keep(attrs)
             {
-                self.shadow_by(&mut shadowed, guard);
+                self.settle(&mut shadowed, &file.path);
             }
             if let Some((relative, attrs)) = literal_include(item, shadowed.always)
                 && self.keep(attrs)
@@ -750,7 +952,7 @@ impl Walker {
                     .expect("a source file has a folder")
                     .join(relative.value());
                 included_file.cfg.extend(self.conditions(attrs));
-                if matches!(item, Item::Macro(invoked) if is_bare_include(&invoked.mac.path)) {
+                if bare {
                     // Where a macro that only some builds have shadows `include!`, the standard
                     // one, and so this file, belongs to the builds without it.
                     included_file.cfg.extend(
@@ -759,6 +961,7 @@ impl Walker {
                             .iter()
                             .map(|guard| format!("not({})", guard.written)),
                     );
+                    self.calls.push((scope, index));
                 }
                 included_file.included = true;
                 self.pending.push(Pending {
@@ -767,6 +970,7 @@ impl Walker {
                     ancestors: ancestors.to_vec(),
                     shadowed: shadowed.clone(),
                     exports_macros: None,
+                    origin: Some((scope, index)),
                 });
             }
             let Item::Mod(declared) = item else { continue };
@@ -820,8 +1024,20 @@ impl Walker {
                         included: file.included,
                     };
                     inline.push(index);
+                    let inner_scope = self.scopes.len();
+                    self.scopes.push(Scope {
+                        parent: Some((scope, index)),
+                        exports: macro_use_guard(&declared.attrs),
+                    });
                     self.children(
-                        &child, inner, &inner_dir, &inner_dir, inline, ancestors, &shadowed,
+                        &child,
+                        inner,
+                        &inner_dir,
+                        &inner_dir,
+                        inline,
+                        ancestors,
+                        &shadowed,
+                        inner_scope,
                     );
                     self.variants.push(ModuleVariant {
                         file: child,
@@ -856,6 +1072,7 @@ impl Walker {
                             macro_use_guard(&declared.attrs)
                                 .unwrap_or_else(|| Cfg::any_of(Vec::new())),
                         ),
+                        origin: Some((scope, index)),
                     });
                 }
             }
@@ -974,6 +1191,21 @@ fn main() { generated(); }
     /// below `mod defs;`, so `never-read.rs` does not exist.
     const INNER_MACRO_USE: &str = "mod defs;\ninclude!(\"never-read.rs\");\nfn main() {}\n";
 
+    /// A module exports the local macro of `NO_OP_INCLUDE` and nothing invokes it: the `include!`
+    /// below is written `std::include!`, so it names the standard macro.
+    const QUALIFIED_INCLUDE: &str =
+        "#[macro_use]\nmod defs;\nstd::include!(\"gen.rs\");\nfn main() { generated(); }\n";
+
+    /// A predicate that no build satisfies, which takes every combination of its first `atoms` atoms
+    /// to show: `all(any(a0, not(a0)), ..., z, not(z))`.
+    fn tangled(atoms: usize) -> String {
+        let mut parts: Vec<String> = (0..atoms)
+            .map(|n| format!("any(a{n}, not(a{n}))"))
+            .collect();
+        parts.extend(["z".to_owned(), "not(z)".to_owned()]);
+        format!("all({})", parts.join(", "))
+    }
+
     /// A fragment no build can compile under its gates is never opened, tests or not; only the
     /// standard `include!` is followed, written bare or as `std::include!`.
     #[test]
@@ -1006,7 +1238,8 @@ mod shadow {
     /// A `macro_rules!` macro shadows `include!` only below its definition, so the standard
     /// `include!` expands in `early` and the local macro in `late` (this layout compiles, with no
     /// `never-read.rs`). A shadowing macro that would reach back into a file the walk has read,
-    /// from an included fragment or a `#[macro_use]` module file, is refused.
+    /// from an included fragment or a `#[macro_use]` module file, is refused where a bare
+    /// `include!` follows it.
     #[test]
     fn a_local_include_macro_shadows_only_the_modules_below_it() {
         let root = tempfile::tempdir().unwrap();
@@ -1282,6 +1515,127 @@ mod shadow {
         }
     }
 
+    /// A `macro_rules! include` that a module file or a fragment exports is refused only where a
+    /// bare literal `include!` could name it: below its declaration or `include!` in the module,
+    /// in a module declared after it, or in one of the modules that export it in turn. The standard
+    /// macro written `std::include!` or `core::include!`, an `include!` above the export, a module
+    /// that does not export and a later module with no `include!` all compile as they do without
+    /// the macro, and the walk opens the same files.
+    #[test]
+    fn an_exported_include_macro_is_refused_only_where_a_bare_include_can_name_it() {
+        let root = tempfile::tempdir().unwrap();
+        let put = |name: &str, text: &str| fs::write(root.path().join(name), text).unwrap();
+        put("gen.rs", GENERATED);
+        put("defs.rs", NO_OP_INCLUDE);
+        for lib in [
+            "#[macro_use]\nmod defs;\nstd::include!(\"gen.rs\");\n",
+            "#[macro_use]\nmod defs;\ncore::include!(\"gen.rs\");\n",
+            "include!(\"defs.rs\");\nstd::include!(\"gen.rs\");\n",
+            "include!(\"gen.rs\");\n#[macro_use]\nmod defs;\n",
+            "include!(\"gen.rs\");\ninclude!(\"defs.rs\");\n",
+            "mod early { include!(\"gen.rs\"); }\n#[macro_use]\nmod defs;\n",
+            "mod defs;\ninclude!(\"gen.rs\");\n",
+        ] {
+            put("lib.rs", lib);
+            assert_eq!(
+                walk(root.path(), false).unwrap(),
+                ["defs.rs", "gen.rs", "lib.rs"],
+                "{lib}"
+            );
+        }
+        put("later.rs", "fn later() {}\n");
+        put("lib.rs", "#[macro_use]\nmod defs;\nmod later;\n");
+        assert_eq!(
+            walk(root.path(), false).unwrap(),
+            ["defs.rs", "later.rs", "lib.rs"]
+        );
+
+        let refused = |lib: &str, verb: &str| {
+            put("lib.rs", lib);
+            let error = walk(root.path(), false).unwrap_err();
+            assert!(
+                error.contains("defs.rs") && error.contains(verb),
+                "{lib}: {error}"
+            );
+        };
+        refused(
+            "#[macro_use]\nmod defs;\ninclude!(\"gen.rs\");\n",
+            "declares",
+        );
+        refused(
+            "#[macro_use]\nmod defs;\nmod inner { include!(\"gen.rs\"); }\n",
+            "declares",
+        );
+        put("later.rs", "include!(\"gen.rs\");\n");
+        refused("#[macro_use]\nmod defs;\nmod later;\n", "declares");
+        refused(
+            "include!(\"defs.rs\");\nmod inner { include!(\"gen.rs\"); }\n",
+            "includes",
+        );
+
+        // `outer` exports what `defs` exports to it only if it says `#[macro_use]` itself.
+        put(
+            "outer.rs",
+            "#[macro_use]\n#[path = \"defs.rs\"]\nmod defs;\n",
+        );
+        refused(
+            "#[macro_use]\nmod outer;\ninclude!(\"gen.rs\");\n",
+            "declares",
+        );
+        put("lib.rs", "mod outer;\ninclude!(\"gen.rs\");\n");
+        assert_eq!(
+            walk(root.path(), false).unwrap(),
+            ["defs.rs", "gen.rs", "lib.rs", "outer.rs"]
+        );
+    }
+
+    /// The `cfg`s of a definition of `include` are weighed only where a bare `include!` can be
+    /// affected by it, and within a bound: a predicate with no build that takes every combination
+    /// of its atoms to refute does not stall the walk where nothing follows the definition, and is
+    /// an error that names the file where something does.
+    #[test]
+    fn a_tangled_cfg_of_an_include_macro_is_weighed_only_where_a_bare_include_follows() {
+        let root = tempfile::tempdir().unwrap();
+        let put = |name: &str, text: &str| fs::write(root.path().join(name), text).unwrap();
+        let atoms = CFG_SEARCH_LIMIT.ilog2() as usize + 2;
+        let definition = format!("#[cfg({})]\n{NO_OP_INCLUDE}", tangled(atoms));
+        put("gen.rs", GENERATED);
+        put("defs.rs", &definition);
+        for lib in [
+            "#[macro_use]\nmod defs;\nstd::include!(\"gen.rs\");\n",
+            "include!(\"gen.rs\");\ninclude!(\"defs.rs\");\n",
+        ] {
+            put("lib.rs", lib);
+            assert_eq!(
+                walk(root.path(), false).unwrap(),
+                ["defs.rs", "gen.rs", "lib.rs"],
+                "{lib}"
+            );
+        }
+        put(
+            "lib.rs",
+            &format!("{definition}fn unrelated() {{}}\nstd::include!(\"gen.rs\");\n"),
+        );
+        assert_eq!(walk(root.path(), false).unwrap(), ["gen.rs", "lib.rs"]);
+
+        let inline = format!("{definition}include!(\"gen.rs\");\n");
+        for (lib, file) in [
+            (
+                "#[macro_use]\nmod defs;\ninclude!(\"gen.rs\");\n",
+                "defs.rs",
+            ),
+            ("include!(\"defs.rs\");\ninclude!(\"gen.rs\");\n", "defs.rs"),
+            (inline.as_str(), "lib.rs"),
+        ] {
+            put("lib.rs", lib);
+            let error = walk(root.path(), false).unwrap_err();
+            assert!(
+                error.contains(file) && error.contains("too many combinations"),
+                "{lib}: {error}"
+            );
+        }
+    }
+
     /// The whole-module predicate, which `sunrise-mod-api-gen` reads, keeps its meaning: a
     /// `macro_rules! include` among the items shadows, but an inline `#[macro_use]` module that
     /// holds one does not, so a standard `include!` above that module is still expanded.
@@ -1306,8 +1660,10 @@ mod shadow {
     /// the second, a normal build expands the standard `include!` and a test build, where the
     /// local macro is on, never reads `gen.rs`, which would stop on its `compile_error!`. In the
     /// third, an inner `#![macro_use]` in the module file makes its macro handle the call below
-    /// the declaration. In the last, the macro's `cfg` and the one that exports it exclude each
-    /// other, so every build with and without `fast` expands the standard `include!`.
+    /// the declaration. In the fourth, a module exports a local macro that nothing invokes, and
+    /// the `std::include!` below it reads `gen.rs`. In the last, the macro's `cfg` and the one
+    /// that exports it exclude each other, so every build with and without `fast` expands the
+    /// standard `include!`.
     #[test]
     #[ignore = "daily"]
     fn rustc_compiles_the_include_order_fixtures_the_walk_follows() {
@@ -1343,6 +1699,14 @@ mod shadow {
         put("defs.rs", &format!("#![macro_use]\n{NO_OP_INCLUDE}"));
         compile(&[]);
         assert!(walk(root.path(), false).unwrap_err().contains("defs.rs"));
+
+        put("lib.rs", QUALIFIED_INCLUDE);
+        put("defs.rs", NO_OP_INCLUDE);
+        compile(&[]);
+        assert_eq!(
+            walk(root.path(), false).unwrap(),
+            ["defs.rs", "gen.rs", "lib.rs"]
+        );
 
         let fast = ["--cfg", "feature=\"fast\""];
         let fragment_defs = format!("#[cfg(not(feature = \"fast\"))]\n{NO_OP_INCLUDE}");
