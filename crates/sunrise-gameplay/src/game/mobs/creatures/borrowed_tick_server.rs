@@ -4,6 +4,94 @@ use sunrise_gameplay_common::game::{
     combat_common::PlayerCredit, entity_memory::OffLevel, native_ticks,
 };
 use sunrise_gameplay_common::lan::mob_players::{GuestViews, acts_on_player};
+use sunrise_items::{
+    blocks::BlockFacts,
+    items::{BlockTagFlags, Items},
+};
+use sunrise_level::world::World;
+use sunrise_sim::parallel;
+use sunrise_world::registry::{BlockRegistry, BlockStateId};
+
+pub(super) const MIN_PARALLEL_MOBS: usize = 256;
+
+struct ClimbingBlocks<'a> {
+    world: &'a World,
+    facts: &'a BlockFacts,
+    registry: &'a BlockRegistry,
+    tags: &'a [u16],
+}
+
+impl ClimbingBlocks<'_> {
+    // Match Mob::on_climbable with both block-part callbacks absent.
+    fn on_climbable(&self, mob: &Mob) -> bool {
+        if mob.kind.flags.climber {
+            return mob.climbing;
+        }
+        let species = mob.species();
+        if sunrise_sim::mobs::equine::is_equine(species)
+            || matches!(
+                species,
+                Species::Ghast | Species::Phantom | Species::HappyGhast
+            )
+        {
+            return false;
+        }
+        let (x, y, z) = (
+            mob.position.x.floor() as i32,
+            mob.position.y.floor() as i32,
+            mob.position.z.floor() as i32,
+        );
+        let state = self.world.block(x, y, z);
+        let tags = self.tags.get(state.0 as usize).copied().unwrap_or(0);
+        if mob.extra.fall_flying && tags & BlockTagFlags::CAN_GLIDE_THROUGH != 0 {
+            return false;
+        }
+        if tags & BlockTagFlags::CLIMBABLE != 0 {
+            return true;
+        }
+        if !self.facts.get(state).has_class("TrapDoorBlock")
+            || self.property(state, "open") != Some("true")
+        {
+            return false;
+        }
+        let below = self.world.block(x, y - 1, z);
+        self.facts.get(below).name.as_ref() == "minecraft:ladder"
+            && self.property(below, "facing") == self.property(state, "facing")
+    }
+
+    fn property(&self, state: BlockStateId, name: &str) -> Option<&str> {
+        self.registry
+            .state(state)
+            .and_then(|state| state.properties.get(name))
+            .map(String::as_str)
+    }
+}
+
+pub(super) fn climbing_flags(mobs: &[Mob], view: &MobWorld<'_>, lanes: usize) -> Vec<bool> {
+    if lanes <= 1 || mobs.len() < MIN_PARALLEL_MOBS {
+        return mobs.iter().map(|mob| mob.on_climbable(view)).collect();
+    }
+    let blocks = ClimbingBlocks {
+        world: view.world,
+        facts: view.facts,
+        registry: view.registry,
+        tags: view.block_tag_flags,
+    };
+    parallel::par_map_on(mobs, MIN_PARALLEL_MOBS, lanes, |part, out| {
+        out.extend(part.iter().map(|mob| blocks.on_climbable(mob)));
+    })
+}
+
+pub(super) fn seen_on_helpers(
+    mobs: &[Mob],
+    uuid: Option<[i32; 4]>,
+    items: &Items,
+    lanes: usize,
+) -> Vec<Seen> {
+    parallel::par_map_on(mobs, MIN_PARALLEL_MOBS, lanes, |part, out| {
+        out.extend(part.iter().map(|mob| seen(mob, uuid, items)));
+    })
+}
 
 /// Route each player event to the player selected when it was emitted.
 /// Untagged events retain the previous per-tick guest binding.
@@ -1457,6 +1545,7 @@ impl crate::game::ServerGame<'_> {
             resume_air_answer = air_answer;
             retried_rider = retry_rider;
             sunrise_sim::mobs::living::section_writes::set_enabled(capture_sections);
+            laps.lap("creature_loop");
         }
         laps.lap("creature_loop");
         if dispatch_panic.is_none() && state.stand_result.is_ok() {
@@ -1861,4 +1950,133 @@ impl mod_api::InsideEntityAccess for GameMobInsideAccess<'_, '_> {
 #[cfg(any(test, feature = "test-support"))]
 thread_local! {
     pub static BORROWED_MOB_YIELDS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+}
+
+#[cfg(test)]
+#[test]
+fn mob_batch_preparation_matches_serial() {
+    use sunrise_core::geometry::border::BorderGeometry;
+    use sunrise_level::chunk::Chunk;
+    use sunrise_sim::mobs::{
+        finalize::set_baby, seen_grid::SeenGrid, world::with_resource_test_world,
+    };
+
+    let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
+        .map(std::path::PathBuf::from)
+        .unwrap_or_else(|| {
+            std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("../../.local/sunrise-client")
+                .join(sunrise_core::VANILLA_VERSION)
+        });
+    let ran = with_resource_test_world(
+        &root,
+        &[],
+        true,
+        true,
+        |world, registry| {
+            world.chunks.insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let ladder = registry.default_state("minecraft:ladder").unwrap();
+            for (x, block) in [
+                (0, "minecraft:ladder"),
+                (4, "minecraft:vine"),
+                (8, "minecraft:scaffolding"),
+                (15, "minecraft:ladder"),
+            ] {
+                world
+                    .set(x, 64, 0, registry.default_state(block).unwrap())
+                    .unwrap();
+            }
+            let mut trapdoor = registry
+                .state(registry.default_state("minecraft:oak_trapdoor").unwrap())
+                .unwrap()
+                .clone();
+            trapdoor.properties.insert("open".into(), "true".into());
+            trapdoor.properties.insert(
+                "facing".into(),
+                registry.state(ladder).unwrap().properties["facing"].clone(),
+            );
+            world.set(12, 64, 0, ladder).unwrap();
+            world
+                .set(12, 65, 0, registry.id(&trapdoor).unwrap())
+                .unwrap();
+        },
+        |view, types| {
+            let border = BorderGeometry::new([0.0, 0.0], 32.0, 30_000_000).unwrap();
+            let mut view = view.clone();
+            view.border = Some(&border);
+            let items = view.items.unwrap();
+            let rows = [
+                ("minecraft:villager", 0.5, 64.0, true),
+                ("minecraft:pig", 4.5, 64.0, true),
+                ("minecraft:pig", 8.5, 64.0, true),
+                ("minecraft:pig", 15.75, 64.0, true),
+                ("minecraft:pig", 16.25, 64.0, false),
+                ("minecraft:pig", 4.5, 64.0, false),
+                ("minecraft:pig", 12.5, 65.0, true),
+                ("minecraft:spider", 2.5, 64.0, true),
+                ("minecraft:horse", 0.5, 64.0, false),
+                ("minecraft:pig", 2.5, 64.0, false),
+            ];
+            let kinds = rows.map(|(kind, ..)| Arc::new(types.types[kind].clone()));
+            let mut mobs: Vec<Mob> = Vec::new();
+            let mut expected_flags = Vec::new();
+            for i in 0..MIN_PARALLEL_MOBS + rows.len() {
+                let row = i % rows.len();
+                let (_, x, y, climbing) = rows[row];
+                let mut mob =
+                    Mob::new_remote(i as u32 + 1, kinds[row].clone(), Vec3::new(x, y, 0.5), 0.0);
+                match row {
+                    0 => mob.extra.rider = Some(i as u32 + 2),
+                    1 => {
+                        set_baby(&mut mob, true);
+                        mob.extra.mount = Some(i as u32);
+                        mob.seated(i as u32, 0.25, mobs[i - 1].bounds());
+                    }
+                    2 => mob.removed = true,
+                    5 => mob.extra.fall_flying = true,
+                    7 => mob.climbing = true,
+                    _ => {}
+                }
+                mobs.push(mob);
+                expected_flags.push(climbing);
+            }
+            assert!(!view.world.loaded(16, 0));
+            assert!(mobs[1].is_baby() && !mobs[2].is_baby());
+            assert_ne!(mobs[1].dims(), mobs[2].dims());
+
+            let serial = climbing_flags(&mobs, &view, 1);
+            let shared = climbing_flags(&mobs, &view, 2);
+            assert_eq!(serial, expected_flags);
+            assert_eq!(shared, serial);
+
+            let uuid = Some([1, 2, 3, 4]);
+            for (mob, flag) in mobs.iter_mut().zip(shared) {
+                mob.on_climbable = flag;
+            }
+            let serial: Vec<_> = mobs.iter().map(|mob| seen(mob, uuid, items)).collect();
+            let shared = seen_on_helpers(&mobs, uuid, items, 2);
+            assert_eq!(serial.len(), shared.len());
+            for (expected, actual) in serial.iter().zip(&shared) {
+                assert_eq!(format!("{expected:?}"), format!("{actual:?}"));
+            }
+
+            let serial_grid = SeenGrid::new(serial.iter().map(|row| row.bounds));
+            let shared_grid = SeenGrid::new(shared.iter().map(|row| row.bounds));
+            let (mut serial_candidates, mut shared_candidates) = (Vec::new(), Vec::new());
+            let mut compared = 0;
+            for row in &serial[..rows.len()] {
+                let area = row.bounds.inflate(Vec3::new(2.0, 2.0, 2.0));
+                assert!(serial_grid.candidates(area, &mut serial_candidates));
+                assert!(shared_grid.candidates(area, &mut shared_candidates));
+                assert_eq!(serial_candidates, shared_candidates);
+                compared += serial_candidates.len();
+            }
+            assert!(compared >= mobs.len());
+            let whole_level = serial[0].bounds.inflate(Vec3::new(1000.0, 0.0, 1000.0));
+            assert!(!serial_grid.candidates(whole_level, &mut serial_candidates));
+            assert!(!shared_grid.candidates(whole_level, &mut shared_candidates));
+            assert_eq!(serial_candidates, shared_candidates);
+        },
+    );
+    assert!(ran || std::env::var_os("SUNRISE_TEST_RESOURCES").is_none());
 }

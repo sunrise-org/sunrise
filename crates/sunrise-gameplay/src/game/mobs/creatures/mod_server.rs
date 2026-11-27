@@ -6024,13 +6024,19 @@ impl crate::game::ServerGame<'_> {
         // yet (the first tick after a load, a fresh spawn) or has moved since
         // would be pushed out of a ladder or scaffolding. Refreshed here, from
         // where each mob stands now, before the snapshot others push it by.
-        let climbing: Vec<bool> = {
+        let prep_lanes = if self.common.mobs.len() >= borrowed_tick::MIN_PARALLEL_MOBS {
+            sunrise_sim::parallel::lanes()
+        } else {
+            1
+        };
+        let climbing = {
             let w = self.mob_world_base(&[]);
-            self.common
-                .mobs
-                .iter()
-                .map(|m| m.on_climbable(&w))
-                .collect()
+            let lanes = if prep_lanes > 1 && !mod_api::__private::mods().is_empty() {
+                1
+            } else {
+                prep_lanes
+            };
+            borrowed_tick::climbing_flags(&self.common.mobs, &w, lanes)
         };
         let inactive_equipment = if self.common.is_logical_server() {
             Some((
@@ -6053,7 +6059,12 @@ impl crate::game::ServerGame<'_> {
         }
         self.flush_pending_mob_parts();
         let mut snapshot = std::mem::take(&mut self.common.creatures.seen_buf);
-        snapshot.extend(self.common.mobs.iter().map(|m| seen(m, uuid, self.items())));
+        if prep_lanes > 1 && self.common.mobs.len() >= borrowed_tick::MIN_PARALLEL_MOBS {
+            snapshot =
+                borrowed_tick::seen_on_helpers(&self.common.mobs, uuid, self.items(), prep_lanes);
+        } else {
+            snapshot.extend(self.common.mobs.iter().map(|m| seen(m, uuid, self.items())));
+        }
         let mut events = std::mem::take(&mut self.common.creatures.event_buf);
         events.clear();
         let passenger_objects = self.retained_passenger_snapshot(uuid);
