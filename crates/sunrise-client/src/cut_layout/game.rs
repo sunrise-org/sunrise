@@ -540,6 +540,22 @@ pub(crate) fn run_with(
     {
         sunrise_level::spans::record_here(true);
     }
+    #[cfg(feature = "client")]
+    let mut startup_capture = options
+        .benchmark_profile
+        .filter(|profile| profile.startup && options.execution_role.is_client())
+        .map(|profile| {
+            let mut capture = sunrise_client::client_perf::StartupCapture::start(
+                &sunrise_gameplay_common::game::profile_capture_common::reports_dir(),
+                options
+                    .spikes
+                    .unwrap_or(sunrise_client::client_perf::SLOW_FRAME_MS),
+                profile.threads,
+            )?;
+            capture.mark("startup.resources.begin");
+            Ok::<_, std::io::Error>(capture)
+        })
+        .transpose()?;
     let vanilla_root = options.resources.clone();
     // Saves from before 1.13 upgrade with vanilla's tables, prepared from the player's jar.
     sunrise_world::datafix::set_resources(
@@ -776,6 +792,9 @@ pub(crate) fn run_with(
             &Progress::new(),
             &options.mods,
         )?;
+        if let Some(capture) = &mut startup_capture {
+            capture.mark("startup.resources.end");
+        }
         options.resources = loaded.root.clone();
         let resources = loaded.resources;
         let audio = if !options.execution_role.is_client() || options.headless {
@@ -800,6 +819,7 @@ pub(crate) fn run_with(
             std::mem::take(&mut loaded.client_applies),
             loaded.entity_models,
             None,
+            startup_capture,
             serve_integrated,
             run_component_harness_on_server,
             session_verifier(),

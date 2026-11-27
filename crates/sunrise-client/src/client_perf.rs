@@ -48,6 +48,77 @@ pub fn env_gpu(timing: Option<&OsStr>, detail: Option<&OsStr>) -> GpuSwitch {
 
 pub use sunrise_sim::perf_types::{Join, reports_dir};
 
+/// A capture opened before the client game exists.
+pub struct StartupCapture {
+    perf: Option<ClientPerf>,
+    gpu: GpuSwitch,
+    spans_were_on: bool,
+}
+
+impl StartupCapture {
+    pub fn start(dir: &Path, slow_ms: f32, threads: Threads) -> std::io::Result<Self> {
+        let mut perf = ClientPerf::new(slow_ms);
+        let gpu = env_gpu(
+            std::env::var_os(ENV_PASS_TIMING).as_deref(),
+            std::env::var_os(ENV_PASS_DETAIL).as_deref(),
+        );
+        let options = StartOptions {
+            threads,
+            gpu,
+            ..StartOptions::default()
+        };
+        let start = start_message(false, None);
+        let path = perf.start(
+            perf.now(),
+            dir,
+            Trigger::Benchmark,
+            &options,
+            start,
+            Vec::new(),
+        )?;
+        log::info!("Sunrise: profiling the client to {}", path.display());
+        let spans_were_on = sunrise_level::spans::recording_here();
+        sunrise_level::spans::record_here(true);
+        Ok(Self {
+            perf: Some(perf),
+            gpu,
+            spans_were_on,
+        })
+    }
+
+    pub fn mark(&mut self, name: &str) {
+        if let Some(perf) = &mut self.perf {
+            perf.mark(perf.now(), name);
+        }
+    }
+
+    pub fn handoff(mut self) -> (ClientPerf, GpuSwitch, bool) {
+        (
+            self.perf.take().expect("startup capture"),
+            self.gpu,
+            self.spans_were_on,
+        )
+    }
+}
+
+impl Drop for StartupCapture {
+    fn drop(&mut self) {
+        if let Some(perf) = &mut self.perf {
+            sunrise_level::spans::record_here(self.spans_were_on);
+            perf.stop(perf.now(), StopReason::Shutdown);
+            for saved in perf.take_saved(true) {
+                match saved {
+                    Ok(saved) => log::info!(
+                        "Sunrise: {}",
+                        sunrise_perf_format::files::saved_line(&saved.path)
+                    ),
+                    Err(e) => log::error!("Sunrise: could not write the performance capture: {e}"),
+                }
+            }
+        }
+    }
+}
+
 /// The client's health history, always on, and the capture running from it, if any.
 pub struct ClientPerf {
     perf: ServerPerf,

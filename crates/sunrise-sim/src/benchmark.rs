@@ -154,6 +154,12 @@ pub fn parse_set(value: &str) -> Result<(String, String), String> {
     Ok((name.to_owned(), setting.to_owned()))
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Profile {
+    pub startup: bool,
+    pub threads: crate::perf_types::Threads,
+}
+
 /// What the game knows about the run before it starts.
 pub struct Setup {
     pub scenario: String,
@@ -168,7 +174,7 @@ pub struct Setup {
     /// `--benchmark-set`: a switch and its value, applied before the world opens.
     pub set: Option<(String, String)>,
     /// `--profile`: record a .hzperf capture of the run and embed the report in it.
-    pub profile: bool,
+    pub profile: Option<Profile>,
 }
 
 /// Starts the driver; the game quits when it is done, and the report's path is printed.
@@ -176,7 +182,7 @@ pub fn start(requests: Sender<Request>, setup: Setup, keep_benchmark: fn(&Path, 
     thread::Builder::new()
         .name("sunrise-benchmark".into())
         .spawn(move || {
-            let control = Control(requests);
+            let control = Control(requests, setup.profile.is_some());
             match run(&control, setup, keep_benchmark) {
                 Ok(path) => println!("Sunrise: benchmark report {}", path.display()),
                 Err(e) => eprintln!("Sunrise: benchmark failed: {e}"),
@@ -186,7 +192,7 @@ pub fn start(requests: Sender<Request>, setup: Setup, keep_benchmark: fn(&Path, 
         .expect("spawn the benchmark thread");
 }
 
-struct Control(Sender<Request>);
+struct Control(Sender<Request>, bool);
 
 impl Control {
     fn call(&self, line: &str) -> Result<Value, String> {
@@ -207,6 +213,12 @@ impl Control {
             None => Ok(value),
         }
     }
+    fn mark(&self, phase: impl std::fmt::Display, edge: &str) {
+        if self.1 {
+            let _ = self.call(&format!("profile client mark benchmark.{phase}.{edge}"));
+        }
+    }
+
     fn status(&self) -> Value {
         self.call("status").unwrap_or(Value::Null)
     }
@@ -225,9 +237,11 @@ fn time_passes(control: &Control, scene: &str, report: &mut Report) -> Result<bo
     {
         return Ok(false);
     }
+    control.mark(format_args!("{scene}.gpu-passes"), "begin");
     control.call("gpu-passes on")?;
     let held = control.call(&format!("bench {}", SETTLE.as_secs_f64()));
     control.call("gpu-passes off")?;
+    control.mark(format_args!("{scene}.gpu-passes"), "end");
     for (pass, ms) in held?["gpu_passes"].as_object().into_iter().flatten() {
         let pass: String = pass
             .trim()
@@ -344,7 +358,7 @@ fn run(
     let written = report
         .write_to(&setup.game_dir.join("benchmarks"))
         .map_err(|e| e.to_string())?;
-    if setup.profile {
+    if setup.profile.is_some() {
         match control.call(&stop_capture(&written)) {
             Ok(done) => println!("Sunrise: benchmark capture {}", text(&done["path"])),
             Err(e) => eprintln!("Sunrise: the benchmark capture failed: {e}"),
@@ -354,7 +368,12 @@ fn run(
 }
 
 /// Starts the capture the run's frames feed; its trigger is the benchmark's.
-const START_CAPTURE: &str = "profile client start";
+fn start_capture(threads: crate::perf_types::Threads) -> &'static str {
+    match threads {
+        crate::perf_types::Threads::Main => "profile client start",
+        crate::perf_types::Threads::All => "profile client start --threads all",
+    }
+}
 
 /// Ends the capture with the written report embedded in it.
 fn stop_capture(report: &Path) -> String {
@@ -375,6 +394,9 @@ fn measure(
         _ => {}
     }
     replace_world(&setup.game_dir)?;
+    if setup.profile.is_some_and(|p| p.startup) {
+        control.mark("world", "begin");
+    }
     control.call(&format!("open {WORLD} {SEED} creative"))?;
     // The world opens on a worker: its folder may not exist yet when `open` replies.
     std::fs::create_dir_all(setup.game_dir.join("saves").join(WORLD)).map_err(|e| e.to_string())?;
@@ -386,8 +408,11 @@ fn measure(
     let loaded = wait_loaded(control, |_| true)?;
     report.metric("startup.world_ms", &[ms(loaded - setup.started)]);
 
-    if setup.profile {
-        control.call(START_CAPTURE)?;
+    if let Some(profile) = setup.profile {
+        if !profile.startup {
+            control.call(start_capture(profile.threads))?;
+        }
+        control.mark("world", "loaded");
     }
 
     match scenario {
@@ -462,6 +487,7 @@ fn load_scene(
     pitch: f64,
     report: &mut Report,
 ) -> Result<(), String> {
+    control.mark(format_args!("{name}.load"), "begin");
     let meshed = control.status()["meshed_sections"].as_f64().unwrap_or(0.0);
     let generated = control.status()["generated_chunks"].as_f64().unwrap_or(0.0);
     let [x, y, z] = start;
@@ -471,6 +497,7 @@ fn load_scene(
     control.call(&format!("fly {x} {y} {z} {x} {y} {z} 0.1 {pitch}"))?;
     control.call(&format!("look {:.3} {pitch}", yaw(start, end)))?;
     let loaded = wait_loaded(control, near(start))?;
+    control.mark(format_args!("{name}.load"), "end");
     let load = loaded - teleported;
     report.metric(&format!("chunks.{name}.load_ms"), &[ms(load)]);
     let status = control.status();
@@ -511,11 +538,13 @@ fn fly(
     steady: &mut Vec<(Instant, Instant)>,
 ) -> Result<Frames, String> {
     let ([x, y, z], [ex, ey, ez]) = (start, end);
+    control.mark(phase, "begin");
     let begin = Instant::now();
     let flight = control.call(&format!(
         "fly {x} {y} {z} {ex} {ey} {ez} {seconds} {pitch} raw"
     ))?;
     steady.push((begin, Instant::now()));
+    control.mark(phase, "end");
     frames_of(&flight, phase, 0)
 }
 
@@ -608,7 +637,9 @@ fn travel(
     trip(control, report, steady)?;
     let mut blocks = Vec::new();
     for repeat in 0..HOLD_BLOCKS {
+        control.mark(format_args!("hold.{repeat}"), "begin");
         let held = control.call(&format!("bench {BLOCK_SECONDS} raw"))?;
+        control.mark(format_args!("hold.{repeat}"), "end");
         blocks.push(frames_of(&held, "hold", repeat)?);
     }
     fps_metrics(report, "hold", &blocks);
@@ -642,8 +673,11 @@ fn ab_blocks(
             };
             control.call(&format!("{} {value}", switch.word))?;
             thread::sleep(plan.warmup);
+            let repeat = 2 * pair + n;
+            control.mark(format_args!("{phase}.{repeat}"), "begin");
             let held = control.call(&format!("bench {BLOCK_SECONDS} raw"))?;
-            blocks.push(frames_of(&held, phase, 2 * pair + n)?);
+            control.mark(format_args!("{phase}.{repeat}"), "end");
+            blocks.push(frames_of(&held, phase, repeat)?);
         }
     }
     steady.push((began, Instant::now()));
@@ -838,9 +872,17 @@ mod tests {
     fn the_capture_commands_are_the_ones_the_game_parses() {
         use crate::perf_types::{self as request, ProfileSide, Request, StartOptions};
         let words = |line: &str| request::parse(&line.split(' ').skip(1).collect::<Vec<_>>());
-        let start = words(START_CAPTURE).unwrap();
-        assert_eq!(start.side, Some(ProfileSide::Client));
-        assert_eq!(start.request, Request::Start(StartOptions::default()));
+        for threads in [request::Threads::Main, request::Threads::All] {
+            let start = words(start_capture(threads)).unwrap();
+            assert_eq!(start.side, Some(ProfileSide::Client));
+            assert_eq!(
+                start.request,
+                Request::Start(StartOptions {
+                    threads,
+                    ..StartOptions::default()
+                })
+            );
+        }
         let path = Path::new("/home/a b/game/benchmarks/game-20261108-travel.json");
         let stop = words(&stop_capture(path)).unwrap();
         assert_eq!(stop.side, Some(ProfileSide::Client));
@@ -941,7 +983,7 @@ mod tests {
                 }
             }
         });
-        let control = Control(tx);
+        let control = Control(tx, false);
         wait_loaded(&control, |_| true).expect("the scene loads");
         assert!(
             polls.load(std::sync::atomic::Ordering::SeqCst) > LATE,
@@ -981,7 +1023,7 @@ mod tests {
                 ..Default::default()
             };
             let mut report = Report::with_hardware(Kind::Game, App::default(), hardware);
-            let control = Control(tx);
+            let control = Control(tx, false);
             let timed = time_passes(&control, "forest", &mut report).expect("the wait runs");
             drop(control);
             (timed, server.join().unwrap(), report.metrics)
@@ -1047,7 +1089,7 @@ mod tests {
         let (tx, rx) = mpsc::channel::<Request>();
         let server = trip_server(rx);
         let mut report = Report::new(Kind::Game, App::default());
-        let control = Control(tx);
+        let control = Control(tx, false);
         let mut steady = Vec::new();
         travel(&control, &mut report, &mut steady).expect("the trip runs");
         drop(control);
@@ -1114,7 +1156,7 @@ mod tests {
             }
         });
         let mut report = Report::new(Kind::Game, App::default());
-        let control = Control(tx);
+        let control = Control(tx, false);
         let error = travel(&control, &mut report, &mut Vec::new()).unwrap_err();
         assert!(error.contains("no such weather"), "{error}");
         assert!(report.frames.is_empty());
@@ -1137,7 +1179,7 @@ mod tests {
             }
             lines
         });
-        let control = Control(tx);
+        let control = Control(tx, false);
         apply_set(&control, "section-draws", "indirect").unwrap();
         let error = apply_set(&control, "gpu-culling", "on").unwrap_err();
         assert!(error.contains("not offered here"), "{error}");
@@ -1219,7 +1261,7 @@ mod tests {
         let (tx, rx) = mpsc::channel::<Request>();
         let server = culling_server(rx, false, true, None);
         let mut report = vulkan_report();
-        let control = Control(tx);
+        let control = Control(tx, false);
         keeping_switch(&control, GPU_CULLING, || {
             ab_blocks(
                 &control,
@@ -1272,7 +1314,7 @@ mod tests {
     fn a_setting_that_was_on_is_on_again_after_the_run() {
         let (tx, rx) = mpsc::channel::<Request>();
         let server = culling_server(rx, true, true, None);
-        let control = Control(tx);
+        let control = Control(tx, false);
         keeping_switch(&control, GPU_CULLING, || {
             ab_blocks(
                 &control,
@@ -1293,7 +1335,7 @@ mod tests {
         let (tx, rx) = mpsc::channel::<Request>();
         // The 3rd block is A: the setting is off when it fails.
         let server = culling_server(rx, true, true, Some(3));
-        let control = Control(tx);
+        let control = Control(tx, false);
         let mut report = vulkan_report();
         let error = keeping_switch(&control, GPU_CULLING, || {
             ab_blocks(
@@ -1318,7 +1360,7 @@ mod tests {
     fn a_refused_switch_ends_the_run_with_the_games_reason_and_changes_nothing() {
         let (tx, rx) = mpsc::channel::<Request>();
         let server = culling_server(rx, false, false, None);
-        let control = Control(tx);
+        let control = Control(tx, false);
         let error = keeping_switch(&control, GPU_CULLING, || {
             apply_set(&control, "gpu-culling", "on")
         })

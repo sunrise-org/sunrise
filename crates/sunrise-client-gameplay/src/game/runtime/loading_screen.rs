@@ -446,6 +446,7 @@ impl Loading {
             std::mem::take(&mut loaded.client_applies),
             loaded.entity_models,
             Some((window, renderer)),
+            None,
             self.serve_integrated,
             self.run_component_harness,
             self.session_verifier.clone(),

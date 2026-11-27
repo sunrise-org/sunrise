@@ -61,7 +61,7 @@ pub struct Options {
     /// `--benchmark-set SWITCH=VALUE`: a graphics choice for the travel benchmark.
     pub benchmark_set: Option<(String, String)>,
     /// `--profile`: capture the benchmark run in a .hzperf file.
-    pub benchmark_profile: bool,
+    pub benchmark_profile: Option<sunrise_sim::benchmark::Profile>,
     /// Content selection and the compiled native runtime shared with resource loaders.
     pub mods: mods::ModsState,
     /// What this Game executes; independent of its current server connection.
@@ -186,7 +186,7 @@ impl Options {
             transfers: None,
             benchmark: None,
             benchmark_set: None,
-            benchmark_profile: false,
+            benchmark_profile: None,
             mods: mods::ModsState {
                 installation_side,
                 overrides_dir: context.game_dir.join(sunrise_mod_package::mod_list::DIR),
@@ -202,12 +202,15 @@ impl Options {
             session_stdin: false,
             offline_reason: None,
         };
+        let mut profile = false;
+        let mut profile_startup = false;
+        let mut profile_threads = None;
         for argument in rest {
             match argument {
                 Argument::Switch(arg) => match arg.as_str() {
                     "--help" | "-h" => {
                         println!(
-                            "Sunrise — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (sunrise-prepare)\n  --render-distance N     Chunks, 2..128 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --game-tests            Enable test-only mod content (or SUNRISE_GAME_TESTS=1/true)\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain, travel, ab:SWITCH), write its report to benchmarks/ and quit\n  --profile               With --benchmark: also write a performance capture that embeds the report\n  --benchmark-set S=V     With --benchmark travel: set gpu-culling, section-cull, section-sides or section-draws\n  --control               Accept sunrise-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/sunrise-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in sunrise-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --session-stdin         The same account as JSON on standard input\n  --game-dir DIR          Game folder: saves, options.txt, packs, mods (default: the working directory)\n  --home DIR              Logs and crash reports (default $SUNRISE_HOME, else the platform data folder)\n  --player-dir DIR        This player's own files when several play in one game folder: options.txt, logs, sunrise-player.txt, servers.dat, screenshots\n  --fullscreen            Open the window fullscreen\n  --launch-api            Print the Launch API version and options as JSON (docs/api/launch.md)\n  --dev-mod PATH          A content mod (.smod or folder) to develop: always on\n  --pregen                Add Sunrise's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
+                            "Sunrise — Minecraft Java Edition {} in Rust\n\n  --resources PATH        Prepared resources (sunrise-prepare)\n  --render-distance N     Chunks, 2..128 (default 12)\n  --world NAME            World folder under saves/ (default \"New World\")\n  --seed N                World seed for new worlds (default 0)\n  --width N, --height N   Window size (default 1280 x 720)\n  --creative              Creative mode (default survival)\n  --test-terrain          Simple test terrain instead of vanilla generation\n  --game-tests            Enable test-only mod content (or SUNRISE_GAME_TESTS=1/true)\n  --frames N              Exit after N frames (testing)\n  --world-frames N        Exit after N frames drawn in the world (testing)\n  --smoke-report PATH     Write a JSON report on exit\n  --benchmark SCENARIO    Run a benchmark (standard, village, forest, ocean, mountain, travel, ab:SWITCH), write its report to benchmarks/ and quit\n  --profile               With --benchmark: also write a performance capture that embeds the report\n  --profile-startup       With --profile: start before resources and the world load\n  --profile-threads MODE  With --profile: sample main (default) or all opted-in threads\n  --benchmark-set S=V     With --benchmark travel: set gpu-culling, section-cull, section-sides or section-draws\n  --control               Accept sunrise-ctl commands on a local socket\n  --control-socket PATH   Control socket path (default $XDG_RUNTIME_DIR/sunrise-control.sock)\n  --server HOST[:PORT]    Join a multiplayer server (offline mode) at start\n  --quickPlaySingleplayer WORLD  Open this world of saves/ at start, only if it exists (vanilla's)\n  --quickPlayMultiplayer HOST[:PORT]  The same as --server (vanilla's name)\n  --name NAME             Player name for multiplayer (default: generated once, kept in sunrise-player.txt)\n  --session-file PATH     Signed-in account from the launcher (read once, then deleted)\n  --session-stdin         The same account as JSON on standard input\n  --game-dir DIR          Game folder: saves, options.txt, packs, mods (default: the working directory)\n  --home DIR              Logs and crash reports (default $SUNRISE_HOME, else the platform data folder)\n  --player-dir DIR        This player's own files when several play in one game folder: options.txt, logs, sunrise-player.txt, servers.dat, screenshots\n  --fullscreen            Open the window fullscreen\n  --launch-api            Print the Launch API version and options as JSON (docs/api/launch.md)\n  --dev-mod PATH          A content mod (.smod or folder) to develop: always on\n  --pregen                Add Sunrise's /pregen command (docs/pregeneration.md)\n\nControls: mouse look, WASD move, Space jump, Left Shift sneak, Left Ctrl sprint,\nleft click break, right click place/use, 1-9/scroll hotbar, E inventory,\nQ drop, F3 debug, Esc pause.",
                             sunrise_core::VANILLA_VERSION
                         );
                         return Ok(None);
@@ -217,7 +220,8 @@ impl Options {
                         return Ok(None);
                     }
                     "--fullscreen" => o.fullscreen = true,
-                    "--profile" => o.benchmark_profile = true,
+                    "--profile" => profile = true,
+                    "--profile-startup" => profile_startup = true,
                     "--session-stdin" => o.session_stdin = true,
                     "--developer-single-player" => o.developer_single_player = true,
                     "--creative" => o.creative = true,
@@ -302,6 +306,7 @@ impl Options {
                                 sunrise_sim::benchmark::Scenario::parse(&value)?;
                                 o.benchmark = Some(value);
                             }
+                            "--profile-threads" => profile_threads = Some(value.parse()?),
                             "--benchmark-set" => {
                                 o.benchmark_set = Some(sunrise_sim::benchmark::parse_set(&value)?)
                             }
@@ -338,9 +343,16 @@ impl Options {
         if o.benchmark_set.is_some() && o.benchmark.as_deref() != Some("travel") {
             return Err("--benchmark-set needs --benchmark travel".into());
         }
-        if o.benchmark_profile && o.benchmark.is_none() {
+        if profile && o.benchmark.is_none() {
             return Err("--profile needs --benchmark".into());
         }
+        if (profile_startup || profile_threads.is_some()) && !profile {
+            return Err("--profile-startup and --profile-threads need --profile".into());
+        }
+        o.benchmark_profile = profile.then_some(sunrise_sim::benchmark::Profile {
+            startup: profile_startup,
+            threads: profile_threads.unwrap_or(sunrise_sim::perf_types::Threads::Main),
+        });
         o.validate_developer_single_player()?;
         Ok(Some(o))
     }

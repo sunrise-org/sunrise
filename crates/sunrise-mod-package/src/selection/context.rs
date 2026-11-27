@@ -177,6 +177,7 @@ impl LaunchArguments {
                 | "--game-tests"
                 | "--fullscreen"
                 | "--profile"
+                | "--profile-startup"
                 | "--session-stdin"
                 | "--creative"
                 | "--test-terrain"

@@ -326,6 +326,7 @@ pub fn start_client_game<'a>(
     client_applies: Vec<client_reload::PreparedClientReload>,
     entity_models: Option<Arc<sunrise_client::mobs::EntityModelDocument>>,
     window: Option<(Arc<Window>, Renderer)>,
+    startup_capture: Option<sunrise_client::client_perf::StartupCapture>,
     serve_integrated: Serve,
     run_component_harness: RunComponentHarness,
     session_verifier: SessionVerifier,
@@ -389,6 +390,12 @@ pub fn start_client_game<'a>(
     // After the mods: their templates are among the ids it lists.
     game.preload_registries();
     game.start_agent_control()?;
+    if let Some(capture) = startup_capture {
+        let profile = &mut game.client.profile;
+        (profile.perf, profile.gpu, profile.spans_were_on) = capture.handoff();
+        profile.started_by = sunrise_perf_format::v1::Trigger::Benchmark;
+        profile.env_tried = true;
+    }
     if let Some(scenario) = game.options.benchmark.clone() {
         let control = game
             .control

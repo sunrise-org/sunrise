@@ -427,6 +427,7 @@ impl ServerPerf {
                     options.window_s.unwrap_or(MAX_WINDOW_S),
                     options.sampler.over_ms.unwrap_or(self.slow.threshold_ms()),
                     &options.sampler,
+                    options.trigger == Trigger::Benchmark,
                 )
             })
             .flatten();
