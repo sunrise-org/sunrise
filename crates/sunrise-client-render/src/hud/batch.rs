@@ -455,6 +455,13 @@ impl HudBatch {
         self.full_target_since(start);
     }
 
+    pub fn fill_gradient_target(&mut self, atlas: &HudAtlas, top: u32, bottom: u32) {
+        let [x, y, w, h] = self.target_rect();
+        let start = self.vertices.len();
+        self.fill_gradient(atlas, (x, y, w, h), top, bottom);
+        self.full_target_since(start);
+    }
+
     pub fn shift_to_target_since(&mut self, start: usize, offset: [f32; 2]) {
         if self.content_clip.is_some() {
             for vertex in &mut self.vertices[start..] {
@@ -1242,6 +1249,62 @@ mod bounds_tests {
         );
         batch.clip_since(0, 40.0, 40.0, 41.0, 41.0);
         assert_eq!(batch.visible_vertex_bounds(0), None);
+    }
+
+    #[test]
+    fn depth_clip_and_glint_offset_before_rounding_and_scale_with_the_capture() {
+        let frame = GuiFrame::from_insets([853, 481], 2, true, Some([15, 9, 7, 3]));
+        for covering in [false, true] {
+            let mut batch = HudBatch::for_frame(&frame);
+            let quad = [[0.0, 0.0], [5.0, 0.0], [5.0, 6.0], [0.0, 6.0]];
+            batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
+            batch.quad(quad, [[0.0; 2]; 4], u32::MAX);
+            let (device, visible) = if covering {
+                batch.depth_glint_over(0, 6, [-1.25, -0.75], [5.25, 6.75]);
+                ([13, 8, 14, 16], [16, 10, 11, 14])
+            } else {
+                batch.depth_glint_since(0, 6, [-1.25, -0.75, 5.25, 6.75]);
+                ([13, 8, 13, 15], [16, 10, 10, 13])
+            };
+            assert_eq!(
+                batch.blends,
+                [
+                    (0..6, Blend::Depth(device)),
+                    (6..12, Blend::DepthGlint(device))
+                ]
+            );
+            for (range, blend) in &batch.blends {
+                assert_eq!(
+                    batch
+                        .scissored_intervals(range.clone(), *blend, frame.target, 1.0)
+                        .next(),
+                    Some((range.clone(), visible))
+                );
+                assert_eq!(
+                    batch
+                        .scissored_intervals(range.clone(), *blend, [1706, 962], 2.0)
+                        .next(),
+                    Some((range.clone(), visible.map(|edge| edge * 2)))
+                );
+            }
+        }
+    }
+
+    #[test]
+    fn target_gradient_covers_every_edge_and_keeps_its_colors() {
+        let frame = GuiFrame::from_insets([853, 481], 2, true, Some([15, 9, 7, 3]));
+        let mut batch = HudBatch::for_frame(&frame);
+        batch.fill_gradient_target(&HudAtlas::boot(), 0x8010_1010, 0xD010_1010);
+        assert_eq!(batch.vertices.first().unwrap().color, 0x8010_1010);
+        assert_eq!(batch.vertices.last().unwrap().color, 0xD010_1010);
+        let (bounds, _) = batch.quad_scissors().next().unwrap();
+        assert_eq!(bounds, [-8.0, -5.0, 418.5, 235.5]);
+        assert_eq!(
+            batch
+                .scissored_intervals(0..6, Blend::Alpha, frame.target, 1.0)
+                .next(),
+            Some((0..6, [0, 0, 853, 481]))
+        );
     }
 
     #[test]

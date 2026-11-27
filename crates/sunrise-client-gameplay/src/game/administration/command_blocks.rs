@@ -185,9 +185,8 @@ impl crate::game::ClientGame<'_> {
         let mid = (w / 2.0).floor();
         // Screen.extractBackground of an isInGameUi screen: the dimmed world,
         // with no blur and no menu background.
-        batch.fill_gradient(
+        batch.fill_gradient_target(
             atlas,
-            (0.0, 0.0, w, h),
             rgba(0x10, 0x10, 0x10, 0xC0),
             rgba(0x10, 0x10, 0x10, 0xD0),
         );

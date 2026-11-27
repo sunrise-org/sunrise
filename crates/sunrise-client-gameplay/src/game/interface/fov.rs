@@ -355,7 +355,14 @@ impl ClientGame<'_> {
         batch.shift_to_target_since(start, [left, top]);
         let black = 0xff00_0000;
         batch.fill(atlas, x, y, w, top.max(0.0), black);
-        batch.fill(atlas, x, y + top + side, w, top.max(0.0), black);
+        batch.fill(
+            atlas,
+            x,
+            y + top + side,
+            w,
+            (h - (top + side)).max(0.0),
+            black,
+        );
         batch.fill(
             atlas,
             x,
@@ -368,7 +375,7 @@ impl ClientGame<'_> {
             atlas,
             x + left + side,
             y + top.max(0.0),
-            left.max(0.0),
+            (w - (left + side)).max(0.0),
             side.min(h),
             black,
         );

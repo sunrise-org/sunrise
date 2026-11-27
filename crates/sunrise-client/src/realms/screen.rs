@@ -8221,7 +8221,7 @@ impl Screen {
                 // 6 apart and at most 150 wide (`RealmsPopups` picks the title).
                 // `Screen.extractTransparentBackground`: `fillGradient` from
                 // 0xC0101010 to 0xD0101010 down the screen.
-                batch.fill_gradient(atlas, (0.0, 0.0, w, h), 0xC010_1010, 0xD010_1010);
+                batch.fill_gradient_target(atlas, 0xC010_1010, 0xD010_1010);
                 let message = match popup {
                     Popup::Leave(_) => t("mco.configure.world.leave.question.line1"),
                     Popup::ResourcePack { .. } => t("mco.configure.world.resourcepack.question"),

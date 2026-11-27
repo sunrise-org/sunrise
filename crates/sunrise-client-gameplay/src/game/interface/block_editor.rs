@@ -316,10 +316,9 @@ impl crate::game::ClientGame<'_> {
             return;
         };
         let atlas = &self.client.gui.atlas;
-        let (w, h) = (batch.width, batch.height);
-        batch.fill_gradient(
+        let w = batch.width;
+        batch.fill_gradient_target(
             atlas,
-            (0.0, 0.0, w, h),
             rgba(0x10, 0x10, 0x10, 0xC0),
             rgba(0x10, 0x10, 0x10, 0xD0),
         );

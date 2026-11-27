@@ -884,9 +884,8 @@ impl crate::game::ClientGame<'_> {
         let atlas = &self.client.gui.atlas;
         let (w, h) = (batch.width, batch.height);
         // Screen.extractTransparentBackground.
-        batch.fill_gradient(
+        batch.fill_gradient_target(
             atlas,
-            (0.0, 0.0, w, h),
             rgba(0x10, 0x10, 0x10, 0xC0),
             rgba(0x10, 0x10, 0x10, 0xD0),
         );
