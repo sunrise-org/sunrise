@@ -91,6 +91,9 @@ pub struct PackInputs {
     pub end_flash_direction: Vec3,
     /// The dimension type's `ambient_light` (`ambientLight`).
     pub ambient_light: f32,
+    /// `bossBattle`: the kind of boss event the client's boss bars show, 0 none, 1 custom,
+    /// 2 ender dragon, 3 wither, 4 raid (`BossOverlay::boss_battle`, decision D-12).
+    pub boss_battle: i32,
     /// What the uniforms tied to the view read from the camera entity.
     pub view: ViewEntity,
     /// Under `SUNRISE_STILL`, the world's ticks: the pack's clock (`frameTimeCounter`,
@@ -413,6 +416,7 @@ pub const NAMES: &[&str] = &[
     "hasSkylight",
     "hasCeiling",
     "cloudTime",
+    "bossBattle",
     // Sunrise's own: Sunrise Extras' dynamic lights (`dynamic_light.rs`), nearest first: how
     // many, and each one's camera-relative position and light level (zeros past the count).
     "sunriseDynamicLightCount",
@@ -1098,6 +1102,7 @@ impl FrameUniforms {
                 "cloudHeight" => Value::f(&[inputs.cloud_height]),
                 "cloudTime" => Value::f(&[inputs.cloud_time]),
                 "ambientLight" => Value::f(&[inputs.ambient_light]),
+                "bossBattle" => Value::i(&[inputs.boss_battle]),
                 // Iris 1.11.7 gave both the same value in every scene measured.
                 "playerMood" | "constantMood" => Value::f(&[inputs.view.mood]),
                 // renderStage is NONE outside gbuffers draws.
@@ -2999,6 +3004,9 @@ fn dynamic_light_index(name: &str) -> Option<usize> {
     (k < sunrise_render_core::MAX_DYNAMIC_LIGHTS).then_some(k)
 }
 
+#[cfg(test)]
+#[path = "pack_uniforms/boss_battle_test.rs"]
+mod boss_battle_test;
 #[cfg(test)]
 #[path = "pack_uniforms/ftransform_test.rs"]
 mod ftransform_test;

@@ -311,10 +311,11 @@ fn parse(bytes: &[u8]) -> Result<(String, Value), serde_json::Error> {
     }
 }
 
-/// Whether the file's own `neoforge:conditions` may disable it: the tool does not know which mods
-/// and features the player has, so a file that carries them is not read.
+/// Whether the file's own load conditions (`neoforge:conditions` or Fabric API's
+/// `fabric:load_conditions`) may disable it: the tool does not know which mods and features the
+/// player has, so a file that carries them is not read.
 fn conditional(value: &Value) -> bool {
-    value.get("neoforge:conditions").is_some()
+    value.get("neoforge:conditions").is_some() || value.get("fabric:load_conditions").is_some()
 }
 
 impl References<'_> {

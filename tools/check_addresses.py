@@ -10,8 +10,8 @@ tools/addresses.json says where each host may be:
 - `vanilla`: the endpoints vanilla itself contacts; allowed anywhere;
 - `not_addresses`: strings that look like hosts but are not contacted (a suffix matcher, a translation key);
 - `renamed_hosts`: a host's old name to its new one, so renaming a domain doesn't count as adding a host;
-- `allowed`: today's addresses outside a home, "path host". They only go away: with --base, a branch may move
-  an entry to another file but may not add a host nor grow the list.
+- `allowed`: today's addresses outside a home, "path host". Unused entries fail the check. With --base, a branch
+  may move an entry to another file but may not add a host nor grow the list.
 
     python3 tools/check_addresses.py                     # the check
     python3 tools/check_addresses.py --base origin/main  # and nothing added since the base
@@ -227,7 +227,7 @@ def scan(files=None):
 
 
 def check(config, found, base=None):
-    """(problems, notes)."""
+    """Violations of the address list and its shrinking-only policy."""
     homes = set(config.get("homes", []))
     vanilla = set(config.get("vanilla", []))
     not_addresses = config.get("not_addresses", {})
@@ -253,9 +253,9 @@ def check(config, found, base=None):
         if len(allowed) > len(before):
             problems.append(f"'allowed' in {CONFIG_PATH} grew from {len(before)} to {len(allowed)} entries; it only "
                             f"shrinks ({DOC})")
-    notes = [f"{rel} {host}: no longer there; you can remove it from 'allowed' in {CONFIG_PATH}"
-             for rel, host in sorted(allowed - used)]
-    return problems, notes
+    for rel, host in sorted(allowed - used):
+        problems.append(f"{rel} {host}: unused allowance; remove it from 'allowed' in {CONFIG_PATH}")
+    return problems
 
 
 def base_config(base):
@@ -294,9 +294,7 @@ def main(argv=None):
             print(f"{host}: {', '.join(sorted(by_host[host]))}")
         return 0
     base = base_config(args.base) if args.base else None
-    problems, notes = check(config, found, base)
-    for note in notes:
-        print(f"note: {note}")
+    problems = check(config, found, base)
     if problems:
         print(f"Address check failed ({DOC}):")
         for problem in problems:

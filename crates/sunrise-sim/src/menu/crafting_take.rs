@@ -147,8 +147,13 @@ impl Menu {
         if self.state.slots[s].role != Role::CraftResult {
             return;
         }
-        // ResultSlot.checkTakeAchievements -> Item.onCraftedBy mutates the
-        // actual taken stack, before the inputs are consumed.
+        // ResultSlot.checkTakeAchievements: ItemStack.onCraftedBy with the removeCount the take
+        // asked for (the statistic, then Item.onCraftedBy mutating the actual taken stack),
+        // before awardUsedRecipes and before the inputs are consumed.
+        let removed = std::mem::take(&mut self.state.craft_remove_count);
+        if removed > 0 {
+            self.crafted_by(taken, removed as i32);
+        }
         if taken.count > 0 {
             Self::map_crafted(env.maps, taken);
         }
@@ -165,7 +170,6 @@ impl Menu {
         {
             let id = crate::crafting::qualified(id);
             if matches!(self.state.kind, Kind::Mod(_)) {
-                self.crafted_by(taken, taken.count as i32);
                 self.state.crafted.push((id, grid.clone()));
             } else {
                 self.state.crafted.push((id.clone(), grid.clone()));

@@ -11,7 +11,7 @@ import tempfile
 import time
 import unittest
 
-from tests.os_support import BASH, POSIX_BASH, needs_runner_shell
+from tests.os_support import BASH, POSIX_BASH, needs_command, needs_gnu_timeout, needs_runner_shell, needs_symlinks
 from tests.test_ci_concurrency import expression_value
 from tools.ci import vendored_yaml
 
@@ -151,6 +151,7 @@ class DynaRoutingTests(unittest.TestCase):
                 self.assertEqual(result.strip(), f"self_hosted={str(expected).lower()}")
 
     @unittest.skipIf(os.name == "nt", "the script installs dependencies on Dyna's Ubuntu runner")
+    @needs_command("sha256sum")
     def test_cached_dependencies_export_persistent_paths(self):
         script = ROOT / "tools/ci/dyna_ci_deps.sh"
         with tempfile.TemporaryDirectory() as directory:
@@ -172,6 +173,8 @@ class DynaRoutingTests(unittest.TestCase):
             self.assertIn(str(cargo_home / "bin"), pathfile.read_text())
 
     @unittest.skipUnless(POSIX_BASH and os.name != "nt", "needs the runner's bash")
+    @needs_gnu_timeout
+    @needs_command("sha256sum")
     def test_baked_packages_skip_the_download_and_a_partial_image_falls_back(self):
         script = ROOT / "tools/ci/dyna_ci_deps.sh"
         for missing, extraction_error in ((False, False), (True, False), (True, True)):
@@ -230,11 +233,12 @@ class DynaRoutingTests(unittest.TestCase):
             stubs.mkdir()
             (stubs / "apt-get").write_text(
                 '#!/usr/bin/env bash\n'
-                f'n=$(cat "{root}/count" 2>/dev/null || echo 0); echo $((n + 1)) > "{root}/count"\n'
-                f'if [ "$n" -lt {failures} ]; then echo "E: File has unexpected size (mirror sync)" >&2; exit 100; fi\n')
-            (stubs / "dpkg-deb").write_text("#!/usr/bin/env bash\n")
+                f'n=$(cat "{root.as_posix()}/count" 2>/dev/null || echo 0); echo $((n + 1)) > "{root.as_posix()}/count"\n'
+                f'if [ "$n" -lt {failures} ]; then echo "E: File has unexpected size (mirror sync)" >&2; exit 100; fi\n',
+                encoding="utf-8", newline="\n")
+            (stubs / "dpkg-deb").write_text("#!/usr/bin/env bash\n", encoding="utf-8", newline="\n")
             # No baked packages: the rootless download fallback is what these cases exercise.
-            (stubs / "dpkg-query").write_text("#!/usr/bin/env bash\nexit 1\n")
+            (stubs / "dpkg-query").write_text("#!/usr/bin/env bash\nexit 1\n", encoding="utf-8", newline="\n")
             for stub in stubs.iterdir():
                 stub.chmod(0o755)
             home = root / "home"
@@ -248,7 +252,9 @@ class DynaRoutingTests(unittest.TestCase):
             count = int((root / "count").read_text()) if (root / "count").exists() else 0
             return result, count
 
-    @unittest.skipUnless(POSIX_BASH and os.name != "nt", "needs the runner's bash")
+    @needs_runner_shell
+    @needs_gnu_timeout
+    @needs_command("sha256sum")
     def test_apt_is_retried_a_bounded_number_of_times_and_then_succeeds(self):
         # The first command (update) fails twice, then both commands pass: 2 failures + 2 successes.
         result, count = self.run_deps_with_stub_apt(failures=2)
@@ -256,7 +262,9 @@ class DynaRoutingTests(unittest.TestCase):
         self.assertEqual(count, 4)
         self.assertEqual(result.stderr.count("retrying in"), 2)
 
-    @unittest.skipUnless(POSIX_BASH and os.name != "nt", "needs the runner's bash")
+    @needs_runner_shell
+    @needs_gnu_timeout
+    @needs_command("sha256sum")
     def test_apt_that_keeps_failing_fails_with_the_real_error_after_the_last_try(self):
         result, count = self.run_deps_with_stub_apt(failures=99)
         self.assertEqual(result.returncode, 100)
@@ -309,8 +317,10 @@ class DynaRoutingTests(unittest.TestCase):
             self.assertEqual(block["needs"], "changes")
             self.assertIn("timeout-minutes", block)
             self.assertEqual(block["if"], conditions[id(block)])
+        for block in (blocks["lint"], runtime, static):
             guard = block["steps"][0]
-            self.assertEqual(guard["if"], "needs.changes.result != 'success'")
+            self.assertEqual(guard["if"], "needs.changes.result != 'success' || (github.event_name == 'workflow_dispatch' "
+                             "&& inputs.pr != '' && needs.changes.outputs.pr_merge == '')")
             self.assertEqual(guard["run"], "exit 1")
         # verify-static routes as verify does, except that a pull request outside the gate and a contributor's
         # pull request stay on GitHub's runners, and our pool gives it a medium runner (it compiles nothing heavy).
@@ -614,20 +624,94 @@ class DynaRoutingTests(unittest.TestCase):
         self.assertIn("steps.setup.outcome == 'success'", condition)
         self.assertNotIn("always()", condition)
 
-    @unittest.skipUnless(POSIX_BASH, "needs a bash that is not WSL's")
-    def test_missing_prepared_data_fails_the_leg(self):
-        shard = workflow("ignored-tests.yml")["jobs"]["ignored-tests-shards"]
-        script = next(step["run"] for step in shard["steps"] if step.get("run", "").startswith("for dir "))
-        with tempfile.TemporaryDirectory() as directory:
-            script = script.replace("/cache/sunrise-local", directory + "/missing")
-            summary = Path(directory) / "summary"
-            for event in ("push", "workflow_dispatch"):
+    @needs_runner_shell
+    @needs_symlinks
+    def test_prepared_data_is_checked_before_checkout_or_setup(self):
+        names = ("minecraft", "datagen", "sunrise-client", "tools")
+        event = "workflow_dispatch"
+        for filename, job_name in (("hot-paths.yml", "measure"), ("ignored-tests.yml", "ignored-tests-shards")):
+            with self.subTest(job=job_name), tempfile.TemporaryDirectory() as directory:
+                job = workflow(filename)["jobs"][job_name]
+                step = job["steps"][0]
+                self.assertEqual(step["name"], "Check runner prepared data")
+                self.assertNotIn("if", step)
+                self.assertNotEqual(step.get("continue-on-error"), "true")
+                is_shard = job_name == "ignored-tests-shards"
+                if is_shard:
+                    self.assertEqual(step["env"]["EVENT"], "${{ github.event_name }}")
+
+                root = Path(directory)
+                seed = root / "sunrise-local"
+                for name in names:
+                    (seed / name).mkdir(parents=True)
+                script = step["run"].replace("/cache/sunrise-local", seed.as_posix())
+                summary = root / "summary"
                 env = dict(os.environ, EVENT=event, GITHUB_STEP_SUMMARY=str(summary))
-                run = subprocess.run(["bash", "-e", "-c", script], env=env,
-                                     capture_output=True, text=True)
-                self.assertEqual(run.returncode, 1)
-                self.assertIn(f"Prepared data unavailable: minecraft ({event})", summary.read_text())
-                summary.unlink()
+
+                def check(unavailable=None):
+                    summary.write_text("")
+                    run = subprocess.run(["bash", "-e", "-c", script], cwd=root, env=env,
+                                         capture_output=True, text=True)
+                    self.assertEqual(run.stderr, "")
+                    self.assertEqual(run.returncode, 1 if unavailable else 0, run.stdout)
+                    self.assertEqual(run.stdout, f"::error::prepared data unavailable on this runner: {unavailable}\n"
+                                     if unavailable else "")
+                    self.assertEqual(summary.read_text(), f"Prepared data unavailable: {unavailable} ({event})\n"
+                                     if unavailable and is_shard else "")
+
+                check()
+                for name in names:
+                    with self.subTest(missing=name):
+                        (seed / name).rmdir()
+                        try:
+                            check(name)
+                        finally:
+                            (seed / name).mkdir()
+
+                tools = seed / "tools"
+                tools.rmdir()
+                tools.touch(mode=0o755)
+                check("tools")
+                tools.unlink()
+                tools.mkdir()
+
+                client = seed / "sunrise-client"
+                legacy = client.rename(seed / "horizon-client")
+                client.symlink_to(legacy.name, target_is_directory=True)
+                check()
+                for mode, denied in ((0o100, os.R_OK), (0o400, os.X_OK)):
+                    with self.subTest(alias_target_mode=oct(mode)):
+                        legacy.chmod(mode)
+                        try:
+                            # A privileged user or a filesystem without Unix modes may still have access.
+                            if not os.access(client, denied):
+                                check("sunrise-client")
+                        finally:
+                            legacy.chmod(0o700)
+                legacy.rmdir()
+                check("sunrise-client")
+
+    def test_ignored_shard_finalizers_run_only_after_seed_readiness(self):
+        job = workflow("ignored-tests.yml")["jobs"]["ignored-tests-shards"]
+        seed_id = job["steps"][0]["id"]
+        finalizers = ("Keep a failed run's full output beyond this slot", "Upload the leg report",
+                      "Record data-leg end and compiler cache")
+        diagnostic = step_named(job, "Retain typed preparation diagnostics only")["if"]
+        for case, seed, data, job_status, finalize, diagnose in (
+            ("preflight refusal", "failure", "skipped", "failure", False, False),
+            ("preparation failure", "success", "failure", "failure", True, True),
+            ("test failure", "success", "success", "failure", True, False),
+            ("clean run", "success", "success", "success", True, False),
+        ):
+            steps = {seed_id: {"outcome": seed}, "data": {"outcome": data}}
+            with self.subTest(case=case, step="preparation diagnostic"):
+                # This step is evaluated before the tests, even if they later fail.
+                prep_status = "success" if data == "success" else "failure"
+                self.assertIs(expression_value(diagnostic, {}, steps=steps, job_status=prep_status), diagnose)
+            for name in finalizers:
+                with self.subTest(case=case, step=name):
+                    condition = step_named(job, name)["if"]
+                    self.assertIs(expression_value(condition, {}, steps=steps, job_status=job_status), finalize)
 
     def test_telemetry_ingest_checks_require_manual_dispatch(self):
         self.assertEqual(set(workflow("telemetry-server.yml")["on"]), {"workflow_dispatch"})
@@ -770,7 +854,7 @@ class IgnoredTestsKeepTests(unittest.TestCase):
     def test_the_run_step_writes_where_the_keep_step_reads(self):
         run = self.steps["Run the ignored tests that need prepared data"]["env"]
         step = self.steps[self.STEP]
-        self.assertEqual(step["if"], "always()")
+        self.assertEqual(step["if"], "always() && steps.seed.outcome == 'success'")
         self.assertEqual(run["IGNORED_TESTS_PRIVATE_LOGS"], step["env"]["PRIVATE_LOGS"])
         self.assertEqual(step["env"]["NAME"],
                          "${{ github.run_id }}-${{ github.run_attempt }}-${{ strategy.job-index }}")
@@ -960,6 +1044,7 @@ class ParityWorkflowTests(unittest.TestCase):
                          ([], ["loot_a"], False, scope))
         self.assertEqual(merged["shares"], {"reported": 1, "expected": 3})
 
+    @needs_symlinks
     def test_vanilla_derived_scratch_is_deleted_when_the_job_ends(self):
         self.initialise()
         build = self.root
@@ -1034,11 +1119,17 @@ class ScheduledDynaJobTests(unittest.TestCase):
         jobs = hot_paths["jobs"]
         self.assertEqual(set(jobs), {"schedule-dispatch", "route", "measure", "record"})
         dispatcher = jobs["schedule-dispatch"]
-        self.assertEqual(dispatcher["if"], "github.repository == 'sunrise-org/sunrise' && github.event_name == 'schedule'")
+        self.assertEqual(hot_paths["on"]["schedule"], [{"cron": "43 8 * * *"}])
+        self.assertEqual(dispatcher["if"], "github.repository == 'sunrise-org/sunrise' && "
+                         "github.event_name == 'schedule' && github.ref == 'refs/heads/main'")
         self.assertEqual(dispatcher["runs-on"], "ubuntu-latest")
-        self.assertEqual(dispatcher["permissions"], {"actions": "write"})
-        self.assertEqual([step["run"] for step in dispatcher["steps"]],
-                         ['gh workflow run hot-paths.yml --repo "$GITHUB_REPOSITORY" --ref main'])
+        self.assertEqual(dispatcher["permissions"], {"actions": "write", "contents": "read"})
+        checkout, dispatch = dispatcher["steps"]
+        self.assertTrue(checkout["uses"].startswith("actions/checkout@"))
+        self.assertEqual(checkout["with"]["ref"], "${{ github.sha }}")
+        self.assertEqual(checkout["with"]["persist-credentials"], "false")
+        self.assertEqual(dispatch["env"], {"GH_TOKEN": "${{ github.token }}"})
+        self.assertEqual(dispatch["run"], "python3 tools/ci/hot_paths_schedule.py")
         self.assertEqual(jobs["route"]["if"], "github.event_name == 'workflow_dispatch'")
         self.assertNotIn("needs", jobs["route"])
         self.assertEqual(jobs["measure"]["needs"], "route")

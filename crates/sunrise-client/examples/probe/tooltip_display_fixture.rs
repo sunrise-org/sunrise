@@ -140,7 +140,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
                 .data_mut()
                 .set_other("minecraft:tooltip_display", Some(Tag::compound(component)));
         }
-        let display = tooltip_display(&stack);
+        let display = tooltip_display(&stack, None);
         writeln!(
             output,
             "{}\t{}",

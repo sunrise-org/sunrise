@@ -67,11 +67,13 @@ fn profiled(name: &'static str, config: Config, body: fn()) -> (Profile, Status)
     cpu_hz();
     let (ready, wait) = mpsc::channel();
     let (go, start) = mpsc::channel::<()>();
+    let (done_tx, done) = mpsc::channel();
     let worker = thread::spawn(move || {
         assert!(sampler::sampled_thread(name));
         ready.send(()).unwrap();
         start.recv().unwrap();
         body();
+        let _ = done_tx.send(());
     });
     wait.recv().unwrap();
     let session = super::start(Config {
@@ -81,8 +83,7 @@ fn profiled(name: &'static str, config: Config, body: fn()) -> (Profile, Status)
     .expect("start profiling");
     go.send(()).unwrap();
     let mut mid = session.status();
-    while !worker.is_finished() {
-        thread::sleep(Duration::from_millis(20));
+    while done.recv_timeout(Duration::from_millis(20)) == Err(mpsc::RecvTimeoutError::Timeout) {
         mid = session.status();
     }
     worker.join().unwrap();

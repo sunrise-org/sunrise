@@ -309,7 +309,7 @@ impl WorldgenOverrides {
             let Ok(value) = serde_json::from_str::<Value>(json) else {
                 return true;
             };
-            if value.get("neoforge:conditions").is_none() {
+            if !crate::conditions::has_conditions(&value) {
                 return true;
             }
             if !allows(&value, kind, id) {

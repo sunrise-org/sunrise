@@ -6,9 +6,9 @@ name: hot-paths
 # recorded on the `perf-history` branch, whose index.html is the trend page.
 #
 # It measures; it never judges. No threshold fails this workflow, and it never runs on a pull request.
-# Once a day on main, and by dispatch: the schedule only dispatches this workflow on main, since Dyna's runners refuse a
-# scheduled event at "Set up runner" (all three scheduled runs failed there, 2026-11-16 to 18). A dispatch may name a commit to measure instead of the branch's head, to
-# narrow a step in the trend to one commit; such a run, like any run off main, uploads its result and records nothing.
+# The main schedule dispatches only when no heavy gate, daily or game release is active or queued. It dispatches
+# rather than measuring directly because Dyna's runners refuse scheduled events. A manual dispatch may name a
+# commit to measure instead of the branch's head; such a run, like any run off main, uploads its result and records nothing.
 on:
   schedule:
     - cron: '43 8 * * *'
@@ -30,15 +30,26 @@ env:
 jobs:
   # Dyna runners accept dispatches, not scheduled events (as daily.yml's schedule-dispatch).
   schedule-dispatch:
-    if: github.repository == 'sunrise-org/sunrise' && github.event_name == 'schedule'
+    if: github.repository == 'sunrise-org/sunrise' && github.event_name == 'schedule' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 5
     permissions:
-      actions: write
+      actions: write  # Read run/job metadata and dispatch this workflow on main.
+      contents: read
     steps:
-      - env:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          sparse-checkout-cone-mode: false
+          sparse-checkout: |
+            tools/ci/hot_paths_schedule.py
+            tools/ci/dyna_ci_pool_watch.py
+            tools/ci/pr_gate.py
+      - name: Dispatch only if the heavy workflows are idle
+        env:
           GH_TOKEN: ${{ github.token }}
-        run: gh workflow run hot-paths.yml --repo "$GITHUB_REPOSITORY" --ref main
+        run: python3 tools/ci/hot_paths_schedule.py
 
   route:
     if: github.event_name == 'workflow_dispatch'
@@ -71,6 +82,16 @@ jobs:
     runs-on: dyna-medium
     timeout-minutes: 150
     steps:
+      # Check the runner's seed before checking out any (possibly older) commit.
+      - name: Check runner prepared data
+        run: |
+          for dir in minecraft datagen sunrise-client tools; do
+            path="/cache/sunrise-local/$dir"
+            if [[ ! -d "$path" || ! -r "$path" || ! -x "$path" ]]; then
+              echo "::error::prepared data unavailable on this runner: $dir"
+              exit 1
+            fi
+          done
       - uses: actions/checkout@v4
         with:
           ref: ${{ inputs.commit || github.sha }}
@@ -97,14 +118,7 @@ jobs:
       - name: Cap build parallelism to the runner
         run: python3 tools/ci/cargo_jobs.py --job-mib 3072 --cap
       - name: Prepare checkout-keyed vanilla data
-        run: |
-          for dir in minecraft datagen sunrise-client tools; do
-            if [ ! -d "/cache/sunrise-local/$dir" ]; then
-              echo "::error::prepared data unavailable on this runner: $dir"
-              exit 1
-            fi
-          done
-          SUNRISE_DYNA_CACHE=true SUNRISE_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" SUNRISE_SHARED_SOURCE=/cache/sunrise-local bash tools/ci/vanilla-data.sh
+        run: SUNRISE_DYNA_CACHE=true SUNRISE_PREPARED_CACHE="$DYNA_CI_BUILD/vanilla" SUNRISE_SHARED_SOURCE=/cache/sunrise-local bash tools/ci/vanilla-data.sh
       # The profile players get, on the server build (no audio, no controllers). sunrise-hot-paths-game is
       # sunrise-game's entry, with one native listener mod it installs only for the hook workload.
       - name: Build the release game

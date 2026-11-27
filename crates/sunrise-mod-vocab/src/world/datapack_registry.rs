@@ -1581,9 +1581,14 @@ pub fn decode_datapack_entry(
     let json: Json = serde_json::from_str(text)
         .map_err(|error| DatapackDecodeError::Malformed(error.to_string()))?;
     let object = json.as_object().ok_or(DatapackDecodeError::NotAnObject)?;
-    let (object, metadata) = if !object.iter().any(|(key, _)| key == "neoforge:conditions") {
+    let has = |name: &str| object.iter().any(|(key, _)| key == name);
+    let (object, metadata) = if !CONDITION_KEYS.iter().any(|key| has(key)) {
         (object, RecordMetadata::None)
-    } else if let Some((_, inner)) = object.iter().find(|(key, _)| key == "neoforge:value") {
+    } else if let Some((_, inner)) = object
+        .iter()
+        .find(|(key, _)| key == "neoforge:value")
+        .filter(|_| has(CONDITION_KEYS[0]))
+    {
         (
             inner.as_object().ok_or(DatapackDecodeError::NotAnObject)?,
             RecordMetadata::None,
@@ -1595,11 +1600,15 @@ pub fn decode_datapack_entry(
         .map(|values| DatapackEntry { values })
 }
 
+/// The top-level load-condition keys: NeoForge's `neoforge:conditions` (whose wrapper may hold
+/// the entry in `neoforge:value`) and Fabric API's `fabric:load_conditions`.
+const CONDITION_KEYS: [&str; 2] = ["neoforge:conditions", "fabric:load_conditions"];
+
 pub(crate) enum RecordMetadata<'a> {
     None,
     /// The feature dispatch key is allowed, and a schema can also read it.
     FeatureType,
-    /// The inlined condition wrapper's key is not part of the schema input.
+    /// The inlined condition keys are not part of the schema input.
     DatapackConditions,
     /// A dispatched variant's fields sit beside the key that named the variant.
     DispatchKey(&'a str),
@@ -1629,16 +1638,18 @@ fn decode_fields(
     path: &str,
     decoder: &mut dyn VanillaValueDecoder,
 ) -> Result<Vec<(String, DatapackValue)>, DatapackDecodeError> {
-    let (extra, hidden) = match metadata {
-        RecordMetadata::None => (None, None),
-        RecordMetadata::FeatureType => (Some("type"), None),
-        RecordMetadata::DatapackConditions => {
-            (Some("neoforge:conditions"), Some("neoforge:conditions"))
+    let dispatch: [&str; 1];
+    let (extra, hidden): (&[&str], &[&str]) = match metadata {
+        RecordMetadata::None => (&[], &[]),
+        RecordMetadata::FeatureType => (&["type"], &[]),
+        RecordMetadata::DatapackConditions => (&CONDITION_KEYS, &CONDITION_KEYS),
+        RecordMetadata::DispatchKey(key) => {
+            dispatch = [key];
+            (&dispatch, &[])
         }
-        RecordMetadata::DispatchKey(key) => (Some(key), None),
     };
     if let Some((unknown, _)) = object.iter().find(|(key, _)| {
-        Some(key.as_str()) != extra && !fields.iter().any(|field| field.name == *key)
+        !extra.contains(&key.as_str()) && !fields.iter().any(|field| field.name == *key)
     }) {
         return Err(DatapackDecodeError::UnknownField {
             field: joined(path, unknown),
@@ -1648,7 +1659,7 @@ fn decode_fields(
     for field in fields {
         let at = joined(path, &field.name);
         let json = object.iter().find_map(|(key, json)| {
-            (*key == field.name && Some(key.as_str()) != hidden).then_some(json)
+            (*key == field.name && !hidden.contains(&key.as_str())).then_some(json)
         });
         let value = match (json, &field.kind) {
             (Some(json), kind) => decode_value(kind, json, &at, decoder)?,
@@ -2467,6 +2478,14 @@ pub(crate) mod tests {
             entry.get("neoforge:conditions"),
             Some(&DatapackValue::Bool(true))
         );
+        // Fabric API's key beside the fields is condition metadata too, never a schema field.
+        let fabric = decode_datapack_entry(
+            &overlapping,
+            r#"{"fabric:load_conditions": {"condition": "fabric:true"}, "tiers": {}}"#,
+            &mut NoVanillaValueDecoder,
+        )
+        .unwrap();
+        assert!(fabric.get("tiers").is_some());
     }
 
     /// Defaults are normalised at every depth as at the top, map keys included, and a default

@@ -299,6 +299,18 @@ pub trait NativeComponentsGameExt1<'__sg>: crate::game::SideGame<'__sg> {
 impl<'__sg, G: crate::game::SideGame<'__sg>> NativeComponentsGameExt1<'__sg> for G {}
 
 pub trait NativeComponentsGameExt3<'__sg>: crate::game::SideGame<'__sg> {
+    /// `EntityType.getDimensions()` of `entity_type`, from the entity type rows of the game's
+    /// resources, as a constructor reads them. None for an unregistered type or one without a
+    /// size row.
+    fn entity_type_dimensions(&self, entity_type: &str) -> Option<mod_api::EntityTypeDimensions> {
+        let id = sunrise_command::args::normalize(entity_type);
+        let [width, height, eye_height] =
+            crate::game::entity_type_rows::entity_type_rows(&self.options.resources)
+                .dimensions(&id)?;
+        Some(mod_api::EntityTypeDimensions::new(
+            width, height, eye_height,
+        ))
+    }
     /// `EntityType.is(TagKey)`: whether `entity_type` (`minecraft:player`) is in the entity
     /// type tag `tag` (`minecraft:cannot_be_pushed_onto_boats`).
     fn entity_type_in_tag(&self, entity_type: &str, tag: &str) -> bool {

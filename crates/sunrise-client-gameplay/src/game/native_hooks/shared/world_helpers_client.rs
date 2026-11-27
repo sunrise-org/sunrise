@@ -197,10 +197,10 @@ impl<'g> crate::game::ClientGame<'g> {
         let start = batch.vertices.len();
         self.draw_gui_layer_body(batch, body, vanilla);
         self.apply_gui_status_heights();
-        if status_row {
-            self.keep_status_rows(&batch.vertices[start..], batch.width, batch.height);
-        }
         if let Some(bounds) = batch.visible_vertex_bounds(start) {
+            if status_row {
+                self.keep_status_rows(bounds[1], batch.width, batch.height);
+            }
             self.client.hud_layer_bounds.push((id, bounds));
         }
         self.native_gui_layer_post(id, batch);

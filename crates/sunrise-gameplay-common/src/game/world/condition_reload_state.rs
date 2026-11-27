@@ -96,7 +96,8 @@ impl WorldBiomeRegistry {
             candidates.insert(id.clone());
             let payload = match winner {
                 Cow::Borrowed(winner)
-                    if !modified.contains(&id) && winner.get("neoforge:conditions").is_none() =>
+                    if !modified.contains(&id)
+                        && !sunrise_world::conditions::has_conditions(winner) =>
                 {
                     // Unchanged prepared vanilla definitions are already in both base readers.
                     continue;

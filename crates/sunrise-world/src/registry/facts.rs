@@ -152,7 +152,7 @@ impl<'de> Deserialize<'de> for State {
 #[cfg(test)]
 mod tests {
     use serde_json::Value;
-    use std::path::Path;
+    use std::path::PathBuf;
     use {
         crate::{
             DATA_VERSION,
@@ -194,13 +194,15 @@ mod tests {
 
     /// The streamed registry is the one the JSON and NBT trees built.
     #[test]
+    #[ignore = "daily"]
     fn matches_the_tree_built_registry() {
-        let path = Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/sunrise-client/26.3/facts.json");
-        let Ok(bytes) = std::fs::read(&path) else {
-            eprintln!("skipped: no prepared facts.json");
-            return;
-        };
+        let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
+            .filter(|root| !root.is_empty())
+            .expect("SUNRISE_TEST_RESOURCES must point to prepared 26.3 resources");
+        let path = PathBuf::from(root).join("facts.json");
+        let bytes = std::fs::read(&path).unwrap_or_else(|error| {
+            panic!("read prepared facts.json at {}: {error}", path.display())
+        });
         fn tag(v: &Value) -> Tag {
             match v {
                 Value::String(s) => Tag::String(s.as_str().into()),
@@ -211,18 +213,26 @@ mod tests {
                 _ => unreachable!(),
             }
         }
-        let facts: Value = serde_json::from_slice(&bytes).unwrap();
-        let rows = facts["states"].as_array().unwrap();
+        let facts: Value = serde_json::from_slice(&bytes).expect("parse prepared facts.json");
+        let rows = facts["states"]
+            .as_array()
+            .expect("prepared facts.json must contain a states array");
+        let defaults = &facts["defaults"];
+        let default_names = defaults
+            .as_object()
+            .expect("prepared facts.json must contain a defaults object")
+            .keys();
         let tree = BlockRegistry::from_nbt(&Tag::compound([
             ("DataVersion", Tag::Int(DATA_VERSION)),
             (
                 "states",
                 Tag::List(rows.iter().map(|r| tag(&r[4])).collect()),
             ),
-            ("defaults", tag(&facts["defaults"])),
+            ("defaults", tag(defaults)),
         ]))
-        .unwrap();
-        let (streamed, flags) = BlockRegistry::from_facts_json_with_flags(&bytes[..]).unwrap();
+        .expect("build the reference registry from prepared facts.json");
+        let (streamed, flags) = BlockRegistry::from_facts_json_with_flags(&bytes[..])
+            .expect("stream the registry from prepared facts.json");
         assert_eq!(streamed.len(), tree.len());
         for (i, row) in rows.iter().enumerate() {
             let id = BlockStateId(i as u32);
@@ -232,7 +242,7 @@ mod tests {
                 (row[1].as_bool().unwrap(), row[2].as_bool().unwrap())
             );
         }
-        for name in facts["defaults"].as_object().unwrap().keys() {
+        for name in default_names {
             assert_eq!(streamed.default_state(name), tree.default_state(name));
         }
     }

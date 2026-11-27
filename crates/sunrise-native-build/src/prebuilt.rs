@@ -194,7 +194,11 @@ impl Package {
     /// The three slices as one folder at `into`, linked file by file (copied where a link can't
     /// be made): the folder the engine and registry routes build against.
     pub fn whole(&self, into: &Path) -> Result<PathBuf, String> {
-        let _ = fs::remove_dir_all(into);
+        match fs::remove_dir_all(into) {
+            Ok(()) => (),
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => (),
+            Err(error) => return Err(format!("{}: {error}", into.display())),
+        }
         for slice in [&self.runtime, &self.api, &self.engine] {
             link_tree(slice, slice, into)?;
         }
@@ -2203,6 +2207,27 @@ mod tests {
                 .is_file()
         );
         assert!(!kept.join("target").exists());
+    }
+
+    #[test]
+    fn combined_sdk_refuses_a_cleanup_error_before_linking_slices() {
+        let scratch = tempfile::tempdir().unwrap();
+        let package = Package::at(&scratch.path().join("sdk"));
+        for slice in [&package.runtime, &package.api, &package.engine] {
+            fs::create_dir_all(slice).unwrap();
+        }
+        fs::write(package.runtime.join("incoming"), "new SDK file").unwrap();
+        let into = scratch.path().join("prebuilt-package");
+        // A non-directory obstruction gives a cleanup failure without relying on permissions.
+        fs::write(&into, "stale").unwrap();
+        let cleanup = fs::remove_dir_all(&into).unwrap_err();
+        assert_ne!(cleanup.kind(), std::io::ErrorKind::NotFound);
+
+        let error = package.whole(&into).unwrap_err();
+
+        assert_eq!(error, format!("{}: {cleanup}", into.display()));
+        assert_eq!(fs::read_to_string(&into).unwrap(), "stale");
+        assert!(!into.join("incoming").exists());
     }
 
     #[test]

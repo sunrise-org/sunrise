@@ -70,8 +70,13 @@ fn the_end_fight_hooks_cancel_answer_and_hear_the_fight() {
             let level = game.level("minecraft:the_end").unwrap();
             assert_eq!(
                 level.dragon_fight(game),
-                None,
-                "not loaded before its first tick"
+                Some(DragonFightState {
+                    won: false,
+                    previously_won: false,
+                    respawn_stage: None,
+                    alive_crystals: 0,
+                }),
+                "set up as the End opens"
             );
             game.common.player =
                 Some(PlayerMotion::new(game.common.motion, Vec3::new(0.5, 128.0, 0.5)).unwrap());

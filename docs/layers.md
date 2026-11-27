@@ -693,7 +693,8 @@ Rust and finds every host. It skips tests, placeholders (`example.com`, `*.test`
   entry applies only in that file;
 - `allowed`: today's addresses outside the list file, as "path host".
 
-`allowed` only shrinks. A branch may move an entry with its code, but it may not add a host or grow the list.
+`allowed` only shrinks. Remove entries the shipped source no longer uses. A branch may move an entry with its code,
+but it may not add a host or grow the list.
 
 Vanilla's endpoints (engine, the same as Java Edition):
 

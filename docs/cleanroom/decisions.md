@@ -106,15 +106,16 @@ the full list.
   `gfx::pack_post::normalized_image_tests::an_rgba8_image_of_a_float_buffer_still_refuses_its_program`
   (`sunrise-client-render`).
 
-## D-4: native terrain quads of block entities and entities under a pack
+## D-4: native terrain quads of block entities, entities and the hand under a pack
 
 - **Open point:** spec rev 1, 2.3 (line 294) gives `gbuffers_block` "block entities, sign text" and `gbuffers_entities`
   "entities", and 6.1.4 sends a program's outputs to the buffers its `RENDERTARGETS`/`DRAWBUFFERS` list names.
   Sunrise's mods can draw, inside a block entity's or an entity's run, terrain-sheet geometry that Sunrise draws
   natively from its sprite arrays: still fluids and terrain models (`FLUID_OVERLAY`, `TERRAIN_MODEL_*_OVERLAY`; a
-  block entity's renderer, a mod's model copies, and a mod's entity renderer or layer all draw through the same
-  context). The spec has no such geometry, so it does not say which program draws it, which texture it reads, which
-  maps its `normals` and `specular` are, or in what order its translucent quads draw.
+  block entity's renderer, a mod's model copies, a mod's entity renderer or layer, and a mod's `render_hand` listener
+  in the first-person hand all draw through the same context). The spec has no such geometry, so it does not say which
+  program draws it, which texture it reads, which maps its `normals` and `specular` are, or in what order its
+  translucent quads draw.
 - **Decision:** the program of its run draws it, as the rest of that block entity or entity: `gbuffers_block` or
   `gbuffers_entities`, and for the translucent kinds (a still fluid, a translucent terrain model) that program's
   translucent one (`gbuffers_block_translucent`, `gbuffers_entities_translucent`) when the pack has it, with the run's
@@ -128,19 +129,30 @@ the full list.
   parts cast nothing, as its other translucent parts). A quad whose sprite the block atlas lacks (a layer past the
   atlas's table, or a fluid layer below 0, NaN or infinite), a pack without the run's program (even one with a shadow
   program: nothing casts the quad then, as before), or one without a block atlas leaves the quad to Sunrise.
+  - In the first-person hand, `gbuffers_hand` draws them as the hand's other geometry, and the translucent kinds
+    `gbuffers_hand_water` (or its fallback) after deferred, with the hand's other translucent quads; each hand run's
+    translucent ones together after its other translucent quads, far to near as above. They sample the block atlas
+    with the same stand-in maps. Sunrise draws nothing of a hand that a pack's `gbuffers_hand` draws, so a quad the
+    block atlas lacks (or every one of them, without a block atlas) is not drawn there: its UVs and layer mean
+    nothing in the shared atlas either.
 - **Reason:** 2.3's programs for block entities and entities are the only ones the spec ties to this geometry, and
   6.1.4 then puts it in the buffers the pack's `final` reads; drawn natively, it reached only `colortex0`. The block
   atlas already holds every terrain sprite, as the pack's terrain reads them, so no texture is copied; the renderer
   has no table from a terrain sprite layer to its place in the shared atlas. Paged-map reads of the block atlas's UVs
   would return another texture's material. Sunrise's own draw sorts these translucent kinds on upload, across every
-  run; the pack's draws sort each run, since one draw carries one `blockEntityId` or `entityId`.
+  run; the pack's draws sort each run, since one draw carries one `blockEntityId` or `entityId`. In the hand, 2.3
+  (lines 301 and 304) gives `gbuffers_hand` "the hand and opaque held objects" and `gbuffers_hand_water` "translucent
+  held objects", drawn after deferred.
 - **Tests:** `pack_entities::material_route_tests::native_terrain_quads_take_the_runs_program_where_the_block_atlas_holds_them`
   and `pack_entities::material_route_tests::the_block_atlas_places_native_terrain_quads` (`sunrise-render-shaderpack`);
   the daily `pack_entities::gpu_span_tests::native_terrain_quads_draw_in_the_pack_programs_from_the_block_atlas`,
   `pack_entities::gpu_span_tests::a_runs_translucent_native_quads_draw_once_far_to_near` and
   `pack_entities::gpu_span_tests::an_entitys_native_terrain_quads_draw_in_the_entity_programs`
   (`sunrise-render-shaderpack`), and `pack_block_entity_runs` and
-  `gfx::pack_post::block_atlas_group_tests::a_resize_drops_the_portal_and_block_atlas_groups` (`sunrise-client-render`).
+  `gfx::pack_post::block_atlas_group_tests::a_resize_drops_the_portal_and_block_atlas_groups` (`sunrise-client-render`);
+  for the hand, `pack_hand::tests::native_terrain_quads_take_the_block_atlas` and
+  `pack_hand::tests::without_a_block_atlas_native_terrain_quads_are_not_drawn` (`sunrise-render-shaderpack`) and the
+  daily `pack_hand_terrain_quads` (`sunrise-client-render`).
 
 ## D-5: which faces a `layer.*` rule moves, and what wins
 
@@ -224,3 +236,40 @@ the full list.
   on its own: the key may name another dimension folder's shader.
 - **Tests:** `post::indirect_tests` (`sunrise-shaders`) and the daily
   `gfx::pack_post::indirect_dispatch_tests` (`sunrise-client-render`).
+
+## D-12: which boss event `bossBattle` gives
+
+- **Open point:** spec rev 1, 5.2, line 699 gives `bossBattle` as an `int`, "1 custom, 2 ender dragon, 3 wither,
+  4 raid", updated every frame. It doesn't say what it reads with no boss event, which event counts when several
+  bars are shown, or how the game tells the kinds apart. It is not one of section 9's open questions. A client knows
+  only the boss bars the server sends (`ClientboundBossEventPacket`): a name, a progress, a colour, an overlay and
+  the darken-screen, boss-music and world-fog flags. No field names the kind.
+- **Decision:** 0 while the client shows no boss bar. Otherwise each bar is matched against the colour, overlay and
+  flags vanilla 26.3 creates each event with: `EnderDragonFight`'s `dragonEvent` (pink, progress, boss music and
+  world fog) is 2, `WitherBoss`'s `bossEvent` (purple, progress, darken screen) is 3, and `Raid`'s `raidEvent` (red,
+  10 notches, no flags) is 4 when its name is also one of the titles `Raid` gives it: `event.minecraft.raid` alone,
+  the same followed by `" - "` and `event.minecraft.raid.raiders_remaining` with one argument (one or two raiders
+  left), `event.minecraft.raid.victory.full` or `event.minecraft.raid.defeat.full`, each a translatable component
+  with nothing else set. Any other bar is 1 (custom). All five fields must match; the dragon's and wither's names
+  are not read. The value is the kind of the first bar, in the order the bars show (the order their add packets
+  arrived), that is not custom, else 1 when only custom bars are shown. It is read from the client's bars each
+  frame, so a removed bar or a cleared overlay (leaving the world or the server) counts from the next frame. Bars
+  the screen has no room for, or that the HUD doesn't draw (F1), still count.
+- **Reason:** the bars are the only boss state a client has, and vanilla never changes those five fields after it
+  creates the three events (only their name, progress and visibility), so the match holds for the whole event. The
+  dragon's and wither's names are left out because either takes a custom name, and `/bossbar` can't set the
+  darken-screen, boss-music or world-fog flags (`BossBarCommands` has setters for name, colour, style, value, max,
+  visibility and players only), so those two signatures need no name. A raid's flags are all off,
+  as a new `/bossbar`'s are, and `/bossbar set ... color red` and `style notched_10` give its colour and overlay, so
+  its name is checked too; `Raid` sets no other name outside its debug mode (`SharedConstants.DEBUG_RAIDS`). A custom bar that copies a signature still reads as that
+  kind: a mod's bar, a saved custom bar's data or a server's own boss event can set any flags, and a server can send a bar with the raid's
+  exact title (a `/bossbar` named `{"translate":"event.minecraft.raid"}`), so on a remote server such a bar stays
+  ambiguous; nothing a client receives tells them apart. A custom bar is skipped while a boss bar is shown, so a
+  server's standing custom bar does not hide a fight from the pack; between two boss bars the first shown wins, as
+  it is the top one on screen.
+- **Tests:** `boss_overlay::tests::boss_battle_*` (`sunrise-client-lib`: each kind, none, the fields one by one,
+  names, the raid's titles and ordinary red notched bars, ordinals past the enum, several bars, removal, style and
+  flag updates), `pack_uniforms::boss_battle_test::*`
+  (`sunrise-render-shaderpack`: the value and its type, in programs and in custom uniforms) and the daily
+  `game::client_side::boss_battle_tests::boss_battle_follows_the_servers_boss_bars` (`sunrise-client-gameplay`: packets to the frame's
+  inputs).

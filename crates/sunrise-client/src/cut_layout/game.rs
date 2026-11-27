@@ -839,6 +839,7 @@ pub(crate) fn run_with(
         &resources,
         pack,
         options,
+        vanilla_root,
         settings,
         started,
         None,

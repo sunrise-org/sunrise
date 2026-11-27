@@ -820,6 +820,7 @@ impl crate::game::ClientGame<'_> {
             end_flash,
             end_flash_direction,
             ambient_light: dimension.map_or(0.0, |d| d.ambient_light),
+            boss_battle: self.client.boss_overlay.boss_battle(),
             view: self.pack_view_entity(eye, partial),
             still_ticks: self.common.clock.still().then(|| self.visual_ticks()),
             frame_timing: None,

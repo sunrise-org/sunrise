@@ -2517,6 +2517,7 @@ void main() {
             "shadowcolorimg0",
             "shadowcolorimg1",
             "cameraPosition",
+            "bossBattle",
         ] {
             let err = run(vec![ModEntry::new(
                 "mod_one",
@@ -2539,6 +2540,7 @@ void main() {
             "depthtex0",
             "colorimg0",
             "shadowcolorimg0",
+            "bossBattle",
         ] {
             let err = run(vec![ModEntry::new(
                 "mod_one",
@@ -2554,6 +2556,38 @@ void main() {
             .unwrap_err();
             assert!(err.contains(reserved_uniform), "{err}");
             assert!(err.contains("mod_one"), "{err}");
+        }
+        // A built-in uniform is refused in the other two positions too: an opaque depth sampler,
+        // and a frame uniform's previous-value name.
+        for reserved in ["cameraPosition", "bossBattle"] {
+            let opaque = run(vec![ModEntry::new(
+                "mod_one",
+                Box::new(Custom(Box::new(move |ev| {
+                    ev.register(pipeline("mod_one:p", "mod_one:p").pack_binding(
+                        PackBinding::new().depth_target(
+                            PackDepthTarget::new(id("mod_one:d")).opaque_depth_sampler(reserved),
+                        ),
+                    ));
+                }))),
+            )])
+            .unwrap_err();
+            assert!(opaque.contains(reserved), "{opaque}");
+            let previous = run(vec![ModEntry::new(
+                "mod_one",
+                Box::new(Custom(Box::new(move |ev| {
+                    ev.register(
+                        pipeline("mod_one:p", "mod_one:p").pack_binding(
+                            PackBinding::new().frame_uniform(
+                                PackUniformDecl::new("modProjection", PackUniformType::Mat4)
+                                    .with_previous(reserved),
+                            ),
+                        ),
+                    );
+                }))),
+            )])
+            .unwrap_err();
+            assert!(previous.contains(reserved), "{previous}");
+            assert!(previous.contains("mod_one"), "{previous}");
         }
 
         // Same identifier claimed as both a sampler and a uniform is refused (same-mod and cross-mod).

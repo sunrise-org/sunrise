@@ -124,4 +124,20 @@ pub(in crate::game) mod tests {
         assert_eq!(rows.dimensions("minecraft:zombie"), Some([0.6, 1.95, 1.74]));
         assert_eq!(rows.dimensions("minecraft:oak_boat"), None);
     }
+
+    /// A content mod's type has its template's row, sizes included; a row without all three
+    /// sizes, or a type with no row, answers none.
+    #[test]
+    fn a_mod_types_row_carries_its_templates_size() {
+        let rows = EntityTypeRows::parse(
+            br#"{"minecraft:cow": {"width": 0.9, "height": 1.4, "eye_height": 1.3,
+                                   "attributes": {}},
+                 "ruby:moo": {"template": "minecraft:cow", "width": 0.9, "height": 1.4,
+                              "eye_height": 1.3, "attributes": {}},
+                 "ruby:half": {"template": "minecraft:cow", "width": 0.9, "attributes": {}}}"#,
+        );
+        assert_eq!(rows.dimensions("ruby:moo"), Some([0.9, 1.4, 1.3]));
+        assert_eq!(rows.dimensions("ruby:half"), None);
+        assert_eq!(rows.dimensions("ruby:absent"), None);
+    }
 }

@@ -19,7 +19,7 @@ pub fn main() -> Result<(), Box<dyn Error>> {
     let mut output = String::new();
     for line in input.lines().filter(|l| !l.starts_with('#')) {
         let stack = parse_stack(line)?.ok_or("empty stack")?;
-        let lines = firework_lines(&stack, &translate);
+        let lines = firework_lines(&stack, None, &translate);
         if lines.is_empty() {
             writeln!(output, "-")?;
         } else {

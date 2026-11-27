@@ -628,30 +628,11 @@ impl HudRenderer {
             pass.set_bind_group(0, &self.group, &[]);
             pass.set_vertex_buffer(0, self.buffer.slice(..));
             let full = [0, 0, size[0], size[1]];
-            let depth_clip = clip.map_or(full, |clip| {
-                let [x, y, w, h] = clip.map(|v| (v as f32 * self.zoom) as u32);
-                [
-                    x.min(size[0]),
-                    y.min(size[1]),
-                    x.saturating_add(w).min(size[0]),
-                    y.saturating_add(h).min(size[1]),
-                ]
-            });
             let mut previous = full;
             for (range, blend) in &runs[at..end] {
-                for (range, clip) in batch.scissors_in(range.clone()) {
-                    let [x0, y0, x1, y1] = clip.map_or(depth_clip, |rect| {
-                        let scale = batch.scale * self.zoom;
-                        // Fractional engine clips retain the old pixel-centre coverage;
-                        // integer GUI rectangles at vanilla's integer scale are exact.
-                        let [l, t, r, b] = rect.map(|v| (v * scale - 0.5).ceil() as u32);
-                        let [x0, y0, x1, y1] = depth_clip;
-                        [l.max(x0), t.max(y0), r.min(x1), b.min(y1)]
-                    });
-                    if x0 >= x1 || y0 >= y1 {
-                        continue;
-                    }
-                    let scissor = [x0, y0, x1 - x0, y1 - y0];
+                for (range, scissor) in
+                    batch.scissored_intervals(range.clone(), *blend, size, self.zoom)
+                {
                     if scissor != previous {
                         pass.set_scissor_rect(scissor[0], scissor[1], scissor[2], scissor[3]);
                         previous = scissor;

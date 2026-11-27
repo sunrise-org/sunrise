@@ -762,13 +762,23 @@ impl SyncData {
                     let top: BTreeMap<String, &serde_json::value::RawValue> =
                         serde_json::from_slice(&bytes)
                             .map_err(|e| format!("damage type {id}: {e}"))?;
-                    if let Some(raw) = top.get("neoforge:conditions") {
-                        let payload: Value = serde_json::from_str(raw.get())
-                            .map_err(|e| format!("damage type {id}: {e}"))?;
-                        let conditions = serde_json::json!({ "neoforge:conditions": payload });
-                        if !overlay.conditions.allows_id(&conditions, path, &id) {
-                            continue;
+                    let mut keys = serde_json::Map::new();
+                    for key in [
+                        sunrise_world::conditions::NEOFORGE_KEY,
+                        sunrise_world::conditions::FABRIC_KEY,
+                    ] {
+                        if let Some(raw) = top.get(key) {
+                            let payload: Value = serde_json::from_str(raw.get())
+                                .map_err(|e| format!("damage type {id}: {e}"))?;
+                            keys.insert(key.to_owned(), payload);
                         }
+                    }
+                    if !keys.is_empty()
+                        && !overlay
+                            .conditions
+                            .allows_id(&Value::Object(keys), path, &id)
+                    {
+                        continue;
                     }
                     let definition =
                         sunrise_world::damage_source::Definition::from_json(&id, &bytes)
@@ -1348,7 +1358,7 @@ mod tests {
         )];
         for (tags, emitted) in [(["test:unrelated"], true), (["test:marker"], false)] {
             let conditions = sunrise_world::conditions::LoadConditions::new([])
-                .with_tags([("minecraft:item", tags)]);
+                .with_tags([("minecraft:item", tags.map(|tag| (tag, true)))]);
             let (packed, admitted) = SyncData::stage_registry_definitions(
                 root.path(),
                 &defaults,

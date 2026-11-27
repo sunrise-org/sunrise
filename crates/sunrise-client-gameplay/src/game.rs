@@ -88,6 +88,10 @@ pub use client_side::books;
 #[allow(unused_imports)]
 pub(in crate::game) use client_side::bookshelves;
 #[cfg(feature = "client")]
+#[cfg(test)]
+#[allow(unused_imports)]
+pub(in crate::game) use client_side::boss_battle_tests;
+#[cfg(feature = "client")]
 #[allow(unused_imports)]
 pub(in crate::game) use client_side::bundles;
 #[cfg(feature = "client")]

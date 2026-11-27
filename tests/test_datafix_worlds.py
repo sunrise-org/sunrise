@@ -227,6 +227,54 @@ class BuildCleanupTests(unittest.TestCase):
         self.assertEqual((events, str(error)), (['joined', 'left', 'stopped'], 'stop failed'))
 
 
+class BuildDebugWorldTests(unittest.TestCase):
+    """build() of the debug world with the servers replaced: the first server is stopped whatever its spawn command does."""
+
+    def build(self, spawn_command):
+        events = []
+
+        class FakeServer:
+            def __init__(self, directory, *args):
+                events.append(f'started (region present: {(directory / "world" / "region").exists()})')
+                (directory / 'world' / 'region').mkdir(parents=True, exist_ok=True)
+
+            def run(self, command):
+                return spawn_command(command)
+
+            def stop(self, *, save):
+                events.append(f'stopped (save: {save})')
+
+        with tempfile.TemporaryDirectory() as temp, mock.patch.object(worlds, 'LOCAL', Path(temp)), \
+                mock.patch.object(worlds, 'server_jar', return_value=(Path('server.jar'), 1631, 404)), \
+                mock.patch.object(worlds, 'java', return_value='java'), mock.patch.object(worlds, 'Server', FakeServer), \
+                mock.patch.object(worlds, 'free_port', return_value=12345), mock.patch.object(worlds, 'build_scene'), \
+                mock.patch.object(worlds, 'time', SimpleNamespace(sleep=lambda seconds: None)):
+            try:
+                worlds.build('1.13.2-debug')
+            except Exception as error:
+                return events, error
+        return events, None
+
+    def test_a_spawn_command_that_raises_stops_the_first_server_and_keeps_its_error(self):
+        def broken(command):
+            raise BrokenPipeError('console closed')
+        events, error = self.build(broken)
+        self.assertEqual(events, ['started (region present: False)', 'stopped (save: False)'])
+        self.assertIsInstance(error, BrokenPipeError)
+
+    def test_a_refused_spawn_command_stops_the_first_server_and_is_reported(self):
+        events, error = self.build(lambda command: ['Nothing changed'])
+        self.assertEqual(events, ['started (region present: False)', 'stopped (save: False)'])
+        self.assertIsInstance(error, RuntimeError)
+        self.assertIn('setworldspawn was refused', str(error))
+
+    def test_a_set_spawn_saves_on_stop_before_the_regions_are_removed_and_the_server_restarts(self):
+        events, error = self.build(lambda command: ['Set the world spawn point to -4000, 70, -4000'])
+        self.assertIsNone(error)
+        self.assertEqual(events, ['started (region present: False)', 'stopped (save: True)',
+                                  'started (region present: False)', 'stopped (save: True)'])
+
+
 class BuildFlatCleanupTests(unittest.TestCase):
     """build_flat() with the server, the bots and the scene replaced: what is closed when something fails."""
 

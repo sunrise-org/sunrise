@@ -6,7 +6,7 @@ folder.
 
 | Command | What it does |
 |---|---|
-| `new <path> --template native [--sunrise <build>]` | Makes a code mod pinned to the current Nightly's build, or the one named, and fetches its SDK. Without `--template` it makes a content mod, which has no SDK. Both templates scaffold [`page.toml` and `page/`](../../how-to/publish.md#your-mods-page) and the [release workflow caller](#release). |
+| `new <path> --template native [--sunrise <build>]` | Makes a code mod pinned to the current Nightly's build, or the one named, and fetches its SDK. Without `--template` it makes a content mod, which has no SDK. `--sunrise` requires `--template native`. Both templates scaffold [`page.toml` and `page/`](../../how-to/publish.md#your-mods-page) and the [release workflow caller](#release). |
 | `build [--with <path>]…` | Compiles a native mod and its [declared libraries](../../concepts/dependencies.md) against the pinned SDK, then packs only the project into a `.smod` with its [`uses.json`](04-fit.md#usesjson). For content-only mods it just packs the project. If the project has `page.toml`, writes the page and its named images separately to `target/sunrise-mod/<id>.page.tar`. See [`build` for a native mod](#build-for-a-native-mod). |
 | [`release [<version>\|patch\|minor\|major] [--check] [--pull-request]`](#release) | Checks a mod in a registered repository, commits the version bump, and pushes the branch and tag. `--check` previews without changing the checkout; `--pull-request` commits on a new `release/<tag>` branch instead. |
 | [`release setup`](#release) | Updates only the shared workflow caller and removes old release files. No registration or commit required. |

@@ -1,6 +1,7 @@
 """Synthetic diagnostics only: never use prepared resource output as a fixture."""
 import contextlib
 import io
+import json
 import subprocess
 import os
 from pathlib import Path
@@ -29,6 +30,52 @@ class Visibility(unittest.TestCase):
         self.assertIn("failed test: suite::broken", log)
         self.assertIn("assertion equality failed", log)
         self.assertNotIn("PRIVATE_RESOURCE", log)
+
+    def test_screen_effect_event_loop_error_keeps_details_private(self):
+        name = "screen_effect::draw"
+        canary_path = "/synthetic/screen-effect-canary/display.sock"
+        canary_token = "synthetic-screen-effect-token"
+        output = target(1, f"test {name} ... FAILED\n\n---- {name} stdout ----\n"
+                        f"screen-effect event loop error: backend denied {canary_path} ({canary_token})\n",
+                        summary(failed=1))
+        process = subprocess.CompletedProcess([], 101, output)
+        with tempfile.TemporaryDirectory() as folder:
+            private = Path(folder) / "private"
+            report = Path(folder) / "report.json"
+            with patch.dict(os.environ, {"IGNORED_TESTS_PRIVATE_LOGS": str(private)}), \
+                    patch.object(ignored_tests, "listed_entries", return_value=[]), \
+                    patch.object(ignored_tests.subprocess, "run", return_value=process), \
+                    contextlib.redirect_stdout(io.StringIO()) as stdout, \
+                    contextlib.redirect_stderr(io.StringIO()) as stderr:
+                self.assertEqual(ignored_tests.main(["example"], report), 1)
+            self.assertEqual((private / "example.test.log").read_text(), output)
+            report_text = report.read_text()
+        self.assertIn("screen-effect event loop error: details withheld", stdout.getvalue().splitlines())
+        public = stdout.getvalue() + stderr.getvalue() + report_text
+        self.assertNotIn(canary_path, public)
+        self.assertNotIn(canary_token, public)
+        self.assertEqual([(item["test"], item["kind"]) for item in json.loads(report_text)["problems"]],
+                         [(name, "failed")])
+
+    def test_repeated_event_loop_errors_share_the_diagnostic_budget(self):
+        name = "画面::draw"
+        output = target(1, f"test {name} ... FAILED\n" + "screen-effect event loop error: synthetic\n" * 120,
+                        summary(failed=1))
+        failure = f"  failed test: {name}\n  panic context missing from captured output\n"
+        category = "screen-effect event loop error: details withheld\n"
+        records = (failure + category * 3).encode("utf-8")
+        process = subprocess.CompletedProcess([], 101, output)
+        with patch.object(ignored_tests, "FAILURE_TOTAL_BYTES", len(records)), \
+                patch.object(ignored_tests, "listed_entries", return_value=[]), \
+                patch.object(ignored_tests.subprocess, "run", return_value=process):
+            with contextlib.redirect_stdout(io.StringIO()) as standalone:
+                self.assertEqual(ignored_tests.run_leg("example", []), {name: False})
+            with contextlib.redirect_stdout(io.StringIO()) as shared:
+                self.assertEqual(ignored_tests.main(["example", "other"]), 1)
+        for log in (standalone, shared):
+            payload = "".join(line for line in log.getvalue().splitlines(keepends=True)
+                              if line.startswith(("  failed test:", "  panic context", "screen-effect", "::error::")))
+            self.assertEqual(payload.encode("utf-8"), records)
 
     def test_unquoted_compiler_payloads_are_never_published(self):
         with contextlib.redirect_stdout(io.StringIO()) as log:
@@ -168,7 +215,7 @@ class Visibility(unittest.TestCase):
     def test_data_end_memory_telemetry_is_bounded_best_effort(self):
         steps = yaml.safe_load((ROOT / '.github/workflows/ignored-tests.yml').read_text())["jobs"]["ignored-tests-shards"]["steps"]
         step = next(s for s in steps if s.get("name") == "Record data-leg end and compiler cache")
-        self.assertEqual(step["if"], "always()")
+        self.assertEqual(step["if"], "always() && steps.seed.outcome == 'success'")
         script = step["run"]
         self.assertIn("/sys/fs/cgroup/$metric", script)
         self.assertIn("memory.peak memory.max memory.swap.peak memory.swap.max", script)

@@ -13,7 +13,7 @@ const COMMANDS: &[Command] = &[
     Command {
         name: "new",
         everyday: true,
-        usage: "new <path> [--name \"Name\"] [--template content|native [--sunrise <build>]]",
+        usage: "new <path> [--name \"Name\"] [--template content | --template native [--sunrise <build>]]",
         summary: "Makes a mod project in <path> with a page template and a release workflow; a native one is pinned to the current Nightly's SDK unless --sunrise names another build.",
     },
     Command {

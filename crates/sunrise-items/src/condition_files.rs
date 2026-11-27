@@ -27,9 +27,10 @@ pub(crate) fn data_files(root: &Path, kind: &str, overlay: &PackOverlay) -> Hash
 }
 
 impl Items {
-    /// Each tag registry's tags that hold an entry: the view of this load's
-    /// bound tags that `neoforge:tag_empty` reads (`ICondition.IContext.getTag`).
-    pub fn bound_tags(&self) -> impl Iterator<Item = (&str, impl Iterator<Item = &str>)> {
+    /// Each tag registry's bound tags, each with whether it holds an entry: the view of this
+    /// load's tags that `neoforge:tag_empty` and `fabric:tags_populated` read
+    /// ([`sunrise_world::conditions::LoadConditions::with_tags`]).
+    pub fn bound_tags(&self) -> impl Iterator<Item = (&str, impl Iterator<Item = (&str, bool)>)> {
         [
             ("minecraft:block", &self.block_tags),
             ("minecraft:item", &self.item_tags),
@@ -41,8 +42,10 @@ impl Items {
         ]
         .into_iter()
         .map(|(registry, tags)| {
-            let bound = tags.iter().filter(|(_, members)| !members.is_empty());
-            (registry, bound.map(|(tag, _)| tag.as_str()))
+            let bound = tags
+                .iter()
+                .map(|(tag, members)| (tag.as_str(), !members.is_empty()));
+            (registry, bound)
         })
     }
 }

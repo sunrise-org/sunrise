@@ -329,3 +329,45 @@ fn large_data_is_not_refused() {
     assert!(upgraded.get("VillagerData").is_some());
     assert_eq!(dynamic::stream(upgraded.get("Tags")).len(), 200_000);
 }
+
+#[test]
+fn entity_string_uuid_fix_matches_java_uuid_from_string() {
+    let mut padded =
+        snbt(r#"{id: "minecraft:pig", UUID: "000000000-0000-0000-0000-000000000001"}"#);
+    update(Ty::Entity, &mut padded, 100, 108);
+    assert_eq!(
+        dynamic::as_str(padded.get("UUID")).as_deref(),
+        Some("000000000-0000-0000-0000-000000000001")
+    );
+    assert_eq!(padded.get("UUIDMost"), None);
+
+    let mut signed = snbt(r#"{id: "minecraft:pig", UUID: "00000000-0000-0000-0000-+1"}"#);
+    update(Ty::Entity, &mut signed, 100, 108);
+    assert_eq!(signed.get("UUIDMost"), Some(&Tag::Long(0)));
+    assert_eq!(signed.get("UUIDLeast"), Some(&Tag::Long(1)));
+
+    let mut all_ones =
+        snbt(r#"{id: "minecraft:pig", UUID: "ffffffff-ffff-ffff-ffff-ffffffffffff"}"#);
+    update(Ty::Entity, &mut all_ones, 100, 108);
+    assert_eq!(all_ones.get("UUIDMost"), Some(&Tag::Long(-1)));
+    assert_eq!(all_ones.get("UUIDLeast"), Some(&Tag::Long(-1)));
+
+    let mut distinct =
+        snbt(r#"{id: "minecraft:pig", UUID: "12345678-9abc-def0-0fed-cba987654321"}"#);
+    update(Ty::Entity, &mut distinct, 100, 108);
+    assert_eq!(
+        distinct.get("UUIDMost"),
+        Some(&Tag::Long(0x1234_5678_9abc_def0_u64 as i64))
+    );
+    assert_eq!(
+        distinct.get("UUIDLeast"),
+        Some(&Tag::Long(0x0fed_cba9_8765_4321_u64 as i64))
+    );
+}
+
+#[test]
+fn mid_uuid_fix_accepts_signed_group_on_wolf_owner_uuid() {
+    let mut wolf = snbt(r#"{id: "minecraft:wolf", OwnerUUID: "00000000-0000-0000-0000-+1"}"#);
+    update(Ty::Entity, &mut wolf, 2500, 2550);
+    assert_eq!(wolf.get("Owner"), Some(&Tag::IntArray(vec![0, 0, 0, 1])));
+}

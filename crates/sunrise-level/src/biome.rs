@@ -409,7 +409,7 @@ impl Biomes {
         files.sort_by_cached_key(|f| format!("{}.json", f.name));
         for file in files {
             let v: Value = sunrise_world::json_file::parse(&file.path, file.bytes()?)?;
-            if !include_mods && v.get("neoforge:conditions").is_some() {
+            if !include_mods && sunrise_world::conditions::has_conditions(&v) {
                 return Err(std::io::Error::other(format!(
                     "biome minecraft:{} requires the world's admitted biome table",
                     file.name
