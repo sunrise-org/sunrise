@@ -358,7 +358,7 @@ impl HudAtlas {
         }
         // What the atlas may do without when the images do not all fit: Custom Item Textures
         // and HD font sheets (a font reads the sheet from its pack instead).
-        let mut optional: HashSet<String> = hd_fonts
+        let mut droppable: HashSet<String> = hd_fonts
             .iter()
             .map(|sheet| sheet.atlas_name.clone())
             .collect();
@@ -380,7 +380,7 @@ impl HudAtlas {
             gui_names = found.gui;
             non_gui = found.non_gui;
             for (image, image_flags, is_animated) in cit_sprites(root, &images) {
-                optional.insert(image.0.clone());
+                droppable.insert(image.0.clone());
                 if let Some(f) = image_flags {
                     flags.insert(image.0.clone(), f);
                 }
@@ -425,21 +425,21 @@ impl HudAtlas {
             pad_sprite_borders(&mut base_images, &flags, u32::MAX)?;
         base_images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
         let (width, placements, glyph_region) =
-            Self::layout_leaving_out(&mut base_images, &mut animated, &optional, max_atlas_size)
+            Self::layout_leaving_out(&mut base_images, &mut animated, &droppable, max_atlas_size)
                 .or_else(|error| -> Result<_> {
-                    let models = reducible_model_sprites(root, &base_images, &blur_bordered);
-                    let layout = Self::layout_reducing_models_with_borders(
-                        &mut base_images,
-                        &mut gui_sizes,
-                        &models,
-                        &clamp_bordered,
-                        max_atlas_size,
-                    )?;
-                    log::warn!(
-                        "reduced HUD model texture resolution to keep the resource pack: {error}"
-                    );
-                    Ok(layout)
-                })?;
+                let models = reducible_model_sprites(root, &base_images, &blur_bordered);
+                let layout = Self::layout_reducing_models_with_borders(
+                    &mut base_images,
+                    &mut gui_sizes,
+                    &models,
+                    &clamp_bordered,
+                    max_atlas_size,
+                )?;
+                log::warn!(
+                    "reduced HUD model texture resolution to keep the resource pack: {error}"
+                );
+                Ok(layout)
+            })?;
         // A multiple of 1024 rather than a power of two: the default resources
         // need 4096x5120 (8192 rows before), Faithful 32x 4096x12288 (16384).
         let height = glyph_region.saturating_add(GLYPH_ROWS).saturating_add(1023) / 1024 * 1024;

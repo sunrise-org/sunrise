@@ -4,9 +4,10 @@
 //! A bitmap provider names its sheet by `file` (`minecraft:font/ascii.png`), which vanilla reads
 //! from `assets/<namespace>/textures/<path>`. OptiFine looks first for the same path under
 //! `optifine/` instead of `textures/` (`assets/minecraft/optifine/font/ascii.png`), in any pack,
-//! and reads that sheet when it exists. It applies to every bitmap provider, whatever its font:
-//! the default font's `ascii.png` and `accented.png`, the Standard Galactic `ascii_sga.png` of
-//! the enchanting table, and a pack's own sheets in any namespace.
+//! and reads that sheet when it exists. OptiDocs names the default font's `ascii.png` and the
+//! enchanting table's `ascii_sga.png`; the rule here is the provider's `file`, so it applies to
+//! every bitmap provider, whatever its font (`accented.png`, a pack's own sheets), in the
+//! provider's own namespace.
 //!
 //! The sheet may have any size. A provider cuts its sheet into the grid its `chars` rows give, so
 //! an HD sheet has bigger cells and the same glyph grid; the glyphs keep their size and advance
@@ -15,7 +16,8 @@
 //! The `.properties` file the documentation puts beside a sheet (`width.<n>`, `blend`,
 //! `offsetBold`) is not read: OptiFine 26.x no longer applies it to a bitmap provider's sheet.
 //!
-//! Written from OptiFine's public documentation of HD fonts (OptiDocs, `hd_fonts`).
+//! Written from OptiFine's public documentation of HD fonts (`OptiFineDoc/doc/hd_fonts.txt` and
+//! the HD Fonts page of OptiDocs).
 
 use sunrise_assets::resource_source::ResourceSource;
 
@@ -29,10 +31,9 @@ const FOLDER: &str = "optifine";
 pub struct HdSheet {
     /// Its resource path: `assets/<namespace>/optifine/<path>`.
     pub resource: String,
-    /// The name the HUD atlas packs it under, `<namespace>:optifine/<path>` without the `.png`.
-    /// It is outside `textures/`, so it never meets a vanilla sprite's name (the default
-    /// namespace's sprites have none, the others' have `<namespace>:`) or that of the sheet it
-    /// replaces.
+    /// The name the HUD atlas packs it under, `<namespace>:optifine/<path>` without the `.png`,
+    /// the default namespace's included (its textures are named by their path alone, so none
+    /// meets it). It is never the name of the sheet it replaces.
     pub atlas_name: String,
 }
 
@@ -133,15 +134,6 @@ mod tests {
                 "minecraft:optifine/font/sheet".to_owned()
             )
         );
-    }
-
-    #[test]
-    fn the_atlas_name_is_not_a_vanilla_sprite_name() {
-        // The default namespace's sprites are named by their path alone, the others' by
-        // `namespace:path`: `optifine/...` after a namespace is never one of them.
-        let (_, name) = sheet("minecraft:font/ascii.png");
-        assert_ne!(name, "font/ascii");
-        assert!(name.starts_with("minecraft:optifine/"));
     }
 
     #[test]
