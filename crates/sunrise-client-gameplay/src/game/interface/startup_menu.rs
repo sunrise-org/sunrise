@@ -31,6 +31,7 @@ pub struct StartupMenu {
     modifiers: ModifiersState,
     physical_keys: HashSet<KeyCode>,
     dragging: bool,
+    margin_buttons: HashSet<MouseButton>,
     clipboard: SystemClipboard,
     selection: AppendSelection,
     /// Narrator candidate, admitted only once Game can supply a ClientHost.
@@ -151,6 +152,7 @@ impl StartupMenu {
         if let Some(title) = &mut self.title {
             title.set_rule_registry(registry);
         }
+        game.client.gui_safe_area = self.safe_area;
         // The startup menu's title is the game's from here: its hooks fire now.
         match self.title.take() {
             Some(title) => {
@@ -175,6 +177,7 @@ impl StartupMenu {
         game.client.pending_entry.0 = self.pending.take();
         game.client.perf = std::mem::take(&mut self.perf);
         game.client.cursor = self.cursor;
+        game.client.gui_margin_buttons = std::mem::take(&mut self.margin_buttons);
         if self.key_focus.is_none() {
             game.client.window_cursor = Some(self.pointer);
         }
@@ -894,18 +897,24 @@ impl Loading {
     }
 
     fn menu_options_click(&mut self, drag: bool, right: bool) {
-        self.menu_options_click_in(self.gui_frame(), drag, right)
+        self.menu_options_click_in(self.gui_frame(), self.menu.cursor, drag, right)
     }
 
     #[inline(always)]
-    fn menu_options_click_in(&mut self, frame: GuiFrame, drag: bool, right: bool) {
+    fn menu_options_click_in(
+        &mut self,
+        frame: GuiFrame,
+        cursor: (f32, f32),
+        drag: bool,
+        right: bool,
+    ) {
         let Some(gui) = &self.gui else { return };
         self.menu.options.shift = self.menu.modifiers.shift_key();
         let events = self.menu.options.click(
             &mut self.settings,
             &gui.atlas,
-            self.menu.cursor.0,
-            self.menu.cursor.1,
+            cursor.0,
+            cursor.1,
             frame.size(),
             frame.target.map(|axis| axis as i32),
             drag,
@@ -1199,30 +1208,63 @@ impl Loading {
         if let WindowEvent::KeyboardInput { event, .. } = &event {
             self.menu_narrator_hotkey(event);
         }
-        // The real mouse takes the pointer back from the keyboard's focus.
         let synthetic = self.menu.key_synthetic;
-        if !synthetic
-            && matches!(
-                &event,
-                WindowEvent::MouseInput {
-                    state: ElementState::Pressed,
-                    ..
-                } | WindowEvent::MouseWheel { .. }
-            )
+        let movement = if let WindowEvent::CursorMoved { position, .. } = &event
+            && self.gui.is_some()
+            && self.menu.pending.is_none()
         {
             let frame = self.gui_frame();
-            if frame.clip().is_some() && !frame.contains(self.projected_menu_pointer().subpixel()) {
-                return Ok(());
+            let projection = PointerProjection::new(
+                frame.with_pointer_space(self.menu_pointer_space(frame.target)),
+            );
+            self.menu.pointer = projection.window.os_sample(*position);
+            Some((
+                frame,
+                projection.project_pointer(self.menu.pointer).subpixel(),
+            ))
+        } else {
+            None
+        };
+        let margin = !synthetic
+            && match (&event, movement) {
+                (WindowEvent::CursorMoved { .. }, Some((frame, cursor))) => !frame.contains(cursor),
+                (WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. }, _) => {
+                    let frame = self.gui_frame();
+                    frame.clip().is_some()
+                        && !frame.contains(self.projected_menu_pointer().subpixel())
+                }
+                _ => false,
+            };
+        if !synthetic {
+            match &event {
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    button,
+                    ..
+                } if margin => {
+                    self.menu.margin_buttons.insert(*button);
+                    return Ok(());
+                }
+                WindowEvent::MouseInput {
+                    state: ElementState::Released,
+                    button,
+                    ..
+                } if self.menu.margin_buttons.remove(button) => return Ok(()),
+                WindowEvent::MouseWheel { .. } if margin => return Ok(()),
+                _ => {}
+            }
+            if !margin {
+                self.menu_key_focus_mouse(&event);
             }
         }
-        if !synthetic {
-            self.menu_key_focus_mouse(&event);
+        if let Some((_, cursor)) = movement
+            && (!margin || self.menu.key_focus.is_none())
+        {
+            self.menu.cursor = cursor;
         }
-        // Fullscreen (F11) is the window's: not the screen's input; the
-        // keyboard's own clicks aren't the mouse.
         let f11 = matches!(&event, WindowEvent::KeyboardInput { event, .. }
             if event.physical_key == PhysicalKey::Code(KeyCode::F11));
-        if !f11 && !synthetic {
+        if !f11 && !synthetic && !margin {
             super::narrator::narrate_input(&mut self.menu.narration, &event, self.menu.cursor);
         }
         // Screen.keyPressed: Tab, the arrows and Enter move and press the
@@ -1279,6 +1321,7 @@ impl Loading {
             WindowEvent::Focused(false) => {
                 self.menu.modifiers = ModifiersState::empty();
                 self.menu.physical_keys.clear();
+                self.menu.margin_buttons.clear();
                 self.menu.dragging = false;
                 if let Some(title) = &mut self.menu.title {
                     title.release();
@@ -1309,18 +1352,13 @@ impl Loading {
             }
             WindowEvent::MouseInput { .. } | WindowEvent::MouseWheel { .. }
                 if self.menu.win.is_some() => {}
-            WindowEvent::CursorMoved { position, .. } => {
-                let frame = self.gui_frame();
-                let projection = PointerProjection::new(
-                    frame.with_pointer_space(self.menu_pointer_space(frame.target)),
-                );
-                self.menu.pointer = projection.window.os_sample(position);
-                self.menu.cursor = projection.project_pointer(self.menu.pointer).subpixel();
+            WindowEvent::CursorMoved { .. } => {
+                let (frame, cursor) = movement.expect("cursor movement was projected");
                 if self.menu.options_open && self.menu.dragging {
-                    self.menu_options_click_in(frame, true, false);
+                    self.menu_options_click_in(frame, cursor, true, false);
                 } else if let Some(title) = &mut self.menu.title {
-                    title.drag(self.menu.cursor, frame.size());
-                    title.drag_field(&self.gui.as_ref().unwrap().atlas, self.menu.cursor.0);
+                    title.drag(cursor, frame.size());
+                    title.drag_field(&self.gui.as_ref().unwrap().atlas, cursor.0);
                 }
             }
             WindowEvent::MouseInput { state, button, .. } if self.menu.options_open => {

@@ -1217,25 +1217,78 @@ mod tests {
     }
 
     #[cfg(feature = "client")]
+    mod safe_area_input {
+        use mod_api::{ClientHost, Flow, Hooks};
+        use std::sync::Mutex;
+
+        pub(super) static DRAGS: Mutex<Vec<[f32; 2]>> = Mutex::new(Vec::new());
+        pub(super) static WHEELS: Mutex<usize> = Mutex::new(0);
+
+        pub(super) fn with_game(run: impl FnOnce(&mut crate::game::ClientGame<'_>)) {
+            mod_platform::testing::with_mods(
+                vec![mod_api::ModEntry::new("safe_area_input", hooks())].into(),
+                || crate::game::native_entity_refs::tests::with_client_game(run),
+            );
+        }
+
+        #[derive(Default)]
+        struct Input;
+
+        #[mod_api::sunrise_mod]
+        impl Hooks for Input {
+            fn screen_mouse_dragged_pre(
+                &self,
+                _: &dyn ClientHost,
+                event: &mut mod_api::ScreenMouseDraggedPreEvent<'_>,
+            ) -> Flow {
+                DRAGS.lock().unwrap().push(event.delta);
+                Flow::Continue
+            }
+
+            fn screen_mouse_scrolled_pre(
+                &self,
+                _: &dyn ClientHost,
+                _: &mut mod_api::ScreenMouseScrolledPreEvent<'_>,
+            ) -> Flow {
+                *WHEELS.lock().unwrap() += 1;
+                Flow::Cancel
+            }
+        }
+    }
+
+    #[cfg(feature = "client")]
     #[test]
     #[ignore = "daily"]
     fn a_safe_area_keeps_pause_slot_and_chat_mouse_hits_on_their_draws() {
-        use crate::game::native_entity_refs::tests::{test_window, with_client_game};
+        use crate::game::native_entity_refs::tests::test_window;
+        use crate::{game::client_side::event_loop::EventLoopCtl, input_trace::InputOrigin};
         use sunrise_client::{
             widgets::{self, Kind},
             window::{GuiFrame, PointerProjection, PointerSpace},
         };
-        use winit::dpi::PhysicalPosition;
+        use winit::{
+            dpi::PhysicalPosition,
+            event::{
+                DeviceId, ElementState, MouseButton, MouseScrollDelta, TouchPhase, WindowEvent,
+            },
+        };
+
+        struct Loop;
+        impl EventLoopCtl for Loop {
+            fn exit(&self) {}
+            fn set_control_flow(&self, _: winit::event_loop::ControlFlow) {}
+        }
 
         sunrise_gameplay_common::game::in_own_process(
             "game::client_side::screen_build::tests::a_safe_area_keeps_pause_slot_and_chat_mouse_hits_on_their_draws",
             || {
-                with_client_game(|game| {
-                    let target = [853, 481];
+                safe_area_input::with_game(|game| {
+                    let target = [853, 521];
                     let (_event_loop, window) = test_window(target);
                     game.common.options.offscreen = true;
                     let mut renderer = game.new_renderer(window.clone()).unwrap();
                     renderer.resize(target[0], target[1]);
+                    let window_id = window.id();
                     game.client.window.0 = Some(window);
                     game.set_renderer(renderer);
                     game.common.player = Some(
@@ -1247,7 +1300,24 @@ mod tests {
                     );
                     game.client.title.0 = None;
                     let frame = GuiFrame::from_insets(target, 1, false, Some([35, 11, 7, 17]));
-                    game.client.gui_safe_area = Some(frame);
+                    game.client.settings.gui_scale = 1;
+                    game.client.settings.force_unicode = false;
+                    game.client.gui_safe_area = Some((
+                        target,
+                        sunrise_hooks::Insets {
+                            left: 35,
+                            top: 11,
+                            right: 7,
+                            bottom: 17,
+                        },
+                    ));
+                    assert_eq!(game.gui_frame_for(target).geometry(), frame.geometry());
+                    game.client.settings.gui_scale = 2;
+                    assert_eq!(game.gui_frame_for(target).scale(), 2.0);
+                    game.client.settings.gui_scale = 1;
+                    game.client.settings.force_unicode = true;
+                    assert_eq!(game.gui_frame_for(target).scale(), 2.0);
+                    game.client.settings.force_unicode = false;
                     let space = PointerSpace::new(target, 1.0);
                     let projection = PointerProjection::new(frame.with_pointer_space(space));
                     let place = |game: &mut crate::game::ClientGame<'_>, at: [f32; 2]| {
@@ -1264,6 +1334,60 @@ mod tests {
                     game.client.screen = Screen::Paused;
                     game.client.pause_menu = true;
                     game.build_screen_at(target);
+                    let event = |game: &mut crate::game::ClientGame<'_>, event| {
+                        game.handle_window_event_as(
+                            &Loop,
+                            window_id,
+                            event,
+                            InputOrigin::Agent,
+                            None,
+                        );
+                    };
+                    let moved = |x, y| WindowEvent::CursorMoved {
+                        device_id: DeviceId::dummy(),
+                        position: PhysicalPosition::new(x, y),
+                    };
+                    let button = |state| WindowEvent::MouseInput {
+                        device_id: DeviceId::dummy(),
+                        state,
+                        button: MouseButton::Left,
+                    };
+                    let wheel = || WindowEvent::MouseWheel {
+                        device_id: DeviceId::dummy(),
+                        delta: MouseScrollDelta::LineDelta(0.0, 1.0),
+                        phase: TouchPhase::Moved,
+                    };
+
+                    event(game, moved(20.0, 40.0));
+                    assert!(game.pointer_in_gui_margin());
+                    let presses = game.client.physical_presses;
+                    event(game, button(ElementState::Pressed));
+                    event(game, wheel());
+                    assert_eq!(game.client.physical_presses, presses);
+                    assert_eq!(*safe_area_input::WHEELS.lock().unwrap(), 0);
+                    event(game, moved(60.0, 40.0));
+                    event(game, button(ElementState::Released));
+                    assert_eq!(game.client.drag_button, None);
+                    assert!(safe_area_input::DRAGS.lock().unwrap().is_empty());
+
+                    event(game, button(ElementState::Pressed));
+                    event(game, moved(20.0, 40.0));
+                    let drags = safe_area_input::DRAGS.lock().unwrap();
+                    assert_eq!(drags.len(), 1);
+                    assert!((drags[0][0] + 40.0).abs() < 0.05);
+                    assert_eq!(drags[0][1], 0.0);
+                    drop(drags);
+                    event(game, button(ElementState::Released));
+                    assert_eq!(game.client.drag_button, None);
+
+                    game.client.captured = true;
+                    game.client.screen_grab = true;
+                    assert!(!game.pointer_in_gui_margin());
+                    event(game, wheel());
+                    assert_eq!(*safe_area_input::WHEELS.lock().unwrap(), 1);
+                    game.client.screen_grab = false;
+                    game.client.captured = false;
+
                     let (w, h) = frame.size();
                     let &(x, y, width, _, _, _) = game
                         .built_pause(w, h)

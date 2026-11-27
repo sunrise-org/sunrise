@@ -766,6 +766,9 @@ impl crate::game::ClientGame<'_> {
             font.reset_cache();
             self.client.chat_ui.chat.rescale(&self.client.gui.atlas);
         }
+        if self.client.gui_safe_area.is_some() {
+            self.refresh_window_cursor();
+        }
         self.notify_window_resize();
         // GUI-scale changes rebuild mounted children before the next input.
         self.refresh_screen_widgets();

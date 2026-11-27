@@ -309,6 +309,17 @@ pub(crate) mod tests {
                 &Loop,
                 WindowEvent::MouseInput {
                     device_id: DeviceId::dummy(),
+                    state: ElementState::Released,
+                    button: MouseButton::Left,
+                },
+            )
+            .unwrap();
+        assert!(!loading.menu.options_open);
+        loading
+            .menu_event(
+                &Loop,
+                WindowEvent::MouseInput {
+                    device_id: DeviceId::dummy(),
                     state: ElementState::Pressed,
                     button: MouseButton::Left,
                 },

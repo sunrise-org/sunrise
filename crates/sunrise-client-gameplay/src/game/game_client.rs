@@ -324,34 +324,36 @@ impl crate::game::ClientGame<'_> {
     }
     #[inline(always)]
     pub fn gui_frame_for(&self, framebuffer: [u32; 2]) -> sunrise_client::window::GuiFrame {
-        let frame = if self.client.renderer.0.is_some() {
-            self.client.gui_safe_area
-        } else {
-            self.client
+        if self.client.renderer.0.is_none()
+            && let Some(frame) = self
+                .client
                 .render_snapshot
                 .get()
                 .and_then(|snapshot| snapshot.gui_frame)
-                .or(self.client.gui_safe_area)
-        };
-        frame
-            .filter(|frame| frame.target == framebuffer)
-            .unwrap_or_else(|| self.client.settings.gui_frame_for(framebuffer))
+                .filter(|frame| frame.target == framebuffer)
+        {
+            return frame;
+        }
+        let insets = self
+            .client
+            .gui_safe_area
+            .filter(|(target, _)| *target == framebuffer)
+            .map(|(_, insets)| insets);
+        self.client
+            .settings
+            .gui_frame_with_insets(framebuffer, insets)
     }
 
     #[inline(always)]
     pub(in crate::game::client_side) fn sample_gui_safe_area(&mut self) {
-        let before = self.client.gui_safe_area.and_then(|frame| frame.geometry());
-        let frame = self.client.renderer.0.as_ref().and_then(|renderer| {
+        let before = self.renderer_gui_frame().and_then(|frame| frame.geometry());
+        self.client.gui_safe_area = self.client.renderer.0.as_ref().and_then(|renderer| {
             let target = [renderer.config.width, renderer.config.height];
-            let insets = sunrise_hooks::engine::safe_area(target)?;
-            let frame = self
-                .client
-                .settings
-                .gui_frame_with_insets(target, Some(insets));
-            frame.geometry().map(|_| frame)
+            sunrise_hooks::engine::safe_area(target)
+                .filter(|insets| insets.edges() != [0; 4])
+                .map(|insets| (target, insets))
         });
-        self.client.gui_safe_area = frame;
-        if before != frame.and_then(|frame| frame.geometry()) {
+        if before != self.renderer_gui_frame().and_then(|frame| frame.geometry()) {
             self.refresh_window_cursor();
             self.notify_window_resize();
         }
@@ -360,7 +362,7 @@ impl crate::game::ClientGame<'_> {
     #[inline(always)]
     pub(in crate::game::client_side) fn pointer_in_gui_margin(&self) -> bool {
         self.client.gui_safe_area.is_some()
-            && (!self.client.captured || self.client.screen_grab)
+            && !self.client.captured
             && self.renderer_gui_frame().is_some_and(|frame| {
                 self.project_window_cursor_in(frame)
                     .is_some_and(|pointer| !frame.contains(pointer.subpixel()))
@@ -1676,9 +1678,7 @@ impl crate::game::ClientGame<'_> {
                     let mut screen_scrolled = false;
                     let stick_scroll = self.pad_stick_scroll();
                     let step_scroll = self.pad_step_scroll();
-                    if self.client.screen == Screen::Playing
-                        && let Some(title) = &mut self.client.title.0
-                    {
+                    if self.client.screen == Screen::Playing && self.client.title.0.is_some() {
                         let size = self
                             .client
                             .window
@@ -1687,12 +1687,8 @@ impl crate::game::ClientGame<'_> {
                             .map(|w| w.inner_size())
                             .unwrap_or_default();
                         let target = [size.width, size.height];
-                        let gui = self
-                            .client
-                            .gui_safe_area
-                            .filter(|frame| frame.target == target)
-                            .unwrap_or_else(|| self.client.settings.gui_frame_for(target))
-                            .size();
+                        let gui = self.gui_frame_for(target).size();
+                        let title = self.client.title.0.as_mut().unwrap();
                         if step_scroll {
                             title.step_scroll(d, self.client.cursor, gui);
                         } else if stick_scroll {
@@ -2491,13 +2487,7 @@ impl crate::game::ClientGame<'_> {
                     } else {
                         hud_layout::paint(batch, &g.client.gui.atlas, &draws);
                     }
-                    batch.shift_to_target_since(
-                        start,
-                        [
-                            width / 2.0 - ((crosshair_w - 15) / 2) as f32 - 7.5,
-                            height / 2.0 - ((crosshair_h - 15) / 2) as f32 - 7.5,
-                        ],
-                    );
+                    batch.shift_to_target_since(start, [0.0; 2]);
                 }
             });
             self.gui_layer(VanillaGuiLayer::Hotbar, &mut batch, &mut |g, batch| {
@@ -5058,6 +5048,9 @@ impl crate::game::ClientGame<'_> {
         let lightmap_chart = self.debug_shows_lightmap();
         let mut prepared_draws =
             std::mem::take(&mut *self.client.prepared_model_draws.borrow_mut());
+        let gui_frame = self
+            .renderer_gui_frame()
+            .filter(|frame| frame.clip().is_some());
         let mut renderer_slot = self.client.renderer.0.take();
         let result = match renderer_slot.as_mut() {
             Some(renderer) => {
@@ -5078,7 +5071,7 @@ impl crate::game::ClientGame<'_> {
                 });
                 renderer.stage_prepared_draws(&prepared_draws);
                 self.client.render_snapshot.set(Some(RenderSnapshot {
-                    gui_frame: self.client.gui_safe_area,
+                    gui_frame,
                     framebuffer: [renderer.config.width, renderer.config.height],
                     prepared_generation: renderer.prepared_generation(),
                     staged_prepared_draws: prepared_draws.len() as u64,

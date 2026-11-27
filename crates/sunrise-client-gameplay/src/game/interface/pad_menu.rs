@@ -2922,9 +2922,17 @@ impl crate::game::ClientGame<'_> {
             .0
             .menu
             .real_pointer
-            .zip(self.renderer_pointer_projection())
-            .map_or((0.0, 0.0), |(sample, projection)| {
-                projection.project_pointer(sample).subpixel()
+            .zip(self.renderer_gui_frame())
+            .map_or((0.0, 0.0), |(sample, frame)| {
+                let cursor = frame
+                    .with_pointer_space(self.pointer_space(frame.target))
+                    .pointer_to_gui(sample)
+                    .subpixel();
+                if frame.contains(cursor) {
+                    cursor
+                } else {
+                    (-1.0e6, -1.0e6)
+                }
             })
     }
 
