@@ -226,7 +226,9 @@ impl crate::game::ClientGame<'_> {
                 button,
                 ..
             } if self.pointer_in_gui_margin() => {
-                self.client.gui_margin_buttons.insert(*button);
+                if !self.client.physical_buttons.contains(button) {
+                    self.client.gui_margin_buttons.insert(*button);
+                }
                 return;
             }
             WindowEvent::MouseInput {

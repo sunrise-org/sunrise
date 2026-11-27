@@ -1535,7 +1535,8 @@ impl crate::game::ClientGame<'_> {
                             self.client
                                 .drag_button
                                 .filter(|b| self.client.physical_buttons.contains(b))
-                        };
+                        }
+                        .filter(|button| !self.client.gui_margin_buttons.contains(button));
                         if margin && button.is_none() {
                             return Ok(());
                         }

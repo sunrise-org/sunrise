@@ -93,10 +93,14 @@ impl crate::game::ClientGame<'_> {
             // The panorama and its blur are drawn by the renderer.
             Reason::Other => sunrise_client::ui::menu_background_full(batch, atlas, w, h, false),
             Reason::NetherPortal => {
-                let [_, _, width, height] = batch.target_rect();
+                let (width, height) = if batch.content_clip().is_some() {
+                    let [_, _, width, height] = batch.target_rect();
+                    (width.ceil() as i32, height.ceil() as i32)
+                } else {
+                    (w as i32, h as i32)
+                };
                 let start = batch.vertices.len();
-                let overlay =
-                    hud_overlays::portal_overlay(width.ceil() as i32, height.ceil() as i32, 1.0);
+                let overlay = hud_overlays::portal_overlay(width, height, 1.0);
                 hud_layout::paint(batch, atlas, &[overlay]);
                 batch.shift_to_target_since(start, [0.0; 2]);
             }
