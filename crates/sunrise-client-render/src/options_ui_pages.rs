@@ -49,7 +49,7 @@ pub(super) fn find_page_key(key: PageKey) -> Option<(usize, usize)> {
 #[cfg(test)]
 thread_local! {
     /// A test's own pages, instead of the game's registered ones: each test runs on its thread.
-    static TEST_PAGES: std::cell::Cell<Option<&'static [&'static dyn added::Page]>> =
+    pub(crate) static TEST_PAGES: std::cell::Cell<Option<&'static [&'static dyn added::Page]>> =
         const { std::cell::Cell::new(None) };
 }
 
@@ -115,9 +115,7 @@ pub(super) fn tooltip(page: usize, r: usize) -> Option<Text> {
 pub(super) fn sunrise_page_tooltip(page: Page) -> Option<&'static str> {
     Some(match page {
         Page::Sunrise => "sunrise.pages.settings.tooltip",
-        Page::Studio => "sunrise.pages.studio.tooltip",
         Page::Controller => "sunrise.pages.controller.tooltip",
-        Page::Pvp => "sunrise.pages.pvp.tooltip",
         Page::Agent => "sunrise.pages.agent.tooltip",
         Page::Mods => "sunrise.pages.mods.tooltip",
         Page::Music => "sunrise.pages.music.tooltip",

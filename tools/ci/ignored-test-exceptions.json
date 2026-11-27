@@ -338,14 +338,6 @@
   {
     "package": "sunrise-sim",
     "target": "lib",
-    "test": "save::far_census::far_floating_cells_per_level",
-    "path": "crates/sunrise-sim/src/save/far_census.rs",
-    "reason": "requires prepared data and a save (see the module docs)",
-    "rationale": "Existing parity-harness step in tools/ci/ignored-tests/parity-harness.txt; SUNRISE_FAR_SAVE supplies its independent oracle/private fixture and drives it separately, not as a prepared-resource daily test."
-  },
-  {
-    "package": "sunrise-sim",
-    "target": "lib",
     "test": "save::loot_tests::opened_loot_parity_fixture",
     "path": "crates/sunrise-sim/src/save/loot_tests.rs",
     "reason": "run by tools/test_opened_loot_parity.py",

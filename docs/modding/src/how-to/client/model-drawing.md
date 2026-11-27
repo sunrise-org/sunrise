@@ -548,7 +548,7 @@ Each mob and player in view gets the render hook pair once a frame, NeoForge's
 
 This is the order within one entity. In the ordered body pass, the hooks run at each body's slot in
 level join order, interleaved with general entity renderer submissions. The local body is not
-submitted while the camera follows another entity (except in studio freecam). The `entity_outline`
+submitted while the camera follows another entity. The `entity_outline`
 queries for mobs, players and dropped items also follow this pass's join order; projectiles are
 queried in a later pass. The ender dragon and end crystals draw at their slots without adding
 these hooks or outline queries.

@@ -1468,7 +1468,6 @@ mod tests {
         assert_eq!(zh.get("%s chunks"), Some("%s 个区块"));
         // Not every bundle is complete: the en_us layer is in every map, so a
         // missing key falls back to English (no bundle exists for xx_xx).
-        assert_eq!(zh.get("LOD Distance"), Some("LOD 距离"));
         let xx = Language::load(&[&empty], "xx_xx");
         assert_eq!(xx.get("sunrise.mods.not_built"), Some(" (Not built)"));
         let pl = Language::load(&[&empty], "pl_pl");

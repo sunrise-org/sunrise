@@ -340,38 +340,6 @@ pub enum Pacing {
     Precise,
 }
 
-/// How finely far terrain is drawn (`FarDetail` in the LOD options).
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
-pub enum FarDetail {
-    /// Each tile level starts at eight times its size from the camera.
-    #[default]
-    Full,
-    /// Coarser levels start at half that distance: about a quarter of the
-    /// far quads, for GPUs that far terrain slows down. Changes the picture.
-    Reduced,
-}
-impl FarDetail {
-    pub fn name(self) -> &'static str {
-        match self {
-            FarDetail::Full => "full",
-            FarDetail::Reduced => "reduced",
-        }
-    }
-    pub fn label(self) -> &'static str {
-        match self {
-            FarDetail::Full => "Full",
-            FarDetail::Reduced => "Reduced",
-        }
-    }
-    fn parse(s: &str) -> Self {
-        if s == "reduced" {
-            FarDetail::Reduced
-        } else {
-            FarDetail::Full
-        }
-    }
-}
-
 /// Frame generation: a frame made between each two real ones.
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
 pub enum FrameGeneration {
@@ -520,16 +488,6 @@ impl Upscaling {
             .find(|u| u.name() == s)
             .unwrap_or_default()
     }
-}
-
-static REDUCED_SUGGESTED: std::sync::atomic::AtomicBool = std::sync::atomic::AtomicBool::new(false);
-/// Whether the settings suggest Reduced far detail: set when the renderer
-/// starts, on the GPUs `lod_capped` names (far terrain slows them most).
-pub(crate) fn suggest_reduced_far_detail(on: bool) {
-    REDUCED_SUGGESTED.store(on, std::sync::atomic::Ordering::Relaxed);
-}
-pub(crate) fn reduced_far_detail_suggested() -> bool {
-    REDUCED_SUGGESTED.load(std::sync::atomic::Ordering::Relaxed)
 }
 
 /// The Screenshot Quality choices, times the game's resolution.
@@ -691,29 +649,7 @@ pub(crate) fn gpu_culling_lost() -> bool {
     GPU_CULLING_LOST.load(std::sync::atomic::Ordering::Relaxed)
 }
 
-/// The farthest LOD Distance, in chunks, on integrated GPUs other than
-/// Apple's: they share the CPU's memory bandwidth, and past it far terrain
-/// costs them more frame time than it is worth.
-pub const INTEGRATED_LOD_DISTANCE: u32 = 128;
-/// Whether `INTEGRATED_LOD_DISTANCE` applies to this adapter. Apple's GPUs
-/// are integrated too, with memory and bandwidth enough for every distance.
-pub(crate) fn lod_capped(info: &wgpu::AdapterInfo) -> bool {
-    info.device_type == wgpu::DeviceType::IntegratedGpu && !info.name.starts_with("Apple")
-}
-/// A LOD distance as far terrain uses it on this adapter.
-pub fn lod_distance_capped(distance: u32, info: &wgpu::AdapterInfo) -> u32 {
-    let distance = distance.min(crate::lod::MAX_CHUNKS);
-    if lod_capped(info) {
-        distance.min(INTEGRATED_LOD_DISTANCE)
-    } else {
-        distance
-    }
-}
 impl Graphics {
-    /// `lod_distance` as far terrain uses it on this adapter.
-    pub fn lod_distance_on(&self, info: &wgpu::AdapterInfo) -> u32 {
-        lod_distance_capped(self.lod_distance, info)
-    }
     /// Whether the selected packs leave vanilla's block models in place.
     /// Sunrise's occlusion assumptions (entity and leaf culling) hold only
     /// for those: a pack can replace an opaque cube's model or a leaf's.
@@ -760,13 +696,6 @@ pub struct Graphics {
     /// Records no engine setting recognized; a registered store may replace them on save.
     pub(crate) unclaimed: Vec<(String, String)>,
     pub preset: Preset,
-    /// Distant surface terrain range, in chunks; 0 disables LODs.
-    pub lod_distance: u32,
-    /// How finely far terrain is drawn; Full unless the player picks Reduced.
-    pub far_detail: FarDetail,
-    /// Far terrain from servers' BlueMap web maps; no server has one unless
-    /// the player names it (`blueMap:` lines).
-    pub blue_map: crate::bluemap::Settings,
     /// Skip sections hidden behind closed ones (vanilla's occlusion graph).
     pub cave_culling: bool,
     /// Near solid terrain culled, and its draws listed, on the GPU (`gfx::gpu_culling`), where it
@@ -901,9 +830,6 @@ impl Default for Graphics {
         Self {
             unclaimed: Vec::new(),
             preset: Preset::Custom,
-            lod_distance: 0,
-            far_detail: FarDetail::Full,
-            blue_map: crate::bluemap::Settings::default(),
             cave_culling: true,
             gpu_culling: GpuCullingMode::Off,
             entity_culling: EntityCullingMode::Off,
@@ -968,14 +894,6 @@ impl Graphics {
     /// Load the shared settings text already read for the registered stores.
     pub(super) fn load_text(dir: &Path, text: &str) -> Self {
         let mut g = Self::parse(text);
-        g.blue_map.servers = match fs::read_to_string(dir.join(crate::bluemap::SERVERS_FILE)) {
-            Ok(text) => crate::bluemap::Settings::parse_servers(&text),
-            Err(e) if e.kind() == std::io::ErrorKind::NotFound => Vec::new(),
-            Err(e) => {
-                log::warn!("{}: {e}; no BlueMap is named", crate::bluemap::SERVERS_FILE);
-                Vec::new()
-            }
-        };
         let marker = dir.join(HDR_MARKER);
         if let Ok(text) = fs::read_to_string(&marker)
             && fs::remove_file(&marker).is_ok()
@@ -1039,15 +957,6 @@ impl Graphics {
             let number = |d: u32| value.parse().unwrap_or(d);
             match key.trim() {
                 "preset" => g.preset = Preset::parse(value),
-                "lodDistance" => {
-                    g.lod_distance = number(g.lod_distance).min(crate::lod::MAX_CHUNKS)
-                }
-                "farDetail" => g.far_detail = FarDetail::parse(value),
-                "blueMapRadius" => {
-                    if let Some(radius) = crate::bluemap::Settings::parse_radius(value) {
-                        g.blue_map.radius = radius;
-                    }
-                }
                 "caveCulling" => g.cave_culling = flag(g.cave_culling),
                 "gpuCullingMode" => gpu_culling = Some(GpuCullingMode::parse(value, g.gpu_culling)),
                 "gpuCulling" => {
@@ -1173,10 +1082,8 @@ impl Graphics {
     }
     pub fn serialize(&self) -> String {
         let mut text = format!(
-            "preset:{}\nlodDistance:{}\nfarDetail:{}\ncaveCulling:{}\nentityCulling:{}\nentityCullingPrecheck:{}\nparticleCulling:{}\nleafCulling:{}\nopaqueIce:{}\nblockEntityCacheShulkerBoxes:{}\nblockEntityCacheSigns:{}\nblockEntityCacheDecoratedPots:{}\nblockEntityCacheBells:{}\nblockEntityCacheChests:{}\nblockEntityCacheBanners:{}\nblockEntityCacheCopperGolemStatues:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\ntextureBudgetMiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\nditherCutoutMips:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\nresolutionScale:{}\ndynamicResolution:{}\ntargetFps:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nupscalingSharpness:{}\nscreenshotQuality:{}\nframeGeneration:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiNits:{}\nhdrLighting:{}\nbatteryMode:{}\nshadowCache:{}\ngraphicsApi:{}\npickedShaderPack:{}\nbatchTranslucent:{}\nhdrSmoothGradients:{}\ngpuCullingMode:{}\ngpuCulling:{}\ngpuCullingWritten:{}\nparallelTick:{}\n",
+            "preset:{}\ncaveCulling:{}\nentityCulling:{}\nentityCullingPrecheck:{}\nparticleCulling:{}\nleafCulling:{}\nopaqueIce:{}\nblockEntityCacheShulkerBoxes:{}\nblockEntityCacheSigns:{}\nblockEntityCacheDecoratedPots:{}\nblockEntityCacheBells:{}\nblockEntityCacheChests:{}\nblockEntityCacheBanners:{}\nblockEntityCacheCopperGolemStatues:{}\nchunkUpdates:{}\nuploadBudgetKiB:{}\ntextureBudgetMiB:{}\nsky:{}\nfog:{}\nweather:{}\nanimatedTextures:{}\nditherCutoutMips:{}\npresentMode:{}\nframePacing:{}\nworkers:{}\nresolutionScale:{}\ndynamicResolution:{}\ntargetFps:{}\nfxaa:{}\ntaa:{}\nupscaling:{}\nupscalingSharpness:{}\nscreenshotQuality:{}\nframeGeneration:{}\nhdr:{}\nhdrPaperWhite:{}\nhdrPeak:{}\nhdrBlackLevel:{}\nhdrUiNits:{}\nhdrLighting:{}\nbatteryMode:{}\nshadowCache:{}\ngraphicsApi:{}\npickedShaderPack:{}\nbatchTranslucent:{}\nhdrSmoothGradients:{}\ngpuCullingMode:{}\ngpuCulling:{}\ngpuCullingWritten:{}\nparallelTick:{}\n",
             self.preset.name(),
-            self.lod_distance,
-            self.far_detail.name(),
             bool_text(self.cave_culling),
             self.entity_culling.name(),
             self.entity_culling_precheck,
@@ -1233,7 +1140,6 @@ impl Graphics {
         if let Some(driver) = &self.hdr_failed_start {
             text += &format!("hdrFailedStart:{driver}\n");
         }
-        text += &self.blue_map.serialize();
         text
     }
     /// The settings stores of this file follow these lines (`sunrise_hooks::settings`).
@@ -1460,10 +1366,10 @@ mod tests {
         let dir = scratch("graphics-unclaimed");
         fs::write(dir.join(FILE), "overlay:graph\n").unwrap();
         let mut graphics = Graphics::load(&dir);
-        graphics.lod_distance = 12;
+        graphics.chunk_updates = 12;
         graphics.save(&dir);
         let saved = fs::read_to_string(dir.join(FILE)).unwrap();
-        assert_eq!(Graphics::parse(&saved).lod_distance, 12);
+        assert_eq!(Graphics::parse(&saved).chunk_updates, 12);
         assert_eq!(
             saved
                 .lines()
@@ -1547,13 +1453,6 @@ mod tests {
         let g = Graphics {
             unclaimed: Vec::new(),
             preset: Preset::Balanced,
-            lod_distance: 256,
-            far_detail: FarDetail::Reduced,
-            blue_map: crate::bluemap::Settings {
-                radius: 40,
-                // In their own file (`bluemap::SERVERS_FILE`).
-                servers: Vec::new(),
-            },
             cave_culling: false,
             gpu_culling: GpuCullingMode::On,
             entity_culling: EntityCullingMode::Synchronous,
@@ -1639,13 +1538,6 @@ mod tests {
         assert_eq!(
             Graphics::parse("entityCulling:false\n").entity_culling,
             EntityCullingMode::Off
-        );
-        // A map named here (a shared instance's, a pack's) is no map.
-        assert!(
-            Graphics::parse("blueMap:play.example.net https://map.example.net\n")
-                .blue_map
-                .servers
-                .is_empty()
         );
         assert_eq!(Graphics::parse(""), Graphics::default());
         // Translucent Batching is on, in files from before it too; only false turns it off,
@@ -1973,82 +1865,6 @@ mod tests {
             "removing the server pack restores the selected local mode"
         );
         assert!(g.vanilla_models_with_server_packs(selected, []));
-    }
-
-    #[test]
-    fn integrated_gpus_other_than_apple_cap_the_lod_distance() {
-        let adapter = |name: &str, device_type| wgpu::AdapterInfo {
-            name: name.into(),
-            vendor: 0,
-            device: 0,
-            device_type,
-            device_pci_bus_id: String::new(),
-            driver: String::new(),
-            driver_info: String::new(),
-            backend: wgpu::Backend::Vulkan,
-            subgroup_min_size: 0,
-            subgroup_max_size: 0,
-            transient_saves_memory: None,
-            limit_bucket: None,
-        };
-        let hd620 = adapter(
-            "Intel(R) HD Graphics 620 (KBL GT2)",
-            wgpu::DeviceType::IntegratedGpu,
-        );
-        let m4 = adapter("Apple M4 Pro", wgpu::DeviceType::IntegratedGpu);
-        let discrete = adapter("NVIDIA GeForce RTX 4070", wgpu::DeviceType::DiscreteGpu);
-        for (distance, capped) in [(0, 0), (64, 64), (128, 128), (256, 128), (1024, 128)] {
-            let g = Graphics {
-                lod_distance: distance,
-                ..Graphics::default()
-            };
-            assert_eq!(g.lod_distance_on(&hd620), capped);
-            assert_eq!(g.lod_distance_on(&m4), distance);
-            assert_eq!(g.lod_distance_on(&discrete), distance);
-        }
-        assert!(
-            crate::graphics_ui::rows()
-                .into_iter()
-                .flat_map(|(_, groups)| groups.into_iter().flat_map(|(_, rows)| rows))
-                .any(|r| r
-                    .text
-                    .contains(&format!("{INTEGRATED_LOD_DISTANCE} chunks"))),
-            "the LOD Distance description names the cap"
-        );
-    }
-
-    #[test]
-    fn lod_distance_is_opt_in_and_bounded() {
-        assert_eq!(Graphics::default().lod_distance, 0);
-        for distance in [0, 64, 128, 256, 512, 1024] {
-            let g = Graphics::parse(&format!("lodDistance:{distance}\n"));
-            assert_eq!(g.lod_distance, distance);
-            assert_eq!(Graphics::parse(&g.serialize()), g);
-        }
-        for old in ["4194304", "99999999"] {
-            let g = Graphics::parse(&format!("lodDistance:{old}\n"));
-            assert_eq!(g.lod_distance, 1024);
-        }
-        assert_eq!(Graphics::parse("lodDistance:-1\n").lod_distance, 0);
-        assert_eq!(Graphics::parse("lodDistance:invalid\n").lod_distance, 0);
-    }
-
-    #[test]
-    fn far_detail_is_full_unless_reduced_is_picked() {
-        assert_eq!(Graphics::default().far_detail, FarDetail::Full);
-        assert_eq!(
-            Graphics::parse("farDetail:reduced\n").far_detail,
-            FarDetail::Reduced
-        );
-        for text in ["farDetail:full\n", "farDetail:other\n", ""] {
-            assert_eq!(Graphics::parse(text).far_detail, FarDetail::Full);
-        }
-        // No preset changes it.
-        for preset in Preset::ALL {
-            let mut s = crate::settings::Settings::default();
-            apply_preset(preset, &mut s);
-            assert_eq!(s.sunrise.far_detail, FarDetail::Full, "{preset:?}");
-        }
     }
 
     #[test]

@@ -138,7 +138,7 @@ passes on without checking it).
 | Open to LAN | Pause > Open to LAN | yes | yes | `lan open\|close\|status` |
 | Play with Friends: host, stop, status | Pause | yes | yes | `friends host\|stop\|status` |
 | Vanilla options, every page | Options | yes | yes | `options-get`, `options-set` (all of options.txt, typed) |
-| Sunrise Settings: its graphics pages, Gameplay (the extras), Tools (Replay Studio, AI Agent), Extras (PvP & HUD); Controller (Controls) | Sunrise Settings, Controls | yes | yes | `options sunrise\|graphics\|extras\|agent...`, then `ui`/`click`/`set` |
+| Sunrise Settings: its graphics pages, Gameplay (the extras), Tools (AI Agent), Extras (registered settings pages); Controller (Controls) | Sunrise Settings, Controls | yes | yes | `options sunrise\|graphics\|extras\|agent...`, then `ui`/`click`/`set` |
 | Agent control on or off, status, connection details | Sunrise Settings > Tools > AI Agent | yes | yes | `options agent`, or `options sunrise`, the Tools tab (`tools`), then its row (`ai-agent`) |
 | Key binds | Controls > Key Binds | yes | yes | `options-set key_key.jump key.keyboard.j` |
 | Resource packs | Options > Resource Packs | yes | yes | `options packs`, then `ui` rows and `click`; `options-set resourcePacks` |
@@ -447,7 +447,7 @@ of the frame ([#8750](https://github.com/horizon-rust/horizon/issues/8750)).
   1, STEP_MS after; a decimal, `16.666667` for 60 fps). The last is written as `screenshot PATH`
   writes it (with its `-hdr.png` under HDR output), and the reply, once it is, names the pack and
   the last frame's clock. Without a pack it draws the frames all the same. It needs the world
-  frozen, far terrain (LOD Distance), TAA, frame generation and the shadow cache off and chunk fade
+  frozen, TAA, frame generation and the shadow cache off and chunk fade
   0, and says so otherwise. While it runs, commands that would change the scene are refused, a
   change to the camera (compared with the first extracted frame), the world, the settings, the pack
   or the window's size ends it with an error, `screenshot-sequence cancel` stops it and `quit` quits.

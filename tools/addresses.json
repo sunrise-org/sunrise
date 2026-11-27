@@ -42,7 +42,6 @@
     "crates/sunrise-jar-fetch/src/lib.rs modrinth.com": "Modrinth version page URL prefix matched locally, never contacted"
   },
   "allowed": [
-    "crates/sunrise-client-render/src/pack_browser.rs api.modrinth.com",
     "crates/sunrise-mod-registry/src/github.rs api.github.com",
     "crates/sunrise-mod-registry/src/github.rs github.com",
     "crates/sunrise-mod-registry/src/github.rs uploads.github.com",

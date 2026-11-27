@@ -13,14 +13,12 @@ impl crate::game::ClientGame<'_> {
     }
     /// Forgets the `gone` columns (and empties the set): their chunks (freed on a thread
     /// of their own when there are many), their sections in the renderer and their block
-    /// entities, each store once for all of them. When the level stays open,
-    /// far terrain keeps their last state (`server_terrain`). Returns the
-    /// positions it freed, in `gone`'s order: only those still resident,
+    /// entities, each store once for all of them. Returns only positions still resident,
     /// so a later forget of the same positions frees nothing.
     pub fn forget_remote_columns(
         &mut self,
         gone: &mut FxHashSet<Column>,
-        keep_terrain: bool,
+        level_stays: bool,
     ) -> Vec<Column> {
         if gone.is_empty() {
             return Vec::new();
@@ -33,9 +31,9 @@ impl crate::game::ClientGame<'_> {
             .copied()
             .collect();
         for &(x, z) in &freed_at {
-            self.client_chunk_unload(x, z, keep_terrain);
+            self.client_chunk_unload(x, z, level_stays);
         }
-        self.free_remote_columns(gone, keep_terrain);
+        self.free_remote_columns(gone);
         freed_at
     }
     /// Explicit Forget always removes the requested column's queued light. Only a
@@ -53,7 +51,6 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn free_remote_columns(
         &mut self,
         gone: &mut FxHashSet<Column>,
-        keep_terrain: bool,
     ) {
         if gone.is_empty() {
             return;
@@ -65,11 +62,6 @@ impl crate::game::ClientGame<'_> {
         self.client
             .streaming
             .forget_columns(&mut self.common.world, gone);
-        if keep_terrain && let Some(lod) = &mut self.client.lod.0 {
-            for chunk in &freed {
-                lod.observe(chunk.clone(), self.common.res.facts());
-            }
-        }
         if let Some(renderer) = self.client.renderer.0.as_mut() {
             renderer.remove_columns(gone.iter().copied());
         }
@@ -93,8 +85,7 @@ impl crate::game::ClientGame<'_> {
         gone.clear();
     }
     pub(in crate::game::client_side) fn remote_chunk_in_range(&self, x: i32, z: i32) -> bool {
-        self.client.replay.playing()
-            || self.common.world.chunks.is_far((x, z))
+        self.common.world.chunks.is_far((x, z))
             || self.client.remote.as_ref().is_none_or(|r| {
                 ClientChunkRange::new(r.chunk_center, r.view_distance).contains((x, z))
             })
@@ -139,20 +130,18 @@ impl crate::game::ClientGame<'_> {
             r.chunk_center = center;
             let range = ClientChunkRange::new(center, r.view_distance);
             let adopted_view = std::mem::take(&mut r.awaiting_viewed_chunk_center);
-            if !self.client.replay.playing() {
-                if adopted_view {
-                    // Viewed worlds hold arbitrary areas, not a ring. Only copy entries
-                    // in the new active view when establishing its cache for the first time.
-                    let chunks = &self.common.world.chunks;
-                    let mut gone = chunks
-                        .keys()
-                        .copied()
-                        .filter(|&key| !range.contains(key) && !chunks.is_far(key))
-                        .collect();
-                    self.forget_remote_columns(&mut gone, true);
-                }
-                self.update_remote_chunk_view(range);
+            if adopted_view {
+                // Viewed worlds hold arbitrary areas, not a ring. Only copy entries
+                // in the new active view when establishing its cache for the first time.
+                let chunks = &self.common.world.chunks;
+                let mut gone = chunks
+                    .keys()
+                    .copied()
+                    .filter(|&key| !range.contains(key) && !chunks.is_far(key))
+                    .collect();
+                self.forget_remote_columns(&mut gone, true);
             }
+            self.update_remote_chunk_view(range);
         }
     }
     pub(in crate::game) fn set_remote_chunk_cache_radius(&mut self, distance: i32) {
@@ -165,7 +154,7 @@ impl crate::game::ClientGame<'_> {
             let old = ClientChunkRange::new(r.chunk_center, r.view_distance);
             let range = ClientChunkRange::new(r.chunk_center, distance);
             r.view_distance = distance;
-            if old != range && !r.awaiting_viewed_chunk_center && !self.client.replay.playing() {
+            if old != range && !r.awaiting_viewed_chunk_center {
                 // ClientChunkCache.updateViewRadius copies the in-range slots into new
                 // storage and abandons the rest. Their data is freed here, so each tells
                 // its `client_chunk_unload`, unlike a centre move's hidden slots.

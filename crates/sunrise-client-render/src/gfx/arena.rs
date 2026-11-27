@@ -1370,7 +1370,6 @@ mod tests {
             solid,
             solid_slots: u64::from(solid) * 4,
             packed: false,
-            packed_far: false,
             sides: crate::mesher::Sides::unsorted(solid),
             translucent,
             sort: super::super::translucency::SortState::new(Vec::new()),
@@ -1378,8 +1377,6 @@ mod tests {
             flat_id: None,
             gpu_id: None,
             gpu_fading: false,
-            fading: None,
-            leaving: None,
             animated_layers: Box::new([]),
         };
         for split in [true, false] {
@@ -1437,14 +1434,13 @@ mod tests {
             assert_eq!(records.page_sections(), [recorded], "split {split}");
             arena.close(0);
             let mut encoder = device.create_command_encoder(&Default::default());
-            let meshes = sections.iter_mut().map(|s| (s, None));
+            let meshes = sections.iter_mut();
             let mut budget = u64::MAX;
             assert!(move_off_page(
                 &mut arena,
                 &mut encoder,
                 None,
                 Some(&mut records),
-                None,
                 meshes,
                 0,
                 Part::Section { split },
@@ -1586,7 +1582,6 @@ mod tests {
             solid: 64,
             solid_slots: 64 * 4,
             packed: false,
-            packed_far: false,
             sides: crate::mesher::Sides::unsorted(64),
             translucent: 128,
             sort: super::super::translucency::SortState::new(Vec::new()),
@@ -1594,8 +1589,6 @@ mod tests {
             flat_id: Some(id),
             gpu_id: None,
             gpu_fading: false,
-            fading: None,
-            leaving: None,
             animated_layers: Box::new([]),
         };
         translucent.close(0);
@@ -1605,8 +1598,7 @@ mod tests {
             &mut encoder,
             Some((&mut flat, &device, &mut uploads)),
             None,
-            None,
-            std::iter::once((&mut section, None)),
+            std::iter::once(&mut section),
             0,
             Part::Translucent,
             &mut budget
@@ -1832,7 +1824,6 @@ mod tests {
                 solid,
                 solid_slots: u64::from(solid) * 4,
                 packed: false,
-                packed_far: false,
                 sides: crate::mesher::Sides::unsorted(solid),
                 translucent,
                 sort: super::super::translucency::SortState::new(Vec::new()),
@@ -1840,8 +1831,6 @@ mod tests {
                 flat_id: None,
                 gpu_id: None,
                 gpu_fading: false,
-                fading: None,
-                leaving: None,
                 animated_layers: Box::new([]),
             };
             let mut uploads = super::super::upload::Uploads::new(&device);
@@ -1891,9 +1880,9 @@ mod tests {
                          encoder: &mut _,
                          meshes: &mut [(u32, SectionGpu)],
                          budget: &mut u64| {
-                let held = meshes.iter_mut().map(|(_, s)| (s, None));
+                let held = meshes.iter_mut().map(|(_, s)| s);
                 assert!(move_off_page(
-                    arena, encoder, None, None, None, held, 0, part, budget
+                    arena, encoder, None, None, held, 0, part, budget
                 ));
                 let on = |s: &SectionGpu| part.of(s).is_some_and(|r| r.0 == 1);
                 meshes.iter().filter(|(_, s)| on(s)).count()

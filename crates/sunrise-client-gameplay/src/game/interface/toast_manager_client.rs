@@ -38,9 +38,8 @@ impl ClientGame<'_> {
     /// `ToastManager.extractRenderState`: F1 hides the draw, not the update.
     pub fn draw_every_toast(&mut self, batch: &mut HudBatch) {
         let clock = ToastClock::of(self.common.clock.still());
-        let replay = self.client.replay.playing();
-        let hidden = self.client.chat_ui.player_hides_gui || replay;
-        let diagnostic_hidden = replay || self.overlay_holds_view();
+        let hidden = self.client.chat_ui.player_hides_gui;
+        let diagnostic_hidden = self.overlay_holds_view();
         self.admit_mod_toasts();
         self.add_server_report_toasts();
         self.add_hook_panic_toasts();

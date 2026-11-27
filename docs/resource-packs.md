@@ -110,7 +110,7 @@ its own shaders' files (`gfx/expression_blocks.rs`):
   components than its format has, and the pack stays.
 - The expression context is the frame's, as the packs' post chains and particles see it: the weather, the game and
   day time, the dimension and its sky, the player's place and motion, the camera's light, biome and climate, and
-  the packs' config entries (`polytone/config_entries`). Fullbright skips only the lightmap's expressions.
+  the packs' config entries (`polytone/config_entries`).
 - Limits: a file is read up to 64 KiB, with at most 16 uniforms, each a GLSL identifier of at most 64 characters
   not starting `gl_`. An expression has at most 1024 tokens; its tree is at most 64 levels high and its parse
   nests at most 16 levels deep (a statement, its expression, each bracket and each unary operator), both checked as
@@ -139,7 +139,7 @@ its own shaders' files (`gfx/expression_blocks.rs`):
   matched. A pack's own file is read instead of the built-in, and one that can't be read refuses the shader by its
   path.
 - The game builds the block only when something reads it, at most once a frame: when an installed pack core shader
-  reads it (the lightmap's not under fullbright, which keeps the light texture white; the text's only where a world
+  reads it (the lightmap's; the text's only where a world
   runs), or when a post effect that runs has a pass reading it. Each reading core pipeline writes its 176 bytes to
   the GPU when it uploads its blocks for its draw; a post pass writes them when it draws (zeros on a frame without
   them, as on the title screen).

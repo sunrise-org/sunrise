@@ -1,6 +1,5 @@
 //! The owner link: the closed set of requests the window sends its integrated server thread.
 use super::{
-    Dim,
     integrated_link::ServerOptions,
     lan_common::LanSettings,
     memory_common::{ServerMemoryRequest, ServerSide},
@@ -50,11 +49,6 @@ pub enum OwnerRequest {
         wanted: Snapshot,
         done: Reply<(bool, Option<u16>)>,
     },
-    /// Far terrain for a client in `dim`.
-    LodSource(
-        Dim,
-        Reply<Option<Arc<dyn sunrise_level::chunk_streamer::LodSource>>>,
-    ),
     /// The pregen commands are on or off.
     SetPregen(bool),
     /// A live content mod switch: the data packs reload from the new root.

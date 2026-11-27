@@ -256,7 +256,6 @@ fn screen_ids_are_distinct_and_stable() {
         Screen::DialogWarning,
         Screen::Win,
         Screen::Mod,
-        Screen::HudEditor,
         Screen::DebugOptions,
     ];
     let ids: Vec<&'static str> = all.iter().map(|screen| screen.id()).collect();

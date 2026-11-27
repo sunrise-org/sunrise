@@ -27,11 +27,6 @@ impl SideOps for crate::game::server_side::ServerState {
     fn side_is_published(game: &Self::Game<'_>) -> bool {
         game.server_is_lan_published()
     }
-    fn side_clear_lod(game: &mut Self::Game<'_>) {
-        {
-            game.server_clear_lod();
-        }
-    }
     fn side_clear_render_caches(game: &mut Self::Game<'_>) {
         {
             game.server_clear_render_caches();

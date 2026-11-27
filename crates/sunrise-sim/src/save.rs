@@ -20,7 +20,6 @@ pub mod biome_regions;
 pub mod block_entity_encode;
 mod block_entity_order;
 pub mod carrier;
-mod far_regions;
 mod horizon_names;
 pub(crate) use horizon_names::adopt_in_player as adopt_horizon_player;
 #[cfg(test)]
@@ -65,8 +64,8 @@ use {
         chunk::{BlockState, block_entity_pos},
         chunk_status::ChunkStatus,
         compression::Compression,
-        heightmap::{Heightmap, HeightmapChunk, HeightmapState, HeightmapType},
-        region::{ChunkRecord, RegionFile},
+        heightmap::{Heightmap, HeightmapChunk, HeightmapType},
+        region::RegionFile,
         registry::{BlockRegistry, BlockStateId},
         worldgen::terrain::TerrainBlockStates,
     },
@@ -610,8 +609,8 @@ mod dir;
 pub use dir::*;
 mod tickets;
 use tickets::*;
-mod lod;
-pub use lod::*;
+mod persistent;
+pub use persistent::Persistent;
 
 mod level_dat;
 pub use level_dat::*;
@@ -715,15 +714,6 @@ pub use worlds::{WorldEntry, list_worlds};
 
 #[cfg(test)]
 mod tests;
-
-/// Far-terrain floating-cell census on a real save: `SUNRISE_TEST_RESOURCES`
-/// (prepared data), `SUNRISE_FAR_SAVE` (a world folder), `SUNRISE_FAR_SEED`
-/// and `SUNRISE_FAR_AT` ("x,z", the camera). Samples the tiles each level
-/// draws around the camera as the far sampler gives them (saved chunks up to
-/// 16 blocks a cell, the seed beyond) and counts components of drawn cells
-/// that touch neither the world's bottom nor the tile's halo.
-#[cfg(test)]
-mod far_census;
 
 #[cfg(test)]
 mod jukebox_song_clock_tests;

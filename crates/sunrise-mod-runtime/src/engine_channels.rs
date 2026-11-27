@@ -16,7 +16,6 @@ pub const RESERVED_ENGINE_CHANNELS: &[&str] = &[
     "sunrise:datapack_registries",
     "sunrise:general_entity",
     "sunrise:levels",
-    "sunrise:lod",
     "sunrise:menu_data",
     "sunrise:menu_extra",
     "sunrise:mod_list",

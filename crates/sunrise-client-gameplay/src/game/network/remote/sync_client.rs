@@ -615,9 +615,7 @@ impl crate::game::ClientGame<'_> {
             }
         }
         entity_section_steps::player_teleport(self, had_player, current, position);
-        if !self.client.replay.playing() {
-            self.common.previous_position = position;
-        }
+        self.common.previous_position = position;
         self.common.yaw = yaw;
         self.common.pitch = pitch;
         // setValuesFromPositionPacket: setOldPosAndRot gives xRotO the same

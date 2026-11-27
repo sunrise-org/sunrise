@@ -37,7 +37,7 @@ a telemetry placeholder or an official-build promotion in the options screen.
 | Extra | Where it lives | The gate |
 |---|---|---|
 | The "Start Sunrise from the launcher" screen of a game without its prepared files, with its Download button (`get_the_game` hook) | crate `sunrise-official` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable has none |
-| Sunrise Settings (Extras, PvP & HUD, Studio, AI Agent) and Mods | `options_ui.rs` (`Page::Sunrise` and below), `extras_ui.rs`, `extras.rs`, `pvp.rs`, `game/extras.rs` and `game/extras/`, `extras_hud.rs` | the Options screen shows vanilla's greyed Telemetry Data instead (`options_ui::SUNRISE_EXTRAS`, set in `entry.rs`) |
+| Sunrise Settings (Gameplay, Extras, AI Agent) and Mods | `options_ui.rs` (`Page::Sunrise` and below), `extras_ui.rs`, `extras.rs`, `chat_options.rs`, `game/extras.rs` and `game/extras/`, `extras_hud.rs` | the Options screen shows vanilla's greyed Telemetry Data instead (`options_ui::SUNRISE_EXTRAS`, set in `entry.rs`) |
 | The Mods screen's Sunrise row (name, version, authors, licence, links) (`sunrise_platform::mod_rows`) | crate `sunrise-official` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable lists Minecraft and the mods only |
 | Auto-reconnect ([extras.md](extras.md)) | crate `sunrise-reconnect` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable has none |
 | Discord Rich Presence and its switch | crate `sunrise-discord` | registered only by the official executable (`sunrise-official`); sunrise-client's own executable has none |
@@ -56,7 +56,7 @@ gate guards.
 
 - The launcher (`https://github.com/sunrise-org/sunrise-launcher`) holds its themes, the telemetry consent and updates. A build of the game alone has none of them; without the
   launcher's consent the game keeps no crash or performance report (docs/telemetry.md).
-- The graphics screen's fullbright, dynamic lights and hiding block-break particles: renderer
+- The graphics screen's dynamic lights and hiding block-break particles: renderer
   options, off by default (docs/extras.md). A `sunrise-extras.txt` left by an official install is
   still read.
 - The mod runtime: nothing installs a mod without the launcher, so it stays idle.

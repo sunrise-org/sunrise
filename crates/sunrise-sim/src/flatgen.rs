@@ -19,7 +19,6 @@ pub struct FlatTerrain {
     shape: LevelShape,
     layers: Vec<u32>,
     biome: u16,
-    surface: Option<crate::columns::Surface>,
     /// The blocks of `minecraft:void_start_platform`, when the adjusted
     /// generation settings place it (the Void preset).
     void_platform: Option<FeatureBlocks>,
@@ -164,48 +163,12 @@ impl FlatTerrain {
         } else {
             None
         };
-        let surface = Self::surface(&layers, registry, shape, biome)?;
         Some(Self {
             shape,
             layers,
             biome,
-            surface,
             void_platform,
         })
-    }
-    /// The top of the layers as the far view reads it: the first block that is not air, with the
-    /// fluid over it. The outer `None` when a layer's state is not in `registry`.
-    fn surface(
-        layers: &[u32],
-        registry: &BlockRegistry,
-        shape: LevelShape,
-        biome: u16,
-    ) -> Option<Option<crate::columns::Surface>> {
-        let mut water = None;
-        let mut surface = None;
-        for (i, &id) in layers.iter().take(shape.height as usize).enumerate().rev() {
-            let state = sunrise_world::registry::BlockStateId(id);
-            let name = registry.state(state)?.name.as_str();
-            if matches!(
-                name,
-                "minecraft:air" | "minecraft:cave_air" | "minecraft:void_air"
-            ) {
-                continue;
-            }
-            let height = shape.min_y + i as i32 + 1;
-            if matches!(name, "minecraft:water" | "minecraft:lava") {
-                water.get_or_insert((height, state));
-            } else {
-                surface = Some(crate::columns::Surface {
-                    height,
-                    state,
-                    water,
-                    biome,
-                });
-                break;
-            }
-        }
-        Some(surface)
     }
     /// The generator of a level a mod opens with the default superflat layers (`flat = true`:
     /// bedrock, two dirt, grass block) or with air alone (`flat = false`: the void), over
@@ -230,12 +193,10 @@ impl FlatTerrain {
             .iter()
             .map(|name| Some(registry.default_state(name)?.0))
             .collect::<Option<Vec<_>>>()?;
-        let surface = Self::surface(&layers, registry, shape, biome)?;
         Some(Self {
             shape,
             layers,
             biome,
-            surface,
             void_platform: None,
         })
     }
@@ -386,9 +347,6 @@ impl ChunkGenerator for FlatTerrain {
     /// vanilla pipeline does for FEATURES neighbours.
     fn light_view(&self, proto: &sunrise_level::chunk_streamer::Proto) -> Option<Chunk> {
         proto.downcast_ref::<Chunk>().cloned()
-    }
-    fn lod_surface(&self, _: &mut (), _: i32, _: i32) -> Option<crate::columns::Surface> {
-        self.surface
     }
     fn proto(
         &self,
@@ -708,7 +666,6 @@ mod tests {
             shape: LevelShape::OVERWORLD,
             layers: Vec::new(),
             biome: 0,
-            surface: None,
             void_platform: None,
         };
         let mut chunk = Chunk::empty(3, -4);

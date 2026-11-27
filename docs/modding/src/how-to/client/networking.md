@@ -54,14 +54,13 @@ server), in packet order, and pay only a single subscriber check when no mod lis
   `sunrise:unknown`. Configuration and control packets do not fire it, standalone
   or bundled: keep-alives, chunk batch starts and finishes, bundle delimiters,
   resource pack pushes and pops, cookies, server links, transfers, disconnects, the
-  configuration switch, `minecraft:brand`, and far terrain tiles. The receive hook
+  configuration switch and `minecraft:brand`. The receive hook
   cannot cancel a packet.
 - `client_packet_send` fires for every play-phase packet the window is about to
   send, in send order, including the selected slot sent before an attack or use and
   play-phase pongs. Control replies (keep-alives, chunk batch acknowledgements,
   configuration pongs and cookies), configuration packets, phase-dependent connection
-  answers (resource pack status and a dialog's custom click action), and far terrain
-  requests do not fire it. Returning `Flow::Cancel` drops
+  answers (resource pack status and a dialog's custom click action) do not fire it. Returning `Flow::Cancel` drops
   the packet unless a later listener marked `#[listener(receive_cancelled)]` sets
   `event.cancelled = false` and returns `Flow::Continue`.
 

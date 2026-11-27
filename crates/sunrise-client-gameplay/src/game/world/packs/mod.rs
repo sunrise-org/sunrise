@@ -17,7 +17,7 @@ use sunrise_assets::resource_source::ResourceRoot;
 #[cfg(feature = "client")]
 use sunrise_client::gfx::PreparedTextures;
 #[cfg(feature = "client")]
-use sunrise_client::{hud::HudAtlas, level_loading::OverlayFade, pack_browser};
+use sunrise_client::{hud::HudAtlas, level_loading::OverlayFade};
 use sunrise_client::{
     pack_screen::{self, Compat, PackInfo, Source as PackSource},
     packs::{self, Pack, Position},
@@ -340,9 +340,7 @@ impl crate::game::ClientGame<'_> {
     pub fn refresh_pack_lists(&mut self) {
         let infos = self.resource_pack_infos();
         let configs = pack_configs(&self.common.vanilla_root());
-        let browsing = self.client.settings.extras.pack_browser;
         let o = &mut self.client.chat_ui.options;
-        o.pack_browser = browsing;
         o.pack_infos = infos;
         o.pack_configs = configs;
         o.pack_selection = self.client.settings.resource_packs.clone();
@@ -357,42 +355,6 @@ impl crate::game::ClientGame<'_> {
     /// a worker under the progress overlay (`LoadingOverlay` over
     /// `ReloadableResourceManager.createReload`'s background executor), so
     /// the window keeps drawing; `drive_pack_reload` applies it.
-    /// Sunrise's pack browser: what its worker finished since the last
-    /// frame. A pack that landed becomes an entry in the available list.
-    pub(in crate::game::client_side) fn drive_pack_browser(&mut self) {
-        let Some(screen) = &mut self.client.chat_ui.options.pack_screen else {
-            return;
-        };
-        let Some(browser) = &mut screen.browser else {
-            return;
-        };
-        let Some(message) = browser.poll() else {
-            return;
-        };
-        if let pack_browser::Message::Results(_) = &message {
-            // The rows draw their icons as they land.
-            browser.fetch_icons();
-        }
-        if let pack_browser::Message::Icon(id, png) = &message {
-            let key = pack_screen::icon_texture(id);
-            if let Some(icon) = pack_screen::load_fetched_icon(png) {
-                // Tracked, so closing the browser frees it again.
-                screen.keep_browser_icon(key, icon);
-            }
-            return;
-        }
-        if let pack_browser::Message::Downloaded(name) = message {
-            log::info!("Sunrise: added the resource pack {name}");
-            // Rebuilding the screen would shut the list; keep it and only
-            // refresh what the lists read.
-            let selection = self.client.settings.resource_packs.clone();
-            let infos = self.resource_pack_infos();
-            self.client.chat_ui.options.pack_infos = infos;
-            self.client.chat_ui.options.pack_configs = pack_configs(&self.common.vanilla_root());
-            self.client.chat_ui.options.pack_selection = selection;
-            self.client.chat_ui.options.pack_screen = None;
-        }
-    }
     pub(in crate::game) fn reload_packs(&mut self) {
         if let Err(e) = self.spawn_pack_reload(ReloadKind::Selection) {
             self.selection_reload_failed(&format!("could not start the pack reload: {e}"));
@@ -823,7 +785,6 @@ impl crate::game::ClientGame<'_> {
                 .audio
                 .0
                 .reload_with(&game.common.pack.source, sounds);
-            game.clear_lod();
             // A pack that may replace leaf models falls back to `Off` before the
             // reload marks every section dirty.
             game.client.streaming.leaf_culling = game.effective_leaf_culling();

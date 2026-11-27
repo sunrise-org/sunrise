@@ -359,10 +359,6 @@ pub struct NetConfig {
     /// client whose `minecraft:brand` isn't Sunrise's is turned away during
     /// configuration. A brand can be spoofed: a gate, not security.
     pub sunrise_clients_only: bool,
-    /// `sunrise-lod-distance` (Sunrise's own server.properties key, 64): how
-    /// far, in chunks, the server samples far terrain for Sunrise clients
-    /// (`lod_net`); 0 serves none.
-    pub lod_distance: u32,
     /// The shapes of the world's levels: their dimension types go to
     /// clients when the world's data packs changed them.
     pub levels: crate::chunk::LevelShapes,
@@ -406,7 +402,6 @@ impl NetConfig {
             code_of_conducts: Vec::new(),
             server_links: Vec::new(),
             sunrise_clients_only: false,
-            lod_distance: crate::lod_net::DEFAULT_DISTANCE,
             levels: crate::chunk::LevelShapes::VANILLA,
             owner_profile: None,
             singleplayer_profile: None,

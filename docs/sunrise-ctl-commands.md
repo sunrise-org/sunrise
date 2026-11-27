@@ -187,7 +187,6 @@ The reply fields of the commands described so far (more follow, a group at a tim
 | `block_entities` | integer | block entities loaded |
 | `pending_chunks` | integer | chunks still being generated, meshed, uploaded or received |
 | `streaming` | object | chunk streaming stages and their counts |
-| `lod` | object | far terrain: distances, tiles, quads and sampling progress |
 | `renderer` | object, null | GPU, driver, backend, size, draw counts and GPU memory; null without a renderer |
 | `display` | object, null | the monitor: width, height, scale, refresh_hz; null without a window |
 | `server` | object, null | the connected server's address, name and state; null when not connected |

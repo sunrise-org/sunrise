@@ -52,9 +52,7 @@ mod section_gpu;
 mod static_entity;
 
 pub(crate) use section_gpu::collect_animated_layers;
-use section_gpu::{
-    Part, SectionGpu, begin_shrink, decide_fade, forget_records, hold_fading, mark_fades,
-};
+use section_gpu::{Part, SectionGpu, begin_shrink, decide_fade, forget_records, mark_fades};
 use static_entity::{GpuStaticEntitySection, StaticEntityUniform};
 pub mod outline;
 mod overlay;
@@ -231,7 +229,6 @@ mod in_flight;
 mod material_animation;
 #[cfg(test)]
 mod material_animation_renderer_tests;
-mod sourced_geometry;
 mod terrain_normals;
 use display_watch::DisplayWatch;
 #[cfg(test)]
@@ -246,7 +243,6 @@ mod linear_blend;
 #[cfg(test)]
 use frame_policy::frame_format;
 use frame_policy::{frame_configuration, overlay_format, sunrise_tone_curve};
-mod lod;
 pub mod mod_compute;
 pub mod mod_frame_graph;
 pub mod mod_gpu;

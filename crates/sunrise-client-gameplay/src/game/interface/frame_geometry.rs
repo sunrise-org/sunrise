@@ -90,7 +90,7 @@ impl crate::game::ClientGame<'_> {
             "first_quarter",
             "waxing_gibbous",
         ];
-        let phase = phases[(self.view_day_time() / 24000).rem_euclid(8) as usize];
+        let phase = phases[(self.common.world.day_time / 24000).rem_euclid(8) as usize];
         let moon = format!("environment/celestial/moon/{phase}");
         let (out, bodies) =
             celestial_bodies(&self.client.gui.atlas.sprites, sky, &moon, body_color);
@@ -198,21 +198,16 @@ impl crate::game::ClientGame<'_> {
     pub fn hand_geometry(&mut self, alpha: f64) -> (Vec<Vertex>, Vec<(u32, i32)>) {
         let mut out = Vec::new();
         let mut runs = Vec::new();
-        // F1 hides both; a native HUD mode may keep the hands visible. The
-        // replay player's hands remain visible in first person; freecam has
-        // no player-view hand.
-        if !fov::studio_draws_hand(
-            self.client.studio.flying(),
-            self.client.chat_ui.hands_drawn(
-                self.common.spectator(),
-                self.camera_subject().is_some_and(|c| c.is_sleeping),
-                self.client.camera_type.is_first_person(),
-                self.common
-                    .player
-                    .as_ref()
-                    .is_some_and(|p| !p.health.dead_or_dying()),
-                self.client.screen == Screen::Dead,
-            ),
+        // F1 hides both; a native HUD mode may keep the hands visible.
+        if !self.client.chat_ui.hands_drawn(
+            self.common.spectator(),
+            self.camera_subject().is_some_and(|c| c.is_sleeping),
+            self.client.camera_type.is_first_person(),
+            self.common
+                .player
+                .as_ref()
+                .is_some_and(|p| !p.health.dead_or_dying()),
+            self.client.screen == Screen::Dead,
         ) {
             return (out, runs);
         }
@@ -254,21 +249,6 @@ impl crate::game::ClientGame<'_> {
             .is_some_and(|p| p.auto_spin_attack_ticks > 0);
         let items = self.visible_hand_items();
         let off_hand_empty = items[1].is_none();
-        // Combat feel Legacy: a sword is held up while use is held, as 1.8.9's block looked.
-        // Only the picture changes: the clicks and what they send stay 26.3's.
-        let legacy_block = self.pvp_legacy_look()
-            && self.mapped_key_down("key.use")
-            && self.client.screen == Screen::Playing
-            && items[0]
-                .as_ref()
-                .is_some_and(|s| s.item.ends_with("_sword"))
-            && match used_hand {
-                None => true,
-                Some(Hand::Off) => items[1]
-                    .as_ref()
-                    .is_some_and(|s| &*s.item == "minecraft:shield"),
-                Some(Hand::Main) => false,
-            };
         for (i, (hand, item)) in Hand::BOTH.into_iter().zip(items).enumerate() {
             if !shown[i] {
                 continue;
@@ -323,10 +303,6 @@ impl crate::game::ClientGame<'_> {
             };
             // The main hand on its arm, the off hand on the other one.
             let left = self.client.settings.main_hand_left != (hand == Hand::Off);
-            // A Legacy sword held up hides the off hand's shield.
-            if hand == Hand::Off && legacy_block {
-                continue;
-            }
             let Some(stack) = item else {
                 // renderArmWithItem: only the main hand's empty arm shows,
                 // on the main arm (the left one with the main hand set to
@@ -437,13 +413,8 @@ impl crate::game::ClientGame<'_> {
                 }
                 _ => ItemPose::Swing,
             };
-            let mut m = to_world
+            let m = to_world
                 * sunrise_client::first_person::item_pose(left, inverse_height, attack, pose);
-            // PvP & HUD's shield size (100% is vanilla's), toward the hand holding it.
-            let shield_size = self.pvp_shield_size();
-            if shield_size != 100 && &*stack.item == "minecraft:shield" {
-                m *= glam::Mat4::from_scale(glam::Vec3::splat(f32::from(shield_size) / 100.0));
-            }
             // Seeded by the player id plus the context ordinal.
             let (context, seed) = if left {
                 (
@@ -462,23 +433,6 @@ impl crate::game::ClientGame<'_> {
                 sunrise_client::cit::Hand::Main
             };
             let state = self.resolve_item_in_hand(&stack, context, Some(&owner), seed, cit_hand);
-            // Combat feel Legacy: 1.8.9's pose for a flat item drawn with vanilla's display.
-            if self.pvp_legacy_look()
-                && !state.layers.is_empty()
-                && state
-                    .layers
-                    .iter()
-                    .all(|l| sunrise_client::first_person::is_modern_flat_display(&l.matrix, left))
-                && let Some(legacy) = sunrise_client::first_person::legacy_item_pose(
-                    left,
-                    inverse_height,
-                    attack,
-                    pose,
-                    hand == Hand::Main && legacy_block,
-                )
-            {
-                m = to_world * legacy;
-            }
             runs.push((out.len() as u32, item_id));
             let light = self.common.world.light(
                 eye[0].floor() as i32,
@@ -507,7 +461,7 @@ impl crate::game::ClientGame<'_> {
         alpha: f64,
     ) -> Vec<sunrise_client::weather::Vertex> {
         use sunrise_client::weather;
-        let (intensity, _) = self.view_weather(alpha as f32);
+        let (intensity, _) = self.weather_levels(alpha as f32);
         if intensity <= 0.0 {
             return Vec::new();
         }

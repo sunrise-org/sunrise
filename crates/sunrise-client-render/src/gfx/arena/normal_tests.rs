@@ -187,7 +187,6 @@ fn normal_stream_counts_in_the_move_budgets() {
         solid: 0,
         solid_slots: 0,
         packed: false,
-        packed_far: false,
         sides: crate::mesher::Sides::unsorted(0),
         translucent: 64,
         sort: super::super::translucency::SortState::new(Vec::new()),
@@ -195,8 +194,6 @@ fn normal_stream_counts_in_the_move_budgets() {
         flat_id: None,
         gpu_id: None,
         gpu_fading: false,
-        fading: None,
-        leaving: None,
         animated_layers: Box::new([]),
     };
     let mut meshes: Vec<SectionGpu> = (0..3)
@@ -211,8 +208,7 @@ fn normal_stream_counts_in_the_move_budgets() {
         &mut encoder,
         None,
         None,
-        None,
-        meshes.iter_mut().map(|s| (s, None)),
+        meshes.iter_mut(),
         0,
         Part::Translucent,
         &mut budget,

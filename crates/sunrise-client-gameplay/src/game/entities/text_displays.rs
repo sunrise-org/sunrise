@@ -1048,12 +1048,6 @@ impl ClientGame<'_> {
     /// Active render `Camera` yaw and pitch (`DisplayRenderer.extractRenderState`), sharing the
     /// same camera source of truth as `particle_rotation` (`ThirdPersonFront` already baked in).
     pub fn display_camera_angles(&self) -> [f32; 2] {
-        if self.client.studio.flying() {
-            return [
-                self.client.studio.freecam.yaw,
-                self.client.studio.freecam.pitch,
-            ];
-        }
         let (yaw, pitch, _) = self.client.posed_rotation.unwrap_or((
             self.client.view.y_rot,
             self.client.view.x_rot,

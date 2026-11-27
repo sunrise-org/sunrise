@@ -1175,29 +1175,25 @@ fn section_instance_carries_the_fade_in_the_step() {
     let step = 1.0 / crate::mesher::UV_STEPS;
     // Fully visible (the option Off) is exactly the record from before the fade.
     assert_eq!(
-        section_instance([1.0, 2.0, 3.0], 0, 1.0),
+        section_instance([1.0, 2.0, 3.0], 1.0),
         [1.0, 2.0, 3.0, step]
     );
     for visibility in [0.0_f32, 0.25, 0.5, 0.999] {
-        let w = section_instance([0.0; 3], 0, visibility)[3];
+        let w = section_instance([0.0; 3], visibility)[3];
         let bits = w.to_bits();
         assert_eq!(f32::from_bits(bits & 0xff80_0000), step);
         let read = 1.0 - (bits & 0x7f_ffff) as f32 / 8_388_608.0;
         assert!((read - visibility).abs() < 1e-6, "{visibility}: {read}");
     }
-    // A section fading in over far terrain keeps its dither code unchanged.
-    assert_eq!(section_instance([0.0; 3], 7, 0.5)[3], -(7.0 + step));
 }
-/// A section as `Renderer::upload_mesh` makes one, with `solid` and
-/// `translucent` quads, fading in over far terrain since `fading`.
-fn section(solid: u32, translucent: u32, fading: Option<std::time::Instant>) -> super::SectionGpu {
+/// A section with the given solid and translucent quad counts.
+fn section(solid: u32, translucent: u32) -> super::SectionGpu {
     super::SectionGpu {
         page: 0,
         start: 0,
         translucent_at: (0, u64::from(solid) * 4),
         solid,
         solid_slots: u64::from(solid) * 4,
-        packed_far: false,
         packed: false,
         sides: crate::mesher::Sides::unsorted(solid),
         translucent,
@@ -1206,85 +1202,58 @@ fn section(solid: u32, translucent: u32, fading: Option<std::time::Instant>) -> 
         flat_id: None,
         gpu_id: None,
         gpu_fading: false,
-        fading,
-        leaving: None,
         animated_layers: Box::new([]),
     }
 }
-/// A section's fade (`SectionGpu::drawn_faded`) only ends as time goes on,
-/// never while it leaves or is held, and by its `fade_end`, at most 10 ms
-/// after it has (a fade-in over far terrain is whole 9.4 ms before
-/// `lod::FADE`): fading in over far terrain or not, first uploaded or not,
-/// both, at every chunk fade-in time, in 1 ms steps over 3 s and at its end.
+/// At every chunk fade-in time, in 1 ms steps over 3 s and at its end.
 #[test]
 fn a_fade_ends_by_its_deadline_and_never_comes_back() {
     use super::FadeInputs;
-    use crate::fast_hash::{FxHashMap, FxHashSet};
+    use crate::fast_hash::FxHashMap;
     use std::time::{Duration, Instant};
     let ms = Duration::from_millis;
     // The steps start at `zero`; what began `t` ms before it began off the steps.
     let zero = Instant::now() + Duration::from_secs(3);
     let ago = |t: u64| zero - ms(t) + Duration::from_micros(370);
     let key = (3, 5, -2);
-    // Neither leaving nor held, leaving, held, both.
-    let states = [(false, false), (true, false), (false, true), (true, true)];
-    for fading in [None, Some(0), Some(300), Some(590), Some(700)] {
-        for up in [None, Some(0), Some(1), Some(740), Some(2_500)] {
-            let uploaded: FxHashMap<_, _> = up.map(|t| (key, ago(t))).into_iter().collect();
-            for (leaving, held) in states {
-                let mut s = section(1, 0, fading.map(ago));
-                s.leaving = leaving.then(|| ago(250));
-                let retiring: FxHashSet<_> = held.then_some(key).into_iter().collect();
-                for fade_ms in [0, 1, 50, 300, 750, 2_000] {
-                    let case = (fading, up, leaving, held, fade_ms);
-                    let at = |now: Instant| FadeInputs {
-                        now,
-                        fade_ms,
-                        uploaded: &uploaded,
-                        retiring: &retiring,
-                    };
-                    let faded = |now: Instant| s.drawn_faded(key, at(now));
-                    let end = s.fade_end(key, at(zero));
-                    if leaving || held {
-                        assert!(end.is_none(), "{case:?}: an end");
-                    }
-                    let mut was = true;
-                    for t in 0..=3_000 {
-                        let now = zero + ms(t);
-                        let is = faded(now);
-                        assert!(was || !is, "{case:?}: faded again at {t} ms");
-                        was = is;
-                        if leaving || held {
-                            assert!(is, "{case:?}: whole at {t} ms");
-                        } else if end.is_none_or(|end| now >= end) {
-                            assert!(!is, "{case:?}: faded at {t} ms, past its end");
-                        }
-                    }
-                    if let Some(end) = end {
-                        assert!(!faded(end), "{case:?}: faded at its end");
-                        assert!(faded(end - ms(10)), "{case:?}: whole 10 ms before it");
-                    }
+    let s = section(1, 0);
+    for up in [None, Some(0), Some(1), Some(740), Some(2_500)] {
+        let uploaded: FxHashMap<_, _> = up.map(|t| (key, ago(t))).into_iter().collect();
+        for fade_ms in [0, 1, 50, 300, 750, 2_000] {
+            let case = (up, fade_ms);
+            let at = |now: Instant| FadeInputs {
+                now,
+                fade_ms,
+                uploaded: &uploaded,
+            };
+            let faded = |now: Instant| s.drawn_faded(key, at(now));
+            let end = s.fade_end(key, at(zero));
+            let mut was = true;
+            for t in 0..=3_000 {
+                let now = zero + ms(t);
+                let is = faded(now);
+                assert!(was || !is, "{case:?}: faded again at {t} ms");
+                was = is;
+                if end.is_none_or(|end| now >= end) {
+                    assert!(!is, "{case:?}: faded at {t} ms, past its end");
                 }
+            }
+            if let Some(end) = end {
+                assert!(!faded(end), "{case:?}: faded at its end");
+                assert!(faded(end - ms(10)), "{case:?}: whole 10 ms before it");
             }
         }
     }
 }
 /// GPU culling's fading sections over 5 s of 16 ms frames, with no device
-/// (`mark_fades`): some 2,000 sections come, fading in as vanilla does or
-/// over far terrain, are meshed again, leave over far terrain, are held while
-/// it comes in and let go, and go, while the chunk fade-in time goes 750 ms,
-/// 2 s, Off and 750 ms. After every frame the GPU keeps only whole sections,
-/// the walk lists every other one, each record's flag is its section's, and
-/// a flagged section that neither leaves nor is held still faded a frame
-/// before. Each kind of event flags sections, and thousands go back. Once
-/// GPU culling is switched off (`forget_records`), every mark is the one a
-/// section has while it is off.
+/// (`mark_fades`): sections upload, re-mesh and unload while the fade-in time changes.
+/// Only whole sections are drawn by the GPU, and switching it off restores every walk mark.
 #[test]
 #[ignore = "daily"]
 fn fading_sections_go_to_the_cpu_and_come_back() {
     use super::{
-        FadeInputs, SectionGpu, SectionKey, decide_fade, forget_records, gpu_culling, hold_fading,
-        mark_fades, section_fade,
+        FadeInputs, SectionGpu, SectionKey, decide_fade, forget_records, gpu_culling, mark_fades,
+        section_fade,
     };
     use crate::fast_hash::{FxHashMap, FxHashSet};
     use std::time::{Duration, Instant};
@@ -1299,29 +1268,18 @@ fn fading_sections_go_to_the_cpu_and_come_back() {
         records: gpu_culling::Records,
         fades: section_fade::Fades,
         uploaded: FxHashMap<SectionKey, Instant>,
-        retiring: FxHashSet<SectionKey>,
     }
     impl Sim {
-        /// `Renderer::upload` at `at`: a new section, fading in over far
-        /// terrain if `far`, or one meshed again.
-        fn upload(&mut self, key: SectionKey, quads: (u32, u32), far: bool, at: Instant) {
-            self.retiring.remove(&key);
-            let fading = match self.sections.find(key) {
-                Some(old) => old.fading,
-                None => far.then_some(at),
-            };
-            if fading.is_none() {
-                self.uploaded.entry(key).or_insert(at);
-            }
+        fn upload(&mut self, key: SectionKey, quads: (u32, u32), at: Instant) {
+            self.uploaded.entry(key).or_insert(at);
             self.release(key);
-            let mut s = section(quads.0, quads.1, fading);
+            let mut s = section(quads.0, quads.1);
             if s.gpu_recorded(key, ROWS) {
                 if let Some(fade_ms) = self.fades.fade_ms {
                     let f = FadeInputs {
                         now: at,
                         fade_ms,
                         uploaded: &self.uploaded,
-                        retiring: &self.retiring,
                     };
                     s.gpu_fading = decide_fade(&s, key, &mut self.fades, f);
                 }
@@ -1335,23 +1293,6 @@ fn fading_sections_go_to_the_cpu_and_come_back() {
             if let Some(id) = self.sections.remove(key).and_then(|s| s.gpu_id) {
                 self.records.remove(id);
             }
-        }
-        /// `Renderer::leave_section`: its column gone (`remove_columns`), or
-        /// no longer left out by far terrain while held (`set_lod_cutout`).
-        fn leave(&mut self, key: SectionKey, at: Instant) {
-            self.uploaded.remove(&key);
-            if let Some(s) = self.sections.find_mut(key)
-                && s.leaving.is_none()
-            {
-                s.leaving = Some(at);
-                hold_fading(&mut self.sections, &mut self.records, key);
-            }
-        }
-        /// `Renderer::remove_columns`' held section: far terrain comes in under it.
-        fn hold(&mut self, key: SectionKey) {
-            self.uploaded.remove(&key);
-            self.retiring.insert(key);
-            hold_fading(&mut self.sections, &mut self.records, key);
         }
         fn flagged(&self, key: SectionKey) -> bool {
             self.sections.find(key).is_some_and(|s| s.gpu_fading)
@@ -1376,12 +1317,10 @@ fn fading_sections_go_to_the_cpu_and_come_back() {
     let mut sim = Sim::default();
     for r in 0..4_096 {
         if next().is_multiple_of(2) {
-            sim.upload(key(r), quads(next()), next().is_multiple_of(2), start);
+            sim.upload(key(r), quads(next()), start);
         }
     }
-    // Flags set by an upload, `leave_section`, a held section and a fade-in
-    // time (GPU culling switched on in the first frame), and dropped.
-    let (mut set_by, mut handed_back) = ([0; 4], 0);
+    let (mut set_by, mut handed_back) = ([0; 2], 0);
     let mut last = start;
     for frame in 0..=312 {
         let now = start + FRAME * frame;
@@ -1392,25 +1331,8 @@ fn fading_sections_go_to_the_cpu_and_come_back() {
             let was = sim.flagged(k);
             let kind = match (r >> 20) % 16 {
                 0..=7 => {
-                    sim.upload(k, quads(r >> 12), (r >> 24).is_multiple_of(2), at);
+                    sim.upload(k, quads(r >> 12), at);
                     0
-                }
-                8 | 9 => {
-                    sim.leave(k, at);
-                    1
-                }
-                10 | 11 => {
-                    sim.hold(k);
-                    2
-                }
-                12 => {
-                    // Far terrain no longer leaves a held section's column out.
-                    let held = sim.retiring.iter().next().copied();
-                    if let Some(held) = held {
-                        sim.retiring.remove(&held);
-                        sim.leave(held, at);
-                    }
-                    continue;
                 }
                 _ => {
                     sim.uploaded.remove(&k);
@@ -1421,17 +1343,6 @@ fn fading_sections_go_to_the_cpu_and_come_back() {
             if !was && sim.flagged(k) {
                 set_by[kind] += 1;
             }
-        }
-        // Those faded out go (`release_left`).
-        let gone = |t: Instant| now.saturating_duration_since(t) >= super::lod::FADE;
-        let left: Vec<SectionKey> = sim
-            .sections
-            .iter()
-            .filter(|(_, s, _)| s.leaving.is_some_and(gone))
-            .map(|(k, ..)| k)
-            .collect();
-        for k in left {
-            sim.release(k);
         }
         let flagged_before: FxHashSet<SectionKey> = sim
             .sections
@@ -1444,7 +1355,6 @@ fn fading_sections_go_to_the_cpu_and_come_back() {
             now,
             fade_ms,
             uploaded: &sim.uploaded,
-            retiring: &sim.retiring,
         };
         mark_fades(&mut sim.sections, &mut sim.records, &mut sim.fades, ROWS, f);
         let a_frame_before = FadeInputs {
@@ -1470,13 +1380,11 @@ fn fading_sections_go_to_the_cpu_and_come_back() {
             }
             if s.gpu_fading {
                 flagged += 1;
-                set_by[3] += usize::from(!flagged_before.contains(&k));
-                if s.leaving.is_none() && !sim.retiring.contains(&k) {
-                    assert!(
-                        s.drawn_faded(k, a_frame_before),
-                        "frame {frame}, {k:?}: flagged a frame after its fade"
-                    );
-                }
+                set_by[1] += usize::from(!flagged_before.contains(&k));
+                assert!(
+                    s.drawn_faded(k, a_frame_before),
+                    "frame {frame}, {k:?}: flagged a frame after its fade"
+                );
             } else {
                 handed_back += usize::from(flagged_before.contains(&k));
             }
@@ -1485,7 +1393,6 @@ fn fading_sections_go_to_the_cpu_and_come_back() {
         last = now;
     }
     assert!(set_by.iter().all(|&n| n > 20), "flags set {set_by:?}");
-    // Over a thousand: the half of the uploads over far terrain come in whole.
     assert!(handed_back > 1_000, "{handed_back} handed back");
     // Switched off with sections still flagged: none keeps a record or a
     // flag, and each is marked as while GPU culling is off.
@@ -1552,41 +1459,6 @@ fn texture_filtering_samplers() {
         [2, 4, 8],
         "Options.maxAnisotropyValue is 1 << bit"
     );
-}
-#[test]
-fn distant_tiles_repeat_their_sprite_under_the_clamped_sampler() {
-    // terrain.wgsl's tile_uv, evaluated by naga as a constant expression.
-    let source = super::terrain_shader();
-    let body = source.split("fn tile_uv(").nth(1).unwrap();
-    let body = body.split("return ").nth(1).unwrap();
-    let expr = &body[..body.find(';').unwrap()];
-    let tile_uv = |u: f32, v: f32| -> [f32; 2] {
-        let uv = format!("vec2<f32>({u:?}, {v:?})");
-        let wgsl = format!("const UV: vec2<f32> = {};", expr.replace("uv", &uv));
-        let module = naga::front::wgsl::parse_str(&wgsl).unwrap();
-        let (_, constant) = module.constants.iter().next().unwrap();
-        let naga::Expression::Compose { components, .. } =
-            &module.global_expressions[constant.init]
-        else {
-            panic!("{wgsl}");
-        };
-        components
-            .iter()
-            .map(|&c| match module.global_expressions[c] {
-                naga::Expression::Literal(naga::Literal::F32(x)) => x,
-                ref e => panic!("{e:?}"),
-            })
-            .collect::<Vec<_>>()
-            .try_into()
-            .unwrap()
-    };
-    // A section's sprite UVs, edges included, stay where the clamped sampler reads them.
-    for (u, v) in [(0.0, 1.0), (0.25, 0.75), (1.0, 0.0)] {
-        assert_eq!(tile_uv(u, v), [u, v]);
-    }
-    // A merged face's UV counts blocks: each takes the sprite from its own corner.
-    assert_eq!(tile_uv(1.25, 2.0), [0.25, 1.0]);
-    assert_eq!(tile_uv(1023.5, 3.75), [0.5, 0.75]);
 }
 #[test]
 fn shader_globals_match_the_rust_layout() {

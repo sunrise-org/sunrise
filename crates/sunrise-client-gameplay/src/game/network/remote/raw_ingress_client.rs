@@ -406,11 +406,6 @@ impl crate::game::ClientGame<'_> {
                     remote.custom_books = true;
                 }
             }
-            Event::FarTerrain(offer) => {
-                if let Some(remote) = &mut self.client.remote {
-                    remote.far_terrain = Some(offer);
-                }
-            }
             Event::Cookie(task) => task.handle(),
             Event::Configuration(task) => {
                 if let Some(effect) = task.handle() {
@@ -430,23 +425,16 @@ impl crate::game::ClientGame<'_> {
                 // Minecraft.clearClientLevel -> updateLevelInEngines(null) stops
                 // sound immediately after the level-unload event fires.
                 self.stop_sounds_for_new_level();
-                // The server configuring us now (a proxy's next one)
-                // offers its own far terrain, or none, and announces its
-                // own features again.
+                // The new server announces its own features again.
                 if let Some(remote) = &mut self.client.remote {
                     remote.datapacks = Default::default();
                     remote.datapack_vanilla_values = None;
                     remote.has_logical_player = false;
                     remote.viewed.clear();
-                    remote.far_terrain = None;
                     remote.quiet_commands = false;
                     remote.custom_books = false;
                     remote.cauldron_entries = None;
                     remote.pending_cauldrons.get_mut().clear();
-                }
-                self.clear_lod();
-                if let Some(remote) = &self.client.remote {
-                    remote.session.reset_far_terrain();
                 }
                 self.remove_local_player_body();
                 self.client.post_effects.clear();

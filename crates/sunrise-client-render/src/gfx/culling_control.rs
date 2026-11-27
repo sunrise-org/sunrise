@@ -83,7 +83,6 @@ impl Renderer {
         if !on {
             if self.gpu_culling.take().is_some() {
                 forget_records(&mut self.sections, self.layout.sections());
-                self.sourced.clear();
             }
             self.gpu_frame = false;
             return Ok(());
@@ -111,28 +110,13 @@ impl Renderer {
             }
         }
         self.gpu_culling = Some(gpu);
-        let mut lods = std::mem::take(&mut self.lods);
-        let oom = self
-            .sourced
-            .record_all(&mut lods, self.gpu_culling.as_ref(), &self.device);
-        self.lods = lods;
-        if oom {
-            self.sourced_oom();
-            return Err(crate::graphics::GpuCullingOffer::OutOfMemory
-                .reason()
-                .expect("out-of-memory offer has a refusal reason")
-                .into());
-        }
         #[cfg(debug_assertions)]
         {
             self.gpu_checks = 0;
         }
         Ok(())
     }
-    /// GPU culling's pass for a frame it can draw (`gpu_frame`), the camera at `camera`, then
-    /// sourced geometry's (`prepare_sourced`). Returns the two answers that returns: a frame
-    /// whose planes leave the test's integers (the camera millions of blocks above or below the
-    /// level), or whose eye is not a number, is the CPU's.
+    /// Prepare GPU culling for a frame; false when the CPU must draw it instead.
     #[allow(clippy::too_many_arguments)]
     pub(super) fn prepare_gpu_culling(
         &mut self,
@@ -144,7 +128,7 @@ impl Renderer {
         view_proj: Mat4,
         bounded: bool,
         encoder: &mut wgpu::CommandEncoder,
-    ) -> (bool, bool) {
+    ) -> bool {
         if gpu_frame && let Some(gpu) = &mut self.gpu_culling {
             let input = gpu_culling::FrameInputs::new(
                 camera,
@@ -176,59 +160,7 @@ impl Renderer {
                 let _ = self.set_gpu_culling(false);
             }
         }
-        self.prepare_sourced(gpu_frame, camera, view, eye, Instant::now(), encoder)
-    }
-    /// Sourced geometry's pass for a frame, after GPU culling's: the tiles whose fade-in is due
-    /// to end by `now` handed to it first. Returns whether the frame is still one GPU culling
-    /// draws (not once its buffers no longer fit: GPU culling is then off) and whether the
-    /// pass draws sourced geometry in it: only where `gpu_frame`, with a table made and the
-    /// frame prepared for it. Every other frame draws sourced geometry on the CPU.
-    pub(super) fn prepare_sourced(
-        &mut self,
-        gpu_frame: bool,
-        camera: DVec3,
-        view: &Frustum,
-        eye: Option<Vec3>,
-        now: Instant,
-        encoder: &mut wgpu::CommandEncoder,
-    ) -> (bool, bool) {
-        if !gpu_frame || self.sourced.off() {
-            return (gpu_frame, false);
-        }
-        self.sourced.take_due(&self.lods, now);
-        #[cfg(debug_assertions)]
-        if self.gpu_checks.wrapping_sub(1).is_multiple_of(64) {
-            self.sourced.check(&self.lods, now, true);
-        }
-        let min_y = self.sections.min_y();
-        let prepared = crate::spans::time("gpu sourced geometry", || {
-            let timing = self.own_timing.as_mut();
-            self.sourced.prepare(
-                &self.device,
-                &self.queue,
-                &mut self.uploads,
-                encoder,
-                camera,
-                min_y,
-                view,
-                eye,
-                timing,
-            )
-        });
-        if prepared == gpu_culling::Prepared::OutOfMemory {
-            self.sourced_oom();
-            return (false, false);
-        }
-        (gpu_frame, prepared == gpu_culling::Prepared::Gpu)
-    }
-    /// Sourced geometry's buffers do not fit in video memory: GPU culling off until the
-    /// next start, as when its own buffers do not (`set_gpu_culling`, `prepare_sourced`).
-    pub(super) fn sourced_oom(&mut self) {
-        log::warn!(
-            "Sunrise renderer: GPU culling off until the next start: the sourced geometry's buffers do not fit in video memory"
-        );
-        self.offer_gpu_culling(crate::graphics::GpuCullingOffer::OutOfMemory);
-        let _ = self.set_gpu_culling(false);
+        gpu_frame
     }
     /// GPU culling offered or not from now on, here and in the settings' switch.
     pub(super) fn offer_gpu_culling(&mut self, offer: crate::graphics::GpuCullingOffer) {

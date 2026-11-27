@@ -26,25 +26,18 @@ pub fn fade_millis(seconds: f32) -> u64 {
     (f64::from(seconds) * 1000.0).floor().max(0.0) as u64
 }
 
-/// A section's instance: its camera-relative origin and its UV step, negated
-/// past its fade code while it fades in over far terrain (`lod::instance`).
-pub fn section_instance(origin: [f32; 3], fade: u32, visibility: f32) -> [f32; 4] {
+/// A section's camera-relative origin and fixed-point UV step. The step is a power
+/// of two, so its mantissa holds the vanilla chunk fade's `1 - visibility`.
+pub fn section_instance(origin: [f32; 3], visibility: f32) -> [f32; 4] {
     let step = 1.0 / UV_STEPS;
+    let faded = ((1.0 - visibility) * 8_388_608.0)
+        .round()
+        .clamp(0.0, 8_388_607.0) as u32;
     [
         origin[0],
         origin[1],
         origin[2],
-        if fade == 0 {
-            // The step is a power of two, so its mantissa is free: it holds the vanilla
-            // chunk fade-in's `1 - visibility` in 23 bits (terrain.wgsl's `instance_step` and
-            // `instance_visibility` read it back). A whole section is the bare step.
-            let faded = ((1.0 - visibility) * 8_388_608.0)
-                .round()
-                .clamp(0.0, 8_388_607.0) as u32;
-            f32::from_bits(step.to_bits() | faded)
-        } else {
-            -(fade as f32 + step)
-        },
+        f32::from_bits(step.to_bits() | faded),
     ]
 }
 
@@ -69,7 +62,7 @@ mod tests {
 
     #[test]
     fn section_instance_unfaded() {
-        let inst = section_instance([16.0, 32.0, 48.0], 0, 1.0);
+        let inst = section_instance([16.0, 32.0, 48.0], 1.0);
         assert_eq!(inst[0], 16.0);
         assert_eq!(inst[1], 32.0);
         assert_eq!(inst[2], 48.0);

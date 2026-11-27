@@ -3,7 +3,7 @@
 //! GPU times as JSON (docs/graphics.md, "Render capture and replay").
 //! `cargo run --release -p sunrise-client-render --example scene_replay -- DIR [--frames 300]
 //! [--warmup 60] [--yaw-offsets 0,90,180,270] [--texture-filtering 0|1|2] [--anisotropy-bit N]
-//! [--mipmaps N] [--lod-distance CHUNKS] [--render-distance CHUNKS] [--size WxH]
+//! [--mipmaps N] [--render-distance CHUNKS] [--size WxH]
 //! [--section-draws flat|indirect] [--section-cull on|off] [--section-sides on|off]
 //! [--gpu-culling on|off] [--root RESOURCES] [--screenshot PNG]
 //! [--world SAVE --leaf-culling MODE] [--memory on] [--gpu-detail on|off]`
@@ -39,7 +39,6 @@ use sunrise_client_render::{
     },
     graphics::LeafCullingMode,
     hud::HudBatch,
-    lod::TileKey,
     mesher::{MeshScratch, MeshTables, Mesher, SectionMesh, packed},
     models,
 };
@@ -76,7 +75,6 @@ struct Options {
     texture_filtering: Option<i32>,
     anisotropy_bit: Option<i32>,
     mipmaps: Option<u32>,
-    lod_distance: Option<u32>,
     render_distance: Option<i32>,
     size: Option<[u32; 2]>,
     flat: Option<bool>,
@@ -127,7 +125,6 @@ fn options() -> Result<Options, String> {
             "--texture-filtering" => o.texture_filtering = Some(number(&value)? as i32),
             "--anisotropy-bit" => o.anisotropy_bit = Some(number(&value)? as i32),
             "--mipmaps" => o.mipmaps = Some(number(&value)?.max(0) as u32),
-            "--lod-distance" => o.lod_distance = Some(number(&value)?.max(0) as u32),
             "--render-distance" => o.render_distance = Some(number(&value)?.max(0) as i32),
             "--size" => {
                 let (w, h) = value.split_once('x').ok_or("--size takes WxH")?;
@@ -243,7 +240,6 @@ fn replay(window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
     let [width, height] = o.size.unwrap_or(state.size);
     renderer.resize(width, height);
     renderer.gamma = state.gamma;
-    renderer.fullbright = state.fullbright;
     renderer.improved_transparency = state.improved_transparency;
     renderer.animated_textures = state.animated_textures;
     let filtering = o.texture_filtering.unwrap_or(settings.texture_filtering);
@@ -282,7 +278,6 @@ fn replay(window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
         renderer.clear_sections(layout);
     }
 
-    // Near sections first: with no far tile resident yet, none fades in.
     let camera = scene.frame.camera;
     let column = |x: f64| (x.floor() as i32) >> 4;
     let (cx, cz) = (column(camera[0]), column(camera[2]));
@@ -324,32 +319,6 @@ fn replay(window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
             sections += 1;
         }
     })?;
-    let mut tiles: Vec<(TileKey, SectionMesh)> = Vec::new();
-    capture::read_meshes(&o.dir, "tiles", |[x, z, level], mesh| {
-        let key = TileKey {
-            x,
-            z,
-            level: level as u8,
-        };
-        let [ox, _, oz] = key.origin();
-        let half = f64::from(key.size()) / 2.0;
-        let (dx, dz) = (
-            f64::from(ox) + half - camera[0],
-            f64::from(oz) + half - camera[2],
-        );
-        let near = o
-            .lod_distance
-            .is_none_or(|d| (dx * dx + dz * dz).sqrt() <= f64::from(d) * 16.0);
-        if near {
-            tiles.push((key, mesh));
-        }
-    })?;
-    let tile_count = tiles.len();
-    if !tiles.is_empty() {
-        let cutout: FxHashSet<(i32, i32)> = scene.lod_cutout.iter().copied().collect();
-        renderer.queue_lods(tiles, Vec::new(), Some(cutout));
-        renderer.upload_lods(Duration::from_secs(3600));
-    }
     let loaded_ms = ms(loading.elapsed());
 
     let hud = HudBatch::scratch([width, height]);
@@ -471,7 +440,6 @@ fn replay(window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
         // Solid quads uploaded as one record each (`mesher::packed`).
         "packed_quads": packed_quads,
         "world": world_report,
-        "tiles": tile_count,
         "load_ms": loaded_ms,
         "frames": o.frames,
         "warmup": o.warmup,
@@ -479,7 +447,6 @@ fn replay(window: Arc<Window>) -> Result<(), Box<dyn std::error::Error>> {
             "texture_filtering": filtering,
             "anisotropy_bit": anisotropy,
             "mipmaps": o.mipmaps.unwrap_or(settings.mipmap_levels),
-            "lod_distance": o.lod_distance,
             "render_distance": o.render_distance,
             "section_draws": section_draws,
             "section_cull": renderer.section_cull(),

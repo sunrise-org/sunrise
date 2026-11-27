@@ -235,7 +235,7 @@ impl crate::game::ClientGame<'_> {
         };
         let at = [camera.x, camera.y, camera.z];
         let fog_type = self.camera_fog_type(at);
-        let (rain, thunder) = self.view_weather(self.common.clock.fraction() as f32);
+        let (rain, thunder) = self.weather_levels(self.common.clock.fraction() as f32);
         let title_fog = sunrise_client::fog::FogTables::default();
         let tables = if self.client.title.0.is_some() {
             &title_fog
@@ -260,7 +260,7 @@ impl crate::game::ClientGame<'_> {
         let fire_resistance = fog_effects.map_or_else(
             || self.common.potions.effects.get("fire_resistance").is_some(),
             |e| e.fire_resistance,
-        ) || (is_local && self.pvp_clear_fluids().0);
+        );
         let night_vision = fog_effects
             .map(|e| {
                 if e.darkness_blend.is_some() {
@@ -275,8 +275,7 @@ impl crate::game::ClientGame<'_> {
             sky,
             water_fog_color,
             biome,
-            render_distance_chunks: self.terrain_distance(),
-            distant_terrain: self.client.lod.0.is_some() && self.overworld_skybox(),
+            render_distance_chunks: self.effective_render_distance(),
             cloud_range_chunks: self.client.settings.cloud_range,
             camera_y: camera.y,
             min_y: self.level_min_y(),
@@ -292,7 +291,7 @@ impl crate::game::ClientGame<'_> {
                 .as_ref()
                 .map_or_else(|| self.own_player_is_spectator(), |c| c.is_spectator),
             fire_resistance,
-            full_water_vision: !is_local || self.pvp_clear_fluids().1,
+            full_water_vision: !is_local,
             night_vision,
             environment: self.client.client_pack.polytone_colors.env,
             fluid_fog: self.client.client_pack.polytone_colors.fluid_fog,
@@ -480,7 +479,6 @@ impl crate::game::ClientGame<'_> {
             block_overlay,
             water,
             on_fire: effects.on_fire && !effects.fire_suppressed,
-            fire_lower: self.pvp_fire_lower(),
             gui_overlays: &gui_overlays,
             custom: [&custom[0], &custom[1], &custom[2]],
         })
@@ -559,7 +557,7 @@ impl crate::game::ClientGame<'_> {
                 near_yaw,
                 near_pitch,
                 sunrise_client::camera::depth_far(
-                    self.terrain_distance(),
+                    self.effective_render_distance(),
                     self.client.settings.cloud_range,
                 ),
             );
@@ -719,7 +717,6 @@ impl crate::game::ClientGame<'_> {
     /// flicker whenever the game is not paused, frozen or not, while `TextureManager.tick`
     /// needs the level running normally. `SUNRISE_STILL` keeps both with the world.
     pub(in crate::game::client_side) fn tick_frame_visuals(&mut self, running: bool) {
-        self.hold_fullbright();
         if running || !self.common.clock.still() {
             self.client.fog.tick_flicker();
         }
@@ -735,7 +732,7 @@ impl crate::game::ClientGame<'_> {
             eye[1].floor() as i32,
             eye[2].floor() as i32,
         ];
-        let rain = self.view_weather(1.0).0;
+        let rain = self.weather_levels(1.0).0;
         let biome = self
             .common
             .world
@@ -1153,8 +1150,8 @@ impl crate::game::ClientGame<'_> {
     /// time of day, the weather, and for expressions the packs' Polytone frame, or the time and
     /// weather alone when no Polytone pack makes one.
     fn update_animation_inputs(&mut self) {
-        let (rain, thunder) = self.view_weather(0.0);
-        let day_time = self.view_day_time();
+        let (rain, thunder) = self.weather_levels(0.0);
+        let day_time = self.common.world.day_time;
         let frame = self
             .client
             .client_pack
@@ -1315,9 +1312,9 @@ pub(in crate::game::client_side) fn tick_client_weather_effects(
 /// The packs' expression uniforms on core shaders (`shader_modifiers`, wiki "Shaders").
 #[cfg(feature = "client")]
 impl crate::game::ClientGame<'_> {
-    /// Whether an installed pack core shader reads expression uniforms this frame. Fullbright
-    /// excludes the lightmap only, and a frame where no world runs the text
-    /// ([`Self::world_runs`]). The frame's expression context is made only when needed.
+    /// Whether an installed pack core shader reads expression uniforms this frame. A frame
+    /// where no world runs excludes the text ([`Self::world_runs`]). The frame's expression
+    /// context is made only when needed.
     pub(in crate::game::client_side) fn reads_pack_expressions(&mut self) -> bool {
         let world = self.world_runs();
         (self.client.renderer.0.as_mut()).is_some_and(|r| r.reads_pack_expressions(world))
@@ -1342,8 +1339,8 @@ impl crate::game::ClientGame<'_> {
     }
 
     /// Evaluate the installed pack pipelines' expression uniforms from `frame`, skipping the
-    /// lightmap under fullbright, and the text's where no world runs
-    /// ([`Self::world_runs`]). Values are uploaded when each pipeline prepares its draw.
+    /// text's where no world runs ([`Self::world_runs`]). Values are uploaded when each
+    /// pipeline prepares its draw.
     pub(in crate::game::client_side) fn evaluate_pack_expressions(
         &mut self,
         frame: Option<&sunrise_level::environment::Frame>,

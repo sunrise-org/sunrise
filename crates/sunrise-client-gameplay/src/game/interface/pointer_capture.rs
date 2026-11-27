@@ -3,10 +3,6 @@
 use super::*;
 use crate::game::client_side::screens::ScreenClientExt as _;
 
-fn studio_suppresses_focus_pause(replay_active: bool, freecam_active: bool) -> bool {
-    replay_active || freecam_active
-}
-
 impl crate::game::ClientGame<'_> {
     /// The options `MouseHandler.turnPlayer` reads.
     pub(in crate::game::client_side) fn look_options(&self) -> LookOptions {
@@ -25,9 +21,8 @@ impl crate::game::ClientGame<'_> {
         let mut look = self.look_options();
         let time = self.client.started.elapsed().as_secs_f64();
         let pointer = self.client.captured || self.client.agent_pointer;
-        let grabbed = pointer
-            && self.client.screen == Screen::Playing
-            && (self.common.player.is_some() || self.client.studio.flying());
+        let grabbed =
+            pointer && self.client.screen == Screen::Playing && self.common.player.is_some();
         let active = self.client.focused || self.client.agent_pointer;
         if active
             && grabbed
@@ -94,10 +89,6 @@ impl crate::game::ClientGame<'_> {
             .is_some_and(|t| t.elapsed() > Duration::from_millis(500))
             && self.common.control.is_none()
             && self.client.screen == Screen::Playing
-            && !studio_suppresses_focus_pause(
-                self.client.replay.playing(),
-                self.client.studio.flying(),
-            )
             && self.common.player.is_some()
             && !self.common.options.no_pause
             && self.client.settings.file.bool("pauseOnLostFocus")
@@ -198,7 +189,6 @@ impl crate::game::ClientGame<'_> {
         self.reset_inventory_clicks();
         if !capture {
             self.stop_mining();
-            self.client.studio.rmb_down = false;
         }
         // The real pointer takes over from an agent's.
         self.client.agent_pointer = false;
@@ -580,12 +570,6 @@ impl crate::game::ClientGame<'_> {
     /// click. A screen that is open keeps it free, as releasing the pointer
     /// for that screen did: it is the screen, not the focus, that shows it.
     pub(in crate::game::client_side) fn regrab_on_refocus(&mut self) {
-        if self.studio_up() {
-            self.client.regrab_on_refocus = false;
-            self.client.studio.rmb_down = false;
-            self.capture(false);
-            return;
-        }
         if std::mem::take(&mut self.client.regrab_on_refocus)
             && self.client.screen == Screen::Playing
         {
@@ -608,14 +592,7 @@ use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;
 
 #[cfg(test)]
 mod tests {
-    use super::{studio_suppresses_focus_pause, top_screen_pauses};
-
-    #[test]
-    fn studio_replay_and_freecam_never_pause_on_focus_loss() {
-        assert!(studio_suppresses_focus_pause(true, false));
-        assert!(studio_suppresses_focus_pause(false, true));
-        assert!(!studio_suppresses_focus_pause(false, false));
-    }
+    use super::top_screen_pauses;
 
     /// `Minecraft.pause` asks the screen Minecraft set, and each of a dialog,
     /// a book and the win screen is a screen of its own that replaces what

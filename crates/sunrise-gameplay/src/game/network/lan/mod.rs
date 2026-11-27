@@ -80,9 +80,6 @@ pub struct LanHost {
     pub commands: Vec<sunrise_gameplay_common::game::lan_actions::GuestCommand>,
     /// Mods' quiet commands waiting to run a few a tick (game/network/lan_quiet.rs).
     pub(in crate::game) quiet: std::collections::VecDeque<super::lan_quiet::QuietBatch>,
-    /// Far terrain sampled for Sunrise clients (game/network/lan_far.rs); None when
-    /// `sunrise-lod-distance` is 0.
-    pub far: Option<sunrise_sim::lod_net::Service>,
     /// Native mods' commands and the level each needs, once asked (game/modding/native_server.rs).
     /// The generation of the session's mod commands the hub was given.
     pub(in crate::game) native_commands_sent: Option<u64>,
@@ -389,8 +386,6 @@ impl crate::game::ServerGame<'_> {
                 .clone(),
         );
         self.lan_update_tag_sources(&mut encoder);
-        let far = (net.lod_distance > 0)
-            .then(|| sunrise_sim::lod_net::Service::new(net.lod_distance, biome_names.clone()));
         let lan = super::lan_configuration_tasks::start(sync.clone(), net)?;
         let mut hub = Hub::new(lan, sync, encoder, config, self.common.loop_context.clone());
         hub.allow_commands = self.allow_commands();
@@ -421,7 +416,6 @@ impl crate::game::ServerGame<'_> {
             waypoint_dead: Default::default(),
             commands: Vec::new(),
             quiet: std::collections::VecDeque::new(),
-            far,
             native_commands_sent: None,
             sleep_ignored: Default::default(),
             states: Default::default(),
@@ -2450,7 +2444,6 @@ impl crate::game::ServerGame<'_> {
         self.lan_sync_scoreboard();
         drop(holding);
         self.flush_attachment_sync();
-        self.flush_far_terrain();
         if let Some(host) = self.server.lan.as_ref() {
             lan::flush_all(host.hub.guests.iter().map(|g| &g.sender));
         }
@@ -3182,7 +3175,6 @@ impl LanHost {
             waypoint_dead: Default::default(),
             commands: Default::default(),
             quiet: Default::default(),
-            far: None,
             native_commands_sent: None,
             sleep_ignored: Default::default(),
             states: Default::default(),
@@ -4629,7 +4621,6 @@ pub(in crate::game) mod tests {
                 let net = NetConfig {
                     listen: false,
                     announce: false,
-                    lod_distance: 0,
                     ..NetConfig::lan(0, String::new(), 3)
                 };
                 let config = HubConfig {
@@ -4904,7 +4895,6 @@ pub(in crate::game) mod tests {
             let net = NetConfig {
                 listen: false,
                 announce: false,
-                lod_distance: 0,
                 ..NetConfig::lan(0, String::new(), 2)
             };
             let config = HubConfig {
@@ -5251,7 +5241,6 @@ mod late_pairing_tests {
             let net = NetConfig {
                 listen: false,
                 announce: false,
-                lod_distance: 0,
                 ..NetConfig::lan(0, String::new(), 2)
             };
             let config = HubConfig {
@@ -5576,7 +5565,6 @@ pub(in crate::game) mod merchant_packet_tests {
                 waypoint_dead: Default::default(),
                 commands: Default::default(),
                 quiet: Default::default(),
-                far: None,
                 native_commands_sent: None,
                 sleep_ignored: Default::default(),
                 states: Default::default(),

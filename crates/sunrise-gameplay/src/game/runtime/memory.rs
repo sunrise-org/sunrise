@@ -221,7 +221,6 @@ impl ServerGame<'_> {
         MemoryInputs {
             render_distance: self.server.streaming.radius,
             client: None,
-            far: None,
         }
     }
 
