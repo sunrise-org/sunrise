@@ -1,5 +1,9 @@
 //! `sunrise-perf diff A B` (docs/perf-platform.md §6.6): two captures cut into time blocks and compared as unpaired samples.
 
+mod workload;
+
+pub use workload::Workload;
+
 use std::collections::{BTreeMap, HashMap};
 
 use serde::{Deserialize, Serialize};
@@ -37,6 +41,8 @@ const CLIENT_HEALTH: [HealthField; 4] = [
 pub struct DiffCapture {
     pub role: Role,
     pub file: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub workload: Option<Workload>,
 }
 
 /// What a capture diff compared.
@@ -75,10 +81,12 @@ pub(crate) fn captures(a: &str, b: &str) -> Vec<DiffCapture> {
         DiffCapture {
             role: Role::A,
             file: a.to_string(),
+            workload: None,
         },
         DiffCapture {
             role: Role::B,
             file: b.to_string(),
+            workload: None,
         },
     ]
 }
@@ -339,6 +347,8 @@ pub struct Diff {
     pub blocks: [usize; 2],
     pub rows: Vec<Row>,
     pub warnings: Vec<String>,
+    workload: [Workload; 2],
+    workload_warnings: Vec<String>,
 }
 
 impl Diff {
@@ -364,17 +374,31 @@ impl Diff {
         )
     }
 
+    pub(crate) fn workload_lines(&self, a: &str, b: &str) -> Vec<String> {
+        let [before, after] = self.workload;
+        let side = side_name(self.side);
+        [before.text("A", a, side), after.text("B", b, side)]
+            .into_iter()
+            .chain(
+                self.workload_warnings
+                    .iter()
+                    .map(|w| format!("warning: {w}")),
+            )
+            .collect()
+    }
+
     /// The text report; `a` and `b` are the files' names.
     pub fn text(&self, a: &str, b: &str) -> String {
         let what = match &self.thread {
             Some(t) => format!("{} {t} thread", side_name(self.side)),
             None => side_name(self.side).to_string(),
         };
-        let mut out = format!(
-            "A {a}  B {b}  ({}, {what}, {})\n",
+        let mut out = self.workload_lines(a, b).join("\n");
+        out.push_str(&format!(
+            "\nA {a}  B {b}  ({}, {what}, {})\n",
             self.blocks_text(),
             self.reply_unit().as_str().replace("_per_", "/")
-        );
+        ));
         let width = self.rows.iter().map(|r| r.id.len()).max().unwrap_or(0);
         for row in &self.rows {
             out.push_str(&row.text(width));
@@ -388,9 +412,13 @@ impl Diff {
 
     /// The JSON report; `a` and `b` are the files' names.
     pub fn envelope(&self, a: &str, b: &str) -> DiffEnvelope {
+        let mut captures = captures(a, b);
+        for (capture, workload) in captures.iter_mut().zip(self.workload) {
+            capture.workload = Some(workload);
+        }
         Envelope::success(
             OpName::Diff(DiffOp::Diff),
-            captures(a, b),
+            captures,
             Some(DiffSelection {
                 side: SideName::from(self.side),
                 thread: self.thread.clone(),
@@ -399,7 +427,11 @@ impl Diff {
             }),
             self.reply_unit(),
             self.rows.iter().map(Row::wire).collect(),
-            self.warnings.clone(),
+            self.workload_warnings
+                .iter()
+                .chain(&self.warnings)
+                .cloned()
+                .collect(),
         )
     }
 }
@@ -546,6 +578,8 @@ pub fn diff(a: &Capture, b: &Capture, options: &DiffOptions) -> Result<Diff, Err
     if let Some((x, y)) = build_mismatch(a, b, side) {
         warnings.push(format!("A is a {x} build and B a {y} build"));
     }
+    let workload_a = Workload::read(&va, side, ta.as_ref().map(|t| t.0));
+    let workload_b = Workload::read(&vb, side, tb.as_ref().map(|t| t.0));
     Ok(Diff {
         side,
         unit: View::main_unit(side),
@@ -557,6 +591,8 @@ pub fn diff(a: &Capture, b: &Capture, options: &DiffOptions) -> Result<Diff, Err
         blocks: [blocks_a.count, blocks_b.count],
         rows,
         warnings,
+        workload: [workload_a, workload_b],
+        workload_warnings: workload::warnings(workload_a, workload_b),
     })
 }
 

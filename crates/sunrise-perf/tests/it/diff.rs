@@ -73,6 +73,104 @@ fn two_ms_more_on_one_span_is_slower_with_two_inside_the_interval_and_the_rest_u
 }
 
 #[test]
+fn workload_leads_the_comparison_and_warns_only_above_ten_percent() {
+    let make = |entities| {
+        let mut data = capture(&server(&CHILDREN, &steady(12, 0), "release"));
+        for h in &mut data.health {
+            h.players = 10;
+            h.chunks = 1000;
+            h.entities = entities;
+            h.mspt_avg = Some(50.0);
+        }
+        data
+    };
+    let a = make(1000);
+    let b = make(1190);
+    let d = diff(&a, &b, &DiffOptions::default()).unwrap();
+    let text = d.text("a.hzperf", "b.hzperf");
+    assert!(text.starts_with("workload server A a.hzperf"));
+    assert!(
+        text.lines()
+            .nth(2)
+            .unwrap()
+            .contains("entities 1000.0 → 1190.0")
+    );
+    let json = d.envelope("a.hzperf", "b.hzperf");
+    let load = json.captures[0].workload.unwrap();
+    assert_eq!(load.ms_per_tick_per_1000_entities, Some(50.0));
+    assert_eq!(load.ms_per_tick_per_1000_chunks, Some(50.0));
+    assert_eq!(json.captures[1].workload.unwrap().entities, Some(1190.0));
+    assert!(
+        !diff(&a, &make(1100), &DiffOptions::default())
+            .unwrap()
+            .text("a", "b")
+            .contains("workloads differ")
+    );
+
+    let options = SummaryOptions {
+        baseline: Some(Baseline {
+            name: "a.hzperf".into(),
+            capture: a,
+        }),
+        ..Default::default()
+    };
+    let summary = summarize(&b, "b.hzperf", &options).unwrap();
+    assert!(summary.starts_with("workload server A a.hzperf"));
+    assert!(summary.lines().nth(2).unwrap().contains("workloads differ"));
+}
+
+#[test]
+fn workload_uses_world_snapshots_and_the_benchmark_window_when_available() {
+    let mut a = capture(&server(&CHILDREN, &steady(12, 0), "release"));
+    a.health.clear();
+    a.world.push(WorldSnapshot {
+        side: common::SERVER,
+        dims: vec![DimensionCounts {
+            chunks: 500,
+            entities: vec![TypeCount {
+                r#type: 0,
+                count: 250,
+            }],
+            ..Default::default()
+        }],
+        ..Default::default()
+    });
+    let d = diff(&a, &a, &DiffOptions::default())
+        .unwrap()
+        .envelope("a", "a");
+    assert_eq!(d.captures[0].workload.unwrap().chunks, Some(500.0));
+    assert_eq!(d.captures[0].workload.unwrap().entities, Some(250.0));
+
+    let mut report = Report::new(BenchKind::Game, App::default());
+    report.conditions.window = Some([1920, 1080]);
+    report.conditions.render_distance = Some(16);
+    let client = Capture {
+        start: vec![Start {
+            side: common::CLIENT,
+            ..Default::default()
+        }],
+        health: vec![HealthSample {
+            side: common::CLIENT,
+            frame_ms_p50: Some(15.0),
+            ..Default::default()
+        }],
+        bench: vec![BenchResult {
+            side: common::CLIENT,
+            report_json: report.to_json(),
+            ..Default::default()
+        }],
+        ..Default::default()
+    };
+    let d = diff(&client, &client, &DiffOptions::default())
+        .unwrap()
+        .envelope("a", "a");
+    let workload = d.captures[0].workload.unwrap();
+    assert_eq!(workload.render_distance, Some(16));
+    assert_eq!(workload.resolution, Some([1920, 1080]));
+    assert_eq!(workload.ms_per_tick_per_1000_entities, None);
+}
+
+#[test]
 fn a_drifting_baseline_raises_the_drift_warning_and_a_steady_one_does_not() {
     let drifting: Vec<Vec<f64>> = (0..12)
         .map(|i| vec![40.0 + 0.5 * i as f64, 6.0, 4.0])
@@ -313,7 +411,8 @@ fn the_diff_and_summary_commands_read_files() {
     let b = save(&dir, "b.hzperf", &server(&CHILDREN, &rows_b, "release"));
     let text = cli(&["diff", &a, &b, "--min-ms", "5"]).unwrap();
     assert!(
-        text.starts_with("A a.hzperf  B b.hzperf  (12 vs 12 blocks of 5 s"),
+        text.lines()
+            .any(|line| line.starts_with("A a.hzperf  B b.hzperf  (12 vs 12 blocks of 5 s")),
         "{text}"
     );
     assert!(
