@@ -337,6 +337,15 @@ pub struct CompiledFrameGraph {
     pub acquire_before: Vec<Vec<TransientTargetId>>,
     /// Indexed by `order_pos`: transient targets to release immediately after running `order[pos]`.
     pub release_after: Vec<Vec<TransientTargetId>>,
+    /// Whether any kept pass is scheduled in `AfterStage(RenderLevelStage::AfterSky)`.
+    pub has_after_sky_pass: bool,
+    /// Whether any kept pass is scheduled in a mid-world stage slot (`AfterOpaqueBlocks`,
+    /// `AfterOpaqueFeatures`, `AfterTranslucentFeatures`, `AfterTranslucentBlocks`,
+    /// `AfterTranslucentParticles`, `AfterWeather`, or `OitTranslucent`).
+    pub has_mid_world_pass: bool,
+    /// Whether any kept pass scheduled in `AfterStage(RenderLevelStage::AfterLevel)` declares a
+    /// read of [`FrameTarget::MainDepth`].
+    pub needs_depth_at_after_level: bool,
 }
 
 fn compile_specs(
@@ -510,6 +519,9 @@ fn compile_specs(
     let mut current_slot = FrameGraphSlot::BeforeWorld;
     let mut order = Vec::with_capacity(num_passes);
     let mut by_slot: HashMap<FrameGraphSlot, Vec<usize>> = HashMap::new();
+    let mut has_after_sky_pass = false;
+    let mut has_mid_world_pass = false;
+    let mut needs_depth_at_after_level = false;
 
     while let Some(Reverse((_, _, node))) = ready.pop() {
         visited += 1;
@@ -520,6 +532,25 @@ fn compile_specs(
             let order_pos = order.len();
             order.push(p);
             by_slot.entry(current_slot).or_default().push(order_pos);
+            match current_slot {
+                FrameGraphSlot::BeforeWorld => {}
+                FrameGraphSlot::AfterStage(stage) => match stage {
+                    RenderLevelStage::AfterSky => has_after_sky_pass = true,
+                    RenderLevelStage::AfterLevel => {
+                        if !needs_depth_at_after_level
+                            && passes[p].reads.contains(&FrameTarget::MainDepth)
+                        {
+                            needs_depth_at_after_level = true;
+                        }
+                    }
+                    // Every remaining `RenderLevelStage` (`AfterOpaqueBlocks`,
+                    // `AfterOpaqueFeatures`, `AfterTranslucentFeatures`,
+                    // `AfterTranslucentBlocks`, `AfterTranslucentParticles`, `AfterWeather`,
+                    // `OitTranslucent(_)`) runs mid-world inside an open render pass
+                    // (`RenderLevelStage` is `#[non_exhaustive]`).
+                    _ => has_mid_world_pass = true,
+                },
+            }
         }
         for &v in &adj[node] {
             if !is_active(v) {
@@ -583,6 +614,9 @@ fn compile_specs(
         transient_lifetimes,
         acquire_before,
         release_after,
+        has_after_sky_pass,
+        has_mid_world_pass,
+        needs_depth_at_after_level,
     })
 }
 
@@ -829,6 +863,20 @@ impl FrameGraphRunner {
             .by_slot
             .get(&slot)
             .is_some_and(|v| !v.is_empty())
+    }
+
+    /// Whether any kept pass is scheduled in a mid-world slot that ends the active world render
+    /// pass and resumes it with `LoadOp::Load` in the same frame, requiring prior world passes
+    /// to store depth even when no pass declares a read of [`FrameTarget::MainDepth`].
+    pub fn splits_world_pass(&self, inline_sky: bool) -> bool {
+        self.compiled.has_mid_world_pass || (inline_sky && self.compiled.has_after_sky_pass)
+    }
+
+    /// Whether any kept pass requires prior world render passes to store `MainDepth` instead of
+    /// discarding it — either because a mid-world slot splits and resumes the world pass or
+    /// because a kept `AfterLevel` pass declares a read of [`FrameTarget::MainDepth`].
+    pub fn needs_world_depth(&self, inline_sky: bool) -> bool {
+        self.splits_world_pass(inline_sky) || self.compiled.needs_depth_at_after_level
     }
 
     /// Execute all kept passes scheduled for `slot` in topological order.
@@ -1214,6 +1262,121 @@ mod tests {
         );
     }
 
+    #[test]
+    fn compiled_world_depth_flags_match_scheduled_slots_and_culling() {
+        let prepare = |graph: RecordedFrameGraph, oit_on: bool| {
+            let mut warned = std::collections::HashSet::new();
+            FrameGraphRunner::prepare(graph, oit_on, &mut warned)
+        };
+
+        // BeforeWorld (even declaring MainDepth) and AfterLevel without a MainDepth read neither
+        // split the world pass nor require storing world depth.
+        let mut graph = RecordedFrameGraph::default();
+        push(
+            &mut graph,
+            FramePassDescriptor::new("before_world_reader", FrameTarget::Mod(rt(1, 0)))
+                .reads(FrameTarget::MainDepth),
+        );
+        push(
+            &mut graph,
+            FramePassDescriptor::new("after_level_plain", FrameTarget::Mod(rt(2, 1)))
+                .after_stage(RenderLevelStage::AfterLevel),
+        );
+        let runner = prepare(graph, false).unwrap();
+        assert!(!runner.splits_world_pass(false));
+        assert!(!runner.splits_world_pass(true));
+        assert!(!runner.needs_world_depth(false));
+        assert!(!runner.needs_world_depth(true));
+
+        // AfterSky splits the world pass and keeps depth only when sky drawing runs inline.
+        let mut graph = RecordedFrameGraph::default();
+        push(
+            &mut graph,
+            FramePassDescriptor::new("after_sky", FrameTarget::Mod(rt(1, 0)))
+                .after_stage(RenderLevelStage::AfterSky)
+                .reads(FrameTarget::MainDepth),
+        );
+        let runner = prepare(graph, false).unwrap();
+        assert!(!runner.splits_world_pass(false));
+        assert!(runner.splits_world_pass(true));
+        assert!(!runner.needs_world_depth(false));
+        assert!(runner.needs_world_depth(true));
+
+        // A culled mid-world MainDepth reader beside an unrelated kept AfterLevel pass leaves the
+        // runner live with all depth-retention flags false.
+        let mut graph = RecordedFrameGraph::default();
+        let dead = graph.add_transient(rgba8_desc([16, 16]));
+        push(
+            &mut graph,
+            FramePassDescriptor::new("culled_mid_world_reader", FrameTarget::Transient(dead))
+                .after_stage(RenderLevelStage::AfterOpaqueBlocks)
+                .reads(FrameTarget::MainDepth),
+        );
+        push(
+            &mut graph,
+            FramePassDescriptor::new("after_level_keeper", FrameTarget::Mod(rt(1, 0)))
+                .after_stage(RenderLevelStage::AfterLevel),
+        );
+        let runner = prepare(graph, false).unwrap();
+        assert!(!runner.splits_world_pass(false));
+        assert!(!runner.splits_world_pass(true));
+        assert!(!runner.needs_world_depth(false));
+        assert!(!runner.needs_world_depth(true));
+
+        // A kept mid-world pass splits and keeps world depth even without declaring MainDepth.
+        let mut graph = RecordedFrameGraph::default();
+        push(
+            &mut graph,
+            FramePassDescriptor::new("after_opaque_no_depth", FrameTarget::Mod(rt(1, 0)))
+                .after_stage(RenderLevelStage::AfterOpaqueBlocks),
+        );
+        let runner = prepare(graph, false).unwrap();
+        assert!(runner.splits_world_pass(false));
+        assert!(runner.needs_world_depth(false));
+
+        // An OIT mid-world slot splits and keeps world depth under OIT.
+        let mut graph = RecordedFrameGraph::default();
+        push(
+            &mut graph,
+            FramePassDescriptor::new("after_oit_accumulate", FrameTarget::Mod(rt(1, 0)))
+                .after_stage(RenderLevelStage::OitTranslucent(OitStage::Accumulate)),
+        );
+        let runner = prepare(graph, true).unwrap();
+        assert!(runner.splits_world_pass(false));
+        assert!(runner.needs_world_depth(false));
+
+        // A kept compute pass at AfterLevel that declares MainDepth keeps depth without splitting.
+        let mut graph = RecordedFrameGraph::default();
+        let compute = mod_api::ComputePassDescriptor::new("after_level_compute")
+            .after_stage(RenderLevelStage::AfterLevel)
+            .reads(FrameTarget::MainDepth);
+        graph.validate_new_compute_pass(&compute, false).unwrap();
+        graph.push_pass(RecordedFramePass::from_compute_descriptor(compute, None));
+        let runner = prepare(graph, false).unwrap();
+        assert!(!runner.splits_world_pass(false));
+        assert!(!runner.splits_world_pass(true));
+        assert!(runner.needs_world_depth(false));
+        assert!(runner.needs_world_depth(true));
+
+        // A pass ordered transitively after a mid-world pass or an AfterLevel pass inherits that
+        // slot's depth requirement.
+        let mut graph = RecordedFrameGraph::default();
+        let anchor = push(
+            &mut graph,
+            FramePassDescriptor::new("after_level_anchor", FrameTarget::Mod(rt(1, 0)))
+                .after_stage(RenderLevelStage::AfterLevel),
+        );
+        push(
+            &mut graph,
+            FramePassDescriptor::new("transitive_after_level_reader", FrameTarget::Mod(rt(2, 1)))
+                .after_pass(anchor)
+                .reads(FrameTarget::MainDepth),
+        );
+        let runner = prepare(graph, false).unwrap();
+        assert!(!runner.splits_world_pass(false));
+        assert!(runner.needs_world_depth(false));
+    }
+
     /// The first texel of mip `level` of `texture`, read back after `enc`'s commands.
     fn read_texel(
         device: &wgpu::Device,
@@ -1488,6 +1651,7 @@ mod tests {
                     attachment: 0,
                 }],
                 push_constants: None,
+                reads_world_depth: false,
             }),
         });
         let _id_b = recorded.push_pass(pass_b);

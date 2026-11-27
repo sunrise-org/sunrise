@@ -4244,6 +4244,9 @@ pub enum PipelineDrawError {
     ///
     /// A draw that samples the transient attachment it renders into also returns this error,
     /// before the undeclared-read refusal documented on [`Self::InvalidBinding`] applies.
+    ///
+    /// An in-world raster draw that samples [`TextureSource::WorldDepth`] on an adapter without
+    /// read-only depth-stencil attachment support also returns this error.
     TargetReadWriteHazard,
 }
 

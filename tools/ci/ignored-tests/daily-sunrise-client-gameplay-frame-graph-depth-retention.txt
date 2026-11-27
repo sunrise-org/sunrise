@@ -1,0 +1,2 @@
+sunrise-client-gameplay game::client_side::native_custom_geometry::tests::frame_graph_compute_reads_rendered_opaque_depth lib daily child-process
+sunrise-client-gameplay game::client_side::native_custom_geometry::tests::mid_world_frame_graph_split_preserves_depth_without_depth_read lib daily child-process

@@ -78,6 +78,7 @@ pub struct ModGpuResources {
     /// Distinct [`FrameGraphWarning`]s already logged once since last reload.
     pub(super) warned_frame_graph: Arc<Mutex<HashSet<FrameGraphWarning>>>,
     render_capabilities: RenderCapabilities,
+    read_only_depth_stencil: bool,
     max_buffer_size: u64,
     /// Retained GPU vertex/index buffers backing [`mod_api::MeshRef`].
     pub(crate) meshes: Arc<Mutex<ModMeshes>>,
@@ -114,6 +115,10 @@ impl ModGpuResources {
             .alloc_view_id();
         Self {
             render_capabilities: probe_render_capabilities(&adapter, &device),
+            read_only_depth_stencil: adapter
+                .get_downlevel_capabilities()
+                .flags
+                .contains(wgpu::DownlevelFlags::READ_ONLY_DEPTH_STENCIL),
             max_buffer_size: device.limits().max_buffer_size,
             adapter,
             device,
@@ -193,7 +198,8 @@ impl ModGpuResources {
 
     /// The active world depth view for `TextureSource::WorldDepth`, with the view ID that keys its
     /// bind groups: a new one each time the renderer swaps its world depth
-    /// (`Renderer::swap_world_depth`).
+    /// (`Renderer::swap_world_depth`) or switches between the window depth and `WorldPost`'s
+    /// scaled depth target (`ModGpuResources::publish_world_depth`).
     pub fn mod_world_depth_texture_view(&self) -> (u64, wgpu::TextureView) {
         self.world_depth
             .lock()
@@ -210,6 +216,15 @@ impl ModGpuResources {
             .unwrap_or_else(|e| e.into_inner())
             .alloc_view_id();
         *self.world_depth.lock().unwrap_or_else(|e| e.into_inner()) = (id, view);
+    }
+
+    /// Publishes `view` as the active world depth under a fresh binding ID when it differs from
+    /// the view currently published, leaving steady-state frames on the same view ID.
+    pub(super) fn publish_world_depth(&self, view: &wgpu::TextureView) {
+        if self.world_depth.lock().unwrap_or_else(|e| e.into_inner()).1 == *view {
+            return;
+        }
+        self.replace_world_depth(view.clone());
     }
 
     /// A mod's dynamic texture by its handle, with the revision that keys its bind group.
@@ -253,6 +268,12 @@ impl ModGpuResources {
     /// `RenderCapabilities::multi_draw_indirect_count`, without copying the rest.
     pub fn multi_draw_indirect_count(&self) -> bool {
         self.render_capabilities.multi_draw_indirect_count
+    }
+
+    /// Whether the adapter supports attaching a depth-stencil texture read-only (`depth_ops: None`)
+    /// while simultaneously sampling it in a render pass (`DownlevelFlags::READ_ONLY_DEPTH_STENCIL`).
+    pub fn read_only_depth_stencil(&self) -> bool {
+        self.read_only_depth_stencil
     }
 
     /// The largest inline uniform and texel-buffer payloads a mod's set-1 draw may bind: the

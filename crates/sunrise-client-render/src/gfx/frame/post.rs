@@ -47,6 +47,7 @@ pub(in crate::gfx) struct PostPassArgs<'a> {
     pub(in crate::gfx) serial: u64,
     pub(in crate::gfx) cpu: [usize; 3],
     pub(in crate::gfx) lifts_world: bool,
+    pub(in crate::gfx) export_opaque_depth: bool,
     pub(in crate::gfx) frame_graph: Option<mod_frame_graph::FrameGraphRunner>,
 }
 
@@ -108,6 +109,7 @@ impl Renderer {
             serial,
             cpu,
             lifts_world,
+            export_opaque_depth,
             mut frame_graph,
         } = args;
 
@@ -312,6 +314,7 @@ impl Renderer {
                     translucent_blocks: pack_translucent_blocks,
                     weather: pack_weather,
                     custom_geometry: pack_custom_geometry,
+                    export_opaque_depth: pack_draws_terrain && export_opaque_depth,
                 },
                 |encoder, boundary| {
                     use pack_post::WorldBoundary;

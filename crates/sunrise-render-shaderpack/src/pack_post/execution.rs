@@ -33,6 +33,9 @@ pub struct WorldBoundaries {
     pub translucent_blocks: bool,
     pub weather: bool,
     pub custom_geometry: bool,
+    /// Copy the pack's `depthtex0` into Sunrise's screen-rows, reversed-Z `world_depth` once
+    /// right after solid terrain and before `WorldBoundary::AfterOpaqueBlocks`.
+    pub export_opaque_depth: bool,
 }
 
 /// Render boundaries reached within the classic pack's world pass.
@@ -768,6 +771,7 @@ impl PackPost {
         let mut terrain_drawn = !boundaries.sky
             && !boundaries.opaque_blocks
             && !boundaries.features
+            && !boundaries.export_opaque_depth
             && self.terrain.is_none()
             && self.terrain_cutout.is_none()
             && self.sky.is_none()
@@ -823,6 +827,7 @@ impl PackPost {
                     device,
                     queue,
                     encoder,
+                    world_depth,
                     size,
                     frame_view,
                     sky,
@@ -961,6 +966,7 @@ impl PackPost {
                 device,
                 queue,
                 encoder,
+                world_depth,
                 size,
                 frame_view,
                 sky,
@@ -984,47 +990,18 @@ impl PackPost {
         if !world_finished {
             boundary(encoder, WorldBoundary::AfterLevel);
         }
-        let targets = self.targets.as_ref().expect("resized");
         // depthtex0 as the frame leaves it, for next frames' `centerDepthSmooth`.
         if let Some(center) = &mut self.center_depth {
+            let targets = self.targets.as_ref().expect("resized");
             center.copy(device, encoder, &targets.depth_texture);
         }
         // Export the pack's final GL depth (`targets.depth`) back to Sunrise's screen-rows,
         // reversed-Z `world_depth` whenever the pack wrote depth, so post-pack consumers
         // (`world_drawn`, overlays, secondary views) depth-test against pack-drawn geometry.
         if self.draws_depth {
-            if self
-                .export_depth_group
-                .as_ref()
-                .is_none_or(|g| g.0 != targets.depth)
-            {
-                let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-                    label: Some("Shader pack depth export"),
-                    layout: &self.export_depth.1,
-                    entries: &[wgpu::BindGroupEntry {
-                        binding: 1,
-                        resource: wgpu::BindingResource::TextureView(&targets.depth),
-                    }],
-                });
-                self.export_depth_group = Some((targets.depth.clone(), group));
-            }
-            let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                label: Some("Shader pack depth export"),
-                color_attachments: &[],
-                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                    view: world_depth,
-                    depth_ops: Some(wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(0.0),
-                        store: wgpu::StoreOp::Store,
-                    }),
-                    stencil_ops: None,
-                }),
-                ..Default::default()
-            });
-            rp.set_pipeline(&self.export_depth.0);
-            rp.set_bind_group(0, self.export_depth_group.as_ref().map(|g| &g.1), &[]);
-            rp.draw(0..3, 0..1);
+            self.export_depth_to(device, encoder, world_depth);
         }
+        let targets = self.targets.as_ref().expect("resized");
         let view = |m: u16, i: usize, alt: bool| {
             targets.color[i]
                 .as_ref()
@@ -2139,6 +2116,48 @@ impl PackPost {
         self.entities = Some(entities);
     }
 
+    /// Copy the pack's GL-rows, standard-Z `depthtex0` (`targets.depth`) into Sunrise's
+    /// screen-rows, reversed-Z `world_depth` using the cached `export_depth` pass.
+    fn export_depth_to(
+        &mut self,
+        device: &wgpu::Device,
+        encoder: &mut wgpu::CommandEncoder,
+        world_depth: &wgpu::TextureView,
+    ) {
+        let targets = self.targets.as_ref().expect("resized");
+        if self
+            .export_depth_group
+            .as_ref()
+            .is_none_or(|g| g.0 != targets.depth)
+        {
+            let group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Shader pack depth export"),
+                layout: &self.export_depth.1,
+                entries: &[wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(&targets.depth),
+                }],
+            });
+            self.export_depth_group = Some((targets.depth.clone(), group));
+        }
+        let mut rp = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            label: Some("Shader pack depth export"),
+            color_attachments: &[],
+            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                view: world_depth,
+                depth_ops: Some(wgpu::Operations {
+                    load: wgpu::LoadOp::Clear(0.0),
+                    store: wgpu::StoreOp::Store,
+                }),
+                stencil_ops: None,
+            }),
+            ..Default::default()
+        });
+        rp.set_pipeline(&self.export_depth.0);
+        rp.set_bind_group(0, self.export_depth_group.as_ref().map(|g| &g.1), &[]);
+        rp.draw(0..3, 0..1);
+    }
+
     /// The sky, when it shows, then terrain, entities and block entities.
     #[allow(clippy::too_many_arguments)]
     pub fn draw_opaque(
@@ -2146,6 +2165,7 @@ impl PackPost {
         device: &wgpu::Device,
         queue: &wgpu::Queue,
         encoder: &mut wgpu::CommandEncoder,
+        world_depth: &wgpu::TextureView,
         size: [u32; 2],
         view: &UniformFrameView<'_>,
         sky: &SkyInputs<'_>,
@@ -2162,6 +2182,9 @@ impl PackPost {
         }
         self.draw_mod_slot(device, queue, encoder, size, ModPassSlot::AfterSky);
         self.draw_terrain(device, queue, encoder, size, TerrainList::Solid, terrain);
+        if boundaries.export_opaque_depth && self.draws_depth {
+            self.export_depth_to(device, encoder, world_depth);
+        }
         if boundaries.opaque_blocks {
             self.target_boundary(encoder, boundary, |color, depth| {
                 WorldBoundary::AfterOpaqueBlocks { color, depth }
