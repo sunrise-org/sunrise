@@ -164,6 +164,34 @@ pub(super) fn write_png(root: &Path, name: &str, w: u32, h: u32) {
         .unwrap();
 }
 
+/// A `w x h` PNG at `rel` under `root`: the columns `opaque` accepts are opaque white, the rest
+/// transparent.
+pub(super) fn write_columns_png(
+    root: &Path,
+    rel: &str,
+    w: u32,
+    h: u32,
+    opaque: impl Fn(u32) -> bool,
+) {
+    let path = root.join(rel);
+    fs::create_dir_all(path.parent().unwrap()).unwrap();
+    let mut pixels = vec![0u8; (w * h * 4) as usize];
+    for y in 0..h {
+        for x in (0..w).filter(|&x| opaque(x)) {
+            let at = ((y * w + x) * 4) as usize;
+            pixels[at..at + 4].fill(255);
+        }
+    }
+    let mut encoder = png::Encoder::new(fs::File::create(path).unwrap(), w, h);
+    encoder.set_color(png::ColorType::Rgba);
+    encoder.set_depth(png::BitDepth::Eight);
+    encoder
+        .write_header()
+        .unwrap()
+        .write_image_data(&pixels)
+        .unwrap();
+}
+
 /// A synthetic default font: two 8x8 glyphs, 3 and 5 pixels wide.
 pub(super) fn two_glyph_font(name: &str) -> std::path::PathBuf {
     let root = std::env::temp_dir().join(format!("sunrise-fonts-{name}-{}", std::process::id()));

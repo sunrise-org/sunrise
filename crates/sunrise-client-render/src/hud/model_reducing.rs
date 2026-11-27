@@ -44,8 +44,8 @@ pub(super) fn reducible_model_sprites(
 }
 
 impl HudAtlas {
-    /// `layout`, but when `extras` (Custom Item Textures) make the images more than `max`
-    /// holds, without them: they are left out, not the packs.
+    /// `layout`, but when `extras` (Custom Item Textures and HD font sheets) make the images
+    /// more than `max` holds, without them: they are left out, not the packs.
     pub(super) fn layout_leaving_out(
         images: &mut Vec<PackedImage>,
         animated: &mut Vec<String>,
@@ -57,7 +57,7 @@ impl HudAtlas {
                 images.retain(|i| !extras.contains(&i.0));
                 animated.retain(|n| !extras.contains(n));
                 let layout = Self::layout(images, max)?;
-                log::warn!("left out the custom item textures: {e}");
+                log::warn!("left out the custom item textures and HD font sheets: {e}");
                 Ok(layout)
             }
             layout => layout,
