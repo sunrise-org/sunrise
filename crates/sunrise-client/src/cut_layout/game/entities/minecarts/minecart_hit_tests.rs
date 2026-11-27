@@ -14,7 +14,7 @@ use {
 /// there for the piglins that look at it.
 fn game_with_player(
     resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'_> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'_> {
     let mut game = server_game(resources);
     game.build_registries();
     game.set_allow_commands(true);

@@ -520,7 +520,7 @@ pub(crate) mod tests {
     /// standing at (8.5, 200, 8.5) on a stone floor.
     pub(crate) fn server_with_guest(
         resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-    ) -> sunrise_gameplay::game::ServerGame<'_> {
+    ) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'_> {
         let mut game = super::super::game_tests::tests::server_game(resources);
         game.build_registries();
         game.set_allow_commands(true);

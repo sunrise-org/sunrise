@@ -10,7 +10,7 @@ const UUID_HIGH: i32 = 3221;
 /// at (5, 64, 5) and (7, 64, 7).
 fn lodestone_world(
     resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'_> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'_> {
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
     game.build_registries();
     game.set_allow_commands(true);

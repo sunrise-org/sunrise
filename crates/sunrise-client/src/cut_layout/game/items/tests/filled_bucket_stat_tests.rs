@@ -14,7 +14,7 @@ fn cauldron_game<'a>(
     state: &str,
     level: Option<u8>,
     held: ItemStack,
-) -> sunrise_gameplay::game::ServerGame<'a> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
     let mut game = server_game(resources);
     game.creative = false;
     game.player = Some(

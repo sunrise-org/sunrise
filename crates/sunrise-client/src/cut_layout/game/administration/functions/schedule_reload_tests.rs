@@ -10,7 +10,10 @@ use sunrise_gameplay::game::commands::execute::ExecState;
 fn schedule_game<'a>(
     label: &str,
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> (sunrise_gameplay::game::ServerGame<'a>, std::path::PathBuf) {
+) -> (
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+    std::path::PathBuf,
+) {
     let dir = std::env::temp_dir().join(format!(
         "sunrise-schedule-{label}-{}-{}",
         std::process::id(),
@@ -41,8 +44,8 @@ fn schedule_game<'a>(
     game.server.world_root = dir.clone();
     game.build_registries();
     game.set_allow_commands(true);
-    game.reload_datapacks(false, &game.level.enabled_features.clone())
-        .unwrap();
+    let enabled_features = game.level.enabled_features.clone();
+    game.reload_datapacks(false, &enabled_features).unwrap();
     assert!(game.server.fns.0.enabled.contains(&"file/hs".to_owned()));
     assert!(
         game.server.fns.0.store.errors.is_empty(),

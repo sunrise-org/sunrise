@@ -75,8 +75,8 @@ pub(crate) mod pickup_tests {
         game.set_allow_commands(true);
         // Opening the world installs its staged advancement tree. Install the
         // custom tree afterwards so the first tick cannot replace it.
-        game.open_world_datapacks(&game.level.enabled_features.clone(), None)
-            .unwrap();
+        let enabled_features = game.level.enabled_features.clone();
+        game.open_world_datapacks(&enabled_features, None).unwrap();
         install_pickup_advancement(&mut game);
         // `DistanceManager` keeps a chunk entity-ticking only while its whole
         // 5x5 neighbourhood is resident.

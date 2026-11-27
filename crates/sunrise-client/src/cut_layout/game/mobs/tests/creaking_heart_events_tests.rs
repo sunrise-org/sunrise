@@ -13,7 +13,7 @@ use sunrise_sim::motion::PlayerMotion;
 
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(4.5, 200.0, 4.5)).unwrap());
     game.build_registries();
@@ -174,13 +174,15 @@ fn shearing_a_copper_golem_posts_shear_at_the_golem() {
         .position(|m| m.species() == Species::CopperGolem)
         .expect("the golem");
     // OfferFlowerGoal.stop: the poppy on the antenna.
-    game.receive_gift(game.mobs[index].id, "minecraft:poppy");
+    let golem = game.mobs[index].id;
+    game.receive_gift(golem, "minecraft:poppy");
     assert!(game.golem_shearable(index), "the antenna holds the poppy");
     let at = {
         let p = game.mobs[index].position;
         [p.x, p.y, p.z]
     };
-    game.common.inventory[game.common.selected] =
+    let selected = game.common.selected;
+    game.common.inventory[selected] =
         Some(sunrise_client::items::ItemStack::new("minecraft:shears", 1));
     let events = posted(&mut game, |g| {
         assert!(g.interact_copper_golem(index, "minecraft:shears"));

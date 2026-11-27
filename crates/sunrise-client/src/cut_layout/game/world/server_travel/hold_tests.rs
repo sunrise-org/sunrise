@@ -23,7 +23,10 @@ fn light(game: &mut sunrise_gameplay::game::ServerGame<'_>, around: i32) {
 /// A server with one guest standing on lit land at the origin.
 fn server<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
-) -> (sunrise_gameplay::game::ServerGame<'a>, mpsc::Receiver<Out>) {
+) -> (
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+    mpsc::Receiver<Out>,
+) {
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
     light(&mut game, 0);
     game.lan_host(

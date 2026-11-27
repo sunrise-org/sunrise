@@ -8,7 +8,7 @@ use sunrise_gameplay::game::game_tests::tests::server_game;
 /// (CI has none: the tests then skip quietly).
 pub(crate) fn server(
     resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> Option<sunrise_gameplay::game::ServerGame<'_>> {
+) -> Option<sunrise_gameplay::game::game_tests::tests::TestServerGame<'_>> {
     std::env::var_os("SUNRISE_TEST_RESOURCES")?;
     Some(server_game(resources))
 }

@@ -112,7 +112,7 @@ fn complete_sender_tick(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
 pub(crate) fn fixture(
     resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
 ) -> (
-    sunrise_gameplay::game::ServerGame<'_>,
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'_>,
     [mpsc::Receiver<Out>; 2],
 ) {
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);

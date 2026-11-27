@@ -974,20 +974,25 @@ thread_local! {
     static PUBLICATION: RefCell<Option<IsolatedPublication>> = const { RefCell::new(None) };
 }
 
+/// Restores the previous language publication on this thread when dropped.
+#[cfg(any(test, feature = "test-language-publication"))]
+pub struct PublicationGuard(
+    Option<IsolatedPublication>,
+    std::marker::PhantomData<std::rc::Rc<()>>,
+);
+
+#[cfg(any(test, feature = "test-language-publication"))]
+impl Drop for PublicationGuard {
+    fn drop(&mut self) {
+        PUBLICATION.with(|slot| *slot.borrow_mut() = self.0.take());
+        scope_changed();
+    }
+}
+
 /// Isolate language reload publication on this fixture thread, including nested scopes.
 /// Unlike `scoped`, subsequent `set` calls replace the visible language.
 #[cfg(any(test, feature = "test-language-publication"))]
-pub fn isolate_publication(language: Language) -> impl Drop {
-    struct Restore(
-        Option<IsolatedPublication>,
-        std::marker::PhantomData<std::rc::Rc<()>>,
-    );
-    impl Drop for Restore {
-        fn drop(&mut self) {
-            PUBLICATION.with(|slot| *slot.borrow_mut() = self.0.take());
-            scope_changed();
-        }
-    }
+pub fn isolate_publication(language: Language) -> PublicationGuard {
     let previous = PUBLICATION.with(|slot| {
         slot.replace(Some(IsolatedPublication {
             current: Some(Arc::new(language)),
@@ -995,7 +1000,7 @@ pub fn isolate_publication(language: Language) -> impl Drop {
         }))
     });
     scope_changed();
-    Restore(previous, std::marker::PhantomData)
+    PublicationGuard(previous, std::marker::PhantomData)
 }
 
 #[cfg(test)]

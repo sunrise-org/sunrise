@@ -18,7 +18,7 @@ use sunrise_world::lazy_json::LazyJson;
 fn campfire_game<'a>(
     pos: [i32; 3],
     resources: &'a mut Option<Arc<Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
     let mut game = server_game(resources);
     // A local player, not a dedicated server's silent world: criteria and
     // statistics apply to them.

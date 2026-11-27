@@ -316,7 +316,10 @@ pub(crate) mod registered_slot_source_preservation_tests {
     pub(crate) fn scene<'a>(
         resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
         root: std::path::PathBuf,
-    ) -> (sunrise_gameplay::game::ServerGame<'a>, std::path::PathBuf) {
+    ) -> (
+        sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+        std::path::PathBuf,
+    ) {
         let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
         game.build_registries();
         game.set_allow_commands(true);

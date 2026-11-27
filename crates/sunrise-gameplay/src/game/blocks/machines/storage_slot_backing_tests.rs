@@ -5,7 +5,10 @@
 //! The double chest's open menu (`MenuRef::slot_backing`) and its `ItemPlace::MenuSlot` places
 //! report the same slots as its sides.
 use super::*;
-use crate::game::{ServerGame, game_tests::tests::server_game};
+use crate::game::{
+    ServerGame,
+    game_tests::tests::{TestServerGame, server_game},
+};
 use mod_api::{ITEMS, ServerHost, StorageSlot};
 use std::sync::Arc;
 use sunrise_core::{
@@ -29,7 +32,7 @@ const COMPOSTER: [i32; 3] = [8, 64, 8];
 const GUEST: u32 = 1;
 const GUEST_UUID: u128 = 123;
 
-fn game<'a>(resources: &'a mut Option<Arc<Resources>>) -> ServerGame<'a> {
+fn game<'a>(resources: &'a mut Option<Arc<Resources>>) -> TestServerGame<'a> {
     let mut game = server_game(resources);
     game.build_registries();
     game.set_allow_commands(true);
@@ -58,7 +61,7 @@ fn game<'a>(resources: &'a mut Option<Arc<Resources>>) -> ServerGame<'a> {
 }
 
 /// `game` opened to the LAN, with `GUEST` online to open the double chest's menu.
-fn host_game<'a>(resources: &'a mut Option<Arc<Resources>>) -> ServerGame<'a> {
+fn host_game<'a>(resources: &'a mut Option<Arc<Resources>>) -> TestServerGame<'a> {
     use crate::game::native_item_places::tests::open_to_lan;
     use sunrise_gameplay_common::game::server_side::native_item_places::tests::guest;
 
@@ -158,7 +161,7 @@ fn an_open_double_chest_menu_backs_each_slot_as_its_sides_do_until_it_closes() {
         assert_eq!(game.open_block_menu(GUEST, (x, y, z)), MenuOpen::Opened);
         let menu = game.player_container_menu(player).unwrap();
         // The 54 container slots, then the player's 36.
-        assert_eq!(menu.slot_count(&game), Some(90));
+        assert_eq!(menu.slot_count(&*game), Some(90));
         for index in 0..54 {
             let storage = StorageSlot {
                 level,
@@ -171,7 +174,7 @@ fn an_open_double_chest_menu_backs_each_slot_as_its_sides_do_until_it_closes() {
                 Some(storage)
             );
             assert_eq!(
-                menu.slot_backing(&game, index),
+                menu.slot_backing(&*game, index),
                 Some(MenuSlotBacking::BlockEntity {
                     level,
                     pos: storage.pos,
@@ -180,16 +183,20 @@ fn an_open_double_chest_menu_backs_each_slot_as_its_sides_do_until_it_closes() {
                 "menu slot {index}"
             );
             let place = ItemPlace::MenuSlot { menu, slot: index };
-            assert_eq!(place.backing(&mut game), Some(storage), "menu slot {index}");
+            assert_eq!(
+                place.backing(&mut *game),
+                Some(storage),
+                "menu slot {index}"
+            );
             let strict = ItemPlace::Strict(Box::new(place));
             assert_eq!(
-                strict.backing(&mut game),
+                strict.backing(&mut *game),
                 Some(storage),
                 "menu slot {index}"
             );
             let one_by_one = ItemPlace::OneByOne(Box::new(strict));
             assert_eq!(
-                one_by_one.backing(&mut game),
+                one_by_one.backing(&mut *game),
                 Some(storage),
                 "menu slot {index}"
             );
@@ -197,26 +204,26 @@ fn an_open_double_chest_menu_backs_each_slot_as_its_sides_do_until_it_closes() {
         // The player's inventory in the same menu backs no block slot: menu slot 54 is the
         // inventory's slot 9. Nor does a slot past the menu.
         assert_eq!(
-            menu.slot_backing(&game, 54),
+            menu.slot_backing(&*game, 54),
             Some(MenuSlotBacking::Player(9))
         );
         for slot in 54..90 {
             assert!(
                 matches!(
-                    menu.slot_backing(&game, slot),
+                    menu.slot_backing(&*game, slot),
                     Some(MenuSlotBacking::Player(_))
                 ),
                 "menu slot {slot}"
             );
             assert_eq!(
-                ItemPlace::MenuSlot { menu, slot }.backing(&mut game),
+                ItemPlace::MenuSlot { menu, slot }.backing(&mut *game),
                 None,
                 "menu slot {slot}"
             );
         }
-        assert_eq!(menu.slot_backing(&game, 90), None);
+        assert_eq!(menu.slot_backing(&*game, 90), None);
         assert_eq!(
-            ItemPlace::MenuSlot { menu, slot: 90 }.backing(&mut game),
+            ItemPlace::MenuSlot { menu, slot: 90 }.backing(&mut *game),
             None
         );
         // `ServerPlayer.openMenu` closed the menu that was open: its handle reaches nothing.
@@ -226,7 +233,7 @@ fn an_open_double_chest_menu_backs_each_slot_as_its_sides_do_until_it_closes() {
                     menu: replaced,
                     slot: 0
                 }
-                .backing(&mut game),
+                .backing(&mut *game),
                 None
             );
         }
@@ -241,23 +248,23 @@ fn an_open_double_chest_menu_backs_each_slot_as_its_sides_do_until_it_closes() {
             .is_none()
     );
     for slot in [0, 54] {
-        assert_eq!(menu.slot_backing(&game, slot), None, "menu slot {slot}");
+        assert_eq!(menu.slot_backing(&*game, slot), None, "menu slot {slot}");
         assert_eq!(
-            ItemPlace::MenuSlot { menu, slot }.backing(&mut game),
+            ItemPlace::MenuSlot { menu, slot }.backing(&mut *game),
             None,
             "menu slot {slot}"
         );
     }
     // What remains is the player's own inventory menu, which no block entity backs.
     let inventory = game.player_container_menu(player).unwrap();
-    assert_eq!(inventory.container_id(&game), Some(0));
+    assert_eq!(inventory.container_id(&*game), Some(0));
     for slot in 0..46 {
         assert_eq!(
             ItemPlace::MenuSlot {
                 menu: inventory,
                 slot
             }
-            .backing(&mut game),
+            .backing(&mut *game),
             None,
             "inventory menu slot {slot}"
         );

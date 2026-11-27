@@ -13,7 +13,7 @@ type Posted = (&'static str, [f64; 3], Option<Who>);
 /// A server's game with nobody playing, or `None` without prepared resources.
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> Option<sunrise_gameplay::game::ServerGame<'a>> {
+) -> Option<sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>> {
     std::env::var_os("SUNRISE_TEST_RESOURCES")?;
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
     game.build_registries();

@@ -19,9 +19,10 @@ fn a_ground_jump_awards_the_jump_statistic() {
     let mut player = PlayerMotion::new(game.motion, Vec3::new(2.5, 64.0, 2.5)).unwrap();
     player.ground.on_ground = true;
     {
+        let game = &mut *game;
         let meta =
             sunrise_gameplay_common::game::side_ops::world::WorldSideGameExt::side_game_side_meta(
-                &game,
+                game,
             );
         let side = game_side!(
             game.common,

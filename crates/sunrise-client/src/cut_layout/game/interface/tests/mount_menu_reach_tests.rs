@@ -145,7 +145,10 @@ fn a_mount_past_seven_blocks_closes_its_menu() {
 fn guest_beside_a_donkey<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
     gap: f64,
-) -> (sunrise_gameplay::game::ServerGame<'a>, Guest) {
+) -> (
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+    Guest,
+) {
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
     let kind = game
         .res

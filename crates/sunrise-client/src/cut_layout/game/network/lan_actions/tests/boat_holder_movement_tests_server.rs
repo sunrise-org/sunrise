@@ -7,7 +7,10 @@ use sunrise_sim::lan::{Joined, NetConfig, Out, PlayerSender, guest::Guest, hub::
 
 pub(crate) fn scene<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> (sunrise_gameplay::game::ServerGame<'a>, mpsc::Receiver<Out>) {
+) -> (
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+    mpsc::Receiver<Out>,
+) {
     let mut g = sunrise_gameplay::game::game_tests::tests::server_game(resources);
     g.build_registries();
     g.set_allow_commands(true);

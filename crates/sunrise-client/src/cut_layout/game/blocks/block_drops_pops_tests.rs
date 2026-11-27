@@ -16,7 +16,7 @@ use {
 
 fn game(
     resources: &mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'_> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'_> {
     let mut game = server_game(resources);
     set_up(&mut game);
     game

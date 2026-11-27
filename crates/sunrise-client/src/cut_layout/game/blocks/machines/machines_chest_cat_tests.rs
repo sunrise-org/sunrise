@@ -22,7 +22,7 @@ const WIRE: Pos = (2, 64, 0);
 /// ticking chunk.
 fn game<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
     let mut game = server_game(resources);
     game.build_registries();
     game.set_allow_commands(true);

@@ -12,7 +12,7 @@ use sunrise_world::registry::BlockStateId;
 /// (CI has none: the tests then skip quietly).
 pub(crate) fn server<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> Option<sunrise_gameplay::game::ServerGame<'a>> {
+) -> Option<sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>> {
     std::env::var_os("SUNRISE_TEST_RESOURCES")?;
     Some(server_game(resources))
 }

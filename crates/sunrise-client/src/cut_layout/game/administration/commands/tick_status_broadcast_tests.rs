@@ -58,7 +58,7 @@ fn admin_line(message: serde_json::Value) -> serde_json::Value {
 fn lan_game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
 ) -> (
-    sunrise_gameplay::game::ServerGame<'a>,
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
     mpsc::Receiver<sunrise_sim::lan::Out>,
 ) {
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);

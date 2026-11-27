@@ -79,7 +79,7 @@ pub(crate) mod tests {
         let mut stopped = Vec::new();
         assert_eq!(
             overworld.visit_experience_orbs(
-                &game,
+                &*game,
                 [0.0, 69.0, 0.0],
                 [2.0, 71.0, 2.0],
                 &mut |orb| {
@@ -100,7 +100,7 @@ pub(crate) mod tests {
         ] {
             let mut called = false;
             assert_eq!(
-                overworld.visit_experience_orbs(&game, min, max, &mut |_| {
+                overworld.visit_experience_orbs(&*game, min, max, &mut |_| {
                     called = true;
                     core::ops::ControlFlow::Continue(())
                 }),
@@ -125,7 +125,7 @@ pub(crate) mod tests {
         let mut parked_orbs = Vec::new();
         assert_eq!(
             overworld.visit_experience_orbs(
-                &game,
+                &*game,
                 [0.0, 69.0, 0.0],
                 [2.0, 71.0, 2.0],
                 &mut |orb| {
@@ -144,34 +144,37 @@ pub(crate) mod tests {
         );
         let orb = parked_orbs[0];
         assert_eq!(game.experience_orb(orb.entity()), Ok(Some(orb)));
-        assert_eq!(orb.entity().position(&game), Some([1.0, 70.0, 1.0]));
-        assert_eq!(orb.value(&game), Ok(3));
-        assert_eq!(orb.count(&game), Ok(1));
-        assert_eq!(orb.age(&game), Ok(0));
-        assert_eq!(orb.set_value(&mut game, 50_000), Ok(()));
-        assert_eq!(orb.set_count(&mut game, 4), Ok(()));
-        assert_eq!(orb.set_age(&mut game, -12), Ok(()));
-        assert_eq!(orb.value(&game), Ok(50_000));
-        assert_eq!(orb.count(&game), Ok(4));
-        assert_eq!(orb.age(&game), Ok(-12));
+        assert_eq!(orb.entity().position(&*game), Some([1.0, 70.0, 1.0]));
+        assert_eq!(orb.value(&*game), Ok(3));
+        assert_eq!(orb.count(&*game), Ok(1));
+        assert_eq!(orb.age(&*game), Ok(0));
+        assert_eq!(orb.set_value(&mut *game, 50_000), Ok(()));
+        assert_eq!(orb.set_count(&mut *game, 4), Ok(()));
+        assert_eq!(orb.set_age(&mut *game, -12), Ok(()));
+        assert_eq!(orb.value(&*game), Ok(50_000));
+        assert_eq!(orb.count(&*game), Ok(4));
+        assert_eq!(orb.age(&*game), Ok(-12));
 
         // Client side refuses with Unavailable.
         let role = game.options.execution_role;
         game.options.execution_role =
             sunrise_gameplay_common::game::execution_role::ExecutionRole::Client;
         assert_eq!(
-            overworld.visit_experience_orbs(&game, [0.0, 69.0, 0.0], [2.0, 71.0, 2.0], &mut |_| {
-                core::ops::ControlFlow::Continue(())
-            }),
+            overworld.visit_experience_orbs(
+                &*game,
+                [0.0, 69.0, 0.0],
+                [2.0, 71.0, 2.0],
+                &mut |_| { core::ops::ControlFlow::Continue(()) }
+            ),
             Err(LevelReadError::Unavailable)
         );
         assert_eq!(
             game.experience_orb(orb.entity()),
             Err(LevelReadError::Unavailable)
         );
-        assert_eq!(orb.value(&game), Err(LevelReadError::Unavailable));
+        assert_eq!(orb.value(&*game), Err(LevelReadError::Unavailable));
         assert_eq!(
-            orb.set_value(&mut game, 1),
+            orb.set_value(&mut *game, 1),
             Err(ExperienceOrbWriteError::Unavailable)
         );
         game.options.execution_role = role;

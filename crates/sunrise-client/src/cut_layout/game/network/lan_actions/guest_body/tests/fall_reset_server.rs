@@ -12,7 +12,7 @@ use sunrise_sim::{
 pub(crate) fn scene<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
     scratch: &Path,
-) -> sunrise_gameplay::game::ServerGame<'a> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
     let mut g = sunrise_gameplay::game::game_tests::tests::server_game(resources);
     g.build_registries();
     g.set_allow_commands(true);

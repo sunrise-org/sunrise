@@ -49,12 +49,15 @@ pub(crate) mod connected_spawnpoint_rotation_tests {
         std::fs::create_dir_all(&scratch).unwrap();
         game.server.world_root = scratch.clone();
         // Fixture setup through the existing column insertion API; admit every lit column below.
-        for x in -2..=2 {
-            for z in -2..=2 {
-                game.server
-                    .streaming
-                    .insert_remote(&mut game.common.world, Chunk::empty(x, z));
-                assert!(game.server.streaming.is_lit(x, z));
+        {
+            let game = &mut *game;
+            for x in -2..=2 {
+                for z in -2..=2 {
+                    game.server
+                        .streaming
+                        .insert_remote(&mut game.common.world, Chunk::empty(x, z));
+                    assert!(game.server.streaming.is_lit(x, z));
+                }
             }
         }
         let stone = game

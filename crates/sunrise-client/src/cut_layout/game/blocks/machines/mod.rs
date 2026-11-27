@@ -229,7 +229,7 @@ pub(crate) mod furnace_fuel_transfer_tests {
         let mut game = server_game(&mut resources);
         let hopper = (8, 64, 8);
         let furnace = (9, 64, 8);
-        let registry = &game.common.pack.assets.registry;
+        let registry = game.common.pack.assets.registry;
         let mut hopper_state = registry
             .state(registry.default_state("minecraft:hopper").unwrap())
             .unwrap()

@@ -17,7 +17,7 @@ use sunrise_sim::entities::{ExperienceOrb, ItemEntity};
 /// positional sounds it plays recorded.
 pub(crate) fn standing_game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
     let mut game = server_game(resources);
     let feet = Vec3::new(8.5, 70.0, 8.5);
     game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, feet).unwrap());
@@ -56,7 +56,8 @@ fn a_thrown_item_takes_the_throwers_random_not_the_levels() {
     let mut game = standing_game(&mut resources);
     game.yaw = 0.0;
     game.pitch = 0.0;
-    game.common.inventory[game.common.selected] = Some(ItemStack::new("minecraft:stone", 4));
+    let selected = game.common.selected;
+    game.common.inventory[selected] = Some(ItemStack::new("minecraft:stone", 4));
     let level = game.world.random.state();
     game.drop_held_item(false);
     let thrown = game.dropped.last().expect("the drop key threw the stack");

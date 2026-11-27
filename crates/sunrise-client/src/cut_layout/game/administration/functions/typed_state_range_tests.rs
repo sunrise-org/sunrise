@@ -66,7 +66,10 @@ mod typed_state_range_read_tests {
         game.update_chunk_tickets();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         while !game.server.streaming.is_lit(0, 0) || !game.world.chunks.contains_key(&(0, 0)) {
-            let _ = game.server.streaming.update(&mut game.common.world);
+            {
+                let game = &mut *game;
+                let _ = game.server.streaming.update(&mut game.common.world);
+            }
             game.spawn_loaded_entities();
             assert!(
                 std::time::Instant::now() < deadline,
@@ -229,7 +232,10 @@ mod typed_state_range_read_tests {
         game.update_chunk_tickets();
         let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
         while !game.server.streaming.is_lit(0, 0) || !game.world.chunks.contains_key(&(0, 0)) {
-            let _ = game.server.streaming.update(&mut game.common.world);
+            {
+                let game = &mut *game;
+                let _ = game.server.streaming.update(&mut game.common.world);
+            }
             game.spawn_loaded_entities();
             assert!(
                 std::time::Instant::now() < deadline,

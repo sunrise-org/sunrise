@@ -15,7 +15,7 @@ use {sunrise_gameplay_common::game::GuestUse, sunrise_gameplay_common::game::Hit
 /// A server's game with the prepared resources, or `None` where CI has none.
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> Option<sunrise_gameplay::game::ServerGame<'a>> {
+) -> Option<sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>> {
     std::env::var_os("SUNRISE_TEST_RESOURCES")?;
     let mut game = server_game(resources);
     game.build_registries();

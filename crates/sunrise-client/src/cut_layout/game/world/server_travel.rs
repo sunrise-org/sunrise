@@ -819,7 +819,7 @@ pub(crate) mod credits_respawn_tests {
         resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
     ) -> (
         tempfile::TempDir,
-        sunrise_gameplay::game::ServerGame<'a>,
+        sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
         mpsc::Receiver<Out>,
     ) {
         let scratch = tempfile::tempdir().unwrap();
@@ -927,9 +927,12 @@ pub(crate) mod credits_respawn_tests {
             g.dimension = "minecraft:the_end".into();
         });
         game.enter_level(Dim::End).unwrap();
-        game.server
-            .streaming
-            .insert_remote(&mut game.common.world, Chunk::empty(0, 0));
+        {
+            let game = &mut *game;
+            game.server
+                .streaming
+                .insert_remote(&mut game.common.world, Chunk::empty(0, 0));
+        }
         let portal = [0, 100, 0];
         assert!(
             game.set_state_named(portal, "minecraft:end_portal", &[])

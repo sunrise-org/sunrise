@@ -39,7 +39,7 @@ fn fresh(name: &str, cases: &[&str]) -> bool {
 /// connected, placed guest standing on the floor at (22.5, 100, 9.5).
 fn game<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
     game.build_registries();
     game.set_allow_commands(true);

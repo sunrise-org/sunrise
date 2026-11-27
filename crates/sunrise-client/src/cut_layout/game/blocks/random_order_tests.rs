@@ -13,7 +13,7 @@ use sunrise_level::chunk::Chunk;
 fn game_loading<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
     order: &[(i32, i32)],
-) -> sunrise_gameplay::game::ServerGame<'a> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
     let mut game = server_game(resources);
     game.server.settings.simulation_distance = 5;
     game.server.settings.render_distance = 8;

@@ -61,7 +61,7 @@ pub(crate) fn suggestions(receiver: &mpsc::Receiver<Out>) -> Vec<String> {
 pub(crate) fn server_with_guests<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
 ) -> (
-    sunrise_gameplay::game::ServerGame<'a>,
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
     Vec<mpsc::Receiver<Out>>,
 ) {
     let mut game = server_game(resources);

@@ -13,7 +13,7 @@ type Posted = (&'static str, [f64; 3], Option<Who>);
 /// A server's game with nobody playing.
 fn game<'a>(
     resources: &'a mut Option<std::sync::Arc<sunrise_gameplay_common::game::Resources>>,
-) -> sunrise_gameplay::game::ServerGame<'a> {
+) -> sunrise_gameplay::game::game_tests::tests::TestServerGame<'a> {
     let mut game = server_game(resources);
     game.build_registries();
     game.set_allow_commands(true);

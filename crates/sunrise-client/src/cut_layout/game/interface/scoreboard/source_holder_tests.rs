@@ -12,7 +12,10 @@ use sunrise_sim::lan::{Joined, NetConfig, Out, PlayerSender, guest::Guest, hub::
 fn game_with_guest<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
     name: &str,
-) -> (sunrise_gameplay::game::ServerGame<'a>, mpsc::Receiver<Out>) {
+) -> (
+    sunrise_gameplay::game::game_tests::tests::TestServerGame<'a>,
+    mpsc::Receiver<Out>,
+) {
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(resources);
     game.world
         .chunks
