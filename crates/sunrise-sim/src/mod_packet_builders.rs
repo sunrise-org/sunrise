@@ -8,7 +8,8 @@ use sunrise_protocol::{
     registry::{Builtin, Dynamic, SyncedNames},
 };
 
-fn encode_serverbound(packet: Serverbound) -> Result<ServerboundPlayPacket, PacketBuildError> {
+/// Package an engine-built play packet for checked mod-packet admission.
+pub fn encode_serverbound(packet: Serverbound) -> Result<ServerboundPlayPacket, PacketBuildError> {
     let name = usize::try_from(packet.id())
         .ok()
         .and_then(|id| ids::play::serverbound::NAMES.get(id).copied())

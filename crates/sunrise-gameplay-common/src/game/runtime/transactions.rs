@@ -824,6 +824,11 @@ pub enum After {
         sunrise_sim::raw_payloads::queued_writer::PreparedPacket,
         Option<&'static str>,
     ),
+    /// Close only the client menu this request addressed, even if its window id was reused.
+    ClientMenuClose {
+        menu: mod_api::MenuRef,
+        prepared: Option<sunrise_sim::raw_payloads::queued_writer::PreparedPacket>,
+    },
     Composter(super::composter_data::Effects),
     DispenseEvent(i32, Pos, i32),
     /// A mod's world pickup or placement of fluid, its block already set: what is left of it
