@@ -648,9 +648,65 @@ impl ServerGame<'_> {
     /// selectors use, so a client can name it back (the crosshair UUID that
     /// `ClientSuggestionProvider.getSelectedEntities` suggests).
     pub fn lan_entity_uuids(&mut self, states: &mut States) {
-        // A bare state is never paired: its UUID is never read.
-        for e in states.as_mut_slice().iter_mut().filter(|e| !e.bare) {
-            e.uuid = ints_uuid(self.uuid_for(e.id as u32));
+        self.resolve_lan_entity_uuids(states, mod_api::__private::mods().is_empty());
+    }
+
+    #[inline(always)]
+    pub(super) fn resolve_lan_entity_uuids(&mut self, states: &mut States, direct_mobs: bool) {
+        use sunrise_sim::join_seq::{
+            Joined,
+            residency::{
+                Kind, Owner, Source,
+                table::{Location, SourceEntity},
+            },
+        };
+
+        let dim = self.common.dim.key();
+        let mut next_mob = 0;
+        for e in states.as_mut_slice() {
+            let id = e.id as u32;
+            let mob = direct_mobs
+                .then(|| {
+                    // Inaccessible and removed mobs can leave gaps in the tracker list.
+                    let end = (next_mob + 4).min(self.common.mobs.len());
+                    let found = (next_mob..end).find(|&i| self.common.mobs[i].id == id)?;
+                    next_mob = found + 1;
+                    let mob = &self.common.mobs[found];
+                    Some(Location {
+                        owner: Owner {
+                            dimension: dim,
+                            kind: Kind::Mob,
+                        },
+                        join: mob.join_seq(),
+                        source: Source::Ordinary,
+                    })
+                })
+                .flatten();
+            if e.bare {
+                continue;
+            }
+            let uuid = if let (Some(mob), Some(&saved)) = (mob, self.common.persist.uuids.get(&id))
+            {
+                let mut table = self.common.resident_entities.table.borrow_mut();
+                let identity = table.server_admitted_identity(id, |at| {
+                    if at == mob {
+                        Some(SourceEntity { id, value: () })
+                    } else {
+                        self.locate_server_resident_owner(at)
+                            .map(|source| SourceEntity {
+                                id: source.id,
+                                value: (),
+                            })
+                    }
+                });
+                identity
+                    .filter(|(at, _, _)| at.owner.dimension == dim)
+                    .and_then(|(_, _, details)| details.known_uuid)
+                    .unwrap_or(saved)
+            } else {
+                self.uuid_for(id)
+            };
+            e.uuid = ints_uuid(uuid);
             if !self.common.persist.sync_body_position.is_empty() {
                 e.sync_position |= self
                     .common

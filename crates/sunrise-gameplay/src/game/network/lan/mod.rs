@@ -61,7 +61,7 @@ pub struct LanHost {
     pub broken: Vec<[f64; 3]>,
     /// Hurt time, death and swing time (while swinging) of the mobs guests
     /// see; the players' hurt time by entity id.
-    pub(in crate::game) mob_state: HashMap<super::Dim, HashMap<u32, (i32, bool, Option<i32>)>>,
+    mob_state: HashMap<super::Dim, AnimationStates>,
     /// Each placed guest's pose as the mods last heard it
     /// (`native_entity_pose_change`), by connection.
     pub poses: HashMap<u32, sunrise_sim::pose::Pose>,
@@ -97,6 +97,40 @@ pub struct LanHost {
     pub(in crate::game) states_next_entity: Option<u32>,
     /// Last tick's states of the idle mobs and items (game/network/lan_idle.rs).
     pub(in crate::game) idle_states: super::lan_idle::IdleStates,
+    mob_states: mob_states::MobStates,
+}
+
+type AnimationState = (i32, bool, Option<i32>);
+
+#[derive(Default)]
+struct AnimationStates {
+    rows: Vec<(u32, AnimationState)>,
+    next: Vec<(u32, AnimationState)>,
+    reordered: sunrise_level::fast_hash::FxHashMap<u32, AnimationState>,
+    ordered: bool,
+}
+
+impl AnimationStates {
+    fn begin(&mut self, ids: impl Iterator<Item = u32>) {
+        self.next.clear();
+        self.ordered = self.rows.iter().map(|&(id, _)| id).eq(ids);
+        if !self.ordered {
+            self.reordered.clear();
+            self.reordered.extend(self.rows.iter().copied());
+        }
+    }
+
+    fn before(&self, id: u32) -> Option<AnimationState> {
+        if self.ordered {
+            self.rows.get(self.next.len()).map(|&(_, state)| state)
+        } else {
+            self.reordered.get(&id).copied()
+        }
+    }
+
+    fn finish(&mut self) {
+        std::mem::swap(&mut self.rows, &mut self.next);
+    }
 }
 
 impl crate::game::ServerGame<'_> {
@@ -427,6 +461,7 @@ impl crate::game::ServerGame<'_> {
             states: Default::default(),
             states_next_entity: None,
             idle_states: Default::default(),
+            mob_states: Default::default(),
         });
         self.start_audio_capture();
         Ok(())
@@ -977,7 +1012,37 @@ impl crate::game::ServerGame<'_> {
         out: &mut States,
         drain_minecart_steps: bool,
         after: u32,
+        kept: Option<&mut super::lan_idle::IdlePass<'_>>,
+    ) {
+        if drain_minecart_steps
+            && after == 0
+            && mod_api::__private::mods().is_empty()
+            && let Some(host) = self.server.lan.as_mut()
+        {
+            let mut previous = std::mem::take(&mut host.mob_states);
+            let cache = previous.level(
+                self.common.dim,
+                &self.common.motion.attributes,
+                &host.hub.sync,
+            );
+            cache.trim(self.common.mobs.len());
+            self.build_lan_entities(out, drain_minecart_steps, after, kept, Some(cache));
+            if let Some(host) = self.server.lan.as_mut() {
+                host.mob_states = previous;
+            }
+        } else {
+            self.build_lan_entities(out, drain_minecart_steps, after, kept, None);
+        }
+    }
+
+    #[inline(always)]
+    fn build_lan_entities(
+        &mut self,
+        out: &mut States,
+        drain_minecart_steps: bool,
+        after: u32,
         mut kept: Option<&mut super::lan_idle::IdlePass<'_>>,
+        mut cache: Option<&mut mob_states::MobLevel>,
     ) {
         out.clear();
         let mut speeds = super::lan_attributes::SpeedByType::default();
@@ -1043,11 +1108,22 @@ impl crate::game::ServerGame<'_> {
             if bare {
                 continue;
             }
-            self.fill_mob_state(m, hub, player_entity(), &mut speeds, e);
+            let row = cache.as_deref_mut().map(|cache| cache.row(m));
+            let row = if let Some(row) = row {
+                row.fill(self, m, hub, player_entity(), &mut speeds, e);
+                Some(row)
+            } else {
+                self.fill_mob_state(m, hub, player_entity(), &mut speeds, e);
+                None
+            };
             let Some(host) = self.server.lan.as_mut() else {
                 return;
             };
-            mob_equipment(m, &mut host.hub, &mut e.equipment);
+            if let Some(row) = row {
+                row.equipment(m, &mut host.hub, e);
+            } else {
+                mob_equipment(m, &mut host.hub, &mut e.equipment);
+            }
         }
         for d in self.common.dropped.iter().filter(|d| d.id > after) {
             let Some(host) = self.server.lan.as_ref() else {
@@ -2855,14 +2931,18 @@ impl crate::game::ServerGame<'_> {
             return;
         }
         // Hurt and death animations of mobs.
-        let mut seen = HashMap::new();
+        let dragon = self.common.dragon.as_ref().filter(|d| d.id != 0);
+        let seen = host.mob_state.entry(self.common.dim).or_default();
+        seen.begin(
+            self.common
+                .mobs
+                .iter()
+                .map(|m| m.id)
+                .chain(dragon.map(|d| d.id)),
+        );
         for m in &self.common.mobs {
             let dead = !m.alive();
-            let old = host
-                .mob_state
-                .get(&self.common.dim)
-                .and_then(|s| s.get(&m.id))
-                .copied();
+            let old = seen.before(m.id);
             let at = [m.position.x, m.position.y, m.position.z];
             // Villager hits already sent their damage in accepted-hit order.
             // Other mobs still use the restarted hurt time at the normal flush.
@@ -2900,25 +2980,21 @@ impl crate::game::ServerGame<'_> {
                 host.hub
                     .swing(m.id as i32, i32::from(m.swing_is_off_hand()), at, None);
             }
-            seen.insert(m.id, (m.hurt_time, dead, swing));
+            seen.next.push((m.id, (m.hurt_time, dead, swing)));
         }
-        if let Some(d) = self.common.dragon.as_ref().filter(|d| d.id != 0) {
+        if let Some(d) = dragon {
             let id = d.id;
             let dead = !d.alive();
-            let old = host
-                .mob_state
-                .get(&self.common.dim)
-                .and_then(|s| s.get(&id))
-                .copied();
+            let old = seen.before(id);
             let at = [d.position.x, d.position.y, d.position.z];
             if d.hurt_time > old.map_or(0, |o| o.0) && !dead {
                 let (kind, cause, direct) =
                     d.last_source.unwrap_or(("minecraft:generic", None, None));
                 host.hub.damage_event(id as i32, kind, cause, direct, at);
             }
-            seen.insert(id, (d.hurt_time, dead, None));
+            seen.next.push((id, (d.hurt_time, dead, None)));
         }
-        host.mob_state.insert(self.common.dim, seen);
+        seen.finish();
         // Level.broadcastEntityEvent(player, 2) of a spear's stab.
         for attacker in kinetic_hits {
             if let Some(g) = attacker.and_then(|conn| host.hub.guest(conn)) {
@@ -3188,6 +3264,7 @@ impl LanHost {
             states: Default::default(),
             states_next_entity: None,
             idle_states: Default::default(),
+            mob_states: Default::default(),
         }
     }
 }
@@ -3200,6 +3277,224 @@ pub(in crate::game) mod tests {
         native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _,
         tables::{GameItems as _, WorldTablesExt as _},
     };
+
+    fn tracker_test_host() -> LanHost {
+        let mut hub = meta_hub("TrackerStateTest");
+        let mut sync = super::lan::data::SyncData::empty();
+        for (registry, names) in [
+            (
+                "minecraft:entity_type",
+                &["minecraft:ocelot", "minecraft:cow"][..],
+            ),
+            ("minecraft:item", &["minecraft:air", "minecraft:stick"][..]),
+            ("minecraft:particle_type", &["minecraft:entity_effect"][..]),
+            ("minecraft:damage_type", &["minecraft:fall"][..]),
+        ] {
+            sync.builtin.registries.insert(
+                registry.into(),
+                sunrise_protocol::registry::Ids::from_names(
+                    names.iter().copied().map(str::to_owned).collect(),
+                ),
+            );
+        }
+        hub.sync = std::sync::Arc::new(sync);
+        LanHost::for_test(hub)
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn cached_tracker_states_match_full_rebuilds_across_ticks_and_levels() {
+        use crate::game::native_entity_refs::tests::{
+            prepare_entity_ticking_neighborhood, with_resident_game,
+        };
+        use sunrise_core::{geometry::Vec3, position::ChunkPos};
+        use sunrise_items::items::ItemStack;
+        use sunrise_sim::mobs::{
+            finalize::{Attr, set_base},
+            sync,
+        };
+
+        with_resident_game(|game| {
+            game.server.lan = Some(tracker_test_host());
+            let kind = game.res.mob_types()["minecraft:ocelot"].clone();
+            let at = Vec3::new(0.5, 70.0, 0.5);
+            game.mobs.push(Mob::new(77, kind.clone(), at, 0.0));
+            let mut cached = super::States::default();
+            let mut reference = super::States::default();
+            let mut compare = |game: &mut crate::game::ServerGame<'_>, ids: &[i32]| {
+                game.world.game_time += 1;
+                game.lan_entities(&mut cached, true, 0, None);
+                game.lan_hook_states(&mut cached);
+                game.resolve_lan_entity_uuids(&mut cached, true);
+                game.build_lan_entities(&mut reference, true, 0, None, None);
+                game.lan_hook_states(&mut reference);
+                game.resolve_lan_entity_uuids(&mut reference, false);
+                assert_eq!(cached.as_slice(), reference.as_slice());
+                assert_eq!(
+                    cached
+                        .as_slice()
+                        .iter()
+                        .map(|state| state.id)
+                        .collect::<Vec<_>>(),
+                    ids,
+                );
+                cached.as_slice().to_vec()
+            };
+
+            let start = compare(game, &[77]);
+            assert_eq!(compare(game, &[77]), start);
+            game.mobs[0].health -= 2.0;
+            assert_ne!(compare(game, &[77])[0].meta, start[0].meta);
+
+            assert!(game.mobs[0].set_equipment_stack(
+                sunrise_items::equipment::MAINHAND,
+                Some(ItemStack::new("minecraft:stick", 1)),
+            ));
+            assert_eq!(compare(game, &[77])[0].equipment.len(), 1);
+            set_base(&mut game.mobs[0], Attr::MovementSpeed, 0.125);
+            assert_ne!(compare(game, &[77])[0].attributes, start[0].attributes);
+
+            game.mobs[0].add_effect("minecraft:speed", 20, 1);
+            assert!(
+                compare(game, &[77])[0]
+                    .meta
+                    .iter()
+                    .any(|entry| entry.0 == 10)
+            );
+            game.mobs[0].retain_effects(|_| false);
+            assert!(
+                compare(game, &[77])[0]
+                    .meta
+                    .iter()
+                    .all(|entry| entry.0 != 10)
+            );
+
+            game.mobs[0].extra.pose = sync::CROUCHING;
+            assert!(
+                compare(game, &[77])[0]
+                    .meta
+                    .iter()
+                    .any(|entry| entry.0 == 6)
+            );
+            game.mobs[0].custom_name = Some("Test Cat".into());
+            assert!(
+                compare(game, &[77])[0]
+                    .meta
+                    .iter()
+                    .any(|entry| entry.0 == 2)
+            );
+            game.common.persist.uuids.insert(77, [1, 2, 3, 4]);
+            assert_ne!(compare(game, &[77])[0].uuid, start[0].uuid);
+
+            game.mobs.push(Mob::new(78, kind.clone(), at, 0.0));
+            compare(game, &[77, 78]);
+            game.mobs.remove(0);
+            let overworld = compare(game, &[78]);
+
+            let previous = game.common.dim;
+            game.enter_level(super::super::Dim::Nether).unwrap();
+            prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, 0));
+            game.mobs.push(Mob::new(79, kind, at, 0.0));
+            compare(game, &[79]);
+            game.enter_level(previous).unwrap();
+            assert_eq!(compare(game, &[78]), overworld);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn two_effect_flushes_keep_hurt_death_and_swing_in_order() {
+        use crate::game::native_entity_refs::tests::with_resident_game;
+        use std::sync::{Arc, atomic::AtomicI32, mpsc};
+        use sunrise_core::geometry::Vec3;
+        use sunrise_sim::{
+            lan::{Joined, Out, PlayerSender, guest::Guest},
+            mobs::Damage,
+        };
+
+        with_resident_game(|game| {
+            let mut host = tracker_test_host();
+            let (tx, rx) = mpsc::channel();
+            let at = [0.5, 70.0, 0.5];
+            let mut guest = Guest::new(
+                Joined {
+                    conn: 1,
+                    uuid: 2,
+                    name: "Test".into(),
+                    properties: Vec::new(),
+                    info: sunrise_protocol::packets::configuration::ClientInformation::new(8),
+                    brand: String::new(),
+                    sender: PlayerSender::new(tx, Arc::default()),
+                    latency: Arc::new(AtomicI32::new(0)),
+                    address: "127.0.0.1:1".parse().unwrap(),
+                    expected: false,
+                },
+                1,
+                at,
+                8,
+            );
+            guest.placed = true;
+            guest.loaded = true;
+            guest.dimension = game.common.dim.id().into();
+            guest.sent_chunks.insert((0, 0));
+            host.hub.guests.push(guest);
+            game.server.lan = Some(host);
+
+            let kind = game.res.mob_types()["minecraft:cow"].clone();
+            for id in 77..=79 {
+                game.mobs.push(Mob::new(
+                    id,
+                    kind.clone(),
+                    Vec3::new(at[0], at[1], at[2]),
+                    0.0,
+                ));
+            }
+            let mut states = super::States::default();
+            game.lan_entities(&mut states, false, 0, None);
+            let hub = &mut game.server.lan.as_mut().unwrap().hub;
+            hub.note_joined(states.as_slice(), None);
+            assert!(hub.guests[0].tracker.is_tracking(78));
+            rx.try_iter().for_each(drop);
+
+            let packets = || {
+                rx.try_iter()
+                    .filter_map(|out| {
+                        let Out::Packet(body) = out else {
+                            return None;
+                        };
+                        let mut reader = sunrise_protocol::buf::Reader::new(&body);
+                        let id = reader.varint().unwrap();
+                        match super::C::decode(id, reader.rest()).unwrap() {
+                            super::C::DamageEvent(p) => Some(("hurt", p.id)),
+                            super::C::EntityEvent(p) if p.event == 3 => Some(("death", p.id)),
+                            super::C::SwingAnimation(p) => Some(("swing", p.id)),
+                            _ => None,
+                        }
+                    })
+                    .collect::<Vec<_>>()
+            };
+
+            game.lan_flush_effects();
+            assert!(packets().is_empty());
+            game.mobs[0].hurt_time = 10;
+            let time = game.world.game_time;
+            game.mobs[0].last_damage = Some((Damage::fall(), time));
+            game.mobs[1].health = 0.0;
+            game.mobs[2].ai.swinging = true;
+            game.mobs[2].ai.swing_time = 3;
+            game.lan_flush_effects();
+            assert_eq!(packets(), [("hurt", 77), ("death", 78), ("swing", 79)]);
+            game.lan_flush_effects();
+            assert!(packets().is_empty());
+
+            game.mobs.remove(0);
+            game.mobs[1].ai.swing_time = 0;
+            game.lan_flush_effects();
+            assert_eq!(packets(), [("swing", 79)]);
+            game.lan_flush_effects();
+            assert!(packets().is_empty());
+        });
+    }
 
     #[test]
     #[ignore = "daily"]
@@ -5582,6 +5877,7 @@ pub(in crate::game) mod merchant_packet_tests {
                 states: Default::default(),
                 states_next_entity: None,
                 idle_states: Default::default(),
+                mob_states: Default::default(),
             });
 
             use sunrise_gameplay_common::game::trading_common::MerchantState;
