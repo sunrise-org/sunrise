@@ -110,6 +110,9 @@ class SceneFileTests(unittest.TestCase):
         self.refused(scene(frames=0), "frames")
         self.refused(scene(frames=10001), "frames")
         self.refused(scene(frames=64.0), "frames")
+        self.refused(scene(options={"chatVisibility": "2"}), "chatVisibility")
+        self.refused(scene(options={"lang": "fr_fr"}), "lang")
+        self.refused(scene(gamerules={"send_command_feedback": "false"}), "send_command_feedback")
         self.refused(scene(step_ms=0), "step_ms")
         self.refused(scene(step_ms=float("inf")), "step_ms")
         self.refused(scene(step_ms="50"), "step_ms")
@@ -279,6 +282,27 @@ class PackTests(unittest.TestCase):
             staged.write_bytes(b"changed")
             self.assertNotEqual(ss.staged_digest(staged), digest)
 
+    def test_the_resources_digest_follows_linked_folders_and_is_taken_again_each_time(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            tmp = Path(tmp)
+            shared = tmp / "shared"
+            (shared / "minecraft").mkdir(parents=True)
+            (shared / "minecraft" / "facts.json").write_text("1")
+            resources = tmp / "res"
+            resources.mkdir()
+            (resources / "sunrise-resources.json").write_text("{}")
+            (resources / "assets").symlink_to(shared)
+            (shared / "minecraft" / "loop").symlink_to(shared)  # a loop is walked once
+            first = ss.resources_digest(resources)
+            (shared / "minecraft" / "facts.json").write_text("2")  # a file inside the linked folder
+            second = ss.resources_digest(resources)
+            self.assertNotEqual(first, second)
+            plain = tmp / "plain"
+            (plain / "assets" / "minecraft").mkdir(parents=True)
+            (plain / "sunrise-resources.json").write_text("{}")
+            (plain / "assets" / "minecraft" / "facts.json").write_text("2")
+            self.assertEqual(second, ss.resources_digest(plain))
+
     def test_a_folder_pack_is_hashed_with_what_its_links_point_at(self):
         with tempfile.TemporaryDirectory() as tmp:
             tmp = Path(tmp)
@@ -401,13 +425,18 @@ class FakeGame:
     (or replies with the next of `refusals` first)."""
 
     def __init__(self, view, picture, refusals=(), pack=None, day_after=None, writes=True, clock=None, log=None,
-                 loads_on_teleport=(), loads_before_move=(), loaded=True, failing=()):
+                 loads_on_teleport=(), loads_before_move=(), loaded=True, failing=(), move_line=True,
+                 loads_during_capture=(), stops_after_capture=False):
         self.view, self.picture, self.refusals, self.writes = view, picture, list(refusals), writes
         self.clock = clock or {}
         # What the game logs (pack_events' events): a teleport logs `loads_before_move` (a load finishing while the
         # move is on its way), then its move line, then `loads_on_teleport`.
         self.log = [] if log is None else log
         self.loads_on_teleport, self.loads_before_move = list(loads_on_teleport), list(loads_before_move)
+        # move_line: whether the teleport's feedback shows; loads_during_capture: logged while the sequence draws;
+        # stops_after_capture: the game stops answering after this view's picture.
+        self.move_line, self.loads_during_capture = move_line, list(loads_during_capture)
+        self.stops_after_capture, self.captured = stops_after_capture, False
         # loaded: the status shows the camera at the view (else 100 blocks off, so it never counts as loaded);
         # failing: commands that fail.
         self.loaded, self.failing = loaded, set(failing)
@@ -416,9 +445,11 @@ class FakeGame:
 
     def __call__(self, *words, check=True, timeout=600):
         self.sent.append(words)
+        if self.stops_after_capture and self.captured:
+            raise RuntimeError("sunrise-ctl state: cannot connect")
         if words[0] == "command":
             if " run tp @a " in words[1]:
-                self.log += self.loads_before_move + [("move",)] + self.loads_on_teleport
+                self.log += self.loads_before_move + [("move",)] * self.move_line + self.loads_on_teleport
             if words[1] in self.failing:
                 return {"success": False}
             if words[1] == "tick query":
@@ -443,6 +474,8 @@ class FakeGame:
                 return {"error": self.refusals.pop(0)}
             if self.writes:
                 Path(words[3]).write_bytes(self.picture)
+            self.log += self.loads_during_capture
+            self.captured = True
             if self.day_after is not None:
                 self.day = self.day_after
             # Frame 8 of a 50 ms clock as the game sends it: 0.35 and 0.05 s, each rounded to an f32.
@@ -539,9 +572,10 @@ class PackEvidenceThroughCaptureTests(unittest.TestCase):
     pack = {"kind": "shaders", "name": "/g/shaderpacks/BSL.zip"}
     load = ("programs", 41)
 
-    def views(self, games, scenes=None, staged="BSL.zip"):
+    def views(self, games, scenes=None, staged="BSL.zip", sent=None, views=None):
         """Captures every view in turn, view n with the FakeGame `games[name]` gives (its keyword arguments), all
-        logging to one log that starts with the world's load. Returns each view's problems."""
+        logging to one log that starts with the world's load. Returns each view's problems; `sent` (a list) gets
+        every command the games were sent, `views` (a dict) the records."""
         scenes = scenes or self.scenes
         log = [self.load] if staged else []
         clock = FakeClock()
@@ -558,11 +592,14 @@ class PackEvidenceThroughCaptureTests(unittest.TestCase):
         def capture_view(g, scenes_, view, *args, **kwargs):
             current["game"] = FakeGame(view, self.picture, pack=self.pack if staged else None, log=log,
                                        **games.get(view["name"], {}))
+            if sent is not None:
+                current["game"].sent = sent
             return real(current["game"], scenes_, view, *args, **kwargs, sleep=clock.sleep)
         with tempfile.TemporaryDirectory() as tmp, mock.patch.object(perf_bench, "time", clock), \
                 mock.patch.object(ss, "time", clock), mock.patch.object(ss, "capture_view", capture_view), \
                 contextlib.redirect_stdout(io.StringIO()):
-            views = ss.run_views(game, scenes, tmp, watch, staged, ss.settings_expected(scenes), "overworld")
+            views = {} if views is None else views
+            ss.run_views(game, scenes, tmp, watch, staged, ss.settings_expected(scenes), "overworld", views)
         return {name: record["problems"] for name, record in views.items()}
 
     def test_each_load_where_it_belongs(self):
@@ -588,16 +625,19 @@ class PackEvidenceThroughCaptureTests(unittest.TestCase):
                                               {"name": "c", "dimension": "overworld", "pos": [1.5, 64.0, -2.5]}]))
         problems = self.views({"c": {"loads_on_teleport": [self.load]}}, scenes)
         self.assertEqual(problems["b"], ["the pack never finished loading in this dimension"])
-        self.assertEqual(problems["c"], ["a load of the dimension before was still awaited at the move here: the "
-                                         "loads after it can't be told apart"])
+        self.assertEqual(problems["c"], ["a load of the dimension before was still awaited at the move into this "
+                                         "dimension: the loads after it can't be told apart"])
 
     def test_setup_runs_only_in_a_loaded_view_and_a_missing_setup_breaks_the_views_after(self):
         scenes = ss.parse_scenes(scene(settle_seconds=0, frames=8, options={"renderDistance": "2"},
                                        views=[{"name": "a", "dimension": "overworld", "pos": [1.5, 64.0, -2.5],
                                                "setup": ["setblock 1 64 1 minecraft:torch"]},
                                               {"name": "b", "dimension": "overworld", "pos": [9.5, 64.0, -2.5]}]))
-        problems = self.views({"a": {"loaded": False}}, scenes, staged=None)
+        sent = []
+        problems = self.views({"a": {"loaded": False}}, scenes, staged=None, sent=sent)
         setup = "execute in minecraft:overworld run setblock 1 64 1 minecraft:torch"
+        self.assertNotIn(("command", setup), sent)  # never sent to the game
+        self.assertIn(("command", "execute in minecraft:overworld run tp @a 9.5 64.0 -2.5 0.0 0.0"), sent)
         self.assertEqual(problems["a"], [f"setup not run (the view never loaded): {setup}",
                                          "the view never finished loading"])
         self.assertEqual(problems["b"], ["the setup of view a did not run fully: the world may differ from the other "
@@ -606,7 +646,57 @@ class PackEvidenceThroughCaptureTests(unittest.TestCase):
         self.assertEqual(problems["a"], [f"command failed: {setup}"])
         self.assertEqual(problems["b"], ["the setup of view a did not run fully: the world may differ from the other "
                                          "side's"])
-        self.assertEqual(self.views({}, scenes, staged=None), {"a": [], "b": []})
+        sent = []
+        self.assertEqual(self.views({}, scenes, staged=None, sent=sent), {"a": [], "b": []})
+        self.assertIn(("command", setup), sent)
+
+    four = ss.parse_scenes(scene(settle_seconds=0, frames=8, options={"renderDistance": "2"},
+                                 views=[{"name": "a", "dimension": "overworld", "pos": [1.5, 64.0, -2.5]},
+                                        {"name": "b", "dimension": "the_nether", "pos": [0.0, 70.0, 3.0]},
+                                        {"name": "c", "dimension": "the_nether", "pos": [0.0, 70.0, 3.0],
+                                         "time": 1000},
+                                        {"name": "d", "dimension": "the_nether", "pos": [0.0, 70.0, 3.0],
+                                         "time": 2000}]))
+
+    def test_an_old_build_logged_after_the_move_line_is_always_caught(self):
+        # The overworld's build finishes in the frame the move to the Nether is applied: its line comes after the
+        # move line, and the Nether's build, started in the same frame, logs a second line.
+        old, new = ("programs", 9), ("programs", 8)
+        unasked = "1 pack load(s) came that no dimension change asked for"
+        problems = self.views({"b": {"loads_on_teleport": [old, new]}})
+        self.assertEqual(problems["a"], [f"{unasked} after this capture; it may have run during it"])
+        self.assertEqual(problems["b"], [unasked])
+        # The Nether's line lands while b draws, or after b's picture (then c finds it).
+        problems = self.views({"b": {"loads_on_teleport": [old], "loads_during_capture": [new]}})
+        self.assertEqual(problems["b"], ["1 pack event(s) came during the capture"])
+        self.assertEqual(problems["c"], [])
+        problems = self.views({"b": {"loads_on_teleport": [old]}, "c": {"loads_before_move": [new]}})
+        self.assertEqual(problems["b"], [f"{unasked} after this capture; it may have run during it"])
+        self.assertEqual(problems["c"], [unasked])
+
+    def test_a_missing_move_line_invalidates_only_its_view(self):
+        missing = "the teleport's feedback never showed in the log"
+        problems = self.views({"b": {"loads_on_teleport": [self.load]}, "c": {"move_line": False}}, self.four)
+        self.assertEqual(problems, {"a": [], "b": [], "c": [missing], "d": []})
+        # The line comes late, with d's own: the extra line invalidates d and c.
+        late = "1 teleport feedback line(s) came that no teleport of this view sent"
+        problems = self.views({"b": {"loads_on_teleport": [self.load]}, "c": {"move_line": False},
+                               "d": {"loads_before_move": [("move",)]}}, self.four)
+        self.assertEqual(problems["c"], [missing, f"{late} after this capture; it may have run during it"])
+        self.assertEqual(problems["d"], [late])
+        # A move to another dimension without its line: that dimension's loads can't be placed.
+        problems = self.views({"b": {"move_line": False, "loads_on_teleport": [self.load]}}, self.four)
+        self.assertEqual(problems["b"][0], missing)
+        never = "the pack never finished loading in this dimension"
+        unplaced = "the move into this dimension showed no feedback line: its loads can't be placed"
+        self.assertEqual((problems["c"], problems["d"]), ([never, unplaced], [never, unplaced]))
+
+    def test_the_views_taken_before_the_game_stops_keep_their_records(self):
+        views = {}
+        with self.assertRaises(RuntimeError):
+            self.views({"b": {"loads_on_teleport": [self.load], "stops_after_capture": True}}, views=views)
+        self.assertEqual(list(views), ["a"])
+        self.assertEqual(views["a"]["problems"], [])
 
 
 class PngTests(unittest.TestCase):
@@ -831,6 +921,20 @@ class ReportTests(unittest.TestCase):
                 self.assertEqual(status, rp.INVALID)
                 self.assertTrue(any(problem in p for p in row["problems"] + row["head"]["problems"]), row)
                 self.assertTrue((Path(out) / "report" / "index.html").is_file())
+
+    def test_a_lone_surrogate_in_a_record_is_invalid_with_exit_two(self):
+        with tempfile.TemporaryDirectory() as out:
+            scene_file = Path(out) / "scenes.json"
+            scene_file.write_text(json.dumps(scene()))
+            folder = self.both(out)
+            text = (folder / "run.json").read_text().replace('"gpu": "AMD', '"gpu": "\\ud800AMD', 1)
+            (folder / "run.json").write_text(text)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                status = ss.main(["compare", "--scenes", str(scene_file), "--out", out, "--jobs", "1"])
+            self.assertEqual(status, rp.INVALID)
+            report = json.loads((Path(out) / "report" / "report.json").read_text())
+            self.assertEqual(report["packs"]["none"]["rows"][0]["head"]["problems"],
+                             [f"{folder / 'run.json'}: a string in it is not text (a lone surrogate)"])
 
     def test_an_explicit_pack_list_is_the_whole_scope(self):
         with tempfile.TemporaryDirectory() as out:
@@ -1061,6 +1165,56 @@ class CliTests(unittest.TestCase):
             self.assertEqual((Path(out) / "world" / "current.json").read_text(), before)
             self.assertEqual(ss.copy_world(out, Path(out) / "g", scenes)["world_id"], json.loads(before)["world_id"])
 
+    def test_world_replace_recovers_from_a_pointer_that_cant_be_read(self):
+        scenes = ss.parse_scenes(scene())
+        with tempfile.TemporaryDirectory() as out, contextlib.redirect_stdout(io.StringIO()):
+            bins = self.build(out)
+            ss.publish_world(out, self.save(Path(out) / "made"), scenes, bins)
+            (Path(out) / "world" / "current.json").write_text('{"world_')
+            resources = Path(out) / "res"
+            resources.mkdir()
+            (resources / "sunrise-resources.json").write_text(json.dumps({"data_version": 5023}))
+            args = argparse.Namespace(out=out, replace=False, resources=str(resources), display="current")
+
+            class SavedGame:
+                """A game that saves the world and quits with status 0 at the first view."""
+                def __init__(self, args_, scenes_, folder, *rest):
+                    self.folder, self.proc = Path(folder), mock.Mock(returncode=0)
+
+                def __enter__(self):
+                    CliTests.save(self.folder / "game" / "saves" / ss.WORLD)
+                    view = scenes["views"][0]
+                    return FakeGame(view, b"", loaded=True)
+
+                def __exit__(self, *_):
+                    return False
+            with mock.patch.object(ss, "Game", SavedGame), self.assertRaises(SystemExit) as caught:
+                ss.run_world(args, scenes, bins)
+            self.assertIn("can't be read", str(caught.exception))
+            args.replace = True
+            with mock.patch.object(ss, "Game", SavedGame), mock.patch.object(ss, "wait_loaded", lambda *a, **k: True):
+                ss.run_world(args, scenes, bins)
+            self.assertTrue((ss.world_generation(out)["save"] / "level.dat").exists())
+
+    def test_a_world_of_the_earlier_layout_is_refused_not_taken_as_absent(self):
+        scenes = ss.parse_scenes(scene())
+        with tempfile.TemporaryDirectory() as out:
+            world = Path(out) / "world"
+            self.save(world / ss.WORLD)
+            (world / rp.RUN_MARK).write_text("")
+            (world / "generation.json").write_text(json.dumps({"world_id": "w", "scene_hash": rp.scene_hash(scenes)}))
+            with self.assertRaises(SystemExit) as caught:
+                ss.copy_world(out, Path(out) / "g", scenes)
+            self.assertIn("earlier version of this tool", str(caught.exception))
+            scene_file = Path(out) / "scenes.json"
+            scene_file.write_text(json.dumps(scene()))
+            bins = self.build(out)
+            with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()) as printed:
+                status = ss.main(["run", "--scenes", str(scene_file), "--out", out, "--base-bin-dir", str(bins),
+                                  "--head-bin-dir", str(bins), "--resources", out])
+            self.assertEqual(status, rp.SETUP_FAILED)
+            self.assertIn("earlier version of this tool", printed.getvalue())
+
     def test_a_failed_publication_leaves_the_previous_world_published(self):
         scenes = ss.parse_scenes(scene())
         with tempfile.TemporaryDirectory() as out, contextlib.redirect_stdout(io.StringIO()):
@@ -1086,7 +1240,8 @@ class CliTests(unittest.TestCase):
             resources.mkdir()
             (resources / "sunrise-resources.json").write_text(json.dumps({"data_version": 5023, "minecraft": "26.3"}))
             ss.prepare_game_dir(scenes, Path(tmp) / "game", resources)
-            self.assertEqual((Path(tmp) / "game" / "options.txt").read_text(), "version:5023\nrenderDistance:8\n")
+            self.assertEqual((Path(tmp) / "game" / "options.txt").read_text(),
+                             "version:5023\nrenderDistance:8\nchatVisibility:0\nlang:en_us\n")
             (resources / "sunrise-resources.json").write_text(json.dumps({"minecraft": "26.3"}))
             with self.assertRaises(SystemExit):
                 ss.prepare_game_dir(scenes, Path(tmp) / "game2", resources)

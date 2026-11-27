@@ -24,11 +24,15 @@ copy both out of the target folder). Each side drives its game with its own `sun
    sha256 and a digest of the save: its files' relative names and sha256, `session.lock` left out), written whole,
    then `OUT/world/current.json` is pointed at it by one atomic rename. Until then the previous generation stays the
    published one, so a generation or a publication that fails leaves it as it was; earlier generations are kept.
+   `world --replace` publishes a new generation even when the current pointer can't be read; a world published
+   by an earlier version of this tool (`OUT/world/generation.json` without `current.json`) is refused until then.
    Every capture loads a copy of the generation `current.json` names, so both sides draw the same chunks and
    entities; the copy is hashed and must be the save its `generation.json` records, or the capture is refused.
 2. `capture --side base` and `--side head`: for each pack (`run` always adds `none`, no pack), a game with scratch
    home and XDG folders inside `OUT/<side>/<pack>/`, the scene's `options.txt` (its `version` line is the
-   `data_version` of the prepared resources' `sunrise-resources.json`) and `sunrise-graphics.txt`, a copy of
+   `data_version` of the prepared resources' `sunrise-resources.json`, and the tool sets `chatVisibility:0` and
+   `lang:en_us`, which the pack evidence below reads the chat through; a scene can't set them, nor the
+   `send_command_feedback` gamerule) and `sunrise-graphics.txt`, a copy of
    the world and the pack copied into its `shaderpacks/`. The game runs with `SUNRISE_STILL=1`, which freezes the
    world before its first tick and makes what the frame shows of time follow the world's ticks
    ([docs/agent-control.md](../../docs/agent-control.md#repeatable-screenshots)). It runs the gamerules,
@@ -87,6 +91,8 @@ first view in the End and any view after an End view in another dimension: End v
   frame count and step, and its last frame's clock must be the one `screenshot-sequence` gives frame FRAMES: counter
   FRAMES, elapsed (FRAMES - 1) x STEP_MS and delta STEP_MS, in seconds, compared exactly as f32s. The
   gamerules are queried after they are set.
+- A view's record goes into the run as soon as it is taken: a game that stops answering later keeps the views
+  before it.
 - A view whose setup did not run fully (skipped, or a command failed) leaves the world unlike the other side's:
   every view after it is invalid.
 - The pack, for each capture: Sunrise loads a pack when the world opens and again at each change of dimension, and
@@ -99,13 +105,19 @@ first view in the End and any view after an End view in another dimension: End v
   that dimension is invalid. A load nothing awaits makes the capture before it and the next one invalid, since the
   log can't place it. Before a capture its move line must be in the log, every awaited load must have come and the
   last must be running; anything the log shows between a capture's start and its reply makes that capture invalid
-  (for `none` the moves are checked the same way). The capture's reply names the pack that drew
+  (for `none` the moves are checked the same way). The load line names the pack, its programs and the build's
+  time, not the dimension it was built for: a build of the dimension before that finishes as the move is applied
+  logs after the move line, but the client then starts the new dimension's build at once, so a second load always
+  follows, which nothing awaits and which invalidates the capture; while that build runs no pack is installed and
+  `screenshot-sequence` refuses or fails. A teleport whose feedback line never comes invalidates its view (and, if
+  it changed dimension, that dimension's views); a line that comes late invalidates the views around it. The capture's reply names the pack that drew
   (its kind and file, taken when the sequence starts; the sequence ends with an error if the pack, the world, the
   settings or the window change while it draws), which must be the staged one, or no pack for `none`.
 - A capture's picture is hashed (sha256) as soon as its reply says it is written, and recorded in `run.json` with
   the view's checks. Each run records the world generation and its save's digest, the scene hash, the sha256 of the
   staged pack (hashed from the copy the game loads) and of the `sunrise-client` it ran, a digest of the prepared
-  resources (every file's relative name and sha256), the renderer the game picked (GPU, vendor, driver, device type
+  resources (every file's relative name and sha256, through linked folders, taken again for each game), the
+  renderer the game picked (GPU, vendor, driver, device type
   and graphics backend, from `sunrise-ctl status`) and the environment its `--env` set.
 - `compare` takes a view only from a record that carries the view's checks (its `problems`, a list) with none,
   names the view's own picture (`<view>.png`) and its sha256, whose file is there with that sha256 and is a whole

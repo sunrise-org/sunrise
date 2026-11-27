@@ -80,6 +80,16 @@ CHANGED_REFUSAL = "changed while it ran"
 CAPTURE_ATTEMPTS = 3
 
 
+# options.txt lines the tool sets over the scene's: PackWatch reads each teleport's feedback in the log, which the
+# chat logs only for a message it shows (crates/sunrise-client-render/src/chat.rs, push_message: chatVisibility 0
+# shows all) and in the language MOVE_MARK is written in.
+FORCED_OPTIONS = {"chatVisibility": "0", "lang": "en_us"}
+
+
+# The gamerule that would keep the teleport's feedback from the chat (vanilla's sendCommandFeedback, 26.3's name).
+FEEDBACK_RULE = "send_command_feedback"
+
+
 class SceneError(ValueError):
     """The scene file is not one this tool can run; the message names the field."""
 
@@ -146,6 +156,11 @@ def parse_scenes(data):
         "gamerules": _strings(data.get("gamerules", {}), "gamerules"),
         "views": [],
     }
+    for key in sorted(set(out["options"]) & set(FORCED_OPTIONS)):
+        raise SceneError(f"options.{key}: the tool sets it ({FORCED_OPTIONS[key]}): the pack evidence reads the chat")
+    if FEEDBACK_RULE in out["gamerules"]:
+        raise SceneError(f"gamerules.{FEEDBACK_RULE}: the tool keeps it on: the pack evidence reads the teleports' "
+                         "feedback")
     views = data["views"]
     if not isinstance(views, list) or not views:
         raise SceneError("views: expected a non-empty list")
@@ -366,31 +381,44 @@ def pack_key(pack):
     return key
 
 
+def _tree_files(root):
+    """Every file under `root` as (its relative path, its path), following symbolic links to folders as the game's
+    reads do (a folder reached twice through links, a loop among them, is walked once)."""
+    root = os.path.realpath(root)
+    files, walked = [], set()
+    for folder, subfolders, names in os.walk(root, followlinks=True):
+        real = os.path.realpath(folder)
+        if real in walked:
+            subfolders[:] = []
+            continue
+        walked.add(real)
+        for name in names:
+            path = os.path.join(folder, name)
+            if os.path.isfile(path):
+                files.append((Path(path).relative_to(root).as_posix(), path))
+    return sorted(files)
+
+
 def staged_digest(staged):
-    """The identity of a staged pack, read from the copy the game loads (never from the source, which can change
-    between the copy and the hash): the sha256 of a zip, or of a folder's relative file names and their sha256 in
-    sorted order. copytree copied the files symlinks pointed at, so the staged folder holds no link."""
+    """The identity of a file or folder as it is now: the sha256 of a file, or of a folder's relative file names and
+    their sha256 in sorted order, through the symbolic links in it (_tree_files). A staged pack is read from the
+    copy the game loads, never from the source, which can change between the copy and the hash."""
     staged = Path(staged)
     if staged.is_file():
         return sha256_file(staged)
     import hashlib
     digest = hashlib.sha256()
-    for path in sorted(p for p in staged.rglob("*") if p.is_file()):
-        digest.update(path.relative_to(staged).as_posix().encode() + b"\0")
+    for relative, path in _tree_files(staged):
+        digest.update(relative.encode() + b"\0")
         digest.update(bytes.fromhex(sha256_file(path)))
     return digest.hexdigest()
 
 
-_RESOURCE_DIGESTS = {}
-
-
 def resources_digest(resources):
-    """The prepared resources' identity, as staged_digest gives a folder's (every file's relative name and sha256),
-    once per folder and process: two sides with the same data version can still have other files."""
-    key = str(Path(resources).resolve())
-    if key not in _RESOURCE_DIGESTS:
-        _RESOURCE_DIGESTS[key] = staged_digest(key)
-    return _RESOURCE_DIGESTS[key]
+    """The prepared resources' identity, staged_digest of the folder, taken again for each game it starts (no
+    cache: the files can change between two launches): two sides with the same data version can still have other
+    files."""
+    return staged_digest(resources)
 
 
 def renderer_identity(status):
@@ -438,6 +466,9 @@ def world_generation(out):
     world = Path(out) / "world"
     pointer = world / "current.json"
     if not pointer.exists():
+        if (world / "generation.json").exists():
+            raise SystemExit(f"{world} holds a world published by an earlier version of this tool (generation.json "
+                             "without current.json): run `world --replace`")
         return None
     try:
         world_id = json.loads(pointer.read_text())["world_id"]
@@ -559,6 +590,11 @@ def pack_events(log_text, name):
     return out
 
 
+AWAITED_AT_MOVE = ("a load of the dimension before was still awaited at the move into this dimension: the loads "
+                   "after it can't be told apart")
+NO_MOVE_LINE = "the move into this dimension showed no feedback line: its loads can't be placed"
+
+
 class PackWatch:
     """Active-pack evidence for each capture interval, bound to the move that asked for it. The log is read in
     order: each view's teleport shows as its feedback line (a "move"), and the pack loads that finish or fail come
@@ -570,16 +606,29 @@ class PackWatch:
     load that nothing awaits came at a time the log can't place: the capture before it (the line may have been
     written late) and the next one are invalid. Before a capture its move line must be there, every awaited load
     must have come and the last must be running; a load between a capture's start and its reply makes that capture
-    invalid."""
+    invalid.
+
+    The load line (crates/sunrise-client-gameplay/src/game/interface/shader_packs.rs, shader_pack_inputs) names the
+    pack, its programs and the build's time, not the dimension the build was for, so a load is placed by its
+    order. The client polls a finished build before it checks the dimension, in the same frame: a build of the
+    dimension before that finishes in the frame the move is applied logs its line after the move line, is
+    installed, and the client starts the new dimension's build at once (load_shader_pack drops the installed
+    pack while it builds). So that case always logs a second load after the move line, which nothing awaits and
+    which invalidates the capture whenever it lands (before it, during it, or before the next one); and while the
+    new build runs no pack is installed, and screenshot-sequence refuses to start (the reply names no running
+    pack) or fails when the pack changes while it draws. A missing move line (a teleport whose feedback never
+    came) invalidates its own view; when that move changed dimension the loads after it can't be placed, as above.
+    A move line no teleport explains (one that came late) invalidates the capture before it and the next one."""
 
     def __init__(self, read_events, now=time.time, sleep=time.sleep):
         self.read, self.now, self.sleep = read_events, now, sleep
         self.seen = 0  # events taken
         self.moves_seen, self.moves_sent = 0, 0
         self.pending = 0  # loads the current dimension awaits
-        self.ambiguous = False  # the current dimension's loads can't be told from an earlier one's
+        self.ambiguous = None  # why the current dimension's loads can't be placed, if they can't
         self.changes = {}  # move number -> whether that move changes dimension
         self.stray = 0  # loads nothing awaited, since the last capture
+        self.extra_moves = 0  # move lines no teleport sent explains, since the last capture
 
     def world_opened(self):
         """The world opens in the saved dimension and loads the pack: the first captures await that load."""
@@ -594,9 +643,12 @@ class PackWatch:
         for event in events[self.seen:]:
             self.seen += 1
             if event[0] == "move":
+                if self.moves_seen == self.moves_sent:
+                    self.extra_moves += 1
+                    continue
                 self.moves_seen += 1
                 if self.changes.get(self.moves_seen):
-                    self.ambiguous = self.pending > 0
+                    self.ambiguous = AWAITED_AT_MOVE if self.pending > 0 else None
                     self.pending = 1
             elif self.pending:
                 self.pending -= 1
@@ -604,11 +656,13 @@ class PackWatch:
                 self.stray += 1
 
     def _stray_problems(self):
-        if not self.stray:
-            return [], []
-        text = f"{self.stray} pack load(s) came that no dimension change asked for"
-        self.stray = 0
-        return [text], [f"{text} after this capture; it may have run during it"]
+        texts = []
+        if self.stray:
+            texts.append(f"{self.stray} pack load(s) came that no dimension change asked for")
+        if self.extra_moves:
+            texts.append(f"{self.extra_moves} teleport feedback line(s) came that no teleport of this view sent")
+        self.stray = self.extra_moves = 0
+        return texts, [f"{text} after this capture; it may have run during it" for text in texts]
 
     def before_capture(self, timeout):
         """Returns (problems of this capture, problems of the capture before it)."""
@@ -622,11 +676,16 @@ class PackWatch:
         mine, previous = self._stray_problems()
         if self.moves_seen < self.moves_sent:
             mine.insert(0, "the teleport's feedback never showed in the log")
+            # The move is given up: a line that comes later is one no teleport explains. A dimension it changed
+            # awaits its load with nothing to place it by.
+            for move in range(self.moves_seen + 1, self.moves_sent + 1):
+                if self.changes.get(move):
+                    self.ambiguous, self.pending = NO_MOVE_LINE, 1
+            self.moves_sent = self.moves_seen
         elif self.pending:
             mine.insert(0, "the pack never finished loading in this dimension")
         if self.ambiguous:
-            mine.append("a load of the dimension before was still awaited at the move here: the loads after it "
-                        "can't be told apart")
+            mine.append(self.ambiguous)
         loads = [e for e in events[:self.seen] if e[0] != "move"]
         if loads and loads[-1][0] == "off":
             mine.append(f"the pack was turned off: {loads[-1][1]}")
@@ -637,7 +696,7 @@ class PackWatch:
         events = self.read()
         moved = len(events) - self.seen
         self._take(events)
-        self.stray = 0
+        self.stray = self.extra_moves = 0
         return [f"{moved} pack event(s) came during the capture"] if moved else []
 
 
@@ -793,11 +852,12 @@ def capture_view(game, scenes, view, previous, folder, watch, staged_name, expec
     return record, before, ready
 
 
-def run_views(game, scenes, folder, watch, staged_name, expected, dimension, side="", key=""):
-    """Captures every view in order in one game (opened in `dimension`); returns {view: record}. A view whose
-    problems the next view's evidence found gets them too; once a view's setup did not run fully, every later view
-    is invalid, since the world it draws may differ from the other side's."""
-    views, previous, last, broken = {}, None, None, None
+def run_views(game, scenes, folder, watch, staged_name, expected, dimension, views, side="", key=""):
+    """Captures every view in order in one game (opened in `dimension`) into `views` ({view: record}), each as soon
+    as it is taken, so the views before a game that stops answering keep their records. A view whose problems the
+    next view's evidence found gets them too; once a view's setup did not run fully, every later view is invalid,
+    since the world it draws may differ from the other side's."""
+    previous, last, broken = None, None, None
     for view in scenes["views"]:
         moved = bool(staged_name) and view["dimension"] != dimension
         dimension = view["dimension"]
@@ -1009,7 +1069,7 @@ def data_version(resources):
 def prepare_game_dir(scenes, game_dir, resources):
     game_dir.mkdir(parents=True)
     (game_dir / "options.txt").write_text(
-        options_text(scenes["options"], {"version": str(data_version(resources))}))
+        options_text({**scenes["options"], **FORCED_OPTIONS}, {"version": str(data_version(resources))}))
     (game_dir / "sunrise-graphics.txt").write_text(options_text(scenes["graphics"]))
 
 
@@ -1046,8 +1106,8 @@ def run_capture(args, scenes, side, bin_dir, extra_env, pack):
                 results[line] = reply.get("result") if reply.get("success") else None
             record["start_problems"] = start_problems(scenes, results)
             ctl("key", "f1", "tap")
-            record["views"] = run_views(ctl, scenes, folder, watch, staged_name, expected, dimension, side,
-                                        pack_key(pack))
+            run_views(ctl, scenes, folder, watch, staged_name, expected, dimension, record["views"], side,
+                      pack_key(pack))
             # A load the log shows only now may have run during the last capture.
             time.sleep(1.0)
             late = watch.after_capture()
@@ -1077,7 +1137,8 @@ def run_world(args, scenes, bin_dir):
     game exited cleanly."""
     out = Path(args.out)
     world = out / "world"
-    if world_generation(out) is not None and not args.replace:
+    # --replace first: it is also the way out of a published world that can't be read.
+    if not args.replace and world_generation(out) is not None:
         raise SystemExit(f"{world} has a published world: pass --replace to make it again")
     scratch = fresh_folder(out / "build" / f"world-run-{uuid.uuid4().hex[:8]}", False)
     prepare_game_dir(scenes, scratch / "game", args.resources)
