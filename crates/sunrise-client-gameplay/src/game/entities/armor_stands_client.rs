@@ -374,7 +374,7 @@ impl ClientGame<'_> {
             // it burns.
             let probe = a.light_probe(alpha, |x, y, z| self.common.world.light(x, y, z));
             let light = self.common.world.light(probe[0], probe[1], probe[2]);
-            let packed = a.render_light(light);
+            let packed = a.render_light(light, self.tracked_entity_on_fire(a.id));
             let skinned = if skinning {
                 let mut models = self.client.skin_models.0.borrow_mut();
                 let mut frame = self.client.skin_frame.borrow_mut();

@@ -1065,21 +1065,23 @@ impl crate::game::ClientGame<'_> {
         let Some(stack) = self.to_stack(stack) else {
             return;
         };
-        let pending = self
-            .client
-            .remote
-            .as_mut()
-            .and_then(|r| r.pending_items.remove(&id));
+        let pending = self.client.remote.as_mut().and_then(|r| {
+            let pending = r.pending_items.remove(&id)?;
+            // NoGravity may have arrived before the stack made the item body.
+            Some((pending, r.entities.get(&id)?.no_gravity))
+        });
         if let Some(item) = self.common.dropped.iter_mut().find(|d| d.id == id as u32) {
             item.stack = stack;
             return;
         }
-        let Some(PendingItem {
-            join,
-            position: [x, y, z],
-            velocity,
+        let Some((
+            PendingItem {
+                join,
+                position: [x, y, z],
+                velocity,
+            },
             no_gravity,
-        }) = pending
+        )) = pending
         else {
             return;
         };

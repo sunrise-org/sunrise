@@ -61,9 +61,16 @@ pub struct Tracked {
     /// packet's delta counts from. A TeleportEntity moves the entity but not
     /// this base, so the server's next delta still lands where it means.
     pub codec_base: [f64; 3],
+    /// Shared flag 0, not the saved remaining fire ticks.
     pub on_fire: bool,
     pub mod_fire_immune: bool,
+    /// `Entity.getAirSupply`, saved as `Air`.
+    pub air: i32,
+    pub custom_name: Option<sunrise_core::nbt::Tag>,
+    pub custom_name_visible: bool,
     pub silent: bool,
+    pub no_gravity: bool,
+    pub ticks_frozen: i32,
     /// `Entity.vehicle`: the entity it rides (`SetPassengers`), whatever either one's type.
     pub vehicle: Option<u32>,
     /// `Entity.tickCount` of this client's copy: the ticks the client level gave it since the
@@ -74,13 +81,57 @@ pub struct Tracked {
     pub size_answer: Option<sunrise_sim::pose::SizeAnswer>,
 }
 
+impl Tracked {
+    pub fn new(kind: String, position: [f64; 3], yaw: f32, pitch: f32) -> Self {
+        Self {
+            kind,
+            position,
+            previous: position,
+            yaw,
+            pitch,
+            previous_yaw: yaw,
+            previous_pitch: pitch,
+            codec_base: position,
+            on_fire: false,
+            mod_fire_immune: false,
+            air: 300,
+            custom_name: None,
+            custom_name_visible: false,
+            silent: false,
+            no_gravity: false,
+            ticks_frozen: 0,
+            vehicle: None,
+            tick_count: 0,
+            size_answer: None,
+        }
+    }
+
+    #[cfg(feature = "client")]
+    pub(in crate::game) fn apply_base_data(
+        &mut self,
+        index: u8,
+        value: &sunrise_protocol::entity_data::Value,
+    ) {
+        use sunrise_protocol::entity_data::Value;
+        match (index, value) {
+            (0, Value::Byte(flags)) => self.on_fire = flags & 1 != 0,
+            (1, Value::Int(air)) => self.air = *air,
+            (2, Value::OptText(name)) => self.custom_name.clone_from(name),
+            (2, Value::Text(name)) => self.custom_name = Some(name.clone()),
+            (3, Value::Bool(visible)) => self.custom_name_visible = *visible,
+            (4, Value::Bool(silent)) => self.silent = *silent,
+            (5, Value::Bool(no_gravity)) => self.no_gravity = *no_gravity,
+            (7, Value::Int(ticks)) => self.ticks_frozen = *ticks,
+            _ => {}
+        }
+    }
+}
+
 /// An item has joined the client level, but has no stack to draw yet.
 pub(in crate::game) struct PendingItem {
     pub(in crate::game) join: JoinSeq,
     pub(in crate::game) position: [f64; 3],
     pub(in crate::game) velocity: Vec3,
-    /// Entity.DATA_NO_GRAVITY, if it came before the stack.
-    pub(in crate::game) no_gravity: bool,
 }
 
 /// `Entity.startRiding` / `removePassenger` for a `SetPassengers` packet: the
@@ -465,8 +516,8 @@ pub struct Remote {
     /// (`AbstractClientPlayer.getPlayerInfo` keeps that `PlayerInfo`): its skin
     /// outlives the entry, which NPC plugins remove a moment after spawning.
     pub(in crate::game) level_player_textures: HashMap<i32, Arc<PlayerTextures>>,
-    /// Entities with shared flag 6 (`Entity.isCurrentlyGlowing` on a client); mobs keep
-    /// theirs in `Mob::glowing`.
+    /// Entities with shared flag 6 (`Entity.isCurrentlyGlowing` on a client),
+    /// distinct from the saved `Entity.hasGlowingTag`.
     pub glowing: std::collections::HashSet<i32>,
     /// The player's own shared flag 5 (`Entity.isInvisible`) as the server last set it.
     pub(in crate::game) own_invisible: bool,
@@ -755,6 +806,15 @@ impl crate::game::ClientGame<'_> {
                 self.common.player.is_none()
             }
         })
+    }
+
+    /// Shared flag 0 (`Entity.isOnFire`), separate from any local fire countdown.
+    pub fn tracked_entity_on_fire(&self, id: u32) -> bool {
+        self.client
+            .remote
+            .as_ref()
+            .and_then(|remote| remote.entity_on_fire(id as i32))
+            .unwrap_or(false)
     }
 
     /// Shared flag 6 of an entity on a server's client (`None` without a server).

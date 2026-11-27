@@ -34,8 +34,8 @@ impl RenderEntity for Mob {
     }
 
     #[cfg(feature = "client")]
-    fn render_glowing(&self, _game: &crate::game::ClientGame<'_>) -> bool {
-        self.is_currently_glowing()
+    fn render_glowing(&self, game: &crate::game::ClientGame<'_>) -> bool {
+        self.is_currently_glowing() || game.tracked_entity_glowing(self.id)
     }
 }
 
