@@ -2047,13 +2047,15 @@ impl ModPipelines {
             }
             layout?
         };
-        let frag = if matches!(target, VariantTarget::Pack(..)) {
+        // Only `VariantTarget::World` holds HDR linear light and needs gamma-to-linear decode;
+        // shader-pack buffers and mod offscreen targets receive the unmodified fragment shader.
+        let frag = if matches!(target, VariantTarget::World) {
+            &source.fragment_shader
+        } else {
             source
                 .pack_fragment_shader
                 .as_ref()
                 .unwrap_or(&source.fragment_shader)
-        } else {
-            &source.fragment_shader
         };
         let pipeline = Self::build_render_pipeline(
             device,
@@ -9405,6 +9407,88 @@ void main() {
         assert_eq!(texel(512), 0.0, "level 0 texel (0, 0)");
     }
 
+    fn offscreen_quad_4x4(x0: f32, x1: f32) -> [PipelineVertex; 4] {
+        [[x0, 0.0], [x0, 4.0], [x1, 4.0], [x1, 0.0]].map(|[x, y]| PipelineVertex {
+            pos: [x, y, 0.0],
+            uv: [0.0, 0.0],
+            color: 0xFFFF_FFFF,
+        })
+    }
+
+    fn execute_offscreen_4x4_passes(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        primitives: &mut WorldPrimitives,
+        targets: &crate::gfx::mod_render_targets::ModRenderTargets,
+        passes: &[(mod_api::RenderTargetRef, &[PipelineDraw])],
+        transient_vertices: &[u8],
+    ) -> Vec<u8> {
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let ortho4 = Mat4::orthographic_rh(0.0, 4.0, 4.0, 0.0, -1.0, 1.0).to_cols_array();
+        let identity = Mat4::IDENTITY.to_cols_array();
+        let mut encoder = device.create_command_encoder(&Default::default());
+        for &(rt, draws) in passes {
+            let resolved = targets.resolve_target(Some("test_mod"), rt, 0).unwrap();
+            let pass = mod_api::OffscreenPass::new(rt)
+                .clear_color_0([0.0, 0.0, 0.0, 1.0])
+                .projection(ortho4)
+                .view(identity);
+            primitives.execute_offscreen_pass(
+                device,
+                queue,
+                &mut encoder,
+                &OffscreenPassData {
+                    pass: &pass,
+                    target: &resolved,
+                    draws,
+                    transient_vertices,
+                    transient_indices: &[],
+                    inline_uniforms: &[],
+                    texel_data: &[],
+                },
+            );
+        }
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (passes.len() as u64) * 1024,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        for (i, &(rt, _)) in passes.iter().enumerate() {
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: targets.color_texture(rt, 0).unwrap(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: (i as u64) * 1024,
+                        bytes_per_row: Some(256),
+                        rows_per_image: None,
+                    },
+                },
+                wgpu::Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth_or_array_layers: 1,
+                },
+            );
+        }
+        queue.submit([encoder.finish()]);
+        assert!(
+            pollster::block_on(validation.pop()).is_none(),
+            "offscreen pass must not raise a wgpu validation error"
+        );
+        readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let bytes = readback.slice(..).get_mapped_range().unwrap().to_vec();
+        readback.unmap();
+        bytes
+    }
+
     #[test]
     #[ignore = "daily"]
     fn offscreen_pass_binds_storage_buffer_ranges_and_skips_rw_conflicts() {
@@ -9501,7 +9585,6 @@ void main() {
                 &mod_api::RenderTargetDescriptor::rgba8([4, 4], mod_api::RenderTargetDepth::None),
             )
             .expect("create 4x4 RGBA8 offscreen target");
-        let resolved_rt = targets.resolve_target(Some("test_mod"), rt, 0).unwrap();
 
         let format = wgpu::TextureFormat::Rgba8Unorm;
         let mut primitives = WorldPrimitives::new(&device, (format, false));
@@ -9510,16 +9593,8 @@ void main() {
             .build(&device, &set, None)
             .expect("build offscreen storage buffer pipelines");
 
-        let ortho4 = Mat4::orthographic_rh(0.0, 4.0, 4.0, 0.0, -1.0, 1.0).to_cols_array();
-        let identity = Mat4::IDENTITY.to_cols_array();
-        let half_quad = |x0: f32, x1: f32| {
-            [[x0, 0.0], [x0, 4.0], [x1, 4.0], [x1, 0.0]].map(|[x, y]| PipelineVertex {
-                pos: [x, y, 0.0],
-                uv: [0.0, 0.0],
-                color: 0xFFFF_FFFF,
-            })
-        };
-        let vertices: Vec<PipelineVertex> = [half_quad(0.0, 2.0), half_quad(2.0, 4.0)].concat();
+        let vertices: Vec<PipelineVertex> =
+            [offscreen_quad_4x4(0.0, 2.0), offscreen_quad_4x4(2.0, 4.0)].concat();
         let vbytes = bytemuck::cast_slice(&vertices);
         let draw_cmd = |slot: u32, offset: u64, first_quad: u64| {
             let r = resolve_range(offset);
@@ -9547,61 +9622,14 @@ void main() {
         };
 
         let read_pass_pixels = |primitives: &mut WorldPrimitives, draws: &[PipelineDraw]| {
-            let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
-            let pass = mod_api::OffscreenPass::new(rt)
-                .clear_color_0([0.0, 0.0, 0.0, 1.0])
-                .projection(ortho4)
-                .view(identity);
-            let mut encoder = device.create_command_encoder(&Default::default());
-            primitives.execute_offscreen_pass(
+            let bytes = execute_offscreen_4x4_passes(
                 &device,
                 &queue,
-                &mut encoder,
-                &OffscreenPassData {
-                    pass: &pass,
-                    target: &resolved_rt,
-                    draws,
-                    transient_vertices: vbytes,
-                    transient_indices: &[],
-                    inline_uniforms: &[],
-                    texel_data: &[],
-                },
+                primitives,
+                &targets,
+                &[(rt, draws)],
+                vbytes,
             );
-            let readback = device.create_buffer(&wgpu::BufferDescriptor {
-                label: None,
-                size: 1024,
-                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
-                mapped_at_creation: false,
-            });
-            encoder.copy_texture_to_buffer(
-                wgpu::TexelCopyTextureInfo {
-                    texture: targets.color_texture(rt, 0).unwrap(),
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                    aspect: wgpu::TextureAspect::All,
-                },
-                wgpu::TexelCopyBufferInfo {
-                    buffer: &readback,
-                    layout: wgpu::TexelCopyBufferLayout {
-                        offset: 0,
-                        bytes_per_row: Some(256),
-                        rows_per_image: None,
-                    },
-                },
-                wgpu::Extent3d {
-                    width: 4,
-                    height: 4,
-                    depth_or_array_layers: 1,
-                },
-            );
-            queue.submit([encoder.finish()]);
-            assert!(
-                pollster::block_on(validation.pop()).is_none(),
-                "offscreen storage-buffer pass must not raise a wgpu validation error"
-            );
-            readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
-            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
-            let bytes = readback.slice(..).get_mapped_range().unwrap().to_vec();
             move |x: usize, y: usize| -> [u8; 4] {
                 let i = y * 256 + x * 4;
                 [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
@@ -9627,6 +9655,191 @@ void main() {
             at(3, 1),
             [0, 0, 0, 255],
             "conflicting read-write draw skipped"
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn offscreen_targets_skip_linear_light_decode_while_world_keeps_it() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            return;
+        };
+
+        let color_id = Identifier::parse("test:hdr_offscreen_color").unwrap();
+        let r32f_id = Identifier::parse("test:hdr_offscreen_r32f").unwrap();
+        let pow_id = Identifier::parse("test:hdr_explicit_pow").unwrap();
+        // Exact dyadic f16/f32 values so offscreen readback is bit-exact and clearly differs from
+        // `pow(rgb, 2.2)`.
+        let color_fsh = "#version 330\n\
+            in vec2 texCoord0;\n\
+            in vec4 vertexColor;\n\
+            out vec4 fragColor;\n\
+            void main() {\n\
+                fragColor = vec4(0.75, 0.5, 0.25, 1.0);\n\
+            }\n";
+        let r32f_fsh = "#version 330\n\
+            in vec2 texCoord0;\n\
+            in vec4 vertexColor;\n\
+            out float fragDepthCopy;\n\
+            void main() {\n\
+                fragDepthCopy = 0.5;\n\
+            }\n";
+        // Reference decode evaluated on the same GPU into the same Rgba16Float format so the world
+        // HDR readback can be compared bit-exactly without an epsilon tolerance.
+        let pow_fsh = "#version 330\n\
+            in vec2 texCoord0;\n\
+            in vec4 vertexColor;\n\
+            out vec4 fragColor;\n\
+            void main() {\n\
+                fragColor = vec4(pow(vec3(0.75, 0.5, 0.25), vec3(2.2)), 1.0);\n\
+            }\n";
+
+        let make = |id: Identifier| {
+            RenderPipeline::new(
+                id.clone(),
+                id,
+                PipelineBlend::Opaque,
+                mod_api::WorldDepth::ThroughWalls,
+            )
+        };
+        let set = Pipelines::build(&[make(color_id), make(r32f_id), make(pow_id)], 1, |file| {
+            if file.ends_with(".vsh") {
+                Ok(Some(VSH.to_owned()))
+            } else if file.contains("hdr_offscreen_color") && file.ends_with(".fsh") {
+                Ok(Some(color_fsh.to_owned()))
+            } else if file.contains("hdr_offscreen_r32f") && file.ends_with(".fsh") {
+                Ok(Some(r32f_fsh.to_owned()))
+            } else if file.contains("hdr_explicit_pow") && file.ends_with(".fsh") {
+                Ok(Some(pow_fsh.to_owned()))
+            } else {
+                Ok(stub_asset(file))
+            }
+        })
+        .expect("HDR offscreen color, R32Float and reference pow pipelines must translate");
+
+        let world_format = wgpu::TextureFormat::Rgba16Float;
+        let mut primitives = WorldPrimitives::new(&device, (world_format, true));
+        primitives
+            .pipelines
+            .build(&device, &set, None)
+            .expect("HDR linear_light build must accept both vec4 and out float shaders");
+
+        let mut targets = crate::gfx::mod_render_targets::ModRenderTargets::default();
+        let color_rt = targets
+            .create(
+                &device,
+                Some("test_mod"),
+                &mod_api::RenderTargetDescriptor::new([4, 4])
+                    .color_target(mod_api::RenderTargetFormat::Rgba16Float),
+            )
+            .expect("create 4x4 Rgba16Float offscreen target");
+        let r32f_rt = targets
+            .create(
+                &device,
+                Some("test_mod"),
+                &mod_api::RenderTargetDescriptor::new([4, 4])
+                    .color_target(mod_api::RenderTargetFormat::R32Float),
+            )
+            .expect("create 4x4 R32Float offscreen target");
+        let ref_pow_rt = targets
+            .create(
+                &device,
+                Some("test_mod"),
+                &mod_api::RenderTargetDescriptor::new([4, 4])
+                    .color_target(mod_api::RenderTargetFormat::Rgba16Float),
+            )
+            .expect("create 4x4 Rgba16Float reference pow target");
+
+        let full_quad = offscreen_quad_4x4(0.0, 4.0);
+        let vbytes = bytemuck::cast_slice(&full_quad);
+        let offscreen_draw = |slot: u32| PipelineDraw {
+            slot,
+            stage: 0,
+            modifier_stack: 0,
+            draw: MeshDraw::vertices(0..4),
+            source: PipelineDrawSource::Transient {
+                vertex_ranges: vec![(0, 0..vbytes.len() as u64)],
+                index_range: None,
+            },
+            bindings: None,
+        };
+        let color_draw = [offscreen_draw(0)];
+        let r32f_draw = [offscreen_draw(1)];
+        let ref_pow_draw = [offscreen_draw(2)];
+        let bytes = execute_offscreen_4x4_passes(
+            &device,
+            &queue,
+            &mut primitives,
+            &targets,
+            &[
+                (color_rt, &color_draw),
+                (r32f_rt, &r32f_draw),
+                (ref_pow_rt, &ref_pow_draw),
+            ],
+            vbytes,
+        );
+
+        let read_rgba16f = |base: usize| -> [f32; 4] {
+            let px = base + 256 + 8;
+            std::array::from_fn(|c| {
+                let at = px + c * 2;
+                half::f16::from_le_bytes([bytes[at], bytes[at + 1]]).to_f32()
+            })
+        };
+
+        // Offscreen Rgba16Float keeps exact raw [0.75, 0.5, 0.25, 1.0] (not linear-decoded).
+        let offscreen_rgba = read_rgba16f(0);
+        assert_eq!(
+            offscreen_rgba,
+            [0.75, 0.5, 0.25, 1.0],
+            "offscreen Rgba16Float must skip linear_fragment_finish"
+        );
+
+        // Offscreen R32Float keeps exact 0.5 (not pow(0.5, 2.2)).
+        let r32_px = 1024 + 256 + 4;
+        let r32_val = f32::from_ne_bytes(bytes[r32_px..r32_px + 4].try_into().unwrap());
+        assert_eq!(
+            r32_val, 0.5,
+            "offscreen R32Float must preserve exact raw 0.5"
+        );
+
+        // Reference explicit GPU `pow(vec3(0.75, 0.5, 0.25), vec3(2.2))` in Rgba16Float.
+        let expected_linear_rgba = read_rgba16f(2048);
+        assert_ne!(
+            expected_linear_rgba,
+            [0.75, 0.5, 0.25, 1.0],
+            "explicit pow(rgb, 2.2) reference must differ from raw gamma values"
+        );
+
+        // Drawing the same vec4 pipeline into the HDR world target matches the explicit GPU
+        // `pow(rgb, 2.2)` decode bit-exactly.
+        let world_quad = quad([0.0, 0.0, 64.0, 64.0], 2.0, [255; 4]);
+        let world_vbytes = bytemuck::cast_slice(&world_quad);
+        let world_draw = PipelineDraw {
+            slot: 0,
+            stage: 0,
+            modifier_stack: 0,
+            draw: MeshDraw::vertices(0..4),
+            source: PipelineDrawSource::Transient {
+                vertex_ranges: vec![(0, 0..world_vbytes.len() as u64)],
+                index_range: None,
+            },
+            bindings: None,
+        };
+        let gpu = (device, queue);
+        let batch = Batch {
+            set: Some(&set),
+            draws: std::slice::from_ref(&world_draw),
+            transient_vertices: world_vbytes,
+            time: 0.0,
+            ..Default::default()
+        };
+        let at = render(&gpu, &mut primitives, world_format, batch, STAGES - 1);
+        assert_eq!(
+            at(32, 32),
+            expected_linear_rgba,
+            "world HDR target must match explicit GPU linear_fragment_finish decode bit-exactly"
         );
     }
 }
