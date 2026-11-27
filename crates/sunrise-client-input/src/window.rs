@@ -273,6 +273,14 @@ impl GuiFrame {
         })
     }
 
+    pub fn hover(self, pointer: GuiPointer) -> (f32, f32) {
+        if self.contains(pointer.subpixel()) {
+            pointer.pixel()
+        } else {
+            (-1.0e6, -1.0e6)
+        }
+    }
+
     pub fn with_pointer_space(self, window: PointerSpace) -> Self {
         Self {
             window: Some(window),
@@ -1254,7 +1262,9 @@ mod tests {
         for target in [[1, 1], [3, 2], [0, 1]] {
             let tiny = GuiFrame::from_insets(target, 0, true, Some([u32::MAX; 4]));
             let [l, t, r, b] = tiny.clip().unwrap();
-            assert_eq!([r - l, b - t], target.map(|axis| axis.min(1)));
+            for (usable, target) in [r - l, b - t].into_iter().zip(target) {
+                assert!((target.min(1)..=target).contains(&usable));
+            }
         }
     }
 

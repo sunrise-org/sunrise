@@ -1459,11 +1459,7 @@ impl Loading {
             let pointer = frame
                 .with_pointer_space(self.menu_pointer_space(frame.target))
                 .pointer_to_gui(self.menu.pointer);
-            if frame.contains(pointer.subpixel()) {
-                pointer.pixel()
-            } else {
-                (-1.0e6, -1.0e6)
-            }
+            frame.hover(pointer)
         };
         // `Gui.setScreen` clears the focus of the screen it leaves
         // (`Screen.clearFocus`): the title behind the options, and the one

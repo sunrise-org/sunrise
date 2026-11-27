@@ -879,16 +879,30 @@ impl HudBatch {
 
     /// The part of each quad's box its scissor lets through, `None` where it hides the quad.
     pub fn visible_quads(&self) -> impl Iterator<Item = Option<[f32; 4]>> + '_ {
-        self.quad_scissors().map(|(bounds, clip)| {
-            let [l, t, r, b] = clip.unwrap_or(bounds);
-            let cut = [
-                bounds[0].max(l),
-                bounds[1].max(t),
-                bounds[2].min(r),
-                bounds[3].min(b),
-            ];
-            (cut[0] < cut[2] && cut[1] < cut[3]).then_some(cut)
-        })
+        self.quad_scissors()
+            .enumerate()
+            .map(|(index, (bounds, clip))| {
+                let first = (index * 6) as u32;
+                let run = self.full_target.partition_point(|r| r.end <= first);
+                let full = self
+                    .full_target
+                    .get(run)
+                    .is_some_and(|r| r.contains(&first));
+                let [mut l, mut t, mut r, mut b] = clip.unwrap_or(bounds);
+                if !full && let Some([left, top, right, bottom]) = self.local_content_rect() {
+                    l = l.max(left);
+                    t = t.max(top);
+                    r = r.min(right);
+                    b = b.min(bottom);
+                }
+                let cut = [
+                    bounds[0].max(l),
+                    bounds[1].max(t),
+                    bounds[2].min(r),
+                    bounds[3].min(b),
+                ];
+                (cut[0] < cut[2] && cut[1] < cut[3]).then_some(cut)
+            })
     }
 
     /// Discard appended vertices and their scissor state.

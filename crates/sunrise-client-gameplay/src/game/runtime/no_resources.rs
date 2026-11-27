@@ -17,6 +17,7 @@ struct Missing {
     pointer: PointerSample,
     window_pointer_space: std::cell::OnceCell<PointerSpace>,
     safe_area: Option<([u32; 2], sunrise_hooks::Insets)>,
+    margin_press: bool,
     api: sunrise_client::graphics::GraphicsApi,
     settings: Settings,
     error: Option<Box<dyn std::error::Error>>,
@@ -44,6 +45,7 @@ pub fn show(looked_in: &std::path::Path, settings: &Settings) -> Result<()> {
         pointer: PointerSample::default(),
         window_pointer_space: std::cell::OnceCell::new(),
         safe_area: None,
+        margin_press: false,
         api: settings.sunrise.api,
         settings: settings.clone(),
         error: None,
@@ -110,12 +112,7 @@ impl Missing {
         }
         let frame = self.gui_frame();
         let mut batch = HudBatch::for_frame(&frame);
-        let pointer = frame.pointer_to_gui(self.pointer);
-        let hover = if frame.contains(pointer.subpixel()) {
-            pointer.pixel()
-        } else {
-            (-1.0e6, -1.0e6)
-        };
+        let hover = frame.hover(frame.pointer_to_gui(self.pointer));
         self.with_ui(&mut batch, hover, |ui| self.screen.draw(ui));
         let Some(renderer) = &mut self.renderer else {
             return;
@@ -211,10 +208,25 @@ impl ApplicationHandler for Missing {
                 window.request_redraw();
             }
             WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                button: MouseButton::Left,
+                ..
+            } => {
+                self.margin_press = self.safe_area.is_some() && {
+                    let frame = self.gui_frame();
+                    !frame.contains(frame.pointer_to_gui(self.pointer).subpixel())
+                };
+            }
+            WindowEvent::MouseInput {
                 state: ElementState::Released,
                 button: MouseButton::Left,
                 ..
-            } => self.click(event_loop),
+            } => {
+                if !std::mem::take(&mut self.margin_press) {
+                    self.click(event_loop);
+                }
+            }
+            WindowEvent::Focused(false) => self.margin_press = false,
             WindowEvent::KeyboardInput { event, .. }
                 if event.state == ElementState::Pressed
                     && event.physical_key == PhysicalKey::Code(KeyCode::Escape) =>

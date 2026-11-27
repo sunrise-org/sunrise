@@ -2892,13 +2892,7 @@ impl crate::game::ClientGame<'_> {
         // the projected fractions for input, but draw and hit-test hover at the frame's pixel.
         let frame = self.gui_frame_for(size);
         let pointer = self.project_window_cursor_in(frame);
-        let hover = pointer.map(|pointer| {
-            if frame.contains(pointer.subpixel()) {
-                pointer.pixel()
-            } else {
-                (-1.0e6, -1.0e6)
-            }
-        });
+        let hover = pointer.map(|pointer| frame.hover(pointer));
         if let Some(hover) = hover {
             self.client.cursor = hover;
         }
@@ -3081,6 +3075,7 @@ impl crate::game::ClientGame<'_> {
             self.client.modifiers = winit::keyboard::ModifiersState::empty();
             self.client.physical_keys.clear();
             self.client.physical_buttons.clear();
+            self.client.gui_margin_buttons.clear();
             self.client.drag_button = None;
             self.client.container_buttons.clear();
             self.client.screen_state.0.context_menu_input.clear();
@@ -4095,9 +4090,10 @@ impl crate::game::ClientGame<'_> {
                     )
                 });
                 let frame = self.renderer_gui_frame();
-                let cursor = frame
-                    .and_then(|frame| self.project_window_cursor_in(frame))
-                    .map_or(self.client.cursor, |p| p.pixel());
+                let cursor = frame.map_or(self.client.cursor, |frame| {
+                    self.project_window_cursor_in(frame)
+                        .map_or(self.client.cursor, |pointer| frame.hover(pointer))
+                });
                 if let (Some(frame), Some(renderer)) = (frame, &mut self.client.renderer.0) {
                     let mut hud = HudBatch::for_frame(&frame);
                     sunrise_client::level_loading::draw_file_fixer(

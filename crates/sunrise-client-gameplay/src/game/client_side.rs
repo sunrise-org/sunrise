@@ -1300,6 +1300,7 @@ pub struct ClientState {
     /// Keys whose first press a mod cancelled (`key_mapping_pre`): their repeats are never held.
     pub rejected_keys: HashSet<KeyCode>,
     pub physical_buttons: HashSet<MouseButton>,
+    pub(in crate::game::client_side) gui_margin_buttons: HashSet<MouseButton>,
     pub drag_button: Option<MouseButton>,
     /// Control + left click as a right click (macOS).
     pub(in crate::game::client_side) right_click_emulation:
@@ -2049,6 +2050,7 @@ impl ClientState {
             physical_keys: HashSet::new(),
             rejected_keys: HashSet::new(),
             physical_buttons: HashSet::new(),
+            gui_margin_buttons: HashSet::new(),
             drag_button: None,
             right_click_emulation: Default::default(),
             cursor: (0.0, 0.0),

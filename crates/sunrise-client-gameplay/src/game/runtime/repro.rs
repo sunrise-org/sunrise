@@ -1355,6 +1355,7 @@ impl crate::game::ClientGame<'_> {
         self.clear_device_keys();
         self.client.physical_keys.clear();
         self.client.physical_buttons.clear();
+        self.client.gui_margin_buttons.clear();
         self.set_mapping_held("key.attack", false);
         self.set_mapping_held("key.use", false);
         self.client.modifiers = winit::keyboard::ModifiersState::empty();
