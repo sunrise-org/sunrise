@@ -621,6 +621,11 @@ impl crate::game::ServerGame<'_> {
         })
     }
 
+    #[cfg(test)]
+    pub(in crate::game) fn test_pick_vehicle_step(&self, entity: u32) -> Option<u32> {
+        self.server_pick_vehicle_step(entity)
+    }
+
     fn server_pick_vehicle_root(&self, id: u32) -> Option<u32> {
         let mut slow = id;
         let mut fast = id;

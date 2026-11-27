@@ -141,3 +141,83 @@ impl crate::game::ClientGame<'_> {
 use sunrise_gameplay_common::game::side_ops::player::PlayerSideGameExt as _;
 
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::sync::Arc;
+    use sunrise_protocol::entity_data::{PaintingHolder, PaintingVariant, Value};
+    use sunrise_sim::entities::Painting;
+
+    #[test]
+    #[ignore = "daily"]
+    fn negative_width_inline_painting_keeps_raw_corners() {
+        use crate::game::client_side::native_client_session::tests::logged_client;
+        use crate::game::client_side::native_entity_refs::tests::with_client_game;
+        use crate::game::client_side::remote_client::Tracked;
+
+        with_client_game(|game| {
+            let _server = logged_client(game);
+            let id = 901;
+            game.common.paintings.push(Painting {
+                attachment_lifetime: Default::default(),
+                join: Default::default(),
+                id,
+                pos: [10, 65, -3],
+                facing: 2,
+                variant: Arc::from("minecraft:kebab"),
+                asset: None,
+                width: 1,
+                height: 1,
+                check_interval: 0,
+                ticks: 0,
+            });
+            game.remote_object_data(
+                id as i32,
+                &[(
+                    9,
+                    0,
+                    Value::PaintingVariant(PaintingHolder::Direct(PaintingVariant {
+                        width: -2,
+                        height: 1,
+                        asset_id: "minecraft:kebab".to_owned(),
+                        title: None,
+                        author: None,
+                    })),
+                )],
+            );
+            game.client.remote.as_mut().unwrap().entities.insert(
+                id as i32,
+                Tracked {
+                    kind: "minecraft:painting".to_owned(),
+                    position: [10.5, 65.5, -2.5],
+                    previous: [10.5, 65.5, -2.5],
+                    yaw: 180.0,
+                    pitch: 0.0,
+                    previous_yaw: 180.0,
+                    previous_pitch: 0.0,
+                    codec_base: [10.5, 65.5, -2.5],
+                    on_fire: false,
+                    mod_fire_immune: false,
+                    silent: false,
+                    vehicle: None,
+                    tick_count: 0,
+                    size_answer: None,
+                },
+            );
+            let (lo, hi) = game
+                .common
+                .paintings
+                .iter()
+                .find(|p| p.id == id)
+                .unwrap()
+                .bounds();
+            assert!(lo[0] > hi[0]);
+            let epoch = game.common.native_lifecycle.epoch().unwrap();
+            assert_eq!(
+                game.client_entity_bounding_box(EntityRef::new(epoch, id)),
+                Some([lo, hi])
+            );
+        });
+    }
+}

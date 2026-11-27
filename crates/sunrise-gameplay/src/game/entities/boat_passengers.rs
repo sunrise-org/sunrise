@@ -648,6 +648,11 @@ impl VehicleMobs {
         self.reach.get().is_some() && mod_api::__private::mods().is_empty()
     }
 
+    #[cfg(test)]
+    pub(in crate::game) fn riders_cache_stamp(&self) -> Option<ListStamp> {
+        self.riders.borrow().as_ref().map(|(stamp, _)| *stamp)
+    }
+
     pub(in crate::game) fn indexed_mob_rider_slots<'a>(
         &'a self,
         mobs: &JoinList<Mob>,

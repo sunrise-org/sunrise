@@ -897,4 +897,239 @@ mod tests {
             );
         });
     }
+
+    #[test]
+    fn visit_seat_sources_lazy_skips_later_sources_on_early_hit() {
+        use std::cell::Cell;
+
+        let vehicle = 700;
+        let guests = [test_guest(1, 710, Some(vehicle), 0)];
+        let resident_mobs = [test_mob(720, Some(vehicle), 0, false)];
+        let general = [(0, 730)];
+        let bolts = [(Some(vehicle), 0, 740)];
+
+        let run =
+            |guest_slice: &[Guest], has_own: bool, mob_slice: &[Mob], gen_slice: &[(i64, u32)]| {
+                let rp = Cell::new(0usize);
+                let rm = Cell::new(0usize);
+                let om = Cell::new(0usize);
+                let gp = Cell::new(0usize);
+                let bl = Cell::new(0usize);
+                let hit = visit_seat_sources_lazy(
+                    vehicle,
+                    LazySeatSources {
+                        acting: None,
+                        riding: has_own.then_some(vehicle),
+                        has_player: has_own,
+                        placed_guests: || guest_slice.iter(),
+                        riding_player: || {
+                            rp.set(rp.get() + 1);
+                            has_own.then_some((711, 0))
+                        },
+                        resident_mobs: || {
+                            rm.set(rm.get() + 1);
+                            mob_slice.iter()
+                        },
+                        lent_mobs: &[],
+                        off_level_mobs: || {
+                            om.set(om.get() + 1);
+                            std::iter::empty()
+                        },
+                        general_passengers: || {
+                            gp.set(gp.get() + 1);
+                            gen_slice.iter().copied()
+                        },
+                        bolts: || {
+                            bl.set(bl.get() + 1);
+                            bolts.iter().copied()
+                        },
+                    },
+                    |_| true,
+                );
+                assert!(hit);
+                (rp.get(), rm.get(), om.get(), gp.get(), bl.get())
+            };
+
+        assert_eq!(
+            run(&guests, true, &resident_mobs, &general),
+            (0, 0, 0, 0, 0)
+        );
+        assert_eq!(run(&[], true, &resident_mobs, &general), (1, 0, 0, 0, 0));
+        assert_eq!(run(&[], false, &resident_mobs, &general), (1, 1, 1, 0, 0));
+        assert_eq!(run(&[], false, &[], &general), (1, 1, 1, 1, 0));
+        assert_eq!(run(&[], false, &[], &[]), (1, 1, 1, 1, 1));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn rider_parent_policies_and_cache_laziness_match_base() {
+        use sunrise_gameplay_common::game::lightning_common::Bolt;
+        use sunrise_sim::entities::ArmorStand;
+        use sunrise_sim::join_seq::RestoreOrder;
+        use sunrise_sim::lan::{NetConfig, hub::HubConfig};
+
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            let vehicle = 800;
+            let hub_vehicle = 801;
+            let mob_only_vehicle = 802;
+            let gen_vehicle = 803;
+
+            game.lan_host(
+                crate::game::server_side::lan::LanSettings {
+                    port: 0,
+                    guest_commands: false,
+                    force_game_mode: false,
+                },
+                NetConfig {
+                    listen: false,
+                    announce: false,
+                    lod_distance: 0,
+                    ..NetConfig::lan(0, String::new(), 2)
+                },
+                HubConfig {
+                    default_game_mode: 0,
+                    guest_commands: false,
+                    force_game_mode: false,
+                    hardcore: false,
+                    view_distance: 2,
+                    simulation_distance: 2,
+                    dimension: game.dim.id().to_owned(),
+                    allow_flight: true,
+                    seed: 0,
+                    max_players: 4,
+                    integrated: true,
+                    levels: game.server.level_shapes.clone(),
+                    level_seeds: game.server.levels.0.runtime.seeds(),
+                },
+            )
+            .unwrap();
+
+            // Local player admitted via residency, riding `vehicle`.
+            crate::game::native_entity_refs::tests::bind_local_player(game, 810, 0x810);
+            game.server.lan_acting = None;
+            game.server.lan_acting_entity = None;
+            game.server.lan_acting_uuid = None;
+            game.common.riding = Some(vehicle);
+            game.server.riding_order = 0;
+
+            // Displaced guest: placed in Overworld with stored vehicle, not in residency.
+            let displaced_guest = test_guest(1, 811, Some(vehicle), 0);
+            // Placed guest in another dimension: excluded from same-dimension seat scans.
+            let mut nether_guest = test_guest(2, 812, Some(vehicle), 0);
+            nether_guest.dimension = "minecraft:the_nether".to_owned();
+            // Guest whose hub vehicle differs from `common.riding` when acting.
+            let acting_guest = test_guest(3, 813, Some(hub_vehicle), 0);
+            {
+                let guests = &mut game.server.lan.as_mut().unwrap().hub.guests;
+                guests.push(displaced_guest);
+                guests.push(nether_guest);
+                guests.push(acting_guest);
+            }
+
+            // Resident mobs, bolt, and armor stand with a vehicle link.
+            game.common
+                .mobs
+                .push(test_mob(820, Some(vehicle), 0, false));
+            game.common
+                .mobs
+                .push(test_mob(821, Some(mob_only_vehicle), 0, false));
+            let (mut bolt, _) = Bolt::new(840, [0.0, 64.0, 0.0], false);
+            bolt.mount = Some(vehicle);
+            bolt.vehicle_order = 0;
+            game.common.bolts.push(bolt);
+            let mut stand = ArmorStand::new(850, Vec3::new(0.0, 64.0, 0.0), 0.0);
+            stand.vehicle = Some(vehicle);
+            game.common.armor_stands.push(stand);
+
+            // Stale VehicleMobs cache stays unbuilt on early player hit, builds on full scan.
+            game.vehicles_ticking(true);
+            assert_eq!(game.server.vehicle_mobs.riders_cache_stamp(), None);
+            assert!(game.has_seated_passengers(vehicle));
+            assert_eq!(game.server.vehicle_mobs.riders_cache_stamp(), None);
+            let full = game.seated_passengers(vehicle);
+            assert_eq!(
+                game.server.vehicle_mobs.riders_cache_stamp(),
+                Some(game.common.mobs.stamp())
+            );
+            assert_eq!(
+                full,
+                vec![
+                    (0, 811, true),
+                    (0, 810, true),
+                    (0, 820, false),
+                    (0, 840, false),
+                ]
+            );
+
+            // Physically lent mob list works with VehicleMobs indexing active.
+            let lent = game.common.mobs.lift();
+            assert!(!game.has_seated_passengers(mob_only_vehicle));
+            assert!(game.has_seated_passengers_with_lent_mobs(mob_only_vehicle, &lent));
+            game.common.mobs.restore(lent, RestoreOrder::SurvivorsFirst);
+            game.vehicles_ticking(false);
+
+            // Fresh vs stale RiderIndex ordering for equal-place general rows.
+            game.common
+                .resident_entities
+                .general
+                .rows
+                .push(test_general_row(831, Some(gen_vehicle), 0));
+            game.common
+                .resident_entities
+                .general
+                .rows
+                .push(test_general_row(830, Some(gen_vehicle), 0));
+            assert_eq!(
+                game.seated_passengers(gen_vehicle),
+                vec![(0, 831, false), (0, 830, false)]
+            );
+            game.common.resident_entities.general.riders.refresh(
+                &game.common.resident_entities.general.rows,
+                game.common.resident_entities.general.mount_writes,
+            );
+            assert_eq!(
+                game.seated_passengers(gen_vehicle),
+                vec![(0, 830, false), (0, 831, false)]
+            );
+
+            // Displaced guest: seated lookup sees hub vehicle; ordinary handle-gated lookup does not.
+            assert_eq!(game.seated_passenger_vehicle(811), Some(vehicle));
+            assert_eq!(game.vehicle_of_any(811), None);
+
+            // Placed guest in another dimension: excluded from placed same-level lookup.
+            assert_eq!(game.seated_passenger_vehicle(812), None);
+            assert_eq!(game.vehicle_of_any(812), None);
+
+            // Bolt is excluded from both reverse lookups; ArmorStand is camera-step only.
+            assert_eq!(game.seated_passenger_vehicle(840), None);
+            assert_eq!(game.vehicle_of_any(840), None);
+            assert_eq!(game.seated_passenger_vehicle(850), None);
+            assert_eq!(game.vehicle_of_any(850), None);
+            assert_eq!(game.test_pick_vehicle_step(850), Some(vehicle));
+
+            // Acting guest with distinct live/hub links: riding_player match uses live link;
+            // unmatched riding_player falls back to stored hub link.
+            game.server.lan_acting = Some(3);
+            game.server.lan_acting_entity = Some(813);
+            game.server.lan_acting_uuid = Some(0x813);
+            game.common.riding = Some(vehicle);
+            assert_eq!(game.seated_passenger_vehicle(813), Some(vehicle));
+            game.server.lan_acting_uuid = None;
+            assert_eq!(game.seated_passenger_vehicle(813), Some(hub_vehicle));
+            game.server.lan_acting = None;
+            game.server.lan_acting_entity = None;
+
+            // Held-out local player: ordinary lookup returns None; seated lookup still sees riding.
+            assert_eq!(game.vehicle_of_any(810), Some(vehicle));
+            game.server.held_out.push(810);
+            assert_eq!(game.vehicle_of_any(810), None);
+            assert_eq!(game.seated_passenger_vehicle(810), Some(vehicle));
+            game.server.held_out.clear();
+
+            // No active epoch: ordinary lookup returns None; seated lookup still sees riding.
+            assert!(game.common.native_lifecycle.retire());
+            assert_eq!(game.vehicle_of_any(810), None);
+            assert_eq!(game.seated_passenger_vehicle(810), Some(vehicle));
+        });
+    }
 }
