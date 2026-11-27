@@ -1,0 +1,31 @@
+# #6276: the five sunrise-client-lib integration targets that read prepared resources through test_resources::prepared_root; each is #[ignore = "daily"] in its source.
+# PACKAGE TEST TARGET daily REASON, sorted.
+sunrise-client-lib a_boat_floating_too_long_kicks_its_driver test:lan_bot daily resources
+sunrise-client-lib a_click_past_the_menu_is_ignored test:lan_bot daily resources
+sunrise-client-lib a_lan_guest_sees_the_signed_in_owners_skin test:lan_bot daily resources
+sunrise-client-lib a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick test:lan_bot daily resources
+sunrise-client-lib a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick test:lan_bot daily resources
+sunrise-client-lib a_move_behind_an_attack_and_its_swing_waits_for_the_next_tick test:lan_bot daily resources
+sunrise-client-lib a_new_column_is_told_apart_from_a_saved_one test:generation_saves daily resources
+sunrise-client-lib a_respawned_guest_is_immune_until_its_client_loads_the_world test:lan_bot daily resources
+sunrise-client-lib a_signed_in_hosts_lan_authenticates_guests_but_not_its_own_player test:lan_bot daily resources
+sunrise-client-lib a_spectators_container_click_is_taken_back test:lan_bot daily resources
+sunrise-client-lib a_tall_column_streams_lights_and_meshes_to_its_top test:tall_column daily resources
+sunrise-client-lib changed_biomes_reach_the_players_that_see_the_column test:lan_bot daily resources
+sunrise-client-lib chunks_left_behind_keep_their_decoration test:generation_saves daily resources
+sunrise-client-lib columns_loaded_past_the_render_distance_mesh_when_they_come_in_range test:streaming_meshes daily resources
+sunrise-client-lib every_extra_area_loads_however_the_areas_change test:streaming_meshes daily resources
+sunrise-client-lib forced_chunks_reach_vanillas_rings test:forced_chunks daily resources
+sunrise-client-lib guests_see_each_other_and_the_world_entities test:lan_bot daily resources
+sunrise-client-lib menu_extra_data_comes_right_before_its_menu test:lan_bot daily resources
+sunrise-client-lib meshes_waiting_for_upload_hold_back_new_mesh_jobs test:streaming_meshes daily resources
+sunrise-client-lib neoforge_shapes_items_reach_two_guests test:lan_bot daily resources
+sunrise-client-lib persistent_forwards_the_block_entities_decoration_made_in_a_final_chunk test:generation_saves daily resources
+sunrise-client-lib proto_chunks_are_viewed_once_per_state test:generation_saves daily resources
+sunrise-client-lib recipe_settings_packets_update_only_the_players_book_and_survive_save test:lan_bot daily resources
+sunrise-client-lib relit_columns_keep_every_mesh_current test:streaming_meshes daily resources
+sunrise-client-lib saved_proto_block_entities_keep_their_id test:generation_saves daily resources
+sunrise-client-lib saved_proto_chunks_restore_exactly test:generation_saves daily resources
+sunrise-client-lib sprint_commands_survive_keyboard_input_changes test:lan_bot daily resources
+sunrise-client-lib status_and_join test:lan_bot daily resources
+sunrise-client-lib the_end_asks_for_no_creature_packs_and_the_overworld_does test:generation_saves daily resources

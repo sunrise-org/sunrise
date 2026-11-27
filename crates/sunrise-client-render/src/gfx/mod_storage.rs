@@ -5,8 +5,8 @@
 //! `max_storage_buffer_binding_size` bytes whose offset is a multiple of
 //! `min_storage_buffer_offset_alignment`. Writes are queued by `write_range` and applied in call
 //! order by [`ModStorageBuffers::flush`] before the frame, as region updates to dynamic textures
-//! are. A buffer survives a resource reload and a world close: it is freed by an explicit release
-//! or when its mod unloads.
+//! are. A buffer survives a same-device resource reload and a world close. It is freed on
+//! release, mod unload or device replacement.
 
 use mod_api::__private::game::Fields;
 use mod_api::{BufferError, StorageBufferDescriptor, StorageBufferRef, StorageBufferSlice};
@@ -38,7 +38,7 @@ pub struct ResolvedStorageRange {
 /// Generational store of retained GPU [`StorageBufferRef`] buffers owned by `Renderer`.
 #[derive(Default)]
 pub struct ModStorageBuffers {
-    next_generation: u64,
+    pub(super) next_generation: u64,
     slots: Vec<Option<ModStorageBuffer>>,
     pending: Vec<PendingWrite>,
     /// Generations freed since the pipelines last dropped their cached bind groups.

@@ -527,25 +527,10 @@ fn replace_ml(tag: &mut Tag, old: &str, new: &str) {
     }
 }
 
-/// `UUID.fromString`, which takes five hexadecimal groups of any length.
-fn parse_uuid(s: &str) -> Option<(i64, i64)> {
-    if s.len() > 36 {
-        return None;
-    }
-    let mut parts = [0i64; 5];
-    let mut count = 0;
-    for part in s.split('-') {
-        if count == 5 || part.is_empty() || !part.bytes().all(|b| b.is_ascii_hexdigit()) {
-            return None;
-        }
-        parts[count] = i64::from_str_radix(part, 16).ok()?;
-        count += 1;
-    }
-    (count == 5).then(|| {
-        let most = (parts[0] & 0xffff_ffff) << 32 | (parts[1] & 0xffff) << 16 | (parts[2] & 0xffff);
-        let least = (parts[3] & 0xffff) << 48 | (parts[4] & 0xffff_ffff_ffff);
-        (most, least)
-    })
+/// Parse a Java `UUID.fromString` string (up to 36 UTF-16 code units, optional `+` on groups) into `(most, least)`.
+pub(super) fn parse_uuid(s: &str) -> Option<(i64, i64)> {
+    let uuid = sunrise_core::text::parse_java_uuid(s)?;
+    Some(((uuid >> 64) as i64, uuid as i64))
 }
 
 /// `AbstractUUIDFix.replaceUUIDString`.

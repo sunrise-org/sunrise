@@ -38,6 +38,34 @@ Within a supplied view, an absent registry has no entries or tags: `registered` 
 is true, with no diagnostic. That is different from a loader that cannot supply the context at all:
 a check that reaches an unavailable context reports a load error.
 
+## Fabric's `fabric:load_conditions`
+
+A Java jar's data files (the passive pack layers of [Java jars](../content-mods.md#java-jars-as-external-assets))
+may be guarded by Fabric API's key instead. The same readers evaluate it, at the top of a file only: tags
+ignore it, and a loot pool's or data-map value's own key is NeoForge's alone. Its value is one condition
+object, or a list that must all hold, each named by `condition`:
+
+- `fabric:true`, `fabric:false`; `fabric:not` (`value`); `fabric:and` / `fabric:or` (`values`).
+- `fabric:all_mods_loaded` / `fabric:any_mods_loaded` (`values`, mod IDs read as `neoforge:mod_loaded` reads them).
+- `fabric:registry_contains` and `fabric:tags_populated`: a `registry` (`minecraft:item` when it is missing or
+  not a valid ID) and `values`. Every entry must be registered, read as `neoforge:registered` reads it, or
+  every tag bound by this load. A bound tag counts even when it holds nothing, for example one whose entries
+  are all optional and absent; `neoforge:tag_empty` calls that tag empty.
+- `fabric:features_enabled` (`features`): every flag enabled; an unknown flag fails the test. Sunrise answers
+  from the world's enabled flags, in worldgen files too. Fabric reads a flag set captured at its last data
+  reload instead: none during the first world's registry load (the test fails there), an older one later.
+- Any other ID goes to the handler registered under it, which reads the object without `condition`.
+
+Sunrise loads a file that has both keys only when both hold. That is Sunrise's own rule: NeoForge reads
+only its key and Fabric only its own, so neither loader defines the pair. Unlike NeoForge's key, a Fabric
+key that does not decode (an unknown ID or a malformed node) is logged once per load candidate and the
+file loads, as Fabric API does. Fabric's `fabric:overlays` pack metadata is not read.
+
+One known difference: while vanilla loads the dynamic registries together (worldgen, damage types), each
+co-loaded registry's tag lookup is a registration getter in which every tag is present, so on Fabric a
+`fabric:tags_populated` naming a tag of one of those registries always holds there. Sunrise answers from the
+tags that load has bound, so such a tag that no file defines does not count.
+
 ## Registry conditions
 
 A registry file sees the current candidate's static holders and resolved static tags, including tags

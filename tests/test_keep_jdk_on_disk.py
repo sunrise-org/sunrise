@@ -4,7 +4,7 @@ import tempfile
 import unittest
 from pathlib import Path
 
-from tests.os_support import needs_runner_shell
+from tests.os_support import BASH, needs_runner_shell
 
 ROOT = Path(__file__).resolve().parents[1]
 SCRIPT = ROOT / "tools/ci/keep_jdk_on_disk.sh"
@@ -33,9 +33,9 @@ class KeepJdkOnDiskTests(unittest.TestCase):
         env = {**os.environ, "RUNNER_TEMP": str(temp), "RUNNER_TOOL_CACHE": str(tools),
                "DYNA_CI_BUILD": str(self.build)}
         listing = job / "listing"
-        subprocess.run(["bash", SCRIPT, "before", listing], env=env, check=True)
+        subprocess.run([BASH, SCRIPT, "before", listing], env=env, check=True)
         setup_java(temp, tools)
-        subprocess.run(["bash", SCRIPT, "after", listing], env=env, check=True)
+        subprocess.run([BASH, SCRIPT, "after", listing], env=env, check=True)
         return temp, tools
 
     @needs_runner_shell

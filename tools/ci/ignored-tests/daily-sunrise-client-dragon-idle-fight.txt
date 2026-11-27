@@ -1,0 +1,5 @@
+# Daily rows for #6545: the dragon's boss bar follows the End fight's player scan, which runs while the End's emptyTime is under 300, idle or not; each in a fresh process.
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+sunrise-gameplay game::server_side::dragon::idle_fight_tests::a_player_who_left_the_end_leaves_the_dragon_bar_at_the_fights_next_scan lib daily resources
+sunrise-gameplay game::server_side::dragon::idle_fight_tests::the_dragon_bar_changes_hands_only_at_the_fights_scans lib daily resources
+sunrise-gameplay game::server_side::dragon::idle_fight_tests::the_fight_ticks_from_its_levels_opening_and_not_for_a_lone_skipped_spectator lib daily resources

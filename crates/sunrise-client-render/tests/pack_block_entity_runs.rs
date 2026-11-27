@@ -4,7 +4,8 @@
 //! cutout-mipped models) and their translucent programs (fluids, translucent models) draw them
 //! from the pack's block atlas into the buffer their `/* DRAWBUFFERS:1 */` names, which `final`
 //! shows (spec 2.3, 6.1.4); the pack's `shadow` draws the ones they cast into `shadowcolor0`. With flat section draws on (a
-//! stitched block atlas) and off (a grid). Original fixture, no pack assets. Run with throwaway
+//! stitched block atlas) and off (a grid). `pack_hand_terrain_quads` does the same for the
+//! first-person hand's (#5418): `gbuffers_hand` and `gbuffers_hand_water`. Original fixture, no pack assets. Run with throwaway
 //! SUNRISE_HOME, SUNRISE_LAUNCHER_HOME, XDG_DATA_HOME and XDG_CONFIG_HOME (AGENTS.md):
 //! `cargo test -p sunrise-client-render --test pack_block_entity_runs -- --ignored`
 //! (under `python3 tools/ci/with_xvfb.py` without a display) gives each its own.
@@ -29,6 +30,12 @@ fn pack_block_entity_runs() {
     run_daily("pack_block_entity_runs", fixture);
 }
 
+#[test]
+#[ignore = "daily"]
+fn pack_hand_terrain_quads() {
+    run_daily("pack_hand_terrain_quads", hand_fixture);
+}
+
 /// The two sprite layers' colour: each channel 0 or 255, so a texel times a vertex colour is
 /// that colour's channel or 0, exactly.
 const SPRITES: [[u8; 4]; 2] = [[255, 255, 0, 255], [0, 255, 255, 255]];
@@ -38,6 +45,8 @@ const BLOCK: [usize; 3] = [0, 1, 2];
 const BLOCK_TRANSLUCENT: [usize; 3] = [2, 1, 0];
 const ENTITIES: [usize; 3] = [1, 2, 0];
 const ENTITIES_TRANSLUCENT: [usize; 3] = [2, 0, 1];
+const HAND: [usize; 3] = [1, 0, 2];
+const HAND_WATER: [usize; 3] = [0, 2, 1];
 
 /// The programs and the swizzle each writes its colour with.
 const PROGRAMS: [(&str, &str); 4] = [
@@ -52,8 +61,49 @@ const PROGRAMS: [(&str, &str); 4] = [
 /// (`PROGRAMS`), and whose `final` shows colortex1; with `shadow`, a `shadow` program writing the
 /// same, unswizzled, into shadowcolor0 and a `final` showing shadowcolor0's middle.
 fn pack(renderer: &mut Renderer, folder: &Path, shadow: bool) {
+    write_pack(renderer, folder, &PROGRAMS, shadow, &[]);
+}
+
+/// The hand's programs and their swizzles: `gbuffers_hand` and, with `water`,
+/// `gbuffers_hand_water`; and a `deferred` that inverts colortex1, so what draws before
+/// deferred shows inverted and what draws after it (spec 2.3: `gbuffers_hand_water`, or its
+/// fallback `gbuffers_hand` for translucent held objects) does not.
+fn hand_pack(renderer: &mut Renderer, folder: &Path, water: bool) {
+    let programs = [("gbuffers_hand", "grb"), ("gbuffers_hand_water", "rbg")];
+    let deferred = [
+        (
+            "deferred.vsh",
+            "#version 120\nvarying vec2 uv; void main() { gl_Position = ftransform(); uv = gl_MultiTexCoord0.xy; }\n",
+        ),
+        (
+            "deferred.fsh",
+            "#version 120\n/* DRAWBUFFERS:1 */\nuniform sampler2D colortex1; varying vec2 uv;\n\
+             void main() { gl_FragData[0] = vec4(1.0 - texture2D(colortex1, uv).rgb, 1.0); }\n",
+        ),
+    ];
+    write_pack(
+        renderer,
+        folder,
+        &programs[..1 + usize::from(water)],
+        false,
+        &deferred,
+    );
+}
+
+/// Writes `programs` as `pack` describes, and `files` (name, text) beside them, and loads the
+/// pack.
+fn write_pack(
+    renderer: &mut Renderer,
+    folder: &Path,
+    programs: &[(&str, &str)],
+    shadow: bool,
+    files: &[(&str, &str)],
+) {
     let shaders = folder.join("shaders");
     std::fs::create_dir_all(&shaders).unwrap();
+    for (name, text) in files {
+        std::fs::write(shaders.join(name), text).unwrap();
+    }
     let vertex = "#version 120\nvarying vec2 uv; varying vec4 c;\n\
                   void main() { gl_Position = ftransform(); uv = gl_MultiTexCoord0.xy; c = gl_Color; }\n";
     let fragment = |drawbuffers: &str, swizzle: &str| {
@@ -62,7 +112,7 @@ fn pack(renderer: &mut Renderer, folder: &Path, shadow: bool) {
              void main() {{ gl_FragData[0] = vec4((texture2D(gtexture, uv) * c).{swizzle}, 1.0); }}\n"
         )
     };
-    for (program, swizzle) in PROGRAMS {
+    for &(program, swizzle) in programs {
         std::fs::write(shaders.join(format!("{program}.vsh")), vertex).unwrap();
         std::fs::write(
             shaders.join(format!("{program}.fsh")),
@@ -150,6 +200,16 @@ fn shaded(sprite: u32, color: [u8; 4], order: [usize; 3]) -> [u8; 4] {
 }
 
 fn shoot(renderer: &mut Renderer, frame: &Frame<'_>, path: &Path) -> [u8; 4] {
+    shoot_at(renderer, frame, path, &[[0.5, 0.5]])[0]
+}
+
+/// The frame's pixels at `points` (fractions of its width and height, from the top left).
+fn shoot_at(
+    renderer: &mut Renderer,
+    frame: &Frame<'_>,
+    path: &Path,
+    points: &[[f32; 2]],
+) -> Vec<[u8; 4]> {
     renderer.screenshot = Some(ScreenshotRequest {
         path: path.to_path_buf(),
         size: None,
@@ -170,8 +230,12 @@ fn shoot(renderer: &mut Renderer, frame: &Frame<'_>, path: &Path) -> [u8; 4] {
     let info = reader.next_frame(&mut bytes).unwrap();
     assert_eq!(info.color_type, png::ColorType::Rgba);
     let (width, height) = (info.width as usize, info.height as usize);
-    let at = 4 * ((height / 2) * width + width / 2);
-    bytes[at..at + 4].try_into().unwrap()
+    (points.iter())
+        .map(|&[x, y]| {
+            let at = 4 * ((y * height as f32) as usize * width + (x * width as f32) as usize);
+            bytes[at..at + 4].try_into().unwrap()
+        })
+        .collect()
 }
 
 /// The span a case draws in: a block entity's or an entity's (`stage`).
@@ -184,12 +248,9 @@ fn span(stage: &str, hidden: bool) -> [EntitySpan; 1] {
     }]
 }
 
-fn fixture(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
-    use client::gfx::{
-        FLUID_OVERLAY, TERRAIN_MODEL_CUTOUT_MIPPED_OVERLAY, TERRAIN_MODEL_CUTOUT_OVERLAY,
-        TERRAIN_MODEL_SOLID_OVERLAY, TERRAIN_MODEL_TRANSLUCENT_OVERLAY,
-    };
-    std::fs::create_dir_all(out)?;
+/// A 320 by 180 renderer whose terrain sprite arrays hold `SPRITES` and whose shared atlas is
+/// white.
+fn renderer(window: Arc<Window>) -> Result<Renderer, Box<dyn std::error::Error>> {
     let sprites: Vec<u8> = SPRITES
         .iter()
         .flat_map(|texel| texel.repeat(16 * 16))
@@ -227,10 +288,17 @@ fn fixture(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std::error::Er
         Default::default(),
     ))?;
     renderer.resize(320, 180);
-    let hud = HudBatch::scratch([320, 180]);
-    let mut result = serde_json::Map::new();
-    // (overlay, sprite layer, vertex colour, drawn by the run's translucent program).
-    let cases = [
+    Ok(renderer)
+}
+
+/// (overlay, sprite layer, vertex colour, drawn by the run's translucent program): each native
+/// terrain kind, each with its own colour.
+fn cases() -> [(u32, u32, [u8; 4], bool); 5] {
+    use client::gfx::{
+        FLUID_OVERLAY, TERRAIN_MODEL_CUTOUT_MIPPED_OVERLAY, TERRAIN_MODEL_CUTOUT_OVERLAY,
+        TERRAIN_MODEL_SOLID_OVERLAY, TERRAIN_MODEL_TRANSLUCENT_OVERLAY,
+    };
+    [
         (TERRAIN_MODEL_SOLID_OVERLAY, 1, [200, 100, 50, 255], false),
         (TERRAIN_MODEL_CUTOUT_OVERLAY, 0, [60, 180, 220, 255], false),
         (
@@ -246,7 +314,15 @@ fn fixture(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std::error::Er
             [40, 160, 250, 255],
             true,
         ),
-    ];
+    ]
+}
+
+fn fixture(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    std::fs::create_dir_all(out)?;
+    let mut renderer = renderer(window)?;
+    let hud = HudBatch::scratch([320, 180]);
+    let mut result = serde_json::Map::new();
+    let cases = cases();
     for flat in [true, false] {
         renderer.set_flat_draws(flat)?;
         let draws = if flat { "flat" } else { "per-section" };
@@ -311,6 +387,116 @@ fn fixture(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std::error::Er
     assert_eq!(adapter.backend, "Vulkan");
     eprintln!(
         "pack_block_entity_runs adapter: {} ({}, {}), driver {}",
+        adapter.name, adapter.backend, adapter.kind, adapter.driver
+    );
+    std::fs::write(out.join("result.json"), serde_json::to_vec_pretty(&result)?)?;
+    Ok(())
+}
+
+/// The first-person hand's native terrain quads (a `render_hand` mod's fluids and terrain models,
+/// #5418): `gbuffers_hand` draws them from the pack's block atlas into colortex1 before
+/// `deferred` (which inverts it), the translucent kinds by `gbuffers_hand_water` when the pack
+/// has it, else by its fallback `gbuffers_hand`, after `deferred`. A plain hand quad and a
+/// translucent held item's still sample the shared atlas (white here), so they show their vertex
+/// colours, and a frame mixing both atlases binds each for its own quads. The pack has no other
+/// gbuffers program, no render boundary and no mod pass: nothing but the hand's own translucent
+/// quads needs the translucent phase. With a stitched block atlas and a grid.
+fn hand_fixture(window: Arc<Window>, out: &Path) -> Result<(), Box<dyn std::error::Error>> {
+    use client::gfx::TRANSLUCENT_ITEM_OVERLAY;
+    std::fs::create_dir_all(out)?;
+    let mut renderer = renderer(window)?;
+    let hud = HudBatch::scratch([320, 180]);
+    let mut result = serde_json::Map::new();
+    // A plain hand quad and a translucent held item's, on the white shared atlas: their vertex
+    // colours.
+    let (plain, glass) = ([70, 140, 210, 255], [30, 200, 90, 255]);
+    let shown = |c: [u8; 4], o: [usize; 3]| [c[o[0]], c[o[1]], c[o[2]], 255];
+    for flat in [true, false] {
+        renderer.set_flat_draws(flat)?;
+        let draws = if flat { "flat" } else { "per-section" };
+        for water in [true, false] {
+            let programs = if water { "hand-water" } else { "hand" };
+            hand_pack(
+                &mut renderer,
+                &out.join(format!("{programs}-{draws}")),
+                water,
+            );
+            let late = if water { HAND_WATER } else { HAND };
+            // Drawn before `deferred`: inverted by it.
+            let early = |c: [u8; 4]| [255 - c[0], 255 - c[1], 255 - c[2], 255];
+            let hand_cases = (cases().into_iter())
+                .map(|(overlay, sprite, color, translucent)| {
+                    let expected = if translucent {
+                        shaded(sprite, color, late)
+                    } else {
+                        early(shaded(sprite, color, HAND))
+                    };
+                    (overlay, sprite, color, expected)
+                })
+                .chain([
+                    (0, 0, plain, early(shown(plain, HAND))),
+                    (TRANSLUCENT_ITEM_OVERLAY, 0, glass, shown(glass, late)),
+                ]);
+            for (overlay, sprite, color, expected) in hand_cases {
+                // 5 blocks ahead, across the middle of the screen, as the hand's own
+                // vertices are (camera relative).
+                let quad = quad(2, 5.0, [-2.0, 2.0, -2.0, 2.0], overlay, sprite, color);
+                let mut frame = fixture_frame(&hud);
+                frame.hand = &quad;
+                let name = format!("{draws}-{programs}-{overlay}");
+                let pixel = shoot(&mut renderer, &frame, &out.join(format!("{name}.png")));
+                assert_eq!(
+                    pixel, expected,
+                    "{name}: the hand's quad as its program draws it in colortex1"
+                );
+                result.insert(name, format!("{pixel:?}").into());
+            }
+            // One frame switching atlas both ways: a block-atlas run, a plain quad after it,
+            // another block-atlas run. Left to right on screen (+x is the viewer's left
+            // looking along +z), each its own colour.
+            use client::gfx::TERRAIN_MODEL_SOLID_OVERLAY;
+            let model = |x: f32, sprite: u32, color: [u8; 4]| {
+                quad(
+                    2,
+                    5.0,
+                    [x - 1.0, x + 1.0, -2.0, 2.0],
+                    TERRAIN_MODEL_SOLID_OVERLAY,
+                    sprite,
+                    color,
+                )
+            };
+            let (left, right) = ([200, 100, 50, 255], [60, 180, 220, 255]);
+            let mixed: Vec<Vertex> = [
+                model(2.5, 1, left),
+                quad(2, 5.0, [-1.0, 1.0, -2.0, 2.0], 0, 0, plain),
+                model(-2.5, 0, right),
+            ]
+            .concat();
+            let mut frame = fixture_frame(&hud);
+            frame.hand = &mixed;
+            let name = format!("{draws}-{programs}-mixed");
+            let pixels = shoot_at(
+                &mut renderer,
+                &frame,
+                &out.join(format!("{name}.png")),
+                &[[0.3, 0.5], [0.5, 0.5], [0.7, 0.5]],
+            );
+            assert_eq!(
+                pixels,
+                [
+                    early(shaded(1, left, HAND)),
+                    early(shown(plain, HAND)),
+                    early(shaded(0, right, HAND)),
+                ],
+                "{name}: each quad from its own atlas in one frame"
+            );
+            result.insert(name, format!("{pixels:?}").into());
+        }
+    }
+    let adapter = client::gfx::adapter().expect("the renderer's adapter");
+    assert_eq!(adapter.backend, "Vulkan");
+    eprintln!(
+        "pack_hand_terrain_quads adapter: {} ({}, {}), driver {}",
         adapter.name, adapter.backend, adapter.kind, adapter.driver
     );
     std::fs::write(out.join("result.json"), serde_json::to_vec_pretty(&result)?)?;

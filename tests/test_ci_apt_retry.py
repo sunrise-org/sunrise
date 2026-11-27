@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 import unittest
 
-from tests.os_support import needs_runner_shell
+from tests.os_support import BASH, needs_runner_shell
 
 ROOT = Path(__file__).resolve().parents[1]
 
@@ -49,12 +49,12 @@ fi
                 path = root / name
                 path.write_text(content)
                 path.chmod(0o755)
-            env = dict(os.environ, PATH=f"{root}:{os.environ['PATH']}",
+            env = dict(os.environ, PATH=f"{root}{os.pathsep}{os.environ['PATH']}",
                        LOG=str(root / "log"), STATE=str(root / "state"),
                        FAILED_COMMAND=failed_command, FAILURES=str(failures),
                        DYNA_CI_APT_TRIES="4", DYNA_CI_APT_PAUSE="5")
             result = subprocess.run(
-                ["bash", ROOT / "tools/ci/install_launcher_deps.sh", "libx11-xcb-dev", "libudev-dev"],
+                [BASH, ROOT / "tools/ci/install_launcher_deps.sh", "libx11-xcb-dev", "libudev-dev"],
                 env=env, text=True, capture_output=True)
             return result, (root / "log").read_text().splitlines()
 

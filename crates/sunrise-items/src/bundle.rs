@@ -107,18 +107,7 @@ impl std::fmt::Debug for WeightCache {
 /// patch (including an explicitly empty list), `None` when removed with
 /// `!minecraft:bundle_contents`, otherwise the item prototype's default.
 fn effective<'a>(items: &'a Items, stack: &'a ItemStack) -> Option<&'a StackData> {
-    if let Some(data) = stack.data() {
-        if data.sets_component(VANILLA_COMPONENT) {
-            return Some(data);
-        }
-        if data.other("!minecraft:bundle_contents").is_some() {
-            return None;
-        }
-    }
-    let prototype = items.get(&stack.item)?.component_prototype.data()?;
-    prototype
-        .sets_component(VANILLA_COMPONENT)
-        .then_some(prototype)
+    stack.component_data(items.get(&stack.item), VANILLA_COMPONENT)
 }
 
 /// The stack's effective `minecraft:bundle_contents` (see [`effective`]).

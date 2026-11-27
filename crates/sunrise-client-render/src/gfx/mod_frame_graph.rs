@@ -14,8 +14,7 @@ use super::mod_render_targets::{
 use super::world_primitives::WorldPrimitives;
 use mod_api::{
     FrameGraphError, FramePassDescriptor, FramePassId, FramePassRef, FrameTarget, OffscreenPass,
-    OitStage, RenderLevelStage, RenderTargetDepth, RenderTargetDescriptor, RenderTargetFormat,
-    TransientTargetId,
+    OitStage, RenderLevelStage, RenderTargetDescriptor, TransientTargetId,
 };
 use std::cmp::Reverse;
 use std::collections::{BTreeSet, BinaryHeap, HashMap, VecDeque};
@@ -614,7 +613,7 @@ pub struct PooledTransientTarget {
 }
 
 impl PooledTransientTarget {
-    fn as_resolved(&self) -> ResolvedOffscreenTarget {
+    pub(super) fn as_resolved(&self) -> ResolvedOffscreenTarget {
         ResolvedOffscreenTarget {
             handle: mod_api::__private::built::render_target_ref(1, 0),
             size: self.desc.size,
@@ -632,7 +631,7 @@ impl PooledTransientTarget {
             .map(|c| (c.view_id, c.view.clone()))
     }
 
-    fn depth_view(&self) -> Option<(u64, wgpu::TextureView)> {
+    pub(super) fn depth_view(&self) -> Option<(u64, wgpu::TextureView)> {
         self.depth
             .as_ref()
             .map(|d| (d.view_id, d.sample_view.clone()))
@@ -1056,31 +1055,10 @@ fn resolve_dispatch_transients(
     }
 }
 
-/// Validate a transient target sampler binding against its descriptor during draw recording.
-pub fn validate_transient_color_binding(
-    desc: &RenderTargetDescriptor,
-    attachment: u8,
-    filterable: bool,
-    float32_filterable: bool,
-) -> bool {
-    let Some(&fmt) = desc.color_targets.get(attachment as usize) else {
-        return false;
-    };
-    if filterable && fmt == RenderTargetFormat::R32Float && !float32_filterable {
-        return false;
-    }
-    true
-}
-
-/// Validate a transient target depth sampler binding against its descriptor during draw recording.
-pub fn validate_transient_depth_binding(desc: &RenderTargetDescriptor, filterable: bool) -> bool {
-    !filterable && desc.depth != RenderTargetDepth::None
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use mod_api::RenderTargetRef;
+    use mod_api::{RenderTargetDepth, RenderTargetRef};
 
     fn rt(generation: u64, slot: u32) -> RenderTargetRef {
         mod_api::__private::built::render_target_ref(generation, slot)
@@ -1504,6 +1482,7 @@ mod tests {
                 index_range: None,
             },
             bindings: Some(super::super::mod_pipelines::ResolvedDrawBindings {
+                sampler_layout: Default::default(),
                 entries: vec![ResolvedSet1Entry::TransientColor {
                     target: tmp,
                     attachment: 0,

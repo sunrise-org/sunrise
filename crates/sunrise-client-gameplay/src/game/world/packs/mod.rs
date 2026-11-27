@@ -1157,3 +1157,9 @@ use sunrise_gameplay_common::game::mods::ModGameExt1 as _;
 use sunrise_gameplay_common::game::pack_finders_common::CommonGameExt1 as _;
 
 use crate::game::client_side::resource_tables_client::PackResourcesClientExt as _;
+
+#[cfg(all(feature = "client", any(test, feature = "test-support")))]
+pub mod cloud_pack_fixture;
+
+#[cfg(all(test, feature = "client"))]
+mod retained_mod_gpu_tests;

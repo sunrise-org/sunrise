@@ -8,6 +8,8 @@ import sys
 import tempfile
 import unittest
 
+from tests.os_support import needs_pass_fds
+
 ROOT = Path(__file__).resolve().parents[1]
 WRAPPER = ROOT / "tools/ci/with_xvfb.py"
 # An unauthenticated local X11 setup request: the success byte means the server
@@ -25,7 +27,7 @@ sys.exit(int(sys.argv[1]))
 """
 
 
-@unittest.skipIf(os.name == "nt", "the wrapper passes a file descriptor to Xvfb, for Linux CI")
+@needs_pass_fds
 class XvfbTests(unittest.TestCase):
     # These integration checks need a real server; the fake-server failure check
     # below still runs in offline tooling environments without Xvfb installed.

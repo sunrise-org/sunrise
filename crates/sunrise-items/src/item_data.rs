@@ -659,6 +659,12 @@ impl StackData {
             .flatten()
     }
 
+    /// Whether the stack's own changes remove component `id` (a `!id` entry).
+    pub fn removes_component(&self, id: &str) -> bool {
+        self.other
+            .iter()
+            .any(|(key, _)| key.strip_prefix('!') == Some(id))
+    }
     /// Whether the stack's own data sets component `id`, read from the live fields: the same
     /// components `components_tag` saves, plus the transient ones it leaves out
     /// (`map_post_processing`), without encoding anything.
@@ -1171,6 +1177,34 @@ impl ItemStack {
     pub fn data(&self) -> Option<&StackData> {
         self.extra.as_deref()
     }
+    /// The data `ItemStack.get(id)` reads component `id` from: the stack's own when its changes
+    /// set it, none when they remove it (a `!id` entry), else the item's prototype when that has
+    /// it (`PatchedDataComponentMap.get`). Read the component's field from the returned data;
+    /// for a component kept as its raw value, [`Self::component`] does both.
+    pub fn component_data<'a>(
+        &'a self,
+        info: Option<&'a ItemInfo>,
+        id: &str,
+    ) -> Option<&'a StackData> {
+        if let Some(data) = self.data() {
+            if data.sets_component(id) {
+                return Some(data);
+            }
+            if data.removes_component(id) {
+                return None;
+            }
+        }
+        info?
+            .component_prototype
+            .data()
+            .filter(|prototype| prototype.sets_component(id))
+    }
+    /// `ItemStack.get(id)` for a component kept as its raw value ([`StackData::other`]): the
+    /// stack's own value, or the item's default unless the stack removes it
+    /// ([`Self::component_data`]).
+    pub fn component<'a>(&'a self, info: Option<&'a ItemInfo>, id: &str) -> Option<&'a Tag> {
+        self.component_data(info, id)?.other(id)
+    }
     /// Whether the stack carries component `id`: its own data sets it, or its item has it by
     /// default and the stack's changes don't remove it (a `!id` entry). Reads the live
     /// components, so nothing is encoded.
@@ -1184,7 +1218,7 @@ impl ItemStack {
         if own {
             return true;
         }
-        if data.is_some_and(|d| d.other.iter().any(|(k, _)| k.strip_prefix('!') == Some(id))) {
+        if data.is_some_and(|d| d.removes_component(id)) {
             return false;
         }
         info.is_some_and(|info| info.components.iter().any(|c| c == id))

@@ -19,7 +19,7 @@ lists every public path a mod can name it by. Types inside signatures are normal
 Hooks are named `hook:<name>` in SDK records. Hidden `HookId` discriminants are process-local dispatch indexes,
 never serialized or stable across builds, and native binaries must rebuild for the selected build.
 
-`cargo sunrise-mod hooks <text>` searches the API records offline ([Commands](05-commands.md)).
+`cargo sunrise-mod hooks <text>` searches the API records of the prepared SDK offline ([Commands](05-commands.md)).
 
 ## What a hash covers
 

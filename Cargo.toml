@@ -134,6 +134,8 @@ debug = "line-tables-only"
 [profile.dev.package.sha2]
 opt-level = 3
 
+[profile.dev.package.sunrise-game-discovery]
+opt-level = 3
 [profile.dev.package.sunrise-mod-api-gen]
 opt-level = 3
 [profile.dev.package.sunrise-stage]

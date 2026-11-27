@@ -7,7 +7,6 @@
 extern crate sunrise_client_lib as sunrise_client;
 use std::{
     collections::{HashMap, HashSet},
-    path::Path,
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -28,13 +27,8 @@ use sunrise_client::{
 };
 use sunrise_core::biome::BiomeZoom;
 use sunrise_world::registry::BlockStateId;
-
-fn resources() -> Option<std::path::PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.local/sunrise-client")
-        .join(sunrise_core::VANILLA_VERSION);
-    root.join("items.json").exists().then_some(root)
-}
+#[path = "../src/test_resources.rs"]
+mod test_resources;
 
 /// A saved world: every column loads with its light, as saved chunks do.
 struct Saved;
@@ -56,10 +50,9 @@ impl ChunkGenerator for Saved {
 }
 
 #[test]
+#[ignore = "daily"]
 fn columns_loaded_past_the_render_distance_mesh_when_they_come_in_range() {
-    let Some(root) = resources() else {
-        return;
-    };
+    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let render = Arc::new(
         sunrise_client::assets::RenderAssets::load(
@@ -171,10 +164,9 @@ fn roofed(x: i32, z: i32, stone: u32, glowstone: u32) -> Chunk {
 /// where their light changed (#270): every mesh still matches the world,
 /// before and after the missing column arrives.
 #[test]
+#[ignore = "daily"]
 fn relit_columns_keep_every_mesh_current() {
-    let Some(root) = resources() else {
-        return;
-    };
+    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let render = Arc::new(
         sunrise_client::assets::RenderAssets::load(
@@ -313,10 +305,9 @@ fn relit_columns_keep_every_mesh_current() {
 /// areas change between updates. `update` trusts the cover it refreshed at
 /// its start; debug builds check it against the areas on every column.
 #[test]
+#[ignore = "daily"]
 fn every_extra_area_loads_however_the_areas_change() {
-    let Some(root) = resources() else {
-        return;
-    };
+    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let render = Arc::new(
         sunrise_client::assets::RenderAssets::load(
@@ -394,10 +385,9 @@ fn every_extra_area_loads_however_the_areas_change() {
 /// frame rate at a wide render distance) meshing waits instead of piling up
 /// gigabytes of meshes, and it resumes once the game takes them.
 #[test]
+#[ignore = "daily"]
 fn meshes_waiting_for_upload_hold_back_new_mesh_jobs() {
-    let Some(root) = resources() else {
-        return;
-    };
+    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let source = sunrise_assets::resource_source::ResourceRoot::directory(root.clone());
     let render = Arc::new(sunrise_client::assets::RenderAssets::load(&source, &assets).unwrap());

@@ -25,6 +25,8 @@ pub mod library_identity;
     any(target_os = "linux", target_os = "macos", windows)
 ))]
 pub mod local_control;
+#[cfg(any(feature = "prebuilt", feature = "runtime-process"))]
+pub mod lock_file;
 #[cfg(feature = "runtime-process")]
 pub mod locks;
 pub mod manifest;

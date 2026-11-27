@@ -536,13 +536,56 @@ impl crate::game::ServerGame<'_> {
         }
         self.load_bossbars();
         self.update_dragon_bar_name();
+        if self.owns_fight(self.common.dim) {
+            // `EnderDragonFight.updateDragon`'s `setProgress`, read while the
+            // fight's level is in place.
+            self.fight_bar_progress();
+        }
         let viewers = self.boss_viewers();
         let live: HashSet<u128> = viewers.iter().map(|v| v.uuid).collect();
         self.server.bosses.sent.retain(|id, _| live.contains(id));
-        let mut packets = Vec::new();
+        let mut out = Vec::new();
         for viewer in &viewers {
             let desired = self.boss_events_for(viewer);
-            for event in self.diff_boss_events(viewer, desired) {
+            let events = self.diff_boss_events(viewer, desired);
+            out.push((viewer, events));
+        }
+        self.deliver_boss_events(out);
+    }
+    /// `EnderDragonFight.updatePlayers`' `addPlayer` and `removePlayer`: the
+    /// dragon's bar alone, sent at once to the viewers who joined or left its
+    /// audience. No other bar is looked at.
+    pub(in crate::game::server_side) fn publish_dragon_bar(&mut self) {
+        if !self.common.is_logical_server() {
+            return;
+        }
+        let id = bossbar::stable_uuid(DRAGON_BAR);
+        let viewers = self.boss_viewers();
+        let mut out = Vec::new();
+        for viewer in &viewers {
+            let desired = self.dragon_bar_for(viewer);
+            let sent = self.server.bosses.sent.entry(viewer.uuid).or_default();
+            let mut events = Vec::new();
+            match desired {
+                Some(offer) => offer_events(sent, offer, &mut events),
+                None => {
+                    if sent.remove(&id).is_some() {
+                        events.push(play::BossEvent {
+                            id,
+                            action: BossAction::Remove,
+                        });
+                    }
+                }
+            }
+            out.push((viewer, events));
+        }
+        self.deliver_boss_events(out);
+    }
+    /// Each viewer's events go out as packets.
+    fn deliver_boss_events(&mut self, out: Vec<(&Viewer, Vec<play::BossEvent>)>) {
+        let mut packets = Vec::new();
+        for (viewer, events) in out {
+            for event in events {
                 if let Some(conn) = viewer.conn {
                     packets.push((conn, C::BossEvent(event)));
                 }
@@ -557,6 +600,33 @@ impl crate::game::ServerGame<'_> {
         for (conn, packet) in &packets {
             host.hub.send_to(*conn, packet);
         }
+    }
+    /// The dragon's bar as `viewer` should hold it: while the viewer is in
+    /// the fight's audience (`dragonEvent.getPlayers()`, which only the
+    /// fight's scan changes) and the bar is visible (`setVisible(!dragonKilled)`).
+    fn dragon_bar_for(&self, viewer: &Viewer) -> Option<Offer> {
+        if !self.server.fight.loaded
+            || self.server.fight.killed
+            || !self.server.fight.hears(viewer.uuid)
+        {
+            return None;
+        }
+        Some(Offer {
+            id: bossbar::stable_uuid(DRAGON_BAR),
+            name: self
+                .server
+                .bosses
+                .dragon_name
+                .clone()
+                .unwrap_or_else(|| translate_tag("entity.minecraft.ender_dragon")),
+            progress: self.server.fight.bar_progress(),
+            color: 0,
+            overlay: 0,
+            darken: false,
+            music: true,
+            fog: true,
+            scope: Scope::Global,
+        })
     }
     /// `EnderDragonFight.updateDragon`: the fight's dragon's custom name
     /// becomes the bar's, and stays after the name is removed.
@@ -601,7 +671,6 @@ impl crate::game::ServerGame<'_> {
                     uuid: g.uuid,
                     ints: sunrise_sim::lan::playerdata::uuid_ints(g.uuid),
                     at: g.position,
-                    alive: !g.dead,
                     here: g.dimension == self.common.dim.id(),
                     conn: Some(g.conn),
                     view_chunks: g.view_distance,
@@ -630,26 +699,7 @@ impl crate::game::ServerGame<'_> {
                 scope: Scope::Global,
             });
         }
-        if viewer.here
-            && let Some(progress) = self.dragon_boss_progress(viewer.at, viewer.alive)
-        {
-            out.push(Offer {
-                id: bossbar::stable_uuid("minecraft:ender_dragon"),
-                name: self
-                    .server
-                    .bosses
-                    .dragon_name
-                    .clone()
-                    .unwrap_or_else(|| translate_tag("entity.minecraft.ender_dragon")),
-                progress,
-                color: 0,
-                overlay: 0,
-                darken: false,
-                music: true,
-                fog: true,
-                scope: Scope::Level(self.common.dim),
-            });
-        }
+        out.extend(self.dragon_bar_for(viewer));
         if viewer.here {
             let range = f64::from(10.min(viewer.view_chunks.max(0)) * 16);
             for m in self
@@ -724,48 +774,56 @@ impl crate::game::ServerGame<'_> {
             keep
         });
         for offer in desired {
-            let Some(prev) = sent.get(&offer.id) else {
-                out.push(event(
-                    offer.id,
-                    BossAction::Add {
-                        name: offer.name.clone(),
-                        progress: offer.progress,
-                        color: offer.color,
-                        overlay: offer.overlay,
-                        darken: offer.darken,
-                        music: offer.music,
-                        fog: offer.fog,
-                    },
-                ));
-                sent.insert(offer.id, offer);
-                continue;
-            };
-            let id = offer.id;
-            if prev.progress != offer.progress {
-                let progress = offer.progress;
-                out.push(event(id, BossAction::UpdateProgress { progress }));
-            }
-            if prev.name != offer.name {
-                let name = offer.name.clone();
-                out.push(event(id, BossAction::UpdateName { name }));
-            }
-            if (prev.color, prev.overlay) != (offer.color, offer.overlay) {
-                let (color, overlay) = (offer.color, offer.overlay);
-                out.push(event(id, BossAction::UpdateStyle { color, overlay }));
-            }
-            if (prev.darken, prev.music, prev.fog) != (offer.darken, offer.music, offer.fog) {
-                let (darken, music, fog) = (offer.darken, offer.music, offer.fog);
-                out.push(event(
-                    id,
-                    BossAction::UpdateProperties { darken, music, fog },
-                ));
-            }
-            sent.insert(id, offer);
+            offer_events(sent, offer, &mut out);
         }
         out
     }
 }
 
+/// The packets that take a viewer's `sent` copy of `offer`'s bar to `offer`
+/// (`ServerBossEvent`'s broadcasts), and the copy updated.
+fn offer_events(sent: &mut HashMap<u128, Offer>, offer: Offer, out: &mut Vec<play::BossEvent>) {
+    let event = |id, action| play::BossEvent { id, action };
+    let Some(prev) = sent.get(&offer.id) else {
+        out.push(event(
+            offer.id,
+            BossAction::Add {
+                name: offer.name.clone(),
+                progress: offer.progress,
+                color: offer.color,
+                overlay: offer.overlay,
+                darken: offer.darken,
+                music: offer.music,
+                fog: offer.fog,
+            },
+        ));
+        sent.insert(offer.id, offer);
+        return;
+    };
+    let id = offer.id;
+    if prev.progress != offer.progress {
+        let progress = offer.progress;
+        out.push(event(id, BossAction::UpdateProgress { progress }));
+    }
+    if prev.name != offer.name {
+        let name = offer.name.clone();
+        out.push(event(id, BossAction::UpdateName { name }));
+    }
+    if (prev.color, prev.overlay) != (offer.color, offer.overlay) {
+        let (color, overlay) = (offer.color, offer.overlay);
+        out.push(event(id, BossAction::UpdateStyle { color, overlay }));
+    }
+    if (prev.darken, prev.music, prev.fog) != (offer.darken, offer.music, offer.fog) {
+        let (darken, music, fog) = (offer.darken, offer.music, offer.fog);
+        out.push(event(
+            id,
+            BossAction::UpdateProperties { darken, music, fog },
+        ));
+    }
+    sent.insert(id, offer);
+}
+/// The dragon fight's bar's id key.
+const DRAGON_BAR: &str = "minecraft:ender_dragon";
 pub(in crate::game::server_side) fn translate_tag(key: &str) -> Tag {
     Tag::compound([("translate", Tag::String(key.into()))])
 }
@@ -791,7 +849,6 @@ pub struct Viewer {
     pub uuid: u128,
     pub(in crate::game) ints: [i32; 4],
     pub at: [f64; 3],
-    pub(in crate::game) alive: bool,
     pub here: bool,
     pub(in crate::game) conn: Option<u32>,
     pub(in crate::game) view_chunks: i32,

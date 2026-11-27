@@ -2735,9 +2735,15 @@ impl PackPost {
             cull: false,
             pages: false,
         });
-        let hand_geometry = world
-            .hand
-            .then(|| crate::pack_hand::PackHand::new(device, &draws.layout));
+        let hand_geometry = world.hand.then(|| {
+            let mut hand = crate::pack_hand::PackHand::new(device, &draws.layout);
+            // A `render_hand` mod's native terrain quads are placed in the block atlas, as an
+            // entity's are (`pack_entities::BlockAtlas`).
+            hand.set_block_atlas(world.atlas.as_ref().and_then(|(_, size)| {
+                crate::pack_entities::BlockAtlas::new(world.sprite_rects, *size)
+            }));
+            hand
+        });
         let hand = post.hand.zip(hand_geometry).and_then(|(p, geometry)| {
             let g = Geometry {
                 buffers: &entity_buffers,

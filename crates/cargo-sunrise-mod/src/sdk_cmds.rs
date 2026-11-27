@@ -3,7 +3,7 @@
 //! `surface.json` from `.sunrise/sdk/`, or another build's
 //! small files through [`crate::sdk_fetch::fetch_build`]; none links the generator's catalog.
 use crate::options::Options;
-use crate::sdk_fetch::{PinnedSdk, ensure_sdk, fetch_build, fetch_index_only, fetch_pinned};
+use crate::sdk_fetch::{PinnedSdk, fetch_build, fetch_index_only, fetch_pinned, prepared_sdk};
 use crate::sdk_notes::{self, Shipped};
 use crate::uses_table::{self, Scanned, surface_of};
 use mod_surface::child::ChildEntry;
@@ -161,10 +161,11 @@ fn hooks_args(args: &[String]) -> Result<(String, bool), String> {
 }
 
 /// `hooks <text> [--all]`: the pinned build's hooks (with `--all`, every record) whose id, doc
-/// or counterparts hold every word, offline.
+/// or counterparts hold every word, offline: the SDK `check` prepared in `.sunrise/sdk/`, never
+/// fetched or repaired here.
 pub(crate) fn hooks(args: &[String]) -> Result<(), String> {
     let (text, all) = hooks_args(args)?;
-    let sdk = ensure_sdk(Path::new("."))?;
+    let sdk = prepared_sdk(Path::new("."))?;
     let surface = surface_of(&sdk)?;
     let found = search(&surface, &text, !all);
     if found.is_empty() {

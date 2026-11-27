@@ -12,6 +12,13 @@ Every `#[ignore]`d test that no daily shard runs (rowless_problems) has a row of
 failure, `needs`, `manual`, ...; otherwise it would run nowhere unseen. In a shard's own targets a rowless
 `#[ignore]` is fine: the shard runs it with `--include-ignored`, and it must pass.
 
+A test that reaches `test_resources::prepared_root` (resolved by name through the helpers, aliases and re-exports
+of its own target, see crates/sunrise-game-discovery/README.md) must be a daily test; with `--base COMMIT`, no
+function may newly reach the older readers of the prepared root (`SUNRISE_TEST_RESOURCES`, `SUNRISE_RESOURCES`,
+`SUNRISE_MESH_TEST_RESOURCES`, `SUNRISE_FISHING_RESOURCES`, `.local/sunrise-client`).
+`--pull-request-merge` (CI's pull-request checkout) compares with the merge's first parent, as check_addresses.py does.
+The base is scanned only for the targets a change can affect, from a partial archive of its tree.
+
 In addition to the legacy physical-source checks below, the canonical inventory checks package, target and
 full logical test path.
 
@@ -24,12 +31,16 @@ attribute and a row per target; both rows find it. The limit: rows carry no file
 name. Two marked functions of one name in one package are satisfied by one row naming either; the daily run, which
 runs each row by its exact path, still fails a row whose test does not run.
 """
+import argparse
 import re
 import subprocess
 import sys
+import tarfile
+import tempfile
 from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[2]))
+from tools import merge_base
 from tools.ci import ignored_inventory, ignored_shards, ignored_tests, rust_tests, vendored_yaml
 
 yaml = vendored_yaml.load()
@@ -37,6 +48,18 @@ yaml = vendored_yaml.load()
 ROOT = Path(__file__).resolve().parents[2]
 WINDOWS_WORKFLOW = ".github/workflows/windows-runtime-leases.yml"
 OWN_SDK_WORKFLOW = ".github/workflows/book-quickstart.yml"
+# Prepared test data: the one required way to get it, and what only a legacy reader spells. Resolved over the
+# tests' own sources by sunrise-game-discovery's `--references` (crates/sunrise-game-discovery/src/references.rs).
+BOUNDARY = "crates/sunrise-client/src/test_resources.rs::prepared_root"
+LEGACY_LITERALS = (
+    "SUNRISE_TEST_RESOURCES",
+    "SUNRISE_RESOURCES",
+    "SUNRISE_MESH_TEST_RESOURCES",
+    "SUNRISE_FISHING_RESOURCES",
+)
+LEGACY_FRAGMENTS = (".local/sunrise-client",)
+# Fragments of the vocabulary's exports that discovery includes into a target: a change there can reach any of them.
+EXPORTS = "crates/sunrise-mod-vocab/src/exports/"
 ADD_ROW = ("add its row: `python3 tools/ci/move_to_daily.py apply LIST` (its docstring has the list format), or write "
            "`PACKAGE TEST TARGET daily REASON` into tools/ci/ignored-tests/daily-PACKAGE-TOPIC.txt")
 
@@ -243,7 +266,171 @@ def source_problems(rows, functions):
     return problems
 
 
+def prepared_problems(tests, records):
+    """A test that reaches `test_resources::prepared_root` is a daily test, and no path to it may stay unresolved.
+
+    `tests` are the inventory's; `records` the discovery tool's reference records. Matched by the complete
+    identity (package, target, name), the one the daily rows select by."""
+    daily = {(test.package, test.target, test.name) for test in tests if test.reason == "daily"}
+    problems = []
+    for record in records:
+        if record["seed"] != "boundary":
+            continue
+        where = f"{record['path']}:{record['line']}: {record['package']} {record['name']}"
+        if record["kind"] == "unresolved":
+            problems.append(f"{where}: `{record['reference']}` may reach {BOUNDARY.rpartition('::')[2]} and the "
+                            "static check cannot follow it (a glob or path it cannot resolve, a method whose name "
+                            "is shared); call the function by a path the source spells out")
+        elif record["test"] and (record["package"], record["target"], record["name"]) not in daily:
+            problems.append(f"{where}: reaches {BOUNDARY.rpartition('::')[2]} ({record['chain']}) so it needs "
+                            f'prepared data, but is not a daily test: mark it #[ignore = "daily"] with its row '
+                            f"({ADD_ROW}), or make it synthetic")
+    return problems
+
+
+def legacy_identity(record):
+    """Where legacy prepared-data access sits: the Cargo target, the file, the function and, for a reference the
+    tool could not resolve, what it spells. Not the chain, which a refactor may change. The target is part of it: a
+    source file already in debt that another target builds does not inherit the first target's exemption."""
+    return (record["package"], record["target"], record["path"], record["name"], record["kind"],
+            record.get("reference", ""))
+
+
+def legacy_problems(head, base, renames):
+    """Legacy access (`SUNRISE_TEST_RESOURCES`, `SUNRISE_RESOURCES`, `SUNRISE_MESH_TEST_RESOURCES`,
+    `SUNRISE_FISHING_RESOURCES`, a path into `.local/sunrise-client`) that the base did not have.
+
+    Existing readers stay until their lane migrates; a function that newly reaches one, or a reader that moves to
+    another file, is refused: new tests get prepared data only from the boundary. `renames` maps a base path to
+    its path now (`git diff -M`), so a moved file keeps its debt."""
+    known = {(package, target, renames.get(path, path), *rest)
+             for package, target, path, *rest in (legacy_identity(record) for record in base
+                                                  if record["seed"] == "legacy")}
+    problems = []
+    for record in head:
+        if record["seed"] != "legacy" or legacy_identity(record) in known:
+            continue
+        what = (f"calls `{record['reference']}`, which may read the prepared root" if record["kind"] == "unresolved"
+                else f"reaches a read of the prepared root ({record['chain']})")
+        problems.append(f"{record['path']}:{record['line']}: {record['package']} {record['name']} {what}, and the "
+                        f"base has no such access there: get prepared data from {BOUNDARY} and mark the test "
+                        f'#[ignore = "daily"] with its row ({ADD_ROW})')
+    return problems
+
+
+def changes(base):
+    """(renames, changed paths) between `base` and the working tree, from one `git diff -M --name-status -z`.
+
+    `renames` maps a base path to its path now. The changed paths hold every added, modified, deleted, copied and
+    renamed file, a renamed or copied one under both its paths."""
+    diff = subprocess.run(["git", "diff", "-M", "--name-status", "-z", base], cwd=ROOT, capture_output=True,
+                          text=True, check=True).stdout.split("\0")
+    renames, changed = {}, set()
+    fields = iter(filter(None, diff))
+    for status in fields:
+        if status.startswith(("R", "C")):
+            old, new = next(fields), next(fields)
+            changed.update((old, new))
+            if status.startswith("R"):
+                renames[old] = new
+        else:
+            changed.add(next(fields))
+    return renames, changed
+
+
+def top_directory(path):
+    """The crate (or top-level) folder a file lives in: `crates/NAME` or the first component."""
+    parts = path.split("/")
+    if len(parts) < 2:
+        return path
+    return "/".join(parts[:2]) if parts[0] == "crates" and len(parts) > 2 else parts[0]
+
+
+def affected_targets(legacy_targets, head_target_files, changed_paths):
+    """The targets whose legacy access a change can have altered: all of them when a manifest or the vocabulary's
+    export fragments changed (they decide which targets exist and what they include), none when no Rust file
+    changed, else those with a changed file (or whose files the head's scan did not list)."""
+    if any(path == "Cargo.toml" or path.endswith("/Cargo.toml") or path.startswith(EXPORTS) for path in changed_paths):
+        return set(legacy_targets)
+    if not any(path.endswith(".rs") for path in changed_paths):
+        return set()
+    return {target for target in legacy_targets
+            if target not in head_target_files or not set(head_target_files[target]).isdisjoint(changed_paths)}
+
+
+def base_records(base, head_records, head_target_files, changed_paths):
+    """The legacy references the tree at commit `base` had.
+
+    A target none of whose files changed has what the head has, so only the targets `affected_targets` names are
+    scanned in `base`, with the head's tool over an archive of just their crates (and the manifests that say which
+    targets exist). Listing the tree fetches no blobs, and a change with no Rust or manifest file archives nothing.
+    A target `base` lacks has no records there."""
+    head_legacy = tuple(record for record in head_records if record["seed"] == "legacy")
+    legacy_targets = {(record["package"], record["target"]) for record in head_legacy}
+    if not legacy_targets:
+        return ()
+    affected = affected_targets(legacy_targets, head_target_files, changed_paths)
+    kept = tuple(record for record in head_legacy if (record["package"], record["target"]) not in affected)
+    if not affected:
+        return kept
+    listing = subprocess.run(["git", "ls-tree", "-r", "--name-only", "-z", base], cwd=ROOT, capture_output=True,
+                             text=True, check=True).stdout
+    paths = set(filter(None, listing.split("\0")))
+    folders = {top_directory(path) for path in paths}
+    needed = {path for path in paths if path == "Cargo.toml" or path.endswith("/Cargo.toml")}
+    if any(path.startswith(EXPORTS) for path in paths):
+        needed.add(EXPORTS.rstrip("/"))
+    # The crates of the affected targets' files, and of every changed Rust file (a moved one under its old path).
+    wanted = {path for target in affected for path in head_target_files.get(target, ())}
+    wanted.update(path for path in changed_paths if path.endswith(".rs"))
+    needed.update(top_directory(path) for path in wanted if top_directory(path) in folders)
+    with tempfile.TemporaryDirectory() as directory:
+        with subprocess.Popen(["git", "archive", "--format=tar", base, "--", *sorted(needed)], cwd=ROOT,
+                              stdout=subprocess.PIPE) as archive:
+            try:
+                with tarfile.open(fileobj=archive.stdout, mode="r|") as tar:
+                    tar.extractall(directory, **({"filter": "tar"} if hasattr(tarfile, "tar_filter") else {}))
+                # The reader stops at the end-of-archive blocks, short of the zero padding git archive still writes;
+                # drain it, or the child blocks on a full pipe while `wait` blocks on the child.
+                while archive.stdout.read(65536):
+                    pass
+            except tarfile.TarError:
+                # A failed `git archive` is the cause of a stream that does not parse: report it, not the symptom.
+                archive.stdout.close()
+                if archive.wait():
+                    raise SystemExit(f"git archive {base} failed")
+                raise
+            archive.stdout.close()
+            if archive.wait():
+                raise SystemExit(f"git archive {base} failed")
+        extracted = Path(directory)
+        roots = ignored_inventory.target_roots(extracted, tested=True)
+        scannable = affected & {(package, target) for package, target, path, _ in roots if (extracted / path).is_file()}
+        scanned = ignored_inventory.references(extracted, BOUNDARY, LEGACY_LITERALS, LEGACY_FRAGMENTS,
+                                               targets=scannable) if scannable else ()
+    return kept + tuple(record for record in scanned if record["seed"] == "legacy")
+
+
+def baseline_problems(references, head_target_files, base, merged):
+    """`legacy_problems` against `base`, which with `merged` is the first parent of CI's pull-request merge
+    (tools/merge_base.py), the base branch as it is now."""
+    base, error = merge_base.pull_request_base(base, merged)
+    if error:
+        return [error]
+    renames, changed = changes(base)
+    return legacy_problems(references, base_records(base, references, head_target_files, changed), renames)
+
+
+def parser():
+    result = argparse.ArgumentParser(description=__doc__.splitlines()[0])
+    result.add_argument("--base", help="a commit whose legacy prepared-data access a change may not add to; "
+                                       "without it only the routing check runs")
+    result.add_argument("--pull-request-merge", action="store_true", help=merge_base.PULL_REQUEST_MERGE_HELP)
+    return result
+
+
 if __name__ == "__main__":
+    arguments = parser().parse_args()
     rows = ignored_tests.listed_entries()
     print(f"{len(rows)} rows in {len({row.file for row in rows})} files of {ignored_tests.POLICY_PATH}/")
     daily = [row for row in rows if row.mark == "daily"]
@@ -254,7 +441,13 @@ if __name__ == "__main__":
     functions = [(path, line, name, packages) for path, line, name, packages, _, daily in ignored if daily]
     problems += source_problems(daily, functions)
     problems += rowless_problems(rows, ignored)
-    problems += ignored_inventory.problems(rows, ignored_inventory.tests(), ignored_inventory.exceptions())
+    inventory = ignored_inventory.tests()
+    problems += ignored_inventory.problems(rows, inventory, ignored_inventory.exceptions())
+    references, head_target_files = ignored_inventory.references_with_files(ROOT, BOUNDARY, LEGACY_LITERALS,
+                                                                            LEGACY_FRAGMENTS)
+    problems += prepared_problems(inventory, references)
+    if arguments.base:
+        problems += baseline_problems(references, head_target_files, arguments.base, arguments.pull_request_merge)
     for problem in problems:
         print(f"::error::{problem}")
     print(f"{len(daily)} daily rows, {len(functions)} #[ignore = \"daily\"] functions, {len(ignored)} ignored tests; "

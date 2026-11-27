@@ -845,8 +845,10 @@ impl ClientGame<'_> {
             match (index, value) {
                 (9, Value::Float(health)) => d.health = *health,
                 (16, Value::Int(phase)) => d.set_phase(Phase::from_id(*phase)),
-                // Mob.DATA_MOB_FLAGS_ID: isNoAi.
-                (15, Value::Byte(flags)) => d.no_ai = flags & 1 != 0,
+                // Mob.DATA_MOB_FLAGS_ID: isNoAi and isLeftHanded.
+                (15, Value::Byte(flags)) => {
+                    sunrise_gameplay_common::game::dragon_common::apply_mob_flags(d, *flags);
+                }
                 _ => {}
             }
         }

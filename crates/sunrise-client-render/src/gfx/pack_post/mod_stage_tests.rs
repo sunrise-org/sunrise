@@ -155,7 +155,6 @@ fn render_stage_quads(inside_pack: bool, quads: &[Vertex]) -> Option<[[u8; 3]; 3
     );
     let atlas_view = atlas.create_view(&Default::default());
     let mut primitives = WorldPrimitives::new(&gpu.device, (T::Rgba8Unorm, false));
-    primitives.prepare_pack_pass(&gpu.device, post.formats[0], post.rgb & 1 != 0, false);
 
     let quad_count = (quads.len() / 4) as u32;
     let stage = if inside_pack {
@@ -181,6 +180,9 @@ fn render_stage_quads(inside_pack: bool, quads: &[Vertex]) -> Option<[[u8; 3]; 3
         &atlas_view,
         None,
     ));
+    if inside_pack {
+        primitives.prepare_pack_pass(&gpu.device, post.formats[0], post.rgb & 1 != 0, false);
+    }
 
     let draws = [DrawRanges {
         primitives: [0..quad_count, 0..0, 0..0, 0..0],
@@ -483,7 +485,6 @@ fn pack_boundaries_fire_in_order_and_draw_pack_custom_depth_tests_mod_pipelines(
     .unwrap();
     let mut primitives = WorldPrimitives::new(&gpu.device, (T::Rgba8Unorm, false));
     primitives.pipelines.build(&gpu.device, &set, None).unwrap();
-    primitives.prepare_pack_pass(&gpu.device, post.formats[0], post.rgb & 1 != 0, false);
 
     let pipe_quad = |[x0, y0, x1, y1]: [f32; 4], reverse_z: f32, rgb: [u8; 3]| {
         let color = rgba(rgb);
@@ -521,6 +522,7 @@ fn pack_boundaries_fire_in_order_and_draw_pack_custom_depth_tests_mod_pipelines(
         &atlas_view,
         None,
     ));
+    primitives.prepare_pack_pass(&gpu.device, post.formats[0], post.rgb & 1 != 0, false);
 
     let screen = gpu.texture(T::Rgba8Unorm);
     let stride = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;
@@ -809,7 +811,6 @@ fn pack_composite_inverts_mod_glsl_quad_drawn_once_after_opaque_blocks() {
     .unwrap();
     let mut primitives = WorldPrimitives::new(&gpu.device, (T::Rgba8Unorm, false));
     primitives.pipelines.build(&gpu.device, &set, None).unwrap();
-    primitives.prepare_pack_pass(&gpu.device, post.formats[0], post.rgb & 1 != 0, false);
 
     // Additive red (100, 0, 0) quad over `gpu.clear`'s (16, 16, 16) background: drawn once
     // before composite gives (116, 16, 16), inverted to (139, 239, 239). Drawn twice would give
@@ -848,6 +849,7 @@ fn pack_composite_inverts_mod_glsl_quad_drawn_once_after_opaque_blocks() {
         &atlas_view,
         None,
     ));
+    primitives.prepare_pack_pass(&gpu.device, post.formats[0], post.rgb & 1 != 0, false);
 
     let screen = gpu.texture(T::Rgba8Unorm);
     let stride = wgpu::COPY_BYTES_PER_ROW_ALIGNMENT;

@@ -288,20 +288,7 @@ fn minecart_identifiers(cx: &mut Cx) {
 
 // ------------------------------------------------------------------ 108
 
-/// `UUID.fromString`.
-fn parse_uuid(s: &str) -> Option<(i64, i64)> {
-    let parts: Vec<&str> = s.split('-').collect();
-    if parts.len() != 5 {
-        return None;
-    }
-    let part = |i: usize| i64::from_str_radix(parts[i], 16).ok();
-    let mut most = part(0)? & 0xFFFF_FFFF;
-    most = (most << 16) | (part(1)? & 0xFFFF);
-    most = (most << 16) | (part(2)? & 0xFFFF);
-    let mut least = part(3)? & 0xFFFF;
-    least = (least << 48) | (part(4)? & 0xFFFF_FFFF_FFFF);
-    Some((most, least))
-}
+use super::fixes_mid::parse_uuid;
 
 /// `EntityStringUuidFix`: the string UUID becomes a most/least pair.
 fn entity_string_uuid(cx: &mut Cx) {

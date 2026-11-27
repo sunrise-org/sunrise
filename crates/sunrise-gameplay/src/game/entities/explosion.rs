@@ -12,6 +12,7 @@ use sunrise_core::{
 };
 use sunrise_game_data::{Result, text::Text};
 use sunrise_gameplay_common::game::collider_rays::ColliderRays;
+use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
 use sunrise_gameplay_common::game::transactions::entities::EntityRemovalGameExt as _;
 use sunrise_items::{blocks::Fluid, items::ItemStack};
 use sunrise_level::collisions::SceneCollisions;
@@ -405,6 +406,67 @@ impl crate::game::ServerGame<'_> {
                 &self.server.combat.0.exploded,
             )
         })
+    }
+    /// `Projectile.setOwner` for the redirectable projectiles a blast takes over: the
+    /// blast's causing entity as the projectile stores it (`owner`, `owner_uuid`,
+    /// `guest`), or none when the source has no causing entity. The three fields move
+    /// together, as the deflection path sets them, and the caller clears `owner_vehicle`.
+    fn blast_projectile_owner(
+        &mut self,
+        causing: Option<u32>,
+    ) -> (Option<Who>, Option<[i32; 4]>, Option<u32>) {
+        use crate::game::server_side::lan_actions_server::CombatPlayer;
+        let Some(id) = causing.filter(|id| *id > 0) else {
+            return (None, None, None);
+        };
+        // The body the blast names: the player in place (the host, or the guest whose
+        // turn it is), a guest held in a turn's frame, or a live mob.
+        let mut mob_cause = false;
+        let mut fields = (None, None, None);
+        match self.combat_player(id) {
+            Some(CombatPlayer::InPlace) => {
+                fields = (
+                    Some(Who::Player),
+                    self.player_uuid_of(self.server.lan_acting),
+                    self.server.lan_acting,
+                );
+            }
+            Some(CombatPlayer::Parked(g)) => {
+                fields = (
+                    Some(Who::Player),
+                    Some(sunrise_sim::lan::playerdata::uuid_ints(g.uuid)),
+                    Some(g.conn),
+                );
+            }
+            Some(CombatPlayer::Displaced(depth, _)) => {
+                let conn = self.server.lan_displaced_players.0[depth].record_conn;
+                fields = (
+                    Some(Who::Player),
+                    self.player_uuid_of(Some(conn)),
+                    Some(conn),
+                );
+            }
+            None => {
+                // A player cause whose body is not the one in place (an explicit cause,
+                // a guest the blast recorded) keeps the player credit and connection.
+                let guest = match self.server.combat.0.explicit_explosion_cause.as_ref() {
+                    Some(cause) => cause.as_ref().filter(|c| c.player).and_then(|c| c.guest),
+                    None => self.server.combat.0.blast_guest,
+                };
+                if self
+                    .blast_player_cause()
+                    .is_some_and(|(player, _)| player as u32 == id)
+                {
+                    fields = (Some(Who::Player), self.player_uuid_of(guest), guest);
+                } else {
+                    mob_cause = self.common.mobs.iter().any(|m| m.id == id && !m.removed);
+                }
+            }
+        }
+        if mob_cause {
+            return (Some(Who::Mob(id)), Some(self.uuid_for(id)), None);
+        }
+        fields
     }
     /// `Explosion.getIndirectSourceEntity` as the kind that caused it: a
     /// primed TNT's owner, the mob whose blast it is, or a projectile's owner.
@@ -1468,6 +1530,26 @@ impl crate::game::ServerGame<'_> {
                         .common
                         .boats
                         .update(i, |boat| boat.push_from_explosion(push)),
+                    EntityHandle::Projectile(i) => {
+                        let redirectable = self.is_redirectable_projectile_type(
+                            self.common.creatures.projectiles[i].entity_type(),
+                        );
+                        // `ServerExplosion.hurtEntities`: the damage source's causing entity
+                        // takes the redirectable projectiles in reach, and a source without
+                        // one leaves them unowned (`Projectile.setOwner`).
+                        let owner = if redirectable {
+                            self.blast_projectile_owner(attacker.as_ref().map(|(id, _)| *id))
+                        } else {
+                            (None, None, None)
+                        };
+                        self.common.creatures.projectiles.update(i, |p| {
+                            p.push_from_explosion(push);
+                            if redirectable {
+                                (p.owner, p.owner_uuid, p.guest) = owner;
+                                p.owner_vehicle = None;
+                            }
+                        });
+                    }
                     other => with_entity_mut!(self, other, e => e.push_from_explosion(push)),
                 }
             }
@@ -3031,3 +3113,7 @@ use sunrise_gameplay_common::game::native_components::NativeComponentsGameExt1 a
 use sunrise_gameplay_common::game::native_hooks::can_drop_from_explosion::CanDropFromExplosionGameExt1 as _;
 
 use sunrise_gameplay_common::game::native_hooks::explosion_resistance::ExplosionResistanceGameExt1 as _;
+
+#[cfg(test)]
+#[path = "tests/explosion_projectile_owner_tests.rs"]
+mod explosion_projectile_owner_tests;

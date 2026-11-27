@@ -790,10 +790,10 @@ pub fn mob_meta(
             defaults.push((18, serializer::ARMADILLO_STATE, Value::Id(0)));
         }
         // Frog.DATA_TONGUE_TARGET_ID (after the variant): the entity id plus
-        // one, 0 for none.
+        // one with Java int wrapping (OPTIONAL_UNSIGNED_INT_CODEC), 0 for none.
         "minecraft:frog" => {
             if let Some(target) = e.frog.tongue_target {
-                let id = i32::try_from(target).map_or(0, |t| t + 1);
+                let id = (target as i32).wrapping_add(1);
                 meta.push((19, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(id)));
             }
             defaults.push((19, serializer::OPTIONAL_UNSIGNED_INT, Value::Id(0)));

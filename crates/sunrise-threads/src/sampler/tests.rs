@@ -81,18 +81,20 @@ fn sampled<T: Send + 'static>(
 ) -> (Vec<Record>, Stats, T) {
     let (ready, wait) = mpsc::channel();
     let (go, start) = mpsc::channel::<()>();
+    let (done_tx, done) = mpsc::channel();
     let worker = thread::spawn(move || {
         assert!(sampled_thread(name));
         ready.send(()).unwrap();
         start.recv().unwrap();
-        body()
+        let value = body();
+        let _ = done_tx.send(());
+        value
     });
     wait.recv().unwrap();
     let mut session = start_session(config, name);
     go.send(()).unwrap();
     let mut records = Vec::new();
-    while !worker.is_finished() {
-        thread::sleep(Duration::from_millis(20));
+    while done.recv_timeout(Duration::from_millis(20)) == Err(mpsc::RecvTimeoutError::Timeout) {
         session.drain(|_, r| records.push(*r));
     }
     let value = worker.join().unwrap();

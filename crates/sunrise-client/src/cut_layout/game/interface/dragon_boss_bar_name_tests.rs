@@ -71,12 +71,6 @@ fn the_dragon_boss_bar_takes_the_dragons_custom_name() {
             }
         }
     }
-    // `updatePlayers` scans every 20 ticks; then `findOrCreateDragon` makes
-    // the fight's dragon.
-    for _ in 0..20 {
-        game.tick_fight();
-    }
-    let id = game.dragon.as_ref().expect("the fight's dragon").id;
     let (mut hub, near, _far) = sunrise_gameplay::game::server_side::lan_particles::tests::test_hub(
         "DragonBossBarNameTest",
         Vec::new(),
@@ -85,6 +79,7 @@ fn the_dragon_boss_bar_takes_the_dragons_custom_name() {
     hub.guests.update(0, |guest| {
         guest.dimension = "minecraft:the_end".into();
         guest.position = [0.5, 128.0, 0.5];
+        guest.loaded = true;
     });
     game.server.lan = Some(sunrise_gameplay::game::lan::LanHost::for_test(hub));
     let mut overlay = sunrise_client::boss_overlay::BossOverlay::default();
@@ -106,6 +101,12 @@ fn the_dragon_boss_bar_takes_the_dragons_custom_name() {
             }
         }
     };
+    // `updatePlayers` scans every 20 ticks, adding the player to the bar;
+    // then `findOrCreateDragon` makes the fight's dragon.
+    for _ in 0..20 {
+        game.tick_fight();
+    }
+    let id = game.dragon.as_ref().expect("the fight's dragon").id;
     game.publish_boss_bars();
     drain(&near, &mut overlay);
     let default = overlay

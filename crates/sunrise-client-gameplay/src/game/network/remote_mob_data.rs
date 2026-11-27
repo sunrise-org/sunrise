@@ -1838,6 +1838,9 @@ pub mod tests {
     }
 }
 
+#[cfg(all(test, feature = "client"))]
+#[path = "remote_mob_data/frog_tongue_meta_tests.rs"]
+mod frog_tongue_meta_tests;
 #[cfg(feature = "client")]
 #[cfg(test)]
 #[path = "remote_mob_data/pet_pose_meta_tests.rs"]

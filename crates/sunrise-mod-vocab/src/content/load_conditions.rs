@@ -38,8 +38,10 @@ impl From<(Identifier, String)> for ConditionError {
 }
 
 /// A handler that reads the condition's JSON from a borrowed raw value.
-/// Arguments are the JSON object without `type`; validate their shape and
-/// return `ConditionError` for invalid mod input, never panic while decoding it.
+/// Arguments are the JSON object without the key that named it: `type` in a
+/// `neoforge:conditions` list, `condition` under Fabric API's `fabric:load_conditions`.
+/// Validate their shape and return `ConditionError` for invalid mod input, never
+/// panic while decoding it.
 /// A loader first selects the winning file and decodes its entire condition list,
 /// including children of `not`, `and` and `or`. Only built-in registry and tag reads
 /// order the dependencies between registry files; custom arguments are just JSON.

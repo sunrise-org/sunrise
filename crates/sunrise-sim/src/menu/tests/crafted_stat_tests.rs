@@ -1,6 +1,6 @@
-//! `ItemStack.onCraftedBy`'s `Stats.ITEM_CRAFTED` count from the stations that
-//! award it on a take: the stonecutter and the smithing table
-//! (`StonecutterMenu.onTake`, `SmithingMenu.onTake`).
+//! `ItemStack.onCraftedBy`'s `Stats.ITEM_CRAFTED` count from the result slots that
+//! award it on a take: the crafting grid (`ResultSlot.checkTakeAchievements`), the
+//! stonecutter and the smithing table (`StonecutterMenu.onTake`, `SmithingMenu.onTake`).
 
 use super::*;
 
@@ -73,4 +73,48 @@ fn a_stonecutter_shift_click_counts_no_item_crafted() {
         assert_eq!(menu.crafted_counts, [("minecraft:air".into(), 0)]);
         assert_eq!(menu.crafted.len(), 1, "the recipe-crafted trigger fires");
     });
+}
+
+/// `ResultSlot.checkTakeAchievements` counts `removeCount`, what the take asked for, while
+/// `ResultContainer.removeItem` hands over the whole stack: one oak log makes four planks,
+/// and a right-click carries all four but counts two, a Q-press drops all four but counts
+/// one. A shift-click counts what moved (`onQuickCraft`), a hotbar swap the whole stack
+/// (`onSwapCraft`). Every take reports the recipe once (`awardUsedRecipes`).
+#[test]
+fn a_crafting_result_take_counts_what_it_asked_for() {
+    for (input, button, counted) in [
+        (Input::Pickup, 0, 4),
+        (Input::Pickup, 1, 2),
+        (Input::QuickMove, 0, 4),
+        (Input::Swap, 0, 4),
+        (Input::Throw, 0, 1),
+        (Input::Throw, 1, 4),
+    ] {
+        with_menu(Kind::Inventory, |env, menu| {
+            menu.creative = false;
+            menu.set_slot(env, 1, stack("oak_log", 1));
+            assert_eq!(
+                menu.slot(0),
+                stack("oak_planks", 4).as_ref(),
+                "the grid's result"
+            );
+            menu.click(env, 0, button, input).unwrap();
+            assert_eq!(
+                menu.crafted_counts,
+                [("minecraft:oak_planks".into(), counted)],
+                "{input:?} {button}"
+            );
+            assert_eq!(
+                menu.crafted.len(),
+                1,
+                "{input:?} {button}: the recipe is reported"
+            );
+            assert_eq!(
+                menu.slot(0),
+                None,
+                "{input:?} {button}: the whole result left"
+            );
+            assert_eq!(menu.slot(1), None, "{input:?} {button}: the log was used");
+        });
+    }
 }

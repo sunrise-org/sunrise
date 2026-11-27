@@ -17,6 +17,7 @@ row, and fails.
 
     python3 tools/ci/check_port_map_paths.py                 # the check
     python3 tools/ci/check_port_map_paths.py --base SHA      # and nothing added to the list since SHA
+    python3 tools/ci/check_port_map_paths.py --base SHA --pull-request-merge  # CI: since the merge's first parent
     python3 tools/ci/check_port_map_paths.py --refresh       # delete the lines that no longer need one
 
 Fix a row by pointing it at the function's new home: the file that declares `fn name`, or the `impl` block it
@@ -25,14 +26,30 @@ against a built ledger.
 """
 
 import argparse
+import importlib
+import importlib.util
 import re
-import subprocess
 import sys
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[2]
 MAP = "tools/port_map/*.tsv"
 LIST = "tools/ci/port_map_known_stale.txt"
+
+
+def _load_tool(name):
+    """`tools/<name>.py`, by path when it is not importable as `tools.<name>`: importing this module must not edit
+    `sys.path`."""
+    try:
+        return importlib.import_module(f"tools.{name}")
+    except ImportError:
+        spec = importlib.util.spec_from_file_location(name, ROOT / "tools" / f"{name}.py")
+        module = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(module)
+        return module
+
+
+merge_base = _load_tool("merge_base")
 # The verdicts whose third column names a Rust function; `missing`, `home` and `skip:<reason>` name none.
 NAMED = ("port", "inline")
 IDENT = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
@@ -189,22 +206,10 @@ def numbered(text):
 
 
 def base_listed(base, root=ROOT):
-    """The list as it was at `base`, or None when the file is new there. An unreadable list is fatal."""
-    known = subprocess.run(["git", "-C", str(root), "cat-file", "-e", f"{base}^{{commit}}"],
-                           capture_output=True, text=True)
-    if known.returncode != 0:
-        sys.exit(f"git cannot read {base}, so the list at the base cannot be read:\n{known.stderr}")
-    listed_at = subprocess.run(["git", "-C", str(root), "ls-tree", "--name-only", base, "--", LIST],
-                               capture_output=True, text=True)
-    if listed_at.returncode != 0:
-        sys.exit(f"git cannot list {LIST} at {base}, so it cannot tell a new list from an unreadable one:\n"
-                 f"{listed_at.stderr}")
-    if not listed_at.stdout.strip():
-        return None
-    was = subprocess.run(["git", "-C", str(root), "show", f"{base}:{LIST}"], capture_output=True, text=True)
-    if was.returncode != 0:
-        sys.exit(f"git lists {LIST} at {base} but cannot read it:\n{was.stderr}")
-    return listed(was.stdout)
+    """The list as it was where the branch left `base`, or None when the file is new there. An unreadable list is
+    fatal."""
+    text = merge_base.text_at(merge_base.branch_base(base, root), LIST, root)
+    return listed(text) if text is not None else None
 
 
 def report(unresolved_rows, malformed=(), obsolete=(), lines=None, list_lines=None):
@@ -227,8 +232,16 @@ def report(unresolved_rows, malformed=(), obsolete=(), lines=None, list_lines=No
 def main(argv=None, root=ROOT):
     parser = argparse.ArgumentParser(description=__doc__.splitlines()[0])
     parser.add_argument("--base", help="a commit whose list this one may not grow past")
+    parser.add_argument("--pull-request-merge", action="store_true", help=merge_base.PULL_REQUEST_MERGE_HELP)
     parser.add_argument("--refresh", action="store_true", help="delete the list lines that no longer need one")
     args = parser.parse_args(argv)
+    if args.pull_request_merge and not args.base:
+        parser.error("--pull-request-merge takes --base")
+    if args.base:
+        args.base, error = merge_base.pull_request_base(args.base, args.pull_request_merge, root)
+        if error:
+            print(f"port map: {error}", file=sys.stderr)
+            return 1
 
     refs, malformed = parse(root)
     stale = unresolved(refs, root)

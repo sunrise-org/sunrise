@@ -56,6 +56,28 @@ private-input checks. Their existing `harness`, `needs`, `gpu` or `manual` rows 
 must not be indiscriminately selected as prepared-resource daily tests. Ordinary prepared-resource tests instead
 use `daily` and one `resources` or `child-process` row here.
 
+A test gets prepared data one way: `test_resources::prepared_root(&[INPUTS])` (`crates/sunrise-client/src/test_resources.rs`,
+included with `#[path]` by an integration target). It resolves `SUNRISE_TEST_RESOURCES`, else the checkout's
+`.local/sunrise-client/<version>`, and fails the test naming each required input that is missing or unreadable; it
+returns no `Option` or `Result`. `check_ignored_test_rows.py` fails a test that reaches it unless the test is
+`#[ignore = "daily"]` with its exact row, and fails a path to it that the static check cannot follow. "Reaches" is
+resolved by `sunrise-game-discovery --references` over each target's own source, with no list of helpers: through
+functions, methods, constants, macros, `use` renames and re-exports, so a wrapper is found by what it calls. A helper
+in another crate is that crate's own target and is not followed.
+With `--base SHA` (verify-static passes the PR's base) it also refuses legacy acquisition added since the base: a
+function that newly reaches a read of `SUNRISE_TEST_RESOURCES`, `SUNRISE_RESOURCES`, `SUNRISE_MESH_TEST_RESOURCES` or
+`SUNRISE_FISHING_RESOURCES`, or of a `.local/sunrise-client` path, or calls a name that may, compared by Cargo target (package and target), file (followed through renames), function and what it
+spells, so a file already in debt that another target newly builds inherits no exemption. `--pull-request-merge`
+(verify-static passes it with `--base`, as `check_addresses.py` does) compares with the first parent of CI's
+pull-request merge (`tools/merge_base.py`). The base is read cheaply: one `git diff -M --name-status` gives the
+changed paths; a change with no Rust or `Cargo.toml` file (or vocabulary export fragment) scans and archives
+nothing; otherwise only the targets with a changed file (every legacy target when a manifest changed) are scanned,
+from a `git archive` of their crates and the manifests of the base, listed from its tree without fetching blobs.
+Existing debt stays until its lane migrates it, and a lane deletes its old accessors in the same change. The static
+resolution is approximate (a use inside a function binds for it alone, a name that does not resolve is compared only
+with items visible from where it is spelled, a method call reaches only functions with a `self` receiver); it is name
+resolution over source, not control-flow analysis, and a refusal names the chain to the read.
+
 `python3 tools/ci/ignored_inventory.py` emits the machine-readable inventory with canonical identities and ignore
 reasons. It accepts `SUNRISE_GAME_DISCOVERY=/absolute/path/to/sunrise-game-discovery` to reuse a built helper;
 otherwise it builds/runs only that lightweight package. Comments, examples in strings and unreferenced source

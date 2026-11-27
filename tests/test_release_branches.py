@@ -13,7 +13,7 @@ ROOT = Path(__file__).resolve().parents[1]
 yaml = vendored_yaml.load()
 
 from tests.git_fixture import git_in
-from tests.os_support import needs_runner_shell
+from tests.os_support import BASH, needs_runner_shell
 from tools import release_file
 from tools import release_train as train
 from tools.ci import nightly
@@ -51,7 +51,7 @@ def run_gate(script, **env):
         out = Path(folder, "out")
         values = {**os.environ, "GITHUB_OUTPUT": str(out), "GITHUB_REPOSITORY": REPO, "GITHUB_EVENT_NAME": DISPATCH,
                   **env}
-        subprocess.run(["bash", "-e", "-c", script], cwd=ROOT, env=values, check=True, capture_output=True)
+        subprocess.run([BASH, "-e", "-c", script], cwd=ROOT, env=values, check=True, capture_output=True)
         return dict(line.split("=", 1) for line in out.read_text().splitlines())
 
 

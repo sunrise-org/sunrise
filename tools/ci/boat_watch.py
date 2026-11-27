@@ -23,15 +23,20 @@ def main():
         targets = [job for job in jobs if job["name"] in ("lint", "verify", "verify-static")]
         reason = recovery_reason(jobs, datetime.now(timezone.utc))
         if reason:
-            # Dispatch before cancelling: a refused dispatch must not destroy this run.
-            subprocess.run([
+            dispatch = [
                 "gh", "api", "--method", "POST",
                 f"repos/{repo}/actions/workflows/dyna-ci.yml/dispatches",
                 "-f", f"ref={os.environ['RECOVERY_REF']}",
                 "-F", "inputs[github-fallback]=true",
-            ], check=True)
+            ]
+            pr = os.environ.get("RECOVERY_PR", "")
+            if pr:
+                dispatch.extend(["-f", f"inputs[pr]={pr}"])
+            # Dispatch before cancelling: a refused dispatch must not destroy this run.
+            subprocess.run(dispatch, check=True)
+            target = f"for PR #{pr}" if pr else "on the source ref"
             with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as summary:
-                summary.write(f"### Boat fallback\n\n{reason}. Dispatched GitHub-hosted recovery on the source branch; cancelling this run.\n")
+                summary.write(f"### Boat fallback\n\n{reason}. Dispatched GitHub-hosted recovery {target}; cancelling this run.\n")
             subprocess.run(["gh", "api", "--method", "POST", f"repos/{repo}/actions/runs/{run}/cancel"], check=True)
             return
         if len(targets) == 3 and all(

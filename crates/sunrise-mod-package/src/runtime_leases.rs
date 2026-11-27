@@ -1,6 +1,9 @@
 //! Shared runtime lease protocol; kernel exclusion protects participating cleanup, not arbitrary deletion.
-use crate::locks::{LockMode, Locked, Release, locked};
-use cap_fs_ext::{DirExt, FollowSymlinks, MetadataExt, OpenOptionsFollowExt};
+use crate::{
+    lock_file::open_nofollow,
+    locks::{LockMode, Locked, Release, locked},
+};
+use cap_fs_ext::{DirExt, MetadataExt};
 use cap_std::fs::{Dir, OpenOptions};
 use sha2::{Digest, Sha256};
 use std::{fs, fs::Metadata, io, path::Path, sync::Arc};
@@ -272,11 +275,7 @@ fn removal_error(error: io::Error) -> Error {
 // A creator must be compatible with shared readers even before its handle closes.
 fn initialize_lock(directory: &Dir, key: &str) -> std::io::Result<cap_std::fs::File> {
     let mut initial = OpenOptions::new();
-    initial
-        .read(true)
-        .write(true)
-        .create_new(true)
-        .follow(FollowSymlinks::No);
+    initial.read(true).write(true).create_new(true);
     #[cfg(windows)]
     {
         use cap_std::fs::OpenOptionsExt;
@@ -284,7 +283,7 @@ fn initialize_lock(directory: &Dir, key: &str) -> std::io::Result<cap_std::fs::F
             .access_mode(windows_sys::Win32::Foundation::GENERIC_READ)
             .share_mode(1);
     }
-    directory.open_with(key, &initial)
+    open_nofollow(directory, key, initial)
 }
 
 fn open_lock(
@@ -302,7 +301,7 @@ fn open_lock(
         }
     }
     let mut options = OpenOptions::new();
-    options.read(true).follow(FollowSymlinks::No);
+    options.read(true);
     #[cfg(not(windows))]
     options.write(true);
     #[cfg(windows)]
@@ -322,10 +321,7 @@ fn open_lock(
                 0
             });
     }
-    let file = directory
-        .open_with(key, &options)
-        .map_err(Error::from)?
-        .into_std();
+    let file = open_nofollow(directory, key, options)?.into_std();
     if !file.metadata()?.is_file() {
         return Err(Error::Unsafe(key.into()));
     }

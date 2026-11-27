@@ -1,7 +1,7 @@
 //! A protocol bot joins a hosted world the way a vanilla client does:
 //! handshake, status, offline login, configuration (registries and tags),
 //! then the play state (login, chunks with light, player list, entities,
-//! block changes). Needs the prepared resources; skipped without them.
+//! block changes). Needs the prepared resources; fails without them.
 extern crate sunrise_client_lib as sunrise_client;
 use std::{
     path::Path,
@@ -34,13 +34,8 @@ use sunrise_protocol::{
     },
 };
 use sunrise_world::registry::BlockStateId;
-
-fn resources() -> Option<std::path::PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.local/sunrise-client")
-        .join(sunrise_core::VANILLA_VERSION);
-    root.join("items.json").exists().then_some(root)
-}
+#[path = "../src/test_resources.rs"]
+mod test_resources;
 
 const STONE: u32 = 1;
 
@@ -316,10 +311,9 @@ fn run<T: Send + 'static>(
 /// player list gives the owner the account's skin (its `textures`
 /// property), and the guest itself none (an offline-mode world).
 #[test]
+#[ignore = "daily"]
 fn a_lan_guest_sees_the_signed_in_owners_skin() {
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let textures = sunrise_core::profile::AccountProperty {
         name: "textures".into(),
         value: "e30=".into(),
@@ -387,10 +381,9 @@ fn a_lan_guest_sees_the_signed_in_owners_skin() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "RecipeSettings", true));
@@ -465,10 +458,9 @@ fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
 /// stonecutter's input sets carry it — and no guest is disconnected over
 /// them (#6368).
 #[test]
+#[ignore = "daily"]
 fn neoforge_shapes_items_reach_two_guests() {
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let compound = r#"{"type":"neoforge:compound",
         "children":["minecraft:raw_copper","minecraft:redstone"]}"#;
     let packs = vec![
@@ -620,10 +612,9 @@ fn read_join_recipes(bot: &mut Bot, expected: (i32, i32), who: &str) -> Result<(
 }
 
 #[test]
+#[ignore = "daily"]
 fn sprint_commands_survive_keyboard_input_changes() {
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Sprinter", true));
@@ -700,10 +691,9 @@ fn sprint_commands_survive_keyboard_input_changes() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick() {
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Digger", true));
@@ -782,11 +772,10 @@ fn first_login_packet(mut c: Connection, port: u16, name: &str) -> login::Client
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_signed_in_hosts_lan_authenticates_guests_but_not_its_own_player() {
     use sunrise_client::lan::{NetConfig, OnlineMode};
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let defaults = sunrise_world::item_defaults::read(&resources).expect("item defaults");
     let items = sunrise_client::items::Items::catalog(
         &resources,
@@ -830,10 +819,9 @@ fn a_signed_in_hosts_lan_authenticates_guests_but_not_its_own_player() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Pillar", true));
@@ -894,10 +882,9 @@ fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_move_behind_an_attack_and_its_swing_waits_for_the_next_tick() {
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Striker", true));
@@ -939,10 +926,9 @@ fn a_move_behind_an_attack_and_its_swing_waits_for_the_next_tick() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn status_and_join() {
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     // Server list ping.
@@ -1096,10 +1082,9 @@ fn status_and_join() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn guests_see_each_other_and_the_world_entities() {
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let zombie = EntityState {
@@ -1239,12 +1224,11 @@ fn guests_see_each_other_and_the_world_entities() {
 /// `OpenScreen`; a menu without it sends no payload. The server always sends
 /// the current `sunrise:menu_extra` wire layout.
 #[test]
+#[ignore = "daily"]
 fn menu_extra_data_comes_right_before_its_menu() {
     use sunrise_client::{items::ItemStack, lan::menu::Slots};
     use sunrise_protocol::menu_extra;
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let bot = run(&mut s, move || connect(port, "Machinist", true));
@@ -1324,6 +1308,7 @@ fn menu_extra_data_comes_right_before_its_menu() {
 /// into a chest but its clicks change nothing, and `sendAllDataToRemote`
 /// takes back what its client predicted.
 #[test]
+#[ignore = "daily"]
 fn a_spectators_container_click_is_taken_back() {
     use sunrise_client::{containers::BlockEntity, items::ItemStack, lan::menu::Slots};
     struct NoRules;
@@ -1338,9 +1323,7 @@ fn a_spectators_container_click_is_taken_back() {
             64
         }
     }
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let mut bot = run(&mut s, move || connect(port, "Watcher", true));
@@ -1419,10 +1402,9 @@ fn a_spectators_container_click_is_taken_back() {
 /// player the new biomes of the columns it has been sent, and only those,
 /// in a `ClientboundChunksBiomesPacket` the client reads section by section.
 #[test]
+#[ignore = "daily"]
 fn changed_biomes_reach_the_players_that_see_the_column() {
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let bot = run(&mut s, move || connect(port, "Gardener", true));
@@ -1485,6 +1467,7 @@ fn changed_biomes_reach_the_players_that_see_the_column() {
 }
 
 #[test]
+#[ignore = "daily"]
 fn a_click_past_the_menu_is_ignored() {
     use sunrise_client::{containers::BlockEntity, items::ItemStack, lan::menu::Slots};
     struct NoRules;
@@ -1499,9 +1482,7 @@ fn a_click_past_the_menu_is_ignored() {
             64
         }
     }
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Clicker", true));
@@ -1565,9 +1546,7 @@ fn a_synced_mod_block_entity_reaches_the_chunks_players_once_a_tick() {
     use sunrise_client::block_entity_types::{self, BlockEntityTypes};
     use sunrise_client::containers::{BlockEntity, ModBlockEntity};
     use sunrise_core::nbt::{Compound, JavaString, Tag};
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     const CHILD: &str = "SUNRISE_TEST_LAN_DECLARED_ENTITY";
     if std::env::var_os(CHILD).is_none() {
         assert!(
@@ -1695,10 +1674,9 @@ fn a_synced_mod_block_entity_reaches_the_chunks_players_once_a_tick() {
 /// level change, and comes back with ServerboundPlayerLoadedPacket: a respawned
 /// guest cannot be hurt at the spot it died in before its client is back.
 #[test]
+#[ignore = "daily"]
 fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Respawned", true));
@@ -1765,10 +1743,9 @@ fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
 /// over air is kicked once the boat has floated longer than `getMaximumFlyingTicks` (160 ticks at a
 /// boat's gravity), and a move that doesn't float starts the count again.
 #[test]
+#[ignore = "daily"]
 fn a_boat_floating_too_long_kicks_its_driver() {
-    let Some(resources) = resources() else {
-        return;
-    };
+    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Boater", true));

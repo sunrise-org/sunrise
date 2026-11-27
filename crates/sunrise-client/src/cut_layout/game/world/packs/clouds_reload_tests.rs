@@ -6,6 +6,10 @@
 //! required shader programs"), even with Improved Transparency off. Each case runs in a process
 //! of its own, in a folder whose `resourcepacks` holds the packs.
 use sunrise_client_gameplay::game::client_side::model_baking_completed_tests::reload;
+pub(super) use sunrise_client_gameplay::game::client_side::packs::cloud_pack_fixture::{
+    INNER, write_pack,
+};
+use sunrise_client_gameplay::game::client_side::packs::cloud_pack_fixture::{png, write_pack_with};
 use {
     crate::game::server_side::native_entity_refs::tests::with_client_game,
     sunrise_gameplay::game::native_entity_refs::tests::run_fresh_cases,
@@ -14,62 +18,6 @@ use {
 const NAME: &str = "cut_layout::game::client_side::packs::clouds_reload_tests::a_pack_whose_clouds_vanilla_reads_past_fails_the_load";
 const CASE: &str = "SUNRISE_CLOUDS_RELOAD_CASE";
 
-/// A `w` by `h` RGBA image with the cells at `filled` opaque.
-fn png(w: u32, h: u32, filled: &[[u32; 2]]) -> Vec<u8> {
-    let mut rgba = vec![0u8; (w * h * 4) as usize];
-    for [x, y] in filled {
-        rgba[((y * w + x) * 4 + 3) as usize] = 255;
-    }
-    let mut out = Vec::new();
-    let mut encoder = png::Encoder::new(&mut out, w, h);
-    encoder.set_color(png::ColorType::Rgba);
-    encoder.set_depth(png::BitDepth::Eight);
-    let mut writer = encoder.write_header().unwrap();
-    writer.write_image_data(&rgba).unwrap();
-    writer.finish().unwrap();
-    out
-}
-
-/// `resourcepacks/<name>`: a pack with its own `core/sky` (a visible override, which the atlas
-/// loads) and a 4 by 6 cloud texture with `cells` filled.
-pub(super) fn write_pack(name: &str, cells: &[[u32; 2]]) {
-    write_pack_with(name, cells, &[]);
-}
-
-/// [`write_pack`] with `own` files besides.
-fn write_pack_with(name: &str, cells: &[[u32; 2]], own: &[(&str, &str)]) {
-    let dir = std::env::current_dir()
-        .unwrap()
-        .join("resourcepacks")
-        .join(name);
-    let file = |path: &str, bytes: &[u8]| {
-        let path = dir.join(path);
-        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
-        std::fs::write(path, bytes).unwrap();
-    };
-    file(
-        "pack.mcmeta",
-        br#"{"pack": {"description": "clouds", "pack_format": 97, "min_format": [97, 0], "max_format": [97, 1]}}"#,
-    );
-    file(
-        "assets/minecraft/shaders/core/sky.vsh",
-        b"#version 330\nlayout(location = 0) in vec3 Position;\n\
-          void main() {\n    gl_Position = vec4(Position, 1.0);\n}\n",
-    );
-    file(
-        "assets/minecraft/shaders/core/sky.fsh",
-        b"#version 330\nlayout(location = 0) out vec4 fragColor;\n\
-          void main() {\n    fragColor = vec4(1.0, 0.0, 0.0, 1.0);\n}\n",
-    );
-    file(
-        "assets/minecraft/textures/environment/clouds.png",
-        &png(4, 6, cells),
-    );
-    for (path, text) in own {
-        file(path, text.as_bytes());
-    }
-}
-
 /// A `clouds.fsh` (for vanilla's `clouds.vsh`) only the transmittance stage of `OIT_CLOUDS`
 /// can't use: there it reads a block no clouds pipeline gives.
 const OIT_ONLY_BROKEN_FSH: &str = "#version 330\nlayout(location = 0) in float vertexDistance;\n\
@@ -77,9 +25,6 @@ const OIT_ONLY_BROKEN_FSH: &str = "#version 330\nlayout(location = 0) in float v
     layout(std140) uniform Other {\n    vec4 Tint;\n};\nlayout(location = 0) out vec4 fragColor;\n\
     void main() {\n    fragColor = vertexColor;\n#ifdef OIT_TRANSMITTANCE\n    fragColor *= Tint;\n#endif\n}\n";
 
-/// A tall texture vanilla reads inside (`tall_inner` of the Java comparison) and one with a cell
-/// in its first column, whose west neighbour vanilla reads at (5, 2).
-pub(super) const INNER: &[[u32; 2]] = &[[1, 0], [2, 1], [1, 3], [2, 5]];
 const PAST: &[[u32; 2]] = &[[0, 2], [2, 1]];
 
 #[test]

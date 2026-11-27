@@ -594,26 +594,24 @@ impl<'a> Context<'a> {
         ) {
             return Ok(None);
         }
-        // shortcut: aggregates of more than 64 scalars stay whole copies (atomic members in them
-        // fail validation); split them too if a pack needs it.
-        /// Whether `ty` holds an integer scalar, and how many scalars it holds.
-        fn leaves(types: &crate::UniqueArena<Type>, ty: Handle<Type>) -> Option<(bool, u64)> {
-            Some(match types[ty].inner {
-                TypeInner::Scalar(s) => (matches!(s.kind, ScalarKind::Sint | ScalarKind::Uint), 1),
-                TypeInner::Vector { size, .. } => (false, size as u64),
-                TypeInner::Matrix { columns, rows, .. } => (false, columns as u64 * rows as u64),
-                TypeInner::Struct { ref members, .. } => {
-                    members.iter().try_fold((false, 0), |(any, sum), m| {
-                        leaves(types, m.ty).map(|(i, n)| (any | i, n.saturating_add(sum)))
-                    })?
+        /// Whether `ty` holds an integer scalar, or `None` if it contains an
+        /// unsupported aggregate member (such as a runtime-sized array).
+        fn has_int_scalar(types: &crate::UniqueArena<Type>, ty: Handle<Type>) -> Option<bool> {
+            match types[ty].inner {
+                TypeInner::Scalar(s) => Some(matches!(s.kind, ScalarKind::Sint | ScalarKind::Uint)),
+                TypeInner::Vector { .. } | TypeInner::Matrix { .. } | TypeInner::Atomic(_) => {
+                    Some(false)
                 }
+                TypeInner::Struct { ref members, .. } => members
+                    .iter()
+                    .try_fold(false, |acc, m| has_int_scalar(types, m.ty).map(|b| acc || b)),
                 TypeInner::Array {
                     base,
-                    size: crate::ArraySize::Constant(n),
+                    size: crate::ArraySize::Constant(_),
                     ..
-                } => leaves(types, base).map(|(i, c)| (i, c.saturating_mul(n.get() as u64)))?,
-                _ => return None,
-            })
+                } => has_int_scalar(types, base),
+                _ => None,
+            }
         }
         let types = &self.module.types;
         let count = match types[base].inner {
@@ -624,7 +622,7 @@ impl<'a> Context<'a> {
             } => n.get(),
             _ => return Ok(None),
         };
-        Ok(matches!(leaves(types, base), Some((true, n)) if n <= 64).then_some((base, count)))
+        Ok((has_int_scalar(types, base) == Some(true)).then_some((base, count)))
     }
 
     /// Internal implementation of [`lower`](Self::lower)

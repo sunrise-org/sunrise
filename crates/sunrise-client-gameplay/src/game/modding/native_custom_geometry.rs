@@ -689,12 +689,14 @@ impl ClientGame<'_> {
         bindings: &mod_api::DrawBindings<'_>,
     ) -> Result<Option<sunrise_client::gfx::mod_pipelines::ResolvedDrawBindings>, PipelineDrawError>
     {
+        let pack_linked = !draw.is_oit_pass() && self.pack_slot_bound(slot as usize);
         let draw = std::cell::RefCell::new(draw);
         self.resolve_draw_bindings_into(
             slot,
             bindings,
             None,
             &[],
+            pack_linked,
             &mut |bytes| draw.borrow_mut().push_inline_uniform(bytes),
             &mut |bytes| draw.borrow_mut().push_texel_data(bytes),
         )
@@ -704,12 +706,14 @@ impl ClientGame<'_> {
     /// pass (`active_target = None`) or an offscreen pass (`active_target = Some((target, mip_level))`:
     /// a mod render target's mip level or a transient frame-graph target at level 0), refusing
     /// self-sampling with [`PipelineDrawError::TargetReadWriteHazard`].
+    #[allow(clippy::too_many_arguments)]
     fn resolve_draw_bindings_into(
         &self,
         slot: u32,
         bindings: &mod_api::DrawBindings<'_>,
         active_target: Option<(mod_api::FrameTarget, u32)>,
         transients: &[mod_api::RenderTargetDescriptor],
+        pack_linked: bool,
         push_inline: &mut dyn FnMut(&[u8]) -> std::ops::Range<usize>,
         push_texel: &mut dyn FnMut(&[u8]) -> std::ops::Range<usize>,
     ) -> Result<Option<sunrise_client::gfx::mod_pipelines::ResolvedDrawBindings>, PipelineDrawError>
@@ -736,6 +740,7 @@ impl ClientGame<'_> {
             bindings,
             active_target,
             transients,
+            pack_linked,
             push_inline,
             push_texel,
         )
@@ -753,10 +758,14 @@ impl ClientGame<'_> {
         bindings: &mod_api::DrawBindings<'_>,
         active_target: Option<(mod_api::FrameTarget, u32)>,
         transients: &[mod_api::RenderTargetDescriptor],
+        pack_linked: bool,
         push_inline: &mut dyn FnMut(&[u8]) -> std::ops::Range<usize>,
         push_texel: &mut dyn FnMut(&[u8]) -> std::ops::Range<usize>,
     ) -> Result<Option<sunrise_client::gfx::mod_pipelines::ResolvedDrawBindings>, PipelineDrawError>
     {
+        use sunrise_client::gfx::mod_pipelines::SamplerLayout;
+        use sunrise_client::gfx::mod_render_targets::{wgpu_color_format, wgpu_depth_format};
+
         if layout.is_empty() && pc_size == 0 {
             if !bindings.entries.is_empty() || bindings.push_constants.is_some() {
                 return Err(PipelineDrawError::InvalidBinding);
@@ -829,6 +838,9 @@ impl ClientGame<'_> {
                 mips: sunrise_client::gfx::mod_render_targets::TargetMips,
             },
         }
+        let float32_filterable = gpu.float32_filterable();
+        let mut sampler_layout = SamplerLayout::default();
+        let mut sampled = 0;
         let mut staged = Vec::with_capacity(layout.entries.len());
         for decl in &layout.entries {
             let mut matches = bindings
@@ -869,122 +881,119 @@ impl ClientGame<'_> {
                 (
                     mod_api::BindingKind::CombinedImageSampler { sampler },
                     mod_api::BindingValue::Texture(source),
-                ) => match source {
-                    mod_api::TextureSource::TransientTargetColor(target, attachment) => {
-                        if active_transient_target == Some(*target) {
-                            return Err(PipelineDrawError::TargetReadWriteHazard);
+                ) => {
+                    let (entry, format) = match source {
+                        mod_api::TextureSource::TransientTargetColor(target, attachment) => {
+                            if active_transient_target == Some(*target) {
+                                return Err(PipelineDrawError::TargetReadWriteHazard);
+                            }
+                            let Some(desc) = transients.get(target.raw() as usize) else {
+                                return Err(PipelineDrawError::InvalidBinding);
+                            };
+                            let format = desc
+                                .color_targets
+                                .get(*attachment as usize)
+                                .ok_or(PipelineDrawError::InvalidBinding)?;
+                            (
+                                StagedEntry::TransientColor {
+                                    target: *target,
+                                    attachment: *attachment,
+                                },
+                                wgpu_color_format(*format),
+                            )
                         }
-                        let Some(desc) = transients.get(target.raw() as usize) else {
-                            return Err(PipelineDrawError::InvalidBinding);
-                        };
-                        let filterable =
-                            sunrise_client::gfx::mod_pipelines::sampler_filtering(&sampler);
-                        if !sunrise_client::gfx::mod_frame_graph::validate_transient_color_binding(
-                            desc,
-                            *attachment,
-                            filterable,
-                            gpu.float32_filterable(),
-                        ) {
-                            return Err(PipelineDrawError::InvalidBinding);
+                        mod_api::TextureSource::TransientTargetDepth(target) => {
+                            if active_transient_target == Some(*target) {
+                                return Err(PipelineDrawError::TargetReadWriteHazard);
+                            }
+                            let Some(desc) = transients.get(target.raw() as usize) else {
+                                return Err(PipelineDrawError::InvalidBinding);
+                            };
+                            let format = wgpu_depth_format(desc.depth)
+                                .ok_or(PipelineDrawError::InvalidBinding)?;
+                            (StagedEntry::TransientDepth { target: *target }, format)
                         }
-                        staged.push(StagedEntry::TransientColor {
-                            target: *target,
-                            attachment: *attachment,
-                        });
-                    }
-                    mod_api::TextureSource::TransientTargetDepth(target) => {
-                        if active_transient_target == Some(*target) {
-                            return Err(PipelineDrawError::TargetReadWriteHazard);
-                        }
-                        let Some(desc) = transients.get(target.raw() as usize) else {
-                            return Err(PipelineDrawError::InvalidBinding);
-                        };
-                        let filterable =
-                            sunrise_client::gfx::mod_pipelines::sampler_filtering(&sampler);
-                        if !sunrise_client::gfx::mod_frame_graph::validate_transient_depth_binding(
-                            desc, filterable,
-                        ) {
-                            return Err(PipelineDrawError::InvalidBinding);
-                        }
-                        staged.push(StagedEntry::TransientDepth { target: *target });
-                    }
-                    other => {
-                        let mut mips = None;
-                        let (view_id, view) = match other {
-                            mod_api::TextureSource::AtlasSprite(id) => {
-                                let sprite_key = id
-                                    .to_string()
-                                    .strip_prefix("minecraft:")
-                                    .map(str::to_owned)
-                                    .unwrap_or_else(|| id.to_string());
-                                if !self
-                                    .client
-                                    .client_pack
-                                    .render
-                                    .sprite_layers
-                                    .contains_key(&sprite_key)
-                                    && !self.client.gui.atlas.sprites.contains_key(&sprite_key)
-                                {
-                                    return Err(PipelineDrawError::InvalidBinding);
+                        other => {
+                            let mut mips = None;
+                            let (view_id, view) = match other {
+                                mod_api::TextureSource::AtlasSprite(id) => {
+                                    let sprite_key = id
+                                        .to_string()
+                                        .strip_prefix("minecraft:")
+                                        .map(str::to_owned)
+                                        .unwrap_or_else(|| id.to_string());
+                                    if !self
+                                        .client
+                                        .client_pack
+                                        .render
+                                        .sprite_layers
+                                        .contains_key(&sprite_key)
+                                        && !self.client.gui.atlas.sprites.contains_key(&sprite_key)
+                                    {
+                                        return Err(PipelineDrawError::InvalidBinding);
+                                    }
+                                    gpu.mod_atlas_texture_view()
                                 }
-                                gpu.mod_atlas_texture_view()
-                            }
-                            mod_api::TextureSource::DynamicTexture(id) => {
-                                self.resolve_dynamic_texture_view(gpu, id)?
-                            }
-                            mod_api::TextureSource::StandaloneTexture(id) => {
-                                let asset_path = if id.path().ends_with(".png") {
-                                    format!("assets/{}/{}", id.namespace(), id.path())
-                                } else {
-                                    format!("assets/{}/textures/{}.png", id.namespace(), id.path())
-                                };
-                                gpu.resolve_mod_standalone_texture(id, || {
-                                    self.common.pack.source.read(&asset_path).ok()
-                                })?
-                            }
-                            mod_api::TextureSource::WorldDepth => {
-                                if writes_depth {
-                                    return Err(PipelineDrawError::InvalidBinding);
+                                mod_api::TextureSource::DynamicTexture(id) => {
+                                    self.resolve_dynamic_texture_view(gpu, id)?
                                 }
-                                gpu.mod_world_depth_texture_view()
-                            }
-                            mod_api::TextureSource::Lightmap => gpu.mod_lightmap_texture_view(),
-                            mod_api::TextureSource::RenderTargetColor(target, attachment) => {
-                                let filterable =
-                                    sunrise_client::gfx::mod_pipelines::sampler_filtering(&sampler);
-                                let (id, view, target_mips) = gpu.resolve_mod_render_target_color(
-                                    owner,
-                                    *target,
-                                    *attachment,
-                                    filterable,
-                                )?;
-                                mips = Some(target_mips);
-                                (id, view)
-                            }
-                            mod_api::TextureSource::RenderTargetDepth(target) => {
-                                let filterable =
-                                    sunrise_client::gfx::mod_pipelines::sampler_filtering(&sampler);
-                                gpu.resolve_mod_render_target_depth(owner, *target, filterable)?
-                            }
-                            mod_api::TextureSource::RenderTargetColorMip(view) => {
-                                let filterable =
-                                    sunrise_client::gfx::mod_pipelines::sampler_filtering(&sampler);
-                                let (id, view, target_mips) = gpu
-                                    .resolve_mod_render_target_color_mips(
-                                        owner, *view, filterable,
-                                    )?;
-                                mips = Some(target_mips);
-                                (id, view)
-                            }
-                            _ => return Err(PipelineDrawError::InvalidBinding),
-                        };
-                        staged.push(StagedEntry::Texture {
-                            view_id,
-                            view,
-                            mips,
-                        });
-                    }
-                },
+                                mod_api::TextureSource::StandaloneTexture(id) => {
+                                    let asset_path = if id.path().ends_with(".png") {
+                                        format!("assets/{}/{}", id.namespace(), id.path())
+                                    } else {
+                                        format!(
+                                            "assets/{}/textures/{}.png",
+                                            id.namespace(),
+                                            id.path()
+                                        )
+                                    };
+                                    gpu.resolve_mod_standalone_texture(id, || {
+                                        self.common.pack.source.read(&asset_path).ok()
+                                    })?
+                                }
+                                mod_api::TextureSource::WorldDepth => {
+                                    if writes_depth {
+                                        return Err(PipelineDrawError::InvalidBinding);
+                                    }
+                                    gpu.mod_world_depth_texture_view()
+                                }
+                                mod_api::TextureSource::Lightmap => gpu.mod_lightmap_texture_view(),
+                                mod_api::TextureSource::RenderTargetColor(target, attachment) => {
+                                    let (id, view, target_mips) = gpu
+                                        .resolve_mod_render_target_color(
+                                            owner,
+                                            *target,
+                                            *attachment,
+                                        )?;
+                                    mips = Some(target_mips);
+                                    (id, view)
+                                }
+                                mod_api::TextureSource::RenderTargetDepth(target) => {
+                                    gpu.resolve_mod_render_target_depth(owner, *target)?
+                                }
+                                mod_api::TextureSource::RenderTargetColorMip(view) => {
+                                    let (id, view, target_mips) =
+                                        gpu.resolve_mod_render_target_color_mips(owner, *view)?;
+                                    mips = Some(target_mips);
+                                    (id, view)
+                                }
+                                _ => return Err(PipelineDrawError::InvalidBinding),
+                            };
+                            let format = view.texture().format();
+                            (
+                                StagedEntry::Texture {
+                                    view_id,
+                                    view,
+                                    mips,
+                                },
+                                format,
+                            )
+                        }
+                    };
+                    sampler_layout.record(sampled, &sampler, format, float32_filterable);
+                    sampled += 1;
+                    staged.push(entry);
+                }
                 (
                     mod_api::BindingKind::TexelBuffer { format },
                     mod_api::BindingValue::TexelBuffer(bytes),
@@ -1041,6 +1050,11 @@ impl ClientGame<'_> {
                 }
                 _ => return Err(PipelineDrawError::InvalidBinding),
             }
+        }
+        // A translated pack program owns its pipeline layout, unlike direct mod draws into
+        // pack targets. Refuse only that route and only if the bindings require another layout.
+        if pack_linked && !sampler_layout.is_empty() {
+            return Err(PipelineDrawError::PackSamplerLayout);
         }
         // One render pass gives a mip level one usage: a draw binds no level both as a storage
         // image it writes and as anything else (a sampled view, or another storage access).
@@ -1165,6 +1179,7 @@ impl ClientGame<'_> {
         let push_constants = pc_slice.map(push_inline);
         Ok(Some(
             sunrise_client::gfx::mod_pipelines::ResolvedDrawBindings {
+                sampler_layout,
                 entries: resolved_entries,
                 push_constants,
             },
@@ -1515,6 +1530,7 @@ impl ClientGame<'_> {
     ) -> Result<(), mod_api::ComputeDispatchError> {
         use mod_api::ComputeDispatchError as Refused;
         use sunrise_client::gfx::mod_compute::{DispatchKind, RecordedDispatch};
+        use sunrise_client::gfx::mod_pipelines::ResolvedDrawBindings;
         let dispatches = pass.dispatches.as_mut().ok_or(Refused::Unavailable)?;
         let gpu = self.mod_gpu().ok_or(Refused::Unavailable)?;
         let compute = self.client.client_pack.render.mod_pipelines.compute();
@@ -1556,6 +1572,7 @@ impl ClientGame<'_> {
                 bindings,
                 None,
                 transients,
+                false,
                 &mut |bytes| {
                     let start = inline.len();
                     inline.extend_from_slice(bytes);
@@ -1576,9 +1593,11 @@ impl ClientGame<'_> {
             return Err(Refused::InvalidBinding);
         }
         // A storage image's texture format is the one its shader declares.
-        let entries = resolved
-            .as_ref()
-            .map_or(&[][..], |bound| &bound.entries[..]);
+        let ResolvedDrawBindings {
+            sampler_layout,
+            entries,
+            ..
+        } = resolved.unwrap_or_default();
         for (index, entry) in entries.iter().enumerate() {
             if let sunrise_client::gfx::mod_pipelines::ResolvedSet1Entry::StorageImage {
                 format,
@@ -1592,7 +1611,8 @@ impl ClientGame<'_> {
         }
         dispatches.push(RecordedDispatch {
             slot,
-            entries: resolved.map_or_else(Vec::new, |bindings| bindings.entries),
+            sampler_layout,
+            entries,
             inline,
             texel,
             kind,
@@ -1650,6 +1670,7 @@ impl ClientGame<'_> {
             bindings,
             active_target,
             transients,
+            false,
             &mut |bytes| {
                 let start = pass.inline_uniforms.len();
                 pass.inline_uniforms.extend_from_slice(bytes);
@@ -1711,6 +1732,7 @@ impl ClientGame<'_> {
             indirect.bindings,
             active_target,
             transients,
+            false,
             &mut |bytes| {
                 let start = pass.inline_uniforms.len();
                 pass.inline_uniforms.extend_from_slice(bytes);
@@ -1839,6 +1861,7 @@ impl ClientGame<'_> {
             bindings,
             active_target,
             transients,
+            false,
             &mut |bytes| {
                 let start = pass.inline_uniforms.len();
                 pass.inline_uniforms.extend_from_slice(bytes);
@@ -4960,6 +4983,31 @@ mod tests {
             );
             assert!(gpu.dynamic_texture_view(u64::MAX).is_none());
 
+            // An active pack alone must not reject a direct draw; it is the translated
+            // program's fixed sampler layout for this slot that makes the binding invalid.
+            game.client.title.0 = None;
+            game.client.screen = sunrise_gameplay_common::game::Screen::Playing;
+            game.client
+                .pack_frame_state
+                .set(Some(mod_api::ShaderPackState::new(false, None, 1)));
+            let depth = mod_api::DrawBindings::default()
+                .texture("ColorTex", mod_api::TextureSource::WorldDepth);
+            assert!(game.resolve_draw_bindings(&mut draw, 0, &depth).is_ok());
+            game.client.pack_frame_slots.borrow_mut().push(0);
+            assert_eq!(
+                game.resolve_draw_bindings(&mut draw, 0, &depth)
+                    .unwrap_err(),
+                PipelineDrawError::PackSamplerLayout
+            );
+            let filterable = mod_api::DrawBindings::default()
+                .texture("ColorTex", mod_api::TextureSource::Lightmap);
+            assert!(
+                game.resolve_draw_bindings(&mut draw, 0, &filterable)
+                    .is_ok()
+            );
+            game.client.pack_frame_slots.borrow_mut().clear();
+            game.client.pack_frame_state.set(None);
+
             // Without the game's handles (the renderer still out), nothing resolves.
             game.client.mod_gpu = None;
             assert_eq!(
@@ -4989,6 +5037,274 @@ mod tests {
                 Err(mod_api::PipelineDrawError::Mesh(MeshError::Unavailable))
             );
             game.client.renderer.0 = renderer_slot;
+        });
+    }
+
+    struct WorldDepthCompute(std::sync::Arc<Mutex<Option<mod_api::RenderTargetRef>>>);
+
+    #[mod_api::__subscriptions]
+    impl Hooks for WorldDepthCompute {
+        fn register_render_pipelines(
+            &self,
+            _: &mod_api::RegistrationContext,
+            event: &mut mod_api::RegisterRenderPipelinesEvent<'_>,
+        ) {
+            let shader = Identifier::parse("depth_probe:sample").unwrap();
+            let layout = mod_api::BindGroupLayout::builder()
+                .entry(mod_api::BindEntry::new(
+                    "OutImage",
+                    mod_api::BindingKind::StorageImage {
+                        access: mod_api::StorageImageAccess::WriteOnly,
+                    },
+                ))
+                .sampler(
+                    "DepthTex",
+                    mod_api::Sampler::new(
+                        mod_api::SamplerFilter::Nearest,
+                        mod_api::SamplerAddress::ClampToEdge,
+                    ),
+                )
+                .build()
+                .unwrap();
+            event.compute_pipeline(
+                mod_api::ComputePipeline::builder(shader.clone(), shader)
+                    .bind_group_layout(layout)
+                    .build(),
+            );
+        }
+
+        fn frame_graph_setup(
+            &self,
+            host: &dyn ClientHost,
+            event: &mut mod_api::FrameGraphSetupEvent<'_>,
+        ) {
+            let target = host
+                .create_render_target(
+                    &mod_api::RenderTargetDescriptor::new([1, 1])
+                        .color_target(mod_api::RenderTargetFormat::Rgba8Unorm)
+                        .storage(mod_api::StorageImageAccess::WriteOnly),
+                )
+                .unwrap();
+            let pipeline = host
+                .render_assets()
+                .compute_pipeline(&Identifier::parse("depth_probe:sample").unwrap())
+                .unwrap();
+            event
+                .graph
+                .add_compute_pass(
+                    mod_api::ComputePassDescriptor::new("sample live world depth")
+                        .reads(mod_api::FrameTarget::MainDepth)
+                        .writes(mod_api::FrameTarget::Mod(target)),
+                    &mut |node| {
+                        node.dispatch(
+                            pipeline,
+                            &mod_api::DrawBindings::default()
+                                .storage_image(
+                                    "OutImage",
+                                    mod_api::StorageImageBinding::new(target, 0, 0),
+                                )
+                                .texture("DepthTex", mod_api::TextureSource::WorldDepth),
+                            [1, 1, 1],
+                        )
+                        .unwrap()
+                    },
+                )
+                .unwrap();
+            *self.0.lock().unwrap() = Some(target);
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn native_frame_graph_compute_reads_live_world_depth_with_the_default_sampler() {
+        use mod_api::__private::{game::RegistrationContextNew, take_hook_panics};
+        use sunrise_client::gfx::{
+            mod_frame_graph::RecordedFrameGraph,
+            world_primitives::{self, FrameHooks},
+        };
+        if super::super::native_entity_refs::tests::run_fresh_cases(
+            "game::client_side::native_custom_geometry::tests::native_frame_graph_compute_reads_live_world_depth_with_the_default_sampler",
+            "SUNRISE_MOD_WORLD_DEPTH_COMPUTE_CHILD",
+            &["run"],
+        ) {
+            return;
+        }
+
+        super::super::native_entity_refs::tests::with_client_game(|game| {
+            let (event_loop, window) =
+                crate::game::native_hooks::particle_count_tests::hidden_window();
+            game.common.options.offscreen = true;
+            game.client.title.0 = None;
+            game.client.screen = sunrise_gameplay_common::game::Screen::Playing;
+            let renderer = game.new_renderer(window.clone()).unwrap();
+            game.set_renderer(renderer);
+            game.client.window.0 = Some(window);
+            // Keep the window/event loop alive through GPU teardown.
+            let _event_loop = event_loop;
+
+            let probe = std::sync::Arc::new(Mutex::new(None));
+            mod_platform::__private::install(
+                vec![ModEntry::new(
+                    "depth_probe",
+                    Box::new(WorldDepthCompute(probe.clone())),
+                )]
+                .into(),
+            );
+            let _ = take_hook_panics();
+            let mut compute = Vec::new();
+            sunrise_gameplay_common::game::native_hooks::native_register_render_pipelines(
+                &mod_api::RegistrationContext::new(),
+                &mut Vec::new(),
+                &mut Vec::new(),
+                &mut compute,
+            );
+            sunrise_client_render::mod_compute::register(compute).unwrap();
+            let shaders = tempfile::tempdir().unwrap();
+            let path = shaders.path().join("assets/depth_probe/shaders/compute");
+            std::fs::create_dir_all(&path).unwrap();
+            std::fs::write(
+                path.join("sample.csh"),
+                "#version 450
+layout(local_size_x = 1) in;
+layout(rgba8) writeonly uniform image2D OutImage;
+uniform sampler2D DepthTex;
+void main() {
+    float depth = textureLod(DepthTex, vec2(0.5), 0.0).r;
+    imageStore(OutImage, ivec2(0), vec4(depth, 0.4, 1.0 - depth, 1.0));
+}
+",
+            )
+            .unwrap();
+            let mut render = sunrise_client_render::assets::RenderAssets::unpublished();
+            render.mod_pipelines = sunrise_client_render::mod_pipelines::Pipelines::load(
+                &sunrise_assets::resource_source::ResourceSource::directory(
+                    shaders.path().to_owned(),
+                ),
+                7,
+            )
+            .unwrap();
+            let mut renderer = game.client.renderer.0.take().unwrap();
+            renderer
+                .build_mod_pipelines(&render.mod_pipelines, &|_| None)
+                .unwrap();
+            let original = std::mem::replace(
+                &mut game.client.client_pack.render,
+                std::sync::Arc::new(render),
+            );
+            let (_, depth) = game.mod_gpu().unwrap().mod_world_depth_texture_view();
+            let mut encoder = renderer.device.create_command_encoder(&Default::default());
+            // Initialize/store the actual view that WorldDepth resolves. This node runs before
+            // the normal world pass so its known value is independent of world geometry and
+            // the engine's unrelated store policy for graph reads later in the frame.
+            drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: &depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(0.25),
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
+                }),
+                ..Default::default()
+            }));
+            renderer.queue.submit([encoder.finish()]);
+
+            let camera = test_camera([0.0; 3], Mat4::IDENTITY);
+            let mut draw = WorldGeometry::default();
+            draw.reset([0.0; 3], Mat4::IDENTITY, [0.0; 2]);
+            let graph = {
+                let mut driver = GameWorldStageDriver::new(game, &camera, 0.0, &mut draw);
+                driver.on_frame_graph_setup(&[], false);
+                driver.take_frame_graph().expect("native compute graph")
+            };
+            let panics = take_hook_panics();
+            assert!(panics.is_empty(), "{panics:?}");
+            game.client.client_pack.render = original;
+            game.client.renderer.0 = Some(renderer);
+
+            // Feed the real recorded graph to the renderer while preserving the fixture's
+            // ordinary world assets and stages. The dispatch still enters through Game and
+            // executes through the renderer's normal FrameGraphRunner.
+            struct Recorded(Option<RecordedFrameGraph>);
+            impl FrameHooks for Recorded {
+                fn wants_after_sky(&self) -> bool {
+                    false
+                }
+                fn on_custom_geometry(&mut self, _: &[mod_api::RenderableSection], _: bool) {}
+                fn take_frame_graph(&mut self) -> Option<RecordedFrameGraph> {
+                    self.0.take()
+                }
+                fn on_after_sky(&mut self, _: &[mod_api::RenderableSection], _: bool) {}
+                fn on_prepare_render_buffers(
+                    &mut self,
+                    _: &[mod_api::RenderableSection],
+                    _: bool,
+                    _: &mut world_primitives::PreparedHookGeometry,
+                ) {
+                }
+                fn on_render_stage(
+                    &mut self,
+                    _: RenderLevelStage,
+                    _: &[mod_api::RenderableSection],
+                    _: bool,
+                ) -> &[world_primitives::DrawRanges] {
+                    &[]
+                }
+                fn prepared_primitives(&self) -> world_primitives::Batch<'_> {
+                    Default::default()
+                }
+                fn on_after_level(&mut self, _: &[mod_api::RenderableSection], _: bool) {}
+            }
+            let mut hooks = Recorded(Some(graph));
+            assert!(
+                game.render_with(|renderer, frame| renderer.render(frame, Some(&mut hooks)))
+                    .unwrap()
+            );
+            let target = probe.lock().unwrap().expect("native output target");
+            let (_, view, _) = game
+                .mod_gpu()
+                .unwrap()
+                .resolve_mod_render_target_color(Some("depth_probe"), target, 0)
+                .unwrap();
+            let renderer = game.client.renderer.0.as_ref().unwrap();
+            let readback = renderer.device.create_buffer(&wgpu::BufferDescriptor {
+                label: Some("native compute output"),
+                size: 256,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            let mut encoder = renderer.device.create_command_encoder(&Default::default());
+            encoder.copy_texture_to_buffer(
+                view.texture().as_image_copy(),
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(256),
+                        rows_per_image: None,
+                    },
+                },
+                wgpu::Extent3d {
+                    width: 1,
+                    height: 1,
+                    depth_or_array_layers: 1,
+                },
+            );
+            renderer.queue.submit([encoder.finish()]);
+            let slice = readback.slice(..);
+            slice.map_async(wgpu::MapMode::Read, |result| result.unwrap());
+            renderer
+                .device
+                .poll(wgpu::PollType::wait_indefinitely())
+                .unwrap();
+            // Depth 0.25: red 0.25 * 255 = 63.75 rounds to 64, green 0.4 * 255 = 102
+            // exactly, blue 0.75 * 255 = 191.25 rounds to 191; no channel is a tie.
+            assert_eq!(
+                &slice.get_mapped_range().unwrap()[..4],
+                &[64, 102, 191, 255]
+            );
+            drop(game.client.renderer.0.take());
+            drop(game.client.mod_gpu.take());
         });
     }
 }

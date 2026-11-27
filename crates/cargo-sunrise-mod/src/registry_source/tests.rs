@@ -18,7 +18,7 @@ fn serve(index: &'static [u8]) -> impl Fn(&str, u64) -> Result<Vec<u8>, String> 
 }
 
 pub(crate) fn read_first_index(cache: &Path) -> Result<Index, String> {
-    read_index(cache, URL, &serve(FIRST), KEY)
+    read_index(&cache.join(SERIAL), URL, &serve(FIRST), KEY)
 }
 
 #[test]
@@ -34,7 +34,7 @@ fn the_index_needs_the_registry_signature_and_a_serial_no_older_than_the_last_ac
 
     // Every byte is signed, whitespace included: the bytes are never reserialized to check them.
     let edited: &'static [u8] = Vec::leak(FIRST.iter().copied().chain(*b" ").collect());
-    let error = read_index(cache.path(), URL, &serve(edited), KEY).unwrap_err();
+    let error = read_index(&serial, URL, &serve(edited), KEY).unwrap_err();
     assert!(error.contains("registry's key"), "{error}");
 
     fs::write(&serial, (FIRST_SERIAL + 1).to_string()).unwrap();
@@ -56,6 +56,92 @@ fn the_index_needs_the_registry_signature_and_a_serial_no_older_than_the_last_ac
     fs::write(&serial, "").unwrap();
     let error = read_first_index(cache.path()).unwrap_err();
     assert!(error.contains(&serial.display().to_string()), "{error}");
+}
+
+#[test]
+fn the_serial_lock_keeps_the_serial_filename_extension() {
+    let cache = tempfile::tempdir().unwrap();
+    let serial = cache.path().join("v2.serial");
+    read_index(&serial, URL, &serve(FIRST), KEY).unwrap();
+    assert!(cache.path().join("v2.serial.lock").is_file());
+    assert!(!cache.path().join("v2.lock").exists());
+}
+
+#[cfg(unix)]
+#[test]
+fn a_linked_serial_lock_is_refused_without_creating_its_target() {
+    let cache = tempfile::tempdir().unwrap();
+    let serial = cache.path().join(SERIAL);
+    let lock = cache.path().join("registry/v2-serial.lock");
+    fs::create_dir_all(lock.parent().unwrap()).unwrap();
+    std::os::unix::fs::symlink("unused-lock", &lock).unwrap();
+
+    let error = read_index(&serial, URL, &serve(FIRST), KEY).unwrap_err();
+    assert!(
+        error.starts_with(&format!("{}: ", lock.display())),
+        "{error}"
+    );
+    assert_eq!(
+        fs::symlink_metadata(lock.with_file_name("unused-lock"))
+            .unwrap_err()
+            .kind(),
+        io::ErrorKind::NotFound
+    );
+    assert!(!serial.exists());
+}
+
+/// A floor that is a link, a directory, oversized or not a number is an error that
+/// leaves the floor as it was: none of them lets an older index in.
+#[test]
+fn a_linked_oversized_or_malformed_floor_is_refused_and_left_alone() {
+    let cache = tempfile::tempdir().unwrap();
+    let serial = cache.path().join(SERIAL);
+    fs::create_dir_all(serial.parent().unwrap()).unwrap();
+    let refused = |why: &str| {
+        let error = read_index(&serial, URL, &serve(FIRST), KEY).unwrap_err();
+        assert!(
+            error.contains(&serial.display().to_string()),
+            "{why}: {error}"
+        );
+    };
+
+    fs::create_dir(&serial).unwrap();
+    refused("directory");
+    fs::remove_dir(&serial).unwrap();
+
+    // The number itself is valid and low enough to accept the index without the bound.
+    let oversized = format!("{}0", " ".repeat(SERIAL_LIMIT as usize));
+    fs::write(&serial, &oversized).unwrap();
+    refused("oversized");
+    assert_eq!(fs::read(&serial).unwrap(), oversized.as_bytes());
+    fs::write(&serial, "-1").unwrap();
+    refused("malformed");
+    fs::write(&serial, [0xff]).unwrap();
+    refused("not UTF-8");
+    assert_eq!(fs::read(&serial).unwrap(), [0xff]);
+
+    // A floor kept as `u64::MAX` text, with a final newline, is read whole.
+    fs::write(&serial, format!("{}\n", u64::MAX)).unwrap();
+    let error = read_index(&serial, URL, &serve(FIRST), KEY).unwrap_err();
+    assert!(
+        error.contains("is older than 18446744073709551615"),
+        "{error}"
+    );
+
+    #[cfg(unix)]
+    {
+        // Even a link to a valid, lower floor (which would accept the index) is refused, and a
+        // dangling link is a link, not a missing floor.
+        let target = cache.path().join("target");
+        fs::write(&target, (FIRST_SERIAL - 1).to_string()).unwrap();
+        fs::remove_file(&serial).unwrap();
+        std::os::unix::fs::symlink(&target, &serial).unwrap();
+        refused("link");
+        fs::remove_file(&target).unwrap();
+        refused("dangling link");
+        assert_eq!(fs::read_link(&serial).unwrap(), target);
+        assert!(!target.exists());
+    }
 }
 
 fn library(bytes: &[u8]) -> Index {

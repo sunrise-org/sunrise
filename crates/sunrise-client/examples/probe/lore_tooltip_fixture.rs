@@ -15,12 +15,12 @@ pub fn main() -> Result<(), Box<dyn Error>> {
         .filter(|l| !l.is_empty() && !l.starts_with('#'))
     {
         let stack = parse_stack(line)?.ok_or("empty stack")?;
-        let display = tooltip_display(&stack);
+        let display = tooltip_display(&stack, None);
         if !display.shows("minecraft:lore") {
             writeln!(output, "-")?;
             continue;
         }
-        let lines = lore_texts(&stack);
+        let lines = lore_texts(&stack, None);
         if lines.is_empty() {
             writeln!(output, "-")?;
             continue;

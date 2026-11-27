@@ -1,0 +1,1 @@
+sunrise-gameplay game::server_side::lan_crafting::recipe_award_tests_server::a_guest_crafting_take_teaches_the_recipe_and_counts_what_it_asked_for lib daily resources # boots the game guest fixture

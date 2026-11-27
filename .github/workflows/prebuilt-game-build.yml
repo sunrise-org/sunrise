@@ -282,6 +282,12 @@ jobs:
           python tools/sdk_api_source.py build "$scratch/api-source"
           python tools/sdk_api_source.py archive "$scratch/api-source" "$scratch/release/api-source.tar.xz"
           python tools/prebuilt_game.py index "$scratch/release"
+          if [[ "$RUNNER_OS" == macOS ]]; then
+            # The system openssl can reject the signer's Ed25519 pkeyutl -rawin option.
+            OPENSSL="$(brew --prefix openssl@3)/bin/openssl"
+            "$OPENSSL" version
+            export OPENSSL
+          fi
           EPHEMERAL=yes bash tools/ci/sign_release.sh "sdk-$commit" "$scratch"/release/*
           echo "SUNRISE_SDK_TRUSTED_KEY=$(cat "$scratch/release/ephemeral.pub")" >> "$GITHUB_ENV"
           rm "$scratch/release/ephemeral.pub"

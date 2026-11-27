@@ -1,7 +1,7 @@
 import argparse
 import contextlib
-import io
 import datetime
+import io
 import json
 import os
 from pathlib import Path
@@ -17,6 +17,7 @@ from unittest import mock
 from tools import pr_ready
 from tests.git_fixture import isolated_git_env
 from tests.os_support import POSIX_BASH
+from tests.test_launcher_mirrors_check import WRITE, MirrorCheckout
 
 PACKAGES = {"sunrise-core": "crates/sunrise-core", "sunrise-client": "crates/sunrise-client",
             "sunrise-theme": "crates/sunrise-theme", "xtask": "xtask"}
@@ -285,6 +286,72 @@ class PrReadyTests(unittest.TestCase):
         by_name = {step.name: step for step in steps}
         self.assertIn("--base abc123", by_name["Port map"].command)
         self.assertIn("--base origin/main", by_name["Layers"].command)
+
+    def launcher_mirror_step(self, changed, merge_base="abc123"):
+        manifest = pr_ready.launcher_mirrors.load_manifest()
+        mirror_crates = {Path(source).parts[1] for mirror in manifest["mirror"] for source in mirror["sources"]}
+        packages = {**PACKAGES, **{crate: f"crates/{crate}" for crate in mirror_crates}}
+        with mock.patch.object(pr_ready, "affected_here", return_value=[]):
+            steps = pr_ready.plan(args(quick=True), "origin/main", set(changed), packages, LIBRARIES, DEPENDENCIES,
+                                  merge_base=merge_base)
+        names = [step.name for step in steps]
+        self.assertLess(names.index("Addresses"), names.index("Launcher mirrors"))
+        self.assertLess(names.index("Launcher mirrors"), names.index("Port map"))
+        return steps[names.index("Launcher mirrors")]
+
+    def test_launcher_mirrors_run_when_a_mirrored_source_or_the_manifest_changes(self):
+        # The paths come from the manifest the check reads, never from a list here.
+        manifest = pr_ready.launcher_mirrors.load_manifest()
+        sources = [source for mirror in manifest["mirror"] for source in mirror.get("sources", [])]
+        self.assertTrue(sources)
+        for source in sources:
+            changed = source if source.endswith(".rs") else f"{source.rstrip('/')}/lib.rs"
+            with self.subTest(source=source):
+                step = self.launcher_mirror_step({changed})
+                self.assertIsNone(step.skip)
+                self.assertEqual(step.where, "here")
+                self.assertEqual(step.command, "python3 tools/ci/check_launcher_mirrors.py --base abc123 --remind-body")
+        self.assertIsNone(self.launcher_mirror_step({"tools/launcher_mirrors.toml"}).skip)
+        # A sibling that only shares a mirror source's name prefix is not part of it.
+        self.assertEqual(self.launcher_mirror_step({f"{sources[0].rstrip('/')}-other/lib.rs"}).skip,
+                         "launcher mirrors untouched")
+        for path in ("README.md", "tools/pr_ready.py", "crates/sunrise-client/src/game.rs"):
+            with self.subTest(path=path):
+                self.assertEqual(self.launcher_mirror_step({path}).skip, "launcher mirrors untouched")
+
+    def run_launcher_mirror_step(self, checkout):
+        """The planned step's own command for a change to a mirrored source, run in `checkout` and finished as the
+        self-check does."""
+        source = pr_ready.launcher_mirrors.load_manifest()["mirror"][0]["sources"][0]
+        step = self.launcher_mirror_step({f"{source.rstrip('/')}/lib.rs"}, merge_base=checkout.base)
+        self.assertIsNone(step.skip)
+        result = checkout.run(*step.command.split())
+        step.output, step.status = result.stdout, "pass" if result.returncode == 0 else "fail"
+        with contextlib.redirect_stderr(io.StringIO()):
+            pr_ready.finish(step, verbose=True)
+        return step
+
+    def test_a_mirrored_source_change_with_a_stale_manifest_fails_with_the_write_command(self):
+        checkout = MirrorCheckout(self)
+        checkout.change_surface(record=False)
+        step = self.run_launcher_mirror_step(checkout)
+        self.assertEqual(step.status, "fail")
+        self.assertIn(f"Run `{WRITE}`", step.detail)
+        self.assertIn("mirror: public surface is", step.detail)
+
+    def test_a_changed_surface_with_a_current_manifest_passes_and_reminds_about_the_body_line(self):
+        checkout = MirrorCheckout(self)
+        checkout.change_surface(record=True)
+        step = self.run_launcher_mirror_step(checkout)
+        self.assertEqual(step.status, "pass", step.output)
+        self.assertIn("Reminder: launcher mirrors changed (mirror)", step.detail)
+        self.assertIn("launcher-mirror:", step.detail)
+
+    def test_a_mirrored_source_touched_without_a_surface_change_passes_without_a_reminder(self):
+        checkout = MirrorCheckout(self)
+        checkout.change_privately()
+        step = self.run_launcher_mirror_step(checkout)
+        self.assertEqual((step.status, step.detail), ("pass", ""))
 
     def test_content_root_tests_run_only_when_what_they_load_changes(self):
         packages = {**PACKAGES, "sunrise-mod-package": "crates/sunrise-mod-package",
@@ -958,6 +1025,182 @@ class PrReadyTests(unittest.TestCase):
         self.assertTrue(result.wasSuccessful())
         self.assertEqual(pr_ready.unittest_passed(stream.getvalue()),
                          "3 run, OK (skipped=1, expected failures=1)")
+
+    def prepared_root(self, directory, **changes):
+        """A root stamped as the checkout's preparer writes it, with `changes` applied (None removes a key)."""
+        expected = pr_ready.expected_prepared_stamp()
+        manifest = {"schema": expected["schema"], "minecraft": expected["minecraft"]}
+        stamp = {"output_version": expected["output_version"]}
+        root = Path(directory)
+        for key, value in changes.items():
+            target = stamp if key == "output_version" else manifest
+            if value is None:
+                target.pop(key, None)
+            else:
+                target[key] = value
+        (root / "sunrise-resources.json").write_text(json.dumps(manifest))
+        if "stamp" not in changes:
+            (root / "sunrise-prepare.json").write_text(json.dumps(stamp))
+        return root
+
+    def test_expected_prepared_stamp_reads_the_checkout(self):
+        expected = pr_ready.expected_prepared_stamp()
+        self.assertEqual(set(expected), {"schema", "output_version", "minecraft"})
+        self.assertGreater(expected["schema"], 0)
+        self.assertGreater(expected["output_version"], 0)
+        self.assertRegex(expected["minecraft"], r"^\d+\.\d+")
+
+    def test_prepared_stamp_problems_accept_a_current_root_and_name_each_stale_part(self):
+        expected = pr_ready.expected_prepared_stamp()
+        with tempfile.TemporaryDirectory() as directory:
+            self.assertEqual(pr_ready.prepared_stamp_problems(Path(directory)), ["sunrise-resources.json is missing"])
+            root = self.prepared_root(directory)
+            self.assertEqual(pr_ready.prepared_stamp_problems(root), [])
+            stale = expected["output_version"] - 1
+            self.prepared_root(directory, output_version=stale)
+            self.assertEqual(pr_ready.prepared_stamp_problems(root),
+                             [f"made by output version {stale}, this build needs {expected['output_version']}"])
+            self.prepared_root(directory, schema=expected["schema"] - 1)
+            self.assertEqual(pr_ready.prepared_stamp_problems(root),
+                             [f"an older layout (schema {expected['schema'] - 1}, "
+                              f"this preparer writes {expected['schema']})"])
+            self.prepared_root(directory, minecraft="1.0")
+            self.assertEqual(pr_ready.prepared_stamp_problems(root),
+                             [f"prepared for Minecraft 1.0, this build needs {expected['minecraft']}"])
+            self.prepared_root(directory)
+            (root / "sunrise-prepare.json").unlink()
+            self.assertEqual(pr_ready.prepared_stamp_problems(root),
+                             [f"made by output version unknown, this build needs {expected['output_version']}"])
+            self.prepared_root(directory, profile="server")
+            self.assertEqual(pr_ready.prepared_stamp_problems(root),
+                             ["prepared for the server profile, tests need full client resources"])
+            (root / "sunrise-resources.json").write_text("{")
+            self.assertEqual(pr_ready.prepared_stamp_problems(root),
+                             ["sunrise-resources.json is not a readable JSON object"])
+
+    def refused(self, host="local", skip=None, **changes):
+        step = pr_ready.Step("content root tests", pr_ready.CONTENT_ROOT_TESTS, skip=skip)
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, {"SUNRISE_TEST_RESOURCES": str(self.prepared_root(directory, **changes))}), \
+                mock.patch.object(pr_ready.subprocess, "Popen", side_effect=AssertionError("cargo started")), \
+                contextlib.redirect_stderr(io.StringIO()):
+            pr_ready.refuse_stale_prepared(args(host=host), [step])
+            if step.status == "fail":  # the others would run cargo: only a refusal must not
+                pr_ready.run_checks([step], host, verbose=False)
+        return step
+
+    def test_prepared_stamp_types_are_read_as_serde_reads_them(self):
+        expected = pr_ready.expected_prepared_stamp()
+        manifest_cases = [{"schema": 7.0}, {"schema": True}, {"schema": "7"}, {"schema": 1 << 63},
+                          {"minecraft": 26}, {"profile": 1}, {"server_sha1": 1}, {"facts_sha256": []},
+                          {"block_tags_sha256": {}}, {"server_files": [1]}, {"server_files": "a"}]
+        stamp_cases = [9.0, True, -1, "9", 1 << 32, [9]]
+        with tempfile.TemporaryDirectory() as directory:
+            root = self.prepared_root(directory)
+            for changes in manifest_cases:
+                with self.subTest(changes=changes):
+                    self.prepared_root(directory, **changes)
+                    self.assertEqual(pr_ready.prepared_stamp_problems(root),
+                                     ["sunrise-resources.json is not a valid manifest"])
+                    step = self.refused(**changes)
+                    self.assertEqual(step.status, "fail")
+                    self.assertIn("sunrise-resources.json is not a valid manifest", step.detail)
+            for value in stamp_cases:
+                with self.subTest(output_version=value):
+                    self.prepared_root(directory, output_version=value)
+                    self.assertEqual(pr_ready.prepared_stamp_problems(root),
+                                     [f"made by output version unknown, this build needs {expected['output_version']}"])
+                    step = self.refused(output_version=value)
+                    self.assertEqual(step.status, "fail")
+                    self.assertIn("made by output version unknown", step.detail)
+            # What serde reads: null and absent optional fields, and a well-typed inventory.
+            self.prepared_root(directory, server_files=["a"], profile=None, server_sha1="x")
+            self.assertEqual(pr_ready.prepared_stamp_problems(root), [])
+
+    def test_a_stale_prepared_root_fails_the_content_root_tests_before_cargo_starts(self):
+        expected = pr_ready.expected_prepared_stamp()
+        refused = self.refused
+
+        step = refused(output_version=expected["output_version"] - 1)
+        self.assertEqual(step.status, "fail")
+        self.assertIn(f"made by output version {expected['output_version'] - 1}, "
+                      f"this build needs {expected['output_version']}", step.detail)
+        self.assertIn("run sunrise-prepare", step.detail)
+        self.assertEqual(step.output, step.detail + "\n")
+        self.assertIsNone(refused().status)
+        self.assertEqual(refused(skip="content root untouched", schema=0).status, "skip")
+        self.assertIsNone(refused(host="macmini", schema=0).status)
+        # A root that is not there is the test boundary's to name, not the preflight's.
+        step = pr_ready.Step("content root tests", pr_ready.CONTENT_ROOT_TESTS)
+        with tempfile.TemporaryDirectory() as directory, \
+                mock.patch.dict(os.environ, {"SUNRISE_TEST_RESOURCES": str(Path(directory) / "none")}):
+            pr_ready.refuse_stale_prepared(args(), [step])
+        self.assertIsNone(step.status)
+
+    def test_a_relative_override_is_read_from_the_cargo_test_directory(self):
+        """cargo test -p sunrise-client-lib starts in crates/sunrise-client-lib, where Rust reads a relative root."""
+        expected = pr_ready.expected_prepared_stamp()
+        stale = expected["output_version"] - 1
+
+        def make(root, path, **changes):
+            (root / path).mkdir(parents=True, exist_ok=True)
+            self.prepared_root(root / path, **changes)
+            return (root / path).resolve()
+
+        def run(root, override):
+            step = pr_ready.Step("content root tests", pr_ready.CONTENT_ROOT_TESTS)
+            with mock.patch.object(pr_ready, "ROOT", root), \
+                    mock.patch.object(pr_ready, "expected_prepared_stamp", return_value=expected), \
+                    mock.patch.dict(os.environ), \
+                    mock.patch.object(pr_ready.subprocess, "Popen", side_effect=AssertionError("cargo started")), \
+                    contextlib.redirect_stderr(io.StringIO()):
+                if override is None:
+                    os.environ.pop("SUNRISE_TEST_RESOURCES", None)
+                else:
+                    os.environ["SUNRISE_TEST_RESOURCES"] = override
+                pr_ready.refuse_stale_prepared(args(), [step])
+                if step.status == "fail":
+                    pr_ready.run_checks([step], "local", verbose=False)
+            return step
+
+        with tempfile.TemporaryDirectory() as directory:
+            root = Path(directory).resolve()
+            crate = "crates/sunrise-client-lib/rel"
+            # The checkout's `rel` is current, the crate's is stale: the crate's is the one cargo's tests read.
+            make(root, "rel")
+            inside = make(root, crate, output_version=stale)
+            step = run(root, "rel")
+            self.assertEqual(step.status, "fail")
+            self.assertIn(f'--output "{inside}"', step.detail)
+            self.assertNotIn(f'--output "{root / "rel"}"', step.detail)
+            # The other way round, nothing is refused.
+            make(root, "rel", output_version=stale)
+            make(root, crate)
+            self.assertIsNone(run(root, "rel").status)
+            # `..` segments come back to the checkout and print without them.
+            lock = ".local/sunrise-client/26.3"
+            relative = f"../../{lock}"
+            outside = make(root, lock, output_version=stale)
+            step = run(root, relative)
+            self.assertEqual(step.status, "fail")
+            self.assertIn(f'--output "{outside}"', step.detail)
+            self.assertNotIn("..", step.detail)
+            make(root, lock)
+            self.assertIsNone(run(root, relative).status)
+            # An empty override is Rust's non-directory, not Python's ".": the crate's own directory (here
+            # stale) is never named, and the boundary reports the missing inputs.
+            make(root, "crates/sunrise-client-lib", output_version=stale)
+            step = run(root, "")
+            self.assertIsNone(step.status)
+            self.assertNotIn("sunrise-client-lib", step.detail)
+            # A missing segment before `..` fails the OS lookup, though lexically the path is the stale checkout
+            # root: nothing is refused.
+            make(root, lock, output_version=stale)
+            self.assertFalse((root / "crates/sunrise-client-lib/missing").exists())
+            self.assertIsNone(run(root, f"missing/../../../{lock}").status)
+            # No override: the checkout's own prepared root.
+            make(root, f".local/sunrise-client/{expected['minecraft']}", output_version=stale)
+            self.assertEqual(run(root, None).status, "fail")
 
     def test_python_checks_run_beside_cargo_and_harnesses_after_it(self):
         steps = pr_ready.plan(args(), "origin/main", {"crates/sunrise-core/src/lib.rs"}, PACKAGES, LIBRARIES,

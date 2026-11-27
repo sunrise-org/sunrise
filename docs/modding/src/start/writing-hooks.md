@@ -78,7 +78,8 @@ to find matching hook names in the pinned SDK, for example:
 cargo sunrise-mod hooks player_tick_post
 ```
 
-With the SDK already fetched, this works offline. The search prints names and short
+The command fetches nothing: it reads the SDK that `new` or `cargo sunrise-mod check` already fetched
+and verified, and tells you to run `check` when there is none. The search prints names and short
 descriptions, not Rust signatures. For the exact signature, go to the matching
 method on `mod_api::Hooks` in your editor, using the pinned SDK under
 [`.sunrise/sdk/api/`](../reference/sdk/03-in-a-project.md#sunrisesdk).

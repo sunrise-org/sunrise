@@ -1,0 +1,1 @@
+cargo-sunrise-mod the_rolling_tool_checks_for_updates_only_after_a_successful_everyday_command test:update_notice daily child-process

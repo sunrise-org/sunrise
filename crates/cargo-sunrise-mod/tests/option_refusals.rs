@@ -55,3 +55,28 @@ fn check_fit_refuses_project_options_before_fetching_an_sdk() {
         refused_before_any_work(root.path(), &output, args[0]);
     }
 }
+
+#[test]
+#[ignore = "daily"]
+fn a_native_build_with_a_refused_sdk_source_fails_before_any_fetch_or_notice() {
+    let project = tempfile::tempdir().unwrap();
+    std::fs::create_dir(project.path().join("src")).unwrap();
+    std::fs::write(
+        project.path().join("sunrise-mod.toml"),
+        "id = \"greeter\"\nname = \"Greeter\"\nversion = \"0.1.0\"\nside = \"both\"\n[native]\ngame = \"26.3\"\nsunrise = \"0123456789abcdef0123456789abcdef01234567\"\n",
+    )
+    .unwrap();
+    // A path into a game checkout is not the pinned SDK's path.
+    std::fs::write(
+        project.path().join("Cargo.toml"),
+        "[package]\nname = \"greeter\"\nversion = \"0.1.0\"\n[dependencies]\nsunrise-mod-api = { path = \"../crates/sunrise-mod-api\" }\n",
+    )
+    .unwrap();
+    let output = tool(project.path(), &["build"]);
+    assert_eq!(output.status.code(), Some(1));
+    assert!(
+        !String::from_utf8_lossy(&output.stdout).contains("checkout"),
+        "{output:?}"
+    );
+    refused_before_any_work(project.path(), &output, "E_SDK_SOURCE");
+}

@@ -53,7 +53,7 @@ cargo sunrise-mod check             # validate the project before release
     plus `tags/worldgen/biome` and `tags/worldgen/structure`. Tag files can be in any namespace, including
     `minecraft`; other tag folders, optional entries and removals are not checked.
   - Loot item entries' `name` and block-state conditions' `block` fields. Recipes, tags, loot tables and loot pools
-    that `neoforge:conditions` may disable are left alone.
+    that `neoforge:conditions` or `fabric:load_conditions` may disable are left alone.
 
   A missing reference is an **error** (exit 1) only when the tool has enough information to confirm it. When a
   manifest lists `[[jar]]`, `check` and `build` read each jar from the local jar store (fetching any missing jar

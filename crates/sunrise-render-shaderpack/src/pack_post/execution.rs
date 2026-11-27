@@ -786,10 +786,12 @@ impl PackPost {
                 .zip(e.late)
                 .any(|(p, late)| p.is_some() && late)
         });
+        // The hand's translucent quads draw in the translucent phase too (`draw_hand_water`).
         let mut water_drawn = !boundaries.translucent_blocks
             && !boundaries.weather
             && !boundaries.custom_geometry
             && self.water.is_none()
+            && self.hand_water.is_none()
             && self.weather.is_none()
             && !late_entities
             && !self.has_mod_slot(ModPassSlot::AfterTranslucentGbuffers)
@@ -2242,6 +2244,11 @@ impl PackPost {
         geometry.prepare(device, queue, hand.vertices, hand.items, projection);
         if geometry.quads > 0 {
             let group = self.bind(device, queue, encoder, &mut pass, size);
+            // Translucent quads wait for `gbuffers_hand_water` when the pack has one.
+            let late = self.hand_water.is_some();
+            let runs =
+                || (geometry.runs.iter()).chain(geometry.translucent_runs.iter().filter(|_| !late));
+            let block_group = self.block_atlas_group(device, &mut pass, runs().any(|r| r.3));
             {
                 let mut rp = self.begin(encoder, &pass);
                 rp.set_pipeline(pass.render());
@@ -2254,19 +2261,15 @@ impl PackPost {
                 rp.set_bind_group(1, &geometry.group, &[]);
                 rp.set_vertex_buffer(0, geometry.vertices());
                 rp.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
-                // The arm and each held item: their own `currentRenderedItemId`. Translucent
-                // quads wait for `gbuffers_hand_water` when the pack has one.
-                let late = self.hand_water.is_some();
-                let runs = geometry
-                    .runs
-                    .iter()
-                    .chain(geometry.translucent_runs.iter().filter(|_| !late));
-                for &(first, quads, offset) in runs {
-                    if pass.draw {
-                        rp.set_bind_group(2, &geometry.slot_group, &[offset]);
-                    }
-                    rp.draw_indexed(first * 6..(first + quads) * 6, 0, 0..1);
-                }
+                // The arm and each held item: their own `currentRenderedItemId`.
+                hand_runs(
+                    &mut rp,
+                    &pass,
+                    &geometry,
+                    runs(),
+                    &group,
+                    block_group.as_ref(),
+                );
             }
             self.mips_valid &= !pass.written;
         }
@@ -2435,6 +2438,8 @@ impl PackPost {
             .filter(|(_, g)| g.quads > 0 && !g.translucent_runs.is_empty())
         {
             let group = self.bind(device, queue, encoder, &mut pass, size);
+            let runs = &geometry.translucent_runs;
+            let block_group = self.block_atlas_group(device, &mut pass, runs.iter().any(|r| r.3));
             {
                 let mut rp = self.begin(encoder, &pass);
                 rp.set_pipeline(pass.render());
@@ -2447,12 +2452,7 @@ impl PackPost {
                 rp.set_bind_group(1, &geometry.group, &[]);
                 rp.set_vertex_buffer(0, geometry.vertices());
                 rp.set_index_buffer(geometry.indices.slice(..), wgpu::IndexFormat::Uint32);
-                for &(first, quads, offset) in &geometry.translucent_runs {
-                    if pass.draw {
-                        rp.set_bind_group(2, &geometry.slot_group, &[offset]);
-                    }
-                    rp.draw_indexed(first * 6..(first + quads) * 6, 0, 0..1);
-                }
+                hand_runs(&mut rp, &pass, geometry, runs, &group, block_group.as_ref());
             }
             self.mips_valid &= !pass.written;
         }
@@ -3116,6 +3116,33 @@ impl PackPost {
             }
         }
         hasher.finish()
+    }
+}
+
+/// Draws the hand's `runs` (`PackHand::runs`), each with its slot of `HzDraw` and set 0 of the
+/// atlas it samples: `block` for native terrain quads placed in the block atlas, `plain` (bound
+/// at the start) for the others. Without a block atlas group no run is placed (`PackHand`'s
+/// block atlas comes from the same atlas).
+fn hand_runs<'a>(
+    rp: &mut wgpu::RenderPass<'_>,
+    pass: &Pass,
+    geometry: &pack_hand::PackHand,
+    runs: impl IntoIterator<Item = &'a (u32, u32, u32, bool)>,
+    plain: &wgpu::BindGroup,
+    block: Option<&wgpu::BindGroup>,
+) {
+    let mut on_block = false;
+    for &(first, quads, offset, block_atlas) in runs {
+        if let Some(block) = block
+            && block_atlas != on_block
+        {
+            rp.set_bind_group(0, if block_atlas { block } else { plain }, &[]);
+            on_block = block_atlas;
+        }
+        if pass.draw {
+            rp.set_bind_group(2, &geometry.slot_group, &[offset]);
+        }
+        rp.draw_indexed(first * 6..(first + quads) * 6, 0, 0..1);
     }
 }
 

@@ -6,7 +6,6 @@
 //! its features and the fourth only its terrain.
 extern crate sunrise_client_lib as sunrise_client;
 use std::{
-    path::Path,
     sync::Arc,
     thread,
     time::{Duration, Instant},
@@ -27,13 +26,8 @@ use sunrise_client::{
     world::World,
 };
 use sunrise_world::registry::BlockStateId;
-
-fn resources() -> Option<std::path::PathBuf> {
-    let root = Path::new(env!("CARGO_MANIFEST_DIR"))
-        .join("../../.local/sunrise-client")
-        .join(sunrise_core::VANILLA_VERSION);
-    root.join("items.json").exists().then_some(root)
-}
+#[path = "../src/test_resources.rs"]
+mod test_resources;
 
 /// A column under generation, and whether it has its features.
 struct Column {
@@ -82,10 +76,9 @@ impl ChunkGenerator for Plain {
 }
 
 #[test]
+#[ignore = "daily"]
 fn forced_chunks_reach_vanillas_rings() {
-    let Some(root) = resources() else {
-        return;
-    };
+    let root = test_resources::prepared_root(&[test_resources::STREAMING_INPUTS]);
     let assets = Arc::new(Assets::load(&root).unwrap());
     let render = Arc::new(
         sunrise_client::assets::RenderAssets::load(

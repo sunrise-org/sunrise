@@ -2,10 +2,12 @@
 import contextlib
 import io
 import subprocess
+import sys
 import tempfile
 import unittest
 from pathlib import Path
 
+from tests import git_history
 from tests.git_fixture import isolated_git_env
 from tools.ci import check_port_map_paths as guard
 
@@ -187,6 +189,77 @@ class PortMapPathTests(unittest.TestCase):
         with self.assertRaises(SystemExit) as exit:
             guard.base_listed(corrupt, self.root)
         self.assertIn(guard.LIST, str(exit.exception))
+
+    def start_history(self):
+        """A committed base holding one resolving row and an empty list; returns its commit."""
+        self.source("fn keep() {}\n")
+        self.row("A.b\tport\tcrates/a.rs::Game::keep")
+        (self.root / guard.LIST).parent.mkdir(parents=True)
+        # Comment lines between the two ends of the list: main lists a row above them and a pull request below, so
+        # the two merge without a conflict.
+        (self.root / guard.LIST).write_text("# Known stale rows.\n" + "".join(f"# note {n}\n" for n in range(5)),
+                                            encoding="utf-8")
+        git_history.git(self.root, "init", "-q")
+        git_history.git(self.root, "add", "-A")
+        git_history.git(self.root, "commit", "-qm", "base")
+        return git_history.git(self.root, "rev-parse", "HEAD").stdout.strip()
+
+    def add_stale_row(self, name, map_name="game-1.tsv", top=False):
+        """A stale row in `map_name`, listed in the known-stale list: at its end, or above `start_history`'s notes."""
+        with (self.root / "tools/port_map" / map_name).open("a", encoding="utf-8") as map_file:
+            map_file.write(f"{name}\tport\tcrates/gone.rs::Game::gone_{name[0].lower()}\n")
+        line = f"tools/port_map/{map_name}\t{name}\tcrates/gone.rs::Game::gone_{name[0].lower()}\n"
+        listed = (self.root / guard.LIST).read_text(encoding="utf-8")
+        (self.root / guard.LIST).write_text(line + listed if top else listed + line, encoding="utf-8")
+
+    def merge(self, base, main_change, pr_change):
+        return git_history.merge_pull_request(self.root, base, ("crates", "tools"), main_change, pr_change)
+
+    def test_a_stale_base_does_not_blame_the_pull_request_for_a_row_main_listed(self):
+        base = self.start_history()
+        self.merge(base, lambda: self.add_stale_row("C.d", top=True),
+                   lambda: self.source("fn other() {}\n", "b.rs"))
+        code, output = self.run_main(["--base", base, "--pull-request-merge"])
+        self.assertEqual(code, 0, output)
+        code, output = self.run_main(["--base", base])
+        self.assertEqual(code, 1)
+        self.assertIn("C.d", output)
+
+    def test_a_pull_request_that_lists_a_stale_row_still_fails_in_the_merge(self):
+        base = self.start_history()
+        self.merge(base, lambda: self.add_stale_row("C.d", top=True),
+                   lambda: self.add_stale_row("E.f", map_name="game-2.tsv"))
+        listed = (self.root / guard.LIST).read_text(encoding="utf-8")
+        self.assertIn("\tC.d\t", listed)
+        self.assertIn("\tE.f\t", listed)
+        # Every stale row is listed, so only the ratchet against the merge's first parent can fail it.
+        self.assertEqual(self.run_main([])[0], 0)
+        code, output = self.run_main(["--base", base, "--pull-request-merge"])
+        self.assertEqual(code, 1)
+        self.assertIn("added since", output)
+        self.assertIn("E.f", output)
+        self.assertNotIn("C.d", output)
+
+    def test_the_pull_request_merge_needs_a_merge_of_a_descendant_of_the_base(self):
+        base = self.start_history()
+        code, output = self.run_main(["--base", base, "--pull-request-merge"])
+        self.assertEqual(code, 1)
+        self.assertIn("descendant of --base", output)
+        pr, _ = self.merge(base, lambda: None, lambda: self.source("fn other() {}\n", "b.rs"))
+        code, output = self.run_main(["--base", pr, "--pull-request-merge"])
+        self.assertEqual(code, 1)
+        self.assertIn("descendant of --base", output)
+
+    def test_the_pull_request_merge_takes_a_base(self):
+        with self.assertRaises(SystemExit) as exit, contextlib.redirect_stderr(io.StringIO()):
+            guard.main(["--pull-request-merge"], self.root)
+        self.assertEqual(exit.exception.code, 2)
+
+    def test_importing_the_guard_leaves_sys_path_alone(self):
+        script = ("import sys; before = list(sys.path); import tools.ci.check_port_map_paths; "
+                  "assert sys.path == before, sys.path")
+        result = subprocess.run([sys.executable, "-c", script], cwd=guard.ROOT, capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
 
     def test_list_lines_ignore_comments_and_blanks(self):
         self.assertEqual(guard.listed("# a note\n\nm\tA.b\tp::f\n"), {("m", "A.b", "p::f")})

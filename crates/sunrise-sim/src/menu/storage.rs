@@ -133,10 +133,16 @@ pub struct State {
     /// stack taken and the grid row by row before the take used it, for the
     /// caller (`native_item_crafted`).
     pub item_crafted: Vec<(String, ItemStack, Vec<Option<ItemStack>>)>,
-    /// `ItemStack.onCraftedBy` counts from merchant result callbacks, without a recipe id.
+    /// `ItemStack.onCraftedBy` counts from result takes (`checkTakeAchievements`), without a
+    /// recipe id.
     pub crafted_counts: Vec<(Arc<str>, i32)>,
     /// `MerchantResultSlot.removeCount`, reset by checkTakeAchievements.
     pub(super) merchant_remove_count: i32,
+    /// `ResultSlot.removeCount`: what a crafting result's takes asked for since its last
+    /// checkTakeAchievements (`remove`'s `min(amount, count)`, `onQuickCraft`'s moved count,
+    /// `onSwapCraft`'s stack). `ResultContainer.removeItem` hands over the whole stack, so a
+    /// right-click carries all of it but counts only the half it asked for.
+    pub(super) craft_remove_count: u32,
     /// Potions taken from a brewing stand's bottle slots
     /// (`PotionSlot.onTake`), for the caller.
     pub brewed: Vec<ItemStack>,

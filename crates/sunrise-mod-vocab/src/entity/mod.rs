@@ -11,6 +11,7 @@ pub(crate) mod dragon_fight;
 pub(crate) mod entity_reach;
 pub(crate) mod entity_tags;
 pub(crate) mod entity_type_defaults;
+pub(crate) mod entity_type_dimensions;
 pub(crate) mod mob_ai_pause;
 pub(crate) mod original_player;
 pub(crate) mod player_data;

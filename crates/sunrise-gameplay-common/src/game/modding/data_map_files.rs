@@ -199,7 +199,13 @@ pub fn load<T: Clone, I: IntoIterator<Item: AsRef<str>>>(
         tags,
         |bytes, context| {
             decode(bytes, |mut raw: Value| {
-                if !overlay.conditions.allows_file_isolated(&raw, context)? {
+                // A value's own conditions are NeoForge's element conditions alone.
+                const KEY: &str = sunrise_world::conditions::NEOFORGE_KEY;
+                if let Some(conditions) = raw.get(KEY)
+                    && !overlay
+                        .conditions
+                        .allows_file_isolated(&serde_json::json!({ KEY: conditions }), context)?
+                {
                     return Ok(None);
                 }
                 if let Some(object) = raw.as_object_mut()

@@ -16,29 +16,36 @@ DAILY_LEGS = [ROOT / ".github/workflows" / name for name in ("fn-replace-check.y
                                                                           "machine-sample.yml")]
 
 
-def expression_value(expression, github, inputs=None, matrix=None):
-    """Evaluate this workflow's context/equality/boolean subset; reject other syntax.
+def expression_value(expression, github, inputs=None, matrix=None, *, steps=None, job_status="success"):
+    """Evaluate the context/equality/boolean subset used by the workflow tests.
 
     These contexts use nonzero PR numbers, lowercase event/ref strings and nonempty
     SHAs, whose truthiness/equality matches Actions. Boolean operators return their
     operands, so the group's fallback chain is exercised rather than pinned as text.
+    For step conditions, job_status is the status when the condition is evaluated.
     """
+    status_checks = {"always": True, "success": job_status == "success",
+                     "failure": job_status == "failure", "cancelled": job_status == "cancelled"}
+
     def evaluate(node):
         if isinstance(node, ast.Constant):
             return node.value
         if isinstance(node, ast.Name):
             return {"github": github, "inputs": inputs or {}, "matrix": matrix or {},
-                    "env": {}, "true": True, "false": False}[node.id]
+                    "steps": steps or {}, "env": {}, "true": True, "false": False}[node.id]
         if isinstance(node, ast.Attribute):
             return evaluate(node.value).get(node.attr, "")
         if isinstance(node, ast.Compare) and len(node.ops) == 1 and isinstance(node.ops[0], (ast.Eq, ast.NotEq)):
             equal = evaluate(node.left) == evaluate(node.comparators[0])
             return equal if isinstance(node.ops[0], ast.Eq) else not equal
-        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id == "format":
-            template, *values = [evaluate(arg) for arg in node.args]
-            for index, value in enumerate(values):
-                template = template.replace(f"{{{index}}}", str(value))
-            return template
+        if isinstance(node, ast.Call) and isinstance(node.func, ast.Name):
+            if node.func.id in status_checks and not node.args and not node.keywords:
+                return status_checks[node.func.id]
+            if node.func.id == "format":
+                template, *values = [evaluate(arg) for arg in node.args]
+                for index, value in enumerate(values):
+                    template = template.replace(f"{{{index}}}", str(value))
+                return template
         if isinstance(node, ast.BoolOp):
             for value in node.values:
                 result = evaluate(value)
@@ -49,7 +56,14 @@ def expression_value(expression, github, inputs=None, matrix=None):
             return result
         raise AssertionError(f"unsupported Actions expression syntax: {ast.dump(node)}")
 
-    return evaluate(ast.parse(expression.replace("&&", " and ").replace("||", " or ").strip(), mode="eval").body)
+    tree = ast.parse(expression.replace("&&", " and ").replace("||", " or ").strip(), mode="eval")
+    # Actions implicitly checks success() when a condition has no status function.
+    if not status_checks["success"] and not any(
+        isinstance(node, ast.Call) and isinstance(node.func, ast.Name) and node.func.id in status_checks
+        for node in ast.walk(tree)
+    ):
+        return False
+    return evaluate(tree.body)
 
 
 def concurrency_for(path, event, sha, number=None, ref="refs/heads/main", inputs=None, job=None,

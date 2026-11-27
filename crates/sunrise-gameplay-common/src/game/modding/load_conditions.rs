@@ -129,7 +129,8 @@ pub struct VanillaValueInputs<'a, 'b> {
 #[derive(Default)]
 pub struct RegistryView {
     pub ids: BTreeMap<String, BTreeSet<String>>,
-    pub tags: BTreeMap<String, BTreeSet<String>>,
+    /// Each registry's bound tags, each with whether it holds an entry.
+    pub tags: BTreeMap<String, BTreeMap<String, bool>>,
 }
 
 impl RegistryView {
@@ -140,11 +141,12 @@ impl RegistryView {
                     .iter()
                     .map(|(key, ids)| (key.as_str(), ids.iter().map(String::as_str))),
             )
-            .with_tags(
-                self.tags
-                    .iter()
-                    .map(|(key, tags)| (key.as_str(), tags.iter().map(String::as_str))),
-            )
+            .with_tags(self.tags.iter().map(|(key, tags)| {
+                (
+                    key.as_str(),
+                    tags.iter().map(|(tag, held)| (tag.as_str(), *held)),
+                )
+            }))
     }
 }
 
@@ -193,9 +195,9 @@ fn admit_datapack_registries(
         .collect();
     let programs: Vec<_> = winners
         .iter()
-        .map(|(_, _, json)| {
+        .map(|(file, _, json)| {
             let (text, json) = json.as_ref().map_err(Clone::clone)?;
-            base.decode_file_conditions(json)
+            base.decode_file_conditions(json, file)
                 .map(|program| (*text, program))
                 .map_err(malformed)
         })
@@ -299,8 +301,7 @@ fn admit_datapack_registries(
             view.tags.insert(
                 declaration.key.clone(),
                 tags.iter()
-                    .filter(|(_, members)| !members.is_empty())
-                    .map(|(tag, _)| tag.clone())
+                    .map(|(tag, members)| (tag.clone(), !members.is_empty()))
                     .collect(),
             );
             builder.stage_registry(&declaration.key, entries, tags);
@@ -407,18 +408,17 @@ pub fn worldgen_load_conditions(
         ..sunrise_world::loot::PackOverlay::default()
     };
     let builtin_ids = sunrise_world::tag_layers::builtin_ids(resources).unwrap_or_default();
-    let mut non_empty_tags: Vec<(String, Vec<String>)> = Vec::new();
+    let mut bound_tags: Vec<(String, Vec<(String, bool)>)> = Vec::new();
     for kind in WORLDGEN_STATIC_TAG_REGISTRIES {
         let ids = builtin_ids.get(kind);
         if let Ok(loaded) = sunrise_world::tag_layers::load(resources, kind, &tag_overlay, |id| {
             ids.is_none_or(|known| known.contains(id))
         }) {
-            let tags: Vec<String> = loaded
+            let tags: Vec<(String, bool)> = loaded
                 .into_iter()
-                .filter(|(_, members)| !members.is_empty())
-                .map(|(tag, _)| tag)
+                .map(|(tag, members)| (tag, !members.is_empty()))
                 .collect();
-            non_empty_tags.push((format!("minecraft:{kind}"), tags));
+            bound_tags.push((format!("minecraft:{kind}"), tags));
         }
     }
     base.clone()
@@ -428,11 +428,12 @@ pub fn worldgen_load_conditions(
                 .iter()
                 .map(|(registry, ids)| (registry.as_str(), ids.iter().map(String::as_str))),
         )
-        .with_tags(
-            non_empty_tags
-                .iter()
-                .map(|(registry, tags)| (registry.as_str(), tags.iter().map(String::as_str))),
-        )
+        .with_tags(bound_tags.iter().map(|(registry, tags)| {
+            (
+                registry.as_str(),
+                tags.iter().map(|(tag, held)| (tag.as_str(), *held)),
+            )
+        }))
 }
 
 /// Strongly connected components, consumers before their dependencies
@@ -520,12 +521,10 @@ pub fn conditions_for_mods(
                 if !enabled {
                     return Ok(false);
                 }
-                let mut arguments = args.as_object().cloned().expect("decoded condition object");
-                arguments.remove("type");
-                let arguments = serde_json::Value::Object(arguments);
+                // The evaluator passes the arguments without the key that named the condition.
                 owner
                     .call("load condition", "test_load_condition", || {
-                        handler.test(&arguments)
+                        handler.test(args)
                     })
                     .map_err(|reason| format!("condition {name}: {reason}"))?
                     .map_err(|error| format!("condition {name}: mod {}: {error}", owner.id()))

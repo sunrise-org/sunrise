@@ -6,9 +6,13 @@
 //! validation and internal error scopes, so a refusal is an `Err` or a log line and never an
 //! uncaptured device error.
 
-use super::mod_pipelines::{ResolvedSet1Entry, create_mod_sampler, sampler_filtering};
+use super::mod_pipelines::{
+    ResolvedSet1Entry, SamplerLayout, create_mod_sampler, sampled_layout_entries,
+};
 use crate::mod_compute::{BuiltCompute, ComputeSet, Refusal};
-use mod_api::{BindingKind, Sampler};
+use mod_api::{BindingKind, ComputeDispatchError};
+use std::collections::{HashMap, HashSet};
+use std::sync::Arc;
 use wgpu::util::DeviceExt;
 
 /// One recorded dispatch of a compute node. Inline uniform and texel byte ranges in `entries`
@@ -16,6 +20,8 @@ use wgpu::util::DeviceExt;
 #[derive(Clone, Debug)]
 pub struct RecordedDispatch {
     pub slot: u32,
+    /// Sampler layout chosen from the submitted texture formats.
+    pub sampler_layout: SamplerLayout,
     pub entries: Vec<ResolvedSet1Entry>,
     pub inline: Vec<u8>,
     pub texel: Vec<u8>,
@@ -35,24 +41,27 @@ pub enum DispatchKind {
 }
 
 struct CompiledCompute {
+    recipe: Arc<BuiltCompute>,
     pipeline: wgpu::ComputePipeline,
     layout: wgpu::BindGroupLayout,
     /// The bind-group binding each declared entry starts at, in declaration order.
     bindings: Vec<(u32, BindingKind)>,
-    /// The device sampler of each set-1 sampler descriptor the pipeline declares, made once at
-    /// compile time.
-    samplers: std::collections::HashMap<Sampler, wgpu::Sampler>,
+    /// The device sampler of each sampled texture, by its binding, made once at compile time.
+    samplers: HashMap<u32, wgpu::Sampler>,
     label: String,
 }
+
+type ComputeKey = (u32, SamplerLayout);
 
 /// The compute pipelines built on one device for one load.
 #[derive(Default)]
 pub struct ModCompute {
     generation: u64,
-    pipelines: Vec<Option<CompiledCompute>>,
-    /// The slots whose dispatches were refused at record time and logged, so a persistent
-    /// refusal logs once, not every frame.
-    warned: std::collections::HashSet<u32>,
+    /// Base pipelines (empty sampler layout) and lazy variants in the current resource generation.
+    pipelines: HashMap<ComputeKey, Result<CompiledCompute, ComputeDispatchError>>,
+    /// Slots whose variant preparation or encoding refused a dispatch, logged once per reason.
+    warned_variants: HashSet<u32>,
+    warned: HashSet<u32>,
 }
 
 /// The texel format the shader declares for the storage image of declared entry `entry` of
@@ -198,15 +207,19 @@ fn check_limits(device: &wgpu::Device, built: &BuiltCompute) -> Result<(), (Refu
     Ok(())
 }
 
+/// The pipeline of `built`. Sampled textures selected by `sampler_layout` are declared
+/// unfilterable and read through nearest samplers.
 fn compile(
     device: &wgpu::Device,
-    built: &BuiltCompute,
+    built: &Arc<BuiltCompute>,
+    sampler_layout: &SamplerLayout,
 ) -> Result<CompiledCompute, (Refusal, String)> {
-    check_limits(device, built)?;
     let compute = wgpu::ShaderStages::COMPUTE;
     let mut layout_entries = Vec::new();
     let mut bindings = Vec::new();
     let mut next = 0u32;
+    let mut sampled = 0;
+    let mut samplers = HashMap::new();
     for entry in &built.bind_group_layout.entries {
         bindings.push((next, entry.kind));
         match entry.kind {
@@ -224,27 +237,10 @@ fn compile(
                 next += 1;
             }
             BindingKind::CombinedImageSampler { sampler } => {
-                let filterable = sampler_filtering(&sampler);
-                layout_entries.push(wgpu::BindGroupLayoutEntry {
-                    binding: next,
-                    visibility: compute,
-                    ty: wgpu::BindingType::Texture {
-                        sample_type: wgpu::TextureSampleType::Float { filterable },
-                        view_dimension: wgpu::TextureViewDimension::D2,
-                        multisampled: false,
-                    },
-                    count: None,
-                });
-                layout_entries.push(wgpu::BindGroupLayoutEntry {
-                    binding: next + 1,
-                    visibility: compute,
-                    ty: wgpu::BindingType::Sampler(if filterable {
-                        wgpu::SamplerBindingType::Filtering
-                    } else {
-                        wgpu::SamplerBindingType::NonFiltering
-                    }),
-                    count: None,
-                });
+                let nearest = sampler_layout.needs_nearest(sampled);
+                sampled += 1;
+                layout_entries.extend(sampled_layout_entries(next, compute, &sampler, nearest));
+                samplers.insert(next, create_mod_sampler(device, &sampler, nearest));
                 next += 2;
             }
             BindingKind::TexelBuffer { .. } | BindingKind::StorageBuffer { .. } => {
@@ -337,15 +333,8 @@ fn compile(
     if let Some(error) = validation.or(internal) {
         return Err((Refusal::Invalid, error.to_string()));
     }
-    let samplers = bindings
-        .iter()
-        .filter_map(|(_, kind)| match kind {
-            BindingKind::CombinedImageSampler { sampler } => Some(*sampler),
-            _ => None,
-        })
-        .map(|sampler| (sampler, create_mod_sampler(device, &sampler)))
-        .collect();
     Ok(CompiledCompute {
+        recipe: Arc::clone(built),
         pipeline,
         layout,
         bindings,
@@ -362,29 +351,72 @@ impl ModCompute {
         if set.generation() == self.generation {
             return;
         }
-        self.pipelines = set
-            .built()
-            .iter()
-            .enumerate()
-            .map(|(slot, built)| {
-                let built = built.as_ref()?;
-                match compile(device, built) {
-                    Ok(compiled) => Some(compiled),
-                    Err((reason, error)) => {
-                        if set.refuse(slot, reason) {
-                            log::warn!(
-                                "Sunrise: mod {} compute pipeline {} refused by the device: {error}",
-                                built.owner,
-                                built.id
-                            );
-                        }
-                        None
+        self.pipelines.clear();
+        for (slot, built) in set.built().iter().enumerate() {
+            let Some(built) = built else { continue };
+            let compiled = check_limits(device, built)
+                .and_then(|()| compile(device, built, &SamplerLayout::EMPTY));
+            let result = match compiled {
+                Ok(compiled) => Ok(compiled),
+                Err((reason, error)) => {
+                    if set.refuse(slot, reason) {
+                        log::warn!(
+                            "Sunrise: mod {} compute pipeline {} refused by the device: {error}",
+                            built.owner,
+                            built.id
+                        );
                     }
+                    Err(ComputeDispatchError::Pipeline(match reason {
+                        Refusal::Invalid => mod_api::ComputePipelineError::Invalid,
+                        Refusal::UnsupportedFeature => {
+                            mod_api::ComputePipelineError::UnsupportedFeature
+                        }
+                    }))
                 }
-            })
-            .collect();
+            };
+            self.pipelines
+                .insert((slot as u32, SamplerLayout::EMPTY), result);
+        }
         self.generation = set.generation();
+        self.warned_variants.clear();
         self.warned.clear();
+    }
+
+    /// Prepare the dispatch variant before encoding the compute pass. A failure applies to this
+    /// layout only: do not invalidate the handle or any other variant in the same load.
+    fn prepare_dispatch(
+        &mut self,
+        device: &wgpu::Device,
+        key: &ComputeKey,
+    ) -> Result<(), ComputeDispatchError> {
+        let (slot, ref sampler_layout) = *key;
+        if let Some(compiled) = self.pipelines.get(key) {
+            return compiled.as_ref().map(|_| ()).map_err(|err| *err);
+        }
+        let recipe = self
+            .pipelines
+            .get(&(slot, SamplerLayout::EMPTY))
+            .ok_or(ComputeDispatchError::Pipeline(
+                mod_api::ComputePipelineError::Invalid,
+            ))?
+            .as_ref()
+            .map_err(|err| *err)?
+            .recipe
+            .clone();
+        let result = compile(device, &recipe, sampler_layout).map_err(|(_, cause)| {
+            let error = ComputeDispatchError::VariantBuildFailed;
+            if self.warned_variants.insert(slot) {
+                log::warn!(
+                    "Sunrise: compute pipeline {} {error:?} (nearest sampler ordinals {:?}): {cause}",
+                    recipe.id,
+                    sampler_layout.ordinals()
+                );
+            }
+            error
+        });
+        let prepared = result.as_ref().map(|_| ()).map_err(|err| *err);
+        self.pipelines.insert(key.clone(), result);
+        prepared
     }
 
     /// Record `dispatches` on `encoder`, each in its own compute pass. Recording a dispatch
@@ -401,9 +433,19 @@ impl ModCompute {
         let mut buffers: Vec<(u32, wgpu::Buffer)> = Vec::new();
         let max_groups = device.limits().max_compute_workgroups_per_dimension;
         for dispatch in dispatches {
-            let Some(Some(compiled)) = self.pipelines.get(dispatch.slot as usize) else {
+            let key = (dispatch.slot, dispatch.sampler_layout.clone());
+            if let Err(error) = self.prepare_dispatch(device, &key) {
+                if self.warned_variants.insert(dispatch.slot) {
+                    log::warn!(
+                        "Sunrise: compute pipeline slot {} refused in preparation: {error:?}",
+                        dispatch.slot
+                    );
+                }
                 continue;
-            };
+            }
+            let compiled = self.pipelines[&key]
+                .as_ref()
+                .expect("prepared compute variant");
             match &dispatch.kind {
                 DispatchKind::Direct(counts) => {
                     if counts.iter().any(|&n| n > max_groups) {
@@ -472,9 +514,9 @@ impl ModCompute {
                     }
                     (
                         ResolvedSet1Entry::Texture { view, .. },
-                        BindingKind::CombinedImageSampler { sampler },
+                        BindingKind::CombinedImageSampler { .. },
                     ) => {
-                        let Some(sampler) = compiled.samplers.get(sampler) else {
+                        let Some(sampler) = compiled.samplers.get(binding) else {
                             ok = false;
                             break;
                         };
@@ -658,6 +700,7 @@ mod tests {
         });
         let dispatch = |counts| RecordedDispatch {
             slot: 0,
+            sampler_layout: SamplerLayout::EMPTY,
             entries: vec![ResolvedSet1Entry::StorageBuffer {
                 id: 1,
                 buffer: storage.clone(),
@@ -857,6 +900,7 @@ mod tests {
         });
         let image_dispatch = RecordedDispatch {
             slot: 0,
+            sampler_layout: SamplerLayout::EMPTY,
             entries: vec![ResolvedSet1Entry::StorageImage {
                 view_id: 1,
                 view: mip_view,

@@ -11,7 +11,7 @@ import tempfile
 import textwrap
 import unittest
 
-from tests.os_support import needs_runner_shell
+from tests.os_support import BASH, needs_runner_shell
 from tools.ci import vendored_yaml
 
 yaml = vendored_yaml.load()
@@ -150,7 +150,7 @@ console.log(JSON.stringify(eval(state.expression)));
                     if leg != absent:
                         os.makedirs(f"{folder}/legs/leg-{leg}")
                 output = Path(folder, "output")
-                ran = subprocess.run(["bash", "-c", decide], cwd=folder, capture_output=True, text=True,
+                ran = subprocess.run([BASH, "-c", decide], cwd=folder, capture_output=True, text=True,
                                      env={**os.environ, "GITHUB_OUTPUT": str(output)})
                 self.assertEqual(ran.returncode == 0, absent is None, ran.stdout)
                 self.assertEqual(output.exists() and output.read_text() == "complete=true\n", absent is None)
@@ -229,7 +229,7 @@ console.log(JSON.stringify(eval(state.expression)));
             python.write_text("#!/bin/sh\necho 'no green dyna-checks main base'\nexit 23\n")
             python.chmod(0o755)
             summary = root / "summary"
-            result = subprocess.run(["bash", "-c", shell], cwd=root, env={**os.environ, "FORCE": "", "KIND": "nightly", "GITHUB_STEP_SUMMARY": str(summary), "PATH": str(root) + os.pathsep + os.environ["PATH"]}, text=True, capture_output=True)
+            result = subprocess.run([BASH, "-c", shell], cwd=root, env={**os.environ, "FORCE": "", "KIND": "nightly", "GITHUB_STEP_SUMMARY": str(summary), "PATH": str(root) + os.pathsep + os.environ["PATH"]}, text=True, capture_output=True)
             self.assertEqual(result.returncode, 23)
             self.assertIn("no green dyna-checks main base", summary.read_text())
             self.assertNotIn("nightly-notes.md", result.stderr)
@@ -246,7 +246,7 @@ console.log(JSON.stringify(eval(state.expression)));
             binary.chmod(0o755)
             for directory in [str(binary_dir), str(binary_dir.relative_to(root))]:
                 with self.subTest(directory=directory):
-                    result = subprocess.run(["bash", "-c", command + '\n"$client"'], cwd=root, env={**os.environ, "BIN": directory}, text=True, capture_output=True)
+                    result = subprocess.run([BASH, "-c", command + '\n"$client"'], cwd=root, env={**os.environ, "BIN": directory}, text=True, capture_output=True)
                     self.assertEqual(result.returncode, 0, result.stderr)
                     self.assertEqual(result.stdout, "smoke ran")
 
@@ -269,7 +269,7 @@ console.log(JSON.stringify(eval(state.expression)));
             binary.chmod(0o755)
             env = {**os.environ, "BIN": folder, "RUNNER_TEMP": folder, "RUNNER_OS": "Linux",
                    "DISPLAY": ":invalid", "WAYLAND_DISPLAY": "invalid", "RUST_MIN_STACK": "16777216"}
-            result = subprocess.run(["bash", str(SMOKE)], cwd=ROOT, env=env, text=True, capture_output=True)
+            result = subprocess.run([BASH, str(SMOKE)], cwd=ROOT, env=env, text=True, capture_output=True)
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             report = json.loads((root / "smoke-test.json").read_text())
             self.assertEqual(report["frames"], 1500)
@@ -288,7 +288,7 @@ console.log(JSON.stringify(eval(state.expression)));
             stub = root / "gh"
             stub.write_text("#!/bin/sh\nprintf '[]'\n")
             stub.chmod(0o755)
-            result = subprocess.run(["bash", "-c", shell], cwd=root, env={**os.environ, "DRY_RUN": "true", "GITHUB_REPOSITORY": "sunrise-org/sunrise", "PATH": str(root) + os.pathsep + os.environ["PATH"]}, text=True, capture_output=True)
+            result = subprocess.run([BASH, "-c", shell], cwd=root, env={**os.environ, "DRY_RUN": "true", "GITHUB_REPOSITORY": "sunrise-org/sunrise", "PATH": str(root) + os.pathsep + os.environ["PATH"]}, text=True, capture_output=True)
             self.assertNotEqual(result.returncode, 0)
             self.assertIn("smoke", result.stdout.lower())
 
