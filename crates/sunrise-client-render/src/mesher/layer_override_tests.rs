@@ -45,6 +45,7 @@ fn mesh(
         blend_radius: 0,
         smooth_lighting: true,
         cutout_leaves,
+        better: Default::default(),
         opaque_ice: false,
         translucent_layers: &[],
         layer_overrides,

@@ -68,6 +68,7 @@ fn mesh(f: &Fixture, chunk: &Chunk, opaque_ice: bool) -> SectionMesh {
         blend_radius: 0,
         smooth_lighting: false,
         cutout_leaves: true,
+        better: Default::default(),
         opaque_ice,
         translucent_layers: &[],
         layer_overrides: &[],

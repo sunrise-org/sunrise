@@ -12,6 +12,7 @@ pub use sunrise_level::bidi;
 pub use sunrise_level::biome;
 pub use sunrise_level::block_edit;
 pub use sunrise_level::block_entities;
+pub mod better_grass;
 pub mod block_entity_anim;
 pub(crate) mod block_entity_cem;
 pub mod block_entity_reach;

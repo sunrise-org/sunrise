@@ -1201,6 +1201,7 @@ mod tests {
             blend_radius: 0,
             smooth_lighting: false,
             cutout_leaves: false,
+            better: Default::default(),
             opaque_ice: false,
             translucent_layers: &[],
             layer_overrides: &[],

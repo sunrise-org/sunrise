@@ -435,6 +435,47 @@ impl LeafCullingMode {
     }
 }
 
+/// OptiFine's Better Grass option: what the sides of grass, mycelium, podzol, nylium and the
+/// dirt beside a dirt path show. `optifine/bettergrass.properties` says which of them take part
+/// and with which textures.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub enum BetterGrassMode {
+    /// Their own models' sides.
+    #[default]
+    Off,
+    /// The top texture on every side.
+    Fast,
+    /// The top texture on a side where the block below beside it is of the same kind.
+    Fancy,
+}
+impl BetterGrassMode {
+    pub const ALL: [BetterGrassMode; 3] = [
+        BetterGrassMode::Off,
+        BetterGrassMode::Fast,
+        BetterGrassMode::Fancy,
+    ];
+    pub fn name(self) -> &'static str {
+        match self {
+            BetterGrassMode::Off => "off",
+            BetterGrassMode::Fast => "fast",
+            BetterGrassMode::Fancy => "fancy",
+        }
+    }
+    pub fn label(self) -> &'static str {
+        match self {
+            BetterGrassMode::Off => "Off",
+            BetterGrassMode::Fast => "Fast",
+            BetterGrassMode::Fancy => "Fancy",
+        }
+    }
+    fn parse(s: &str) -> Self {
+        Self::ALL
+            .into_iter()
+            .find(|mode| mode.name() == s)
+            .unwrap_or_default()
+    }
+}
+
 /// TAA upscaling: the world renders this much smaller than the resolution scale's size,
 /// and TAA builds the full-size picture from the jittered frames (FSR's and DLSS's ratios).
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Default)]
@@ -718,6 +759,10 @@ pub struct Graphics {
     /// vanilla's fancy leaves. Ignored with a resource pack that may replace
     /// the vanilla leaf models ([`Graphics::leaf_culling_effective`]).
     pub leaf_culling: LeafCullingMode,
+    /// Better Grass (see [`BetterGrassMode`]).
+    pub better_grass: BetterGrassMode,
+    /// Better Snow: a snow layer under plants, fences and the like that have snow beside them.
+    pub better_snow: bool,
     /// Draw regular ice opaque in the solid pass, without its see-through texture.
     pub opaque_ice: bool,
     /// Cache settled shulker-box models.
@@ -836,6 +881,8 @@ impl Default for Graphics {
             entity_culling_precheck: 64,
             particle_culling: ParticleCullingMode::Off,
             leaf_culling: LeafCullingMode::Off,
+            better_grass: BetterGrassMode::Off,
+            better_snow: false,
             opaque_ice: false,
             cache_shulker_boxes: false,
             // Sign text has used its renderer cache independently of the new model caches.
@@ -971,6 +1018,8 @@ impl Graphics {
                 }
                 "particleCulling" => g.particle_culling = ParticleCullingMode::parse(value),
                 "leafCulling" => g.leaf_culling = LeafCullingMode::parse(value),
+                "betterGrass" => g.better_grass = BetterGrassMode::parse(value),
+                "betterSnow" => g.better_snow = flag(g.better_snow),
                 "opaqueIce" => g.opaque_ice = flag(g.opaque_ice),
                 "parallelTick" => g.parallel_tick = ParallelTickMode::parse(value),
                 "blockEntityCache" => {
@@ -1136,6 +1185,11 @@ impl Graphics {
             self.gpu_culling.key(),
             self.gpu_culling.key(),
             self.parallel_tick.name(),
+        );
+        text += &format!(
+            "betterGrass:{}\nbetterSnow:{}\n",
+            self.better_grass.name(),
+            bool_text(self.better_snow)
         );
         if let Some(driver) = &self.hdr_failed_start {
             text += &format!("hdrFailedStart:{driver}\n");
@@ -1459,6 +1513,8 @@ mod tests {
             entity_culling_precheck: 128,
             particle_culling: ParticleCullingMode::Asynchronous,
             leaf_culling: LeafCullingMode::SolidAggressive,
+            better_grass: BetterGrassMode::Fancy,
+            better_snow: true,
             opaque_ice: true,
             cache_shulker_boxes: true,
             cache_signs: true,
@@ -1808,6 +1864,39 @@ mod tests {
                 assert_eq!(s.sunrise.gpu_culling, mode, "{preset:?}");
                 assert_eq!(Graphics::parse(&s.sunrise.serialize()).gpu_culling, mode);
             }
+        }
+    }
+
+    #[test]
+    fn better_grass_round_trips_its_stable_names() {
+        assert_eq!(Graphics::default().better_grass, BetterGrassMode::Off);
+        assert!(!Graphics::default().better_snow);
+        for mode in BetterGrassMode::ALL {
+            let graphics = Graphics {
+                better_grass: mode,
+                better_snow: mode != BetterGrassMode::Off,
+                ..Graphics::default()
+            };
+            assert_eq!(Graphics::parse(&graphics.serialize()), graphics);
+            assert_eq!(
+                Graphics::parse(&format!("betterGrass:{}\n", mode.name())).better_grass,
+                mode
+            );
+        }
+        for text in ["betterGrass:\n", "betterGrass:sparkly\n", ""] {
+            assert_eq!(Graphics::parse(text).better_grass, BetterGrassMode::Off);
+        }
+    }
+
+    #[test]
+    fn presets_keep_better_grass_and_better_snow() {
+        for preset in Preset::ALL {
+            let mut s = crate::settings::Settings::default();
+            s.sunrise.better_grass = BetterGrassMode::Fancy;
+            s.sunrise.better_snow = true;
+            apply_preset(preset, &mut s);
+            assert_eq!(s.sunrise.better_grass, BetterGrassMode::Fancy, "{preset:?}");
+            assert!(s.sunrise.better_snow, "{preset:?}");
         }
     }
 

@@ -46,6 +46,9 @@ pub struct RenderAssets {
     pub connected: crate::connected::ConnectedTextures,
     /// Fusion connected textures (empty without Fusion's connecting textures and models).
     pub fusion: crate::fusion::FusionTextures,
+    /// What Better Grass and Better Snow draw: the pack's `optifine/bettergrass.properties` (or
+    /// the defaults), the faces it puts over a side, and a kind for each block state.
+    pub better: crate::better_grass::BetterAssets,
     /// The keyframe animations mods and packs ship (`neoforge/animations/entity`), by id.
     pub mod_animations: crate::mod_animations::Animations,
     /// The mods' registered render pipelines as this load built them.
@@ -79,6 +82,7 @@ impl RenderAssets {
             pbr_size: 0,
             connected: Default::default(),
             fusion: Default::default(),
+            better: Default::default(),
             mod_animations: Default::default(),
             mod_pipelines: Default::default(),
             generation: 0,
@@ -590,6 +594,17 @@ impl RenderAssets {
         } else {
             Vec::new()
         };
+        // Its sprites join the atlas before it is finished.
+        let better = if draws {
+            crate::better_grass::BetterAssets::load(
+                root.source(),
+                registry,
+                &mut sprites,
+                &models.catalog,
+            )?
+        } else {
+            Default::default()
+        };
         if draws {
             sprites.save_disk_cache();
             sprites.finish();
@@ -625,6 +640,7 @@ impl RenderAssets {
             pbr_size: sprites.pbr_size,
             connected,
             fusion,
+            better,
             mod_animations: if draws {
                 crate::mod_animations::Animations::load(root.source())
             } else {

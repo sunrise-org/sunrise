@@ -182,6 +182,7 @@ pub(crate) fn shaped_mesh(compact: bool) -> SectionMesh {
         blend_radius: 0,
         smooth_lighting: false,
         cutout_leaves: true,
+        better: Default::default(),
         opaque_ice: false,
         translucent_layers: &[],
         layer_overrides: &[],
@@ -252,6 +253,7 @@ fn assemble(
         pbr_size: 1,
         connected: Default::default(),
         fusion: Default::default(),
+        better: Default::default(),
         mod_animations: Default::default(),
         mod_pipelines: Default::default(),
         generation: 1,
@@ -389,6 +391,7 @@ fn terrain_source_cpu_multipart_and_waterlogged_faces_keep_their_owner() {
         blend_radius: 0,
         smooth_lighting: false,
         cutout_leaves: true,
+        better: Default::default(),
         opaque_ice: false,
         translucent_layers: &[],
         layer_overrides: &[],
@@ -480,6 +483,7 @@ fn a_folder_without_connected_texture_rules_meshes_exactly_as_before() {
             blend_radius: 0,
             smooth_lighting: false,
             cutout_leaves: true,
+            better: Default::default(),
             opaque_ice: false,
             translucent_layers: &[],
             layer_overrides: &[],
@@ -566,4 +570,253 @@ fn terrain_source_cpu_partial_metadata_never_inherits_a_previous_face() {
     );
     mesh.clear();
     assert!(mesh.solid_sources.is_empty());
+}
+
+/// Three blocks: a cube whose four sides cull (`fixture:turf`, state 1, a full opaque cube), a
+/// small plant (state 2) and a snow layer (state 3), all with the sprite `fixture:block/shared`.
+fn better_fixture() -> Fixture {
+    let scratch = scratch();
+    let path = scratch.0.clone();
+    let write = |name: &str, value: serde_json::Value| write(&path, name, value);
+    let shapes = [
+        ("turf", [0, 0, 0], [16, 16, 16], true),
+        ("plant", [4, 0, 4], [12, 8, 12], false),
+        ("layer", [0, 0, 0], [16, 2, 16], false),
+    ];
+    let mut states = vec![json!(["air", true, false, "", "minecraft:air"])];
+    let mut defaults = serde_json::Map::from_iter([("minecraft:air".into(), json!(0))]);
+    let mut facts = BTreeMap::new();
+    for (i, (name, from, to, sides)) in shapes.into_iter().enumerate() {
+        let id = format!("fixture:{name}");
+        states.push(json!([name, false, false, "", id]));
+        defaults.insert(id.clone(), json!(i + 1));
+        facts.insert(id, json!({"schema":{}, "states":[{}]}));
+        write(
+            &format!("assets/fixture/blockstates/{name}.json"),
+            json!({"variants":{"":{"model":format!("fixture:block/{name}")}}}),
+        );
+        let side = |side: &str| json!({"texture":"#all","cullface":side});
+        let faces = if sides {
+            json!({
+                "north":side("north"),"south":side("south"),"west":side("west"),
+                "east":side("east"),"up":{"texture":"#all"}
+            })
+        } else {
+            json!({"up":{"texture":"#all"}})
+        };
+        write(
+            &format!("assets/fixture/models/block/{name}.json"),
+            json!({
+                "textures":{"all":"fixture:block/shared"},
+                "elements":[{"from":from,"to":to,"faces":faces}]
+            }),
+        );
+    }
+    let registry = json!({"defaults":defaults,"states":states});
+    let air = air_info();
+    let block = Info {
+        air: false,
+        model: true,
+        ..air
+    };
+    let ground = Info {
+        solid: true,
+        full: true,
+        opaque_cube: true,
+        ..block
+    };
+    let mut properties = vec![(true, false, false, false)];
+    properties.resize(4, (false, false, false, false));
+    assemble(
+        scratch,
+        registry,
+        &facts,
+        &properties,
+        vec![air, ground, block, block],
+    )
+}
+
+#[test]
+fn better_grass_puts_other_faces_over_the_sides_the_blocks_around_it_pick() {
+    use crate::better_grass::{Better, BetterAssets, Sides, StateKind, side_index};
+    use sunrise_optifine::bettergrass::{Cube, Surface};
+    let (_scratch, assets, mut render, tables, biomes) = better_fixture();
+    // A block at 2, 3, 4 and another at 3, 2, 4: the first has the second below beside its east.
+    let mut chunk = Chunk::with_layout(3, -2, crate::chunk::ColumnLayout::new(0, 16).unwrap());
+    chunk.set(2, 3, 4, 1);
+    chunk.set(3, 2, 4, 1);
+    let region = [
+        [None, None, None],
+        [None, Some(&chunk), None],
+        [None, None, None],
+    ];
+    let mesh = |render: &RenderAssets, grass: BetterGrassMode| {
+        let mut mesher = Mesher {
+            hidden_states: &[],
+            part_tables: Default::default(),
+            nether_shading: false,
+            shader_pack_lighting: false,
+            separate_ao: false,
+            shader_pack: false,
+            assets: &assets,
+            render,
+            tables: &tables,
+            biomes: &biomes,
+            visibility: FaceVisibility::empty(),
+            zoom: BiomeZoom::new(0),
+            blend_radius: 0,
+            smooth_lighting: false,
+            cutout_leaves: true,
+            better: Better { grass, snow: false },
+            opaque_ice: false,
+            translucent_layers: &[],
+            layer_overrides: &[],
+            leaf_culling: LeafCullingMode::Off,
+        };
+        mesher.mesh(&region, 0)
+    };
+    // The corners whose texture coordinates differ from the plain mesh's, whose corners all lie
+    // where they did.
+    let changed = |plain: &SectionMesh, mesh: &SectionMesh| {
+        assert_eq!(mesh.solid.len(), plain.solid.len());
+        assert!(
+            mesh.solid
+                .iter()
+                .zip(&plain.solid)
+                .all(|(a, b)| a.pos == b.pos)
+        );
+        mesh.solid
+            .iter()
+            .zip(&plain.solid)
+            .filter(|(a, b)| a.uv != b.uv)
+            .count()
+    };
+    let plain = mesh(&render, BetterGrassMode::Off);
+    assert_eq!(plain.solid.len(), 2 * 5 * 4, "five faces for each block");
+    // Nothing is known of the blocks yet, so nothing changes.
+    assert_eq!(changed(&plain, &mesh(&render, BetterGrassMode::Fast)), 0);
+
+    // The cube's faces: the block's own side faces, mirrored.
+    let mut found = Vec::new();
+    render
+        .model_catalog
+        .models_at(BlockStateId(1), BlockPos::new(0, 0, 0), &mut found)
+        .unwrap();
+    let mut sides = Sides::default();
+    for face in found.iter().flat_map(|model| &model.faces) {
+        if let Some(side) = face.quad.cull.and_then(side_index) {
+            let mut quad = face.quad.clone();
+            quad.uv = [quad.uv[3], quad.uv[2], quad.uv[1], quad.uv[0]];
+            sides[side].push(BakedFace::new(
+                quad,
+                face.layer,
+                face.opaque,
+                face.translucent,
+                None,
+            ));
+        }
+    }
+    let mut cubes = vec![Sides::default(); Cube::ALL.len()];
+    cubes[Cube::Grass as usize] = sides;
+    let turf = StateKind {
+        surface: Some(Surface::Grass),
+        flags: 0,
+    };
+    render.better = BetterAssets::for_tests(vec![StateKind::default(), turf], cubes, None);
+
+    let off = mesh(&render, BetterGrassMode::Off);
+    assert_eq!(changed(&plain, &off), 0, "the option is off");
+    // Fast: all four sides of both blocks.
+    let fast = mesh(&render, BetterGrassMode::Fast);
+    assert_eq!(changed(&plain, &fast), 2 * 4 * 4);
+    // Fancy: only the first block's east side, which has a block like it below beside it.
+    let fancy = mesh(&render, BetterGrassMode::Fancy);
+    assert_eq!(changed(&plain, &fancy), 4);
+}
+
+#[test]
+fn better_snow_draws_a_snow_layer_under_a_plant_with_snow_beside_it() {
+    use crate::better_grass::{Better, BetterAssets, SNOW_LAYER, StateKind, TAKES_SNOW};
+    let (_scratch, assets, mut render, tables, biomes) = better_fixture();
+    let kind = |flags| StateKind {
+        surface: None,
+        flags,
+    };
+    render.better = BetterAssets::for_tests(
+        vec![
+            StateKind::default(),
+            kind(0),
+            kind(TAKES_SNOW),
+            kind(SNOW_LAYER),
+        ],
+        Vec::new(),
+        Some(3),
+    );
+    // The faces Better Snow adds to the section with `blocks` (x, y, z, state) in it.
+    let added = |blocks: &[(i32, i32, i32, u32)]| {
+        let mut chunk = Chunk::with_layout(3, -2, crate::chunk::ColumnLayout::new(0, 16).unwrap());
+        for &(x, y, z, state) in blocks {
+            chunk.set(x, y, z, state);
+        }
+        let region = [
+            [None, None, None],
+            [None, Some(&chunk), None],
+            [None, None, None],
+        ];
+        let mesh = |snow: bool| {
+            let mut mesher = Mesher {
+                hidden_states: &[],
+                part_tables: Default::default(),
+                nether_shading: false,
+                shader_pack_lighting: false,
+                separate_ao: false,
+                shader_pack: false,
+                assets: &assets,
+                render: &render,
+                tables: &tables,
+                biomes: &biomes,
+                visibility: FaceVisibility::empty(),
+                zoom: BiomeZoom::new(0),
+                blend_radius: 0,
+                smooth_lighting: false,
+                cutout_leaves: true,
+                better: Better {
+                    grass: BetterGrassMode::Off,
+                    snow,
+                },
+                opaque_ice: false,
+                translucent_layers: &[],
+                layer_overrides: &[],
+                leaf_culling: LeafCullingMode::Off,
+            };
+            mesher.mesh(&region, 0).solid.len()
+        };
+        mesh(true) - mesh(false)
+    };
+    // A plant on a full block, with a snow layer beside it: the layer's one top face is added.
+    let (ground, plant, layer) = (1, 2, 3);
+    assert_eq!(
+        added(&[
+            (3, 2, 4, ground),
+            (3, 3, 4, plant),
+            (4, 2, 4, ground),
+            (4, 3, 4, layer)
+        ]),
+        4
+    );
+    // Nothing under the plant, or none beside it, or not a plant: nothing is added.
+    assert_eq!(
+        added(&[(3, 3, 4, plant), (4, 2, 4, ground), (4, 3, 4, layer)]),
+        0
+    );
+    assert_eq!(added(&[(3, 2, 4, ground), (3, 3, 4, plant)]), 0);
+    assert_eq!(
+        added(&[
+            (3, 2, 4, ground),
+            (3, 3, 4, ground),
+            (4, 2, 4, ground),
+            (4, 3, 4, layer)
+        ]),
+        0
+    );
 }

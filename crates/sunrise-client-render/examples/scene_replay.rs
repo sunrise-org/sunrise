@@ -669,6 +669,7 @@ fn remesh(
                         blend_radius,
                         smooth_lighting,
                         cutout_leaves,
+                        better: Default::default(),
                         opaque_ice: false,
                         translucent_layers: &[],
                         layer_overrides: &[],

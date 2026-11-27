@@ -3,7 +3,8 @@
 //! colours): `.properties` files, the matchers their values hold, their texture paths, and the
 //! `optifine/` (or legacy `mcpatcher/`) folders that hold them. Each feature's own rules sit in
 //! a module of their own, free of the game's types (`random`: random entity textures' rules;
-//! `random_textures`: where a pack keeps their variants; [`ctm`]: connected textures; `cit`:
+//! `random_textures`: where a pack keeps their variants; [`bettergrass`]: Better Grass and
+//! Better Snow; [`ctm`]: connected textures; `cit`:
 //! custom item textures, which the client matches against its stacks; `emissive`: emissive
 //! overlays; `blink`: ETF's blinking textures; [`fusion`]: the Fusion mod's connected
 //! textures, whose layouts read [`ctm`]'s neighbour masks; [`color`]: `color.properties`' custom
@@ -14,6 +15,7 @@
 //! source (THIRD_PARTY_NOTICES.md); `fusion` from Fusion's wiki and FusionExamples' MIT-licensed
 //! layout templates (THIRD_PARTY_NOTICES.md). No OptiFine or Fusion code was read.
 
+pub mod bettergrass;
 pub mod blink;
 pub mod cem;
 pub mod cit;
