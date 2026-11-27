@@ -274,7 +274,7 @@ impl ClientGame<'_> {
         }
         let gpu = renderer.mod_gpu();
         if let Some(previous) = &self.client.mod_gpu {
-            gpu.continue_ids_from(previous);
+            gpu.continue_ids_from(previous.id_state());
         }
         self.client.mod_gpu = Some(gpu.clone());
         self.client.renderer.0 = Some(renderer);
