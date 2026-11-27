@@ -159,14 +159,28 @@ pub fn linear_fragment_finish(out_name: &str) -> String {
     )
 }
 
-/// Returns the GLSL output variable name bound to fragment `location = 0` in `module`, if any.
+/// Returns the GLSL output variable name bound to fragment `location = 0` in `module`, if any
+/// and if its type is `vec4` (`f32` quad vector). Non-`vec4` outputs (such as `out float` for
+/// `R32Float` offscreen targets or integer targets) cannot receive [`linear_fragment_finish`].
 fn fragment_loc0_output_name(module: &naga::Module) -> Option<&str> {
+    let is_vec4 = |ty: naga::Handle<naga::Type>| {
+        matches!(
+            module.types[ty].inner,
+            naga::TypeInner::Vector {
+                size: naga::VectorSize::Quad,
+                scalar: naga::Scalar::F32,
+            }
+        )
+    };
     let ep = module
         .entry_points
         .iter()
         .find(|e| e.stage == naga::ShaderStage::Fragment)?;
     let res = ep.function.result.as_ref()?;
     if let Some(naga::Binding::Location { location: 0, .. }) = res.binding {
+        if !is_vec4(res.ty) {
+            return None;
+        }
         // Trace the entry point's returned expression back to the GLSL output GlobalVariable.
         let ret_expr = ep.function.body.iter().rev().find_map(|stmt| match stmt {
             naga::Statement::Return { value: Some(expr) } => Some(*expr),
@@ -184,7 +198,11 @@ fn fragment_loc0_output_name(module: &naga::Module) -> Option<&str> {
     if let naga::TypeInner::Struct { ref members, .. } = module.types[res.ty].inner {
         for m in members {
             if let Some(naga::Binding::Location { location: 0, .. }) = m.binding {
-                return m.name.as_deref();
+                return if is_vec4(m.ty) {
+                    m.name.as_deref()
+                } else {
+                    None
+                };
             }
         }
     }
@@ -1248,6 +1266,51 @@ void main() {
                 .iter()
                 .any(|(_, f)| f.name.as_deref() == Some("hz_main")),
             "linear_light must wrap main as hz_main using customOut, not scratchGlobal"
+        );
+    }
+
+    #[test]
+    fn linear_light_fragment_finish_skips_non_vec4_outputs() {
+        let scalar_fsh = "\
+#version 330
+in vec2 texCoord0;
+in vec4 vertexColor;
+out float fragDepthCopy;
+void main() {
+    fragDepthCopy = 0.5;
+}
+";
+        let built = translate(
+            &sources(VSH, scalar_fsh),
+            &Options {
+                linear_light: true,
+                check_backends: true,
+                ..Default::default()
+            },
+            &stub_include,
+        )
+        .expect("out float shader must translate on linear_light frames");
+        assert!(
+            !built
+                .translated
+                .fragment
+                .functions
+                .iter()
+                .any(|(_, f)| f.name.as_deref() == Some("hz_main")),
+            "linear_light must not wrap a scalar float location-0 output"
+        );
+        let lazy = translate_linear_fragment(
+            &built.vertex_expanded,
+            &built.fragment_expanded,
+            &Options::default(),
+        )
+        .expect("lazy linear re-translation must leave out float untouched");
+        assert!(
+            !lazy
+                .functions
+                .iter()
+                .any(|(_, f)| f.name.as_deref() == Some("hz_main")),
+            "lazy linear_light must not wrap a scalar float location-0 output"
         );
     }
 
