@@ -3,7 +3,7 @@
 use super::Target;
 use crate::game::server_side::commands_server::targets::with_server_entity_projection;
 use sunrise_core::geometry::Aabb;
-use sunrise_gameplay_common::game::entity::{EntityProjection, extents_aabb};
+use sunrise_gameplay_common::game::entity::{extents_aabb, knot_bounds};
 
 /// `EntitySelectorParser.createAabb`, moved by the selector origin.
 pub(in crate::game) fn selector_box(origin: [f64; 3], delta: [f64; 3]) -> Aabb {
@@ -23,7 +23,8 @@ impl crate::game::ServerGame<'_> {
             | Target::Dragon(_)
             | Target::Spawner(_)
             | Target::Cloud(_) => None,
-            other => with_server_entity_projection(self, other, EntityProjection::projected_bounds)
+            Target::Knot(id) => self.natural_knot(id).map(knot_bounds),
+            other => with_server_entity_projection(self, other, |entity| entity.projected_bounds())
                 .flatten(),
         }
     }

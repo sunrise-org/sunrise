@@ -333,12 +333,12 @@ impl crate::game::ServerGame<'_> {
         if let Some(h) = self.common.native_walk_entity(entity.id()) {
             return Some(corners(with_entity!(self, h, e => e.bounds())));
         }
-        let bounds = match t {
+        let (lo, hi) = match t {
             Target::Other(_) | Target::DragonPart(_) | Target::Crystal(_) => {
                 return crate::game::server_side::commands_server::targets::with_server_entity_projection(
                     self,
                     t,
-                    sunrise_gameplay_common::game::entity::EntityProjection::projected_bounds,
+                    |entity| entity.projected_bounds(),
                 )
                 .flatten()
                 .map(corners);
@@ -347,13 +347,12 @@ impl crate::game::ServerGame<'_> {
                 crate::game::server_side::commands_server::targets::with_server_entity_projection(
                     self,
                     t,
-                    sunrise_gameplay_common::game::entity::EntityProjection::projected_bounds,
+                    |entity| entity.projected_raw_bounds(),
                 )
                 .flatten()?
             }
             _ => return None,
         };
-        let [lo, hi] = corners(bounds);
         if lo.iter().chain(&hi).any(|v| !v.is_finite()) {
             return None;
         }

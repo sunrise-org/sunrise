@@ -813,11 +813,9 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
                 .unwrap_or([0.0; 2]),
             // Dragon parts aren't admitted by UUID. Natural fence knots never turn.
             Target::DragonPart(_) | Target::Knot(_) => [0.0; 2],
-            other => with_common_entity_projection(
-                self.common(),
-                other,
-                EntityProjection::projected_rotation,
-            )
+            other => with_common_entity_projection(self.common(), other, |entity| {
+                entity.projected_rotation()
+            })
             .flatten()
             .unwrap_or([0.0; 2]),
         }

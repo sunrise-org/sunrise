@@ -4,26 +4,8 @@ use sunrise_gameplay_common::game::entity::{
     DragonPartRef, EntityProjection, with_common_entity_projection,
 };
 
-fn natural_knot_entity<'a>(
-    game: &'a crate::game::ServerGame<'_>,
-    id: u32,
-) -> Option<&'a sunrise_gameplay_common::leash_knot::Knot> {
-    use sunrise_sim::join_seq::residency::table::EntityLookup;
-    let EntityLookup::Found {
-        location,
-        value: Target::Knot(_),
-    } = game.server_resident_entity(id)
-    else {
-        return None;
-    };
-    if location.owner.dimension != game.common.dim.key() {
-        return None;
-    }
-    let index = game.common.resident_entities.knots.locate(location.join)?;
-    Some(&game.common.resident_entities.knots[index])
-}
-
-/// Read-only lookup of any server entity target through [`EntityProjection`].
+/// Read-only lookup of a server entity target through [`EntityProjection`].
+#[inline(always)]
 pub(in crate::game) fn with_server_entity_projection<R>(
     game: &crate::game::ServerGame<'_>,
     target: Target,
@@ -42,7 +24,6 @@ pub(in crate::game) fn with_server_entity_projection<R>(
         Target::DragonPart(id) => game
             .resident_dragon_part(id)
             .map(|(d, i)| visit(&DragonPartRef::new(id, d, i))),
-        Target::Knot(id) => natural_knot_entity(game, id).map(|k| visit(k)),
         other => with_common_entity_projection(&game.common, other, visit),
     }
 }
@@ -61,10 +42,16 @@ impl crate::game::ServerGame<'_> {
             .map_or(self.common.dim, |g| Dim::from_id(&g.dimension))
     }
     pub fn target_position(&self, t: Target) -> Option<[f64; 3]> {
-        with_server_entity_projection(self, t, |entity| {
-            let p = entity.projected_position();
-            [p.x, p.y, p.z]
-        })
+        match t {
+            Target::Knot(id) => self.natural_knot(id).map(|fence| {
+                let p = sunrise_sim::mobs::leash::knot_state(fence).position;
+                [p.x, p.y, p.z]
+            }),
+            other => with_server_entity_projection(self, other, |entity| {
+                let p = entity.projected_position();
+                [p.x, p.y, p.z]
+            }),
+        }
     }
 }
 
@@ -100,29 +87,25 @@ mod projection_tests {
         assert_eq!(mob.projected_rotation(), Some([mob.yaw, mob.head_pitch]));
         assert_eq!(mob.projected_bounds(), Some(mob.bounds()));
         assert_eq!(mob.projected_on_ground(), Some(mob.ground.on_ground));
-        assert_eq!(mob.projected_fire_ticks(), Some(mob.fire_ticks));
+        assert_eq!(mob.projected_body_fire_ticks(), Some(mob.fire_ticks));
         assert_eq!(mob.projected_air_supply(), Some(mob.air));
-        assert_eq!(mob.projected_is_removed(), Some(mob.removed));
-        assert_eq!(mob.projected_saved_uuid(), None);
+        assert_eq!(mob.projected_body_removed(), Some(mob.removed));
+        assert_eq!(mob.projected_body_uuid(), None);
 
         let expected_bounds = mob.bounds();
         let off = OffLevel::Mob(mob);
         assert_eq!(off.projected_id(), 301);
         assert_eq!(off.projected_kind(), "minecraft:cow");
         assert_eq!(off.projected_bounds(), Some(expected_bounds));
-        assert_eq!(off.projected_fire_ticks(), Some(42));
+        assert_eq!(off.projected_body_fire_ticks(), Some(42));
         assert_eq!(off.projected_air_supply(), Some(195));
-        assert_eq!(off.projected_is_removed(), Some(true));
+        assert_eq!(off.projected_body_removed(), Some(true));
     }
 
     #[test]
+    #[ignore = "daily"]
     fn player_motion_projection_matches_body() {
-        let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-            .join("../../.local/sunrise-client")
-            .join(sunrise_core::VANILLA_VERSION);
-        if !root.join("movement-properties.nbt").exists() {
-            return;
-        }
+        let root = crate::game::native_entity_refs::tests::fixture_root();
         let assets = sunrise_level::assets::Assets::load(&root).unwrap();
         let resources = sunrise_sim::motion::MotionResources::load(&root, &assets).unwrap();
         let mut player =
@@ -144,9 +127,9 @@ mod projection_tests {
         );
         assert_eq!(player.projected_bounds(), Some(player.bounds()));
         assert_eq!(player.projected_on_ground(), Some(player.ground.on_ground));
-        assert_eq!(player.projected_fire_ticks(), Some(player.fire_ticks));
+        assert_eq!(player.projected_body_fire_ticks(), Some(player.fire_ticks));
         assert_eq!(player.projected_air_supply(), Some(player.air));
-        assert_eq!(player.projected_is_removed(), None);
-        assert_eq!(player.projected_saved_uuid(), None);
+        assert_eq!(player.projected_body_removed(), None);
+        assert_eq!(player.projected_body_uuid(), None);
     }
 }
