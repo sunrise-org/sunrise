@@ -442,9 +442,9 @@ impl crate::game::ClientGame<'_> {
         let mut bubbles = Vec::new();
         let mut arrow_events = Vec::new();
         self.with_lifted_remote_projectiles(
-            |game, projectiles| {
+            |_game, projectiles| {
                 #[cfg(test)]
-                nested_spawn_tests::after_lift(game, nested_spawn_tests::Point::Projectile);
+                nested_spawn_tests::after_lift(_game, nested_spawn_tests::Point::Projectile);
                 bubbles = projectiles
                     .iter()
                     .filter_map(Projectile::water_bubbles)
