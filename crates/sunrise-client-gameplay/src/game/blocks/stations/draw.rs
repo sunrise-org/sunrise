@@ -42,7 +42,7 @@ impl crate::game::ClientGame<'_> {
                 cycling.advance(now, icons);
             }
         }
-        let (ox, oy) = self.inventory_origin(batch.size());
+        let (ox, oy) = self.inventory_origin(batch);
         let local = (self.client.cursor.0 - ox, self.client.cursor.1 - oy);
         let mut tooltip: Option<Vec<(sunrise_game_data::text::Text, u32)>> = None;
         let mut anvil_name = false;
@@ -592,7 +592,7 @@ impl crate::game::ClientGame<'_> {
         }
         self.draw_hovered_slot_highlight(batch, true, ox, oy);
         let slot_tooltip = if tooltip.is_none() {
-            self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1)
+            self.slot_at(batch, self.client.cursor.0, self.client.cursor.1)
                 .and_then(|slot| self.slot_mut(slot).clone())
         } else {
             None

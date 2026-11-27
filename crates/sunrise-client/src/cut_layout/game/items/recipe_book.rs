@@ -42,14 +42,14 @@ pub(crate) mod screen_room_tests {
                 game.client.settings.gui_scale = 1;
                 game.level.recipe_book.open[BookType::Crafting.index()] = true;
                 let batch = HudBatch::new([640, 240], game.client.settings.gui_scale_inputs());
-                let (x, y) = game.book_origin(batch.size());
+                let (x, y) = game.book_origin(&batch);
                 assert_eq!((x, y), (110.0, 37.0));
                 assert_eq!(game.tab_pos(x, y, 0), (80.0, 40.0));
                 assert_eq!(
                     sunrise_client_gameplay::game::ClientGame::button_pos(x, y, 0),
                     (121.0, 68.0)
                 );
-                assert_eq!(game.inventory_origin(batch.size()), (259.0, 37.0));
+                assert_eq!(game.inventory_origin(&batch), (259.0, 37.0));
                 let search = Search::default();
                 let tabs = [screen::TabView {
                     icons: ("minecraft:stone".into(), None),
@@ -81,13 +81,13 @@ pub(crate) mod screen_room_tests {
                 let batch = HudBatch::new([510, 240], game.client.settings.gui_scale_inputs());
                 room.store(180, Ordering::Relaxed);
                 game.client.frames += 1;
-                assert_eq!(game.open_book_left(batch.size()), Some(63.0));
-                assert_eq!(game.book_origin(batch.size()), (95.0, 37.0));
-                assert_eq!(game.inventory_origin(batch.size()), (244.0, 37.0));
+                assert_eq!(game.open_book_left(&batch), Some(63.0));
+                assert_eq!(game.book_origin(&batch), (95.0, 37.0));
+                assert_eq!(game.inventory_origin(&batch), (244.0, 37.0));
                 room.store(100, Ordering::Relaxed);
                 game.client.frames += 1;
-                assert_eq!(game.book_origin(batch.size()), (45.0, 37.0));
-                assert_eq!(game.inventory_origin(batch.size()), (194.0, 37.0));
+                assert_eq!(game.book_origin(&batch), (45.0, 37.0));
+                assert_eq!(game.inventory_origin(&batch), (194.0, 37.0));
             });
         });
     }

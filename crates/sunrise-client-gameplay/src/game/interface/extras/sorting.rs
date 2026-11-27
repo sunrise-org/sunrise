@@ -95,7 +95,7 @@ impl crate::game::ClientGame<'_> {
             return false;
         };
         let frame = self.gui_frame_for([r.config.width, r.config.height]);
-        let (ox, oy) = self.inventory_origin(frame.size());
+        let (ox, oy) = self.inventory_origin_in(frame.size());
         let (cx, cy) = self.client.cursor;
         let hit = self.sort_buttons().into_iter().find(|((x, y), _)| {
             let (x, y) = (ox + x, oy + y);

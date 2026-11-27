@@ -37,11 +37,26 @@ impl crate::game::ClientGame<'_> {
         })
     }
 
-    pub fn container_layout(&self, gui: (f32, f32)) -> ContainerLayout {
-        self.build_container_layout(gui, self.container_layout_inputs(gui))
+    pub fn container_layout(&self, batch: &sunrise_client::hud::HudBatch) -> ContainerLayout {
+        self.container_layout_in(batch.size())
     }
 
+    #[inline(always)]
+    pub fn container_layout_in(&self, gui: (f32, f32)) -> ContainerLayout {
+        self.build_container_layout_in(gui, self.container_layout_inputs_in(gui))
+    }
+
+    #[allow(dead_code)]
     pub(in crate::game::client_side) fn build_container_layout(
+        &self,
+        batch: &sunrise_client::hud::HudBatch,
+        inputs: ContainerLayout,
+    ) -> ContainerLayout {
+        self.build_container_layout_in(batch.size(), inputs)
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn build_container_layout_in(
         &self,
         gui: (f32, f32),
         mut inputs: ContainerLayout,
@@ -65,7 +80,7 @@ impl crate::game::ClientGame<'_> {
         inputs.effects = inputs
             .shows_effects
             .then(|| {
-                self.inventory_effects_rect(
+                self.inventory_effects_rect_in(
                     gui,
                     [inputs.origin.0, inputs.origin.1],
                     inputs.image[2],
@@ -81,15 +96,24 @@ impl crate::game::ClientGame<'_> {
     /// draws, the book and effect panels beside it, the creative tab rows and
     /// every slot's hover box. The build calls it when it makes the layout;
     /// nothing else does.
+    #[allow(dead_code)]
     pub(in crate::game::client_side) fn container_layout_inputs(
+        &self,
+        batch: &sunrise_client::hud::HudBatch,
+    ) -> ContainerLayout {
+        self.container_layout_inputs_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn container_layout_inputs_in(
         &self,
         gui: (f32, f32),
     ) -> ContainerLayout {
-        let image = self.container_image_parts(gui);
-        let origin = self.inventory_origin_unbuilt(gui);
+        let image = self.container_image_parts_in(gui);
+        let origin = self.inventory_origin_unbuilt_in(gui);
         // A title over the inventory draws no book or effects of its own.
         let covered = self.client.screen == Screen::Inventory && self.client.title.0.is_some();
-        let book = (!covered).then(|| self.recipe_book_rect(gui)).flatten();
+        let book = (!covered).then(|| self.recipe_book_rect_in(gui)).flatten();
         let shows_effects = !covered
             && match self.client.screen {
                 Screen::Creative => true,
@@ -100,7 +124,7 @@ impl crate::game::ClientGame<'_> {
                 }
                 _ => false,
             };
-        let space = Self::effects_space(gui, [origin.0, origin.1], image[2]);
+        let space = Self::effects_space_in(gui, [origin.0, origin.1], image[2]);
         let effects_layout = if shows_effects {
             self.inventory_effects_layout(&space, image)
         } else {

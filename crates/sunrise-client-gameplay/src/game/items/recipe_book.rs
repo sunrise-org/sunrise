@@ -797,21 +797,37 @@ impl crate::game::ClientGame<'_> {
     // ---- geometry ----
 
     /// Move the vanilla recipe book origin with the window when mods reserve room.
-    pub fn book_origin(&self, gui: (f32, f32)) -> (f32, f32) {
-        let (x, y) = self.book_origin_in_place(gui);
-        (x + self.screen_room_offset(gui), y)
+    pub fn book_origin(&self, batch: &HudBatch) -> (f32, f32) {
+        self.book_origin_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub fn book_origin_in(&self, gui: (f32, f32)) -> (f32, f32) {
+        let (x, y) = self.book_origin_in_place_in(gui);
+        (x + self.screen_room_offset_in(gui), y)
     }
     /// The visible left edge, including the selected tab, of the book beside
     /// the window before room moves it; none while no book is open or it covers the
     /// window of a narrow screen.
-    pub fn open_book_left(&self, gui: (f32, f32)) -> Option<f32> {
+    pub fn open_book_left(&self, batch: &HudBatch) -> Option<f32> {
+        self.open_book_left_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub fn open_book_left_in(&self, gui: (f32, f32)) -> Option<f32> {
         if !self.mod_book_open() {
             self.active_book().filter(|b| self.book_open(*b))?;
         }
-        (!self.book_covers_menu(gui.0)).then(|| self.book_origin_in_place(gui).0 - 32.0)
+        (!self.book_covers_menu(gui.0)).then(|| self.book_origin_in_place_in(gui).0 - 32.0)
     }
     /// `book_origin` before the mods' room moves it.
-    pub(in crate::game) fn book_origin_in_place(&self, gui: (f32, f32)) -> (f32, f32) {
+    #[allow(dead_code)]
+    pub(in crate::game) fn book_origin_in_place(&self, batch: &HudBatch) -> (f32, f32) {
+        self.book_origin_in_place_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn book_origin_in_place_in(&self, gui: (f32, f32)) -> (f32, f32) {
         let narrow = if self.native_screen_book().is_some() {
             self.mod_book_overlay(gui.0)
         } else {
@@ -825,18 +841,37 @@ impl crate::game::ClientGame<'_> {
     }
     /// The open book's panel, `[x, y, width, height]` in GUI pixels; none
     /// while the screen has no book or it is closed.
+    #[allow(dead_code)]
     pub(in crate::game::client_side) fn recipe_book_rect(
+        &self,
+        batch: &HudBatch,
+    ) -> Option<[f32; 4]> {
+        self.recipe_book_rect_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn recipe_book_rect_in(
         &self,
         gui: (f32, f32),
     ) -> Option<[f32; 4]> {
         if !self.mod_book_open() {
             self.active_book().filter(|b| self.book_open(*b))?;
         }
-        let (x, y) = self.book_origin(gui);
+        let (x, y) = self.book_origin_in(gui);
         Some([x, y, WIDTH, HEIGHT])
     }
     /// The green book button's top-left corner.
     pub(in crate::game) fn book_button_pos(
+        &self,
+        book: BookType,
+        ox: f32,
+        batch: &HudBatch,
+    ) -> (f32, f32) {
+        self.book_button_pos_in(book, ox, batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn book_button_pos_in(
         &self,
         book: BookType,
         ox: f32,
@@ -862,6 +897,12 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game) fn swap_index(&self) -> usize {
         (self.client.recipe_ui.0.time / SWAP_TICKS).floor() as usize
     }
+    #[allow(dead_code)]
+    pub(in crate::game) fn batch_for_size(&self) -> Option<HudBatch> {
+        self.recipe_book_frame()
+            .map(|frame| HudBatch::for_frame(&frame))
+    }
+
     #[inline(always)]
     pub(in crate::game) fn recipe_book_frame(&self) -> Option<sunrise_client::window::GuiFrame> {
         #[cfg(any(test, feature = "test-support"))]
@@ -887,14 +928,14 @@ impl crate::game::ClientGame<'_> {
         };
         self.ensure_book();
         let cursor = self.client.cursor;
-        let (ox, _) = self.inventory_origin(frame.size());
+        let (ox, _) = self.inventory_origin_in(frame.size());
         // Clicking a crafting slot drops the ghost recipe (`slotClicked`).
-        if let Some(slot) = self.slot_at(frame.size(), cursor.0, cursor.1)
+        if let Some(slot) = self.slot_at_in(frame.size(), cursor.0, cursor.1)
             && self.is_book_slot(book_type, slot)
         {
             self.client.recipe_ui.0.ghost.clear();
         }
-        let (bx, by) = self.book_button_pos(book_type, ox, frame.size());
+        let (bx, by) = self.book_button_pos_in(book_type, ox, frame.size());
         if inside(cursor, bx, by, 20.0, 18.0) {
             let open = !self.book_open(book_type);
             self.common.level.recipe_book.open[book_type.index()] = open;
@@ -918,7 +959,7 @@ impl crate::game::ClientGame<'_> {
             return narrow;
         }
         self.refresh_book_view(book_type);
-        let (xo, yo) = self.book_origin(frame.size());
+        let (xo, yo) = self.book_origin_in(frame.size());
         // The alternatives overlay captures the click first.
         if let Some(overlay) = self.client.recipe_ui.0.overlay.take() {
             let maxrow = if overlay.entries.len() <= 16 { 4 } else { 5 };
@@ -929,7 +970,7 @@ impl crate::game::ClientGame<'_> {
                     let shift = self.shift_down();
                     if self.try_place(*entry, shift) {
                         self.remember_click(*entry);
-                        self.close_narrow_book(book_type, frame.size());
+                        self.close_narrow_book_in(book_type, frame.size());
                     }
                     return true;
                 }
@@ -973,7 +1014,7 @@ impl crate::game::ClientGame<'_> {
                 let shift = self.shift_down();
                 if self.try_place(entry, shift) {
                     self.remember_click(entry);
-                    self.close_narrow_book(book_type, frame.size());
+                    self.close_narrow_book_in(book_type, frame.size());
                 }
             }
             return true;
@@ -1161,7 +1202,7 @@ impl crate::game::ClientGame<'_> {
                 inside(cursor, x, y, 24.0, 24.0).then_some(e.0)
             });
         }
-        let (xo, yo) = self.book_origin(frame.size());
+        let (xo, yo) = self.book_origin_in(frame.size());
         let first = self.client.recipe_ui.0.page * 20;
         (0..20).find_map(|n| {
             let button = self.client.recipe_ui.0.view.buttons.get(first + n)?;
@@ -1178,7 +1219,7 @@ impl crate::game::ClientGame<'_> {
         if self.client.recipe_ui.0.overlay.is_some() {
             return false;
         }
-        let (xo, yo) = self.book_origin(frame.size());
+        let (xo, yo) = self.book_origin_in(frame.size());
         let first = self.client.recipe_ui.0.page * 20;
         (0..20).any(|n| {
             let (x, y) = Self::button_pos(xo, yo, n);
@@ -1274,13 +1315,13 @@ impl crate::game::ClientGame<'_> {
             rect,
             kind: Kind::Button,
         };
-        let (ox, _) = self.inventory_origin(frame.size());
-        let (bx, by) = self.book_button_pos(book_type, ox, frame.size());
+        let (ox, _) = self.inventory_origin_in(frame.size());
+        let (bx, by) = self.book_button_pos_in(book_type, ox, frame.size());
         let mut out = vec![button([bx, by, 20.0, 18.0])];
         if !self.book_open(book_type) || self.common.spectator() {
             return out;
         }
-        let (xo, yo) = self.book_origin(frame.size());
+        let (xo, yo) = self.book_origin_in(frame.size());
         if self.client.recipe_ui.0.overlay.is_none() {
             // The search box is painted by hand: a field, for the pad's keyboard.
             out.push(Target {
@@ -1336,18 +1377,27 @@ impl crate::game::ClientGame<'_> {
     }
     /// The open screen's book for `hasClickedOutside`: (visible, selected tab
     /// hovered); None when the screen has no book.
+    #[allow(dead_code)]
     pub(in crate::game::client_side) fn recipe_book_area(
+        &self,
+        batch: &HudBatch,
+    ) -> Option<(bool, bool)> {
+        self.recipe_book_area_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn recipe_book_area_in(
         &self,
         gui: (f32, f32),
     ) -> Option<(bool, bool)> {
         if self.native_screen_shown() {
-            return self.mod_book_area(gui);
+            return self.mod_book_area_in(gui);
         }
         let book = self.active_book()?;
         if !self.book_open(book) {
             return Some((false, false));
         }
-        let (xo, yo) = self.book_origin(gui);
+        let (xo, yo) = self.book_origin_in(gui);
         let tabs = &self.client.recipe_ui.0.view.tabs;
         let selected = self.client.recipe_ui.0.tab.unwrap_or(Tab::Search);
         let hovered = tabs.iter().position(|t| *t == selected).is_some_and(|n| {
@@ -1386,7 +1436,13 @@ impl crate::game::ClientGame<'_> {
     /// What the book's click handler does once a recipe was placed: a book
     /// that is not offset next to the menu (`!isOffsetNextToMainGUI`, a window
     /// narrower than `NARROW`) closes with `setVisible(false)`.
-    pub(in crate::game) fn close_narrow_book(&mut self, book_type: BookType, gui: (f32, f32)) {
+    #[allow(dead_code)]
+    pub(in crate::game) fn close_narrow_book(&mut self, book_type: BookType, batch: &HudBatch) {
+        self.close_narrow_book_in(book_type, batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn close_narrow_book_in(&mut self, book_type: BookType, gui: (f32, f32)) {
         if gui.0 >= NARROW {
             return;
         }
@@ -1408,7 +1464,7 @@ impl crate::game::ClientGame<'_> {
         if !escape_closes_book(frame.size().0, self.book_open(book_type)) {
             return false;
         }
-        self.close_narrow_book(book_type, frame.size());
+        self.close_narrow_book_in(book_type, frame.size());
         true
     }
     /// `RecipeBookComponent.tryPlaceRecipe`: false when the click is refused.
@@ -1894,9 +1950,9 @@ impl crate::game::ClientGame<'_> {
         if !self.shift_down_or_ctrl() {
             self.client.recipe_ui.0.time += self.client.frame_ticks;
         }
-        let (ox, _) = self.inventory_origin(batch.size());
+        let (ox, _) = self.inventory_origin(batch);
         let cursor = self.client.cursor;
-        let (bx, by) = self.book_button_pos(book_type, ox, batch.size());
+        let (bx, by) = self.book_button_pos(book_type, ox, batch);
         let hover = inside(cursor, bx, by, 20.0, 18.0);
         batch.sprite(
             &self.client.gui.atlas,
@@ -1936,7 +1992,7 @@ impl crate::game::ClientGame<'_> {
             Narratable::button("", button, true).key(key_of(&"recipe_book/button"))
         });
         let open = self.book_open(book_type);
-        let (xo, yo) = self.book_origin(batch.size());
+        let (xo, yo) = self.book_origin(batch);
         let group = key_of(&"recipe_book");
         widgets::narratable(|| Narratable::group(open, [xo, yo, WIDTH, HEIGHT]).key(group));
         if !open {
@@ -2025,7 +2081,7 @@ impl crate::game::ClientGame<'_> {
         if self.client.recipe_ui.0.ghost.is_empty() {
             return;
         }
-        let (ox, oy) = self.inventory_origin(batch.size());
+        let (ox, oy) = self.inventory_origin(batch);
         let big_result = book_type != BookType::Crafting || self.common.craft_size == 3;
         let ghosts: Vec<GhostView> = self
             .client
@@ -2076,7 +2132,7 @@ impl crate::game::ClientGame<'_> {
         batch: &mut HudBatch,
         book_type: BookType,
     ) -> Option<Vec<(Text, u32)>> {
-        let (xo, yo) = self.book_origin(batch.size());
+        let (xo, yo) = self.book_origin(batch);
         let cursor = self.client.cursor;
         let atlas = &self.client.gui.atlas;
         let search = match self.client.recipe_ui.0.search.as_mut() {
@@ -2537,7 +2593,7 @@ pub(in crate::game) mod tests {
                                 size,
                                 game.client.settings.gui_scale_inputs(),
                             );
-                            assert_eq!(game.inventory_origin(batch.size()), (x, 37.0), "{case}");
+                            assert_eq!(game.inventory_origin(&batch), (x, 37.0), "{case}");
                             let mut painted = sunrise_client::hud::HudBatch::new(
                                 size,
                                 game.client.settings.gui_scale_inputs(),

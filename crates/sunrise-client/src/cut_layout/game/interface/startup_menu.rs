@@ -622,7 +622,7 @@ pub(crate) mod tests {
         }) if name == "My world")
         );
         let mut batch = HudBatch::scratch([1280, 720]);
-        loading.draw_menu(loading.gui_frame(), &mut batch);
+        loading.draw_menu(&mut batch);
         assert!(
             !batch.vertices.is_empty(),
             "queued entry draws loading progress"

@@ -248,7 +248,7 @@ impl crate::game::ClientGame<'_> {
         }
         // slot_count mirrors slots() without allocating; keep them in step.
         debug_assert_eq!(self.slot_count(), self.slots().len());
-        Some(self.screen_view(batch.size(), screen))
+        Some(self.screen_view(batch, screen))
     }
     /// Whether the screen on top asked for the panorama through
     /// [`sunrise_client::screen_draw::Backdrop`].
@@ -328,6 +328,6 @@ impl crate::game::ClientGame<'_> {
         {
             return None;
         }
-        self.title_screen_view(batch.size())
+        self.title_screen_view(batch)
     }
 }

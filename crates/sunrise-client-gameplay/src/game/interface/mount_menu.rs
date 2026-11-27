@@ -270,7 +270,7 @@ impl crate::game::ClientGame<'_> {
             return true;
         };
         let frame = self.gui_frame_for([r.config.width, r.config.height]);
-        let Some(slot) = self.slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1)
+        let Some(slot) = self.slot_at_in(frame.size(), self.client.cursor.0, self.client.cursor.1)
         else {
             return true;
         };

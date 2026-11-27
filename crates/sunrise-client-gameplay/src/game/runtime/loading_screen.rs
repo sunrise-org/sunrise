@@ -336,7 +336,7 @@ impl Loading {
         };
         let gui_frame = self.gui_frame_for(size);
         let mut batch = HudBatch::for_frame(&gui_frame);
-        self.draw_menu(gui_frame, &mut batch);
+        self.draw_menu_in(gui_frame, &mut batch);
         self.menu.frame_drawn((batch.width, batch.height));
         let mut frame = loading_frame(&batch);
         frame.yaw = self.panorama_rotation.update(

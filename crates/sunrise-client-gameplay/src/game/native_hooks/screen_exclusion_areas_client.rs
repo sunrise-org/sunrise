@@ -17,7 +17,7 @@ impl crate::game::ClientGame<'_> {
             return Vec::new();
         };
         let frame = self.gui_frame_for(framebuffer);
-        let mut areas = self.screen_own_exclusion(frame.size());
+        let mut areas = self.screen_own_exclusion_in(frame.size());
         self.native_screen_exclusion_areas(&view, &mut areas);
         areas.retain(|a| a.iter().all(|v| v.is_finite()) && a[2] > 0.0 && a[3] > 0.0);
         areas

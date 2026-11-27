@@ -604,6 +604,12 @@ impl crate::game::ClientGame<'_> {
     }
 
     /// Framebuffer size and GUI projection, including before the renderer is initialized.
+    #[allow(dead_code)]
+    pub fn gui_frame_now(&self) -> ([u32; 2], GuiSize) {
+        let frame = self.gui_frame();
+        (frame.target, frame.gui)
+    }
+
     #[inline(always)]
     pub fn gui_frame(&self) -> sunrise_client::window::GuiFrame {
         self.gui_frame_for(self.gui_target())
@@ -654,7 +660,7 @@ impl crate::game::ClientGame<'_> {
         // the exclusion never disagree by a frame.
         let container = (shown
             && matches!(self.client.screen, Screen::Inventory | Screen::Creative))
-        .then(|| self.container_layout_inputs(frame.size()));
+        .then(|| self.container_layout_inputs_in(frame.size()));
         let container = container.and_then(|inputs| {
             let unchanged = self
                 .client
@@ -680,7 +686,7 @@ impl crate::game::ClientGame<'_> {
                                     && old.slot_inputs == inputs.slot_inputs
                             })
                 });
-            (!unchanged).then(|| self.build_container_layout(frame.size(), inputs))
+            (!unchanged).then(|| self.build_container_layout_in(frame.size(), inputs))
         });
         // The pause menu's inputs can change while it is open: a server's
         // links or a custom-additions dialog arriving. Compare them here and
@@ -771,7 +777,7 @@ impl crate::game::ClientGame<'_> {
         let tabs = self.client.screen_state.0.drawn_book_tabs.take();
         let shown = region_screen.filter(|_| self.screen_view_listened());
         if let Some(screen) = shown
-            && let Some(layout) = self.built_container(batch.size())
+            && let Some(layout) = self.built_container(batch)
         {
             self.collect_screen_regions(screen, layout, batch.width, &mut regions);
             if screen == Screen::Inventory
@@ -800,7 +806,15 @@ impl crate::game::ClientGame<'_> {
     }
 
     /// The build's container layout, when it holds the current GUI size.
-    pub fn built_container(&self, gui: (f32, f32)) -> Option<&ContainerLayout> {
+    pub fn built_container(
+        &self,
+        batch: &sunrise_client::hud::HudBatch,
+    ) -> Option<&ContainerLayout> {
+        self.built_container_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub fn built_container_in(&self, gui: (f32, f32)) -> Option<&ContainerLayout> {
         self.client
             .screen_state
             .0

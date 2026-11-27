@@ -652,8 +652,19 @@ impl crate::game::ClientGame<'_> {
     }
     /// The panel's parts: right of the window, from the top of the screen to
     /// the search box at its foot. None when the screen has no room for it.
-    fn browser_layout(&self, gui: (f32, f32), scale: f32) -> Option<Layout> {
-        let image = self.container_image(gui);
+    #[allow(dead_code)]
+    fn browser_batch(&self) -> Option<HudBatch> {
+        self.renderer_gui_frame()
+            .map(|frame| HudBatch::for_frame(&frame))
+    }
+
+    fn browser_layout(&self, batch: &HudBatch) -> Option<Layout> {
+        self.browser_layout_in(batch.size(), batch.scale)
+    }
+
+    #[inline(always)]
+    fn browser_layout_in(&self, gui: (f32, f32), scale: f32) -> Option<Layout> {
+        let image = self.container_image_in(gui);
         let recipes = self
             .client
             .panel
@@ -661,7 +672,7 @@ impl crate::game::ClientGame<'_> {
             .as_ref()
             .is_some_and(|(owner, _)| owner.native_id() == "recipes");
         let window_right = if self.client.screen == Screen::Creative {
-            Self::creative_origin(gui).0 + 198.0
+            Self::creative_origin_in(gui).0 + 198.0
         } else {
             (image.left + image.width) as f32
         };
@@ -914,14 +925,14 @@ impl crate::game::ClientGame<'_> {
     /// overlay phase. The carried stack belongs to the enclosing screen.
     pub fn draw_mod_browser(&mut self, batch: &mut HudBatch) -> Option<BrowserTooltip> {
         let owner = self.browser_sync()?;
-        let mut layout = self.browser_layout(batch.size(), batch.scale)?;
+        let mut layout = self.browser_layout(batch)?;
         // A search text the owner set (`panel_search`) goes into its box only
         // now, with room for the box, and is heard through typing's own path,
         // outside the mod's call; the list it sends back is drawn this frame.
         if self.client.panel.deliver_search(&owner) {
             self.browser_searched();
             self.browser_sync()?;
-            layout = self.browser_layout(batch.size(), batch.scale)?;
+            layout = self.browser_layout(batch)?;
         }
         let cursor = self.client.cursor;
         if self.client.panel.recipes.is_some() {
@@ -1053,7 +1064,7 @@ impl crate::game::ClientGame<'_> {
         let Some(frame) = self.renderer_gui_frame() else {
             return false;
         };
-        let Some(layout) = self.browser_layout(frame.size(), frame.scale()) else {
+        let Some(layout) = self.browser_layout_in(frame.size(), frame.scale()) else {
             return false;
         };
         let cursor = self.client.cursor;
@@ -1167,7 +1178,7 @@ impl crate::game::ClientGame<'_> {
         let owner = self.browser_sync();
         let on_panel = self
             .renderer_gui_frame()
-            .and_then(|frame| self.browser_layout(frame.size(), frame.scale()))
+            .and_then(|frame| self.browser_layout_in(frame.size(), frame.scale()))
             .map(|layout| inside(self.client.cursor, layout.area));
         let Some(held) = self.client.panel.held.take() else {
             return true;
@@ -1236,7 +1247,7 @@ impl crate::game::ClientGame<'_> {
         let Some(frame) = self.renderer_gui_frame() else {
             return false;
         };
-        let Some(layout) = self.browser_layout(frame.size(), frame.scale()) else {
+        let Some(layout) = self.browser_layout_in(frame.size(), frame.scale()) else {
             return false;
         };
         if self.client.panel.recipes.is_some() {
@@ -1349,7 +1360,7 @@ impl crate::game::ClientGame<'_> {
         let frame = self.renderer_gui_frame()?;
         let stack = match self
             .browser_sync()
-            .and_then(|_| self.browser_layout(frame.size(), frame.scale()))
+            .and_then(|_| self.browser_layout_in(frame.size(), frame.scale()))
         {
             // The panel's stacks as the mod sent them.
             Some(layout) if inside(self.client.cursor, layout.area) => {
@@ -1357,7 +1368,7 @@ impl crate::game::ClientGame<'_> {
             }
             _ => {
                 let slot =
-                    self.slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1)?;
+                    self.slot_at_in(frame.size(), self.client.cursor.0, self.client.cursor.1)?;
                 self.slot_view(slot)?
             }
         };

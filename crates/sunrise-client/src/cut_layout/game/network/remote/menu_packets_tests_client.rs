@@ -212,8 +212,8 @@ fn remote_mount_is_installed_before_screen_init_and_keeps_all_columns() {
                     let last = CHEST + 17;
                     assert_eq!(game.mount_slot_position(last), Some((170.0, 54.0)));
                     let batch = HudBatch::scratch([854, 480]);
-                    let (ox, oy) = game.inventory_origin(batch.size());
-                    let hovered = game.slot_at(batch.size(), ox + 171.0, oy + 55.0);
+                    let (ox, oy) = game.inventory_origin(&batch);
+                    let hovered = game.slot_at(&batch, ox + 171.0, oy + 55.0);
                     assert_eq!(hovered, Some(last));
                     game.handle_packet(C::ContainerSetSlot(ContainerSetSlot {
                         container: 8,

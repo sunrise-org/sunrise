@@ -307,14 +307,25 @@ impl crate::game::ClientGame<'_> {
         ui.presentation = Some(presentation);
     }
     /// A mod menu's book toggle edges before the window moves to make room.
-    pub(in crate::game) fn mod_book_toggle_span(&self, gui: (f32, f32)) -> Option<[f32; 2]> {
+    #[allow(dead_code)]
+    pub(in crate::game) fn mod_book_toggle_span(&self, batch: &HudBatch) -> Option<[f32; 2]> {
+        self.mod_book_toggle_span_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn mod_book_toggle_span_in(&self, gui: (f32, f32)) -> Option<[f32; 2]> {
         let (open, _) = self.mod_book_flags()?;
         Some(self.mod_book_layout(gui.0, open)?.toggle_span())
     }
-    fn mod_book_button(&self, gui: (f32, f32)) -> (f32, f32) {
+    fn mod_book_button(&self, batch: &HudBatch) -> (f32, f32) {
+        self.mod_book_button_in(batch.size())
+    }
+
+    #[inline(always)]
+    fn mod_book_button_in(&self, gui: (f32, f32)) -> (f32, f32) {
         self.mod_book_layout(gui.0, self.mod_book_open())
             .map_or((0.0, 0.0), |layout| {
-                layout.shifted_toggle(self.screen_room_offset(gui))
+                layout.shifted_toggle(self.screen_room_offset_in(gui))
             })
     }
     pub(in crate::game) fn draw_mod_book(
@@ -323,7 +334,7 @@ impl crate::game::ClientGame<'_> {
     ) -> Option<Vec<(Text, u32)>> {
         self.refresh_mod_book();
         let (open, filtering) = self.mod_book_flags()?;
-        let (bx, by) = self.mod_book_button(batch.size());
+        let (bx, by) = self.mod_book_button(batch);
         batch.sprite(
             &self.client.gui.atlas,
             &sprite(if inside(self.client.cursor, bx, by, 20.0, 18.0) {
@@ -341,7 +352,7 @@ impl crate::game::ClientGame<'_> {
         if !open {
             return None;
         }
-        let (xo, yo) = self.book_origin(batch.size());
+        let (xo, yo) = self.book_origin(batch);
         let search = match self.client.recipe_ui.0.search.as_mut() {
             Some(edit) => {
                 edit.x = xo + 25.0;
@@ -412,24 +423,36 @@ impl crate::game::ClientGame<'_> {
             return false;
         };
         let cursor = self.client.cursor;
-        let consumed = self.mod_book_click_panel(frame.size(), open, filtering, right);
+        let consumed = self.mod_book_click_panel_in(frame.size(), open, filtering, right);
         if !consumed
             && self
-                .slot_at(frame.size(), cursor.0, cursor.1)
+                .slot_at_in(frame.size(), cursor.0, cursor.1)
                 .is_some_and(|slot| slot >= 300)
         {
             self.client.recipe_ui.0.ghost.clear();
         }
         consumed
     }
+    #[allow(dead_code)]
     fn mod_book_click_panel(
+        &mut self,
+        batch: &HudBatch,
+        open: bool,
+        filtering: bool,
+        right: bool,
+    ) -> bool {
+        self.mod_book_click_panel_in(batch.size(), open, filtering, right)
+    }
+
+    #[inline(always)]
+    fn mod_book_click_panel_in(
         &mut self,
         gui: (f32, f32),
         open: bool,
         filtering: bool,
         right: bool,
     ) -> bool {
-        let (bx, by) = self.mod_book_button(gui);
+        let (bx, by) = self.mod_book_button_in(gui);
         let cursor = self.client.cursor;
         if inside(cursor, bx, by, 20.0, 18.0) {
             if let Some(book) = self.native_screen_book().cloned() {
@@ -450,7 +473,7 @@ impl crate::game::ClientGame<'_> {
         if self.common.spectator() {
             return narrow;
         }
-        let (xo, yo) = self.book_origin(gui);
+        let (xo, yo) = self.book_origin_in(gui);
         if self.consume_mod_book_overlay(right) {
             return true;
         }
@@ -546,9 +569,15 @@ impl crate::game::ClientGame<'_> {
         }
         narrow
     }
-    pub(in crate::game) fn mod_book_area(&self, gui: (f32, f32)) -> Option<(bool, bool)> {
+    #[allow(dead_code)]
+    pub(in crate::game) fn mod_book_area(&self, batch: &HudBatch) -> Option<(bool, bool)> {
+        self.mod_book_area_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn mod_book_area_in(&self, gui: (f32, f32)) -> Option<(bool, bool)> {
         let (open, _) = self.mod_book_flags()?;
-        let (xo, yo) = self.book_origin(gui);
+        let (xo, yo) = self.book_origin_in(gui);
         let ui = &self.client.recipe_ui.0.custom;
         let hovered = ui.presentation.as_ref().is_some_and(|p| {
             ui.visible_tabs().into_iter().enumerate().any(|(n, index)| {
@@ -576,12 +605,12 @@ impl crate::game::ClientGame<'_> {
             rect,
             kind: Kind::Button,
         };
-        let (bx, by) = self.mod_book_button(frame.size());
+        let (bx, by) = self.mod_book_button_in(frame.size());
         let mut targets = vec![button([bx, by, 20.0, 18.0])];
         if !open || self.common.spectator() {
             return targets;
         }
-        let (xo, yo) = self.book_origin(frame.size());
+        let (xo, yo) = self.book_origin_in(frame.size());
         let ui = &self.client.recipe_ui.0.custom;
         if let Some(overlay) = &ui.overlay {
             let columns = if overlay.view.recipes.len() <= 16 {

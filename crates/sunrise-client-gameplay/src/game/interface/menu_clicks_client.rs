@@ -305,7 +305,7 @@ impl crate::game::ClientGame<'_> {
             .as_ref()
             .map(|r| [r.config.width, r.config.height])?;
         let frame = self.gui_frame_for(size);
-        self.slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1)
+        self.slot_at_in(frame.size(), self.client.cursor.0, self.client.cursor.1)
     }
     /// Several clicks on one menu instance (a quick craft drag is three).
     pub fn menu_ops(&mut self, ops: &[(Option<usize>, i32, sunrise_sim::menu::Input)]) -> bool {

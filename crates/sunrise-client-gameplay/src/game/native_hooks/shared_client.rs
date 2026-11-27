@@ -149,6 +149,16 @@ impl OpenNativeScreen {
 
     pub(in crate::game) fn frame(
         &self,
+        batch: &HudBatch,
+        (ox, oy): (f32, f32),
+        (x, y): (f32, f32),
+    ) -> mod_api::MenuScreenFrame<'_> {
+        self.frame_in(batch.size(), (ox, oy), (x, y))
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn frame_in(
+        &self,
         (w, h): (f32, f32),
         (ox, oy): (f32, f32),
         (x, y): (f32, f32),

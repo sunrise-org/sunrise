@@ -72,15 +72,11 @@ fn filled_slot_tooltip_replaces_lines_but_keeps_item_image_and_visibility() {
                                 ]));
                             game.inventory[9] = Some(stack.clone());
                             let mut batch = HudBatch::scratch([512, 512]);
-                            let (ox, oy) = game.inventory_origin(batch.size());
+                            let (ox, oy) = game.inventory_origin(&batch);
                             let (x, y) = game.slot_position(9);
                             game.client.cursor = (ox + x + 8.0, oy + y + 8.0);
                             assert_eq!(
-                                game.slot_at(
-                                    batch.size(),
-                                    game.client.cursor.0,
-                                    game.client.cursor.1
-                                ),
+                                game.slot_at(&batch, game.client.cursor.0, game.client.cursor.1),
                                 Some(9)
                             );
                             game.draw_stack_tooltip(

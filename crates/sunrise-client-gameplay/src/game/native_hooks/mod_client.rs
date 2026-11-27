@@ -607,7 +607,7 @@ impl crate::game::ClientGame<'_> {
             }
         }
         if s.screen.has_draw() {
-            let frame = s.frame(batch.size(), (ox, oy), self.client.cursor);
+            let frame = s.frame(batch, (ox, oy), self.client.cursor);
             let mut draw = crate::game::host::draw::GameDrawContext::new(self, batch);
             s.screen.draw(self, frame, &mut draw);
         }
@@ -635,7 +635,7 @@ impl crate::game::ClientGame<'_> {
         // Over no item: an empty slot still gets the mod's hint (which fuel it takes).
         // A carried stack hides only slot tooltips, as AbstractContainerScreen's;
         // the screen's other parts keep theirs, as a vanilla widget's tooltip does.
-        let slot = self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1);
+        let slot = self.slot_at(batch, self.client.cursor.0, self.client.cursor.1);
         if slot.is_some_and(|i| self.slot_view(i).is_some()) {
             return;
         }
@@ -737,21 +737,26 @@ impl crate::game::ClientGame<'_> {
             return false;
         };
         let frame = self.gui_frame_for([r.config.width, r.config.height]);
-        self.native_screen_press_at(frame.size(), right)
+        self.native_screen_press_at_in(frame.size(), right)
     }
     /// Dispatch a press in the given GUI viewport, with inventory slots taking priority.
-    pub fn native_screen_press_at(&mut self, gui: (f32, f32), right: bool) -> bool {
+    pub fn native_screen_press_at(&mut self, batch: &HudBatch, right: bool) -> bool {
+        self.native_screen_press_at_in(batch.size(), right)
+    }
+
+    #[inline(always)]
+    pub fn native_screen_press_at_in(&mut self, gui: (f32, f32), right: bool) -> bool {
         let Some(screen) = self.shown_native_screen() else {
             return false;
         };
         if self
-            .slot_at(gui, self.client.cursor.0, self.client.cursor.1)
+            .slot_at_in(gui, self.client.cursor.0, self.client.cursor.1)
             .is_some()
         {
             return false;
         }
         let opening = (screen.menu.window, screen.menu.generation);
-        let frame = screen.frame(gui, self.inventory_origin(gui), self.client.cursor);
+        let frame = screen.frame_in(gui, self.inventory_origin_in(gui), self.client.cursor);
         let Some(button) = screen.screen.click(self, frame, right) else {
             return false;
         };
@@ -820,11 +825,7 @@ impl crate::game::ClientGame<'_> {
         let menu_slot = slot.and_then(|slot| {
             Self::menu_slot_index(&screen.menu.name, slot).map(|slot| slot as u32)
         });
-        let frame = screen.frame(
-            batch.size(),
-            self.inventory_origin(batch.size()),
-            self.client.cursor,
-        );
+        let frame = screen.frame(batch, self.inventory_origin(batch), self.client.cursor);
         if screen.screen.tooltip(self, frame, menu_slot, &mut snapshot)
             && let Ok(replacement) = snapshot.try_into_engine(&())
         {
@@ -1130,7 +1131,7 @@ impl crate::game::ClientGame<'_> {
     /// renderer (a test, a window not yet up) leaves its rectangle empty.
     pub(crate) fn screen_change_view(&self, screen: Screen) -> ScreenView<'_> {
         let rect = match &self.client.renderer.0 {
-            Some(renderer) => self.screen_rect(
+            Some(renderer) => self.screen_rect_for_size(
                 self.gui_frame_for([renderer.config.width, renderer.config.height])
                     .size(),
                 screen,
@@ -1448,13 +1449,23 @@ impl crate::game::ClientGame<'_> {
     /// The open screen's container panel in GUI pixels (`screen`'s, the one
     /// this frame draws), or the whole window for a screen with none
     /// (`ScreenView.rect`).
-    pub(in crate::game) fn screen_rect(&self, gui: (f32, f32), screen: Screen) -> [f32; 4] {
+    #[allow(dead_code)]
+    pub(in crate::game) fn screen_rect(&self, batch: &HudBatch, screen: Screen) -> [f32; 4] {
+        self.screen_rect_for_size(batch.size(), screen)
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn screen_rect_for_size(
+        &self,
+        gui: (f32, f32),
+        screen: Screen,
+    ) -> [f32; 4] {
         if screen != Screen::Inventory && screen != Screen::Creative {
             return [0.0, 0.0, gui.0, gui.1];
         }
         // The window the game itself draws (`container_image`): the merchant
         // and the beacon are wider and shifted, creative is its own size.
-        let image = self.container_image(gui);
+        let image = self.container_image_in(gui);
         [
             image.left as f32,
             image.top as f32,
@@ -1493,9 +1504,9 @@ impl crate::game::ClientGame<'_> {
         let framebuffer = self.renderer_framebuffer()?;
         let frame = self.gui_frame_for(framebuffer);
         if self.client.screen != Screen::Playing {
-            return Some(self.screen_view(frame.size(), self.client.screen));
+            return Some(self.screen_view_for_size(frame.size(), self.client.screen));
         }
-        self.title_screen_view(frame.size())
+        self.title_screen_view_in(frame.size())
     }
     /// `set_screen`, with `before` run once the hooks let the change go ahead and
     /// before it applies: what a screen's own `onClose` does only when it really
@@ -1740,7 +1751,12 @@ impl crate::game::ClientGame<'_> {
     /// `world_create`, `multiplayer`, `add_server`…), no menu and no menu
     /// title, the whole window as its rectangle and no slots (no menu is
     /// open). None while no title screen is up.
-    pub fn title_screen_view(&self, gui: (f32, f32)) -> Option<ScreenView<'_>> {
+    pub fn title_screen_view(&self, batch: &HudBatch) -> Option<ScreenView<'_>> {
+        self.title_screen_view_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub fn title_screen_view_in(&self, gui: (f32, f32)) -> Option<ScreenView<'_>> {
         let title = self.client.title.0.as_ref()?;
         Some(ScreenView::from(mod_api::__private::built::ScreenView {
             id: title.mode.id(),
@@ -1914,8 +1930,13 @@ impl crate::game::ClientGame<'_> {
         self.native_screen_render_post(draw, screen);
     }
     /// Borrowed `ScreenView` of the open screen for this frame.
-    pub fn screen_view(&self, gui: (f32, f32), screen: Screen) -> ScreenView<'_> {
-        self.screen_view_at(screen, self.screen_rect(gui, screen))
+    pub fn screen_view(&self, batch: &HudBatch, screen: Screen) -> ScreenView<'_> {
+        self.screen_view_for_size(batch.size(), screen)
+    }
+
+    #[inline(always)]
+    pub fn screen_view_for_size(&self, gui: (f32, f32), screen: Screen) -> ScreenView<'_> {
+        self.screen_view_at(screen, self.screen_rect_for_size(gui, screen))
     }
     /// `screen_view` with an explicit panel `rect` for container layout.
     pub(in crate::game) fn screen_view_at(&self, screen: Screen, rect: [f32; 4]) -> ScreenView<'_> {

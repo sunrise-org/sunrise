@@ -750,7 +750,7 @@ impl crate::game::ClientGame<'_> {
             return true;
         };
         let frame = self.gui_frame_for(size);
-        let (ox, oy) = self.inventory_origin(frame.size());
+        let (ox, oy) = self.inventory_origin_in(frame.size());
         let local = (self.client.cursor.0 - ox, self.client.cursor.1 - oy);
         let shift = self.has_shift_down();
         if let Some(kind) = self.common.station.as_ref().map(|s| s.kind) {
@@ -783,7 +783,7 @@ impl crate::game::ClientGame<'_> {
                 return true;
             }
         }
-        let Some(slot) = self.slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1)
+        let Some(slot) = self.slot_at_in(frame.size(), self.client.cursor.0, self.client.cursor.1)
         else {
             return true;
         };
@@ -876,7 +876,7 @@ impl crate::game::ClientGame<'_> {
         let Some(frame) = self.renderer_gui_frame() else {
             return false;
         };
-        let (ox, oy) = self.inventory_origin(frame.size());
+        let (ox, oy) = self.inventory_origin_in(frame.size());
         let local = (self.client.cursor.0 - ox, self.client.cursor.1 - oy);
         if !off_visible_rows(&self.station_targets(), local, up) {
             return false;
@@ -932,7 +932,7 @@ impl crate::game::ClientGame<'_> {
         else {
             return handled;
         };
-        let (_, oy) = self.inventory_origin(self.gui_frame_for(size).size());
+        let (_, oy) = self.inventory_origin_in(self.gui_frame_for(size).size());
         let y = self.client.cursor.1 - oy;
         // `StonecutterScreen.mouseDragged`.
         if let Some((s, ui)) = self.station_and_ui_mut()
@@ -2089,8 +2089,7 @@ impl crate::game::ClientGame<'_> {
         if self.mod_browser_dragging() {
             return;
         }
-        let Some(slot) = self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1)
-        else {
+        let Some(slot) = self.slot_at(batch, self.client.cursor.0, self.client.cursor.1) else {
             return;
         };
         // The recipe book's tooltip is drawn after the slot's own, so a ghost wins.

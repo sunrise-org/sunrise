@@ -2246,7 +2246,13 @@ impl crate::game::ClientGame<'_> {
         }
         title_settled
     }
-    pub fn hud_layers(&mut self, frame: sunrise_client::window::GuiFrame) -> HudBatch {
+    #[allow(dead_code)]
+    pub fn hud_layers(&mut self, size: [u32; 2]) -> HudBatch {
+        self.hud_layers_for_frame(self.gui_frame_for(size))
+    }
+
+    #[inline(always)]
+    pub fn hud_layers_for_frame(&mut self, frame: sunrise_client::window::GuiFrame) -> HudBatch {
         use sunrise_client::gui_layers::VanillaGuiLayer;
 
         self.client.hud_status_heights = Default::default();
@@ -2816,7 +2822,7 @@ impl crate::game::ClientGame<'_> {
         // Gui.extractRenderState passes integer coordinates to the HUD and screen. Keep
         // the projected fractions for input, but draw and hit-test hover at the frame's pixel.
         let frame = self.gui_frame_for(size);
-        let pointer = self.project_window_cursor(frame);
+        let pointer = self.project_window_cursor_in(frame);
         if let Some(pointer) = pointer {
             self.client.cursor = pointer.pixel();
         }
@@ -2834,7 +2840,7 @@ impl crate::game::ClientGame<'_> {
         {
             HudBatch::for_frame(&frame)
         } else {
-            self.hud_layers(frame)
+            self.hud_layers_for_frame(frame)
         };
         // Vanilla's confirmation replaces the dialog as the screen.
         if self.client.command_prompt.0.is_none() {
@@ -3786,7 +3792,16 @@ impl crate::game::ClientGame<'_> {
             self.play_audio(name, c, volume, pitch);
         }
     }
+    #[allow(dead_code)]
     pub(in crate::game::client_side) fn project_window_cursor(
+        &self,
+        framebuffer: [u32; 2],
+    ) -> Option<sunrise_client::window::GuiPointer> {
+        self.project_window_cursor_in(self.gui_frame_for(framebuffer))
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn project_window_cursor_in(
         &self,
         frame: sunrise_client::window::GuiFrame,
     ) -> Option<sunrise_client::window::GuiPointer> {
@@ -4003,7 +4018,7 @@ impl crate::game::ClientGame<'_> {
                 });
                 let frame = self.renderer_gui_frame();
                 let cursor = frame
-                    .and_then(|frame| self.project_window_cursor(frame))
+                    .and_then(|frame| self.project_window_cursor_in(frame))
                     .map_or(self.client.cursor, |p| p.pixel());
                 if let (Some(frame), Some(renderer)) = (frame, &mut self.client.renderer.0) {
                     let mut hud = HudBatch::for_frame(&frame);
@@ -5329,7 +5344,7 @@ impl crate::game::ClientGame<'_> {
             Screen::Options if left => self.options_drag()?,
             Screen::Creative => {
                 let frame = self.gui_frame_for(framebuffer);
-                let (_, oy) = Self::creative_origin(frame.size());
+                let (_, oy) = Self::creative_origin_in(frame.size());
                 (left
                     && self
                         .client

@@ -236,7 +236,7 @@ impl crate::game::ClientGame<'_> {
             },
         );
         let gui = GuiSize::new(window, scale, false);
-        let layout = self.container_layout(batch.size());
+        let layout = self.container_layout(&batch);
         // The frame's build, the way `observe_screen` makes it: the hit tests
         // and the panel readers below go through it.
         self.client.screen_state.0.build.sync(
@@ -247,11 +247,11 @@ impl crate::game::ClientGame<'_> {
             Some(ScreenLayout::Container(layout)),
         );
 
-        let Some(layout) = self.built_container(batch.size()) else {
+        let Some(layout) = self.built_container(&batch) else {
             return Err("no build".into());
         };
-        let image = self.container_image(batch.size());
-        let (ox, oy) = self.inventory_origin(batch.size());
+        let image = self.container_image(&batch);
+        let (ox, oy) = self.inventory_origin(&batch);
         let mut slots: Vec<[i32; 2]> = layout
             .slots
             .iter()
@@ -262,7 +262,7 @@ impl crate::game::ClientGame<'_> {
         for point in case["points"].as_array().ok_or("points")? {
             let x = point[0].as_f64().ok_or("point x")? as f32;
             let y = point[1].as_f64().ok_or("point y")? as f32;
-            let hit = self.slot_at(batch.size(), x, y).map(|slot| {
+            let hit = self.slot_at(&batch, x, y).map(|slot| {
                 let rect = layout
                     .slots
                     .iter()

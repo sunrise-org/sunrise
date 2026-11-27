@@ -140,7 +140,8 @@ impl crate::game::ClientGame<'_> {
             return false;
         };
         let frame = self.gui_frame_for(size);
-        let hover = match self.slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1) {
+        let hover = match self.slot_at_in(frame.size(), self.client.cursor.0, self.client.cursor.1)
+        {
             None => Hover::Nothing,
             Some(slot) if slot >= Creative::DISPLAY => Hover::Display {
                 filled: self.creative_display_stack(slot).is_some(),
@@ -165,7 +166,7 @@ impl crate::game::ClientGame<'_> {
             return false;
         };
         let frame = self.gui_frame_for(size);
-        let Some(slot) = self.slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1)
+        let Some(slot) = self.slot_at_in(frame.size(), self.client.cursor.0, self.client.cursor.1)
         else {
             return false;
         };
@@ -205,7 +206,7 @@ impl crate::game::ClientGame<'_> {
         };
         let frame = self.gui_frame_for(size);
         let Some(slot) = self
-            .slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1)
+            .slot_at_in(frame.size(), self.client.cursor.0, self.client.cursor.1)
             .filter(|_| menu)
         else {
             return;
@@ -368,7 +369,8 @@ impl crate::game::ClientGame<'_> {
             return true;
         };
         let frame = self.gui_frame_for([r.config.width, r.config.height]);
-        if let Some(slot) = self.slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1)
+        if let Some(slot) =
+            self.slot_at_in(frame.size(), self.client.cursor.0, self.client.cursor.1)
             && slot != 200
             && slot < Creative::DISPLAY
             && !slots.contains(&slot)
@@ -397,14 +399,20 @@ impl crate::game::ClientGame<'_> {
             return (None, false);
         };
         let frame = self.gui_frame_for([r.config.width, r.config.height]);
-        self.target_at(frame.size())
+        self.target_at_in(frame.size())
     }
     /// `inventory_target` for an explicit GUI size.
-    pub fn target_at(&self, gui: (f32, f32)) -> (Option<usize>, bool) {
-        let slot = self.slot_at(gui, self.client.cursor.0, self.client.cursor.1);
+    pub fn target_at(&self, batch: &HudBatch) -> (Option<usize>, bool) {
+        self.target_at_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub fn target_at_in(&self, gui: (f32, f32)) -> (Option<usize>, bool) {
+        let slot = self.slot_at_in(gui, self.client.cursor.0, self.client.cursor.1);
         // A mod screen may place a slot beyond its image: a click on one is
         // not a click outside the window.
-        let outside = self.clicked_outside(gui) && !(slot.is_some() && self.native_screen_shown());
+        let outside =
+            self.clicked_outside_in(gui) && !(slot.is_some() && self.native_screen_shown());
         (slot, outside)
     }
     pub(in crate::game::client_side) fn screen_button(
@@ -441,11 +449,17 @@ impl crate::game::ClientGame<'_> {
         );
     }
     /// `hasClickedOutside` of the open screen at the cursor.
-    pub(in crate::game::client_side) fn clicked_outside(&self, gui: (f32, f32)) -> bool {
+    #[allow(dead_code)]
+    pub(in crate::game::client_side) fn clicked_outside(&self, batch: &HudBatch) -> bool {
+        self.clicked_outside_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn clicked_outside_in(&self, gui: (f32, f32)) -> bool {
         use sunrise_client::container_screen::{Book, clicked_outside};
-        let image = self.container_image(gui);
+        let image = self.container_image_in(gui);
         let book = self
-            .recipe_book_area(gui)
+            .recipe_book_area_in(gui)
             .map(|(visible, tab_hovered)| Book {
                 visible,
                 selected_tab_hovered: tab_hovered,
@@ -458,17 +472,31 @@ impl crate::game::ClientGame<'_> {
         )
     }
     /// The open container screen's window: its place and size.
-    pub fn container_image(&self, gui: (f32, f32)) -> sunrise_client::container_screen::Image {
-        match self.built_container(gui) {
+    pub fn container_image(&self, batch: &HudBatch) -> sunrise_client::container_screen::Image {
+        self.container_image_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub fn container_image_in(&self, gui: (f32, f32)) -> sunrise_client::container_screen::Image {
+        match self.built_container_in(gui) {
             Some(layout) => Self::image_of(layout.image),
-            None => Self::image_of(self.container_image_parts(gui)),
+            None => Self::image_of(self.container_image_parts_in(gui)),
         }
     }
     /// `leftPos`, `topPos`, `imageWidth`, `imageHeight` from the game's state
     /// alone: the container build's own arithmetic, and the fallback when no
     /// build holds this size.
-    pub(in crate::game::client_side) fn container_image_parts(&self, gui: (f32, f32)) -> [f32; 4] {
-        let (ox, oy) = self.inventory_origin_unbuilt(gui);
+    #[allow(dead_code)]
+    pub(in crate::game::client_side) fn container_image_parts(&self, batch: &HudBatch) -> [f32; 4] {
+        self.container_image_parts_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn container_image_parts_in(
+        &self,
+        gui: (f32, f32),
+    ) -> [f32; 4] {
+        let (ox, oy) = self.inventory_origin_unbuilt_in(gui);
         let (shift, width, height) = if self.client.screen == Screen::Creative {
             (0.0, Creative::WIDTH, Creative::HEIGHT)
         } else {

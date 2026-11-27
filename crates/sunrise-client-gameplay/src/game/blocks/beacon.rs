@@ -263,7 +263,7 @@ impl crate::game::ClientGame<'_> {
     }
     /// `BeaconScreen`: background, labels, payment icons, power buttons.
     pub(in crate::game::client_side) fn draw_beacon(&mut self, batch: &mut HudBatch) {
-        let (ox, oy) = self.inventory_origin(batch.size());
+        let (ox, oy) = self.inventory_origin(batch);
         let (bx, by) = (ox + SHIFT, oy);
         let local = (self.client.cursor.0 - bx, self.client.cursor.1 - by);
         let levels = self.beacon_levels();
@@ -400,7 +400,7 @@ impl crate::game::ClientGame<'_> {
         }
         self.draw_hovered_slot_highlight(batch, true, ox, oy);
         let mut stack_tip = None;
-        if let Some(slot) = self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1) {
+        if let Some(slot) = self.slot_at(batch, self.client.cursor.0, self.client.cursor.1) {
             stack_tip = self.slot_mut(slot).clone();
         }
         let browser_tip = self.draw_mod_browser(batch);

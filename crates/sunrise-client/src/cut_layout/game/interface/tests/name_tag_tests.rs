@@ -320,7 +320,7 @@ fn a_trades_title_draws_the_names_style() {
     game.open_remote_merchant(session, Some(Text::colored("Bob", 0xFF_0000)));
     let mut batch = HudBatch::new([854, 480], game.client.settings.gui_scale_inputs());
     assert!(game.draw_merchant(&mut batch));
-    let (_, oy) = game.inventory_origin(batch.size());
+    let (_, oy) = game.inventory_origin(&batch);
     // The title's row: glyphs only, its own line (`oy + 6`, 8 px tall).
     let title: Vec<u32> = batch
         .vertices

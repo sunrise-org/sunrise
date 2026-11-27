@@ -58,10 +58,17 @@ impl Missing {
             .map_or([1280, 720], |r| [r.config.width, r.config.height])
     }
 
+    #[allow(dead_code)]
+    fn projected_pointer(&self) -> sunrise_client::window::GuiPointer {
+        self.gui_frame().pointer_to_gui(self.pointer)
+    }
+
+    #[inline(always)]
     fn gui_frame(&self) -> GuiFrame {
         self.gui_frame_for(self.size())
     }
 
+    #[inline(always)]
     fn gui_frame_for(&self, size: [u32; 2]) -> GuiFrame {
         let inputs = self.settings.gui_scale_inputs();
         let window = self.window.as_deref().map_or_else(

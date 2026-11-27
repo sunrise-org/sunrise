@@ -70,7 +70,7 @@ fn chest(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) -> (u32, u32)
         .block_entities
         .insert(POS, BlockEntity::Chest(items));
     let batch = HudBatch::scratch(SIZE);
-    let (x, y) = game.inventory_origin(batch.size());
+    let (x, y) = game.inventory_origin(&batch);
     let (sx, sy) = game.slot_position(300);
     assert_eq!((sx, sy), (8.0, 18.0));
     game.client.cursor = (x + sx + 8.0, y + sy + 8.0);
@@ -80,7 +80,7 @@ fn chest(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) -> (u32, u32)
 fn frame(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) -> Vec<u8> {
     // Exercise the actual Game dispatch, including its Pre/Post orchestration,
     // rather than manufacturing an equivalent sequence of render operations.
-    let batch = game.hud_layers(game.gui_frame_for(SIZE));
+    let batch = game.hud_layers(SIZE);
     render_hud(&batch, &game.client.gui.atlas, SIZE).expect("software Vulkan screen draw")
 }
 

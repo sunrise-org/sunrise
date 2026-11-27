@@ -367,6 +367,11 @@ impl crate::game::ClientGame<'_> {
         first_controller_target(targets.iter().copied().filter(|t| Some(t.rect) != warning))
     }
 
+    pub fn gui_batch(&self) -> Option<HudBatch> {
+        self.renderer_gui_frame()
+            .map(|frame| HudBatch::for_frame(&frame))
+    }
+
     #[inline(always)]
     pub fn renderer_gui_frame(&self) -> Option<sunrise_client::window::GuiFrame> {
         let r = self.client.renderer.0.as_ref()?;
@@ -433,8 +438,13 @@ impl crate::game::ClientGame<'_> {
 
     /// The inventory screen's slots as pad targets, at the positions the
     /// frame draws them (a mod screen's moved slots included).
-    pub fn pad_slot_targets(&self, gui: (f32, f32)) -> Vec<Target> {
-        let (ox, oy) = self.inventory_origin(gui);
+    pub fn pad_slot_targets(&self, batch: &HudBatch) -> Vec<Target> {
+        self.pad_slot_targets_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub fn pad_slot_targets_in(&self, gui: (f32, f32)) -> Vec<Target> {
+        let (ox, oy) = self.inventory_origin_in(gui);
         self.slots()
             .into_iter()
             .map(|i| {
@@ -466,8 +476,8 @@ impl crate::game::ClientGame<'_> {
         };
         match self.client.screen {
             Screen::Inventory => {
-                let (ox, oy) = self.inventory_origin(frame.size());
-                targets.extend(self.pad_slot_targets(frame.size()));
+                let (ox, oy) = self.inventory_origin_in(frame.size());
+                targets.extend(self.pad_slot_targets_in(frame.size()));
                 targets.extend(
                     self.station_targets()
                         .into_iter()
@@ -479,7 +489,7 @@ impl crate::game::ClientGame<'_> {
                 targets.extend(self.recipe_book_targets());
             }
             Screen::Creative => {
-                let (ox, oy) = Self::creative_origin(frame.size());
+                let (ox, oy) = Self::creative_origin_in(frame.size());
                 if self.creative_inventory_open() {
                     targets.extend(self.slots().into_iter().map(|i| {
                         let (x, y) = self.slot_position(i);
@@ -556,14 +566,14 @@ impl crate::game::ClientGame<'_> {
         if self.client.title.0.is_none() {
             match self.client.screen {
                 Screen::Inventory => {
-                    let (ox, oy) = self.inventory_origin(frame.size());
+                    let (ox, oy) = self.inventory_origin_in(frame.size());
                     let (x, y) = self.slot_position(self.common.selected);
                     if let Some(t) = at(ox + x, oy + y) {
                         return Some(t);
                     }
                 }
                 Screen::Creative if !self.creative_inventory_open() => {
-                    let (ox, oy) = Self::creative_origin(frame.size());
+                    let (ox, oy) = Self::creative_origin_in(frame.size());
                     if let Some(t) = at(ox + 9.0 + self.common.selected as f32 * 18.0, oy + 112.0) {
                         return Some(t);
                     }

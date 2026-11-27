@@ -77,11 +77,11 @@ pub(crate) mod tests {
                     unicode: false,
                 },
             );
-            let layout = game.container_layout(batch.size());
+            let layout = game.container_layout(&batch);
             assert_eq!(layout.origin, (72.0, 37.0));
             assert_eq!(layout.effects, Some([250.0, 37.0, 32.0, 32.0]));
             game.client.screen = Screen::Creative;
-            let layout = game.container_layout(batch.size());
+            let layout = game.container_layout(&batch);
             assert_eq!(
                 layout.tabs,
                 Some([[62.0, 24.0, 195.0, 28.0], [62.0, 188.0, 195.0, 28.0]])
@@ -294,13 +294,13 @@ pub(crate) mod tests {
                 game.client.frames = 11;
                 game.build_screen();
                 let batch = HudBatch::new([1280, 720], game.client.settings.gui_scale_inputs());
-                assert_eq!(game.inventory_origin(batch.size()), (51.0, 37.0));
+                assert_eq!(game.inventory_origin(&batch), (51.0, 37.0));
                 assert_eq!(
-                    game.screen_view(batch.size(), Screen::Inventory).rect,
+                    game.screen_view(&batch, Screen::Inventory).rect,
                     [51.0, 37.0, 176.0, 166.0]
                 );
                 let slot = game
-                    .built_container(batch.size())
+                    .built_container(&batch)
                     .unwrap()
                     .slots
                     .iter()
@@ -308,8 +308,8 @@ pub(crate) mod tests {
                     .unwrap()
                     .1;
                 assert_eq!(slot, [58.0, 178.0, 18.0, 18.0]);
-                assert_eq!(game.slot_at(batch.size(), 59.0, 179.0), Some(0));
-                assert_eq!(game.slot_at(batch.size(), 133.0, 179.0), Some(4));
+                assert_eq!(game.slot_at(&batch, 59.0, 179.0), Some(0));
+                assert_eq!(game.slot_at(&batch, 133.0, 179.0), Some(4));
                 let builds = game.client.screen_state.0.build.builds;
                 assert_eq!(calls.load(Ordering::Relaxed), 2);
                 game.build_screen();
@@ -322,11 +322,11 @@ pub(crate) mod tests {
                 width.store(100, Ordering::Relaxed);
                 game.client.frames += 1;
                 game.build_screen();
-                assert_eq!(game.inventory_origin(batch.size()), (75.0, 37.0));
+                assert_eq!(game.inventory_origin(&batch), (75.0, 37.0));
                 assert_eq!(game.client.screen_state.0.build.builds, builds + 1);
-                assert_eq!(game.slot_at(batch.size(), 83.0, 179.0), Some(0));
+                assert_eq!(game.slot_at(&batch, 83.0, 179.0), Some(0));
                 assert_eq!(
-                    game.screen_view(batch.size(), Screen::Inventory).rect,
+                    game.screen_view(&batch, Screen::Inventory).rect,
                     [75.0, 37.0, 176.0, 166.0]
                 );
             });
@@ -369,7 +369,7 @@ pub(crate) mod tests {
                                 [width, 240],
                                 game.client.settings.gui_scale_inputs(),
                             );
-                            let layout = game.container_layout(batch.size());
+                            let layout = game.container_layout(&batch);
                             let x = if open { open_x } else { closed_x };
                             assert_eq!(layout.origin, (x, 37.0));
                             assert_eq!(layout.book, open.then_some([book_x, 37.0, 147.0, 166.0]));
@@ -378,11 +378,11 @@ pub(crate) mod tests {
                                 [x + 7.0, 178.0, 18.0, 18.0]
                             );
                             assert_eq!(
-                                game.screen_view(batch.size(), Screen::Inventory).rect,
+                                game.screen_view(&batch, Screen::Inventory).rect,
                                 [x, 37.0, 176.0, 166.0]
                             );
                             assert_eq!(
-                                game.slot_at(batch.size(), x + 8.0, 179.0),
+                                game.slot_at(&batch, x + 8.0, 179.0),
                                 if open && width == 378 { None } else { Some(0) }
                             );
                         }
@@ -452,7 +452,7 @@ pub(crate) mod tests {
                             game.level.recipe_book.open[BookType::Crafting.index()] = open;
                             left.store(f32::to_bits(l), Ordering::Relaxed);
                             right.store(f32::to_bits(r), Ordering::Relaxed);
-                            let layout = game.container_layout(batch.size());
+                            let layout = game.container_layout(&batch);
                             assert_eq!(layout.origin, (x, 37.0), "{open} {l} {r}");
                             assert_eq!(layout.book.map(|book| book[0]), book_x);
                             assert_eq!(
@@ -460,10 +460,10 @@ pub(crate) mod tests {
                                 [x + 7.0, 178.0, 18.0, 18.0]
                             );
                             assert_eq!(
-                                game.screen_view(batch.size(), Screen::Inventory).rect,
+                                game.screen_view(&batch, Screen::Inventory).rect,
                                 [x, 37.0, 176.0, 166.0]
                             );
-                            assert_eq!(game.slot_at(batch.size(), x + 8.0, 179.0), Some(0));
+                            assert_eq!(game.slot_at(&batch, x + 8.0, 179.0), Some(0));
                         }
                     });
                 });
@@ -569,7 +569,7 @@ pub(crate) mod tests {
                 game.level.recipe_book.open[crafting] = false;
 
                 let render = |game: &mut sunrise_client_gameplay::game::ClientGame<'_>, size| {
-                    game.hud_layers(game.gui_frame_for(size));
+                    game.hud_layers(size);
                     let mut posts = observer.posts.lock().unwrap();
                     assert_eq!(posts.len(), 1, "one Render.Post per draw");
                     posts.pop().unwrap()

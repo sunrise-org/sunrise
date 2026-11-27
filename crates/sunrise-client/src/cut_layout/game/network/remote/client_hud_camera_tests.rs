@@ -88,7 +88,7 @@ pub(in crate::game) fn vanilla_groups(case: &serde_json::Value) -> Groups {
 pub(in crate::game) fn drawn_groups(
     game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
 ) -> Groups {
-    let batch = game.hud_layers(game.gui_frame_for(SIZE));
+    let batch = game.hud_layers(SIZE);
     let rects: Vec<(&str, [f32; 4])> = GROUPS
         .iter()
         .flat_map(|(_, names)| names.iter())

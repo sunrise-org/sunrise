@@ -66,8 +66,7 @@ impl crate::game::ClientGame<'_> {
         ox: f32,
         oy: f32,
     ) {
-        let Some(slot) = self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1)
-        else {
+        let Some(slot) = self.slot_at(batch, self.client.cursor.0, self.client.cursor.1) else {
             return;
         };
         if slot == 309 && matches!(self.container_kind(), Some(BlockEntity::Crafter(_))) {
@@ -82,7 +81,7 @@ impl crate::game::ClientGame<'_> {
         if self.draw_station(batch) {
             return false;
         }
-        let (ox, oy) = self.inventory_origin(batch.size());
+        let (ox, oy) = self.inventory_origin(batch);
         {
             let atlas = &self.client.gui.atlas;
             self.render_transparent_background("inventory", batch);
@@ -459,20 +458,31 @@ impl crate::game::ClientGame<'_> {
     /// The open container screen's player-inventory origin (`getXOrigin`/
     /// `getYOrigin`): the build's, or the frame's own arithmetic with no
     /// build yet.
-    pub fn inventory_origin(&self, gui: (f32, f32)) -> (f32, f32) {
-        match self.built_container(gui) {
+    pub fn inventory_origin(&self, batch: &HudBatch) -> (f32, f32) {
+        self.inventory_origin_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub fn inventory_origin_in(&self, gui: (f32, f32)) -> (f32, f32) {
+        match self.built_container_in(gui) {
             Some(layout) => layout.origin,
-            None => self.inventory_origin_unbuilt(gui),
+            None => self.inventory_origin_unbuilt_in(gui),
         }
     }
     /// Recompute the origin when no build holds this size, including the book shift and signed mod offset.
-    pub(in crate::game) fn inventory_origin_unbuilt(&self, gui: (f32, f32)) -> (f32, f32) {
+    #[allow(dead_code)]
+    pub(in crate::game) fn inventory_origin_unbuilt(&self, batch: &HudBatch) -> (f32, f32) {
+        self.inventory_origin_unbuilt_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn inventory_origin_unbuilt_in(&self, gui: (f32, f32)) -> (f32, f32) {
         if self.client.screen == Screen::Creative {
-            return Self::creative_origin(gui);
+            return Self::creative_origin_in(gui);
         }
         let width = self.native_screen_width().unwrap_or(176.0);
         let (x, y) = sunrise_client::window::centered_gui_origin(gui, width, self.screen_height());
-        let x = x + self.recipe_book_shift(gui.0) + self.screen_room_offset(gui);
+        let x = x + self.recipe_book_shift(gui.0) + self.screen_room_offset_in(gui);
         (x, y)
     }
     /// Whether a quick craft drag takes `slot`
@@ -495,11 +505,16 @@ impl crate::game::ClientGame<'_> {
     /// from the build's slot boxes rather than a fresh grid, so the hit test
     /// is the one the frame draws with. None while the recipe book covers the
     /// menu in a narrow window (`AbstractRecipeBookScreen.isHovering`).
-    pub fn slot_at(&self, gui: (f32, f32), x: f32, y: f32) -> Option<usize> {
+    pub fn slot_at(&self, batch: &HudBatch, x: f32, y: f32) -> Option<usize> {
+        self.slot_at_in(batch.size(), x, y)
+    }
+
+    #[inline(always)]
+    pub fn slot_at_in(&self, gui: (f32, f32), x: f32, y: f32) -> Option<usize> {
         if self.book_covers_menu(gui.0) {
             return None;
         }
-        match self.built_container(gui) {
+        match self.built_container_in(gui) {
             Some(layout) => self.first_hovered(
                 layout
                     .slots
@@ -512,17 +527,28 @@ impl crate::game::ClientGame<'_> {
                     })
                     .map(|&(slot, _)| slot),
             ),
-            None => self.slot_at_unbuilt(gui, x, y),
+            None => self.slot_at_unbuilt_in(gui, x, y),
         }
     }
     /// `slot_at` from the game's state alone, without a build.
+    #[allow(dead_code)]
     pub(in crate::game) fn slot_at_unbuilt(
+        &self,
+        batch: &HudBatch,
+        x: f32,
+        y: f32,
+    ) -> Option<usize> {
+        self.slot_at_unbuilt_in(batch.size(), x, y)
+    }
+
+    #[inline(always)]
+    pub(in crate::game) fn slot_at_unbuilt_in(
         &self,
         gui: (f32, f32),
         x: f32,
         y: f32,
     ) -> Option<usize> {
-        let (ox, oy) = self.inventory_origin_unbuilt(gui);
+        let (ox, oy) = self.inventory_origin_unbuilt_in(gui);
         let hits = self.slots().into_iter().filter(|&i| {
             let (sx, sy) = self.slot_position(i);
             // AbstractContainerScreen.isHovering: the 16x16 slot grows by one

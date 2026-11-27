@@ -34,7 +34,13 @@ pub(in crate::game::client_side) fn room_offset(
 
 impl crate::game::ClientGame<'_> {
     /// Ask once per frame for left and right room beside an eligible inventory screen.
-    pub(in crate::game::client_side) fn mod_room(&self, gui: (f32, f32)) -> [f32; 2] {
+    #[allow(dead_code)]
+    pub(in crate::game::client_side) fn mod_room(&self, batch: &HudBatch) -> [f32; 2] {
+        self.mod_room_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn mod_room_in(&self, gui: (f32, f32)) -> [f32; 2] {
         let kind = self.common.station.as_ref().map(|s| s.kind);
         if self.client.screen != Screen::Inventory
             || matches!(
@@ -74,15 +80,24 @@ impl crate::game::ClientGame<'_> {
     }
 
     /// The signed offset of the container and open book after the mods reserve room.
-    pub(in crate::game::client_side) fn screen_room_offset(&self, gui: (f32, f32)) -> f32 {
-        let rooms = self.mod_room(gui);
+    #[allow(dead_code)]
+    pub(in crate::game::client_side) fn screen_room_offset(&self, batch: &HudBatch) -> f32 {
+        self.screen_room_offset_in(batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn screen_room_offset_in(&self, gui: (f32, f32)) -> f32 {
+        let rooms = self.mod_room_in(gui);
         if rooms == [0.0; 2] {
             return 0.0;
         }
         let image = self.native_screen_width().unwrap_or(176.0);
         let (x, _) = sunrise_client::window::centered_gui_origin(gui, image, self.screen_height());
         let x = x + self.recipe_book_shift(gui.0);
-        let (book, toggle) = (self.open_book_left(gui), self.mod_book_toggle_span(gui));
+        let (book, toggle) = (
+            self.open_book_left_in(gui),
+            self.mod_book_toggle_span_in(gui),
+        );
         room_offset(gui.0, x, image, book, toggle, rooms)
     }
 }

@@ -561,16 +561,24 @@ impl Loading {
     }
 
     pub fn menu_pointer_projection(&self) -> PointerProjection {
-        PointerProjection::new(self.gui_frame())
+        let frame = self.gui_frame();
+        PointerProjection::new(frame.with_pointer_space(self.menu_pointer_space(frame.target)))
     }
 
+    #[inline(always)]
     pub fn gui_frame(&self) -> GuiFrame {
         self.gui_frame_for(self.menu_size())
     }
 
+    #[inline(always)]
     pub fn gui_frame_for(&self, size: [u32; 2]) -> GuiFrame {
         let inputs = self.settings.gui_scale_inputs();
-        let window = self.window.as_deref().map_or_else(
+        GuiFrame::new(size, inputs.requested, inputs.unicode)
+    }
+
+    #[inline(always)]
+    fn menu_pointer_space(&self, size: [u32; 2]) -> PointerSpace {
+        self.window.as_deref().map_or_else(
             || PointerSpace::new(size, 1.0),
             |window| {
                 *self
@@ -578,8 +586,7 @@ impl Loading {
                     .window_pointer_space
                     .get_or_init(|| PointerSpace::from_window(window))
             },
-        );
-        GuiFrame::new(size, inputs.requested, inputs.unicode).with_pointer_space(window)
+        )
     }
 
     fn projected_menu_pointer(&self) -> sunrise_client::window::GuiPointer {
@@ -860,7 +867,12 @@ impl Loading {
             .status_changed(was_disabled, sunrise_narrator::screen::Trigger::Keyboard);
     }
 
-    fn menu_options_click(&mut self, frame: GuiFrame, drag: bool, right: bool) {
+    fn menu_options_click(&mut self, drag: bool, right: bool) {
+        self.menu_options_click_in(self.gui_frame(), drag, right)
+    }
+
+    #[inline(always)]
+    fn menu_options_click_in(&mut self, frame: GuiFrame, drag: bool, right: bool) {
         let Some(gui) = &self.gui else { return };
         self.menu.options.shift = self.menu.modifiers.shift_key();
         let events = self.menu.options.click(
@@ -1259,11 +1271,13 @@ impl Loading {
                 if self.menu.win.is_some() => {}
             WindowEvent::CursorMoved { position, .. } => {
                 let frame = self.gui_frame();
-                let projection = PointerProjection::new(frame);
+                let projection = PointerProjection::new(
+                    frame.with_pointer_space(self.menu_pointer_space(frame.target)),
+                );
                 self.menu.pointer = projection.window.os_sample(position);
                 self.menu.cursor = projection.project_pointer(self.menu.pointer).subpixel();
                 if self.menu.options_open && self.menu.dragging {
-                    self.menu_options_click(frame, true, false);
+                    self.menu_options_click_in(frame, true, false);
                 } else if let Some(title) = &mut self.menu.title {
                     title.drag(self.menu.cursor, frame.size());
                     title.drag_field(&self.gui.as_ref().unwrap().atlas, self.menu.cursor.0);
@@ -1277,11 +1291,7 @@ impl Loading {
                 } else if matches!(button, MouseButton::Left | MouseButton::Right) {
                     if state == ElementState::Pressed {
                         self.menu.dragging = button == MouseButton::Left;
-                        self.menu_options_click(
-                            self.gui_frame(),
-                            false,
-                            button == MouseButton::Right,
-                        );
+                        self.menu_options_click(false, button == MouseButton::Right);
                     } else if button == MouseButton::Left {
                         self.menu.dragging = false;
                         let events = self.menu.options.release();
@@ -1392,7 +1402,13 @@ impl Loading {
         Ok(())
     }
 
-    pub fn draw_menu(&mut self, frame: GuiFrame, batch: &mut HudBatch) {
+    #[allow(dead_code)]
+    pub fn draw_menu(&mut self, batch: &mut HudBatch) {
+        self.draw_menu_in(self.gui_frame(), batch)
+    }
+
+    #[inline(always)]
+    pub fn draw_menu_in(&mut self, frame: GuiFrame, batch: &mut HudBatch) {
         // The buttons crates add to the title screen show by what is installed now
         // (`sunrise_hooks::title`), as on the game's own title screen.
         self.sync_title_mods();
@@ -1406,7 +1422,10 @@ impl Loading {
         let cursor = if self.menu.key_focus.is_some() {
             self.menu.cursor
         } else {
-            frame.pointer_to_gui(self.menu.pointer).pixel()
+            frame
+                .with_pointer_space(self.menu_pointer_space(frame.target))
+                .pointer_to_gui(self.menu.pointer)
+                .pixel()
         };
         // `Gui.setScreen` clears the focus of the screen it leaves
         // (`Screen.clearFocus`): the title behind the options, and the one

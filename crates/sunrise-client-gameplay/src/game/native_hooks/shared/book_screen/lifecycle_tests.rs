@@ -133,9 +133,7 @@ pub const MENU: &str = "minecraft:generic_9x1";
 pub fn geometry(game: &crate::game::ClientGame<'_>) -> ((f32, f32), Vec<(usize, [f32; 4])>) {
     let batch =
         sunrise_client::hud::HudBatch::new([1280, 720], game.client.settings.gui_scale_inputs());
-    let layout = game
-        .built_container(batch.size())
-        .expect("cached container");
+    let layout = game.built_container(&batch).expect("cached container");
     (layout.origin, layout.slots.clone())
 }
 

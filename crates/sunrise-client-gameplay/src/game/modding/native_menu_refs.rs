@@ -100,7 +100,7 @@ impl ClientGame<'_> {
         // frame callback reads the boxes too.
         let framebuffer = self.renderer_framebuffer()?;
         let frame = self.gui_frame_for(framebuffer);
-        self.inventory_menu_slot_boxes(menu.fields().window, name, frame.size())
+        self.inventory_menu_slot_boxes_in(menu.fields().window, name, frame.size())
     }
 
     pub(in crate::game) fn menu_creative_catalog(
@@ -117,7 +117,7 @@ impl ClientGame<'_> {
             return Some(Vec::new());
         }
         let frame = self.gui_frame_for(framebuffer);
-        let (ox, oy) = Self::creative_origin(frame.size());
+        let (ox, oy) = Self::creative_origin_in(frame.size());
         let shown = self
             .client
             .creative_screen
@@ -130,7 +130,18 @@ impl ClientGame<'_> {
         )
     }
 
+    #[allow(dead_code)]
     pub(in crate::game::client_side) fn inventory_menu_slot_boxes(
+        &self,
+        window: i32,
+        name: &str,
+        batch: &super::HudBatch,
+    ) -> Option<Vec<Option<[f32; 4]>>> {
+        self.inventory_menu_slot_boxes_in(window, name, batch.size())
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn inventory_menu_slot_boxes_in(
         &self,
         window: i32,
         name: &str,
@@ -151,7 +162,7 @@ impl ClientGame<'_> {
             Some(_) => {}
         }
         let visible = self.slots();
-        let (ox, oy) = self.inventory_origin(gui);
+        let (ox, oy) = self.inventory_origin_in(gui);
         Some(
             (0..)
                 .map_while(slot_id)
@@ -501,14 +512,14 @@ pub mod tests {
             );
             assert_eq!(game.native_client_menu_name(menu), Some("inventory"));
             assert!(
-                game.inventory_menu_slot_boxes(0, "inventory", batch.size())
+                game.inventory_menu_slot_boxes(0, "inventory", &batch)
                     .is_some()
             );
             let boxes = game.menu_slot_boxes(menu).unwrap();
             assert_eq!(boxes.len(), 46);
             assert_eq!(
                 Some(boxes),
-                game.inventory_menu_slot_boxes(0, "inventory", batch.size())
+                game.inventory_menu_slot_boxes(0, "inventory", &batch)
             );
         });
     }
@@ -524,20 +535,17 @@ pub mod tests {
         let batch =
             super::super::HudBatch::new([800, 600], game.client.settings.gui_scale_inputs());
         let boxes = game
-            .inventory_menu_slot_boxes(0, "inventory", batch.size())
+            .inventory_menu_slot_boxes(0, "inventory", &batch)
             .unwrap();
         assert_eq!(boxes.len(), 46);
         for (index, expected_slot) in [(0, 200), (9, 9), (36, 0), (45, 504)] {
             let [x, y, w, h] = boxes[index].unwrap();
             assert_eq!(
-                game.slot_at(batch.size(), x + w / 2.0, y + h / 2.0),
+                game.slot_at(&batch, x + w / 2.0, y + h / 2.0),
                 Some(expected_slot)
             );
         }
-        assert!(
-            game.inventory_menu_slot_boxes(1, PANEL, batch.size())
-                .is_none()
-        );
+        assert!(game.inventory_menu_slot_boxes(1, PANEL, &batch).is_none());
         game.client.screen = super::super::Screen::Playing;
         open_panel(game);
         let menu = game
@@ -549,11 +557,11 @@ pub mod tests {
             "the same live handle and count are available during screen_opening"
         );
         assert!(
-            game.inventory_menu_slot_boxes(1, "unsupported", batch.size())
+            game.inventory_menu_slot_boxes(1, "unsupported", &batch)
                 .is_none()
         );
         assert_eq!(
-            game.inventory_menu_slot_boxes(1, PANEL, batch.size()),
+            game.inventory_menu_slot_boxes(1, PANEL, &batch),
             Some(vec![])
         );
         assert!(
@@ -630,7 +638,7 @@ pub mod tests {
                     game.client.screen = super::super::Screen::Creative;
                     game.refresh_creative_tabs();
                     let batch = window_batch(game);
-                    let (ox, oy) = crate::game::ClientGame::creative_origin(batch.size());
+                    let (ox, oy) = crate::game::ClientGame::creative_origin(&batch);
                     // Menu index, game slot, position on the inventory tab, shown on item tabs.
                     let expected = |index: usize| -> Option<(usize, (f32, f32), bool)> {
                         let row = |i: usize| (9.0 + (i % 9) as f32 * 18.0, (i / 9) as f32 * 18.0);
@@ -670,7 +678,7 @@ pub mod tests {
                             );
                             if let Some((slot, (x, y), _)) = want {
                                 assert_eq!(
-                                    game.slot_at(batch.size(), ox + x + 8.0, oy + y + 8.0),
+                                    game.slot_at(&batch, ox + x + 8.0, oy + y + 8.0),
                                     Some(slot),
                                     "{tab} slot {index}"
                                 );
@@ -739,7 +747,7 @@ pub mod tests {
                     let _window = offscreen_window(game);
                     let batch = window_batch(game);
                     let hover = |game: &mut crate::game::ClientGame<'_>, slot: usize| {
-                        let (ox, oy) = game.inventory_origin(batch.size());
+                        let (ox, oy) = game.inventory_origin(&batch);
                         let (x, y) = game.slot_position(slot);
                         game.client.cursor = (ox + x + 8.0, oy + y + 8.0);
                         ScreensClientHost::screen_hovered_stack(&*game)
@@ -774,7 +782,7 @@ pub mod tests {
                     is_potion(hover(game, 9));
                     is_sword(hover(game, 500));
                     assert_eq!(hover(game, 11), None);
-                    let (ox, oy) = game.inventory_origin(batch.size());
+                    let (ox, oy) = game.inventory_origin(&batch);
                     let (tx, ty) = Creative::TRASH_POSITION;
                     game.client.cursor = (ox + tx + 8.0, oy + ty + 8.0);
                     assert_eq!(ScreensClientHost::screen_hovered_stack(&*game), None);
