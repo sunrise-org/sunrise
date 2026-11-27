@@ -660,7 +660,11 @@ fn fixture_mob_impl(kind: &str) -> Mob {
     Mob::new(1, kind, sunrise_core::geometry::Vec3::ZERO, 0.0)
 }
 
-#[cfg(all(feature = "client", feature = "test-support", not(test)))]
+#[cfg(all(
+    feature = "client",
+    feature = "test-support",
+    not(any(test, feature = "parity-fixtures"))
+))]
 pub mod tests {
     pub fn fixture_mob(kind: &str) -> super::Mob {
         super::fixture_mob_impl(kind)
@@ -668,7 +672,7 @@ pub mod tests {
 }
 
 #[cfg(feature = "client")]
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub mod tests {
     use super::*;
     use sunrise_protocol::entity_data::serializer as s;
@@ -1139,6 +1143,7 @@ pub mod tests {
         let _ = super::apply(m, values, &builtin(), 99);
     }
 
+    #[cfg(test)]
     fn mob(kind: &str) -> Option<Mob> {
         let types = sunrise_sim::mobs::MobTypes::load(&root()).ok()?;
         let t = std::sync::Arc::new(types.types.get(kind)?.clone());

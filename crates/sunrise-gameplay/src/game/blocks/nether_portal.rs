@@ -2082,7 +2082,7 @@ pub mod tests {
         run_portal_transfer_pending_arrival_does_not_save_transient_tnt_immunity();
     }
 
-    #[cfg(test)]
+    #[cfg(any(test, feature = "parity-fixtures"))]
     pub(in crate::game::server_side) fn run_portal_transfer_pending_arrival_does_not_save_transient_tnt_immunity()
      {
         let arrival = Arrival {

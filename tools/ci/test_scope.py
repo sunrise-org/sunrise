@@ -28,6 +28,7 @@ from tools.ci.rust_changes import changed_paths  # noqa: E402
 SUNRISE_CLIENT = [
     # The build script and the native hook tests read the hook targets' sources; prepared-data tests include the shared boundary.
     "crates/sunrise-client-render/src", "crates/sunrise-core/src/prepared_test_root.rs",
+    "crates/sunrise-gameplay-common/src/game/parity_fixtures.rs",
     "crates/sunrise-world/src", "crates/sunrise-items/src",
     "docs/api/launch-reference.md", "docs/sunrise-ctl-commands.md", "docs/modding/examples/src/worldgen.rs",
     "docs/parity/block-entity-client-ticks.jsonl", "docs/parity/random-chance-seeded.jsonl",
@@ -75,7 +76,7 @@ READERS = {
         "crates/sunrise-core/src/prepared_test_root.rs", "crates/sunrise-mod-vocab/src/hooks", "tests/fixtures",
     ],
     "sunrise-client-gameplay": ["crates/sunrise-mod-vocab/src/hooks"],
-    "sunrise-parity-fixtures": [*SUNRISE_CLIENT, "crates/sunrise-gameplay-common/src/game/parity_fixtures.rs"],
+    "sunrise-parity-fixtures": SUNRISE_CLIENT,
     "sunrise-sim": [
         "crates/sunrise-client/tests/fixtures/advancement-icons/data",
         "crates/sunrise-client/tests/fixtures/dialog_codec_cases.json",

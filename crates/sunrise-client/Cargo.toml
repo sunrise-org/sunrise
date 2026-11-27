@@ -103,7 +103,6 @@ rustix = { version = "1", default-features = false, features = ["std", "time", "
 libc = { version = "0.2", features = ["extra_traits"], optional = true }
 
 [features]
-parity-fixtures = []
 default = ["client", "audio", "controllers", "sunrise-extras"]
 # Interactive client gameplay, UI, rendering hooks, and client-side modules.
 # Without it (`--no-default-features`, released as sunrise-engine; docs/server.md),

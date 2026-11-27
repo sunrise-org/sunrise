@@ -1209,10 +1209,12 @@ use sunrise_gameplay_common::game::tables::GameItems as _;
 use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
 
 #[cfg(feature = "client")]
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(in crate::game) mod tests {
     use super::*;
+    #[cfg(test)]
     use mod_api::ClientHost;
+    #[cfg(test)]
     use serde_json::json;
 
     /// The resolver skips a mod that leaves `item_model_property` at its default;
@@ -1269,7 +1271,9 @@ pub(in crate::game) mod tests {
         assert_eq!(calls.load(Ordering::Relaxed), 3);
     }
 
+    #[cfg(test)]
     struct Fill;
+    #[cfg(test)]
     #[mod_api::__subscriptions]
     impl mod_api::Hooks for Fill {
         fn register_range_select_item_model_property(
@@ -1364,7 +1368,9 @@ pub(in crate::game) mod tests {
         });
     }
 
+    #[cfg(test)]
     struct Mode;
+    #[cfg(test)]
     #[mod_api::__subscriptions]
     impl mod_api::Hooks for Mode {
         fn register_select_item_model_property(
@@ -1511,7 +1517,9 @@ pub(in crate::game) mod tests {
         assert!((hi.y - 66.25).abs() < 1e-6);
     }
 
+    #[cfg(test)]
     struct Charge;
+    #[cfg(test)]
     #[mod_api::__subscriptions]
     impl mod_api::Hooks for Charge {
         fn register_item_tint_sources(
@@ -1543,7 +1551,9 @@ pub(in crate::game) mod tests {
     /// A mod's item model type: a cell that draws `gui` in a screen and `ground` elsewhere, `full`
     /// or `empty` by the stack, and reports the seed, the owner's type and the level it was told,
     /// as names the test reads back.
+    #[cfg(test)]
     struct Cell;
+    #[cfg(test)]
     #[mod_api::__subscriptions]
     impl mod_api::Hooks for Cell {
         fn register_item_models(

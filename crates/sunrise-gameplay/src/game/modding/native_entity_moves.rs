@@ -491,8 +491,9 @@ use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCo
 
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt5 as _;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(in crate::game) mod tests {
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
     #[test]
     #[ignore = "daily"]

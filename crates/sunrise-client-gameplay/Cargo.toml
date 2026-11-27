@@ -73,10 +73,11 @@ sunrise-world = { path = "../sunrise-world", features = ["test-support"] }
 workspace = true
 
 [build-dependencies]
+sunrise-game-discovery = { path = "../sunrise-game-discovery" }
 sunrise-mod-api-gen = { path = "../sunrise-mod-api-gen" }
 
 [features]
-parity-fixtures = []
+parity-fixtures = ["test-support"]
 rng-trace = ["sunrise-client-lib/rng-trace"]
 sunrise-extras = ["client", "friends"]
 friends = ["dep:sunrise-friends"]

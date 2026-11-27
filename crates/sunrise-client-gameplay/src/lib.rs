@@ -36,6 +36,13 @@ pub mod upload_pace;
 
 extern crate self as sunrise_client_gameplay;
 pub mod game;
+
+/// Fixtures available to the parity dispatcher in this build.
+#[cfg(feature = "parity-fixtures")]
+pub fn parity_fixtures() -> &'static [(&'static str, fn())] {
+    game::client_side::parity_fixtures()
+}
+
 #[cfg(test)]
 mod test_game_dir;
 

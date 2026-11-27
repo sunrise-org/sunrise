@@ -1620,7 +1620,7 @@ use sunrise_gameplay_common::game::pick_ray::PickRayGameExt1 as _;
 use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;
 
 #[cfg(feature = "client")]
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "tests/remote_camera_tests.rs"]
 pub(in crate::game) mod camera_tests;
 

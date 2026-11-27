@@ -1,11 +1,11 @@
 //! The parity harnesses' fixtures, run by the `sunrise-parity-fixtures` program (crates/sunrise-parity-fixtures, CI
 //! only) as the lib test runs them, without compiling the lib's other tests: the lib test's rustc outgrew a parity
-//! runner (#4896). The table is that package's build.rs's: each `#[test]` whose body is one call to the function
-//! `run_<test>` beside it. Its build.rs sets `test` for this build, so the test-only code the fixtures read compiles as in the lib test, and only the
-//! `#[test]` functions, which need `--test`, are left out. The command line is libtest's, as far as the harnesses and
-//! `in_own_process` use it, and so is the report they read.
+//! runner (#4896). The build scripts discover each `#[test]` whose only statement calls its sibling
+//! `run_<test>()`. The gameplay crates expose their runners through a feature; the dispatcher builds
+//! the shell with `cfg(test)` but without libtest. The command line and report match the parts of
+//! libtest used by the harnesses and `in_own_process`.
 
-include!(concat!(env!("OUT_DIR"), "/parity_fixtures.rs"));
+use crate::game::FIXTURES;
 
 /// Runs the fixtures the arguments select, one after another, each on a thread named for it as libtest names
 /// its tests' threads; the exit code is libtest's (101 when one failed), and 101 too when the filters select none, so a

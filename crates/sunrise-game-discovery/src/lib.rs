@@ -4,6 +4,7 @@
 use std::{fs, path::Path};
 
 pub mod exports;
+pub mod parity_fixtures;
 pub mod references;
 
 /// The `*.rs` file stems of `directory` but `mod`, sorted, each checked to be a Rust identifier.

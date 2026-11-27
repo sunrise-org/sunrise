@@ -923,7 +923,7 @@ use sunrise_gameplay_common::game::item_use_stacks::ItemUseStacksGameExt1 as _;
 #[cfg(test)]
 pub(in crate::game) mod native_read_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(in crate::game) mod save_tests;
 
 #[cfg(test)]

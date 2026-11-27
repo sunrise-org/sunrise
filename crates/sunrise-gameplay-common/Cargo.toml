@@ -51,11 +51,12 @@ sunrise-world = { path = "../sunrise-world", features = ["test-support"] }
 workspace = true
 
 [build-dependencies]
+sunrise-game-discovery = { path = "../sunrise-game-discovery" }
 sunrise-mod-api-gen = { path = "../sunrise-mod-api-gen" }
 
 [features]
 alloc-count = ["sunrise-threads/alloc-count"]
-parity-fixtures = []
+parity-fixtures = ["test-support"]
 system-allocator = ["sunrise-threads/system-allocator"]
 test-owner-requests = []
 test-support = ["dep:tempfile", "sunrise-hooks/test-support", "sunrise-game-data/test-language-publication", "sunrise-game-data/test-effect-registry", "sunrise-mod-runtime/test-work-count", "sunrise-threads/test-allocation-count", "sunrise-threads/test-game-dir", "mod_api/testing", "sunrise-items/test-support", "sunrise-world/test-support"]

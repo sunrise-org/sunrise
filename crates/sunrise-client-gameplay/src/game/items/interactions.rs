@@ -91,7 +91,7 @@ fn metadata(interaction: &mut RemoteInteraction, values: &[(u8, i32, Value)]) {
 }
 
 #[cfg(feature = "client")]
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(in crate::game) mod tests {
     use super::*;
 
