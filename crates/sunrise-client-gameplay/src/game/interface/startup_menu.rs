@@ -39,6 +39,7 @@ pub struct StartupMenu {
     /// The screens' narration, handed to the game with the title (which
     /// stays the screen already opened).
     narration: sunrise_client::screen_narrator::ScreenNarrator,
+    narration_hover: Option<(f32, f32)>,
     /// Frames drawn, for `widgets::end_frame`.
     frames: u64,
     /// The keyboard's focus (`key_focus`: Tab, the arrows, Enter); the
@@ -240,8 +241,13 @@ impl StartupMenu {
                 self.key_nudge = None;
             }
         }
+        let cursor = if self.key_focus.is_some() {
+            self.cursor
+        } else {
+            self.narration_hover.unwrap_or(self.cursor)
+        };
         self.narration
-            .frame(gui, self.cursor, self.key_focus.map(|t| t.rect));
+            .frame(gui, cursor, self.key_focus.map(|t| t.rect));
     }
 
     /// Which screen is open, as far as the keyboard's focus cares.
@@ -1491,19 +1497,22 @@ impl Loading {
         // (`sunrise_hooks::title`), as on the game's own title screen.
         self.sync_title_mods();
         let logs = sunrise_level::logging::recent_lines();
+        self.menu.narration_hover = None;
         let Some(gui) = &self.gui else {
-            // The pack's screens do not exist yet: the boot screen holds the
-            // window, the wordmark and the console's lines while they load.
             sunrise_client::ui_theme::draw_boot(&self.boot, batch, &logs);
             return;
         };
-        let cursor = if self.menu.key_focus.is_some() {
-            self.menu.cursor
-        } else {
+        let hover = (frame.clip().is_some() || self.menu.key_focus.is_none()).then(|| {
             let pointer = frame
                 .with_pointer_space(self.menu_pointer_space(frame.target))
                 .pointer_to_gui(self.menu.pointer);
             frame.hover(pointer)
+        });
+        self.menu.narration_hover = hover.filter(|_| frame.clip().is_some());
+        let cursor = if self.menu.key_focus.is_some() {
+            self.menu.cursor
+        } else {
+            hover.unwrap_or(self.menu.cursor)
         };
         // `Gui.setScreen` clears the focus of the screen it leaves
         // (`Screen.clearFocus`): the title behind the options, and the one
