@@ -5726,7 +5726,7 @@ void main() {
                     .map_err(BuildError::from)
             });
         assert!(result.is_err());
-        assert!(set.invalidate(0));
+        assert!(set.refuse(0, Refusal::Invalid));
         assert_eq!(set.resolve(&id), Err(mod_api::RenderPipelineError::Invalid));
         assert_eq!(set.slot(handle), Err(mod_api::RenderPipelineError::Invalid));
     }
@@ -5751,7 +5751,7 @@ void main() {
         assert_eq!(renderer.generation, 41);
         assert!(renderer.pipelines[0].is_none());
         assert_eq!(set.slot(handle), Err(mod_api::RenderPipelineError::Invalid));
-        assert!(!set.invalidate(0));
+        assert!(!set.refuse(0, Refusal::Invalid));
         renderer
             .build_with(&set, |_, _| panic!("already compiled"))
             .unwrap();

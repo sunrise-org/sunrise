@@ -1431,12 +1431,6 @@ impl Pipelines {
         fresh
     }
 
-    /// Marks `slot` as one the GPU refused as [`Refusal::Invalid`]; false when already refused.
-    #[cfg(test)]
-    pub(crate) fn invalidate(&self, slot: usize) -> bool {
-        self.refuse(slot, Refusal::Invalid)
-    }
-
     /// Makes `slot` usable again: a renderer that built it took the refusal of another over.
     pub(crate) fn revalidate(&self, slot: usize) {
         self.refused
@@ -2260,8 +2254,8 @@ void main() {
         // The GPU turns down a pipeline the load built: it is reported once, a handle taken
         // before is refused, and the rest still draw.
         let driver = set.resolve(&id("example:driver")).unwrap();
-        assert!(set.invalidate(3));
-        assert!(!set.invalidate(3));
+        assert!(set.refuse(3, Refusal::Invalid));
+        assert!(!set.refuse(3, Refusal::Invalid));
         assert_eq!(set.slot(driver), Err(RenderPipelineError::Invalid));
         assert_eq!(
             set.resolve(&id("example:driver")),
