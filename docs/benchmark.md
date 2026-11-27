@@ -48,7 +48,7 @@ It starts at the title screen, creates the world `sunrise-benchmark` (seed 1234,
 
 `--benchmark-set SWITCH=VALUE` (only with `--benchmark travel`) sets a graphics switch before the world opens: `gpu-culling` (`off`, `on`), `section-cull` (`on`, `off`), `section-sides` (`on`, `off`) or `section-draws` (`flat`, `indirect`), the first value being the default. A switch the device does not offer (`gpu-culling on` where it is not) ends the run with the game's reason and no report. To time a block yourself in any world, `sunrise-ctl bench SECONDS raw` replies with the summary and every frame time.
 
-`--profile` (with `--benchmark`) writes `reports/profile-<time>Z.hzperf` in the game home and embeds the benchmark report. By default the capture starts after the world loads and samples the render thread on Linux. Add `--profile-startup` to start before resource loading and include world open and the first frames. Add `--profile-threads all` to sample every opted-in thread, including `Render submit` when it is enabled (`main` selects the render thread alone). The capture marks the benchmark's world load, scene loads, and measurement phases as they occur. The game prints both paths. The 10 minute capture window starts when recording starts. If it ends before the benchmark, the report is saved separately.
+A benchmark records a performance capture by default. It starts after the world loads and samples the render thread on Linux. The game writes the capture beside the JSON report in `benchmarks/` and embeds the report in it. Use `--no-profile` to measure without recording. Existing `--profile` commands still work. Add `--profile-startup` to include resource loading, world open and the first frames. Use `--profile-threads all` for every opted-in thread, including `Render submit` when enabled. Phase marks identify scene loads and measurement windows. If the 10-minute cap ends the capture early, the game keeps the separate numbers and marks the profiling coverage incomplete. Compare only reports with matching profiling conditions.
 
 `sunrise-perf query frames FILE --side client --worst 10` lists the longest recorded frame intervals. Use `--from` and `--to` to select the load you want to measure. `sunrise-perf query bench FILE` lists the embedded report's metrics and measured phases. `sunrise-perf summary` and `diff` take a bare `benchmarks/*.json` wherever they take a capture ([perf-platform.md](perf-platform.md)).
 
@@ -82,13 +82,15 @@ The report is the [benchmark report format](benchmark-report.md): startup to the
 You need Sunrise built (`cargo build --release -p sunrise-game -p sunrise-client-lib --bins`) and its resources prepared from your own copy of 26.3 (which also provides `.local/minecraft/26.3`, the vanilla client the driver starts), Java 25 with `javac`, and Python 3.11 or newer.
 
 ```sh
-python3 tools/perf_bench.py --game sunrise --label sunrise-mine
+python3 tools/perf_bench.py --game sunrise --no-profile --label sunrise-mine
 python3 tools/perf_bench.py --game vanilla --label vanilla-mine
 python3 tools/perf_bench.py --game vanilla-mods --label mods-mine
 python3 tools/perf_bench.py --table sunrise-mine vanilla-mine mods-mine
 ```
 
 Options: `--distances 8,16`, `--sizes 1920x1080`, `--scenes village,ocean`, `--seconds 20`, `--repeats 5`, `--heap 4G` (vanilla), `--offscreen` (Sunrise, for locked or headless sessions). Results go to `benchmarks/perf/<label>-rd<N>.json` at 1280x720 and `<label>-1080p-rd<N>.json` at 1920x1080 (other sizes `<label>-<W>x<H>-rd<N>.json`; `--table` takes those labels), one [benchmark report](benchmark-report.md) per window size and render distance (the same format the game's `--benchmark` and the launcher write), with the load average before each game; each game's log, and the vanilla driver's event log, stay in `.local/perf-bench/`. Keep the machine otherwise idle, plugged in, and the window on a screen. `PERF_BENCH_TRACE=<file>` appends each load's timeline to that file, one JSON line per sample: Sunrise's status every 50 ms after a line for each teleport (resident and generated chunks, chunks still pending, stage counts), and the vanilla driver's loaded chunk count and the chunks it holds within the render distance minus one; compare when the columns arrive with when the load ends.
+
+The driver records one client capture per measured Sunrise game, starting after the world loads and stopping after the last scene. The report lists the capture filenames in repeat order beside its numbers in `benchmarks/perf/`. Use `--no-profile` for unrecorded games, older builds without control-socket profiling, or a comparison with Java games. Both `--table` and `--compare` require matching recording conditions.
 
 ### Many-entity stress scenes
 

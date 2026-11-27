@@ -880,6 +880,12 @@ reproducible by anyone, and show the same gameplay on both sides.
   machine, commit, Java version, settings and every run) and prints a comparison table. Results are
   published like the client benchmark, with the machine, the versions and the exact commands. TPS is derived
   from `/tick query`'s average (20 while it fits in 50 ms), since the command reports times, not the rate.
+  Sunrise starts a `sunrise-report` capture at the start of measurement by default. The driver saves each
+  completed capture beside the JSON report, including with `--out`, and attaches the run record when
+  `sunrise-perf` is available. Use `--no-profile` for an unrecorded run or `--profile=--no-samples`
+  to keep the capture without CPU sampling. Each run records `profile_recording`, the requested
+  `profile_seconds` within the server's 600-second cap, and the basename in `profile` when saved.
+  Capture or attachment failures appear in `profile_error`. Other servers run without this capture.
 - **First run (PR 5,** on a busy shared Mac mini, so the numbers are noisy). With 1 bot Sunrise ticks in
   3.5 ms against vanilla's 11.2 ms and uses 1.6 GB against 3.6 GB. At 10 and 25 `mixed` bots Sunrise falls
   to about 10 TPS where vanilla keeps 20, and at 50 both land at about 15 TPS. The work isn't equal yet:

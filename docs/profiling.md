@@ -5,7 +5,7 @@
 Run a benchmark capture to measure resource loading, world opening, and the first rendered frames in one file:
 
 ```sh
-sunrise-client --benchmark village --profile --profile-startup --profile-threads all
+sunrise-client --benchmark village --profile-startup --profile-threads all
 sunrise-perf query marks FILE
 sunrise-perf query frames FILE --side client --worst 5
 ```
