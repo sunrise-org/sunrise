@@ -116,6 +116,13 @@ fn side_state(&self) -> &ClientState { &self.client }
 fn stack_in(&self, slot: usize) -> Option<&ItemStack> { self.common.hotbar.as_ref().filter(|_| slot == 3) }
 // The pick-section index is not the subject of this physics fixture.
 fn pick_section_move(&mut self, _: u32, _: [f64; 3]) {}
+fn with_lifted_rockets(&mut self, work: impl FnOnce(&mut Self, &mut Vec<Rocket>)) {
+    let mut rockets = self.common.rockets.lift();
+    work(self, &mut rockets);
+    self.common
+        .rockets
+        .restore(rockets, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+}
 METHODS
 }
 fn rocket() -> Option<ItemStack> { Some(ItemStack { item: "minecraft:firework_rocket".into() }) }
