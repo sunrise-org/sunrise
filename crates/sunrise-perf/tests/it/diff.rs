@@ -141,7 +141,7 @@ fn workload_uses_world_snapshots_and_the_benchmark_window_when_available() {
     assert_eq!(d.captures[0].workload.unwrap().chunks, Some(500.0));
     assert_eq!(d.captures[0].workload.unwrap().entities, Some(250.0));
 
-    let mut report = Report::new(BenchKind::Game, App::default());
+    let mut report = Report::with_hardware(BenchKind::Game, App::default(), Hardware::default());
     report.conditions.window = Some([1920, 1080]);
     report.conditions.render_distance = Some(16);
     let client = Capture {

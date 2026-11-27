@@ -18,7 +18,7 @@ pub struct Workload {
 }
 
 impl Workload {
-    pub(super) fn read(view: &View<'_>, side: Side, thread: Option<u32>) -> Self {
+    pub(super) fn read(view: &View<'_>, side: Side) -> Self {
         let capture = view.capture;
         let health = live(capture, side);
         let start = capture.start.iter().find(|s| s.side() == side);
@@ -68,7 +68,8 @@ impl Workload {
             Side::Server => {
                 let mspt =
                     mean(health.iter().filter_map(|h| h.mspt_avg.map(f64::from))).or_else(|| {
-                        let s = view.summary(side, thread?)?;
+                        let thread = view.resolve_thread(side, None).ok()?;
+                        let s = view.summary(side, thread)?;
                         (s.count > 0 && s.wall_ms_total > 0.0)
                             .then(|| s.wall_ms_total / s.count as f64)
                     });

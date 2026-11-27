@@ -578,8 +578,8 @@ pub fn diff(a: &Capture, b: &Capture, options: &DiffOptions) -> Result<Diff, Err
     if let Some((x, y)) = build_mismatch(a, b, side) {
         warnings.push(format!("A is a {x} build and B a {y} build"));
     }
-    let workload_a = Workload::read(&va, side, ta.as_ref().map(|t| t.0));
-    let workload_b = Workload::read(&vb, side, tb.as_ref().map(|t| t.0));
+    let workload_a = Workload::read(&va, side);
+    let workload_b = Workload::read(&vb, side);
     Ok(Diff {
         side,
         unit: View::main_unit(side),
