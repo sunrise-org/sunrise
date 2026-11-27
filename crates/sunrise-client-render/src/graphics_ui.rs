@@ -309,8 +309,6 @@ pub const fn vanilla_row_id(opt: Opt) -> Option<RowId> {
 pub enum Item {
     Vanilla(Opt),
     Sunrise(H),
-    /// A Sunrise extra that changes the picture (`extras::Item`, kept in `sunrise-extras.txt`).
-    Extra(crate::extras::Item),
     Described(RowId),
 }
 
@@ -319,7 +317,6 @@ impl Item {
         match self {
             Item::Vanilla(o) => vanilla_row_id(o),
             Item::Sunrise(h) => Some(h.row_id()),
-            Item::Extra(_) => None,
             Item::Described(id) => Some(id),
         }
     }
@@ -336,7 +333,7 @@ fn active_descriptors() -> &'static [&'static RowDescriptor] {
     if let Some(rows) = TEST_DESCRIPTORS.get() {
         return rows;
     }
-    &[]
+    crate::described_graphics_rows()
 }
 
 fn descriptor(id: RowId) -> Option<&'static RowDescriptor> {
@@ -429,15 +426,6 @@ fn h(opt: H, cost: Cost, text: &'static str) -> Setting {
         item: Item::Sunrise(opt),
         cost,
         text,
-    }
-}
-/// An extra's row: its description is its own language key.
-fn e(item: crate::extras::Item, cost: Cost) -> Setting {
-    Setting {
-        id: RowId(item.caption_key()),
-        item: Item::Extra(item),
-        cost,
-        text: item.description_key(),
     }
 }
 
@@ -565,7 +553,6 @@ fn base_pages(macos: bool) -> Vec<(Page, Vec<ResolvedGroup>)> {
                             "How far rain and snow fall around you.",
                         ),
                         v(Opt::Particles, Medium, "How many particles effects spawn."),
-                        e(crate::extras::Item::HideBlockParticles, None),
                     ],
                 ),
                 g(
@@ -594,8 +581,6 @@ fn base_pages(macos: bool) -> Vec<(Page, Vec<ResolvedGroup>)> {
                         ),
                         v(Opt::Vignette, None, "Darkens the screen's edges."),
                         v(Opt::ChunkFade, None, "Fades newly loaded chunks in."),
-                        e(crate::extras::Item::DynamicLights, Low),
-                        e(crate::extras::Item::Fullbright, None),
                     ],
                 ),
                 g(
@@ -1677,7 +1662,6 @@ impl Item {
                 g.hdr_smooth_gradients && out.wide_frame_supported
             }
             Item::Vanilla(Opt::Vsync) => s.vsync,
-            Item::Extra(e) => return e.switch(&s.extras),
             Item::Described(id) => {
                 return match descriptor(id).map(|d| d.control) {
                     Some(RowControl::Switch { get, .. }) => Some(get(s)),
@@ -1699,7 +1683,6 @@ impl Item {
         match self {
             Item::Vanilla(o) => o.slider_position(s),
             Item::Sunrise(h) => h.slider(s).map(f64::from),
-            Item::Extra(_) => None,
             Item::Described(id) => match descriptor(id).map(|d| d.control) {
                 Some(RowControl::Slider { get, .. }) => Some(get(s)),
                 _ => None,
@@ -1717,10 +1700,6 @@ impl Item {
             }
             Item::Vanilla(o) => o.label(s),
             Item::Sunrise(h) => h.label(s, out),
-            Item::Extra(e) => Text::option_name_value(
-                Text::literal(e.caption_text()),
-                Text::literal(e.value(&s.extras)),
-            ),
             Item::Described(id) => match descriptor(id) {
                 Some(d) => {
                     let (name, value) = described_parts(d, s, out);
@@ -1743,7 +1722,6 @@ impl Item {
             // A vanilla option's slider, as Video Settings' does it.
             Item::Vanilla(o) => crate::options_ui::set_slider(o, s, v),
             Item::Sunrise(h) => h.set_slider(s, v as f32),
-            Item::Extra(_) => {}
             Item::Described(id) => {
                 let Some(RowControl::Slider { set, .. }) = descriptor(id).map(|d| d.control) else {
                     return;
@@ -1760,7 +1738,6 @@ impl Item {
         match self {
             Item::Vanilla(o) => o.cycle(s, back, framebuffer),
             Item::Sunrise(h) => h.cycle(s, back, out),
-            Item::Extra(e) => e.cycle(&mut s.extras, back),
             Item::Described(id) => {
                 if self.blocked(s, out).is_some() {
                     return;
@@ -1781,8 +1758,7 @@ impl Item {
     fn touched(self, s: &mut Settings) {
         let presetless = match self {
             Item::Described(id) => !descriptor(id).is_some_and(|d| d.affects_preset),
-            Item::Extra(_)
-            | Item::Sunrise(
+            Item::Sunrise(
                 H::Preset
                 | H::BlueMapRadius
                 | H::ScreenshotQuality
@@ -1823,7 +1799,6 @@ impl Item {
         match self {
             Item::Vanilla(o) => o.slider_steps(),
             Item::Sunrise(h) => h.slider_steps(),
-            Item::Extra(_) => None,
             Item::Described(id) => match descriptor(id).map(|d| d.control) {
                 Some(RowControl::Slider { steps, .. }) => steps,
                 _ => None,
@@ -1867,7 +1842,6 @@ fn described_parts(
 fn shown(item: Item, s: &Settings) -> bool {
     match item {
         Item::Sunrise(H::Upscaling) => s.sunrise.taa,
-        Item::Extra(crate::extras::Item::Fullbright) => !s.fullbright_held,
         Item::Described(id) => descriptor(id).is_some_and(|d| (d.shown)(s)),
         _ => true,
     }
@@ -2019,7 +1993,6 @@ fn read<'a>(s: &'a Settings, out: &EffectiveOutput) -> impl std::fmt::Debug + 'a
     );
     (
         &s.sunrise,
-        &s.extras,
         distances,
         frames,
         picture,
@@ -2055,7 +2028,7 @@ impl Screen for GraphicsScreen {
             g::gpu_culling_offer(),
             g::reduced_far_detail_suggested(),
         );
-        shell::stamp_of(&(read(s, &self.output), s.fullbright_held, offers))
+        shell::stamp_of(&(read(s, &self.output), offers))
     }
     fn sheets(&self, s: &Settings) -> Vec<Sheet<Page, Item>> {
         let sheet = |(page, groups): (Page, Vec<(&'static str, Vec<Setting>)>)| Sheet {
@@ -2143,9 +2116,6 @@ impl Screen for GraphicsScreen {
         s.max_fps = b.max_fps;
         s.inactivity_fps_limit = b.inactivity_fps_limit.clone();
         s.menu_blur = b.menu_blur;
-        s.extras.fullbright = b.extras.fullbright;
-        s.extras.dynamic_lights = b.extras.dynamic_lights;
-        s.extras.hide_block_particles = b.extras.hide_block_particles;
         s.attack_indicator = b.attack_indicator;
         s.autosave_indicator = b.autosave_indicator;
         s.clouds = b.clouds.clone();
@@ -2532,7 +2502,7 @@ mod tests {
         assert_eq!(exclusive.switch(&s, &NONE), Some(true));
         assert!(s.file.bool("exclusiveFullscreen"));
         // The graphics extras switch their own setting.
-        let lights = Item::Extra(crate::extras::Item::DynamicLights);
+        let lights = Item::Described(RowId("sunrise:dynamic_lights"));
         lights.cycle(&mut s, false, FB, &NONE);
         assert!(s.extras.dynamic_lights);
         assert_eq!(lights.switch(&s, &NONE), Some(true));
@@ -2664,8 +2634,8 @@ mod tests {
             let groups = sheets.into_iter().flat_map(|sheet| sheet.groups);
             groups.flat_map(|group| group.rows).any(|r| r.id == item)
         };
-        let fullbright = Item::Extra(crate::extras::Item::Fullbright);
-        let lights = Item::Extra(crate::extras::Item::DynamicLights);
+        let fullbright = Item::Described(RowId("sunrise:fullbright"));
+        let lights = Item::Described(RowId("sunrise:dynamic_lights"));
         assert!(listed(&s, fullbright));
         let free = screen.stamp(&s);
         s.fullbright_held = true;

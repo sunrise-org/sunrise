@@ -212,6 +212,10 @@ pub mod render_slots;
 
 pub mod render_views;
 
+pub(crate) fn described_graphics_rows() -> &'static [&'static graphics_ui::RowDescriptor] {
+    extras::GRAPHICS_ROWS
+}
+
 #[cfg(test)]
 mod glsl_spirv_dump_tests;
 #[cfg(test)]

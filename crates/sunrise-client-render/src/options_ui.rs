@@ -7993,8 +7993,10 @@ mod tests {
                         }
                         SunriseRow::Graphics(Item::Vanilla(o)) => format!("{o:?}"),
                         SunriseRow::Graphics(Item::Sunrise(h)) => format!("graphics:{h:?}"),
-                        SunriseRow::Graphics(Item::Extra(e))
-                        | SunriseRow::Extra(ExtraRow::Item(e)) => format!("extra:{e:?}"),
+                        SunriseRow::Graphics(Item::Described(id)) => {
+                            format!("described:{}", id.as_str())
+                        }
+                        SunriseRow::Extra(ExtraRow::Item(e)) => format!("extra:{e:?}"),
                         SunriseRow::Pack(item) => format!("shader:{item:?}"),
                         SunriseRow::ShaderOptions => {
                             let way = format!("Sunrise/{tab:?}");
