@@ -161,6 +161,9 @@ pub(in crate::game) use client_side::creative_hotbar;
 pub(in crate::game) use client_side::custom_arm_pose;
 #[cfg(feature = "client")]
 #[allow(unused_imports)]
+pub(in crate::game) use client_side::custom_guis;
+#[cfg(feature = "client")]
+#[allow(unused_imports)]
 pub(in crate::game) use client_side::custom_sky;
 #[allow(unused_imports)]
 pub(in crate::game) use client_side::debug_keys;

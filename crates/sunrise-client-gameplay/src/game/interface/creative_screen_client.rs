@@ -1,5 +1,6 @@
 use super::*;
 use sunrise_items::creative_catalog::{item_group_key, mod_item_group_key};
+use sunrise_optifine::gui::{Container, Detail};
 
 impl crate::game::ClientGame<'_> {
     pub(in crate::game) fn creative_origin(batch: &HudBatch) -> (f32, f32) {
@@ -269,6 +270,13 @@ impl crate::game::ClientGame<'_> {
         } else {
             "gui/container/creative_inventory/tab_items"
         };
+        let background = self.gui_sprite(
+            background,
+            Container::Creative,
+            self.gui_block(),
+            None,
+            Detail::None,
+        );
         if let Some(mut r) = self.client.gui.atlas.sprites.get(background).copied() {
             r.u1 = r.u0 + (r.u1 - r.u0) * Creative::WIDTH / r.w as f32;
             r.v1 = r.v0 + (r.v1 - r.v0) * Creative::HEIGHT / r.h as f32;

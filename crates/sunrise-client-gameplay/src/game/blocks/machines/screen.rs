@@ -1,4 +1,5 @@
 use super::*;
+use sunrise_optifine::gui::{Container, Detail};
 
 impl crate::game::ClientGame<'_> {
     /// HopperScreen / DispenserScreen background and labels; false for other containers.
@@ -42,6 +43,24 @@ impl crate::game::ClientGame<'_> {
                 "Dropper",
             ),
         };
+        let title = &self.remote_menu_title().unwrap_or_else(|| {
+            sunrise_game_data::text::Text::literal(
+                self.container_title(self.translate_with_fallback(key, fallback)),
+            )
+            .resolve_legacy()
+        });
+        let (container, detail) = match screen {
+            Screen::Hopper => (Container::Hopper, Detail::None),
+            Screen::Dispenser => (Container::Dispenser, Detail::Dispenser { dropper: false }),
+            Screen::Dropper => (Container::Dispenser, Detail::Dispenser { dropper: true }),
+        };
+        let texture = self.gui_sprite(
+            texture,
+            container,
+            self.gui_block(),
+            Some(title.plain().as_str()),
+            detail,
+        );
         if let Some(mut r) = atlas.sprites.get(texture).copied() {
             let dv = (r.v1 - r.v0) / r.h as f32;
             let du = (r.u1 - r.u0) / r.w as f32;
@@ -51,12 +70,6 @@ impl crate::game::ClientGame<'_> {
         }
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
         let grey = sunrise_client::hud::rgba(64, 64, 64, 255);
-        let title = &self.remote_menu_title().unwrap_or_else(|| {
-            sunrise_game_data::text::Text::literal(
-                self.container_title(self.translate_with_fallback(key, fallback)),
-            )
-            .resolve_legacy()
-        });
         crate::game::screen_info::name_container(|| title.plain());
         let title_x = if screen == Screen::Hopper {
             8.0

@@ -119,7 +119,7 @@ pub fn vertex_light(packed: u8) -> u32 {
 }
 /// `ChestRenderer.xmasTextures`: `SpecialDates.isExtendedChristmas` (24 to 26
 /// December in the local time zone), read once when the renderer is created.
-fn extended_christmas() -> bool {
+pub fn extended_christmas() -> bool {
     use chrono::Datelike;
     static XMAS: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
     *XMAS.get_or_init(|| {

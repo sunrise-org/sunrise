@@ -138,21 +138,12 @@ impl ClientGame<'_> {
         oy: f32,
     ) {
         use sunrise_client::hud::rgba;
+        use sunrise_optifine::gui::{Container, Detail};
         let atlas = &self.client.gui.atlas;
         let grey = rgba(64, 64, 64, 255);
-        if self
-            .container_block()
-            .as_deref()
-            .is_some_and(is_shulker_box)
-        {
-            batch.sprite_region(
-                atlas,
-                "gui/container/shulker_box",
-                [ox, oy, 176.0, 167.0],
-                256.0,
-                256.0,
-            );
-            self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
+        let at = self.gui_block();
+        let block = self.container_block();
+        if block.as_deref().is_some_and(is_shulker_box) {
             // ShulkerBoxScreen draws the menu's title: the box's custom name
             // (BaseContainerBlockEntity.getDisplayName) or its default name.
             let title = self.remote_menu_title().unwrap_or_else(|| {
@@ -161,6 +152,20 @@ impl ClientGame<'_> {
                 ))
                 .resolve_legacy()
             });
+            // A dyed box is `<color>_shulker_box`.
+            let color = block.as_deref().and_then(|name| {
+                name.strip_prefix("minecraft:")?
+                    .strip_suffix("_shulker_box")
+            });
+            let background = self.gui_sprite(
+                "gui/container/shulker_box",
+                Container::ShulkerBox,
+                at,
+                Some(title.plain().as_str()),
+                Detail::Shulker { color },
+            );
+            batch.sprite_region(atlas, background, [ox, oy, 176.0, 167.0], 256.0, 256.0);
+            self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
             super::screen_info::name_container(|| title.plain());
             batch.text_styled(atlas, &title, ox + 8.0, oy + 6.0, grey, false);
             let inventory = self.translate_with_fallback("container.inventory", "Inventory");
@@ -169,15 +174,17 @@ impl ClientGame<'_> {
         }
         let rows = self.chest_rows().unwrap_or(3);
         let top = rows as f32 * 18.0 + 17.0;
-        batch.sprite_region(
-            atlas,
+        let title = self.chest_title(rows);
+        let background = self.gui_sprite(
             "gui/container/generic_54",
-            [ox, oy, 176.0, top],
-            256.0,
-            256.0,
+            Container::Chest,
+            at,
+            Some(title.plain().as_str()),
+            self.gui_chest(at),
         );
+        batch.sprite_region(atlas, background, [ox, oy, 176.0, top], 256.0, 256.0);
         // The player half of the texture starts at v = 126.
-        if let Some(mut r) = atlas.sprites.get("gui/container/generic_54").copied() {
+        if let Some(mut r) = atlas.sprites.get(background).copied() {
             let (du, dv) = ((r.u1 - r.u0) / r.w as f32, (r.v1 - r.v0) / r.h as f32);
             r.v0 += 126.0 * dv;
             r.v1 = r.v0 + 96.0 * dv;
@@ -185,7 +192,6 @@ impl ClientGame<'_> {
             batch.rect_uv(ox, oy + top, 176.0, 96.0, r, u32::MAX);
         }
         self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
-        let title = self.chest_title(rows);
         super::screen_info::name_container(|| title.plain());
         batch.text_styled(atlas, &title, ox + 8.0, oy + 6.0, grey, false);
         let inventory = self.translate_with_fallback("container.inventory", "Inventory");

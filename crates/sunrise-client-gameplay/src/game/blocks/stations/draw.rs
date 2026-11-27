@@ -4,6 +4,7 @@ use super::*;
 impl crate::game::ClientGame<'_> {
     /// Draws the open station or brewing stand screen; false when none is open.
     pub fn draw_station(&mut self, batch: &mut HudBatch) -> bool {
+        use sunrise_optifine::gui::{Container, Detail};
         if let Some(kind) = self.common.station.as_ref().map(|s| s.kind) {
             if self.client.station_ui.is_none() {
                 debug_assert!(false, "open client station missing StationUi");
@@ -58,14 +59,23 @@ impl crate::game::ClientGame<'_> {
             let (fuel, total_fuel, brew, total_brew) =
                 (b.fuel, b.total_fuel, b.brew_time, b.total_brew_time);
             let atlas = &self.client.gui.atlas;
-            Self::part(
-                batch,
-                atlas,
+            let default = self.translate_with_fallback("container.brewing", "Brewing Stand");
+            let title = self.remote_menu_title().unwrap_or_else(|| {
+                let named = self
+                    .common
+                    .station
+                    .as_ref()
+                    .and_then(|s| self.common.block_name_plain((s.pos[0], s.pos[1], s.pos[2])));
+                Text::literal(named.unwrap_or(default)).resolve_legacy()
+            });
+            let texture = self.gui_sprite(
                 "gui/container/brewing_stand",
-                (0.0, 0.0),
-                (176.0, 166.0),
-                (ox, oy),
+                Container::BrewingStand,
+                self.gui_block(),
+                Some(title.plain().as_str()),
+                Detail::None,
             );
+            Self::part(batch, atlas, texture, (0.0, 0.0), (176.0, 166.0), (ox, oy));
             self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
             let fuel_len = if total_fuel > 0 {
                 ((18 * fuel + total_fuel - 1) / total_fuel).clamp(0, 18)
@@ -106,15 +116,6 @@ impl crate::game::ClientGame<'_> {
                     );
                 }
             }
-            let default = self.translate_with_fallback("container.brewing", "Brewing Stand");
-            let title = self.remote_menu_title().unwrap_or_else(|| {
-                let named = self
-                    .common
-                    .station
-                    .as_ref()
-                    .and_then(|s| self.common.block_name_plain((s.pos[0], s.pos[1], s.pos[2])));
-                Text::literal(named.unwrap_or(default)).resolve_legacy()
-            });
             crate::game::screen_info::name_container(|| title.plain());
             let tw = atlas.font.width_text(&title);
             batch.text_styled(
@@ -151,14 +152,21 @@ impl crate::game::ClientGame<'_> {
             crate::game::screen_info::name_container(|| title.plain());
             {
                 let atlas = &self.client.gui.atlas;
-                Self::part(
-                    batch,
-                    atlas,
-                    kind.texture(),
-                    (0.0, 0.0),
-                    (176.0, 166.0),
-                    (ox, oy),
-                );
+                let container = match kind {
+                    Kind::Anvil => Some(Container::Anvil),
+                    Kind::Enchanting => Some(Container::Enchantment),
+                    _ => None,
+                };
+                let texture = container.map_or(kind.texture(), |container| {
+                    self.gui_sprite(
+                        kind.texture(),
+                        container,
+                        self.gui_block(),
+                        Some(title.plain().as_str()),
+                        Detail::None,
+                    )
+                });
+                Self::part(batch, atlas, texture, (0.0, 0.0), (176.0, 166.0), (ox, oy));
                 self.draw_screen_phase(batch, sunrise_client::screen_draw::RenderPhase::Background);
                 let (tx, ty) = kind.title_pos();
                 batch.text_styled(atlas, &title, ox + tx, oy + ty, GREY, false);
