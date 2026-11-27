@@ -1362,9 +1362,9 @@ impl Loading {
                 let (frame, cursor) = movement.expect("cursor movement was projected");
                 if self.menu.options_open && self.menu.dragging {
                     self.menu_options_click_in(frame, cursor, true, false);
-                } else if let Some(title) = &mut self.menu.title {
+                } else if let (Some(title), Some(gui)) = (&mut self.menu.title, &self.gui) {
                     title.drag(cursor, frame.size());
-                    title.drag_field(&self.gui.as_ref().unwrap().atlas, cursor.0);
+                    title.drag_field(&gui.atlas, cursor.0);
                 }
             }
             WindowEvent::MouseInput { state, button, .. } if self.menu.options_open => {

@@ -1006,7 +1006,8 @@ mod tests {
         for zoom in [1, 2] {
             let size = frame.target.map(|axis| axis * zoom);
             let scale = batch.scale * zoom as f32;
-            let data: Vec<f32> = bytemuck::cast_slice(&uniforms(&batch, size, scale)).to_vec();
+            let data = uniforms(&batch, size, scale);
+            let data: &[f32] = bytemuck::cast_slice(&data);
             let [x, y] = frame
                 .gui_to_target([0.0, 0.0])
                 .map(|axis| axis * zoom as f32);

@@ -1678,17 +1678,19 @@ impl crate::game::ClientGame<'_> {
                     let mut screen_scrolled = false;
                     let stick_scroll = self.pad_stick_scroll();
                     let step_scroll = self.pad_step_scroll();
-                    if self.client.screen == Screen::Playing && self.client.title.0.is_some() {
-                        let size = self
-                            .client
-                            .window
-                            .0
-                            .as_ref()
-                            .map(|w| w.inner_size())
-                            .unwrap_or_default();
-                        let target = [size.width, size.height];
-                        let gui = self.gui_frame_for(target).size();
-                        let title = self.client.title.0.as_mut().unwrap();
+                    if self.client.screen == Screen::Playing
+                        && let Some(gui) = self.client.title.0.as_ref().map(|_| {
+                            let size = self
+                                .client
+                                .window
+                                .0
+                                .as_ref()
+                                .map(|w| w.inner_size())
+                                .unwrap_or_default();
+                            self.gui_frame_for([size.width, size.height]).size()
+                        })
+                        && let Some(title) = self.client.title.0.as_mut()
+                    {
                         if step_scroll {
                             title.step_scroll(d, self.client.cursor, gui);
                         } else if stick_scroll {
@@ -2931,10 +2933,9 @@ impl crate::game::ClientGame<'_> {
             &self.client.gui.atlas,
         );
         self.draw_pad_over_hud(&mut batch);
-        if let Some(pointer) = pointer {
+        if let Some((pointer, hover)) = pointer.zip(hover) {
             debug_assert_eq!(
-                self.client.cursor,
-                hover.unwrap(),
+                self.client.cursor, hover,
                 "drawing changed the input cursor"
             );
             self.client.cursor = pointer.subpixel();
