@@ -156,8 +156,8 @@ impl Renderer {
         self.pack_generation
     }
     /// Before this renderer is published in place of one whose last generation was `previous`,
-    /// continue that count, keeping the pack changes this one already counted: a pack it
-    /// installs then never repeats a generation the old one reported.
+    /// continue that count, keeping the pack changes this one already counted. The count wraps
+    /// around after `u32::MAX`, as every pack change counts it.
     pub fn continue_pack_generation(&mut self, previous: u32) {
         self.pack_generation = previous.wrapping_add(self.pack_generation);
     }

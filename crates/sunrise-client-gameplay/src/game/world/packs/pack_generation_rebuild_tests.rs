@@ -57,6 +57,8 @@ fn install_on(renderer: &mut sunrise_client::gfx::Renderer, folder: &Path) {
 /// What a mod's `host.shader_pack_state()` reads after the next frame: the hides-clouds flag
 /// (which pack runs) and the generation.
 fn frame_state(game: &mut ClientGame<'_>) -> (bool, u32) {
+    // A frame drawn under the reload overlay's opaque fade-out takes no pack snapshot.
+    game.client.reload_overlay = None;
     assert!(game.render().unwrap());
     let ShaderPackState {
         hides_clouds,
@@ -100,7 +102,9 @@ fn shader_pack_generation_continues_across_a_renderer_rebuild() {
         install_pack(game, &packs.path().join("second"), "off");
         assert_eq!(frame_state(game), (true, 2));
 
-        // A retained mesh retires with its renderer: its going stale proves the rebuild.
+        // Only the first renderer carries this mark: a renderer without it is a replacement.
+        game.client.renderer.0.as_mut().unwrap().test_mark = 1;
+        // A retained mesh retires on the rebuild too.
         let _owner = enter_native_mod(ModCall {
             id: "pack_generation_probe",
             hook: "pack generation rebuild fixture",
@@ -147,6 +151,11 @@ fn shader_pack_generation_continues_across_a_renderer_rebuild() {
             }
             case => panic!("unknown case {case}"),
         }
+        assert_eq!(
+            game.client.renderer.0.as_ref().unwrap().test_mark,
+            0,
+            "{case}: the renderer was not replaced"
+        );
         assert_eq!(frame_state(game), (false, 3), "{case}");
         drop(game.client.renderer.0.take());
         drop(game.client.mod_gpu.take());

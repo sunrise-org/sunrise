@@ -2545,6 +2545,8 @@ impl Renderer {
             pack_post: None,
             pack_loading: None,
             pack_generation: 0,
+            #[cfg(feature = "test-support")]
+            test_mark: 0,
             pass_timing: false,
             pass_detail: false,
             pass_timing_gap: std::time::Duration::ZERO,

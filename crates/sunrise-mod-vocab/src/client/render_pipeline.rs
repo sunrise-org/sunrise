@@ -1065,7 +1065,9 @@ pub struct ShaderPackState {
     /// Changes every time a shader pack is loaded, switched or turned off, including a reload of
     /// the same pack and a dimension change that loads the pack again, and at no other time.
     /// Compare it each frame and re-read what you derived from the pack when it differs: that
-    /// covers a pack switch with no resource reload.
+    /// covers a pack switch with no resource reload. The count continues when the game rebuilds
+    /// its renderer (a resource reload, recovery from a lost graphics device), and wraps around
+    /// after `u32::MAX`.
     pub generation: u32,
 }
 

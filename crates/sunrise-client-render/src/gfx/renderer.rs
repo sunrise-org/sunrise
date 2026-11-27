@@ -417,6 +417,11 @@ pub struct Renderer {
     /// Counts shader packs loaded, switched or turned off (`ShaderPackState::generation`),
     /// continuing the count of the renderer this one replaced (`continue_pack_generation`).
     pub(crate) pack_generation: u32,
+    /// Free for a test to set, to tell this renderer from the one that replaces it: every new
+    /// renderer starts at 0 and nothing else writes it.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub test_mark: u32,
     /// Time the shader pack's passes on the GPU (F3, or a capture made with `--gpu`).
     pub(crate) pass_timing: bool,
     /// Times the parts of passes too (`set_pass_detail`).
