@@ -3122,6 +3122,43 @@ impl ModPipelines {
         let inline_base = inline_base.unwrap_or(0) as u32;
         let texel_base = texel_base.unwrap_or(0);
 
+        // wgpu gives a buffer written by shaders one usage for the whole pass: refuse draws
+        // binding the same storage buffer both read-only and read-write in this offscreen pass.
+        self.storage_uses.clear();
+        self.storage_conflicts.clear();
+        for (cmd, key) in &ready {
+            let Some(bindings) = &cmd.bindings else {
+                continue;
+            };
+            let compiled = self.variants[key]
+                .as_ref()
+                .expect("prepared offscreen variant");
+            for (entry, spec) in bindings.entries.iter().zip(&compiled.set1_entries) {
+                if let (
+                    ResolvedSet1Entry::StorageBuffer { id, .. },
+                    BindingKind::StorageBuffer { read_only, .. },
+                ) = (entry, spec.kind)
+                {
+                    let used = self.storage_uses.entry((0, *id)).or_default();
+                    if read_only {
+                        used.0 = true;
+                    } else {
+                        used.1 = true;
+                    }
+                    if used.0 && used.1 {
+                        self.storage_conflicts.insert((0, *id));
+                    }
+                }
+            }
+        }
+        for &(_, id) in &self.storage_conflicts {
+            if self.warned_storage_conflicts.insert(id) {
+                log::warn!(
+                    "Sunrise: mod offscreen draws binding storage buffer {id} both read-only and read-write in one pass are skipped"
+                );
+            }
+        }
+
         let mut prepared_draws = Vec::with_capacity(ready.len());
         for (submitted_index, ((cmd, key), meta)) in ready.into_iter().zip(staged_meta).enumerate()
         {
@@ -3209,6 +3246,28 @@ impl ModPipelines {
                                     buffer: buf,
                                     offset: texel_base + offset,
                                     size: wgpu::BufferSize::new(size),
+                                }),
+                            });
+                        }
+                        (
+                            ResolvedSet1Entry::StorageBuffer {
+                                id,
+                                buffer,
+                                offset,
+                                size,
+                            },
+                            BindingKind::StorageBuffer { .. },
+                        ) => {
+                            if self.storage_conflicts.contains(&(0, *id)) {
+                                valid = false;
+                                break;
+                            }
+                            bg_entries.push(wgpu::BindGroupEntry {
+                                binding: spec.binding,
+                                resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                                    buffer,
+                                    offset: *offset,
+                                    size: wgpu::BufferSize::new(*size),
                                 }),
                             });
                         }
@@ -9344,5 +9403,230 @@ void main() {
         assert_eq!(texel(256), 0.0, "level 1 texel (0, 1)");
         assert_eq!(texel(260), 0.0, "level 1 texel (1, 1)");
         assert_eq!(texel(512), 0.0, "level 0 texel (0, 0)");
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn offscreen_pass_binds_storage_buffer_ranges_and_skips_rw_conflicts() {
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some((device, queue)) = device() else {
+            return;
+        };
+
+        let read_id = Identifier::parse("test:offscreen_ssbo_read").unwrap();
+        let write_id = Identifier::parse("test:offscreen_ssbo_write").unwrap();
+        let read_fsh = "#version 330\n\
+            layout(std430) readonly buffer Tints { vec4 tint[]; };\n\
+            out vec4 fragColor;\n\
+            void main() {\n\
+                fragColor = tint[0];\n\
+            }\n";
+        let write_fsh = "#version 330\n\
+            layout(std430) buffer Tints { vec4 tint[]; };\n\
+            out vec4 fragColor;\n\
+            void main() {\n\
+                tint[0] = vec4(0.0, 0.0, 1.0, 1.0);\n\
+                fragColor = vec4(0.0, 0.0, 1.0, 1.0);\n\
+            }\n";
+        let make_pipeline = |id: Identifier, read_only: bool| {
+            RenderPipeline::new(
+                id.clone(),
+                id,
+                PipelineBlend::Opaque,
+                mod_api::WorldDepth::ThroughWalls,
+            )
+            .bind_group_layout(
+                mod_api::BindGroupLayout::builder()
+                    .entry(mod_api::BindEntry::new(
+                        "Tints",
+                        mod_api::BindingKind::StorageBuffer {
+                            read_only,
+                            min_size: 16,
+                        },
+                    ))
+                    .build()
+                    .unwrap(),
+            )
+        };
+        let set = Pipelines::build(
+            &[make_pipeline(read_id, true), make_pipeline(write_id, false)],
+            1,
+            |file| {
+                if file.ends_with(".vsh") {
+                    Ok(Some(VSH.to_owned()))
+                } else if file.contains("offscreen_ssbo_read") && file.ends_with(".fsh") {
+                    Ok(Some(read_fsh.to_owned()))
+                } else if file.contains("offscreen_ssbo_write") && file.ends_with(".fsh") {
+                    Ok(Some(write_fsh.to_owned()))
+                } else {
+                    Ok(stub_asset(file))
+                }
+            },
+        )
+        .expect("offscreen storage buffer pipelines must translate");
+
+        let mut storage = crate::gfx::mod_storage::ModStorageBuffers::default();
+        let buffer = storage
+            .create(&device, None, &mod_api::StorageBufferDescriptor::new(512))
+            .unwrap();
+        storage
+            .write_range(
+                None,
+                buffer,
+                0,
+                bytemuck::cast_slice(&[1.0f32, 0.0, 0.0, 1.0]),
+            )
+            .unwrap();
+        storage
+            .write_range(
+                None,
+                buffer,
+                256,
+                bytemuck::cast_slice(&[0.0f32, 1.0, 0.0, 1.0]),
+            )
+            .unwrap();
+        storage.flush(&device, &queue);
+        let limits = device.limits();
+        let resolve_range = |offset| {
+            storage
+                .resolve(&limits, None, buffer.slice(offset, 16), 16)
+                .unwrap()
+        };
+
+        let mut targets = crate::gfx::mod_render_targets::ModRenderTargets::default();
+        let rt = targets
+            .create(
+                &device,
+                Some("test_mod"),
+                &mod_api::RenderTargetDescriptor::rgba8([4, 4], mod_api::RenderTargetDepth::None),
+            )
+            .expect("create 4x4 RGBA8 offscreen target");
+        let resolved_rt = targets.resolve_target(Some("test_mod"), rt, 0).unwrap();
+
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut primitives = WorldPrimitives::new(&device, (format, false));
+        primitives
+            .pipelines
+            .build(&device, &set, None)
+            .expect("build offscreen storage buffer pipelines");
+
+        let ortho4 = Mat4::orthographic_rh(0.0, 4.0, 4.0, 0.0, -1.0, 1.0).to_cols_array();
+        let identity = Mat4::IDENTITY.to_cols_array();
+        let half_quad = |x0: f32, x1: f32| {
+            [[x0, 0.0], [x0, 4.0], [x1, 4.0], [x1, 0.0]].map(|[x, y]| PipelineVertex {
+                pos: [x, y, 0.0],
+                uv: [0.0, 0.0],
+                color: 0xFFFF_FFFF,
+            })
+        };
+        let vertices: Vec<PipelineVertex> = [half_quad(0.0, 2.0), half_quad(2.0, 4.0)].concat();
+        let vbytes = bytemuck::cast_slice(&vertices);
+        let draw_cmd = |slot: u32, offset: u64, first_quad: u64| {
+            let r = resolve_range(offset);
+            let stride = 4 * std::mem::size_of::<PipelineVertex>() as u64;
+            PipelineDraw {
+                slot,
+                stage: 0,
+                modifier_stack: 0,
+                draw: MeshDraw::vertices(0..4),
+                source: PipelineDrawSource::Transient {
+                    vertex_ranges: vec![(0, first_quad * stride..(first_quad + 1) * stride)],
+                    index_range: None,
+                },
+                bindings: Some(ResolvedDrawBindings {
+                    sampler_layout: SamplerLayout::EMPTY,
+                    entries: vec![ResolvedSet1Entry::StorageBuffer {
+                        id: r.id,
+                        buffer: r.buffer,
+                        offset: r.offset,
+                        size: r.length,
+                    }],
+                    push_constants: None,
+                }),
+            }
+        };
+
+        let read_pass_pixels = |primitives: &mut WorldPrimitives, draws: &[PipelineDraw]| {
+            let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+            let pass = mod_api::OffscreenPass::new(rt)
+                .clear_color_0([0.0, 0.0, 0.0, 1.0])
+                .projection(ortho4)
+                .view(identity);
+            let mut encoder = device.create_command_encoder(&Default::default());
+            primitives.execute_offscreen_pass(
+                &device,
+                &queue,
+                &mut encoder,
+                &OffscreenPassData {
+                    pass: &pass,
+                    target: &resolved_rt,
+                    draws,
+                    transient_vertices: vbytes,
+                    transient_indices: &[],
+                    inline_uniforms: &[],
+                    texel_data: &[],
+                },
+            );
+            let readback = device.create_buffer(&wgpu::BufferDescriptor {
+                label: None,
+                size: 1024,
+                usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+                mapped_at_creation: false,
+            });
+            encoder.copy_texture_to_buffer(
+                wgpu::TexelCopyTextureInfo {
+                    texture: targets.color_texture(rt, 0).unwrap(),
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                    aspect: wgpu::TextureAspect::All,
+                },
+                wgpu::TexelCopyBufferInfo {
+                    buffer: &readback,
+                    layout: wgpu::TexelCopyBufferLayout {
+                        offset: 0,
+                        bytes_per_row: Some(256),
+                        rows_per_image: None,
+                    },
+                },
+                wgpu::Extent3d {
+                    width: 4,
+                    height: 4,
+                    depth_or_array_layers: 1,
+                },
+            );
+            queue.submit([encoder.finish()]);
+            assert!(
+                pollster::block_on(validation.pop()).is_none(),
+                "offscreen storage-buffer pass must not raise a wgpu validation error"
+            );
+            readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+            device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+            let bytes = readback.slice(..).get_mapped_range().unwrap().to_vec();
+            move |x: usize, y: usize| -> [u8; 4] {
+                let i = y * 256 + x * 4;
+                [bytes[i], bytes[i + 1], bytes[i + 2], bytes[i + 3]]
+            }
+        };
+
+        // Pass 1: two read-only sub-ranges of the storage buffer render red (left) and green (right).
+        let read_draws = [draw_cmd(0, 0, 0), draw_cmd(0, 256, 1)];
+        let at = read_pass_pixels(&mut primitives, &read_draws);
+        assert_eq!(at(0, 1), [255, 0, 0, 255], "left range red");
+        assert_eq!(at(3, 1), [0, 255, 0, 255], "right range green");
+
+        // Pass 2: binding the same storage buffer both read-only and read-write in one offscreen
+        // pass skips conflicting draws cleanly without raising a wgpu validation error.
+        let conflict_draws = [draw_cmd(0, 0, 0), draw_cmd(1, 256, 1)];
+        let at = read_pass_pixels(&mut primitives, &conflict_draws);
+        assert_eq!(
+            at(0, 1),
+            [0, 0, 0, 255],
+            "conflicting read-only draw skipped"
+        );
+        assert_eq!(
+            at(3, 1),
+            [0, 0, 0, 255],
+            "conflicting read-write draw skipped"
+        );
     }
 }
