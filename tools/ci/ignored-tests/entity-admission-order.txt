@@ -1,0 +1,4 @@
+sunrise-gameplay game::server_side::lan_entities::tests::hanging_veto_keeps_frame_id_but_consumes_painting_id lib daily child-process
+sunrise-gameplay game::server_side::lan_entities::tests::lan_ids_keep_family_and_unbound_vector_order lib daily resources
+sunrise-gameplay game::server_side::lan_entities::tests::pending_dragon_and_parts_publish_before_crystals lib daily resources
+sunrise-gameplay game::server_side::lan_entities::tests::saved_constructor_observes_its_family_install_boundary lib daily child-process

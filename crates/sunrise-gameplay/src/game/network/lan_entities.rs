@@ -1338,8 +1338,8 @@ mod tests {
         let mut p = Projectile::new(
             ProjectileKind::Arrow {
                 base_damage: 2.0,
-                critical: false,
-                effect: None,
+                critical: true,
+                effect: Some(("minecraft:poison", 0)),
             },
             Vec3::new(8.0, 9.0, 10.0),
             None,
@@ -1349,6 +1349,7 @@ mod tests {
         p.needs_sync = true;
         let a = p.arrow.as_deref_mut().unwrap();
         a.in_ground = true;
+        a.fire_ticks = 10;
         a.spawn_pos = Some(Vec3::new(1.0, 2.0, 3.0));
         a.spawn_velocity = Some(Vec3::new(4.0, 5.0, 6.0));
         assert!(fresh_projectile_pairing_state(&p, "minecraft:arrow", 42, 43).is_none());
@@ -1361,7 +1362,306 @@ mod tests {
         assert_eq!((joined.id, joined.data, joined.uuid), (41, 42, 43));
         assert!(joined.needs_sync);
         assert!(!joined.on_ground);
+        assert!(joined.meta.contains(&(0, serializer::BYTE, Value::Byte(1))));
+        assert!(joined.meta.contains(&(8, serializer::BYTE, Value::Byte(1))));
         assert!(joined.meta.iter().all(|(id, _, _)| *id != 10));
+        assert!(joined.meta.iter().any(|(id, _, _)| *id == 11));
+
+        p.kind = ProjectileKind::Trident;
+        p.arrow
+            .as_deref_mut()
+            .unwrap()
+            .pickup_item
+            .enchant("minecraft:loyalty", 1);
+        let joined = fresh_projectile_pairing_state(&p, "minecraft:trident", 42, 43).unwrap();
+        assert!(
+            joined
+                .meta
+                .contains(&(12, serializer::BOOLEAN, Value::Bool(true)))
+        );
+        assert!(
+            joined
+                .meta
+                .iter()
+                .all(|(id, _, _)| !matches!(*id, 8 | 10 | 11))
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn pending_dragon_and_parts_publish_before_crystals() {
+        use sunrise_core::geometry::Vec3;
+        use sunrise_gameplay_common::game::dragon_common::{Crystal, Dragon};
+        use sunrise_sim::join_seq::residency::Change;
+
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            let next = game.server.next_entity;
+            let journal = game.common.resident_entities.table.borrow().producer();
+            let mut events = Vec::new();
+            journal.drain_into(&mut events);
+            events.clear();
+            game.common.dragon.replace(Dragon::new(Vec3::ZERO, 0.0, 7));
+            game.common
+                .crystals
+                .push(Crystal::new(0, Vec3::ZERO, false, 0));
+            let dragon_join = game.common.dragon.as_ref().unwrap().join;
+            let crystal_join = game.common.crystals[0].join;
+            game.assign_dragon_and_crystal_ids();
+            assert_eq!(game.common.dragon.as_ref().unwrap().id, next + 1);
+            assert_eq!(game.common.crystals[0].id, next + 10);
+            assert_eq!(game.server.next_entity, next + 10);
+            journal.drain_into(&mut events);
+            let spawned: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event.change {
+                    Change::Spawned(identity) => Some((identity.id.get(), identity.join)),
+                    _ => None,
+                })
+                .collect();
+            let mut expected: Vec<_> = (next + 1..=next + 9).map(|id| (id, dragon_join)).collect();
+            expected.push((next + 10, crystal_join));
+            assert_eq!(spawned, expected);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn lan_ids_keep_family_and_unbound_vector_order() {
+        use sunrise_core::{geometry::Vec3, nbt::parse_snbt, random::LegacyRandom};
+        use sunrise_gameplay_common::game::{
+            dragon_common::{Breath, Crystal},
+            fireworks::Rocket,
+            lightning_common::Bolt,
+            potions_common::ThrownPotion,
+        };
+        use sunrise_items::items::ItemStack;
+        use sunrise_sim::{
+            projectiles::{Projectile, ProjectileKind},
+            thrown_trident::ThrownTrident,
+        };
+
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            game.load_tnt(
+                parse_snbt("{id:'minecraft:tnt',Pos:[1d,70d,1d]}")
+                    .unwrap()
+                    .0,
+                None,
+            );
+            game.common.tnts.update(0, |t| t.id = 0);
+            let air = game.common.world.air;
+            game.spawn_falling_block_entity(air, Vec3::ZERO, Vec3::ZERO, false, Default::default())
+                .unwrap();
+            game.common.falling.update(0, |f| f.id = 0);
+            game.common.creatures.projectiles.push(Projectile::new(
+                ProjectileKind::Snowball,
+                Vec3::ZERO,
+                None,
+            ));
+            game.common
+                .tridents
+                .push(ThrownTrident::remote(0, Vec3::ZERO, 0.0, 0.0));
+            game.common
+                .rockets
+                .push(Rocket::remote(0, Vec3::ZERO, Vec3::ZERO));
+            game.common
+                .crystals
+                .push(Crystal::new(0, Vec3::ZERO, false, 0));
+            game.common.bolts.push(Bolt::new(0, [0.0; 3], false).0);
+            game.add_ominous_item_spawner(ItemStack::new("minecraft:stone", 1), [0.0; 3], 60);
+            game.common.ominous_spawners.update(0, |row| row.id = 0);
+            game.common.potions.thrown.push(ThrownPotion {
+                id: 0,
+                stack: ItemStack::new("minecraft:splash_potion", 1),
+                previous: Vec3::ZERO,
+                position: Vec3::ZERO,
+                velocity: Vec3::ZERO,
+                age: 0,
+                owner: None,
+                thrower: None,
+                guest: None,
+                left_owner: false,
+                last_deflected_by: None,
+                random: LegacyRandom::new(0),
+            });
+            game.common.end.add_remote_eye(0, [0.0; 3], [0.0; 3]);
+            game.common.breath_clouds.push(Breath {
+                attachment_lifetime: Default::default(),
+                join: Default::default(),
+                id: 0,
+                at: [0.0; 3],
+                motion: [0.0; 3],
+                fall_distance: 0.0,
+                fire_ticks: 0,
+                first_tick: true,
+                radius: 3.0,
+                age: 0,
+                duration: 20,
+                from_dragon: true,
+                victims: Vec::new(),
+                potion: None,
+            });
+            let next = game.server.next_entity;
+            game.lan_assign_ids();
+            let ids = [
+                game.common.tnts[0].id,
+                game.common.falling[0].id,
+                game.common.creatures.projectiles[0].id,
+                game.common.tridents[0].id,
+                game.common.rockets[0].id,
+                game.common.crystals[0].id,
+                game.common.bolts[0].id,
+                game.common.ominous_spawners[0].id,
+                game.common.potions.thrown[0].id,
+                game.common.end.eyes_tracked().next().unwrap().0,
+                game.common.breath_clouds[0].id,
+            ];
+            assert_eq!(ids, std::array::from_fn(|index| next + index as u32 + 1));
+            assert_eq!(game.server.next_entity, next + 11);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn hanging_veto_keeps_frame_id_but_consumes_painting_id() {
+        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_resident_game};
+        use sunrise_gameplay_common::game::GameGameExt1 as _;
+        use sunrise_items::items::ItemStack;
+
+        struct Veto(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Veto {
+            fn hanging_place(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::HangingPlaceEvent<'_>,
+            ) -> mod_api::Flow {
+                self.0.lock().unwrap().push(event.kind.to_owned());
+                mod_api::Flow::Cancel
+            }
+        }
+
+        if run_fresh_cases(
+            "game::server_side::lan_entities::tests::hanging_veto_keeps_frame_id_but_consumes_painting_id",
+            "SUNRISE_HANGING_ID_CHILD",
+            &["veto"],
+        ) {
+            return;
+        }
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let entry = mod_api::ModEntry::new("hanging-id", Box::new(Veto(heard.clone())));
+        mod_platform::testing::with_mods(std::sync::Arc::from([entry]), || {
+            with_resident_game(|game| {
+                for y in 65..=75 {
+                    for x in 2..=12 {
+                        game.set_state_named([x, y, 5], "minecraft:stone", &[])
+                            .unwrap();
+                    }
+                }
+                game.server.lan_acting_uuid = Some(17);
+                game.server.lan_acting_name = Some("guest".into());
+                let hit = sunrise_gameplay_common::hit::Hit {
+                    pos: [7, 70, 5],
+                    face: [0, 0, 1],
+                    point: [7.5, 70.5, 6.0],
+                    inside: false,
+                };
+                let next = game.server.next_entity;
+                assert!(game.place_item_frame(&hit, &ItemStack::new("minecraft:item_frame", 1)));
+                assert_eq!(game.server.next_entity, next);
+                assert!(game.common.item_frames.is_empty());
+                assert!(game.place_painting(&hit, &ItemStack::new("minecraft:painting", 1)));
+                assert_eq!(game.server.next_entity, next + 1);
+                assert!(game.common.paintings.is_empty());
+                assert_eq!(
+                    &*heard.lock().unwrap(),
+                    &["minecraft:item_frame", "minecraft:painting"]
+                );
+            });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn saved_constructor_observes_its_family_install_boundary() {
+        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_resident_game};
+        use mod_api::{
+            EntityConstructingEvent, EntityRef, EntityResidency, Holder, HostSide, WorldEpoch,
+        };
+        use std::sync::{Arc, Mutex};
+        use sunrise_core::nbt::parse_snbt;
+
+        type Observations = (Option<WorldEpoch>, Vec<(String, EntityResidency)>);
+        struct Observe(Arc<Mutex<Observations>>);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Observe {
+            fn entity_constructing(
+                &self,
+                host: HostSide<'_>,
+                event: &mut EntityConstructingEvent<'_>,
+            ) {
+                let (HostSide::Server(host), Holder::Entity(id)) = (host, event.holder) else {
+                    return;
+                };
+                let Some(epoch) = self.0.lock().unwrap().0 else {
+                    return;
+                };
+                let residency = EntityRef::new(epoch, id).residency(host);
+                self.0
+                    .lock()
+                    .unwrap()
+                    .1
+                    .push((event.kind.to_owned(), residency));
+            }
+        }
+
+        if run_fresh_cases(
+            "game::server_side::lan_entities::tests::saved_constructor_observes_its_family_install_boundary",
+            "SUNRISE_SAVED_ADMISSION_CHILD",
+            &["order"],
+        ) {
+            return;
+        }
+        let seen = Arc::new(Mutex::new((None, Vec::new())));
+        let entry = mod_api::ModEntry::new("saved-admission", Box::new(Observe(seen.clone())));
+        mod_platform::testing::with_mods(Arc::from([entry]), || {
+            with_resident_game(|game| {
+                seen.lock().unwrap().0 = Some(game.common.native_lifecycle.epoch().unwrap());
+                let tag = |kind, extra| {
+                    parse_snbt(&format!("{{id:'minecraft:{kind}',Pos:[1d,70d,1d]{extra}}}"))
+                        .unwrap()
+                        .0
+                };
+                game.load_armor_stand(tag("armor_stand", ""), Some([1, 0, 0, 0]));
+                game.load_arrow(tag("arrow", ""), Some([2, 0, 0, 0]), None);
+                game.load_falling(
+                    tag("falling_block", ",BlockState:{Name:'minecraft:sand'}"),
+                    Some([3, 0, 0, 0]),
+                );
+                game.load_tnt(tag("tnt", ""), Some([4, 0, 0, 0]));
+                game.load_unlisted(
+                    (0, 0),
+                    "minecraft:evoker_fangs",
+                    Some([5, 0, 0, 0]),
+                    tag("evoker_fangs", ""),
+                )
+                .unwrap();
+                assert_eq!(
+                    seen.lock()
+                        .unwrap()
+                        .1
+                        .iter()
+                        .map(|(kind, state)| (kind.as_str(), *state))
+                        .collect::<Vec<_>>(),
+                    [
+                        ("minecraft:armor_stand", EntityResidency::Gone),
+                        ("minecraft:arrow", EntityResidency::Gone),
+                        ("minecraft:falling_block", EntityResidency::Gone),
+                        ("minecraft:tnt", EntityResidency::InPlace),
+                        ("minecraft:evoker_fangs", EntityResidency::InPlace),
+                    ],
+                );
+            });
+        });
     }
 
     #[test]
