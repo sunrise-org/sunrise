@@ -188,7 +188,7 @@ path = ""                    # the game program; empty: the one beside sunrise-s
 resources = ""               # the prepared game files; empty: resources/ here, else the usual places
 restart_on_crash = true
 low_memory = false           # true: less memory, slightly slower ticks (see below)
-parallel_tick = false        # reserved: parallel phases are disabled in this fork (see below)
+parallel_tick = false        # true: share eligible server tick phases across helper threads (see below)
 droppable_clientbound = 262144  # bytes a second of droppable mod payloads sent to each player; 0 turns them off (see below)
 droppable_serverbound = 16384   # the same, accepted from each player
 
@@ -766,17 +766,13 @@ effect from the environment variable `MIMALLOC_ALLOW_THP=0`. On macOS and Window
 
 ### Parallel tick: `parallel_tick`
 
-**Fork limitation:** all opt-in parallel server phases are currently disabled, including when this
-setting is true or `SUNRISE_PARALLEL_TICK` is set. A request logs a warning and uses serial execution.
-The upstream behavior described below is retained for reference, not currently available on the fork.
-Typed hook-aware parallel execution is tracked in [#1532](https://github.com/sunrise-org/sunrise/issues/1532).
-
 Off by default. Under `[engine]`, `parallel_tick = true` starts the game with its parallel tick on: the
 phases of the server tick that give the same result in any order share their work among helper threads (at
 most 8, as many as the machine has cores). It applies at the next start. It is the same switch as the
 environment variable `SUNRISE_PARALLEL_TICK=1`, for a host that gives you no way to set one (a game panel
 with a fixed startup command). With the setting off, a `SUNRISE_PARALLEL_TICK` already in the server's
-environment still applies.
+environment still applies (including `SUNRISE_PARALLEL_TICK=verify`, which checks each parallel phase
+against the serial path).
 
 ### Droppable mod payloads: `droppable_clientbound` and `droppable_serverbound`
 
