@@ -1121,6 +1121,42 @@ mod shadow {
         assert!(literal_include(&own[0], include_shadowed(&own)).is_none());
     }
 
+    /// The fixtures above, compiled: `rustc` follows `include!` the way the walk does. In the
+    /// first, `early` reads `gen.rs` and `late` reads nothing (there is no `never-read.rs`). In
+    /// the second, a normal build expands the standard `include!` and a test build, where the
+    /// local macro is on, never reads `gen.rs`, which would stop on its `compile_error!`.
+    #[test]
+    #[ignore = "daily"]
+    fn rustc_compiles_the_include_order_fixtures_the_walk_follows() {
+        let root = tempfile::tempdir().unwrap();
+        let put = |name: &str, text: &str| fs::write(root.path().join(name), text).unwrap();
+        let compile = |extra: &[&str]| {
+            let output = std::process::Command::new("rustc")
+                .args(["--edition=2024", "--crate-name", "fixture"])
+                .args(["--emit=metadata", "--out-dir"])
+                .arg(root.path())
+                .args(extra)
+                .arg(root.path().join("lib.rs"))
+                .output()
+                .unwrap();
+            assert!(
+                output.status.success(),
+                "{}",
+                String::from_utf8_lossy(&output.stderr)
+            );
+        };
+        put("gen.rs", GENERATED);
+
+        put("lib.rs", EARLY_AND_LATE);
+        compile(&[]);
+        assert_eq!(walk(root.path(), false).unwrap(), ["gen.rs", "lib.rs"]);
+
+        put("lib.rs", TEST_ONLY_DEFINITION);
+        compile(&[]);
+        compile(&["--test"]);
+        assert_eq!(walk(root.path(), false).unwrap(), ["gen.rs", "lib.rs"]);
+    }
+
     #[test]
     fn contradictory_gates_cannot_compile() {
         let gates = |gates: &[&str]| gates.iter().map(|g| (*g).to_owned()).collect::<Vec<_>>();
