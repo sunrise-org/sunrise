@@ -19,6 +19,7 @@ pub mod cit_glint;
 pub mod dynamic_textures;
 mod gui_sprite;
 pub use gui_sprite::atlas_key_of_gui_sprite;
+pub mod custom_animations;
 mod menu_pictures;
 mod model_reducing;
 pub(crate) mod pack_text;

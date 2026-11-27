@@ -69,6 +69,8 @@ pub struct HudAtlas {
     pub sprite_animations: Vec<(Rect, crate::sprites::SpriteAnimation)>,
     /// Exact integer placement and border policy for each entry in `sprite_animations`.
     pub sprite_animation_placements: Vec<AnimatedPlacement>,
+    /// The packs' OptiFine custom animations (`optifine/anim`) of textures this atlas packs.
+    pub custom_animations: Vec<super::custom_animations::CustomAnimation>,
     /// The default font (bitmap sheets in this atlas, unifont rasterized on demand).
     pub font: crate::font::Font,
     /// `misc/enchanted_glint_item` as its own image: vanilla's `GlintSampler`
@@ -292,6 +294,10 @@ impl HudAtlas {
             .map(|(&placement, (_, animation))| (placement, animation.clone(), (usize::MAX, 0, 0)))
             .collect()
     }
+    /// The `HudRenderer::custom_animations` to run from the packed custom animations.
+    pub fn renderer_custom_animations(&self) -> super::custom_animations::Running {
+        super::custom_animations::Running::new(self.custom_animations.clone())
+    }
     /// `TextureAtlas.dumpContents` for this atlas: `dir` is `screenshots/debug`,
     /// the folder `TextureUtil.getDebugTexturePath` names.
     pub fn dump_contents(&self, dir: &Path, name: &str) -> std::io::Result<PathBuf> {
@@ -381,6 +387,7 @@ impl HudAtlas {
             flags: self.flags.clone(),
             sprite_animations: self.sprite_animations.clone(),
             sprite_animation_placements: self.sprite_animation_placements.clone(),
+            custom_animations: self.custom_animations.clone(),
             font: self.font.clone_for_tests(),
             glint: self.glint.clone(),
             glint_armor: self.glint_armor.clone(),
@@ -639,6 +646,7 @@ impl HudAtlas {
             flags: HashMap::new(),
             sprite_animations: Vec::new(),
             sprite_animation_placements: Vec::new(),
+            custom_animations: Vec::new(),
             font: crate::font::Font::metrics(root),
             glint: (Vec::new(), 1, 1),
             glint_armor: (Vec::new(), 1, 1),
@@ -734,6 +742,7 @@ impl HudAtlas {
             object_skins_revision: Self::next_revision(),
             sprite_animations: Vec::new(),
             sprite_animation_placements: Vec::new(),
+            custom_animations: Vec::new(),
             glint: (vec![0; 4], 1, 1),
             glint_armor: (vec![0; 4], 1, 1),
             white,

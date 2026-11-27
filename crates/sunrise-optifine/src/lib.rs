@@ -14,6 +14,7 @@
 //! source (THIRD_PARTY_NOTICES.md); `fusion` from Fusion's wiki and FusionExamples' MIT-licensed
 //! layout templates (THIRD_PARTY_NOTICES.md). No OptiFine or Fusion code was read.
 
+pub mod anim;
 pub mod blink;
 pub mod cem;
 pub mod cit;
