@@ -676,10 +676,18 @@ same `register_render_pipelines` hook as a draw pipeline.
    created with `indirect: true`.
 
 A workgroup size, workgroup storage or binding count over the device's limits makes the pipeline
-resolve `Invalid`. A shader that needs subgroup operations resolves `UnsupportedFeature` when
-`RenderCapabilities::subgroup` is false, and a dispatch over
-`max_compute_workgroups_per_dimension` returns `TooManyWorkgroups`. To sample the live world depth
-from a compute node, declare `.reads(FrameTarget::MainDepth)` and bind `TextureSource::WorldDepth`.
+resolve `Invalid`. A compute shader that needs subgroup operations resolves `UnsupportedFeature`
+when `RenderCapabilities::subgroup` is false, and a dispatch over
+`max_compute_workgroups_per_dimension` returns `TooManyWorkgroups`. Likewise, a `RenderPipeline`
+whose fragment shader declares `layout(early_fragment_tests) in;` resolves
+`RenderPipelineError::UnsupportedFeature` when `RenderCapabilities::shader_early_depth_test` is
+false (Metal, DirectX 12, and Adreno Vulkan), and a fragment shader that writes storage buffers or
+storage images resolves `RenderPipelineError::UnsupportedFeature` when
+`RenderCapabilities::fragment_writable_storage` is false (Vulkan without `fragmentStoresAndAtomics`
+or OpenGL below 4.3). `cargo sunrise-mod check` skips Metal and DirectX 12 backend checks for
+`early_fragment_tests` shaders and prints a note naming `shader_early_depth_test`. To sample the
+live world depth from a compute node, declare `.reads(FrameTarget::MainDepth)` and bind
+`TextureSource::WorldDepth`.
 The same sampler rules apply as for standalone draws. Free retained storage buffers and render
 targets with `release`.
 

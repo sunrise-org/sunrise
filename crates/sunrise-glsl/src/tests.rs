@@ -1576,3 +1576,63 @@ fn only_a_real_subgroup_operation_sets_uses_subgroup() {
     );
     assert!(compute_uses_subgroup(&barrier_only));
 }
+
+#[test]
+fn fragment_early_depth_test_and_writable_storage_come_from_ir() {
+    let includes = Includes {
+        read: &|_| Ok(None),
+        namespace: "t",
+        folder: "",
+        once: &[],
+    };
+    let glue = Glue {
+        inputs: &[("Position", "vec3")],
+        prelude: "layout(location = 0) in vec3 hz_pos;",
+        setup: "Position = hz_pos;",
+        finish: "",
+        vertex_id: "gl_VertexIndex",
+        fragment_finish: None,
+        interface: LIMITS,
+    };
+    let vsh =
+        "#version 330\nin vec3 Position;\nvoid main() { gl_Position = vec4(Position, 1.0); }\n";
+    let run = |fsh: &str, read_only: bool| {
+        let inputs = Inputs {
+            blocks: &[],
+            samplers: &[],
+            extra_set: 1,
+            extra_blocks: &[],
+            extra_samplers: &[],
+            extra_texel_buffers: &[],
+            extra_storage_buffers: &[("Vis", 0, read_only)],
+            extra_storage_images: &[],
+            push_constant_binding: None,
+            loose: &[],
+            defines: &[],
+            includes: &includes,
+        };
+        translate(&storage_stages(vsh, fsh), &inputs, &glue, &|_| false)
+            .unwrap_or_else(|e| panic!("{e:?}"))
+    };
+
+    let readonly = run(
+        "#version 330\nlayout(std430) readonly buffer Vis { uint vis[]; };\nout vec4 fragColor;\nvoid main() { fragColor = vec4(float(vis[0])); }\n",
+        true,
+    );
+    assert!(!readonly.uses_early_depth_test());
+    assert!(!readonly.uses_fragment_writable_storage());
+
+    let writable_no_early = run(
+        "#version 330\nlayout(std430) buffer Vis { uint vis[]; };\nout vec4 fragColor;\nvoid main() { vis[0] = 1u; fragColor = vec4(1.0); }\n",
+        false,
+    );
+    assert!(!writable_no_early.uses_early_depth_test());
+    assert!(writable_no_early.uses_fragment_writable_storage());
+
+    let early_writable = run(
+        "#version 330\nlayout(early_fragment_tests) in;\nlayout(std430) buffer Vis { uint vis[]; };\nvoid main() { vis[0] = 1u; }\n",
+        false,
+    );
+    assert!(early_writable.uses_early_depth_test());
+    assert!(early_writable.uses_fragment_writable_storage());
+}

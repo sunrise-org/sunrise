@@ -806,7 +806,11 @@ fn translate(
     let mut vertex_module = compile(&v, &v_header, &v_code, limits);
     // A stage that writes an image or a buffer runs once per vertex: run again by the game's
     // `after`, it would write twice. One that only reads them is run again like any other.
-    if run_again && vertex_module.as_ref().is_ok_and(writes_storage) {
+    if run_again
+        && vertex_module
+            .as_ref()
+            .is_ok_and(sunrise_glsl::module_writes_storage)
+    {
         let once = v_header.replacen(RUNS_AGAIN, RUNS_ONCE, 1);
         vertex_module = compile(&v, &once, &v_code, limits);
     }
@@ -877,43 +881,6 @@ fn alpha_test(test: Option<AlphaTest>) -> String {
 /// stage that writes an image or a buffer (`GbuffersInputs::after`).
 const RUNS_AGAIN: &str = "const bool hz_vertex_reruns = true;";
 const RUNS_ONCE: &str = "const bool hz_vertex_reruns = false;";
-
-/// Whether `module` writes an image or a buffer anywhere: an image store or atomic, an atomic,
-/// or a store into a global of the storage address space (through any member or index).
-fn writes_storage(module: &naga::Module) -> bool {
-    use naga::{Expression as E, Statement as S};
-    fn storage(module: &naga::Module, f: &naga::Function, mut e: naga::Handle<E>) -> bool {
-        loop {
-            match f.expressions[e] {
-                E::Access { base, .. } | E::AccessIndex { base, .. } => e = base,
-                E::GlobalVariable(g) => {
-                    return matches!(
-                        module.global_variables[g].space,
-                        naga::AddressSpace::Storage { .. }
-                    );
-                }
-                _ => return false,
-            }
-        }
-    }
-    fn block(module: &naga::Module, f: &naga::Function, b: &naga::Block) -> bool {
-        b.iter().any(|s| match s {
-            S::ImageStore { .. } | S::ImageAtomic { .. } | S::Atomic { .. } => true,
-            S::Store { pointer, .. } => storage(module, f, *pointer),
-            S::CooperativeStore { target, .. } => storage(module, f, *target),
-            S::Block(b) => block(module, f, b),
-            S::If { accept, reject, .. } => block(module, f, accept) || block(module, f, reject),
-            S::Switch { cases, .. } => cases.iter().any(|c| block(module, f, &c.body)),
-            S::Loop {
-                body, continuing, ..
-            } => block(module, f, body) || block(module, f, continuing),
-            _ => false,
-        })
-    }
-    (module.functions.iter().map(|(_, f)| f))
-        .chain(module.entry_points.iter().map(|e| &e.function))
-        .any(|f| block(module, f, &f.body))
-}
 
 /// Images an atomic function uses (naga gave them atomic access) are bound for atomics.
 fn mark_atomic(module: &naga::Module, images: &mut [Image]) {

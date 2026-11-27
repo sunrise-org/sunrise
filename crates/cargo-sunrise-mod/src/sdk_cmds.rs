@@ -754,23 +754,30 @@ fn check_mod_with_fetch(
         .or_else(|| std::env::var_os("SUNRISE_TEST_RESOURCES"))
         .map(std::path::PathBuf::from)
         .filter(|p| p.is_dir());
-    let (pipelines, refused) =
-        crate::check::pipeline_shaders(&files, prepared_resources.as_deref());
-    if !refused.is_empty() {
+    let shader_report = crate::check::check_pipeline_shaders(&files, prepared_resources.as_deref());
+    if !shader_report.refused.is_empty() {
         return Err(format!(
             "render pipeline shaders refused:\n{}",
-            refused.join("\n")
+            shader_report.refused.join("\n")
         ));
     }
-    if pipelines > 0 {
+    if shader_report.checked > 0 {
         let source = if prepared_resources.is_some() {
             "prepared resources"
         } else {
             "Sunrise interface stubs (set SUNRISE_RESOURCES for prepared 26.3 includes)"
         };
         println!(
-            "{pipelines} GLSL render pipeline program(s) translate and validate as the game does ({source})."
+            "{} GLSL render pipeline program(s) translate and validate as the game does ({source}).",
+            shader_report.checked
         );
+        if !shader_report.early_depth_test.is_empty() {
+            println!(
+                "note: {} shader(s) require RenderCapabilities::shader_early_depth_test (Vulkan/OpenGL, non-Adreno; Metal and DirectX 12 checks skipped): {}",
+                shader_report.early_depth_test.len(),
+                shader_report.early_depth_test.join(", "),
+            );
+        }
     }
     crate::check::references(root, &package.manifest)?;
     crate::page::check(root, &package, release)?;

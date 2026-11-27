@@ -254,6 +254,16 @@ impl Translated {
         }
     }
 
+    /// Whether the fragment entry point declares `layout(early_fragment_tests) in;`.
+    pub fn uses_early_depth_test(&self) -> bool {
+        module_uses_early_depth_test(&self.fragment)
+    }
+
+    /// Whether the fragment stage writes any storage buffer or storage image.
+    pub fn uses_fragment_writable_storage(&self) -> bool {
+        module_writes_storage(&self.fragment)
+    }
+
     /// Where a stage declares the resource at `binding` of set 0, a stage reading it first
     /// ([`declared_at`]): what a refusal of that declaration names. Nowhere known for a program
     /// made from modules alone.
@@ -1008,6 +1018,51 @@ fn block_uses_subgroup_barrier(body: &naga::Block) -> bool {
         }
     }
     false
+}
+
+/// Whether any entry point of `module` declares `layout(early_fragment_tests) in;`.
+pub fn module_uses_early_depth_test(module: &naga::Module) -> bool {
+    module
+        .entry_points
+        .iter()
+        .any(|ep| ep.early_depth_test.is_some())
+}
+
+/// Whether `module` writes an image or a buffer anywhere: an image store or atomic, an atomic,
+/// or a store into a global of the storage address space (through any member or index).
+pub fn module_writes_storage(module: &naga::Module) -> bool {
+    use naga::{Expression as E, Statement as S};
+    fn storage(module: &naga::Module, f: &naga::Function, mut e: naga::Handle<E>) -> bool {
+        loop {
+            match f.expressions[e] {
+                E::Access { base, .. } | E::AccessIndex { base, .. } => e = base,
+                E::GlobalVariable(g) => {
+                    return matches!(
+                        module.global_variables[g].space,
+                        naga::AddressSpace::Storage { .. }
+                    );
+                }
+                _ => return false,
+            }
+        }
+    }
+    fn block(module: &naga::Module, f: &naga::Function, b: &naga::Block) -> bool {
+        b.iter().any(|s| match s {
+            S::ImageStore { .. } | S::ImageAtomic { .. } | S::Atomic { .. } => true,
+            S::Store { pointer, .. } => storage(module, f, *pointer),
+            S::CooperativeStore { target, .. } => storage(module, f, *target),
+            S::Block(b) => block(module, f, b),
+            S::If { accept, reject, .. } => block(module, f, accept) || block(module, f, reject),
+            S::Switch { cases, .. } => cases.iter().any(|c| block(module, f, &c.body)),
+            S::Loop {
+                body, continuing, ..
+            } => block(module, f, body) || block(module, f, continuing),
+            _ => false,
+        })
+    }
+    (module.functions.iter().map(|(_, f)| f))
+        .chain(module.entry_points.iter().map(|e| &e.function))
+        .any(|f| block(module, f, &f.body))
 }
 
 /// A bound on a program's includes, which are pasted every time.

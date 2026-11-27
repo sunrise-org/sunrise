@@ -16,7 +16,7 @@ use super::mod_meshes::{ResolvedMeshDraw, wgpu_index_format};
 use super::mod_render_targets::{TargetMips, TargetUse};
 use super::world_primitives::{PreparedPass, Upload, VertexPages};
 use crate::mod_pipelines::{
-    Built, BuiltTexture, ModifierStacks, Pipelines, wgpu_compare, wgpu_depth_bias,
+    Built, BuiltTexture, ModifierStacks, Pipelines, Refusal, wgpu_compare, wgpu_depth_bias,
     wgpu_stencil_state,
 };
 use glam::Mat4;
@@ -912,10 +912,38 @@ enum VariantTarget {
 type VariantKey = (usize, SamplerLayout, VariantTarget);
 type DrawVariants = HashMap<VariantKey, Result<Compiled, PipelineDrawError>>;
 
+/// A pipeline-build failure carrying the refusal classification (`Invalid` vs `UnsupportedFeature`).
+#[derive(Debug)]
+struct BuildError {
+    reason: Refusal,
+    message: String,
+}
+
+impl From<String> for BuildError {
+    fn from(message: String) -> Self {
+        Self {
+            reason: Refusal::Invalid,
+            message,
+        }
+    }
+}
+
+impl From<&str> for BuildError {
+    fn from(message: &str) -> Self {
+        Self::from(message.to_owned())
+    }
+}
+
 /// The pipelines and the buffer that draw a [`Batch`].
 pub struct ModPipelines {
     color_format: wgpu::TextureFormat,
     linear_light: bool,
+    /// Whether the active adapter/device supports `layout(early_fragment_tests) in;` reliably
+    /// (`RenderCapabilities::shader_early_depth_test`).
+    shader_early_depth_test: bool,
+    /// Whether the active adapter/device allows fragment shaders to write storage buffers/images
+    /// (`RenderCapabilities::fragment_writable_storage`).
+    fragment_writable_storage: bool,
     /// Shared nearest/default sampler for `Sampler0`.
     sampler: wgpu::Sampler,
     /// Non-filtering nearest sampler for OIT float textures (`DepthBoundsSampler`, `Coeff0`, `Coeff1`).
@@ -1442,6 +1470,10 @@ impl ModPipelines {
         Self {
             color_format,
             linear_light,
+            shader_early_depth_test: device
+                .features()
+                .contains(wgpu::Features::SHADER_EARLY_DEPTH_TEST),
+            fragment_writable_storage: true,
             sampler,
             non_filtering_sampler,
             vanilla,
@@ -1827,13 +1859,32 @@ impl ModPipelines {
     /// One load's pipeline: its translated GLSL naga modules with the fixed state it registered,
     /// its per-pipeline set-0 layout and bind groups (`vanilla` and `pack_vanilla`), and its
     /// sprite texture/rect when textured — or the GPU's error.
+    /// Update feature gates from the active adapter's probed [`mod_api::RenderCapabilities`]
+    /// (including vendor quirks such as Adreno Vulkan and downlevel storage flags).
+    pub(super) fn set_capabilities(&mut self, capabilities: &mod_api::RenderCapabilities) {
+        self.shader_early_depth_test = capabilities.shader_early_depth_test;
+        self.fragment_writable_storage = capabilities.fragment_writable_storage;
+    }
+
     fn pipeline_source(
         &self,
         device: &wgpu::Device,
         built: &Arc<Built>,
         textures: Option<TextureSources<'_>>,
-    ) -> Result<Arc<PipelineSource>, String> {
+    ) -> Result<Arc<PipelineSource>, BuildError> {
         use wgpu::util::DeviceExt;
+        if built.program.uses_early_depth_test() && !self.shader_early_depth_test {
+            return Err(BuildError {
+                reason: Refusal::UnsupportedFeature,
+                message: "fragment shader uses layout(early_fragment_tests) in;, which this adapter does not support (RenderCapabilities::shader_early_depth_test is false)".to_owned(),
+            });
+        }
+        if built.program.uses_fragment_writable_storage() && !self.fragment_writable_storage {
+            return Err(BuildError {
+                reason: Refusal::UnsupportedFeature,
+                message: "fragment shader writes storage, which this adapter does not support (RenderCapabilities::fragment_writable_storage is false)".to_owned(),
+            });
+        }
         let sprite_binding = match &built.texture {
             None => None,
             Some(BuiltTexture::Sprite(name)) => {
@@ -1844,7 +1895,8 @@ impl ModPipelines {
                         crate::mod_pipelines::texture_refusal(
                             mod_api::PipelineTextureError::NoSuchSprite
                         )
-                    ));
+                    )
+                    .into());
                 };
                 Some((sources.atlas.clone(), rect))
             }
@@ -2003,7 +2055,7 @@ impl ModPipelines {
         let internal = pollster::block_on(internal.pop());
         let validation = pollster::block_on(validation.pop());
         if let Some(error) = internal.or(validation) {
-            return Err(error.to_string());
+            return Err(error.to_string().into());
         }
         Ok(Arc::new(PipelineSource {
             recipe: Arc::clone(built),
@@ -2324,6 +2376,7 @@ impl ModPipelines {
                 &SamplerLayout::EMPTY,
                 None,
             )
+            .map_err(BuildError::from)
         })?;
         self.compute.build(device, set.compute());
         Ok(())
@@ -2332,7 +2385,7 @@ impl ModPipelines {
     fn build_with(
         &mut self,
         set: &Pipelines,
-        compile: impl Fn(&Self, &Arc<Built>) -> Result<Compiled, String>,
+        compile: impl Fn(&Self, &Arc<Built>) -> Result<Compiled, BuildError>,
     ) -> Result<(), String> {
         if set.generation() == self.generation {
             return Ok(());
@@ -2352,14 +2405,14 @@ impl ModPipelines {
         let required: Vec<_> = refused
             .iter()
             .filter(|(_, built, _)| !built.optional)
-            .map(|(_, built, error)| format!("required {}", gpu_refusal(built, error)))
+            .map(|(_, built, error)| format!("required {}", gpu_refusal(built, &error.message)))
             .collect();
         if !required.is_empty() {
             return Err(required.join("; "));
         }
         for (slot, built, error) in refused {
-            if set.invalidate(slot) {
-                log::warn!("Sunrise: {}", gpu_refusal(built, &error));
+            if set.refuse(slot, error.reason) {
+                log::warn!("Sunrise: {}", gpu_refusal(built, &error.message));
             }
         }
         for (slot, pipeline) in pipelines.iter().enumerate() {
@@ -5225,11 +5278,14 @@ impl super::Renderer {
             atlas: &self.entity_atlas,
             sprite,
         };
-        self.world_primitives
+        let capabilities = self.mod_gpu.render_capabilities();
+        let pipelines = &mut self
+            .world_primitives
             .as_mut()
             .expect("world primitives")
-            .pipelines
-            .build(&self.device, set, Some(textures))
+            .pipelines;
+        pipelines.set_capabilities(&capabilities);
+        pipelines.build(&self.device, set, Some(textures))
     }
 }
 
@@ -5587,13 +5643,15 @@ void main() {
         let result = renderer
             .pipeline_source(&device, &Arc::new(broken), None)
             .and_then(|source| {
-                renderer.compile(
-                    &device,
-                    source,
-                    &VariantTarget::World,
-                    &SamplerLayout::EMPTY,
-                    None,
-                )
+                renderer
+                    .compile(
+                        &device,
+                        source,
+                        &VariantTarget::World,
+                        &SamplerLayout::EMPTY,
+                        None,
+                    )
+                    .map_err(BuildError::from)
             });
         assert!(result.is_err());
         assert!(set.invalidate(0));
@@ -10527,6 +10585,305 @@ void main() {
             pixel(&with_stencil, 1, 1),
             [0, 255, 0, 255],
             "stencil pipeline on Depth32Float must draw green"
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn early_depth_test_gates_unsupported_devices_and_skips_storage_writes_when_occluded() {
+        use mod_api::{
+            DepthState, RenderCapabilities, RenderPipelineError, StorageBufferDescriptor,
+        };
+
+        let _gpu = crate::gfx::test_gpu::lock();
+        let Some(adapter) = crate::gfx::test_gpu::adapter() else {
+            return;
+        };
+
+        let blocker_id = Identifier::parse("test:early_z_blocker").unwrap();
+        let early_id = Identifier::parse("test:early_z_raster").unwrap();
+        let storage_id = Identifier::parse("test:frag_storage_only").unwrap();
+        let ndc_vsh = "#version 330\n\
+            in vec3 Position;\n\
+            in vec2 UV0;\n\
+            in vec4 Color;\n\
+            void main() {\n\
+                gl_Position = vec4(Position.x / 2.0 - 1.0, 1.0 - Position.y / 2.0, Position.z, 1.0);\n\
+            }\n";
+        let blocker_fsh = "#version 330\n\
+            out vec4 fragColor;\n\
+            void main() {\n\
+                fragColor = vec4(1.0);\n\
+            }\n";
+        let early_fsh = "#version 330\n\
+            layout(early_fragment_tests) in;\n\
+            layout(std430) buffer Vis { uint visible[]; };\n\
+            out vec4 fragColor;\n\
+            void main() {\n\
+                visible[0] = 1u;\n\
+                fragColor = vec4(1.0);\n\
+            }\n";
+        let storage_fsh = "#version 330\n\
+            layout(std430) buffer Vis { uint visible[]; };\n\
+            out vec4 fragColor;\n\
+            void main() {\n\
+                visible[0] = 1u;\n\
+                fragColor = vec4(1.0);\n\
+            }\n";
+
+        let storage_layout = || {
+            mod_api::BindGroupLayout::builder()
+                .entry(mod_api::BindEntry::new(
+                    "Vis",
+                    mod_api::BindingKind::StorageBuffer {
+                        read_only: false,
+                        min_size: 4,
+                    },
+                ))
+                .build()
+                .unwrap()
+        };
+        let make_set = |generation: u64| {
+            let pipelines = [
+                RenderPipeline::new(
+                    blocker_id.clone(),
+                    blocker_id.clone(),
+                    PipelineBlend::Opaque,
+                    mod_api::WorldDepth::Tested,
+                )
+                .depth_stencil(Some(DepthState::new(DepthCompare::GreaterEqual, true)))
+                .optional(),
+                RenderPipeline::new(
+                    early_id.clone(),
+                    early_id.clone(),
+                    PipelineBlend::Opaque,
+                    mod_api::WorldDepth::Tested,
+                )
+                .depth_stencil(Some(DepthState::new(DepthCompare::GreaterEqual, false)))
+                .bind_group_layout(storage_layout())
+                .optional(),
+                RenderPipeline::new(
+                    storage_id.clone(),
+                    storage_id.clone(),
+                    PipelineBlend::Opaque,
+                    mod_api::WorldDepth::Tested,
+                )
+                .depth_stencil(Some(DepthState::new(DepthCompare::GreaterEqual, false)))
+                .bind_group_layout(storage_layout())
+                .optional(),
+            ];
+            Pipelines::build(&pipelines, generation, |file| {
+                if file.ends_with(".vsh") {
+                    Ok(Some(ndc_vsh.to_owned()))
+                } else if file.contains("early_z_blocker") && file.ends_with(".fsh") {
+                    Ok(Some(blocker_fsh.to_owned()))
+                } else if file.contains("early_z_raster") && file.ends_with(".fsh") {
+                    Ok(Some(early_fsh.to_owned()))
+                } else if file.contains("frag_storage_only") && file.ends_with(".fsh") {
+                    Ok(Some(storage_fsh.to_owned()))
+                } else {
+                    Ok(stub_asset(file))
+                }
+            })
+            .expect("early-Z and fragment-storage pipelines must translate")
+        };
+
+        // 1. A device without SHADER_EARLY_DEPTH_TEST refuses the early_fragment_tests pipeline
+        // with RenderPipelineError::UnsupportedFeature while keeping the other pipelines.
+        {
+            let Some((device_without, _queue_without)) =
+                crate::gfx::test_gpu::optional_device_with(&adapter, &Default::default())
+            else {
+                return;
+            };
+            let set = make_set(1);
+            let mut renderer =
+                ModPipelines::new(&device_without, (wgpu::TextureFormat::Rgba8Unorm, false));
+            renderer
+                .build(&device_without, &set, None)
+                .expect("optional unsupported feature pipeline must not fail load");
+            assert!(set.resolve(&blocker_id).is_ok());
+            assert_eq!(
+                set.resolve(&early_id),
+                Err(RenderPipelineError::UnsupportedFeature)
+            );
+            assert!(set.resolve(&storage_id).is_ok());
+
+            // When fragment_writable_storage is also false (e.g. Vulkan without
+            // fragmentStoresAndAtomics or OpenGL < 4.3), both storage-writing pipelines refuse
+            // with UnsupportedFeature.
+            let set_no_storage = make_set(2);
+            let mut gated =
+                ModPipelines::new(&device_without, (wgpu::TextureFormat::Rgba8Unorm, false));
+            gated.set_capabilities(&RenderCapabilities::default());
+            gated
+                .build(&device_without, &set_no_storage, None)
+                .expect("optional unsupported storage pipeline must not fail load");
+            assert!(set_no_storage.resolve(&blocker_id).is_ok());
+            assert_eq!(
+                set_no_storage.resolve(&early_id),
+                Err(RenderPipelineError::UnsupportedFeature)
+            );
+            assert_eq!(
+                set_no_storage.resolve(&storage_id),
+                Err(RenderPipelineError::UnsupportedFeature)
+            );
+        }
+
+        // 2. On an adapter that supports forced early-Z (Vulkan/OpenGL, non-Adreno), occluded
+        // fragments must skip their SSBO write while visible fragments execute it.
+        if !adapter
+            .features()
+            .contains(wgpu::Features::SHADER_EARLY_DEPTH_TEST)
+        {
+            return;
+        }
+        let Some((device, queue)) = crate::gfx::test_gpu::optional_device_with(
+            &adapter,
+            &wgpu::DeviceDescriptor {
+                required_features: wgpu::Features::SHADER_EARLY_DEPTH_TEST,
+                ..Default::default()
+            },
+        ) else {
+            return;
+        };
+        let caps = crate::gfx::mod_render_targets::probe_render_capabilities(&adapter, &device);
+        if !caps.shader_early_depth_test || !caps.fragment_writable_storage {
+            return;
+        }
+
+        let set = make_set(3);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let mut primitives = WorldPrimitives::new(&device, (format, false));
+        primitives.pipelines.set_capabilities(&caps);
+        primitives
+            .pipelines
+            .build(&device, &set, None)
+            .expect("build early-Z pipelines on capable device");
+        assert!(set.resolve(&early_id).is_ok());
+
+        let mut targets = crate::gfx::mod_render_targets::ModRenderTargets::default();
+        let rt = targets
+            .create(
+                &device,
+                Some("test_mod"),
+                &mod_api::RenderTargetDescriptor::rgba8(
+                    [4, 4],
+                    mod_api::RenderTargetDepth::Depth32Float,
+                ),
+            )
+            .expect("create 4x4 Depth32Float target");
+        let resolved_rt = targets.resolve_target(Some("test_mod"), rt, 0).unwrap();
+
+        let mut storage = crate::gfx::mod_storage::ModStorageBuffers::default();
+        let buffer = storage
+            .create(&device, None, &StorageBufferDescriptor::new(512).copy_src())
+            .unwrap();
+        storage.write_range(None, buffer, 0, &[0u8; 4]).unwrap();
+        storage.write_range(None, buffer, 256, &[0u8; 4]).unwrap();
+        storage.flush(&device, &queue);
+        let limits = device.limits();
+        let resolve_slice = |offset: u64, len: u64| {
+            storage
+                .resolve(&limits, None, buffer.slice(offset, len), 4)
+                .unwrap()
+        };
+
+        let ndc_quad = |x0: f32, x1: f32, z: f32| {
+            [[x0, 0.0], [x0, 4.0], [x1, 4.0], [x1, 0.0]].map(|[x, y]| PipelineVertex {
+                pos: [x, y, z],
+                uv: [0.0, 0.0],
+                color: 0xFFFF_FFFF,
+            })
+        };
+        // Reversed-Z: depth clears to 0.0, GreaterEqual passes nearer (larger) Z.
+        // Quad 0: blocker at z=0.8 on left half; Quad 1: occluded at z=0.2 on left half;
+        // Quad 2: visible at z=0.2 on right half.
+        let vertices: Vec<PipelineVertex> = [
+            ndc_quad(0.0, 2.0, 0.8),
+            ndc_quad(0.0, 2.0, 0.2),
+            ndc_quad(2.0, 4.0, 0.2),
+        ]
+        .concat();
+        let vbytes = bytemuck::cast_slice(&vertices);
+        let stride = 4 * std::mem::size_of::<PipelineVertex>() as u64;
+        let quad_draw = |slot: u32, quad_idx: u64, storage_offset: Option<u64>| PipelineDraw {
+            slot,
+            stage: 0,
+            modifier_stack: 0,
+            draw: MeshDraw::vertices(0..4),
+            source: PipelineDrawSource::Transient {
+                vertex_ranges: vec![(0, quad_idx * stride..(quad_idx + 1) * stride)],
+                index_range: None,
+            },
+            bindings: storage_offset.map(|offset| {
+                let r = resolve_slice(offset, 16);
+                ResolvedDrawBindings {
+                    sampler_layout: SamplerLayout::EMPTY,
+                    entries: vec![ResolvedSet1Entry::StorageBuffer {
+                        id: r.id,
+                        buffer: r.buffer,
+                        offset: r.offset,
+                        size: r.length,
+                    }],
+                    push_constants: None,
+                }
+            }),
+        };
+
+        let draws = [
+            quad_draw(0, 0, None),
+            quad_draw(1, 1, Some(0)),
+            quad_draw(1, 2, Some(256)),
+        ];
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let pass = mod_api::OffscreenPass::new(rt)
+            .clear_color_0([0.0, 0.0, 0.0, 1.0])
+            .clear_depth(0.0);
+        let mut encoder = device.create_command_encoder(&Default::default());
+        primitives.execute_offscreen_pass(
+            &device,
+            &queue,
+            &mut encoder,
+            &OffscreenPassData {
+                pass: &pass,
+                target: &resolved_rt,
+                draws: &draws,
+                transient_vertices: vbytes,
+                transient_indices: &[],
+                inline_uniforms: &[],
+                texel_data: &[],
+                modifiers: None,
+                modifier_defs: None,
+            },
+        );
+        let resolved_all = resolve_slice(0, 512);
+        let readback = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: 512,
+            usage: wgpu::BufferUsages::COPY_DST | wgpu::BufferUsages::MAP_READ,
+            mapped_at_creation: false,
+        });
+        encoder.copy_buffer_to_buffer(&resolved_all.buffer, 0, &readback, 0, 512);
+        queue.submit([encoder.finish()]);
+        assert!(
+            pollster::block_on(validation.pop()).is_none(),
+            "early_fragment_tests offscreen pass must not raise a wgpu validation error"
+        );
+        readback.slice(..).map_async(wgpu::MapMode::Read, |_| {});
+        device.poll(wgpu::PollType::wait_indefinitely()).unwrap();
+        let bytes = readback.slice(..).get_mapped_range().unwrap().to_vec();
+        readback.unmap();
+
+        let occluded = u32::from_ne_bytes(bytes[0..4].try_into().unwrap());
+        let visible = u32::from_ne_bytes(bytes[256..260].try_into().unwrap());
+        assert_eq!(
+            occluded, 0,
+            "depth-occluded early_fragment_tests draw must skip SSBO write"
+        );
+        assert_eq!(
+            visible, 1,
+            "unoccluded early_fragment_tests draw must execute SSBO write"
         );
     }
 }

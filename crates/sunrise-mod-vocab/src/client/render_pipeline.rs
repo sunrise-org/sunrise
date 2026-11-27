@@ -2790,6 +2790,20 @@ pub struct RenderCapabilities {
     /// adapter lacks `MULTI_DRAW_INDIRECT_COUNT`, and on DirectX 12, whose count draws leave an
     /// indexed command's `base_vertex` out of the vertex fetch.
     pub multi_draw_indirect_count: bool,
+    /// Whether the adapter supports forced hardware early depth tests
+    /// (`layout(early_fragment_tests) in;`, `SHADER_EARLY_DEPTH_TEST`) reliably with fragment
+    /// storage writes. True on Vulkan and OpenGL when the device enables
+    /// `SHADER_EARLY_DEPTH_TEST` (excluding Qualcomm Adreno Vulkan drivers, whose early-Z
+    /// storage-write path mis-executes); false on Metal, DirectX 12, and Adreno. A
+    /// [`RenderPipeline`] whose fragment shader declares `layout(early_fragment_tests) in;` is
+    /// refused with [`RenderPipelineError::UnsupportedFeature`] when this is false.
+    pub shader_early_depth_test: bool,
+    /// Whether fragment shaders may write storage buffers or storage images
+    /// (`DownlevelFlags::FRAGMENT_WRITABLE_STORAGE`). False on shipped backends without it
+    /// (Vulkan without `fragmentStoresAndAtomics`, OpenGL below 4.3). A [`RenderPipeline`] whose
+    /// fragment stage writes storage is refused with [`RenderPipelineError::UnsupportedFeature`]
+    /// when this is false.
+    pub fragment_writable_storage: bool,
     /// The device's own size limits, the numbers the buffer, binding, dispatch and render target
     /// refusals are checked against.
     pub limits: RenderLimits,
@@ -4308,6 +4322,12 @@ pub enum RenderPipelineError {
     /// The pipeline is registered, but the current resources give it no usable shader. The log
     /// names the pipeline and the reason.
     Invalid,
+    /// The pipeline's shader uses a GPU feature this adapter does not support (such as
+    /// `layout(early_fragment_tests) in;` when [`RenderCapabilities::shader_early_depth_test`] is
+    /// false, or fragment storage writes when [`RenderCapabilities::fragment_writable_storage`] is
+    /// false). Check [`crate::prelude::ClientRenderClientHost::render_capabilities`] and fall back
+    /// to an alternate pipeline.
+    UnsupportedFeature,
     /// A successful resource reload superseded the handle's generation.
     Stale,
 }
