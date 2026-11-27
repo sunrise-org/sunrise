@@ -1,3 +1,6 @@
+#[cfg(feature = "client")]
+use mod_api::ScreenView;
+
 /// The hook points. Each does nothing in Sunrise.
 #[cfg(feature = "client")]
 impl crate::game::ClientGame<'_> {
@@ -9,7 +12,7 @@ impl crate::game::ClientGame<'_> {
     /// Client-side.
     pub(in crate::game) fn native_screen_exclusion_areas(
         &self,
-        screen: &mod_api::ScreenView<'_>,
+        screen: &ScreenView<'_>,
         areas: &mut Vec<[f32; 4]>,
     ) {
         self.fire_screen_exclusion_areas(screen, areas);

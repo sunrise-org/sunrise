@@ -2,3 +2,4 @@
 sunrise-client-gameplay game::native_hooks::client_options::tests::a_vsync_change_during_a_frame_waits_for_the_renderer lib daily resources
 sunrise-client-gameplay game::native_hooks::client_options::tests::screen_exclusion_is_read_during_a_frame lib daily resources
 sunrise-client-gameplay game::client_side::native_menu_refs::tests::slot_boxes_are_read_during_a_frame lib daily resources
+sunrise-client-gameplay game::client_side::screen_build::tests::resize_uses_the_renderer_target_and_reprojects_the_retained_cursor lib daily gpu

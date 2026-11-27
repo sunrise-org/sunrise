@@ -43,19 +43,30 @@ pub(in crate::game) mod tests {
     #[test]
     #[ignore = "daily"]
     fn screen_exclusion_is_read_during_a_frame() {
+        use sunrise_client::hud::HudBatch;
+
         crate::game::native_entity_refs::tests::with_client_game(|game| {
             game.client.screen = sunrise_gameplay_common::game::Screen::Creative;
+            game.client.settings.gui_scale = 0;
+            game.client.settings.force_unicode = true;
+            assert!(game.client.renderer.0.is_none());
             assert!(game.screen_exclusion().is_empty(), "no window, no screen");
+            let framebuffer = [853, 479];
             game.client
                 .render_snapshot
                 .set(Some(crate::game::RenderSnapshot {
-                    framebuffer: [800, 600],
+                    framebuffer,
                     prepared_generation: None,
                     staged_prepared_draws: 0,
                 }));
-            let batch = sunrise_client::hud::HudBatch::new(
-                [800, 600],
-                game.client.settings.gui_scale_inputs(),
+            let batch = HudBatch::new(framebuffer, game.client.settings.gui_scale_inputs());
+            assert_eq!(
+                resolved_gui_scale(game.renderer_framebuffer(), 0, true),
+                Some(batch.scale as u32)
+            );
+            assert_eq!(
+                game.screen_overlay_view("snapshot").rect,
+                [0.0, 0.0, batch.width, batch.height]
             );
             let own = game.screen_own_exclusion(&batch);
             assert!(!own.is_empty());

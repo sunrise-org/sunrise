@@ -1128,6 +1128,59 @@ mod tests {
         }
     }
 
+    #[cfg(feature = "client")]
+    #[test]
+    #[ignore = "daily"]
+    fn resize_uses_the_renderer_target_and_reprojects_the_retained_cursor() {
+        use crate::game::native_entity_refs::tests::{test_window, with_client_game};
+        use sunrise_client::window::{PointerProjection, PointerSpace};
+        use winit::dpi::{PhysicalPosition, PhysicalSize};
+
+        with_client_game(|game| {
+            let (_event_loop, window) = test_window([641, 481]);
+            game.common.options.offscreen = true;
+            let renderer = game.new_renderer(window.clone()).unwrap();
+            game.client.window.0 = Some(window);
+            game.set_renderer(renderer);
+            game.client.settings.gui_scale = 2;
+            game.client.settings.force_unicode = true;
+
+            let live_size = PhysicalSize::new(641, 481);
+            let window_space = PointerSpace::new(live_size.into(), 1.25);
+            let retained = PointerSpace::new([853, 479], 1.5)
+                .physical_sample(PhysicalPosition::new(413.0, 203.0));
+            game.client.window_pointer_space.take();
+            game.client.window_pointer_space.set(window_space).unwrap();
+            game.client.window_cursor = Some(retained);
+
+            let mut previous = None;
+            for target in [[853, 479], [641, 481]] {
+                game.client
+                    .renderer
+                    .0
+                    .as_mut()
+                    .unwrap()
+                    .resize(target[0], target[1]);
+                let legacy_gui = GuiSize::new(target, 2, true);
+                let resize = game.resize_state_of(live_size);
+                assert_eq!(resize.size, live_size);
+                assert_eq!(resize.gui_size, legacy_gui.size);
+
+                let legacy = PointerProjection {
+                    gui: legacy_gui,
+                    window: window_space,
+                }
+                .project_pointer(retained);
+                let projected = game.project_window_cursor(target).unwrap();
+                assert_eq!(projected.pixel(), legacy.pixel());
+                game.refresh_window_cursor();
+                assert_eq!(game.client.cursor, legacy.subpixel());
+                assert_ne!(Some(game.client.cursor), previous);
+                previous = Some(game.client.cursor);
+            }
+        });
+    }
+
     /// The pause menu's layout is made when it opens and when it resizes, not
     /// per frame: the build keeps it, and the readers get the same buttons and
     /// icons the frame drew.
