@@ -608,11 +608,7 @@ impl crate::game::ServerGame<'_> {
                         return;
                     }
                     let context = &host.hub.loop_context;
-                    if !host
-                        .hub
-                        .guests
-                        .update(gi, |g| g.reaches_block(context, a.pos))
-                    {
+                    if !host.hub.guests[gi].within_interaction_range(context, a.pos, 1.0) {
                         return;
                     }
                     // ServerPlayerGameMode.handleBlockBreakAction: no dig starts
@@ -728,11 +724,7 @@ impl crate::game::ServerGame<'_> {
                     };
                     host.hub.ack(conn, a.sequence);
                     let context = &host.hub.loop_context;
-                    if !host
-                        .hub
-                        .guests
-                        .update(gi, |g| g.reaches_block(context, a.pos))
-                    {
+                    if !host.hub.guests[gi].within_interaction_range(context, a.pos, 1.0) {
                         // Too far (handleBlockBreakAction's "too far"): the ack has the client
                         // undo its prediction, and only the dig drops — `destroy_pos` and the
                         // ticks since its START stay, so a STOP for the same block after the
