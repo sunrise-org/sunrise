@@ -33,3 +33,5 @@ pub mod wandering_trader;
 
 extern crate self as sunrise_gameplay;
 pub mod game;
+#[cfg(test)]
+mod test_game_dir;

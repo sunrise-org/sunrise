@@ -32,6 +32,7 @@ struct Block<'a> {
 }
 
 /// `pp` with its buffers' `bool` members rewritten, and what could not be.
+/// A member's `layout` without a following token is reported at the `layout` keyword.
 pub(super) fn rewrite(pp: &Preprocessed) -> (Option<Preprocessed>, Vec<Error>) {
     if !pp.code().contains("buffer") || !(pp.code().contains("bool") || pp.code().contains("bvec"))
     {
@@ -84,7 +85,7 @@ pub(super) fn rewrite(pp: &Preprocessed) -> (Option<Preprocessed>, Vec<Error>) {
         let mut members = Vec::new();
         // Statements of the block, split at their `;`.
         let mut start = open + 1;
-        while start < close {
+        'member: while start < close {
             let end = (start..close).find(|&j| tokens[j] == ";").unwrap_or(close);
             let words: Vec<usize> = (start..end).filter(|&j| significant(tokens[j])).collect();
             start = end + 1;
@@ -92,9 +93,14 @@ pub(super) fn rewrite(pp: &Preprocessed) -> (Option<Preprocessed>, Vec<Error>) {
             // Qualifiers: `layout(...)`, `readonly`...
             while let Some(&w) = words.get(k) {
                 if tokens[w] == "layout" {
+                    let Some(&arguments) = words.get(k + 1) else {
+                        fail(w, "buffer member: expected `(` after `layout`".to_owned());
+                        continue 'member;
+                    };
+                    let layout_end = matching(arguments);
                     k = words
                         .iter()
-                        .position(|&x| Some(x) == matching(words[k + 1]))
+                        .position(|&x| Some(x) == layout_end)
                         .map_or(words.len(), |p| p + 1);
                 } else if matches!(
                     tokens[w],
@@ -321,7 +327,7 @@ pub(super) fn rewrite(pp: &Preprocessed) -> (Option<Preprocessed>, Vec<Error>) {
 mod tests {
     use super::rewrite;
     use crate::pack::tests::zip;
-    use crate::{Macros, Pack, preprocess};
+    use crate::{Error, Macros, Pack, Preprocessed, preprocess};
 
     /// The rewritten code of a fragment stage, `None` when nothing changes.
     fn code(source: &str) -> Option<String> {
@@ -361,6 +367,28 @@ mod tests {
         assert!(
             out.contains("(s.flags[2] != 0u) && !(s.flags[s.n] != 0u)"),
             "{out}"
+        );
+    }
+
+    #[test]
+    fn trailing_layout_qualifier_is_refused_at_its_source_line() {
+        let stage = Preprocessed::from_source(
+            "composite.fsh",
+            "layout(std430, binding = 4) buffer State {
+    bool flag;
+    layout;
+};
+",
+        );
+        let (rewritten, errors) = rewrite(&stage);
+        assert!(rewritten.is_none());
+        assert_eq!(
+            errors,
+            [Error::new(
+                "composite.fsh",
+                3,
+                "buffer member: expected `(` after `layout`",
+            )]
         );
     }
 

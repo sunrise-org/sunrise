@@ -97,14 +97,20 @@ fn a_failed_registry_build_names_the_authors_file_and_a_good_one_still_builds() 
         )
     });
     assert!(built.status.success(), "{built:?}");
-    assert!(
-        project
-            .project
-            .join("target/sunrise-mod/greeter.smod")
-            .is_file()
+    let output = project.project.join("target/sunrise-mod/greeter.smod");
+    assert_eq!(
+        sunrise_mod_package::Package::read(&output)
+            .unwrap()
+            .manifest
+            .id,
+        "greeter"
     );
     let built = project.build(type_error);
     project.assert_names_the_authors_file(&built);
+    assert!(
+        !output.exists(),
+        "the previous package survived a failed build"
+    );
 }
 
 /// A native mod whose build script compiles one C file with `cc` and whose Rust calls it, built by

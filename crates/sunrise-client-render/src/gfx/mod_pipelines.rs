@@ -14,8 +14,10 @@
 use super::expression_blocks::{VANILLA_OFFSETS, VANILLA_SIZES, block_entry};
 use super::mod_meshes::{ResolvedMeshDraw, wgpu_index_format};
 use super::mod_render_targets::{TargetMips, TargetUse};
-use super::world_primitives::{Upload, VertexPages};
-use crate::mod_pipelines::{Built, BuiltTexture, ModifierStacks, Pipelines, wgpu_compare};
+use super::world_primitives::{PreparedPass, Upload, VertexPages};
+use crate::mod_pipelines::{
+    Built, BuiltTexture, ModifierStacks, Pipelines, wgpu_compare, wgpu_depth_bias,
+};
 use glam::Mat4;
 use mod_api::{
     BindingKind, BlendFactor, BlendOp, ColorTargetState, ColorWrite, DrawRange, Identifier,
@@ -1530,24 +1532,12 @@ impl ModPipelines {
                 } else {
                     ds.compare
                 };
-                let (constant, slope_scale) = if target.standard_z {
-                    (
-                        ds.depth_bias_constant.saturating_neg(),
-                        -ds.depth_bias_slope_scale,
-                    )
-                } else {
-                    (ds.depth_bias_constant, ds.depth_bias_slope_scale)
-                };
                 Some(wgpu::DepthStencilState {
                     format,
                     depth_write_enabled: Some(ds.write),
                     depth_compare: Some(wgpu_compare(compare)),
                     stencil: Default::default(),
-                    bias: wgpu::DepthBiasState {
-                        constant,
-                        slope_scale,
-                        clamp: 0.0,
-                    },
+                    bias: wgpu_depth_bias(ds, target.standard_z),
                 })
             }
             (Some(format), None) if target.force_depth_attachment => {
@@ -1621,14 +1611,7 @@ impl ModPipelines {
         }
         let targets = super::oit::stage_targets(stage);
         let (depth_compare, bias) = match state.depth_stencil {
-            Some(ds) => (
-                wgpu_compare(ds.compare),
-                wgpu::DepthBiasState {
-                    constant: ds.depth_bias_constant,
-                    slope_scale: ds.depth_bias_slope_scale,
-                    clamp: 0.0,
-                },
-            ),
+            Some(ds) => (wgpu_compare(ds.compare), wgpu_depth_bias(ds, false)),
             None => (wgpu::CompareFunction::GreaterEqual, Default::default()),
         };
         let buffers = wgpu_buffer_layouts(vertex_layouts);
@@ -4233,48 +4216,88 @@ impl ModPipelines {
         );
     }
 
-    /// Draw prepared standard-pass pipeline runs for the given run-index ranges.
-    pub fn draw_prepared_runs(
+    fn prepared_runs(&self, range: std::ops::Range<u32>) -> &[Run] {
+        let start = (range.start as usize).min(self.runs.len());
+        let end = (range.end as usize).min(self.runs.len());
+        &self.runs[start..end]
+    }
+
+    fn prepared_draws(&self, range: std::ops::Range<u32>) -> &[PreparedDraw] {
+        let start = self
+            .draws
+            .partition_point(|cmd| cmd.submitted_index < range.start as usize);
+        let end = self
+            .draws
+            .partition_point(|cmd| cmd.submitted_index < range.end as usize);
+        &self.draws[start..end]
+    }
+
+    /// Whether the given prepared ranges have work not owned by a translated pack pass.
+    pub(super) fn has_unbound_prepared(
+        &self,
+        runs: std::ops::Range<u32>,
+        draws: std::ops::Range<u32>,
+        bound_slots: &[usize],
+    ) -> bool {
+        (!runs.is_empty()
+            && self
+                .prepared_runs(runs)
+                .iter()
+                .any(|run| !bound_slots.contains(&run.slot)))
+            || (!draws.is_empty()
+                && self
+                    .prepared_draws(draws)
+                    .iter()
+                    .any(|cmd| !bound_slots.contains(&cmd.slot)))
+    }
+
+    /// Draw prepared pipeline runs for the selected pass, omitting pack-bound slots in a pack pass.
+    pub(super) fn draw_prepared_runs(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         indices: &wgpu::Buffer,
         ranges: impl IntoIterator<Item = std::ops::Range<u32>>,
+        target: PreparedPass<'_>,
     ) {
+        if let PreparedPass::Oit(stage) = target {
+            self.draw_prepared_oit(pass, stage, indices, ranges);
+            return;
+        }
+        let skip_slots = target.skip_slots();
         self.draw_runs(
             pass,
             indices,
-            false,
-            ranges.into_iter().flat_map(|r| {
-                let start = (r.start as usize).min(self.runs.len());
-                let end = (r.end as usize).min(self.runs.len());
-                self.runs[start..end]
-                    .iter()
-                    .map(|run| (run, run.quads.clone()))
-            }),
+            matches!(target, PreparedPass::Pack { .. }),
+            ranges
+                .into_iter()
+                .flat_map(|range| self.prepared_runs(range))
+                .filter(|run| !skip_slots.contains(&run.slot))
+                .map(|run| (run, run.quads.clone())),
         );
     }
 
-    /// Draw prepared standard-pass unified pipeline draws (`draw_mesh`, `draw_vertices`,
-    /// `pipeline_quads`) for the given draw-index ranges.
-    pub fn draw_prepared_draws(
+    /// Draw prepared unified pipeline draws (`draw_mesh`, `draw_vertices`, `pipeline_quads`)
+    /// for the selected pass, omitting pack-bound slots in a pack pass.
+    pub(super) fn draw_prepared_draws(
         &self,
         pass: &mut wgpu::RenderPass<'_>,
         indices: &wgpu::Buffer,
-        ranges: &[std::ops::Range<u32>],
+        ranges: impl IntoIterator<Item = std::ops::Range<u32>>,
+        target: PreparedPass<'_>,
     ) {
+        if let PreparedPass::Oit(stage) = target {
+            self.draw_prepared_oit_draws(pass, stage, indices, ranges);
+            return;
+        }
+        let skip_slots = target.skip_slots();
         self.draw_prepared_cmds(
             pass,
             indices,
-            false,
-            ranges.iter().flat_map(|r| {
-                let start = self
-                    .draws
-                    .partition_point(|cmd| cmd.submitted_index < r.start as usize);
-                let end = self
-                    .draws
-                    .partition_point(|cmd| cmd.submitted_index < r.end as usize);
-                self.draws[start..end].iter()
-            }),
+            matches!(target, PreparedPass::Pack { .. }),
+            ranges
+                .into_iter()
+                .flat_map(|range| self.prepared_draws(range))
+                .filter(|cmd| !skip_slots.contains(&cmd.slot)),
         );
     }
 
@@ -4329,14 +4352,14 @@ impl ModPipelines {
         pass: &mut wgpu::RenderPass<'_>,
         stage: super::oit::Stage,
         indices: &wgpu::Buffer,
-        ranges: &[std::ops::Range<u32>],
+        ranges: impl IntoIterator<Item = std::ops::Range<u32>>,
     ) {
         let stage_idx = stage as usize;
         self.draw_oit_cmds(
             pass,
             stage_idx,
             indices,
-            ranges.iter().flat_map(|r| {
+            ranges.into_iter().flat_map(|r| {
                 let start = self
                     .oit_draws
                     .partition_point(|cmd| cmd.submitted_index < r.start as usize);
@@ -7714,6 +7737,15 @@ void main() {
         queue: &wgpu::Queue,
         attachment: &wgpu::TextureView,
     ) {
+        clear_depth(device, queue, attachment, 0.25);
+    }
+
+    fn clear_depth(
+        device: &wgpu::Device,
+        queue: &wgpu::Queue,
+        attachment: &wgpu::TextureView,
+        value: f32,
+    ) {
         let mut encoder = device.create_command_encoder(&Default::default());
         drop(encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
             label: None,
@@ -7721,7 +7753,7 @@ void main() {
             depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
                 view: attachment,
                 depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Clear(0.25),
+                    load: wgpu::LoadOp::Clear(value),
                     store: wgpu::StoreOp::Store,
                 }),
                 stencil_ops: None,
@@ -8539,7 +8571,115 @@ void main() {
         draw_sampling_depth(
             &(device, queue),
             view,
-            crate::gfx::mod_uniforms::WORLD_DEPTH_VIEW_ID,
+            crate::gfx::mod_uniforms::DYNAMIC_VIEW_ID_BIT | 3,
+        );
+    }
+
+    /// The world depth after the renderer replaced it, as a resize does (#6175): a draw whose
+    /// inputs did not otherwise change keeps its set-1 bind group between frames, so the
+    /// replacement needs a view ID of its own for the second frame to sample it.
+    #[test]
+    #[ignore = "daily"]
+    fn a_replaced_world_depth_is_sampled_through_a_retained_bind_group() {
+        let _guard = crate::gfx::test_gpu::lock();
+        let Some((adapter, device, queue)) = crate::gfx::test_gpu::optional_device() else {
+            return;
+        };
+        let depth_of = |size: u32, value: f32| {
+            let config = wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: wgpu::TextureFormat::Rgba8Unorm,
+                width: size,
+                height: size,
+                present_mode: wgpu::PresentMode::Fifo,
+                desired_maximum_frame_latency: 2,
+                alpha_mode: wgpu::CompositeAlphaMode::Auto,
+                view_formats: vec![],
+                color_space: wgpu::SurfaceColorSpace::default(),
+            };
+            let view = crate::gfx::Renderer::depth(&device, &config);
+            clear_depth(&device, &queue, &view, value);
+            view
+        };
+        let unused_view = || {
+            device
+                .create_texture(&wgpu::TextureDescriptor {
+                    label: None,
+                    size: wgpu::Extent3d {
+                        width: 1,
+                        height: 1,
+                        depth_or_array_layers: 1,
+                    },
+                    mip_level_count: 1,
+                    sample_count: 1,
+                    dimension: wgpu::TextureDimension::D2,
+                    format: wgpu::TextureFormat::Rgba8Unorm,
+                    usage: wgpu::TextureUsages::TEXTURE_BINDING,
+                    view_formats: &[],
+                })
+                .create_view(&Default::default())
+        };
+        let resources = crate::gfx::mod_gpu::ModGpuResources::new(
+            adapter,
+            device.clone(),
+            queue.clone(),
+            Default::default(),
+            crate::gfx::mod_gpu::ModFrameState {
+                entity_atlas: unused_view(),
+                lightmap: unused_view(),
+                entity_quad_capacity: crate::gfx::EntityQuadCapacity::from_limits(
+                    &device.limits(),
+                    false,
+                ),
+                pack_iris: false,
+            },
+            // Depth 0.25 is 63.75 of 255, which the frame stores as 64.
+            depth_of(4, 0.25),
+            None,
+        );
+
+        let (set, quad, sampler) = sampled_quad_setup(SAMPLE_DEPTH, false);
+        let vbytes = bytemuck::cast_slice(&quad);
+        let format = wgpu::TextureFormat::Rgba8Unorm;
+        let gpu = (device.clone(), queue.clone());
+        let mut primitives = WorldPrimitives::new(&device, (format, false));
+        // One frame: the quad over the world depth as the mod handles hand it out now.
+        let mut frame = || {
+            let (view_id, view) = resources.mod_world_depth_texture_view();
+            let mut sampler_layout = SamplerLayout::default();
+            sampler_layout.record(0, &sampler, view.texture().format(), true);
+            let draw = sampled_quad_draw(
+                vec![ResolvedSet1Entry::Texture {
+                    view_id,
+                    view,
+                    mips: None,
+                }],
+                sampler_layout,
+                4,
+                vbytes,
+            );
+            let batch = Batch {
+                set: Some(&set),
+                draws: std::slice::from_ref(&draw),
+                transient_vertices: vbytes,
+                ..Default::default()
+            };
+            let at = render(&gpu, &mut primitives, format, batch, STAGES - 1);
+            [(8, 8), (32, 32), (56, 56)].map(|(x, y)| at(x, y))
+        };
+        assert_eq!(
+            frame(),
+            [[64.0, 0.0, 0.0, 255.0]; 3],
+            "the first frame reads the first depth"
+        );
+
+        // The renderer's resize makes a larger depth and hands it to the mod handles. Depth
+        // 0.75 is 191.25 of 255, which the frame stores as 191.
+        resources.replace_world_depth(depth_of(8, 0.75));
+        assert_eq!(
+            frame(),
+            [[191.0, 0.0, 0.0, 255.0]; 3],
+            "the second frame reads the replacement depth, not the retired one"
         );
     }
 

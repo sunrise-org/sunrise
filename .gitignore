@@ -31,8 +31,11 @@
 /servers.dat
 /screenshots/
 /.sunrise-cache/
-# The same cache real-Game tests write, from the crate's own directory.
+# The same cache real-Game tests write, from a crate's own directory.
 /crates/sunrise-client/.sunrise-cache/
+/crates/sunrise-gameplay/.sunrise-cache/
+/crates/sunrise-client-gameplay/.sunrise-cache/
+/crates/sunrise-gameplay-common/.sunrise-cache/
 /crates/sunrise-client/sunrise-player.txt
 /crash-reports/
 /debug/

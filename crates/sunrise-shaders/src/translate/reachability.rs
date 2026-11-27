@@ -5,7 +5,7 @@ use std::{
     ops::Range,
 };
 
-use super::{anonymous_structs, atomic_vectors, interface_blocks, scan::is_ident};
+use super::{Error, anonymous_structs, atomic_vectors, interface_blocks, scan::is_ident};
 use crate::{Preprocessed, macros::lex};
 
 struct Token<'a> {
@@ -179,9 +179,9 @@ fn prune(code: &str) -> Option<String> {
     Some(String::from_utf8(out).expect("whole token spans replaced by spaces"))
 }
 
-/// Stage preparation before compatibility analysis. Extracted from translate so its
-/// already oversized module does not grow when reachability is added.
-pub(super) fn prepare(pp: &Preprocessed) -> Option<Preprocessed> {
+/// Stage preparation before compatibility analysis, or `None` if no rewrite changes it.
+/// A refusal from the atomic vector rewrite is returned at its pack file and line.
+pub(super) fn prepare(pp: &Preprocessed) -> Result<Option<Preprocessed>, Error> {
     let pruned = prune(pp.code()).map(|code| pp.with_code(code));
     let pp = pruned.as_ref().unwrap_or(pp);
     let named = anonymous_structs::name(pp.code());
@@ -189,6 +189,6 @@ pub(super) fn prepare(pp: &Preprocessed) -> Option<Preprocessed> {
     let flat = interface_blocks::flatten(code)
         .or(named)
         .map(|code| pp.with_code(code));
-    let split = atomic_vectors::rewrite(flat.as_ref().unwrap_or(pp));
-    split.or(flat).or(pruned)
+    let split = atomic_vectors::rewrite(flat.as_ref().unwrap_or(pp))?;
+    Ok(split.or(flat).or(pruned))
 }

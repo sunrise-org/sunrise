@@ -666,6 +666,50 @@ impl HudBatch {
         }
     }
 
+    /// Cut the triangles drawn since `start` to `[x0, y0, x1, y1]` (GUI pixels): a triangle
+    /// inside stays as it is, one outside goes, one across an edge is clipped with every
+    /// attribute interpolated. Unlike [`Self::clip_since`] it changes the geometry, so a pose
+    /// applied afterwards (a rotated canvas) carries the crop with it. The draw runs that
+    /// begin at or after `start` follow their triangles; call it before any scissor covers
+    /// them.
+    pub fn crop_since(&mut self, start: usize, rect: [f32; 4]) {
+        let [x0, y0, x1, y1] = rect;
+        let tail = self.vertices.split_off(start);
+        let (triangles, rest) = tail.as_chunks::<3>();
+        // The vertex count after each source triangle.
+        let mut after = Vec::with_capacity(triangles.len() + 1);
+        after.push(start as u32);
+        for triangle in triangles {
+            let inside = triangle.iter().all(|v| {
+                let [x, y] = v.pos;
+                x >= x0 && x <= x1 && y >= y0 && y <= y1
+            });
+            if inside {
+                self.vertices.extend_from_slice(triangle);
+            } else {
+                let poly = clip_triangle(triangle, rect);
+                for i in 1..poly.len().saturating_sub(1) {
+                    let piece = [poly[0], poly[i], poly[i + 1]];
+                    if triangle_area(&piece) != 0.0 {
+                        self.vertices.extend_from_slice(&piece);
+                    }
+                }
+            }
+            after.push(self.vertices.len() as u32);
+        }
+        self.vertices.extend_from_slice(rest);
+        let moved = |old: u32| {
+            let offset = old as usize - start;
+            let whole = (offset / 3).min(triangles.len());
+            after[whole] + (offset - whole * 3) as u32
+        };
+        for (range, _) in &mut self.blends {
+            if range.start as usize >= start {
+                *range = moved(range.start)..moved(range.end);
+            }
+        }
+    }
+
     /// The intervals of a draw run in order, including any unscissored gaps.
     pub fn scissors_in(
         &self,
@@ -1023,6 +1067,60 @@ impl HudUniform {
 #[cfg(test)]
 mod bounds_tests {
     use super::*;
+
+    #[test]
+    fn crop_since_cuts_geometry_to_the_box_and_keeps_its_run() {
+        let mut batch = HudBatch::scratch([320, 240]);
+        batch.quad_3d(
+            [
+                [-8.0, -8.0, 0.0],
+                [24.0, -8.0, 0.0],
+                [24.0, 24.0, 1.0],
+                [-8.0, 24.0, 1.0],
+            ],
+            [[0.0, 0.0], [1.0, 0.0], [1.0, 1.0], [0.0, 1.0]],
+            u32::MAX,
+        );
+        batch.depth_since(0, [0.0, 0.0, 16.0, 16.0]);
+        batch.crop_since(0, [0.0, 0.0, 16.0, 16.0]);
+        assert!(batch.vertices.len() >= 6);
+        assert!(
+            batch
+                .vertices
+                .iter()
+                .all(|v| { (0.0..=16.0).contains(&v.pos[0]) && (0.0..=16.0).contains(&v.pos[1]) })
+        );
+        // The box's corner is a quarter of the way along each texture axis.
+        let corner = batch
+            .vertices
+            .iter()
+            .find(|v| v.pos[0].abs() < 1e-4 && v.pos[1].abs() < 1e-4)
+            .expect("the box's corner is drawn");
+        assert!((corner.uv[0] - 0.25).abs() < 1e-5 && (corner.uv[1] - 0.25).abs() < 1e-5);
+        assert_eq!(batch.blends.len(), 1);
+        assert_eq!(batch.blends[0].0, 0..batch.vertices.len() as u32);
+        assert!(matches!(batch.blends[0].1, Blend::Depth(_)));
+
+        // A quad wholly outside the box goes; one wholly inside stays as it is.
+        let before = batch.vertices.len();
+        batch.rect_uv(
+            40.0,
+            40.0,
+            4.0,
+            4.0,
+            Rect {
+                u0: 0.0,
+                v0: 0.0,
+                u1: 1.0,
+                v1: 1.0,
+                w: 1,
+                h: 1,
+            },
+            u32::MAX,
+        );
+        batch.crop_since(before, [0.0, 0.0, 16.0, 16.0]);
+        assert_eq!(batch.vertices.len(), before);
+    }
 
     #[test]
     fn visible_vertex_bounds_tracks_drawn_slice_and_ignores_empty_geometry() {

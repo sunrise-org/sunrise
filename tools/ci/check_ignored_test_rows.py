@@ -12,7 +12,7 @@ Every `#[ignore]`d test that no daily shard runs (rowless_problems) has a row of
 failure, `needs`, `manual`, ...; otherwise it would run nowhere unseen. In a shard's own targets a rowless
 `#[ignore]` is fine: the shard runs it with `--include-ignored`, and it must pass.
 
-A test that reaches `test_resources::prepared_root` (resolved by name through the helpers, aliases and re-exports
+A test that reaches `prepared_test_root::prepared_root` (resolved by name through the helpers, aliases and re-exports
 of its own target, see crates/sunrise-game-discovery/README.md) must be a daily test; with `--base COMMIT`, no
 function may newly reach the older readers of the prepared root (`SUNRISE_TEST_RESOURCES`, `SUNRISE_RESOURCES`,
 `SUNRISE_MESH_TEST_RESOURCES`, `SUNRISE_FISHING_RESOURCES`, `.local/sunrise-client`).
@@ -50,7 +50,7 @@ WINDOWS_WORKFLOW = ".github/workflows/windows-runtime-leases.yml"
 OWN_SDK_WORKFLOW = ".github/workflows/book-quickstart.yml"
 # Prepared test data: the one required way to get it, and what only a legacy reader spells. Resolved over the
 # tests' own sources by sunrise-game-discovery's `--references` (crates/sunrise-game-discovery/src/references.rs).
-BOUNDARY = "crates/sunrise-client/src/test_resources.rs::prepared_root"
+BOUNDARY = "crates/sunrise-core/src/prepared_test_root.rs::prepared_root"
 LEGACY_LITERALS = (
     "SUNRISE_TEST_RESOURCES",
     "SUNRISE_RESOURCES",
@@ -267,7 +267,7 @@ def source_problems(rows, functions):
 
 
 def prepared_problems(tests, records):
-    """A test that reaches `test_resources::prepared_root` is a daily test, and no path to it may stay unresolved.
+    """A test that reaches `prepared_test_root::prepared_root` is a daily test, and no path to it may stay unresolved.
 
     `tests` are the inventory's; `records` the discovery tool's reference records. Matched by the complete
     identity (package, target, name), the one the daily rows select by."""

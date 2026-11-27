@@ -1814,6 +1814,25 @@ pub(crate) fn wgpu_compare(compare: DepthCompare) -> wgpu::CompareFunction {
     }
 }
 
+/// The raster depth bias `ds` declares. With `standard_z` (the pack's forward depth plane, where
+/// nearer is smaller) the constant and the slope scale are negated, since mods declare the bias
+/// for reversed-Z, where a positive bias moves toward the camera.
+pub(crate) fn wgpu_depth_bias(ds: mod_api::DepthState, standard_z: bool) -> wgpu::DepthBiasState {
+    let (constant, slope_scale) = if standard_z {
+        (
+            ds.depth_bias_constant.saturating_neg(),
+            -ds.depth_bias_slope_scale,
+        )
+    } else {
+        (ds.depth_bias_constant, ds.depth_bias_slope_scale)
+    };
+    wgpu::DepthBiasState {
+        constant,
+        slope_scale,
+        clamp: 0.0,
+    }
+}
+
 /// Owned runtime descriptors (`depth_targets`, `uniforms`, `pipelines`) for `PackPost`.
 pub fn pack_runtime_specs() -> sunrise_render_shaderpack::pack_post::OwnedModPackRuntime {
     pack_runtime_specs_of(registered())
@@ -1900,6 +1919,11 @@ pub(crate) fn pack_runtime_specs_of(
             pass_slot: mod_pass_slot(pass_slot),
             depth_target,
             depth_compare,
+            // Judged on the declared values: negating a zero slope gives -0.0, which wgpu's
+            // bias comparison does not equal to the default.
+            depth_bias: depth_state
+                .filter(|ds| ds.depth_bias_constant != 0 || ds.depth_bias_slope_scale != 0.0)
+                .map(|ds| wgpu_depth_bias(ds, true)),
             depth_write,
             cull: pipeline.state.cull,
             program_mode: pipeline
@@ -2836,6 +2860,52 @@ void main() {
         assert_eq!(
             own_vertex.program_mode,
             ModProgramMode::ModVertexPackFragment
+        );
+    }
+
+    #[test]
+    fn only_a_declared_depth_bias_reaches_the_pack_spec_in_standard_z() {
+        let biased = |name: &str, constant: i32, slope: f32| {
+            RenderPipeline::new(
+                id(name),
+                id(name),
+                PipelineBlend::Opaque,
+                WorldDepth::Tested,
+            )
+            .depth_compare(mod_api::DepthCompare::Greater)
+            .depth_bias(constant, slope)
+            .pack_binding(
+                mod_api::PackBinding::new()
+                    .program("example_program")
+                    .slot(mod_api::PackPassSlot::AfterOpaqueGbuffers),
+            )
+        };
+        let list = [
+            biased("example:none", 0, 0.0),
+            biased("example:both", 100, 2.0),
+            biased("example:slope", 0, 3.0),
+        ];
+        let runtime = pack_runtime_specs_of(&list);
+        let [none, both, slope] = &runtime.pipelines[..] else {
+            panic!("three pipelines expected");
+        };
+        assert_eq!(none.depth_bias, None);
+        // Reversed-Z bias 100 and 2.0 are -100 and -2.0 in the pack's forward depth.
+        assert_eq!(
+            both.depth_bias,
+            Some(wgpu::DepthBiasState {
+                constant: -100,
+                slope_scale: -2.0,
+                clamp: 0.0,
+            })
+        );
+        assert_eq!(
+            slope.depth_bias,
+            Some(wgpu::DepthBiasState {
+                constant: 0,
+                slope_scale: -3.0,
+                clamp: 0.0,
+            })
         );
     }
 

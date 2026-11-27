@@ -540,7 +540,7 @@ fn native_admission_allocates_only_when_preparing_subscribed_snapshots() {
     use sunrise_threads::allocation_count::measure;
 
     with_filter(|mods| {
-        sunrise_gameplay_common::game::api_values::install_parts(mods).unwrap();
+        crate::game::api_values::install_parts(mods).unwrap();
         mod_api::__private::resolve_items(["minecraft:stone"]).unwrap();
         let facts =
             r#"{"defaults":{"minecraft:air":0},"states":[["a",true,false,"","minecraft:air"]]}"#;

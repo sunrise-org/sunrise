@@ -531,7 +531,7 @@ def _is_exact_int(value, low, high):
 
 def prepared_stamp_problems(root):
     """Why root is not a current full-profile prepared root, worded as Manifest::version_problems and
-    test_resources.rs `stamp_problems` word it; empty when it is."""
+    prepared_test_support.rs `stamp_problems` word it; empty when it is."""
     if not (root / "sunrise-resources.json").is_file():
         return ["sunrise-resources.json is missing"]
     manifest = read_json_object(root / "sunrise-resources.json")
@@ -569,7 +569,7 @@ def prepared_stamp_problems(root):
 
 def refuse_stale_prepared(args, steps):
     """Fail `content root tests` before cargo starts when a local run would read a stale prepared root: the
-    test boundary (test_resources.rs `prepared_root`) refuses it after minutes of building. A root that is not
+    test boundary (prepared_test_root.rs `prepared_root`) refuses it after minutes of building. A root that is not
     there is left to that boundary, which names every missing input."""
     step = next((step for step in steps if step.name == "content root tests"), None)
     if args.host != "local" or step is None or step.skip:
@@ -581,7 +581,7 @@ def refuse_stale_prepared(args, steps):
         root = ROOT / ".local" / "sunrise-client" / expected_prepared_stamp()["minecraft"]
     else:
         # CONTENT_ROOT_TESTS runs under `cargo test -p sunrise-client-lib`, whose tests start in that crate's
-        # directory: a relative override names a root there (as test_resources.rs `prepared_root` reads it),
+        # directory: a relative override names a root there (as prepared_test_root.rs `prepared_root` reads it),
         # not relative to this script's cwd.
         path = Path(override)
         root = path if path.is_absolute() else ROOT / "crates" / "sunrise-client-lib" / path

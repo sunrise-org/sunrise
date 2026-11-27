@@ -594,6 +594,117 @@ pub(crate) mod tests {
         }
     }
 
+    /// The owner's memory connection starts after `server_starting` and `server_started`, so a
+    /// listener that blocks past the 10 s login timeout of `lan::conn` cannot run the owner's
+    /// login out: the owner still reaches play, on the server as well as in the window.
+    #[test]
+    #[ignore = "daily"]
+    fn a_slow_server_starting_listener_does_not_time_out_the_owner_login() {
+        use crate::game::server_side::native_entity_refs::tests::with_client_game;
+        use mod_api::{Hooks, ModEntry, ServerHost};
+        use std::sync::mpsc::{Receiver, RecvTimeoutError};
+        use sunrise_gameplay_common::game::test_fixtures::run_fresh_cases;
+        use sunrise_protocol::crypto::offline_uuid;
+        use sunrise_sim::{save::WorldPreset, world_options::WorldOptions};
+
+        /// Longer than `lan::conn`'s login timeout (10 s), by a margin that only covers the
+        /// timer, not scheduling: a connection opened before this listener runs has timed out
+        /// by the time the listener returns.
+        const BLOCK: Duration = Duration::from_secs(12);
+
+        struct Block {
+            gate: Mutex<Receiver<()>>,
+            blocked_for: Arc<Mutex<Option<Duration>>>,
+            placed_owner: Arc<Mutex<Option<u128>>>,
+        }
+        #[mod_api::__subscriptions]
+        impl Hooks for Block {
+            fn server_starting(
+                &self,
+                _: &mut dyn ServerHost,
+                _: &mut mod_api::ServerStartingEvent,
+            ) {
+                let started = Instant::now();
+                // One wait on a gate nobody opens; the test keeps its sender alive.
+                let opened = self.gate.lock().unwrap().recv_timeout(BLOCK);
+                assert_eq!(opened, Err(RecvTimeoutError::Timeout));
+                *self.blocked_for.lock().unwrap() = Some(started.elapsed());
+            }
+            fn player_logged_in(
+                &self,
+                _: &mut dyn ServerHost,
+                event: &mut mod_api::PlayerLoggedInEvent<'_>,
+            ) {
+                *self.placed_owner.lock().unwrap() = Some(event.player);
+            }
+        }
+
+        const NAME: &str = "cut_layout::game::server_side::integrated::tests::a_slow_server_starting_listener_does_not_time_out_the_owner_login";
+        if run_fresh_cases(
+            NAME,
+            "SUNRISE_INTEGRATED_STARTING_BLOCK_CHILD",
+            &["blocked"],
+        ) {
+            return;
+        }
+        let (gate_open, gate) = channel();
+        let blocked_for = Arc::new(Mutex::new(None));
+        let placed_owner = Arc::new(Mutex::new(None));
+        let mods = vec![ModEntry::new(
+            "starting_block",
+            Box::new(Block {
+                gate: Mutex::new(gate),
+                blocked_for: blocked_for.clone(),
+                placed_owner: placed_owner.clone(),
+            }),
+        )]
+        .into();
+        mod_platform::testing::with_mods(mods, || {
+            with_client_game(|game| {
+                game.client.settings.render_distance = 2;
+                game.client.settings.simulation_distance = 2;
+                let options = WorldOptions {
+                    world_type: WorldPreset::Flat,
+                    ..Default::default()
+                };
+                let owner = offline_uuid(&game.common.options.player_name());
+                game.open_integrated(
+                    "slow_server_starting",
+                    Some("Slow server starting"),
+                    Some(1),
+                    true,
+                    Some(&options),
+                )
+                .unwrap();
+                assert!(
+                    blocked_for.lock().unwrap().is_some_and(|d| d >= BLOCK),
+                    "the listener held startup past the login timeout"
+                );
+                let deadline = Instant::now() + Duration::from_secs(60);
+                while !game
+                    .client
+                    .remote
+                    .as_ref()
+                    .is_some_and(|r| r.logged_in && r.joined)
+                    || *placed_owner.lock().unwrap() != Some(owner)
+                {
+                    if let Err(error) = game.poll_remote() {
+                        panic!("the owner's login failed after the slow start: {error}");
+                    }
+                    assert!(Instant::now() < deadline, "the owner never reached play");
+                    std::thread::yield_now();
+                }
+                assert_eq!(
+                    *placed_owner.lock().unwrap(),
+                    Some(owner),
+                    "the server placed the owner in the world"
+                );
+                game.leave_server(None).unwrap();
+            });
+        });
+        drop(gate_open);
+    }
+
     #[test]
     #[ignore = "daily"]
     fn new_authenticated_world_saves_profile_without_player_before_login() {

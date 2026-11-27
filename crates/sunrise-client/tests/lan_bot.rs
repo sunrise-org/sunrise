@@ -21,6 +21,7 @@ use sunrise_client::{
     },
     world::World,
 };
+use sunrise_core::prepared_test_support::SERVER_INPUTS;
 use sunrise_protocol::{
     PROTOCOL_VERSION,
     connection::Connection,
@@ -34,8 +35,8 @@ use sunrise_protocol::{
     },
 };
 use sunrise_world::registry::BlockStateId;
-#[path = "../src/test_resources.rs"]
-mod test_resources;
+#[path = "../../sunrise-core/src/prepared_test_root.rs"]
+mod prepared_test_root;
 
 const STONE: u32 = 1;
 
@@ -313,7 +314,7 @@ fn run<T: Send + 'static>(
 #[test]
 #[ignore = "daily"]
 fn a_lan_guest_sees_the_signed_in_owners_skin() {
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let textures = sunrise_core::profile::AccountProperty {
         name: "textures".into(),
         value: "e30=".into(),
@@ -383,7 +384,7 @@ fn a_lan_guest_sees_the_signed_in_owners_skin() {
 #[test]
 #[ignore = "daily"]
 fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "RecipeSettings", true));
@@ -460,7 +461,7 @@ fn recipe_settings_packets_update_only_the_players_book_and_survive_save() {
 #[test]
 #[ignore = "daily"]
 fn neoforge_shapes_items_reach_two_guests() {
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let compound = r#"{"type":"neoforge:compound",
         "children":["minecraft:raw_copper","minecraft:redstone"]}"#;
     let packs = vec![
@@ -614,7 +615,7 @@ fn read_join_recipes(bot: &mut Bot, expected: (i32, i32), who: &str) -> Result<(
 #[test]
 #[ignore = "daily"]
 fn sprint_commands_survive_keyboard_input_changes() {
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Sprinter", true));
@@ -693,7 +694,7 @@ fn sprint_commands_survive_keyboard_input_changes() {
 #[test]
 #[ignore = "daily"]
 fn a_move_behind_a_dig_and_its_swing_waits_for_the_next_tick() {
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Digger", true));
@@ -775,7 +776,7 @@ fn first_login_packet(mut c: Connection, port: u16, name: &str) -> login::Client
 #[ignore = "daily"]
 fn a_signed_in_hosts_lan_authenticates_guests_but_not_its_own_player() {
     use sunrise_client::lan::{NetConfig, OnlineMode};
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let defaults = sunrise_world::item_defaults::read(&resources).expect("item defaults");
     let items = sunrise_client::items::Items::catalog(
         &resources,
@@ -821,7 +822,7 @@ fn a_signed_in_hosts_lan_authenticates_guests_but_not_its_own_player() {
 #[test]
 #[ignore = "daily"]
 fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Pillar", true));
@@ -884,7 +885,7 @@ fn a_move_behind_a_use_on_a_block_and_its_swing_waits_for_the_next_tick() {
 #[test]
 #[ignore = "daily"]
 fn a_move_behind_an_attack_and_its_swing_waits_for_the_next_tick() {
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Striker", true));
@@ -928,7 +929,7 @@ fn a_move_behind_an_attack_and_its_swing_waits_for_the_next_tick() {
 #[test]
 #[ignore = "daily"]
 fn status_and_join() {
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     // Server list ping.
@@ -1084,7 +1085,7 @@ fn status_and_join() {
 #[test]
 #[ignore = "daily"]
 fn guests_see_each_other_and_the_world_entities() {
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let zombie = EntityState {
@@ -1228,7 +1229,7 @@ fn guests_see_each_other_and_the_world_entities() {
 fn menu_extra_data_comes_right_before_its_menu() {
     use sunrise_client::{items::ItemStack, lan::menu::Slots};
     use sunrise_protocol::menu_extra;
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let bot = run(&mut s, move || connect(port, "Machinist", true));
@@ -1323,7 +1324,7 @@ fn a_spectators_container_click_is_taken_back() {
             64
         }
     }
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let mut bot = run(&mut s, move || connect(port, "Watcher", true));
@@ -1404,7 +1405,7 @@ fn a_spectators_container_click_is_taken_back() {
 #[test]
 #[ignore = "daily"]
 fn changed_biomes_reach_the_players_that_see_the_column() {
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let bot = run(&mut s, move || connect(port, "Gardener", true));
@@ -1482,7 +1483,7 @@ fn a_click_past_the_menu_is_ignored() {
             64
         }
     }
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Clicker", true));
@@ -1546,7 +1547,7 @@ fn a_synced_mod_block_entity_reaches_the_chunks_players_once_a_tick() {
     use sunrise_client::block_entity_types::{self, BlockEntityTypes};
     use sunrise_client::containers::{BlockEntity, ModBlockEntity};
     use sunrise_core::nbt::{Compound, JavaString, Tag};
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     const CHILD: &str = "SUNRISE_TEST_LAN_DECLARED_ENTITY";
     if std::env::var_os(CHILD).is_none() {
         assert!(
@@ -1676,7 +1677,7 @@ fn a_synced_mod_block_entity_reaches_the_chunks_players_once_a_tick() {
 #[test]
 #[ignore = "daily"]
 fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Respawned", true));
@@ -1745,7 +1746,7 @@ fn a_respawned_guest_is_immune_until_its_client_loads_the_world() {
 #[test]
 #[ignore = "daily"]
 fn a_boat_floating_too_long_kicks_its_driver() {
-    let resources = test_resources::prepared_root(&[test_resources::SERVER_INPUTS]);
+    let resources = prepared_test_root::prepared_root(&[SERVER_INPUTS]);
     let mut s = server(&resources);
     let port = s.hub.lan.port;
     let _bot = run(&mut s, move || connect(port, "Boater", true));

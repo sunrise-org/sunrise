@@ -78,6 +78,51 @@ fn bounded_manifest_commands() {
         assert_eq!(fs::metadata(&path).unwrap().len(), limit + 1);
     }
 }
+#[test]
+#[ignore = "daily"]
+fn build_invalidates_a_previous_package_only_after_validating_the_invocation() {
+    use sunrise_mod_package::Package;
+
+    let f = Fixture::new("build-output");
+    f.manifest("");
+    let manifest = f.dir.join("sunrise-mod.toml");
+    let valid = fs::read(&manifest).unwrap();
+    let cargo = f.dir.join("Cargo.toml");
+    let crate_header = "[package]\nname = 'mod-example'\nversion = '1.0.0'\n";
+    fs::write(
+        &cargo,
+        format!("{crate_header}\n[dependencies]\nsunrise-mod-api = {{ path = '.sunrise/sdk/api/crates/sunrise-mod-api' }}\n"),
+    )
+    .unwrap();
+    fs::create_dir(f.dir.join("src")).unwrap();
+    fs::write(f.dir.join("src/lib.rs"), "pub fn ready() {}\n").unwrap();
+    let previous = Package::pack_directory(&f.dir).unwrap();
+    let output = f.dir.join("target/sunrise-mod/example.smod");
+    fs::create_dir_all(output.parent().unwrap()).unwrap();
+    fs::write(&output, &previous).unwrap();
+
+    assert!(f.run(&["build", "--typo"]).contains("--typo"));
+    assert_eq!(fs::read(&output).unwrap(), previous);
+    fs::remove_file(&manifest).unwrap();
+    assert!(f.run(&["build"]).contains("sunrise-mod.toml"));
+    assert_eq!(fs::read(&output).unwrap(), previous);
+    fs::write(&manifest, "id =").unwrap();
+    assert!(f.run(&["build"]).contains("sunrise-mod.toml"));
+    assert_eq!(fs::read(&output).unwrap(), previous);
+    assert!(!f.dir.join(".sunrise").exists());
+
+    // Project::read rejects the missing API dependency before SDK fetch.
+    // The build_errors fixture separately exercises the real compiler-failure path.
+    fs::write(&manifest, valid).unwrap();
+    fs::write(&cargo, crate_header).unwrap();
+    let error = f.run(&["build"]);
+    assert!(
+        error.contains("has no sunrise-mod-api dependency"),
+        "{error}"
+    );
+    assert!(!output.exists());
+}
+
 #[cfg(unix)]
 #[test]
 #[ignore = "daily"]

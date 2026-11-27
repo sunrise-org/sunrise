@@ -97,8 +97,9 @@ never builds with another compiler.
 
 A mod with crates.io dependencies is compiled with them, as `cargo build` would, and `build` pins them in
 `Cargo.lock` the first time. After you change `Cargo.toml`, `cargo sunrise-mod build --update-lock` resolves again.
-When a build stops on a package the lock doesn't pin, its error ends with that command. The
-[build log](../how-to/native-mods/04-what-the-launcher-does.md#build-log) shows the compiler's output when a build fails.
+When a build stops on a package the lock doesn't pin, its error ends with that command.
+If compilation fails, look for `Build log:` in the error. It points to the compiler output in
+`work/<mod-id>-<checkout-hash>/build.log` inside the tool's cache.
 
 The template also writes `.github/workflows/sunrise-release.yml`. To publish your mod, see
 [Releasing](../how-to/publish.md#releasing).

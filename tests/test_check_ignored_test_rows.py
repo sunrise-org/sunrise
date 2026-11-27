@@ -381,6 +381,10 @@ FIXTURE_CRATE = {
     "crates/sunrise-client/Cargo.toml": '[package]\nname = "sunrise-client"\n',
     "crates/sunrise-client/src/lib.rs": "mod test_resources;\nmod refs;\nmod menu;\nmod synthetic;\n",
     "crates/sunrise-client/src/test_resources.rs":
+        '#[path = "../../sunrise-core/src/prepared_test_root.rs"]\n'
+        'mod prepared_test_root;\n'
+        'pub use prepared_test_root::prepared_root;\n',
+    "crates/sunrise-core/src/prepared_test_root.rs":
         'pub fn prepared_root(needs: &[&str]) -> std::path::PathBuf {\n'
         '    std::env::var_os("SUNRISE_TEST_RESOURCES").map(Into::into).unwrap_or_default()\n}\n',
     "crates/sunrise-client/src/refs.rs":
@@ -437,3 +441,22 @@ class ResolvedEndToEnd(unittest.TestCase):
         problems = check.legacy_problems(self.records(head), self.records(), {})
         self.assertEqual(len(problems), 1)
         self.assertIn("menu::a_second_menu_test", problems[0])
+
+    def test_a_second_crate_including_the_shared_boundary_is_held_to_it_too(self):
+        self.write("Cargo.toml", '[workspace]\nmembers = ["crates/sunrise-client", "crates/sunrise-world"]\n')
+        self.write("crates/sunrise-world/Cargo.toml", '[package]\nname = "sunrise-world"\n')
+        self.write("crates/sunrise-world/src/lib.rs",
+                   '#[path = "../../sunrise-core/src/prepared_test_root.rs"]\n'
+                   'mod prepared_test_root;\n'
+                   '#[test] #[ignore = "daily"] fn world_marked() { prepared_test_root::prepared_root(&[]); }\n'
+                   '#[test] fn world_unmarked() { prepared_test_root::prepared_root(&[]); }\n')
+        problems = [problem for problem in check.prepared_problems(ignored_inventory.tests(self.root), self.records())
+                    if "sunrise-world" in problem]
+        self.assertEqual(len(problems), 1)
+        self.assertIn("world_unmarked", problems[0])
+        self.assertNotIn("world_marked", problems[0].replace("world_unmarked", ""))
+
+    def write(self, relative, text):
+        path = self.root / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(text, encoding="utf-8")

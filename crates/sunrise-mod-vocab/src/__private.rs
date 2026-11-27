@@ -389,6 +389,7 @@ pub mod built {
         subgroup: bool,
         indirect_first_instance: bool,
         multi_draw_indirect_count: bool,
+        limits: crate::RenderLimits,
     ) -> crate::RenderCapabilities {
         crate::RenderCapabilities {
             float32_filterable,
@@ -396,6 +397,23 @@ pub mod built {
             subgroup,
             indirect_first_instance,
             multi_draw_indirect_count,
+            limits,
+        }
+    }
+    /// The renderer's [`crate::RenderLimits`].
+    pub fn render_limits(
+        max_buffer_size: u64,
+        max_storage_buffer_binding_size: u64,
+        max_uniform_buffer_binding_size: u64,
+        max_compute_workgroups_per_dimension: u32,
+        max_texture_dimension_2d: u32,
+    ) -> crate::RenderLimits {
+        crate::RenderLimits {
+            max_buffer_size,
+            max_storage_buffer_binding_size,
+            max_uniform_buffer_binding_size,
+            max_compute_workgroups_per_dimension,
+            max_texture_dimension_2d,
         }
     }
     /// Wrap a slot in the retained GPU storage buffer store.
