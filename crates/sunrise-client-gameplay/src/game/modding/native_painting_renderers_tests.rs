@@ -100,7 +100,7 @@ fn hanging(id: u32) -> Painting {
         id,
         pos: [0, 64, 0],
         facing: FACING,
-        variant: Arc::from("minecraft:kebab"),
+        variant: Some(Arc::from("minecraft:kebab")),
         asset: None,
         width: WIDTH,
         height: HEIGHT,
@@ -129,7 +129,11 @@ fn expected_quads(
     let Some(back) = sprites.get("painting/back").copied() else {
         return Vec::new();
     };
-    let Some(v) = world_paintings!(game).get(&p.variant) else {
+    let Some(v) = p
+        .variant
+        .as_deref()
+        .and_then(|key| world_paintings!(game).get(key))
+    else {
         return Vec::new();
     };
     let Some(front) = sprites.get(&format!("painting/{}", v.asset)).copied() else {

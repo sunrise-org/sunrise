@@ -168,7 +168,7 @@ impl ClientGame<'_> {
                 id,
                 pos: block,
                 facing,
-                variant,
+                variant: Some(variant),
                 asset,
                 width,
                 height,
@@ -244,30 +244,29 @@ impl ClientGame<'_> {
                 if let Some(item) = item {
                     f.item = item;
                 }
-            } else if self.common.paintings.iter().any(|p| p.id == id) {
-                // HangingEntity.DATA_DIRECTION, kept as the painting's 2D value; it is never vertical.
-                if let (8, Value::Id(direction)) = (index, value)
-                    && let Some(facing) = painting_facing(*direction)
-                    && let Some(p) = self.common.paintings.iter_mut().find(|p| p.id == id)
-                {
-                    p.facing = facing;
-                }
-                // Painting.DATA_PAINTING_VARIANT_ID: holder already resolved during packet decode.
-                if let (9, Value::PaintingVariant(holder)) = (index, value)
-                    && let Some(p) = self.common.paintings.iter_mut().find(|p| p.id == id)
-                {
-                    let (variant_name, v) = match holder {
-                        PaintingHolder::Reference { name, variant, .. } => {
-                            (Arc::from(name.as_str()), variant)
+            } else if let Some(p) = self.common.paintings.iter_mut().find(|p| p.id == id) {
+                match (index, value) {
+                    // HangingEntity.DATA_DIRECTION, kept as the painting's 2D value.
+                    (8, Value::Id(direction)) => {
+                        if let Some(facing) = painting_facing(*direction) {
+                            p.facing = facing;
                         }
-                        PaintingHolder::Direct(v) => (Arc::from(v.asset_id.as_str()), v),
-                    };
-                    p.variant = variant_name;
-                    p.asset = Some(Arc::from(
-                        v.asset_id.strip_prefix("minecraft:").unwrap_or(&v.asset_id),
-                    ));
-                    p.width = v.width;
-                    p.height = v.height;
+                    }
+                    // Painting.DATA_PAINTING_VARIANT_ID: the packet decoder resolved the holder.
+                    (9, Value::PaintingVariant(holder)) => {
+                        let (key, v) = match holder {
+                            PaintingHolder::Reference { name, variant, .. } => {
+                                (Some(Arc::from(name.as_str())), variant)
+                            }
+                            PaintingHolder::Direct(v) => (None, v),
+                        };
+                        p.variant = key;
+                        p.asset = Some(Arc::from(
+                            v.asset_id.strip_prefix("minecraft:").unwrap_or(&v.asset_id),
+                        ));
+                        (p.width, p.height) = (v.width, v.height);
+                    }
+                    _ => {}
                 }
             } else if let Some(a) = self.common.armor_stands.iter_mut().find(|a| a.id == id) {
                 match (index, value) {
@@ -587,7 +586,7 @@ impl ClientGame<'_> {
         }
         for p in &self.common.paintings {
             out.push(json!({"id": p.id, "kind": "minecraft:painting", "position": p.pos, "facing": p.facing,
-                "variant": &*p.variant}));
+                "variant": p.variant.as_deref()}));
         }
         out
     }
@@ -663,6 +662,107 @@ use sunrise_gameplay_common::game::minecarts::MinecartRailGameExt as _;
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    #[ignore = "daily"]
+    fn painting_metadata_saves_only_registry_keys() {
+        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game_role_client};
+        use sunrise_core::{
+            nbt::Tag,
+            prepared_test_support::{SERVER_INPUTS, STREAMING_INPUTS, WORLDGEN_INPUTS},
+        };
+        use sunrise_gameplay_common::game::execution_role::ExecutionRole;
+        use sunrise_protocol::{
+            connection::Pipe,
+            entity_data::{PaintingVariant, serializer},
+            packets::play::{AddEntity, SetEntityData},
+        };
+        use sunrise_sim::entity_nbt::painting_to_nbt;
+
+        if run_fresh_cases(
+            "game::client_side::remote_objects::tests::painting_metadata_saves_only_registry_keys",
+            "SUNRISE_PAINTING_METADATA_SAVE_CHILD",
+            &["save"],
+        ) {
+            return;
+        }
+        let root = crate::prepared_test_root::prepared_root(&[
+            SERVER_INPUTS,
+            STREAMING_INPUTS,
+            WORLDGEN_INPUTS,
+        ]);
+        with_game_role_client(root, ExecutionRole::Client, |game| {
+            let (client, _server) = Pipe::pair();
+            game.connect_local(client, "PaintingMetadata").unwrap();
+            let remote = game.client.remote.as_mut().unwrap();
+            remote.logged_in = true;
+            let kind = remote
+                .builtin
+                .get("minecraft:entity_type")
+                .unwrap()
+                .id("minecraft:painting")
+                .unwrap();
+            let id = 2001;
+            game.apply_add_entity_packet(AddEntity {
+                id,
+                uuid: 2001,
+                kind,
+                position: [2.0, 65.0, 2.0],
+                velocity: [0.0; 3],
+                pitch: 0,
+                yaw: 0,
+                head_yaw: 0,
+                data: 2,
+            });
+
+            let key = "test:registered_mural";
+            let reference = PaintingHolder::Reference {
+                id: 1,
+                name: key.into(),
+                variant: PaintingVariant {
+                    width: 2,
+                    height: 3,
+                    asset_id: "test:mural_texture".into(),
+                    title: None,
+                    author: None,
+                },
+            };
+            let direct = PaintingHolder::Direct(PaintingVariant {
+                width: 4,
+                height: 1,
+                asset_id: "minecraft:inline_texture".into(),
+                title: None,
+                author: None,
+            });
+            let mut saved = None;
+            for (holder, key, asset, size) in [
+                (reference, Some(key), "test:mural_texture", (2, 3)),
+                (direct, None, "inline_texture", (4, 1)),
+            ] {
+                game.apply_set_entity_data_packet(SetEntityData {
+                    id,
+                    values: vec![(
+                        9,
+                        serializer::PAINTING_VARIANT,
+                        Value::PaintingVariant(holder),
+                    )],
+                })
+                .unwrap();
+                let p = &game.common.paintings[0];
+                assert_eq!(p.variant.as_deref(), key);
+                assert_eq!(p.asset.as_deref(), Some(asset));
+                assert_eq!((p.width, p.height), size);
+
+                // Pass the keyed save as raw NBT for the inline save, too.
+                let tag = painting_to_nbt(p, [0, 0, 0, 2001], saved.as_ref());
+                assert_eq!(
+                    tag.get("variant"),
+                    key.map(|key| Tag::String(key.into())).as_ref()
+                );
+                saved = Some(tag);
+            }
+        });
+    }
 
     /// `MinecartTNT.tick` on the client (#6011): a primed TNT minecart counts its fuse down
     /// and adds one smoke particle a tick, not two.

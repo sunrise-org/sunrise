@@ -92,7 +92,7 @@ fn reusable_entity_lifetimes_cover_clone_moves_and_vec_destruction() {
         id: 1,
         pos: [0; 3],
         facing: 0,
-        variant: "minecraft:kebab".into(),
+        variant: Some("minecraft:kebab".into()),
         asset: None,
         width: 1,
         height: 1,

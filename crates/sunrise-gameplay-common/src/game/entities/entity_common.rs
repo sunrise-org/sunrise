@@ -4,7 +4,6 @@ use super::{Hit, entity::Entity as _};
 use crate::game::{
     armor_stands_common::overlaps as stand_overlaps, cushions_common::aabb as cushion_aabb,
 };
-use std::sync::Arc;
 use sunrise_core::geometry::{Aabb, Vec3};
 use sunrise_gameplay_common::painting_variants::{painting_coexists, painting_facing};
 use sunrise_items::items::ItemStack;
@@ -306,7 +305,7 @@ pub trait EntityCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             id: 0,
             pos,
             facing,
-            variant: Arc::from(""),
+            variant: None,
             asset: None,
             width: 1,
             height: 1,
@@ -332,8 +331,8 @@ pub trait EntityCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         if !any {
             return false;
         }
-        if let Some(v) = paintings.of_stack(stack).cloned() {
-            (candidate.variant, candidate.width, candidate.height) = (v.id, v.width, v.height);
+        if let Some(v) = paintings.of_stack(stack) {
+            (candidate.width, candidate.height) = (v.width, v.height);
             return self.painting_survives(&candidate);
         }
         true
