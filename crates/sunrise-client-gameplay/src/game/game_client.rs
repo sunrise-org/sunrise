@@ -1311,6 +1311,7 @@ impl crate::game::ClientGame<'_> {
         self.common.world =
             sunrise_gameplay_common::game::world_for_mods(self.common.res.facts().air, 0);
         self.common.player = None;
+        self.client.native_camera_frame = None;
         // `LocalPlayer`'s constructor: `KeyMapping.resetToggleKeys`, so a sneak or sprint toggled
         // in this world is not still on in the next one.
         self.reset_toggle_keys();

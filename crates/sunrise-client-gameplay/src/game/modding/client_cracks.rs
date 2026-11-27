@@ -40,6 +40,7 @@ impl crate::game::ClientGame<'_> {
         self.client.mining_crack = None;
         self.common.mining = None;
         self.common.world = world;
+        self.client.native_camera_frame = None;
     }
 
     /// Preserve the stage's stored display answer across prediction updates.

@@ -83,8 +83,9 @@ pub trait ClientViewClientHost {
     /// The shape clip does not depend on how far away other chunks are loaded.
     fn view_hit(&self) -> Option<(f32, Hit)>;
     /// Side: client.
-    /// The most recently extracted world frame's camera, if one exists.
-    /// During GUI rendering this is the current frame, including bob/spin and FOV.
+    /// The most recently extracted world frame's camera, or None without a loaded level
+    /// or before its first extraction. During GUI rendering this is the current frame,
+    /// including bob/spin and FOV.
     fn camera(&self) -> Option<Camera>;
     /// Side: client.
     /// World point `at` projected on this frame's screen (`GameRenderer.projectPointToScreen`):
