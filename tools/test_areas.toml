@@ -204,7 +204,7 @@ cargo = [
 harnesses = [
   "save_roundtrip", "world_reopen", "world", "datafix", "*_save_reload", "*_save", "*_load", "*_saved_*",
   "saved_empty_tags", "player_save_fields", "display_save", "trident_save", "stand_fall_save", "dedicated_crash_save",
-  "save_kill", "save_corruption", "structure_start_nbt", "entity_nbt_boolean", "nbt_path_reader", "snbt_unicode", "java_*", "string_hash", "modified_utf8",
+  "save_kill", "save_corruption", "region_bytes", "structure_start_nbt", "entity_nbt_boolean", "nbt_path_reader", "snbt_unicode", "java_*", "string_hash", "modified_utf8",
 ]
 lan = ["sleep-reload", "leash_reload", "reopen_player"]
 

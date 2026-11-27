@@ -15,10 +15,10 @@ pub enum Compression {
     Lz4 = 4,
 }
 
-/// The region file versions `RegionFileVersion.register` puts in its table, in
-/// registration order: the names server.properties' `region-file-compression`
-/// takes, and the ones an invalid value is told to use.
-pub const REGION_FILE_NAMES: [&str; 4] = ["gzip", "deflate", "none", "lz4"];
+/// The names server.properties' `region-file-compression` takes, in the order
+/// vanilla 26.3 lists them to an invalid value. Gzip has none: it is read, never
+/// selected for writing.
+pub const REGION_FILE_NAMES: [&str; 3] = ["lz4", "none", "deflate"];
 
 /// `RegionFileVersion.selected`, which starts at `DEFAULT` (VERSION_DEFLATE).
 static SELECTED: AtomicU8 = AtomicU8::new(Compression::Zlib as u8);
@@ -33,7 +33,7 @@ impl Compression {
         let Some(compression) = REGION_FILE_NAMES
             .iter()
             .position(|known| *known == name)
-            .map(|i| [Self::Gzip, Self::Zlib, Self::None, Self::Lz4][i])
+            .map(|i| [Self::Lz4, Self::None, Self::Zlib][i])
         else {
             return false;
         };
@@ -774,7 +774,6 @@ mod tests {
             "VERSION_DEFLATE is DEFAULT"
         );
         for (name, want) in [
-            ("gzip", Compression::Gzip),
             ("deflate", Compression::Zlib),
             ("none", Compression::None),
             ("lz4", Compression::Lz4),
@@ -784,6 +783,7 @@ mod tests {
         }
         // Vanilla logs the value and keeps the version it had.
         assert!(!Compression::configure("zstd"));
+        assert!(!Compression::configure("gzip"), "gzip is read only");
         assert!(!Compression::configure("LZ4"), "the names are exact");
         assert_eq!(Compression::selected(), Compression::Lz4);
         assert!(Compression::configure("deflate"));

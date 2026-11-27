@@ -360,7 +360,7 @@ pub(super) fn preflight(options: &mut Options) -> Result<bool> {
             &format!(
                 "Invalid `region-file-compression` value `{}` in server.properties. Please use one of: {}",
                 props.region_file_compression,
-                sunrise_world::compression::REGION_FILE_NAMES.join(",")
+                sunrise_world::compression::REGION_FILE_NAMES.join(", ")
             ),
         );
     }

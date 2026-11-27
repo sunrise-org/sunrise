@@ -149,6 +149,7 @@ mod player_inventory_fixture;
 mod player_travel_fixture;
 mod portal_travel_fixture;
 mod redstone_catalog_fixture;
+mod region_bytes_fixture;
 mod registered_player_combat_fixture;
 mod registry_collision_scan_fixture;
 mod registry_fall_ray_fixture;
@@ -326,6 +327,7 @@ probes! {
     player_travel_fixture,
     portal_travel_fixture,
     redstone_catalog_fixture,
+    region_bytes_fixture,
     registered_player_combat_fixture,
     registry_collision_scan_fixture,
     registry_fall_ray_fixture,

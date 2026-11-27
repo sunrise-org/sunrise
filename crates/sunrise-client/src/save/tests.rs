@@ -1471,7 +1471,7 @@ fn work_shared_out_is_all_done_in_order_when_no_helper_can_start() {
 /// `RegionFile.getVersion` writes a chunk with the version
 /// `region-file-compression` selected: `compress_records` asks
 /// `Compression::selected()` for every record it encodes, so a server told
-/// to write lz4, gzip or uncompressed regions does
+/// to write lz4 or uncompressed regions does
 /// (`RegionFileVersion.configure`).
 #[test]
 fn a_chunk_is_written_with_the_selected_region_version() {
@@ -1482,7 +1482,7 @@ fn a_chunk_is_written_with_the_selected_region_version() {
     });
     let records = [((3, 4), Record::Tag(Arc::clone(&tag)))];
     let refs: Vec<_> = records.iter().map(|(k, r)| (*k, r)).collect();
-    for name in ["none", "lz4", "gzip", "deflate"] {
+    for name in ["none", "lz4", "deflate"] {
         assert!(Compression::configure(name), "{name}");
         let written = compress_records(&refs, 99)
             .pop()
