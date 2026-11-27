@@ -5951,7 +5951,7 @@ void main() {
         });
     }
 
-    struct PackWorldDepthProbe(Arc<Mutex<Option<mod_api::RenderTargetRef>>>);
+    struct PackWorldDepthProbe(std::sync::Arc<Mutex<Option<mod_api::RenderTargetRef>>>);
 
     #[mod_api::__subscriptions]
     impl Hooks for PackWorldDepthProbe {
@@ -5962,12 +5962,13 @@ void main() {
         ) {
             let shader = Identifier::parse("pack_world_depth:sample").unwrap();
             let layout = mod_api::BindGroupLayout::builder()
-                .storage_image(
+                .entry(mod_api::BindEntry::new(
                     "OutImage",
-                    mod_api::RenderTargetFormat::Rgba8Unorm,
-                    mod_api::StorageImageAccess::WriteOnly,
-                )
-                .combined_image_sampler(
+                    mod_api::BindingKind::StorageImage {
+                        access: mod_api::StorageImageAccess::WriteOnly,
+                    },
+                ))
+                .sampler(
                     "DepthTex",
                     mod_api::Sampler::new(
                         mod_api::SamplerFilter::Nearest,
