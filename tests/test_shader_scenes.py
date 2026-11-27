@@ -32,6 +32,10 @@ def scene(**changes):
     return data
 
 
+RENDERER = {"gpu": "AMD Radeon RX 7900 XTX (RADV NAVI31)", "vendor": "AMD", "driver": "radv Mesa 25.2.4",
+            "device_type": "discrete", "backend": "Vulkan"}
+
+
 def chunk(kind, body):
     return struct.pack(">I", len(body)) + kind + body + struct.pack(">I", zlib.crc32(kind + body))
 
@@ -692,7 +696,8 @@ class ReportTests(unittest.TestCase):
             rp.write_png(path, 4, 2, data)
             views[view] = {"picture": path.name, "sha256": rp.sha256_file(path), "problems": []}
         full = {"side": side, "pack": key, "pack_sha256": "p", "world_id": "w", "save_sha256": "s",
-                "scene_hash": rp.scene_hash(self.scenes), "views": views, "notes": [], "start_problems": []}
+                "scene_hash": rp.scene_hash(self.scenes), "views": views, "notes": [], "start_problems": [],
+                "resources_sha256": "r", "renderer": dict(RENDERER)}
         full.update(record)
         (folder / "run.json").write_text(json.dumps(full))
         return folder
@@ -802,6 +807,44 @@ class ReportTests(unittest.TestCase):
             path = Path(out) / "head" / "none" / "a.png"
             self.assertEqual(self.rows(report)["a"]["head"]["problems"], [f"{path}: a second IHDR"])
 
+    def test_the_report_names_what_each_side_drew_on(self):
+        with tempfile.TemporaryDirectory() as out:
+            self.both(out)
+            report = self.compare(out)
+            self.assertIn("head drawn on: AMD Radeon RX 7900 XTX (RADV NAVI31) (AMD, discrete), driver radv Mesa "
+                          "25.2.4, backend Vulkan; resources r", report["packs"]["none"]["notes"])
+
+    def test_malformed_identity_picture_or_pack_fields_are_invalid_with_exit_two(self):
+        cases = ((lambda r, _: r.update(world_id=[]), "a", "records no valid world_id"),
+                 (lambda r, _: r["views"]["a"].update(picture=[]), "a", "names no picture a.png"),
+                 (lambda r, _: r.update(pack=5), "a", "pack is not a name"),
+                 (lambda r, _: r.update(renderer={"gpu": []}), "a", "records no valid renderer"))
+        for change, view, problem in cases:
+            with self.subTest(problem=problem), tempfile.TemporaryDirectory() as out:
+                scene_file = Path(out) / "scenes.json"
+                scene_file.write_text(json.dumps(scene()))
+                self.edit_head(out, change)
+                with contextlib.redirect_stdout(io.StringIO()), contextlib.redirect_stderr(io.StringIO()):
+                    status = ss.main(["compare", "--scenes", str(scene_file), "--out", out, "--jobs", "1"])
+                report = json.loads((Path(out) / "report" / "report.json").read_text())
+                row = {r["view"]: r for r in report["packs"]["none"]["rows"]}[view]
+                self.assertEqual(status, rp.INVALID)
+                self.assertTrue(any(problem in p for p in row["problems"] + row["head"]["problems"]), row)
+                self.assertTrue((Path(out) / "report" / "index.html").is_file())
+
+    def test_an_explicit_pack_list_is_the_whole_scope(self):
+        with tempfile.TemporaryDirectory() as out:
+            self.both(out)
+            changed = bytearray(self.pixels)
+            changed[0] ^= 1
+            self.make_run(out, "base", "bsl", {"a": self.pixels, "b": self.pixels})
+            self.make_run(out, "head", "bsl", {"a": bytes(changed), "b": self.pixels})
+            self.make_run(out, "base", "solas", {"a": self.pixels, "b": self.pixels})  # one side only
+            report = self.compare(out, packs=["none"])
+            self.assertEqual((list(report["packs"]), report["status"]), (["none"], rp.SAME))
+            report = self.compare(out)  # compare on its own: every run folder
+            self.assertEqual((sorted(report["packs"]), report["status"]), (["bsl", "none", "solas"], rp.INVALID))
+
     def test_a_recorded_problem_or_start_problem_is_invalid(self):
         with tempfile.TemporaryDirectory() as out:
             folder = self.both(out)
@@ -819,8 +862,14 @@ class ReportTests(unittest.TestCase):
 
     def test_pairs_of_other_worlds_scenes_or_packs_are_invalid(self):
         for change, message in (({"world_id": "w2"}, "different worlds"), ({"pack_sha256": "q"}, "different pack"),
-                                ({"scene_hash": "s"}, "different scene"), ({"world_id": None}, "records no world_id"),
-                                ({"save_sha256": "t"}, "different saves")):
+                                ({"scene_hash": "s"}, "different scene"), ({"world_id": None}, "records no valid world_id"),
+                                ({"save_sha256": "t"}, "different saves"),
+                                ({"resources_sha256": "q"}, "different prepared resources"),
+                                ({"renderer": dict(RENDERER, backend="Gl")}, "different renderers"),
+                                ({"renderer": dict(RENDERER, driver="radv 25.3")}, "different renderers"),
+                                ({"renderer": dict(RENDERER, gpu="llvmpipe")}, "different renderers"),
+                                ({"renderer": None}, "records no valid renderer"),
+                                ({"resources_sha256": None}, "records no valid resources_sha256")):
             with self.subTest(message=message), tempfile.TemporaryDirectory() as out:
                 self.both(out, **change)
                 report = self.compare(out)

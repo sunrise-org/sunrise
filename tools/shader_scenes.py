@@ -46,7 +46,7 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools.shader_scenes_report import (  # noqa: E402
-    INVALID, RUN_MARK, SETUP_FAILED, SIDES, compare, scene_hash, sha256_file, summary)
+    INVALID, RENDERER_KEYS, RUN_MARK, SETUP_FAILED, SIDES, compare, scene_hash, sha256_file, summary)
 
 SCENES = ROOT / "tools/shader-scenes/scenes.json"
 FREEZE = "tick freeze"
@@ -379,6 +379,24 @@ def staged_digest(staged):
         digest.update(path.relative_to(staged).as_posix().encode() + b"\0")
         digest.update(bytes.fromhex(sha256_file(path)))
     return digest.hexdigest()
+
+
+_RESOURCE_DIGESTS = {}
+
+
+def resources_digest(resources):
+    """The prepared resources' identity, as staged_digest gives a folder's (every file's relative name and sha256),
+    once per folder and process: two sides with the same data version can still have other files."""
+    key = str(Path(resources).resolve())
+    if key not in _RESOURCE_DIGESTS:
+        _RESOURCE_DIGESTS[key] = staged_digest(key)
+    return _RESOURCE_DIGESTS[key]
+
+
+def renderer_identity(status):
+    """The renderer the game picked, from its `status` reply (RENDERER_KEYS of `renderer`); None without one."""
+    renderer = status.get("renderer")
+    return {k: renderer.get(k) for k in RENDERER_KEYS} if isinstance(renderer, dict) else None
 
 
 def stage_pack(pack, game_dir):
@@ -993,7 +1011,8 @@ def run_capture(args, scenes, side, bin_dir, extra_env, pack):
     client, _ = binaries(bin_dir)
     record = {"side": side, "pack": staged_name or "none", "pack_sha256": digest,
               "binary_sha256": sha256_file(client), "env": extra_env, "views": {}, "notes": [],
-              "start_problems": ["the start checks never ran"], **generation}
+              "start_problems": ["the start checks never ran"], "resources_sha256": resources_digest(args.resources),
+              "renderer": None, **generation}
     expected = settings_expected(scenes)
     game = Game(args, scenes, folder, bin_dir, env, [])
     # Read for `none` too: its moves must show in the log as well.
@@ -1003,6 +1022,7 @@ def run_capture(args, scenes, side, bin_dir, extra_env, pack):
         with game as ctl:
             # The world opens where the player was saved (the first view's dimension): its load is expected.
             dimension = (ctl("state").get("dimension") or "").removeprefix("minecraft:")
+            record["renderer"] = renderer_identity(ctl("status"))
             if staged_name:
                 watch.world_opened()
             results = {}

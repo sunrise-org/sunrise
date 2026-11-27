@@ -203,13 +203,16 @@ def _rgba(pixels, channels, k):
 
 def record_shape_problem(record):
     """Why a run record is not one run_capture writes (None when it is): an object whose start_problems and notes are
-    lists of strings and whose views map each name to an object."""
+    lists of strings, whose pack is a name and whose views map each name to an object (the identities and each
+    view's fields are checked where they are read: identity_problems, side_view)."""
     if not isinstance(record, dict):
         return "not an object"
     for key in ("start_problems", "notes"):
         value = record.get(key)
         if not isinstance(value, list) or not all(isinstance(v, str) for v in value):
             return f"{key} is not a list of strings"
+    if not isinstance(record.get("pack"), str) or not record["pack"]:
+        return "pack is not a name"
     views = record.get("views")
     if not isinstance(views, dict) or not all(isinstance(v, dict) for v in views.values()):
         return "views is not an object of view records"
@@ -246,24 +249,53 @@ def scene_hash(scenes):
     return hashlib.sha256(json.dumps(scenes, sort_keys=True).encode()).hexdigest()
 
 
+# What a run records of the inputs that shape its pictures besides the build, and what tells them apart: the
+# world and its save, the scene definition, the staged pack, the prepared resources, and the renderer the game
+# picked (its GPU, vendor, driver, device type and graphics backend, as `sunrise-ctl status` reports them).
+IDENTITY = (("world_id", "worlds"), ("save_sha256", "saves"), ("scene_hash", "scene definitions"),
+            ("pack_sha256", "pack files"), ("resources_sha256", "prepared resources"), ("renderer", "renderers"))
+RENDERER_KEYS = ("gpu", "vendor", "driver", "device_type", "backend")
+
+
+def _identity_value(key, value):
+    """A recorded identity as it compares (None when it is missing or not of its type): a string, or for the
+    renderer an object of RENDERER_KEYS strings."""
+    if key == "renderer":
+        if not isinstance(value, dict) or not all(isinstance(value.get(k), str) for k in RENDERER_KEYS):
+            return None
+        return json.dumps({k: value[k] for k in RENDERER_KEYS}, sort_keys=True)
+    return value if isinstance(value, str) and value else None
+
+
 def identity_problems(records):
-    """Why a pack's base and head runs can't be compared: taken in different worlds, for different scene
-    definitions, of different staged pack files, or with a record missing an identity."""
+    """Why a pack's base and head runs can't be compared: taken in different worlds or saves, for different scene
+    definitions, of different staged pack files, with different prepared resources or on different renderers, or
+    with a record missing an identity (or giving one of the wrong type)."""
     problems = []
-    for key, what in (("world_id", "worlds"), ("save_sha256", "saves"), ("scene_hash", "scene definitions"),
-                      ("pack_sha256", "pack files")):
-        values = {side: record.get(key) for side, record in records.items()}
+    for key, what in IDENTITY:
+        values = {side: _identity_value(key, record.get(key)) for side, record in records.items()}
         if None in values.values():
-            problems.append(f"a run records no {key} ({values})")
+            shown = {side: record.get(key) for side, record in records.items()}
+            problems.append(f"a run records no valid {key} ({shown})")
         elif len(set(values.values())) > 1:
             problems.append(f"the two sides were taken with different {what} ({values})")
     return problems
 
 
+def describe_inputs(record):
+    """One line of what a run's pictures were drawn with, for the report."""
+    renderer = record.get("renderer") if isinstance(record.get("renderer"), dict) else {}
+    resources = record.get("resources_sha256")
+    return (f"{renderer.get('gpu')} ({renderer.get('vendor')}, {renderer.get('device_type')}), driver "
+            f"{renderer.get('driver')}, backend {renderer.get('backend')}; resources "
+            f"{resources[:12] if isinstance(resources, str) else None}")
+
+
 def unrecorded_pictures(folder, record):
     """PNG files in a run folder that no view record of it names (a capture that stopped before recording, or a
     file put there by hand): listed, never compared."""
-    named = {v.get("picture") for v in (record or {}).get("views", {}).values() if isinstance(v, dict)}
+    named = {v.get("picture") for v in (record or {}).get("views", {}).values()
+             if isinstance(v, dict) and isinstance(v.get("picture"), str)}
     return sorted(p.name for p in Path(folder).glob("*.png") if p.name not in named)
 
 
@@ -328,14 +360,17 @@ def fresh_report_dir(out):
 
 
 def compare(out, scenes, packs=None, jobs=None):
-    """Compares every view of every pack (`packs`: the pack keys to require, default every pack either side ran)
+    """Compares every view of every pack (`packs`: the pack keys to compare, and only those; default every pack
+    either side ran)
     and writes report/ under out: report.json, report.md, index.html and diff/<pack>/<view>.png for each view that
     differs. Returns the report; its "status" is SAME, DIFFERENT or INVALID."""
     out = Path(out)
     report_dir = fresh_report_dir(out)
     size = scenes["size"]
     runs = run_folders(out)
-    keys = sorted(set(runs) | set(packs or []))
+    # An explicit list (`run`'s packs) is the whole scope: an earlier run's folder of another pack is not this
+    # comparison's. Without one (`compare` on its own) every run folder this tool made is compared.
+    keys = sorted(set(packs)) if packs is not None else sorted(runs)
     current = scene_hash(scenes)
     report = {"size": size, "scene_hash": current, "packs": {}}
     tasks, rows_of = [], {}
@@ -372,7 +407,9 @@ def compare(out, scenes, packs=None, jobs=None):
                 tasks.append((paths["base"], paths["head"], size, diff))
                 rows_of[len(tasks) - 1] = (row, diff)
             rows.append(row)
-        report["packs"][key] = {"pack": next((r.get("pack") for r in pair.values() if r.get("pack")), key),
+        notes += [f"{side} drawn on: {describe_inputs(record)}" for side, record in pair.items()]
+        report["packs"][key] = {"pack": next((r["pack"] for r in pair.values() if isinstance(r.get("pack"), str)
+                                              and r["pack"]), key),
                                 "world_id": {side: r.get("world_id") for side, r in pair.items()},
                                 "notes": notes, "rows": rows}
     workers = max(1, min(jobs or os.cpu_count() or 1, 8))
