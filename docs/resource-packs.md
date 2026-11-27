@@ -58,6 +58,7 @@ harness named checks that loader against vanilla).
 | Fonts: `bitmap`, `space`, `unihex`, `reference` | `font/*.json`, `textures/font/` | works | `test_resource_pack_parity` (merged provider lists) |
 | Fonts: `ttf` | `font/*.json` | works | `font.rs` rasterises them with `ab_glyph` (`TrueTypeGlyphProvider`) |
 | Fonts picked by text components (`"font": "..."`, custom fonts) | `font/` | works | `component.rs` reads the `font` key and `font.rs` (`glyph_styled`) draws with the font it names |
+| OptiFine HD fonts: a bitmap provider reads a pack's `optifine/<path>` in place of its sheet `textures/<path>` when a pack has one, whatever its namespace and resolution; the glyph grid is the same, so glyphs keep their size and advance in GUI pixels (the enchanting table's Standard Galactic text included) | `optifine/font/ascii.png` for `textures/font/ascii.png`, and so on for every bitmap provider's `file` | works | `sunrise-optifine` `font` tests, `font.rs` and `hud::tests::atlas` HD font tests; the `.properties` file beside a sheet (`width.<n>`, `blend`, `offsetBold`) is not read, as OptiFine 26.x does not apply it |
 | Languages, translations | `lang/*.json` | works | `test_resource_pack_parity` (key by key, as `ClientLanguage`) |
 | New languages | `pack.mcmeta` `language` | works | `lang.rs` reads every pack's `language` section into the language list |
 | Sounds and sound events (`replace`, weights, streams, event references) | `sounds.json`, `sounds/` | works | `test_resource_pack_parity`, `test_sound_event_parity`, `test_sound_engine_parity` |
@@ -83,7 +84,7 @@ harness named checks that loader against vanilla).
 | OptiFine / CIT Resewn custom item textures (`type=item`: `texture`, `model`, `texture.<name>`, `model.<name>`; `type=armor`: `texture`, `texture.<layer>` with the pre-1.21.2 layer names such as `diamond_layer_1`, `leather_layer_2_overlay`; `type=elytra`: `texture`; `type=enchantment` layers on GUI items; `useGlint=false` in `cit.properties`, which removes vanilla's glint from items) | `optifine/cit/`, `mcpatcher/cit/`, `citresewn/cit/` | partly | `item_render/cit.rs`, `cit_armor.rs`, `cit_glint.rs` and `hud/cit_glint.rs` tests; enchantment layers on held, dropped, framed and worn items, and `anim/` glints, come later; special renderers (heads, shields, banners) keep their vanilla look; only players and armour stands wear CIT armour and elytra, other mobs keep vanilla's; worn trims are unchanged; armour textures above 1024x512 (16 times vanilla's 64x32) draw vanilla |
 | GPU warn list, regional compliance | `gpu_warnlist.json`, `regional_compliancies.json` | n/a | OpenGL driver warnings and play-time notices for some regions; not used |
 
-Summary: 50 rows; 43 work, 6 partly (OptiFine/EMF entity models, random entity textures, connected textures,
+Summary: 51 rows; 44 work, 6 partly (OptiFine/EMF entity models, random entity textures, connected textures,
 emissive textures, CIT, core shaders), 1 doesn't apply. Every vanilla loader in the list above reads the pack; what
 is left is the core shaders, plus the OptiFine-format extras.
 
