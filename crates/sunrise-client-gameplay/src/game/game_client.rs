@@ -450,6 +450,11 @@ impl crate::game::ClientGame<'_> {
         self.mark_stage(out.len(), "NONE");
     }
     pub fn close_container_client(&mut self) {
+        self.clear_container_screen_state();
+        self.remote_close_container();
+    }
+
+    pub(in crate::game) fn clear_container_screen_state(&mut self) {
         assert!(
             !self.is_logical_server(),
             "close_container_client called on Server role"
@@ -460,7 +465,6 @@ impl crate::game::ClientGame<'_> {
         self.close_station_client();
         self.mount_closed();
         self.client.recipe_ui.0.reset_screen();
-        self.remote_close_container();
     }
     /// Shared window/socket ScreenEvent Pre → the captured screen → cancellable Post.
     /// A declined event is never offered to a replacement screen or its bindings.

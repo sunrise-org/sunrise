@@ -181,6 +181,11 @@ pub trait MenusClientBackendMut {
     /// server is told (`ContainerClose`) and the screen goes. Refuses stale
     /// menus, non-client hosts and a menu whose screen is not open, such as
     /// the inventory menu while playing. A server closes a menu with `close_container`.
+    ///
+    /// Inside a client transaction, `true` accepts a close request for the current menu
+    /// instance. The packet and local close wait for the outermost commit; aborting or
+    /// replacing the menu discards the request. Canceling the packet does not cancel the
+    /// local close.
     fn menu_close(&mut self, menu: MenuRef) -> bool;
     /// Side: client.
     /// Press button `button` of the local player's open menu as a click on
