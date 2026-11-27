@@ -896,8 +896,9 @@ fn uniforms(batch: &HudBatch, size: [u32; 2], scale: f32) -> Vec<u8> {
     data[projection] = 2.0 / w;
     data[projection + 5] = -2.0 / h;
     data[projection + 10] = 2.0 / (near - far);
-    data[projection + 12] = -1.0;
-    data[projection + 13] = 1.0;
+    let [x, y] = batch.gui_origin();
+    data[projection + 12] = -1.0 + x * data[projection];
+    data[projection + 13] = 1.0 + y * data[projection + 5];
     data[projection + 14] = (far + near) / (near - far);
     data[projection + 15] = 1.0;
     let transforms = 128;

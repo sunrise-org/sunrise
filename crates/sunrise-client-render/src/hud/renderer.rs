@@ -526,16 +526,19 @@ impl HudRenderer {
             encoder,
             &self.uniform,
             0,
-            bytemuck::bytes_of(&HudUniform::new(
-                [
-                    size[0] as f32,
-                    size[1] as f32,
-                    batch.scale * self.zoom,
-                    batch.glint_alpha,
-                ],
-                batch.end_portal,
-                batch.glint_colour,
-            )),
+            bytemuck::bytes_of(
+                &HudUniform::new(
+                    [
+                        size[0] as f32,
+                        size[1] as f32,
+                        batch.scale * self.zoom,
+                        batch.glint_alpha,
+                    ],
+                    batch.end_portal,
+                    batch.glint_colour,
+                )
+                .with_origin(batch.gui_origin()),
+            ),
         );
         if let Some(pack_text) = &self.pack_text {
             pack_text.prepare(uploads, encoder, batch, size, batch.scale * self.zoom);

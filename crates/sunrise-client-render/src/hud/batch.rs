@@ -101,6 +101,9 @@ pub struct HudBatch {
     pub height: f32,
     /// Physical viewport; GUI width and height round up at non-integer ratios.
     viewport: [u32; 2],
+    origin: [f32; 2],
+    content_clip: Option<[u32; 4]>,
+    full_target: Vec<Range<u32>>,
     /// Glyph pixels to upload into the atlas before drawing.
     pub patches: Vec<crate::font::Patch>,
     /// The changes to client mods' dynamic textures, applied in order before drawing. Never
@@ -257,7 +260,10 @@ impl HudBatch {
     }
 
     pub fn for_frame(frame: &GuiFrame) -> Self {
-        Self::with_gui_size(frame.target, frame.gui)
+        let mut batch = Self::with_gui_size(frame.target, frame.gui);
+        batch.origin = frame.origin().map(|axis| axis as f32);
+        batch.content_clip = frame.clip();
+        batch
     }
 
     fn with_gui_size(window: [u32; 2], gui: GuiSize) -> Self {
@@ -268,6 +274,9 @@ impl HudBatch {
             width: gui.size[0] as f32,
             height: gui.size[1] as f32,
             viewport: window,
+            origin: [0.0; 2],
+            content_clip: None,
+            full_target: Vec::new(),
             patches: Vec::new(),
             dynamic_commands: Vec::new(),
             blends: Vec::new(),
@@ -424,6 +433,53 @@ impl HudBatch {
         (self.width, self.height)
     }
 
+    pub fn gui_origin(&self) -> [f32; 2] {
+        self.origin
+    }
+
+    pub fn content_clip(&self) -> Option<[u32; 4]> {
+        self.content_clip
+    }
+
+    pub fn target_rect(&self) -> [f32; 4] {
+        self.content_clip
+            .map_or([0.0, 0.0, self.width, self.height], |_| {
+                [
+                    -self.origin[0],
+                    -self.origin[1],
+                    self.viewport[0] as f32 / self.scale,
+                    self.viewport[1] as f32 / self.scale,
+                ]
+            })
+    }
+
+    pub fn full_target_since(&mut self, start: usize) {
+        let end = self.vertices.len() as u32;
+        if self.content_clip.is_some() && (start as u32) < end {
+            let start = start as u32;
+            let first = self.full_target.partition_point(|r| r.end < start);
+            let start = self
+                .full_target
+                .get(first)
+                .map_or(start, |r| r.start.min(start));
+            self.full_target.truncate(first);
+            self.full_target.push(start..end);
+        }
+    }
+
+    pub fn local_content_rect(&self) -> Option<[f32; 4]> {
+        self.content_clip
+            .map(|clip| std::array::from_fn(|i| clip[i] as f32 / self.scale - self.origin[i % 2]))
+    }
+
+    fn device_point(&self, point: [f32; 2], scale: f32) -> [f32; 2] {
+        if self.origin == [0.0; 2] {
+            point.map(|value| value * scale)
+        } else {
+            std::array::from_fn(|axis| (point[axis] + self.origin[axis]) * scale)
+        }
+    }
+
     pub fn quad(&mut self, p: [[f32; 2]; 4], uv: [[f32; 2]; 4], color: u32) {
         self.quad_lit(p, uv, color, 0);
     }
@@ -513,7 +569,13 @@ impl HudBatch {
     /// ([`Self::quad_3d_glint`]) follow its own from `glint`: both share the
     /// depth buffer, and the glint is drawn over the model in the same pass.
     pub fn depth_glint_since(&mut self, start: usize, glint: usize, clip: [f32; 4]) {
-        let [x0, y0, x1, y1] = clip.map(|v| (v * self.scale).max(0.0) as u32);
+        let [l, t, r, b] = clip;
+        let [x0, y0] = self
+            .device_point([l, t], self.scale)
+            .map(|v| v.max(0.0) as u32);
+        let [x1, y1] = self
+            .device_point([r, b], self.scale)
+            .map(|v| v.max(0.0) as u32);
         self.depth_pass_since(
             start,
             glint,
@@ -524,8 +586,12 @@ impl HudBatch {
     /// GUI pixels): the scissor takes every device pixel the bounds touch, so the min edges round
     /// down and the max edges up.
     pub fn depth_glint_over(&mut self, start: usize, glint: usize, lo: [f32; 2], hi: [f32; 2]) {
-        let [x0, y0] = lo.map(|v| (v * self.scale).max(0.0).floor() as u32);
-        let [x1, y1] = hi.map(|v| (v * self.scale).max(0.0).ceil() as u32);
+        let [x0, y0] = self
+            .device_point(lo, self.scale)
+            .map(|v| v.max(0.0).floor() as u32);
+        let [x1, y1] = self
+            .device_point(hi, self.scale)
+            .map(|v| v.max(0.0).ceil() as u32);
         self.depth_pass_since(
             start,
             glint,
@@ -727,14 +793,45 @@ impl HudBatch {
             ]
         });
         let scale = self.scale * zoom;
-        self.scissors_in(vertices).filter_map(move |(range, clip)| {
-            let [l, t, r, b] = clip.map_or([x0, y0, x1, y1], |rect| {
-                // Fractional clips select pixels by their centres; integer GUI edges
-                // at vanilla's integer scale already fall on device pixel boundaries.
-                let [l, t, r, b] = rect.map(|v| (v * scale - 0.5).ceil() as u32);
+        let content = self
+            .content_clip
+            .map(|clip| clip.map(|v| (v as f32 * zoom - 0.5).ceil() as u32));
+        self.scissors_in(vertices).flat_map(move |(range, clip)| {
+            let bounds = clip.map_or([x0, y0, x1, y1], |[l, t, r, b]| {
+                let cut = |p| self.device_point(p, scale).map(|v| (v - 0.5).ceil() as u32);
+                let [l, t] = cut([l, t]);
+                let [r, b] = cut([r, b]);
                 [l.max(x0), t.max(y0), r.min(x1), b.min(y1)]
             });
-            (l < r && t < b).then(|| (range, [l, t, r - l, b - t]))
+            let mut cursor = range.start;
+            let mut index = self.full_target.partition_point(|r| r.end <= cursor);
+            std::iter::from_fn(move || {
+                while cursor < range.end {
+                    let (end, bleed) = match self.full_target.get(index) {
+                        Some(full) if full.start <= cursor => {
+                            index += 1;
+                            (full.end.min(range.end), true)
+                        }
+                        Some(full) => (full.start.min(range.end), false),
+                        None => (range.end, false),
+                    };
+                    let part = cursor..end;
+                    cursor = end;
+                    let [l, t, r, b] = match content.filter(|_| !bleed) {
+                        Some([l, t, r, b]) => [
+                            l.max(bounds[0]),
+                            t.max(bounds[1]),
+                            r.min(bounds[2]),
+                            b.min(bounds[3]),
+                        ],
+                        None => bounds,
+                    };
+                    if l < r && t < b {
+                        return Some((part, [l, t, r - l, b - t]));
+                    }
+                }
+                None
+            })
         })
     }
 
@@ -779,6 +876,11 @@ impl HudBatch {
     pub fn truncate_vertices(&mut self, len: usize) {
         self.vertices.truncate(len);
         let len = len as u32;
+        self.full_target
+            .truncate(self.full_target.partition_point(|r| r.start < len));
+        if let Some(last) = self.full_target.last_mut() {
+            last.end = last.end.min(len);
+        }
         let first = self
             .scissors
             .partition_point(|(range, _)| range.start < len);
@@ -972,6 +1074,8 @@ impl HudBatch {
             .flat_map(|(range, blend)| self.scissored_intervals(range, blend, self.viewport, 1.0));
         for (range, [x, y, w, h]) in intervals {
             let [x0, y0, x1, y1] = [x, y, x + w, y + h].map(|v| v as f32 / self.scale);
+            let [ox, oy] = self.origin;
+            let (x0, y0, x1, y1) = (x0 - ox, y0 - oy, x1 - ox, y1 - oy);
             let vertices = &self.vertices[range.start as usize..range.end as usize];
             for triangle in vertices.as_chunks::<3>().0 {
                 if triangle.iter().flat_map(|v| v.pos).any(|v| !v.is_finite())
@@ -1019,6 +1123,7 @@ fn inline_profile_name(profile: &serde_json::Value) -> Option<&str> {
 #[derive(Clone, Copy, bytemuck::Pod, bytemuck::Zeroable)]
 pub(super) struct HudUniform {
     size: [f32; 4],
+    origin: [f32; 4],
     /// `EndPortalFill`: the two sprites, then the game time in x.
     end_portal: [[f32; 4]; 3],
 }
@@ -1032,6 +1137,7 @@ impl HudUniform {
         };
         Self {
             size,
+            origin: [0.0; 4],
             end_portal: [
                 fill.sprites[0],
                 fill.sprites[1],
@@ -1039,11 +1145,38 @@ impl HudUniform {
             ],
         }
     }
+
+    pub(super) fn with_origin(mut self, [x, y]: [f32; 2]) -> Self {
+        self.origin = [x, y, 0.0, 0.0];
+        self
+    }
 }
 
 #[cfg(test)]
 mod bounds_tests {
     use super::*;
+
+    #[test]
+    fn safe_area_scissors_clip_local_geometry_at_window_and_capture_scale() {
+        let frame = GuiFrame::from_insets([853, 481], 2, true, Some([15, 9, 7, 3]));
+        let mut batch = HudBatch::for_frame(&frame);
+        batch.quad(
+            [[0.0, 0.0], [30.0, 0.0], [30.0, 30.0], [0.0, 30.0]],
+            [[0.0; 2]; 4],
+            u32::MAX,
+        );
+        batch.clip_since(0, -5.0, -5.0, 20.0, 20.0);
+        batch.clip_since(0, 2.0, 3.0, 15.0, 14.0);
+        assert_eq!(batch.visible_vertex_bounds(0), Some([2.0, 3.0, 13.0, 11.0]));
+        assert_eq!(
+            batch
+                .scissored_intervals(0..6, Blend::Alpha, [1706, 962], 2.0)
+                .next(),
+            Some((0..6, [40, 32, 52, 44]))
+        );
+        batch.clip_since(0, 40.0, 40.0, 41.0, 41.0);
+        assert_eq!(batch.visible_vertex_bounds(0), None);
+    }
 
     #[test]
     fn visible_vertex_bounds_tracks_drawn_slice_and_ignores_empty_geometry() {
