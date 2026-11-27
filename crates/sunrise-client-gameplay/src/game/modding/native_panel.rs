@@ -696,9 +696,14 @@ impl crate::game::ClientGame<'_> {
                 .as_ref()
                 .filter(|_| recipes)
                 .map_or(gui, |renderer| {
+                    let target = [renderer.config.width, renderer.config.height];
+                    let usable = self
+                        .gui_frame_for(target)
+                        .clip()
+                        .map_or(target, |[l, t, r, b]| [r - l, b - t]);
                     (
-                        (renderer.config.width as f32 / scale).floor(),
-                        (renderer.config.height as f32 / scale).floor(),
+                        (usable[0] as f32 / scale).floor(),
+                        (usable[1] as f32 / scale).floor(),
                     )
                 });
         let right = width - if recipes { 6.0 } else { MARGIN };

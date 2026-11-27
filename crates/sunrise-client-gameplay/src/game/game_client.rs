@@ -1686,10 +1686,12 @@ impl crate::game::ClientGame<'_> {
                             .as_ref()
                             .map(|w| w.inner_size())
                             .unwrap_or_default();
+                        let target = [size.width, size.height];
                         let gui = self
                             .client
-                            .settings
-                            .gui_frame_for([size.width, size.height])
+                            .gui_safe_area
+                            .filter(|frame| frame.target == target)
+                            .unwrap_or_else(|| self.client.settings.gui_frame_for(target))
                             .size();
                         if step_scroll {
                             title.step_scroll(d, self.client.cursor, gui);
