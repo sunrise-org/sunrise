@@ -476,7 +476,7 @@ fn custom_menu_screens_route_by_menu_type_and_allow_cross_mod_slot_controls() {
                             let (ox, oy) = game.inventory_origin(batch.size());
                             game.client.cursor = (ox + 90.0, oy + 105.0);
                             assert!(game.draw_native_screen(&mut batch, ox, oy));
-                            assert!(game.native_screen_press_at(&batch, false));
+                            assert!(game.native_screen_press_at(batch.size(), false));
                             let click = (0..32).find_map(|_| {
                                 let (id, body) = peer.recv().ok()?;
                                 match Serverbound::decode(id, &body).unwrap() {

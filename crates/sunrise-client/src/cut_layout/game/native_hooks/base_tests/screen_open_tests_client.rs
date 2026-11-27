@@ -504,7 +504,7 @@ fn the_creative_screen_excludes_its_two_tab_rows() {
             let batch = HudBatch::scratch([854, 480]);
             let image = game.container_image(batch.size());
             let (x, y) = (image.left as f32, image.top as f32);
-            let areas = game.screen_own_exclusion(&batch);
+            let areas = game.screen_own_exclusion(batch.size());
             assert_eq!(areas[0], [x, y - 28.0, 195.0, 28.0]);
             assert_eq!(areas[1], [x, y + 136.0, 195.0, 28.0]);
         });

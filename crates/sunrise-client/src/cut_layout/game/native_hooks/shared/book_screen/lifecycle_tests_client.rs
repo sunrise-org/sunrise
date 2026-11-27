@@ -852,7 +852,7 @@ fn a_reopened_window_uses_only_its_new_screen_instance() {
                     let (ox, oy) = game.inventory_origin(batch.size());
                     game.client.cursor = (ox + 17.0, oy + 25.0);
                     assert!(game.draw_native_screen(&mut batch, ox, oy));
-                    assert!(game.native_screen_press_at(&batch, true));
+                    assert!(game.native_screen_press_at(batch.size(), true));
                     let packet = (0..32)
                         .find_map(|_| {
                             let (id, body) = peer.recv().ok()?;
@@ -873,7 +873,7 @@ fn a_reopened_window_uses_only_its_new_screen_instance() {
                     game.handle_packet(C::ContainerClose(ContainerClose { container: 23 }))
                         .unwrap();
                     assert!(!game.draw_native_screen(&mut batch, ox, oy));
-                    assert!(!game.native_screen_press_at(&batch, true));
+                    assert!(!game.native_screen_press_at(batch.size(), true));
                     lines.clear();
                     game.native_screen_tooltip_lines(&batch, None, &mut lines);
                     assert!(lines.is_empty());

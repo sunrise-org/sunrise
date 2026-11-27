@@ -4,13 +4,13 @@ use sunrise_client::creative::Creative;
 /// Helpers for native mods, kept as stable as the hook points.
 // Native mods use these; nothing in Sunrise does.
 impl crate::game::ClientGame<'_> {
-    /// `screen_hovered_stack` at `(x, y)` in `batch`'s GUI pixels. A creative item tab's display
+    /// `screen_hovered_stack` at `(x, y)` in GUI pixels. A creative item tab's display
     /// slot shows the tab's list (`ItemPickerMenu`), scrolled to its first visible row.
-    pub(crate) fn hovered_stack_at(&self, batch: &HudBatch, x: f32, y: f32) -> Option<ItemStack> {
+    pub(crate) fn hovered_stack_at(&self, gui: (f32, f32), x: f32, y: f32) -> Option<ItemStack> {
         if !matches!(self.client.screen, Screen::Inventory | Screen::Creative) {
             return None;
         }
-        let slot = self.slot_at(batch.size(), x, y)?;
+        let slot = self.slot_at(gui, x, y)?;
         if self.creative_tab_open() && slot >= Creative::DISPLAY {
             return self.creative_display_stack(slot);
         }
@@ -29,7 +29,7 @@ impl crate::game::ClientGame<'_> {
             .0
             .as_ref()
             .map(|r| [r.config.width, r.config.height])?;
-        let batch = HudBatch::new(size, self.client.settings.gui_scale_inputs());
-        self.hovered_stack_at(&batch, self.client.cursor.0, self.client.cursor.1)
+        let frame = self.gui_frame_for(size);
+        self.hovered_stack_at(frame.size(), self.client.cursor.0, self.client.cursor.1)
     }
 }

@@ -1,5 +1,3 @@
-use super::*;
-
 /// The hook points. Each does nothing in Sunrise.
 impl crate::game::ClientGame<'_> {
     /// Where the open screen draws outside its `rect`, and where mods draw
@@ -18,8 +16,8 @@ impl crate::game::ClientGame<'_> {
         let Some(framebuffer) = self.renderer_framebuffer() else {
             return Vec::new();
         };
-        let batch = HudBatch::new(framebuffer, self.client.settings.gui_scale_inputs());
-        let mut areas = self.screen_own_exclusion(&batch);
+        let frame = self.gui_frame_for(framebuffer);
+        let mut areas = self.screen_own_exclusion(frame.size());
         self.native_screen_exclusion_areas(&view, &mut areas);
         areas.retain(|a| a.iter().all(|v| v.is_finite()) && a[2] > 0.0 && a[3] > 0.0);
         areas

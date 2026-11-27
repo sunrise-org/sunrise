@@ -230,7 +230,7 @@ impl crate::game::ClientGame<'_> {
         let panel = hovered.panel;
         let mut lines = inventory_effects::tooltip(hovered);
         if mod_api::__private::listened(mod_api::HookId::GatherEffectScreenTooltips) {
-            let view = self.screen_view(batch, self.client.screen);
+            let view = self.screen_view(batch.size(), self.client.screen);
             let effect =
                 sunrise_gameplay_common::game::native_living_body::active_effect(panel.effect);
             self.native_gather_effect_screen_tooltips(&view, &effect, &mut lines);

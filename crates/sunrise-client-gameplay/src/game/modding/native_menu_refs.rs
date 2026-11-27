@@ -99,8 +99,8 @@ impl ClientGame<'_> {
         // The framebuffer `Renderer::render` leaves behind while it has the renderer out, so a
         // frame callback reads the boxes too.
         let framebuffer = self.renderer_framebuffer()?;
-        let batch = super::HudBatch::new(framebuffer, self.client.settings.gui_scale_inputs());
-        self.inventory_menu_slot_boxes(menu.fields().window, name, &batch)
+        let frame = self.gui_frame_for(framebuffer);
+        self.inventory_menu_slot_boxes(menu.fields().window, name, frame.size())
     }
 
     pub(in crate::game) fn menu_creative_catalog(
@@ -116,8 +116,8 @@ impl ClientGame<'_> {
         if !self.creative_tab_open() {
             return Some(Vec::new());
         }
-        let batch = super::HudBatch::new(framebuffer, self.client.settings.gui_scale_inputs());
-        let (ox, oy) = Self::creative_origin(batch.size());
+        let frame = self.gui_frame_for(framebuffer);
+        let (ox, oy) = Self::creative_origin(frame.size());
         let shown = self
             .client
             .creative_screen
@@ -134,9 +134,9 @@ impl ClientGame<'_> {
         &self,
         window: i32,
         name: &str,
-        batch: &super::HudBatch,
+        gui: (f32, f32),
     ) -> Option<Vec<Option<[f32; 4]>>> {
-        if self.book_covers_menu(batch.width) {
+        if self.book_covers_menu(gui.0) {
             return None;
         }
         let kind = self.native_screen_menu_type(window, name);
@@ -151,7 +151,7 @@ impl ClientGame<'_> {
             Some(_) => {}
         }
         let visible = self.slots();
-        let (ox, oy) = self.inventory_origin(batch.size());
+        let (ox, oy) = self.inventory_origin(gui);
         Some(
             (0..)
                 .map_while(slot_id)
@@ -501,14 +501,14 @@ pub mod tests {
             );
             assert_eq!(game.native_client_menu_name(menu), Some("inventory"));
             assert!(
-                game.inventory_menu_slot_boxes(0, "inventory", &batch)
+                game.inventory_menu_slot_boxes(0, "inventory", batch.size())
                     .is_some()
             );
             let boxes = game.menu_slot_boxes(menu).unwrap();
             assert_eq!(boxes.len(), 46);
             assert_eq!(
                 Some(boxes),
-                game.inventory_menu_slot_boxes(0, "inventory", &batch)
+                game.inventory_menu_slot_boxes(0, "inventory", batch.size())
             );
         });
     }
@@ -524,7 +524,7 @@ pub mod tests {
         let batch =
             super::super::HudBatch::new([800, 600], game.client.settings.gui_scale_inputs());
         let boxes = game
-            .inventory_menu_slot_boxes(0, "inventory", &batch)
+            .inventory_menu_slot_boxes(0, "inventory", batch.size())
             .unwrap();
         assert_eq!(boxes.len(), 46);
         for (index, expected_slot) in [(0, 200), (9, 9), (36, 0), (45, 504)] {
@@ -534,7 +534,10 @@ pub mod tests {
                 Some(expected_slot)
             );
         }
-        assert!(game.inventory_menu_slot_boxes(1, PANEL, &batch).is_none());
+        assert!(
+            game.inventory_menu_slot_boxes(1, PANEL, batch.size())
+                .is_none()
+        );
         game.client.screen = super::super::Screen::Playing;
         open_panel(game);
         let menu = game
@@ -546,11 +549,11 @@ pub mod tests {
             "the same live handle and count are available during screen_opening"
         );
         assert!(
-            game.inventory_menu_slot_boxes(1, "unsupported", &batch)
+            game.inventory_menu_slot_boxes(1, "unsupported", batch.size())
                 .is_none()
         );
         assert_eq!(
-            game.inventory_menu_slot_boxes(1, PANEL, &batch),
+            game.inventory_menu_slot_boxes(1, PANEL, batch.size()),
             Some(vec![])
         );
         assert!(

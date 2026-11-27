@@ -592,13 +592,6 @@ impl crate::game::ClientGame<'_> {
         let caller = mod_api::content::crash::current_native_mod();
         self.client.panel.set_search(caller, mod_id, text);
     }
-    fn browser_batch(&self) -> Option<HudBatch> {
-        let r = self.client.renderer.0.as_ref()?;
-        Some(HudBatch::new(
-            [r.config.width, r.config.height],
-            self.client.settings.gui_scale_inputs(),
-        ))
-    }
     /// The mod showing a panel, with its items made into stacks once per
     /// change; none while no mod shows one or no container screen is up.
     fn browser_sync(&mut self) -> Option<Owner> {
@@ -659,8 +652,8 @@ impl crate::game::ClientGame<'_> {
     }
     /// The panel's parts: right of the window, from the top of the screen to
     /// the search box at its foot. None when the screen has no room for it.
-    fn browser_layout(&self, batch: &HudBatch) -> Option<Layout> {
-        let image = self.container_image(batch.size());
+    fn browser_layout(&self, gui: (f32, f32), scale: f32) -> Option<Layout> {
+        let image = self.container_image(gui);
         let recipes = self
             .client
             .panel
@@ -668,7 +661,7 @@ impl crate::game::ClientGame<'_> {
             .as_ref()
             .is_some_and(|(owner, _)| owner.native_id() == "recipes");
         let window_right = if self.client.screen == Screen::Creative {
-            Self::creative_origin(batch.size()).0 + 198.0
+            Self::creative_origin(gui).0 + 198.0
         } else {
             (image.left + image.width) as f32
         };
@@ -681,19 +674,22 @@ impl crate::game::ClientGame<'_> {
         if let Some((centred, window_width)) = classic.filter(|_| !recipes) {
             let (left, top) = (image.left as f32, image.top as f32);
             let window = [left, top, window_right - left, image.height as f32];
-            let screen = [batch.width, batch.height];
+            let screen = [gui.0, gui.1];
             return classic_layout(screen, window, f32::from(window_width), centred);
         }
         let left = window_right + MARGIN;
-        let (width, height) = self.client.renderer.0.as_ref().filter(|_| recipes).map_or(
-            (batch.width, batch.height),
-            |renderer| {
-                (
-                    (renderer.config.width as f32 / batch.scale).floor(),
-                    (renderer.config.height as f32 / batch.scale).floor(),
-                )
-            },
-        );
+        let (width, height) =
+            self.client
+                .renderer
+                .0
+                .as_ref()
+                .filter(|_| recipes)
+                .map_or(gui, |renderer| {
+                    (
+                        (renderer.config.width as f32 / scale).floor(),
+                        (renderer.config.height as f32 / scale).floor(),
+                    )
+                });
         let right = width - if recipes { 6.0 } else { MARGIN };
         let columns = (((right - left) / SLOT).floor().max(0.0) as usize).min(if recipes {
             9
@@ -714,7 +710,7 @@ impl crate::game::ClientGame<'_> {
         let mut search = if recipes {
             [x, height - 26.0, grid_width, 20.0]
         } else {
-            [x, batch.height - MARGIN - 16.0, grid_width, 16.0]
+            [x, gui.1 - MARGIN - 16.0, grid_width, 16.0]
         };
         let settings = recipes.then(|| {
             search[2] -= RECIPES_SETTINGS_WIDTH;
@@ -728,9 +724,9 @@ impl crate::game::ClientGame<'_> {
         let rows = ((search[1] - 4.0 - top) / SLOT).floor().max(0.0) as usize;
         (rows > 0).then_some(Layout {
             area: if recipes {
-                [x, 0.0, right - x, batch.height]
+                [x, 0.0, right - x, gui.1]
             } else {
-                [left, 0.0, right - left, batch.height]
+                [left, 0.0, right - left, gui.1]
             },
             grid: (x, top),
             columns,
@@ -918,14 +914,14 @@ impl crate::game::ClientGame<'_> {
     /// overlay phase. The carried stack belongs to the enclosing screen.
     pub fn draw_mod_browser(&mut self, batch: &mut HudBatch) -> Option<BrowserTooltip> {
         let owner = self.browser_sync()?;
-        let mut layout = self.browser_layout(batch)?;
+        let mut layout = self.browser_layout(batch.size(), batch.scale)?;
         // A search text the owner set (`panel_search`) goes into its box only
         // now, with room for the box, and is heard through typing's own path,
         // outside the mod's call; the list it sends back is drawn this frame.
         if self.client.panel.deliver_search(&owner) {
             self.browser_searched();
             self.browser_sync()?;
-            layout = self.browser_layout(batch)?;
+            layout = self.browser_layout(batch.size(), batch.scale)?;
         }
         let cursor = self.client.cursor;
         if self.client.panel.recipes.is_some() {
@@ -1054,10 +1050,10 @@ impl crate::game::ClientGame<'_> {
         let Some(owner) = self.browser_sync() else {
             return false;
         };
-        let Some(batch) = self.browser_batch() else {
+        let Some(frame) = self.renderer_gui_frame() else {
             return false;
         };
-        let Some(layout) = self.browser_layout(&batch) else {
+        let Some(layout) = self.browser_layout(frame.size(), frame.scale()) else {
             return false;
         };
         let cursor = self.client.cursor;
@@ -1169,8 +1165,9 @@ impl crate::game::ClientGame<'_> {
             return false;
         }
         let owner = self.browser_sync();
-        let on_panel = (self.browser_batch())
-            .and_then(|batch| self.browser_layout(&batch))
+        let on_panel = self
+            .renderer_gui_frame()
+            .and_then(|frame| self.browser_layout(frame.size(), frame.scale()))
             .map(|layout| inside(self.client.cursor, layout.area));
         let Some(held) = self.client.panel.held.take() else {
             return true;
@@ -1236,10 +1233,10 @@ impl crate::game::ClientGame<'_> {
         let Some(owner) = self.browser_sync() else {
             return false;
         };
-        let Some(batch) = self.browser_batch() else {
+        let Some(frame) = self.renderer_gui_frame() else {
             return false;
         };
-        let Some(layout) = self.browser_layout(&batch) else {
+        let Some(layout) = self.browser_layout(frame.size(), frame.scale()) else {
             return false;
         };
         if self.client.panel.recipes.is_some() {
@@ -1349,10 +1346,10 @@ impl crate::game::ClientGame<'_> {
     /// The item under the pointer on a container screen, for the mods' keys
     /// (the `Key` event): the panel's, else a slot's.
     pub(in crate::game::client_side) fn mod_browser_pointed(&mut self) -> Option<BrowserStack> {
-        let batch = self.browser_batch()?;
+        let frame = self.renderer_gui_frame()?;
         let stack = match self
             .browser_sync()
-            .and_then(|_| self.browser_layout(&batch))
+            .and_then(|_| self.browser_layout(frame.size(), frame.scale()))
         {
             // The panel's stacks as the mod sent them.
             Some(layout) if inside(self.client.cursor, layout.area) => {
@@ -1360,7 +1357,7 @@ impl crate::game::ClientGame<'_> {
             }
             _ => {
                 let slot =
-                    self.slot_at(batch.size(), self.client.cursor.0, self.client.cursor.1)?;
+                    self.slot_at(frame.size(), self.client.cursor.0, self.client.cursor.1)?;
                 self.slot_view(slot)?
             }
         };

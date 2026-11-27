@@ -296,7 +296,7 @@ pub(crate) mod tests {
                 let batch = HudBatch::new([1280, 720], game.client.settings.gui_scale_inputs());
                 assert_eq!(game.inventory_origin(batch.size()), (51.0, 37.0));
                 assert_eq!(
-                    game.screen_view(&batch, Screen::Inventory).rect,
+                    game.screen_view(batch.size(), Screen::Inventory).rect,
                     [51.0, 37.0, 176.0, 166.0]
                 );
                 let slot = game
@@ -326,7 +326,7 @@ pub(crate) mod tests {
                 assert_eq!(game.client.screen_state.0.build.builds, builds + 1);
                 assert_eq!(game.slot_at(batch.size(), 83.0, 179.0), Some(0));
                 assert_eq!(
-                    game.screen_view(&batch, Screen::Inventory).rect,
+                    game.screen_view(batch.size(), Screen::Inventory).rect,
                     [75.0, 37.0, 176.0, 166.0]
                 );
             });
@@ -378,7 +378,7 @@ pub(crate) mod tests {
                                 [x + 7.0, 178.0, 18.0, 18.0]
                             );
                             assert_eq!(
-                                game.screen_view(&batch, Screen::Inventory).rect,
+                                game.screen_view(batch.size(), Screen::Inventory).rect,
                                 [x, 37.0, 176.0, 166.0]
                             );
                             assert_eq!(
@@ -460,7 +460,7 @@ pub(crate) mod tests {
                                 [x + 7.0, 178.0, 18.0, 18.0]
                             );
                             assert_eq!(
-                                game.screen_view(&batch, Screen::Inventory).rect,
+                                game.screen_view(batch.size(), Screen::Inventory).rect,
                                 [x, 37.0, 176.0, 166.0]
                             );
                             assert_eq!(game.slot_at(batch.size(), x + 8.0, 179.0), Some(0));

@@ -330,8 +330,7 @@ impl<'g> crate::game::ClientGame<'g> {
         self.remote_menu_type()
             .and_then(sunrise_level::containers::mod_menu_type)
     }
-    /// The panel's corner, which slot positions are from, and its size, as `batch`'s frame lays
-    /// the screen out.
+    /// The panel's corner and size in GUI pixels.
     fn container_frame(&self, gui: (f32, f32)) -> ((f32, f32), Panel) {
         let (origin, width, height) = match self.built_container(gui) {
             Some(layout) => (layout.origin, layout.image[2], layout.image[3]),

@@ -308,7 +308,7 @@ fn title_hook_requests_one_orderly_quit() {
             *game.test_title_mut() = Some(title);
             let event_loop = QuitLoop(Cell::new(0));
             let batch = HudBatch::scratch([854, 480]);
-            let screen = game.title_screen_view(&batch).unwrap();
+            let screen = game.title_screen_view(batch.size()).unwrap();
             let mut canceled = false;
             game.native_screen_key_pressed_pre(&screen, "key.keyboard.q", false, 0, &mut canceled);
             let requests = [("request", true), ("request", false)];

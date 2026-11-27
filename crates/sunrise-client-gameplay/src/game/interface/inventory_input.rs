@@ -399,7 +399,7 @@ impl crate::game::ClientGame<'_> {
         let frame = self.gui_frame_for([r.config.width, r.config.height]);
         self.target_at(frame.size())
     }
-    /// `inventory_target` for the frame `batch` describes.
+    /// `inventory_target` for an explicit GUI size.
     pub fn target_at(&self, gui: (f32, f32)) -> (Option<usize>, bool) {
         let slot = self.slot_at(gui, self.client.cursor.0, self.client.cursor.1);
         // A mod screen may place a slot beyond its image: a click on one is
