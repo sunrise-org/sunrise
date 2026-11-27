@@ -29,12 +29,18 @@ def in_workspace(pkg_id):
                                                       ).is_relative_to(ROOT)
 
 
-def workspace_pkg_name(unit):
-    """Package name of a workspace unit from its pkg_id (`.../<dir>#<ver>` or `...#<name>@<ver>`)."""
-    path_part, fragment = unit["pkg_id"].split("#", 1)
+def parse_pkg_id(pkg_id):
+    """(name, version) of a Cargo pkg_id (`...#<name>@<ver>` or `.../<dir>#<ver>`)."""
+    path_part, fragment = pkg_id.rsplit("#", 1)
     if "@" in fragment:
-        return fragment.split("@", 1)[0]
-    return Path(unquote(path_part[len("path+file://"):])).name
+        name, version = fragment.rsplit("@", 1)
+        return name, version
+    return Path(unquote(path_part.split("?", 1)[0].split("://", 1)[-1])).name, fragment
+
+
+def workspace_pkg_name(unit):
+    """Package name of a workspace unit from its pkg_id."""
+    return parse_pkg_id(unit["pkg_id"])[0]
 
 
 def plan(root, *, extras_off):
@@ -67,7 +73,7 @@ def own(unit):
 
 
 def describe(unit):
-    name, version = unit["pkg_id"].rsplit("#", 1)[-1].rsplit("@", 1)
+    name, version = parse_pkg_id(unit["pkg_id"])
     return f"{name} {version} {unit['target']['name']} ({unit['mode']}; features [{', '.join(unit['features'])}])"
 
 

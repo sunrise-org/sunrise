@@ -99,14 +99,19 @@ class ExtrasFeaturesTest(unittest.TestCase):
 
     def test_a_path_package_outside_the_workspace_is_still_compared(self):
         for folder in ("/elsewhere", f"{ROOT}-sibling"):
-            with self.subTest(folder=folder):
-                source = f"path+file://{folder}/outside#"
-                status, diagnostic = self.check(
-                    graph(unit("outside@0.1.0", ["std"], source=source), *extras_units(True), GAME),
-                    graph(unit("outside@0.1.0", source=source), *extras_units(False), GAME),
-                )
-                self.assertEqual(status, 1)
-                self.assertIn("outside 0.1.0 outside (build; features []) differs", diagnostic)
+            for package, tail in (("0.1.0", "outside"), ("outside@0.1.0", "other-dir")):
+                with self.subTest(folder=folder, package=package):
+                    source = f"path+file://{folder}/{tail}#"
+                    default_unit = unit(package, ["std"], source=source)
+                    default_unit["target"]["name"] = "outside"
+                    vanilla_unit = unit(package, source=source)
+                    vanilla_unit["target"]["name"] = "outside"
+                    status, diagnostic = self.check(
+                        graph(default_unit, *extras_units(True), GAME),
+                        graph(vanilla_unit, *extras_units(False), GAME),
+                    )
+                    self.assertEqual(status, 1)
+                    self.assertIn("outside 0.1.0 outside (build; features []) differs", diagnostic)
 
     def test_a_host_unit_does_not_stand_in_for_a_target_unit(self):
         # The vanilla target libc has the features only the default build's host libc had.
