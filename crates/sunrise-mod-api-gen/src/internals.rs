@@ -907,6 +907,34 @@ impl Shapes {
     }
 }
 
+/// Whether staging makes an import of `module` public, `cfg` being the conditions of the module's
+/// enclosing declarations. The patch crate's mirror reads the same answer to tell which bindings the
+/// prebuilt crate exposes.
+///
+/// - A game module's restricted import, such as `pub(super) use lower::Item;` left where an item
+///   moved to a lower crate: the game's code reaches the item through it, and so do a mixin's copy
+///   of that code and the patch crate's repeated imports, so it is widened with the game's own
+///   items. (An import of a game macro stays as written; `Pass::item` checks that.)
+/// - A lower crate's import under one of its own Cargo features: the patch crate is built with the
+///   game's features, so its mirror reaches the binding the prebuilt crate chose through the
+///   module's glob, which needs the import public.
+pub(crate) fn widens_import(
+    layout: SourceLayout,
+    module: &str,
+    cfg: &[String],
+    value: &syn::ItemUse,
+) -> bool {
+    !test_only(&value.attrs)
+        && if layout.owns(module) {
+            matches!(value.vis, Visibility::Restricted(_))
+        } else {
+            cfg.iter()
+                .cloned()
+                .chain(conditions(&value.attrs))
+                .any(|condition| crate::patch::names_feature_text(&condition))
+        }
+}
+
 /// The names a `use` tree imports, before any rename: what each binding refers to.
 fn use_names(tree: &syn::UseTree) -> Vec<String> {
     match tree {
@@ -1394,34 +1422,15 @@ impl Pass {
                     self.shadowed = outer_shadowed;
                 }
             }
-            // A game module's restricted import, such as `pub(super) use lower::Item;` left where
-            // an item moved to a lower crate: the game's code reaches the item through it, and so
-            // do a mixin's copy of that code and the patch crate's repeated imports, so it is
-            // widened with the game's own items.
+            // An import `widens_import` names is widened with the game's own items.
             Item::Use(value)
-                if !test_only(&value.attrs)
-                    && self.layout.owns(module)
-                    && matches!(value.vis, Visibility::Restricted(_))
-                    && !use_names(&value.tree).iter().any(|name| {
-                        self.game_macros
-                            .get(module.split("::").next().unwrap_or_default())
-                            .is_some_and(|macros| macros.contains(name))
-                    }) =>
-            {
-                self.sources[file].public(&value.vis, value.use_token.span(), "use");
-            }
-            // A lower crate's import under one of its own Cargo features: the patch crate is built
-            // with the game's features, so its mirror reaches the binding the prebuilt crate chose
-            // through the module's glob, which needs the import public.
-            Item::Use(value)
-                if !test_only(&value.attrs)
-                    && !self.layout.owns(module)
-                    && self
-                        .cfg
-                        .iter()
-                        .cloned()
-                        .chain(conditions(&value.attrs))
-                        .any(|condition| crate::patch::names_feature_text(&condition)) =>
+                if widens_import(self.layout, module, &self.cfg, value)
+                    && (!self.layout.owns(module)
+                        || !use_names(&value.tree).iter().any(|name| {
+                            self.game_macros
+                                .get(module.split("::").next().unwrap_or_default())
+                                .is_some_and(|macros| macros.contains(name))
+                        })) =>
             {
                 self.sources[file].public(&value.vis, value.use_token.span(), "use");
             }
