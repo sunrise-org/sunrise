@@ -95,6 +95,8 @@ mod section_fade;
 mod section_upload;
 mod shader_pack;
 pub use shader_pack::PreparedShaderPack;
+#[cfg(feature = "test-support")]
+pub use shader_pack::ShaderPackBuildTestMode;
 mod surface_lifecycle;
 use entity_draw::*;
 #[cfg(test)]

@@ -69,6 +69,8 @@ fn terrain_sources_are_kept_only_while_a_pack_is_loaded() {
             .as_mut()
             .unwrap()
             .wait_shader_pack_build_for_test();
+        frame(game);
+        assert!(kept(game), "installed");
         game.client.settings.sunrise.shader_pack.clear();
         frame(game);
         assert!(!kept(game), "dropped");

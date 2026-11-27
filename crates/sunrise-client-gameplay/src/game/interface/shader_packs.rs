@@ -588,6 +588,7 @@ struct TranslationWorker {
 pub(super) enum TranslationTestAction {
     Complete,
     Fail,
+    Panic,
 }
 
 impl Drop for TranslationWorker {
@@ -600,7 +601,12 @@ impl TranslationWorker {
     fn spawn(
         request: TranslationRequest,
         #[cfg(test)] gate: Option<std::sync::mpsc::Receiver<TranslationTestAction>>,
+        #[cfg(test)] fail_spawn: bool,
     ) -> std::io::Result<Self> {
+        #[cfg(test)]
+        if fail_spawn {
+            return Err(std::io::Error::other("forced translation spawn failure"));
+        }
         let key = request.key.clone();
         let cancel = Arc::new(AtomicBool::new(false));
         let cancelled = cancel.clone();
@@ -609,8 +615,11 @@ impl TranslationWorker {
             .spawn(move || {
                 let key = request.key.clone();
                 #[cfg(test)]
+                let mut force_panic = false;
+                #[cfg(test)]
                 if let Some(gate) = gate {
                     match gate.recv() {
+                        Ok(TranslationTestAction::Panic) => force_panic = true,
                         Ok(TranslationTestAction::Complete) => {}
                         Ok(TranslationTestAction::Fail) => {
                             return TranslationReply {
@@ -626,8 +635,12 @@ impl TranslationWorker {
                         }
                     }
                 }
-                let outcome = sunrise_level::crash::contain(|| translate_pack(request, &cancelled))
-                    .map_err(|panic| format!("translating it panicked: {panic}"));
+                let outcome = sunrise_level::crash::contain(|| {
+                    #[cfg(test)]
+                    assert!(!force_panic, "forced translation panic");
+                    translate_pack(request, &cancelled)
+                })
+                .map_err(|panic| format!("translating it panicked: {panic}"));
                 TranslationReply { key, outcome }
             })?;
         Ok(Self {
@@ -694,6 +707,12 @@ pub(in crate::game) struct ShaderTranslation {
     pick_time: Option<(String, Instant)>,
     #[cfg(test)]
     gate: Option<std::sync::mpsc::Receiver<TranslationTestAction>>,
+    #[cfg(test)]
+    pub(super) test_immediate: bool,
+    #[cfg(test)]
+    pub(super) test_spawn_failure: bool,
+    #[cfg(test)]
+    pub(super) test_lava_layers: Option<Vec<u16>>,
 }
 
 impl ShaderTranslation {
@@ -825,7 +844,15 @@ impl ShaderTranslation {
 
     pub(super) fn wait_for_translation(&mut self) {
         let worker = self.worker.as_mut().expect("a translation worker");
-        worker.ready = Some(worker.thread.take().expect("worker running").join());
+        if let Some(thread) = worker.thread.take() {
+            worker.ready = Some(thread.join());
+        }
+    }
+
+    #[cfg(test)]
+    pub(super) fn disconnect_worker(&mut self) {
+        self.wait_for_translation();
+        self.worker.as_mut().unwrap().ready = Some(Err(Box::new("disconnected")));
     }
 }
 
@@ -1152,6 +1179,14 @@ impl crate::game::ClientGame<'_> {
                     .map(|&l| l as u16)
             })
             .collect();
+        #[cfg(test)]
+        let lava_layers = self
+            .client
+            .native_shaders
+            .translation
+            .test_lava_layers
+            .clone()
+            .unwrap_or(lava_layers);
         let folder = dimension_folder_named(&pack, key.selection.dimension, dimension);
         // Its terrain programs read the section arena's pages, or else the
         // normal stream, where they still fit the vertex stage with them.
@@ -1202,8 +1237,16 @@ impl crate::game::ClientGame<'_> {
             *request,
             #[cfg(test)]
             translation.gate.take(),
+            #[cfg(test)]
+            std::mem::take(&mut translation.test_spawn_failure),
         ) {
-            Ok(worker) => translation.worker = Some(worker),
+            Ok(worker) => {
+                translation.worker = Some(worker);
+                #[cfg(test)]
+                if std::mem::take(&mut translation.test_immediate) {
+                    translation.wait_for_translation();
+                }
+            }
             Err(error) => {
                 log::error!(
                     "shader pack {}: no thread to translate it on: {error}",

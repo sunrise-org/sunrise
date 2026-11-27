@@ -13,6 +13,14 @@ pub struct PreparedShaderPack {
     atlases: Option<PackAtlases>,
 }
 
+#[cfg(feature = "test-support")]
+#[derive(Clone, Copy)]
+pub enum ShaderPackBuildTestMode {
+    Immediate,
+    Refuse,
+    SpawnFailure,
+}
+
 impl Renderer {
     /// Runs `post` over the world from now on (`None`: no pack), for the dimension `dimension`;
     /// `block_ids` gives each source state its model and fluid material ids (two values
@@ -229,6 +237,17 @@ impl Renderer {
         label: String,
         started: std::time::Instant,
     ) {
+        #[cfg(feature = "test-support")]
+        let test_mode = self.shader_pack_build_test_mode.take();
+        #[cfg(feature = "test-support")]
+        if matches!(test_mode, Some(ShaderPackBuildTestMode::SpawnFailure)) {
+            self.pack_thread_failed(
+                dimension,
+                &label,
+                &std::io::Error::other("forced GPU spawn failure"),
+            );
+            return;
+        }
         let device = self.device.clone();
         let queue = self.queue.clone();
         let adapter = self.adapter.clone();
@@ -333,7 +352,19 @@ impl Renderer {
         // A pack is not the game's code: a panic building it turns the pack off (#3525).
         let thread = std::thread::Builder::new()
             .name("Shader pack".into())
-            .spawn(move || crate::crash::contain(build));
+            .spawn(move || {
+                #[cfg(feature = "test-support")]
+                if matches!(test_mode, Some(ShaderPackBuildTestMode::Refuse)) {
+                    return Ok((
+                        Err(pack_post::Refused {
+                            reason: "forced GPU build refusal".into(),
+                            notes: Vec::new(),
+                        }),
+                        Vec::new(),
+                    ));
+                }
+                crate::crash::contain(build)
+            });
         match thread {
             Ok(thread) => {
                 // The last pack doesn't draw this dimension meanwhile.
@@ -347,6 +378,13 @@ impl Renderer {
                     _cancel: CancelOnDrop(cancel),
                     draws: draws_sections,
                 });
+                #[cfg(feature = "test-support")]
+                if matches!(
+                    test_mode,
+                    Some(ShaderPackBuildTestMode::Immediate | ShaderPackBuildTestMode::Refuse)
+                ) {
+                    self.wait_shader_pack_build_for_test();
+                }
             }
             Err(e) => self.pack_thread_failed(dimension, &label, &e),
         }
@@ -409,6 +447,30 @@ impl Renderer {
         self.pack_loading
             .as_ref()
             .is_some_and(|build| build.task.is_finished())
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn set_shader_pack_build_test_mode(&mut self, mode: ShaderPackBuildTestMode) {
+        self.shader_pack_build_test_mode = Some(mode);
+    }
+
+    #[cfg(feature = "test-support")]
+    pub fn shader_pack_inputs_for_test(
+        &self,
+    ) -> (
+        bool,
+        Option<bool>,
+        Vec<u16>,
+        pack_atlas::TerrainBindings,
+        pack_atlas::TerrainDraws,
+    ) {
+        (
+            self.separate_ao,
+            self.pack_atlas.as_ref().map(|atlas| atlas.separate_ao),
+            self.pack_lava_layers.clone(),
+            self.pack_terrain_bindings,
+            self.pack_terrain_draws(),
+        )
     }
 
     #[cfg(feature = "test-support")]
