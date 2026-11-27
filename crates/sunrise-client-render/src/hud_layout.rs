@@ -101,6 +101,14 @@ pub enum GuiDraw {
 pub type Pose = [f32; 6];
 pub const IDENTITY: Pose = [1.0, 0.0, 0.0, 1.0, 0.0, 0.0];
 
+/// `Matrix3x2f.equals(new Matrix3x2f())`: the identity to the bit (JOML compares
+/// `floatToIntBits`), so a pose with `-0.0` where the identity has `0.0` is not the identity.
+pub fn is_identity(pose: &Pose) -> bool {
+    pose.iter()
+        .zip(IDENTITY)
+        .all(|(a, b)| a.to_bits() == b.to_bits())
+}
+
 /// Applies `op` like JOML's `translate` / `scale` / `rotate` (same float order).
 /// A `Rotate` by a NaN or infinite angle leaves `m` as it was.
 pub fn pose_apply(m: &mut Pose, op: PoseOp) {
@@ -1273,6 +1281,21 @@ mod gradient_tests;
 #[cfg(test)]
 #[path = "hud_layout_rotate_tests.rs"]
 mod rotate_tests;
+
+#[cfg(test)]
+mod identity_tests {
+    use super::*;
+
+    /// A pose JOML's `equals` keeps apart from the identity, though float `==` calls them equal:
+    /// the probe prints it, as vanilla's oracle does.
+    #[test]
+    fn a_negative_zero_pose_is_not_the_identity() {
+        let negative = [1.0, -0.0, 0.0, 1.0, 0.0, -0.0];
+        assert_eq!(negative, IDENTITY, "float equality can't tell them apart");
+        assert!(!is_identity(&negative));
+        assert!(is_identity(&IDENTITY));
+    }
+}
 
 #[cfg(test)]
 mod player_health_tests {

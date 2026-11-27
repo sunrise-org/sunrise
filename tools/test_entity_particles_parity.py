@@ -46,23 +46,16 @@ def make_cases(build):
     return path, count
 
 
-def close(a, b):
-    """Lines equal but for doubles within 1e-12 relative error. The motion is
-    Gaussian, and MarsagliaPolarGaussian calls Math.log, which HotSpot's x86-64
-    intrinsic rounds a unit apart from the platform libm sunrise_core::jmath
-    uses for a small fraction of arguments."""
-    ta, tb = a.split(), b.split()
-    if len(ta) != len(tb):
-        return False
-    for x, y in zip(ta, tb):
-        if x == y:
-            continue
-        if len(x) != 16 or len(y) != 16:
-            return False
-        fx, fy = (struct.unpack('>d', bytes.fromhex(t))[0] for t in (x, y))
-        if not abs(fx - fy) <= 1e-12 * max(1.0, abs(fx)):
-            return False
-    return True
+def ulp_note(a, b):
+    """How far apart the first differing 16-hex double tokens of two lines are, in ULPs."""
+    for x, y in zip(a.split(), b.split()):
+        if x != y and len(x) == len(y) == 16:
+            try:
+                fx, fy = (struct.unpack('>d', bytes.fromhex(t))[0] for t in (x, y))
+            except ValueError:
+                return ''
+            return f' ({lab.ulps(int(x, 16), int(y, 16), 64)} ulp: vanilla {fx!r}, Rust {fy!r})'
+    return ''
 
 
 def main():
@@ -87,11 +80,8 @@ def main():
     vanilla = (build / 'client.txt').read_text().splitlines()
     rust = (build / 'rust.txt').read_text().splitlines()
     assert len(vanilla) == len(rust), f'{len(vanilla)} vanilla lines, {len(rust)} Rust lines'
-    tolerated = 0
     for line, (a, b) in enumerate(zip(vanilla, rust), 1):
-        if a != b:
-            assert close(a, b), f'Parity mismatch at output line {line}: vanilla={a!r}, Rust={b!r}'
-            tolerated += 1
+        assert a == b, f'Parity mismatch at output line {line}: vanilla={a!r}, Rust={b!r}' + ulp_note(a, b)
     particles = sum(line.startswith('+ ') for line in vanilla)
     assert particles > units, 'too few particles to establish parity'
     base.ensure_sources_unchanged(sources, tested)
@@ -100,14 +90,13 @@ def main():
         rustc=subprocess.check_output(['rustc', '--version'], text=True).strip(), units=units,
         sources_sha256=tested, input_sha256=lab.digest(cases_path, 'sha256'),
         client_jar_sha256=lab.digest(jars['client'], 'sha256'), matched_output_lines=len(vanilla),
-        libm_tolerated_lines=tolerated, output_sha256=lab.digest(build / 'rust.txt', 'sha256'),
+        output_sha256=lab.digest(build / 'rust.txt', 'sha256'),
         scope=('The real client handleEntityEvent of Villager (12, 13, 14, 42), Animal (18, love hearts), TamableAnimal '
                'and AbstractHorse (6, 7, taming), Ocelot (40, 41, trusting), Dolphin (38) and Allay (18), on entities '
                'allocated with a stand-in level, a position, dimensions and a seeded random: the particle type, '
                'count, positions, motion and draws on the entity random. Which server code fires each event, and '
                'the particles themselves once spawned, are covered elsewhere.')))
-    print(f'{units:,} entity events, {particles:,} particles match the pinned client ({tolerated} lines within the '
-          f'Math.log tolerance): {report}', flush=True)
+    print(f'{units:,} entity events, {particles:,} particles match the pinned client bit for bit: {report}', flush=True)
 
 
 if __name__ == '__main__':

@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Compare text-display matrices with the real Java client renderer (no window)."""
+"""Compare text-display matrices with the real Java client renderer (no window), as binary32 bits."""
 import json
 import os
 import sys
@@ -38,14 +38,21 @@ def main():
     harness.run_logged(['java','-Xmx1G','-cp',str(classes)+os.pathsep+cp,'dev.sunriselab.parity.VanillaTextDisplayTransformOracle',inputs,build/'java.jsonl'],build,'java')
     command = harness.build_probe(build,'text_display_fixture')
     harness.run_logged([*command,inputs,build/'rust.jsonl'],build,'rust')
-    java = [json.loads(line) for line in (build/'java.jsonl').read_text().splitlines()]
-    rust = [json.loads(line) for line in (build/'rust.jsonl').read_text().splitlines()]
+    java = [lab.exact_json(line) for line in (build/'java.jsonl').read_text().splitlines()]
+    rust = [lab.exact_json(line) for line in (build/'rust.jsonl').read_text().splitlines()]
     assert len(java) == len(rust) == len(cases)
+    bad = []
     for i,(a,b) in enumerate(zip(java,rust)):
-        # JOML and glam evaluate float matrix products in different orders.
-        assert all(abs(x-y) <= 0.00002 for x,y in zip(a,b)), (i,a,b)
+        differing = [(k, x, y, lab.ulps(lab.f32_bits(x), lab.f32_bits(y))) for k,(x,y) in enumerate(zip(a,b))
+                     if lab.f32_bits(x) != lab.f32_bits(y)]
+        if len(a) != len(b) or differing:
+            bad.append((i, cases[i]['angles'], differing))
+    for i, angles, differing in bad[:5]:
+        print(f'MISMATCH case {i} angles {angles}: (entry, vanilla, Sunrise, ulp) {differing}')
+    if bad:
+        raise SystemExit(f'{len(bad)}/{len(cases)} text-display matrices differ from the native client renderer')
     base.ensure_sources_unchanged(sources, tested)
-    lab.write_json(build/'report.json', {'pass':True,'cases':len(cases),'matrix_absolute_tolerance':0.00002,
+    lab.write_json(build/'report.json', {'pass':True,'cases':len(cases),'comparison':'binary32 bits',
         'sources_sha256':tested})
     print(f'Text-display transforms: {len(cases)} cases match the native client renderer')
 
