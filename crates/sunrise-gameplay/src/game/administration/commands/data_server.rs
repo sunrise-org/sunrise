@@ -7,6 +7,7 @@ use sunrise_core::nbt::{Compound, Tag};
 #[allow(unused_imports)]
 use sunrise_game_data::text::Text;
 use sunrise_gameplay_common::game::native_entity_base::owned;
+use sunrise_gameplay_common::game::potions_common::area_effect_cloud_to_nbt;
 #[allow(unused_imports)]
 use sunrise_level::containers::BlockEntity;
 #[allow(unused_imports)]
@@ -821,92 +822,8 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Cloud(id) => {
                 let uuid = self.uuid_for(id);
-                let c = self.common.breath_clouds.iter().find(|c| c.id == id)?;
-                let [x, y, z] = c.at;
-                let [yaw, pitch] = self
-                    .common
-                    .persist
-                    .raw
-                    .get(&id)
-                    .map_or([0.0; 2], entity_nbt::loaded_rotation);
-                // Read the live cloud, including its current radius and age;
-                // the raw compound alone does not contain generated clouds.
-                let mut tag = self.other_to_nbt(
-                    &super::OtherEntity {
-                        size_answer: None,
-                        attachment_lifetime: Default::default(),
-                        join: Default::default(),
-                        id,
-                        kind: "minecraft:area_effect_cloud".into(),
-                        display: None,
-                        interaction: None,
-                        knot_check: None,
-                        eye: None,
-                        position: sunrise_core::geometry::Vec3::new(x, y, z),
-                        yaw,
-                        pitch,
-                    },
-                    uuid,
-                );
-                // Entity.saveWithoutId's common fields, also for a cloud never saved.
-                crate::game::persist::write_static_entity_fields(&mut tag);
-                set_key(
-                    &mut tag,
-                    "Motion",
-                    Tag::List(
-                        c.motion
-                            .into_iter()
-                            .map(|v| Tag::Double(if v == 0.0 { 0 } else { v.to_bits() }))
-                            .collect(),
-                    ),
-                );
-                set_key(
-                    &mut tag,
-                    "fall_distance",
-                    Tag::Double(if c.fall_distance == 0.0 {
-                        0
-                    } else {
-                        c.fall_distance.to_bits()
-                    }),
-                );
-                set_key(&mut tag, "Fire", Tag::Short(c.fire_ticks as i16));
-                set_key(&mut tag, "Age", Tag::Int(c.age));
-                set_key(&mut tag, "Duration", Tag::Int(c.duration));
-                set_key(&mut tag, "Radius", Tag::Float(c.radius.to_bits()));
-                let wait = c.potion.as_ref().map_or(20, |p| p.settings.wait_time);
-                set_key(&mut tag, "WaitTime", Tag::Int(wait));
-                if let Some(p) = &c.potion {
-                    set_key(
-                        &mut tag,
-                        "ReapplicationDelay",
-                        Tag::Int(p.settings.reapplication_delay),
-                    );
-                    set_key(
-                        &mut tag,
-                        "DurationOnUse",
-                        Tag::Int(p.settings.duration_on_use),
-                    );
-                    set_key(
-                        &mut tag,
-                        "RadiusOnUse",
-                        Tag::Float(p.settings.radius_on_use.to_bits()),
-                    );
-                    set_key(
-                        &mut tag,
-                        "RadiusPerTick",
-                        Tag::Float(p.radius_per_tick.to_bits()),
-                    );
-                    if p.settings.duration_scale != 1.0 {
-                        set_key(
-                            &mut tag,
-                            "potion_duration_scale",
-                            Tag::Float(p.settings.duration_scale.to_bits()),
-                        );
-                    } else if let Tag::Compound(c) = &mut tag {
-                        c.remove(&"potion_duration_scale".into());
-                    }
-                }
-                tag
+                let cloud = self.common.breath_clouds.iter().find(|c| c.id == id)?;
+                area_effect_cloud_to_nbt(cloud, uuid, self.common.persist.raw.get(&id))
             }
             Target::Trident(id) => {
                 let uuid = self.uuid_for(id);

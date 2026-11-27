@@ -7,7 +7,7 @@ use sunrise_core::nbt::Tag;
 use sunrise_gameplay::game::game_tests::tests::server_game;
 use sunrise_gameplay::game::server_side::potions_server::PotionOwner;
 use sunrise_items::items::ItemStack;
-use sunrise_level::particle_options::ParticleType;
+use sunrise_level::{effects::EffectInstance, particle_options::ParticleType};
 use sunrise_sim::motion::PlayerMotion;
 
 /// A server's game with a player standing at the origin's block.
@@ -139,7 +139,10 @@ fn a_lingering_potion_of_custom_effects_makes_its_cloud() {
         "a cloud for custom-only contents"
     );
     let cloud = game.breath_clouds[0].potion.as_ref().unwrap();
-    assert_eq!(cloud.effects, vec![("poison", 900, 0)]);
+    assert_eq!(
+        cloud.contents.effects().collect::<Vec<_>>(),
+        [EffectInstance::new("minecraft:poison", 900, 0)]
+    );
     assert_eq!(cloud.settings.duration_scale, 1.0);
     let particle = cloud.particle();
     assert_eq!(particle.ty, ParticleType::EntityEffect);

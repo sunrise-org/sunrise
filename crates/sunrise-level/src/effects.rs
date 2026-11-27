@@ -57,6 +57,67 @@ impl EffectInstance {
             client_blend: (false, false),
         }
     }
+    /// `MobEffectInstance.CODEC`, shared by active effects and potion contents.
+    pub fn from_nbt(tag: &sunrise_core::nbt::Tag) -> Option<Self> {
+        use sunrise_game_data::nbt_value::text;
+        let def = potions::effect(&text(tag.get("id"))?)?;
+        Some(Self::from_nbt_details(def, tag))
+    }
+
+    fn from_nbt_details(def: &potions::EffectDef, tag: &sunrise_core::nbt::Tag) -> Self {
+        use sunrise_game_data::nbt_value::number;
+        use sunrise_world::datafix::dynamic::as_number;
+        // UNSIGNED_BYTE decodes the stored number's low eight bits.
+        let amplifier = tag
+            .get("amplifier")
+            .and_then(as_number)
+            .map_or(0, |n| i32::from(n.byte_value() as u8));
+        let mut effect = Self::from_def(
+            def,
+            number(tag.get("duration")).unwrap_or(0) as i32,
+            amplifier,
+        );
+        effect.id = potions::namespaced(def.id);
+        effect.ambient = number(tag.get("ambient")).is_some_and(|v| v != 0);
+        effect.visible = number(tag.get("show_particles")) != Some(0);
+        effect.show_icon = number(tag.get("show_icon")).map_or(effect.visible, |v| v != 0);
+        effect.hidden = tag
+            .get("hidden_effect")
+            .map(|hidden| Box::new(Self::from_nbt_details(def, hidden)));
+        effect
+    }
+
+    /// `MobEffectInstance.CODEC`: the effect ID and its instance details.
+    pub fn to_nbt(&self) -> sunrise_core::nbt::Tag {
+        use sunrise_core::nbt::Tag;
+        let mut fields = self.nbt_details();
+        fields.push(("id", Tag::String(potions::namespaced(self.id).into())));
+        Tag::compound(fields)
+    }
+
+    fn nbt_details(&self) -> Vec<(&'static str, sunrise_core::nbt::Tag)> {
+        use sunrise_core::nbt::Tag;
+        let mut fields = vec![("show_icon", Tag::Byte(i8::from(self.show_icon)))];
+        if self.duration != 0 {
+            fields.push(("duration", Tag::Int(self.duration)));
+        }
+        if self.amplifier != 0 {
+            fields.push((
+                "amplifier",
+                Tag::Byte(self.amplifier.clamp(0, 255) as u8 as i8),
+            ));
+        }
+        if self.ambient {
+            fields.push(("ambient", Tag::Byte(1)));
+        }
+        if !self.visible {
+            fields.push(("show_particles", Tag::Byte(0)));
+        }
+        if let Some(hidden) = &self.hidden {
+            fields.push(("hidden_effect", Tag::compound(hidden.nbt_details())));
+        }
+        fields
+    }
     /// `new MobEffectInstance(effect, duration, amplifier, ambient, visible)`:
     /// the icon shows exactly when the particles do.
     pub fn with_flags(mut self, ambient: bool, visible: bool) -> Self {

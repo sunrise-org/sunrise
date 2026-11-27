@@ -1,6 +1,7 @@
 use serde::Deserialize;
 use sunrise_core::nbt::Tag;
 use sunrise_gameplay::game::native_entity_refs::tests::with_game;
+use sunrise_gameplay_common::game::potions_common::area_effect_cloud_to_nbt;
 use {
     sunrise_gameplay::game::server_side::commands::data::DataRef,
     sunrise_gameplay_common::game::commands_common::Target,
@@ -104,12 +105,7 @@ pub(crate) fn run_a_cloud_and_a_falling_block_save_the_rotation_they_were_loaded
                         "{label}: cloud /data get"
                     );
                     let cloud = game.breath_clouds.last().unwrap();
-                    let saved =
-                        sunrise_gameplay::game::server_side::potions_server::potion_cloud_to_nbt(
-                            cloud,
-                            [1, 2, 3, 4],
-                            game.persist_raw(id),
-                        );
+                    let saved = area_effect_cloud_to_nbt(cloud, [1, 2, 3, 4], game.persist_raw(id));
                     assert_eq!(
                         rotation(&saved),
                         Some(&expected_saved),
@@ -135,11 +131,7 @@ pub(crate) fn run_a_cloud_and_a_falling_block_save_the_rotation_they_were_loaded
         }
         // A cloud with no loaded raw compound matches the default 26.3 witness.
         let cloud = game.breath_clouds.last().unwrap();
-        let saved = sunrise_gameplay::game::server_side::potions_server::potion_cloud_to_nbt(
-            cloud,
-            [1, 2, 3, 4],
-            None,
-        );
+        let saved = area_effect_cloud_to_nbt(cloud, [1, 2, 3, 4], None);
         let default_bits = default_cloud_bits.expect("cloud_default witness case");
         assert_eq!(
             rotation(&saved),

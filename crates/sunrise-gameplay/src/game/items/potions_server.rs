@@ -1020,12 +1020,12 @@ impl crate::game::ServerGame<'_> {
         cloud: Option<u32>,
     ) {
         let source = Text::translate("entity.minecraft.area_effect_cloud", &[]);
-        let effect = [("instant_damage", 1, amplifier)];
+        let effect = [EffectInstance::new("instant_damage", 1, amplifier)];
         // DragonFireball.onHit and the flame phase: `setPotionDurationScale(0.25)`.
         self.cloud_affect(
             Victim::Mob(mob),
             &effect,
-            (&[], &[], 0.25),
+            0.25,
             at,
             &source,
             (None, None),
@@ -1038,20 +1038,29 @@ impl crate::game::ServerGame<'_> {
     pub fn cloud_affect(
         &mut self,
         victim: Victim,
-        effects: &[(&'static str, i32, i32)],
-        flags: (&[&'static str], &[&'static str], f32),
+        effects: &[EffectInstance],
+        duration_scale: f32,
         at: [f64; 3],
         source: &Text,
         owners: (Option<Who>, Option<u32>),
         cloud: Option<u32>,
     ) {
-        self.cloud_affect_from(victim, effects, flags, at, source, owners, cloud, None);
+        self.cloud_affect_from(
+            victim,
+            effects,
+            duration_scale,
+            at,
+            source,
+            owners,
+            cloud,
+            None,
+        );
     }
     pub(in crate::game::server_side) fn cloud_affect_from(
         &mut self,
         victim: Victim,
-        effects: &[(&'static str, i32, i32)],
-        (hidden, ambient, duration_scale): (&[&'static str], &[&'static str], f32),
+        effects: &[EffectInstance],
+        duration_scale: f32,
         at: [f64; 3],
         source: &Text,
         (owner, guest): (Option<Who>, Option<u32>),
@@ -1064,9 +1073,19 @@ impl crate::game::ServerGame<'_> {
             name: Some(source.clone()),
             ..Default::default()
         };
-        // MobEffectInstance.withScaledDuration: floor(duration * scale), at least 1; an infinite
-        // effect stays infinite.
-        let scaled = |duration| sunrise_level::effects::scaled_duration(duration, duration_scale);
+        // `MobEffectInstance.withScaledDuration` copies the details, not a
+        // suppressed effect chain or client blend state.
+        let scaled = |effect: &EffectInstance, id| EffectInstance {
+            id,
+            registry_index: effect.registry_index,
+            duration: sunrise_level::effects::scaled_duration(effect.duration, duration_scale),
+            amplifier: effect.amplifier,
+            ambient: effect.ambient,
+            visible: effect.visible,
+            show_icon: effect.show_icon,
+            hidden: None,
+            client_blend: (false, false),
+        };
         match victim {
             Victim::Player(who) => self.as_fight_player(who, |g| {
                 let mut attack = g.potion_attack(
@@ -1075,21 +1094,25 @@ impl crate::game::ServerGame<'_> {
                     cloud.map(|id| (id, DirectEntity::Other, "minecraft:area_effect_cloud")),
                 );
                 attack.position = Some(at);
-                for (id, duration, amp) in effects {
-                    let Some(e) = brewing::effect(id) else {
+                for effect in effects {
+                    let short = effect.id.strip_prefix("minecraft:").unwrap_or(effect.id);
+                    let Some(def) = effect
+                        .registry_index
+                        .and_then(sunrise_game_data::potions::effect_by_index)
+                    else {
                         continue;
                     };
-                    if e.instant {
-                        if let Some(a) = sunrise_level::effects::instant(id, *amp, 0.5) {
+                    if def.instant {
+                        if let Some(a) =
+                            sunrise_level::effects::instant(short, effect.amplifier, 0.5)
+                        {
                             g.with_attack(attack.clone(), |g| {
                                 g.apply_indirect_effect_action(a, &cloud_owner)
                             });
                         }
                     } else {
-                        let mut instance = EffectInstance::new(e.id, scaled(*duration), *amp);
-                        instance.visible = !hidden.contains(id);
-                        instance.ambient = ambient.contains(id);
-                        g.add_player_effect_from(instance, effect_source);
+                        // Player effects use the registry's short vanilla IDs.
+                        g.add_player_effect_from(scaled(effect, def.id), effect_source);
                     }
                 }
             }),
@@ -1102,18 +1125,19 @@ impl crate::game::ServerGame<'_> {
                     self.common.mobs[i].kind.flags.entity_tag_slot,
                     sunrise_items::items::EntityTypeTags::INVERTED_HEALING_AND_HARM,
                 );
-                for (id, duration, amp) in effects {
+                for effect in effects {
                     // A mod's effect hooks may have changed the mobs.
                     let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == mob) else {
                         return;
                     };
-                    match *id {
+                    let short = effect.id.strip_prefix("minecraft:").unwrap_or(effect.id);
+                    match short {
                         "instant_damage" | "instant_health" => {
                             let amount = |base: i32| {
-                                (0.5 * f64::from(base.wrapping_shl(*amp as u32)) + 0.5) as i32
-                                    as f32
+                                (0.5 * f64::from(base.wrapping_shl(effect.amplifier as u32)) + 0.5)
+                                    as i32 as f32
                             };
-                            if (*id == "instant_damage") != inverted {
+                            if (short == "instant_damage") != inverted {
                                 // HealOrHarmMobEffect.applyInstantaneousEffect: indirectMagic(cloud, owner).
                                 let source = Damage::indirect_magic(
                                     "minecraft:area_effect_cloud",
@@ -1158,10 +1182,7 @@ impl crate::game::ServerGame<'_> {
                             }
                         }
                         _ => {
-                            let mut instance = EffectInstance::new(id, scaled(*duration), *amp);
-                            instance.ambient = ambient.contains(id);
-                            instance.visible = !hidden.contains(id);
-                            self.add_mob_effect(mob, instance, effect_source);
+                            self.add_mob_effect(mob, scaled(effect, effect.id), effect_source);
                         }
                     }
                 }
@@ -1467,14 +1488,7 @@ impl crate::game::ServerGame<'_> {
     /// `Creeper.spawnLingeringCloud`: an `AreaEffectCloud` of radius 2.5, wait time 10, duration 300,
     /// shrinking by `-radius / duration` a tick and by 0.5 for each entity it affects, applying
     /// the creeper's effects at 0.25 of their remaining duration.
-    pub fn spawn_creeper_cloud(
-        &mut self,
-        at: [f64; 3],
-        effects: Vec<(&'static str, i32, i32)>,
-        hidden: Vec<&'static str>,
-        ambient: Vec<&'static str>,
-        color: u32,
-    ) {
+    pub fn spawn_creeper_cloud(&mut self, at: [f64; 3], effects: Vec<EffectInstance>) {
         let id = self.take_entity_id();
         self.common.breath_clouds.push(Breath {
             attachment_lifetime: Default::default(),
@@ -1490,19 +1504,14 @@ impl crate::game::ServerGame<'_> {
             duration: 300,
             from_dragon: false,
             victims: Vec::new(),
-            potion: Some(PotionCloud {
-                settings: CloudSettings::lingering(),
-                effects,
-                hidden,
-                ambient,
-                radius_per_tick: -2.5 / 300.0,
-                color,
-                custom_particle: None,
-                victims: Vec::new(),
-                source: Text::translate("entity.minecraft.area_effect_cloud", &[]),
-                owner: None,
-                guest: None,
-            }),
+            potion: Some(PotionCloud::new(
+                brewing::PotionContents {
+                    custom_effects: effects,
+                    ..Default::default()
+                },
+                CloudSettings::lingering(),
+                -2.5 / 300.0,
+            )),
         });
     }
     /// `AbstractThrownPotion.onHit` with `ThrownSplashPotion.onHitAsPotion`, or
@@ -1565,15 +1574,15 @@ impl crate::game::ServerGame<'_> {
         });
         // `PotionContents.getColor`: an explicit `custom_color` wins over the
         // amplifier-weighted mix of the potion's and the stack's custom effects.
-        let color = brewing::contents_color(stack);
+        let contents = brewing::PotionContents::from_stack(stack);
+        let color = contents.color();
         self.server_level_event_at(if instant { 2007 } else { 2002 }, block, color as i32);
         if !silent {
             self.server_level_event_at(if instant { 1054 } else { 1053 }, block, 0);
         }
         // `PotionContents.hasEffects`: the potion's effects and the stack's
         // custom ones; without either `onHitAsPotion` is not called at all.
-        let effects = brewing::contents_effects(stack);
-        if effects.is_empty() {
+        if contents.effects().next().is_none() {
             return;
         }
         if lingering {
@@ -1582,6 +1591,19 @@ impl crate::game::ServerGame<'_> {
             // stack's `potion_contents` and `potion_duration_scale`.
             let at = mob.unwrap_or(at);
             let id = self.take_entity_id();
+            let mut cloud = PotionCloud::new(
+                contents,
+                CloudSettings {
+                    duration_scale: stack.potion_duration_scale(),
+                    ..CloudSettings::lingering()
+                },
+                -3.0 / 600.0,
+            );
+            if let Some(source) = &owner.name {
+                cloud.source = source.clone();
+            }
+            cloud.owner = owner.who();
+            cloud.guest = owner.guest;
             self.common.breath_clouds.push(Breath {
                 attachment_lifetime: Default::default(),
                 join: Default::default(),
@@ -1596,27 +1618,20 @@ impl crate::game::ServerGame<'_> {
                 duration: 600,
                 from_dragon: false,
                 victims: Vec::new(),
-                potion: Some(PotionCloud {
-                    settings: CloudSettings {
-                        duration_scale: stack.potion_duration_scale(),
-                        ..CloudSettings::lingering()
-                    },
-                    effects,
-                    hidden: Vec::new(),
-                    ambient: Vec::new(),
-                    radius_per_tick: -3.0 / 600.0,
-                    color,
-                    custom_particle: None,
-                    victims: Vec::new(),
-                    source: owner.name.clone().unwrap_or_else(|| {
-                        Text::translate("entity.minecraft.area_effect_cloud", &[])
-                    }),
-                    owner: owner.who(),
-                    guest: owner.guest,
-                }),
+                potion: Some(cloud),
             });
             return;
         }
+        let effects = contents
+            .effects()
+            .map(|e| {
+                (
+                    e.id.strip_prefix("minecraft:").unwrap_or(e.id),
+                    e.duration,
+                    e.amplifier,
+                )
+            })
+            .collect::<Vec<_>>();
         let duration_scale = f64::from(stack.potion_duration_scale());
         // Every player in range (`ThrownSplashPotion.applySplash` over
         // `LivingEntity`s, the players among them).
@@ -1838,7 +1853,8 @@ impl crate::game::ServerGame<'_> {
             return true;
         }
         potion.victims.retain(|(_, until)| c.age < *until);
-        if potion.effects.is_empty() {
+        let effects: Vec<_> = potion.contents.effects().collect();
+        if effects.is_empty() {
             potion.victims.clear();
             return true;
         }
@@ -1851,7 +1867,6 @@ impl crate::game::ServerGame<'_> {
         for p in players.iter().filter(|p| p.bounds.intersects(area)) {
             inside.push((Victim::Player(p.who), p.position.x, p.position.z));
         }
-        let effects = potion.effects.clone();
         // Only mobs that at least one of the cloud's effects can affect are
         // taken (`allEffects.stream().anyMatch(entity::canBeAffected)`), so
         // the others neither become victims nor use up its radius.
@@ -1863,9 +1878,12 @@ impl crate::game::ServerGame<'_> {
             .map(|m| (m.id, m.kind.id.clone(), m.position.x, m.position.z))
             .collect();
         for (mob_id, kind, x, z) in candidates {
-            let affected = effects
-                .iter()
-                .any(|(id, ..)| self.can_be_affected(Some(mob_id as i32), &kind, id));
+            let affected = effects.iter().any(|effect| {
+                let key = effect
+                    .registry_index
+                    .and_then(mod_api::__private::effect_key_by_index);
+                self.can_be_affected_resolved(Some(mob_id as i32), &kind, effect.id, key)
+            });
             if affected {
                 inside.push((Victim::Mob(mob_id), x, z));
             }
@@ -1892,11 +1910,7 @@ impl crate::game::ServerGame<'_> {
             self.cloud_affect_from(
                 victim,
                 &effects,
-                (
-                    &potion.hidden,
-                    &potion.ambient,
-                    potion.settings.duration_scale,
-                ),
+                potion.settings.duration_scale,
                 c.at,
                 &potion.source,
                 (potion.owner, potion.guest),
@@ -2458,46 +2472,31 @@ pub fn thrown_projectile(stack: ItemStack, position: Vec3, by_player: bool) -> P
 /// `AreaEffectCloud.readAdditionalSaveData`: load the cloud's simulation state and decode
 /// its custom particle once. The entity id is the caller's (`load_potion_cloud`).
 pub(in crate::game) fn potion_cloud_from_nbt(tag: &Tag) -> Option<(Vec3, Breath)> {
-    use sunrise_sim::save::{float, number, text};
+    use sunrise_sim::save::{float, number};
     let at = sunrise_sim::entity_nbt::position(tag)?;
     let motion = sunrise_sim::entity_nbt::loaded_motion(tag);
     let int = |key, default| number(tag.get(key)).map_or(default, |v| v as i32);
     let real = |key, default| float(tag.get(key)).map_or(default, |v| v as f32);
-    let contents = tag.get("potion_contents");
-    let mut effects = contents
-        .and_then(|c| text(c.get("potion")))
-        .and_then(|id| brewing::potion(&id))
-        .map_or_else(Vec::new, |p| p.effects.to_vec());
-    let (mut hidden, mut ambient) = (Vec::new(), Vec::new());
-    if let Some(Tag::List(custom)) = contents.and_then(|c| c.get("custom_effects")) {
-        for effect in custom {
-            let Some(def) = text(effect.get("id")).and_then(|id| brewing::effect(&id)) else {
-                continue;
-            };
-            let duration = number(effect.get("duration")).unwrap_or(0) as i32;
-            let amp = number(effect.get("amplifier")).unwrap_or(0).clamp(0, 255) as i32;
-            effects.push((def.id, duration, amp));
-            if number(effect.get("show_particles")) == Some(0) {
-                hidden.push(def.id);
-            }
-            if number(effect.get("ambient")).unwrap_or(0) != 0 {
-                ambient.push(def.id);
-            }
-        }
-    }
-    let color = contents
-        .and_then(|c| number(c.get("custom_color")))
-        .map_or_else(
-            || {
-                sunrise_game_data::potions::effects_color(
-                    effects
-                        .iter()
-                        .filter(|(id, ..)| !hidden.contains(id))
-                        .map(|(id, _, amp)| (*id, *amp)),
-                )
-            },
-            |color| color as u32,
-        );
+    let mut cloud = PotionCloud::new(
+        tag.get("potion_contents")
+            .map_or_else(Default::default, brewing::PotionContents::from_nbt),
+        CloudSettings {
+            wait_time: int("WaitTime", 20),
+            reapplication_delay: int("ReapplicationDelay", 20),
+            radius_on_use: real("RadiusOnUse", 0.0),
+            duration_on_use: int("DurationOnUse", 0),
+            duration_scale: real("potion_duration_scale", 1.0),
+        },
+        real("RadiusPerTick", 0.0),
+    );
+    cloud.custom_particle = tag.get("custom_particle").and_then(|tag| {
+        let options = custom_particle_options(tag)?;
+        let vanilla_tag = options.typed_particle.is_none().then(|| tag.clone());
+        Some(CloudParticle {
+            options,
+            vanilla_tag,
+        })
+    });
     Some((
         at,
         Breath {
@@ -2514,140 +2513,9 @@ pub(in crate::game) fn potion_cloud_from_nbt(tag: &Tag) -> Option<(Vec3, Breath)
             duration: int("Duration", -1),
             from_dragon: false,
             victims: Vec::new(),
-            potion: Some(PotionCloud {
-                settings: CloudSettings {
-                    wait_time: int("WaitTime", 20),
-                    reapplication_delay: int("ReapplicationDelay", 20),
-                    radius_on_use: real("RadiusOnUse", 0.0),
-                    duration_on_use: int("DurationOnUse", 0),
-                    duration_scale: real("potion_duration_scale", 1.0),
-                },
-                effects,
-                hidden,
-                ambient,
-                radius_per_tick: real("RadiusPerTick", 0.0),
-                color,
-                custom_particle: tag.get("custom_particle").and_then(|tag| {
-                    let options = custom_particle_options(tag)?;
-                    let vanilla_tag = options.typed_particle.is_none().then(|| tag.clone());
-                    Some(CloudParticle {
-                        options,
-                        vanilla_tag,
-                    })
-                }),
-                victims: Vec::new(),
-                source: Text::translate("entity.minecraft.area_effect_cloud", &[]),
-                owner: None,
-                guest: None,
-            }),
+            potion: Some(cloud),
         },
     ))
-}
-
-/// `AreaEffectCloud.addAdditionalSaveData`: the lifetime, radius and use
-/// settings with the effects the cloud applies, as `custom_effects` with the
-/// colour they were drawn in. A cloud from a named potion is written effect by effect;
-/// its custom typed particle is encoded by its registered map codec.
-pub fn potion_cloud_to_nbt(c: &Breath, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
-    use sunrise_core::nbt::Compound;
-    let Some(potion) = &c.potion else {
-        return Tag::End;
-    };
-    let at = Vec3::new(c.at[0], c.at[1], c.at[2]);
-    let motion = Vec3::new(c.motion[0], c.motion[1], c.motion[2]);
-    // AreaEffectCloud never turns: the rotation it was loaded with.
-    let rotation = raw.map_or([0.0; 2], sunrise_sim::entity_nbt::loaded_rotation);
-    let mut tag = sunrise_sim::entity_nbt::entity_base_tag(
-        "minecraft:area_effect_cloud",
-        at,
-        motion,
-        rotation,
-        uuid,
-        raw,
-    );
-    let custom: Vec<Tag> = potion
-        .effects
-        .iter()
-        .map(|(id, duration, amplifier)| {
-            let mut effect = Compound::new();
-            effect.insert("id".into(), Tag::String(brewing::namespaced(id).into()));
-            effect.insert("duration".into(), Tag::Int(*duration));
-            effect.insert("amplifier".into(), Tag::Int(*amplifier));
-            if potion.hidden.contains(id) {
-                effect.insert("show_particles".into(), Tag::Byte(0));
-            }
-            if potion.ambient.contains(id) {
-                effect.insert("ambient".into(), Tag::Byte(1));
-            }
-            Tag::Compound(effect)
-        })
-        .collect();
-    let mut contents = Compound::new();
-    contents.insert("custom_effects".into(), Tag::List(custom));
-    contents.insert("custom_color".into(), Tag::Int(potion.color as i32));
-    let Tag::Compound(map) = &mut tag else {
-        return tag;
-    };
-    map.insert(
-        "fall_distance".into(),
-        Tag::Double(if c.fall_distance == 0.0 {
-            0
-        } else {
-            c.fall_distance.to_bits()
-        }),
-    );
-    map.insert("Fire".into(), Tag::Short(c.fire_ticks as i16));
-    map.insert("Age".into(), Tag::Int(c.age));
-    map.insert("Duration".into(), Tag::Int(c.duration));
-    map.insert("Radius".into(), Tag::Float(c.radius.to_bits()));
-    map.insert(
-        "RadiusPerTick".into(),
-        Tag::Float(potion.radius_per_tick.to_bits()),
-    );
-    // The base tag can carry the original NBT, even if its custom particle did not decode.
-    map.remove(&"custom_particle".into());
-    if let Some(particle) = &potion.custom_particle {
-        let saved = match &particle.options.typed_particle {
-            Some((value, _)) => match mod_api::__private::encode_particle_map(value) {
-                Ok(fields) => Some(Tag::Compound(fields)),
-                Err(error) => {
-                    log::warn!(
-                        "Cannot save cloud particle {:?}: {error}",
-                        particle.options.mod_particle
-                    );
-                    None
-                }
-            },
-            None => particle.vanilla_tag.clone(),
-        };
-        if let Some(saved) = saved {
-            map.insert("custom_particle".into(), saved);
-        }
-    }
-    map.insert("WaitTime".into(), Tag::Int(potion.settings.wait_time));
-    map.insert(
-        "ReapplicationDelay".into(),
-        Tag::Int(potion.settings.reapplication_delay),
-    );
-    map.insert(
-        "RadiusOnUse".into(),
-        Tag::Float(potion.settings.radius_on_use.to_bits()),
-    );
-    map.insert(
-        "DurationOnUse".into(),
-        Tag::Int(potion.settings.duration_on_use),
-    );
-    map.insert(
-        "potion_duration_scale".into(),
-        Tag::Float(potion.settings.duration_scale.to_bits()),
-    );
-    // Vanilla writes the key only while the contents differ from
-    // PotionContents.EMPTY: no effects and the default water colour.
-    if !(potion.effects.is_empty() && potion.color == sunrise_game_data::potions::BASE_POTION_COLOR)
-    {
-        map.insert("potion_contents".into(), Tag::Compound(contents));
-    }
-    tag
 }
 
 /// `BottleItem.use`: find a living `AreaEffectCloud` owned by an `EnderDragon`

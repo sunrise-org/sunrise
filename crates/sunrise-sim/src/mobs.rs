@@ -2181,16 +2181,10 @@ pub enum MobEvent {
     /// The centre, the radius and the kind of the mob blowing up (it may be
     /// gone from the list by the time the blast is handled), and its `Silent`.
     Explode([f64; 3], f32, Species, bool),
-    /// `Creeper.spawnLingeringCloud`, right after its `Explode`: an `AreaEffectCloud` at the
-    /// creeper with its active effects `(id, remaining ticks, amplifier)`, in their mixed colour.
+    /// `Creeper.spawnLingeringCloud`, after its explosion: copy its active effects.
     LingeringCloud {
         at: [f64; 3],
-        effects: Vec<(&'static str, i32, i32)>,
-        /// The effects among them added hidden (`hideParticles`).
-        hidden: Vec<&'static str>,
-        /// The effects among them that are ambient.
-        ambient: Vec<&'static str>,
-        color: u32,
+        effects: Vec<crate::effects::EffectInstance>,
     },
     /// Damage that bypasses `EnchantmentHelper.doPostAttackEffects` (roars,
     /// beams, retaliation and hot-cube contact).
@@ -5294,6 +5288,24 @@ impl Mob {
         self.add_effect_instance(effect, incoming)
     }
 
+    /// Copy an active instance without its suppressed weaker effects.
+    pub(crate) fn active_effect_instance(
+        &self,
+        stored: &StoredEffect,
+    ) -> crate::effects::EffectInstance {
+        crate::effects::EffectInstance {
+            id: stored.id,
+            registry_index: stored.registry_index,
+            duration: stored.duration,
+            amplifier: stored.amplifier,
+            ambient: self.extra.ambient_effects.contains(&stored.id),
+            visible: !self.extra.hidden_effects.contains(&stored.id),
+            show_icon: stored.show_icon,
+            client_blend: (false, false),
+            hidden: None,
+        }
+    }
+
     /// Apply an already resolved effect instance through the same update path as content input.
     pub fn add_effect_instance(
         &mut self,
@@ -5305,20 +5317,7 @@ impl Mob {
         incoming.id = effect;
         let index = self.extra.effects.iter().position(|e| e.id == effect);
         let mut active = if let Some(i) = index {
-            let stored = &self.extra.effects[i];
-            let mut active = crate::effects::EffectInstance {
-                id: stored.id,
-                registry_index: stored.registry_index,
-                duration: stored.duration,
-                amplifier: stored.amplifier,
-                ambient: false,
-                visible: true,
-                show_icon: stored.show_icon,
-                client_blend: (false, false),
-                hidden: None,
-            };
-            active.ambient = self.extra.ambient_effects.contains(&effect);
-            active.visible = !self.extra.hidden_effects.contains(&effect);
+            let mut active = self.active_effect_instance(&self.extra.effects[i]);
             if let Some(i) = self.extra.effect_chains.iter().position(|e| e.id == effect) {
                 active.hidden = Some(Box::new(self.extra.effect_chains.remove(i)));
             }
