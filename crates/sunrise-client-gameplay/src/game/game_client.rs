@@ -630,7 +630,7 @@ impl crate::game::ClientGame<'_> {
             if self.hides_as_camera(item.id) {
                 continue;
             }
-            if item.fire_ticks > 0
+            if (item.fire_ticks > 0 || self.tracked_entity_on_fire(item.id))
                 && self
                     .stack_can_be_hurt_by(&item.stack, "minecraft:in_fire")
                     .unwrap_or(true)
@@ -660,7 +660,8 @@ impl crate::game::ClientGame<'_> {
             if self.hides_as_camera(stand.id) {
                 continue;
             }
-            if stand.is_on_fire() && !stand.marker {
+            if stand.is_on_fire_with_synced(self.tracked_entity_on_fire(stand.id)) && !stand.marker
+            {
                 let scale = if stand.small { 0.5 } else { 1.0 };
                 let at = stand.render_position(alpha);
                 if !fire_visible([at.x, at.y, at.z], 0.5 * scale, 1.975 * scale) {
@@ -808,7 +809,9 @@ impl crate::game::ClientGame<'_> {
             }
             // Blaze.isOnFire: a charged blaze burns.
             let blazing = m.species() == sunrise_sim::mobs::Species::Blaze && m.extra.flag;
-            if (m.is_on_fire() || blazing) && !m.removed {
+            if (m.is_on_fire_with_synced(self.tracked_entity_on_fire(m.id)) || blazing)
+                && !m.removed
+            {
                 let at = m.previous.lerp(m.position, alpha);
                 if !fire_visible([at.x, at.y, at.z], m.width(), m.height()) {
                     continue;

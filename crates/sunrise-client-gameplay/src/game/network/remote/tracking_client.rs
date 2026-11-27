@@ -287,11 +287,13 @@ impl crate::game::ClientGame<'_> {
                 .orbs
                 .push(ExperienceOrb::new(id as u32, at, Vec3::ZERO, 1));
         }
+        let mut air = 300;
         if let Some(t) = mob_type {
             // The window's copy of the server's mob: no mod part goals —
             // their `register_goals` ran on the authoritative side (#1077).
             let mut mob = Mob::new_remote(id as u32, t, at, head);
             super::super::remote_mob_data::client_defaults(&mut mob);
+            air = mob.air;
             if kind == "minecraft:player"
                 && let Some(r) = self.client.remote.as_ref()
             {
@@ -322,7 +324,6 @@ impl crate::game::ClientGame<'_> {
                         join: JoinSeq::next(),
                         position,
                         velocity: Vec3::ZERO,
-                        no_gravity: false,
                     },
                 );
             }
@@ -332,25 +333,9 @@ impl crate::game::ClientGame<'_> {
             } else {
                 0.0
             };
-            r.entities.insert(
-                id,
-                Tracked {
-                    kind: kind.to_owned(),
-                    position,
-                    previous: position,
-                    yaw: tracked_yaw,
-                    pitch: tracked_pitch,
-                    previous_yaw: tracked_yaw,
-                    previous_pitch: tracked_pitch,
-                    codec_base: position,
-                    on_fire: false,
-                    mod_fire_immune: false,
-                    silent: false,
-                    vehicle: None,
-                    tick_count: 0,
-                    size_answer: None,
-                },
-            );
+            let mut tracked = Tracked::new(kind.to_owned(), position, tracked_yaw, tracked_pitch);
+            tracked.air = air;
+            r.entities.insert(id, tracked);
         }
     }
 }
