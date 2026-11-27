@@ -102,9 +102,7 @@ fn shader_pack_generation_continues_across_a_renderer_rebuild() {
         install_pack(game, &packs.path().join("second"), "off");
         assert_eq!(frame_state(game), (true, 2));
 
-        // Only the first renderer carries this mark: a renderer without it is a replacement.
-        game.client.renderer.0.as_mut().unwrap().test_mark = 1;
-        // A retained mesh retires on the rebuild too.
+        // A retained mesh retires on the rebuild, proving the renderer was replaced.
         let _owner = enter_native_mod(ModCall {
             id: "pack_generation_probe",
             hook: "pack generation rebuild fixture",
@@ -151,11 +149,6 @@ fn shader_pack_generation_continues_across_a_renderer_rebuild() {
             }
             case => panic!("unknown case {case}"),
         }
-        assert_eq!(
-            game.client.renderer.0.as_ref().unwrap().test_mark,
-            0,
-            "{case}: the renderer was not replaced"
-        );
         assert_eq!(frame_state(game), (false, 3), "{case}");
         drop(game.client.renderer.0.take());
         drop(game.client.mod_gpu.take());
