@@ -210,7 +210,10 @@ impl LiveSectionHost {
     }
 }
 
-mod_api::impl_host_areas!(LiveSectionHost, except(config, datafix));
+mod_api::impl_host_areas!(LiveSectionHost, except(config, datafix, keys));
+// The callback's borrowed view holds no registry tables: every key read refuses as typed
+// (`None`, an empty list, `Unavailable`), never the panicking default (#6704).
+mod_api::refuse_host_area!(LiveSectionHost, keys);
 impl mod_api::prelude::ConfigHost for LiveSectionHost {
     fn config_dir(&self) -> &std::path::Path {
         &self.config_root
@@ -662,3 +665,36 @@ use crate::game::side_ops::modapi_modding::ModapiModdingSideGameExt as _;
 use crate::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
 use crate::game::native_hooks::entity_entering_section::GameHooks as _;
+
+#[cfg(test)]
+mod live_section_host_tests {
+    use super::LiveSectionHost;
+    use mod_api::prelude::KeysHost;
+    use mod_api::{Identifier, RegistryEntry, RegistryReadError};
+
+    /// The host an `entity_entering_section` listener receives answers the shared key reads with
+    /// their typed refusal instead of panicking (#6704).
+    #[test]
+    fn a_section_callback_host_refuses_registry_reads() {
+        let host = LiveSectionHost::new(None);
+        let mut visited = 0;
+        assert_eq!(
+            host.visit_registry_entries("minecraft:item", &mut |_| {
+                visited += 1;
+                core::ops::ControlFlow::Continue(())
+            }),
+            Err(RegistryReadError::Unavailable)
+        );
+        assert_eq!(visited, 0);
+        let stone = RegistryEntry::new(
+            Identifier::parse("minecraft:block").unwrap(),
+            Identifier::parse("minecraft:stone").unwrap(),
+        );
+        assert_eq!(
+            host.registry_entry_in_tag(&stone, "minecraft:mineable/pickaxe"),
+            None
+        );
+        assert_eq!(host.block_key("minecraft:stone"), None);
+        assert!(host.block_keys().is_empty());
+    }
+}

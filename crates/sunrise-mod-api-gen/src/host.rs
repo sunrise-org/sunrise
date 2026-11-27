@@ -532,6 +532,49 @@ pub(super) fn areas_source(root: &Path) -> Result<String, String> {
         }};
     }};"
     );
+    // A host that answers none of an area's reads (one that lends a borrowed view, such as a
+    // section callback's) implements it with each read's typed refusal, so a read added to the
+    // area later refuses there too instead of reaching the `unimplemented!` default.
+    let mut refuse_arms = String::new();
+    for area in &areas {
+        let Some(entries) = area.tiers.get(&Tier::Host) else {
+            continue;
+        };
+        let mut methods = String::new();
+        let refusable = entries.iter().try_for_each(|entry| {
+            let name = entry.name.as_str();
+            let sig = entry.sig.to_token_stream();
+            let args = signature_args(&entry.sig, name)?;
+            let value = refusal(entry)?;
+            if args.is_empty() {
+                writeln!(methods, "{sig} {{ {value} }}").unwrap();
+            } else {
+                writeln!(methods, "{sig} {{ let _ = ({args},); {value} }}").unwrap();
+            }
+            Ok::<(), String>(())
+        });
+        if refusable.is_ok() {
+            writeln!(
+                refuse_arms,
+                "($host:ty, {stem}) => {{ const _: () = {{ use $crate::*; #[deny(unconditional_recursion)] impl $crate::prelude::{trait_name} for $host {{ {methods} }} }}; }};",
+                stem = area.stem,
+                trait_name = area.trait_name(Tier::Host),
+            )
+            .unwrap();
+        }
+    }
+    writeln!(
+        macros,
+        "/// Implements host area `$area` for `$host` with each read's typed refusal (`None`, `false`,
+/// an empty list, or the error's `NoBackend::no_backend()`): for a host that answers none of
+/// that area. List the area in `impl_host_areas!`'s `except(...)` too.
+#[doc(hidden)]
+#[macro_export]
+macro_rules! __mod_api_refuse_host_area {{ {refuse_arms} }}
+#[doc(hidden)]
+pub use __mod_api_refuse_host_area as refuse_host_area;"
+    )
+    .unwrap();
     for (name, tiers, union) in [
         ("impl_host_areas", &[Tier::Host][..], "Host"),
         (
@@ -1619,6 +1662,7 @@ fn refusal_with(entry: &Entry, result_err: &'static str) -> Result<&'static str,
     let last = path.path.segments.last().map(|seg| seg.ident.to_string());
     match last.as_deref() {
         Some("Option") => Ok("None"),
+        Some("Vec") => Ok("Vec::new()"),
         Some("bool") => Ok("false"),
         Some("EntityResidency") => Ok("EntityResidency::Gone"),
         Some("Result") => Ok(result_err),
