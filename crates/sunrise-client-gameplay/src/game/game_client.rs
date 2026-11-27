@@ -4069,8 +4069,8 @@ impl crate::game::ClientGame<'_> {
         {
             self.apply_ui_settings();
         }
-        self.sample_gui_safe_area();
         self.follow_frame();
+        self.sample_gui_safe_area();
         self.observe_screen();
         // `Gui.setScreen` clears the focus of the screen it leaves: a menu
         // that comes back starts with no widget highlighted.
