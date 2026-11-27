@@ -99,6 +99,21 @@ fn finish_translation(
     notices: u64,
     folder: &str,
 ) {
+    let stone = game
+        .common
+        .pack
+        .assets
+        .registry
+        .default_state("minecraft:stone")
+        .unwrap()
+        .0 as usize;
+    let previous = game
+        .client
+        .renderer
+        .0
+        .as_ref()
+        .unwrap()
+        .installed_pack_block_id_for_test(stone);
     game.client
         .native_shaders
         .translation
@@ -108,6 +123,7 @@ fn finish_translation(
     assert_boundary(game, Some(expected), notices);
     let building = layout(game);
     let renderer = game.client.renderer.0.as_mut().unwrap();
+    assert_eq!(renderer.installed_pack_block_id_for_test(stone), previous);
     assert!(renderer.shader_pack_build_pending());
     assert_eq!(renderer.shader_pack_kind(), None);
     renderer.wait_shader_pack_build_for_test();
@@ -118,6 +134,15 @@ fn finish_translation(
     assert_eq!(
         game.client.renderer.0.as_ref().unwrap().shader_pack_kind(),
         Some("iris")
+    );
+    assert_eq!(
+        game.client
+            .renderer
+            .0
+            .as_ref()
+            .unwrap()
+            .installed_pack_block_id_for_test(stone),
+        Some(expected.0)
     );
     assert_eq!(layout(game), building);
     assert_eq!(
@@ -193,6 +218,7 @@ fn a_packs_separate_ao_reaches_the_terrain() {
         assert_boundary(game, None, notices);
         assert_eq!(layout(game), vanilla);
 
+        let mut translating_layout = vanilla;
         match case.as_str() {
             "on" | "switch" | "off" => {
                 gate.send(TranslationTestAction::Complete).unwrap();
@@ -264,6 +290,7 @@ fn a_packs_separate_ao_reaches_the_terrain() {
                     .expect("resource reload started");
                 let staged = reload.handle.take().unwrap().join().unwrap().unwrap();
                 game.apply_staged_pack(staged).unwrap();
+                translating_layout = layout(game);
             }
             "renderer" => {
                 #[allow(deprecated)]
@@ -276,6 +303,7 @@ fn a_packs_separate_ao_reaches_the_terrain() {
                     .unwrap();
                 let renderer = game.new_renderer(std::sync::Arc::new(window)).unwrap();
                 game.set_renderer(renderer);
+                translating_layout = layout(game);
                 gate.send(TranslationTestAction::Fail).unwrap();
             }
             _ => panic!("unknown shader pack case {case}"),
@@ -286,7 +314,7 @@ fn a_packs_separate_ao_reaches_the_terrain() {
             .wait_for_translation();
         frame(game);
         assert_boundary(game, None, notices);
-        assert_eq!(layout(game), vanilla);
+        assert_eq!(layout(game), translating_layout);
         assert_eq!(
             game.client.settings.sunrise.shader_pack,
             if case == "late-failure" {

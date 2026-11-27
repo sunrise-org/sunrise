@@ -420,6 +420,15 @@ impl Renderer {
         });
     }
 
+    #[cfg(feature = "test-support")]
+    pub fn installed_pack_block_id_for_test(&self, state: usize) -> Option<i32> {
+        self.pack_block_ids
+            .as_ref()?
+            .0
+            .get(state.checked_mul(2)?)
+            .copied()
+    }
+
     pub fn shader_pack_build_pending(&self) -> bool {
         self.pack_loading.is_some()
     }
