@@ -10,7 +10,7 @@
 //! is that divergence removed.
 
 use crate::game::ServerGame;
-use crate::game::server_side::lan_entities::commit_next_entity_id;
+use crate::game::server_side::lan_entities::advance_entity_id_counter;
 use sunrise_core::geometry::{Aabb, Vec3};
 use sunrise_sim::mobs::{Mob, Species, finalize, spawn_rules::Reason, spawning};
 use sunrise_world::food::Difficulty;
@@ -117,7 +117,7 @@ impl finalize::FinalizeLevel for FinalizeGame<'_, '_> {
             return None;
         }
         let t = t.clone();
-        commit_next_entity_id(&mut self.game.server.next_entity);
+        advance_entity_id_counter(&mut self.game.server.next_entity);
         Some(Mob::new(self.game.server.next_entity, t, Vec3::ZERO, 0.0))
     }
     fn spawn_data(&self) -> finalize::SpawnData<'_> {

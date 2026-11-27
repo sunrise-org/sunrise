@@ -1,7 +1,7 @@
 //! Dropped items and experience orbs: their tick (`tick_items`, `tick_dropped_items`,
 //! `tick_experience`), the stacks a destroyed container lets fall, and spawning and merging orbs.
 use super::*;
-use crate::game::server_side::lan_entities::commit_next_entity_id;
+use crate::game::server_side::lan_entities::advance_entity_id_counter;
 use sunrise_gameplay_common::game::collision_source::Mover;
 use sunrise_gameplay_common::game::creatures;
 use sunrise_sim::{entities::ItemCells, join_seq::JoinList};
@@ -835,7 +835,7 @@ impl crate::game::ServerGame<'_> {
         if len_sqr > 0.0 && dot < 0.0 {
             velocity = Vec3::new(-velocity.x, -velocity.y, -velocity.z);
         }
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         self.common.orbs.push(ExperienceOrb {
             size_answer: None,
             attachment_lifetime: Default::default(),

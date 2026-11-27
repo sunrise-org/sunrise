@@ -1,14 +1,14 @@
 //! Evoker fangs (`EvokerFangs`): rising out of the floor after a delay,
 //! biting what stands on them for 6 damage, sinking back after 22 ticks.
 use crate::game::ServerGame;
-use crate::game::server_side::lan_entities::commit_next_entity_id;
+use crate::game::server_side::lan_entities::advance_entity_id_counter;
 use sunrise_core::geometry::Vec3;
 use sunrise_gameplay_common::game::fangs_common::{Fangs, fang_attack_pitch};
 use sunrise_sim::mobs::Species;
 
 impl ServerGame<'_> {
     pub fn add_fangs(&mut self, at: [f64; 3], yaw: f32, delay: i32, owner: u32) {
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         self.common
             .insert_fangs(self.server.next_entity, at, yaw, delay, owner);
     }

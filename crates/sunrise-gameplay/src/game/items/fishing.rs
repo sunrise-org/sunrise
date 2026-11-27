@@ -2,7 +2,7 @@
 //! bobbing, lure and bite timers, open water, hooking mobs, retrieving the
 //! `gameplay/fishing` loot) and `FishingHookRenderer` (bobber and line).
 use super::lan_mobs::guest_bounds;
-use crate::game::server_side::lan_entities::commit_next_entity_id;
+use crate::game::server_side::lan_entities::advance_entity_id_counter;
 use std::sync::Arc;
 use sunrise_core::{
     geometry::{Aabb, Vec3, trig},
@@ -506,7 +506,7 @@ impl crate::game::ServerGame<'_> {
             let _synchronized = random_source::create();
             let v = cast_velocity(y_sin, y_cos, dir_y, &mut random);
             let [hook_yaw, hook_pitch] = hook_rotation(v);
-            commit_next_entity_id(&mut self.server.next_entity);
+            advance_entity_id_counter(&mut self.server.next_entity);
             self.install_fishing_hook(Hook {
                 uuid,
                 attachment_lifetime: Default::default(),

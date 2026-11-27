@@ -15,8 +15,12 @@ pub(in crate::game::server_side) fn candidate_entity_id(next: u32) -> u32 {
     next + 1
 }
 
-pub(in crate::game::server_side) fn commit_next_entity_id(next: &mut u32) -> u32 {
+pub(in crate::game::server_side) fn advance_entity_id_counter(next: &mut u32) {
     *next += 1;
+}
+
+pub(in crate::game::server_side) fn commit_next_entity_id(next: &mut u32) -> u32 {
+    advance_entity_id_counter(next);
     *next
 }
 
@@ -1281,8 +1285,8 @@ mod tests {
 
         let mut next = 40;
         let decoded_id = candidate_entity_id(next);
-        commit_next_entity_id(&mut next);
-        commit_next_entity_id(&mut next);
+        advance_entity_id_counter(&mut next);
+        advance_entity_id_counter(&mut next);
         commit_decoded_entity_id(&mut next, decoded_id);
         assert_eq!(next, decoded_id);
     }

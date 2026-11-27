@@ -23,7 +23,9 @@ pub(in crate::game) mod save_lending;
 #[path = "dragon/walls.rs"]
 pub(in crate::game) mod walls;
 use super::commands::Target;
-use crate::game::server_side::lan_entities::{candidate_entity_id, commit_next_entity_id};
+use crate::game::server_side::lan_entities::{
+    advance_entity_id_counter, candidate_entity_id, commit_next_entity_id,
+};
 use mod_api::DragonRespawnStage;
 use sunrise_core::nbt::Tag;
 use sunrise_core::position::BlockPos;
@@ -1314,7 +1316,7 @@ impl crate::game::ServerGame<'_> {
             let (drawn, uuid) = Crystal::own_draws();
             let time = Crystal::start_time(at, drawn, self.common.clock.still());
             // EndCrystal's constructor takes an id from the entity counter.
-            commit_next_entity_id(&mut self.server.next_entity);
+            advance_entity_id_counter(&mut self.server.next_entity);
             self.common
                 .persist
                 .uuids
@@ -3729,7 +3731,7 @@ impl crate::game::ServerGame<'_> {
         let time = Crystal::start_time(at, drawn, self.common.clock.still());
         // EndCrystal's constructor takes an id from the entity counter, so
         // the crystal is an entity a command can name (`@e[type=end_crystal]`).
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         self.common
             .crystals
             .push(Crystal::new(self.server.next_entity, at, false, time));

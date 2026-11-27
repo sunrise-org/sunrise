@@ -4,7 +4,7 @@
 //! side of them.
 use super::Dim;
 use crate::game::ServerGame;
-use crate::game::server_side::lan_entities::commit_next_entity_id;
+use crate::game::server_side::lan_entities::advance_entity_id_counter;
 use std::collections::{HashMap, HashSet};
 use sunrise_core::nbt::Tag;
 use sunrise_core::{
@@ -955,7 +955,7 @@ impl crate::game::ServerGame<'_> {
         reason: raider::Reason,
     ) -> Option<u32> {
         let t = self.common.res.mob_types().get(kind).cloned()?;
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         let mut mob = Mob::new(
             self.server.next_entity,
             t,

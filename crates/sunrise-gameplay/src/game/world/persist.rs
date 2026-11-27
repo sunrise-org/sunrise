@@ -3,7 +3,7 @@
 //! scheduled block/fluid ticks (chunk `block_ticks`/`fluid_ticks`).
 use crate::game::ServerGame;
 use crate::game::server_side::lan_entities::{
-    candidate_entity_id, commit_decoded_entity_id, commit_next_entity_id,
+    advance_entity_id_counter, candidate_entity_id, commit_decoded_entity_id, commit_next_entity_id,
 };
 use sunrise_gameplay_common::game::GameGameExt3;
 #[path = "persist/display.rs"]
@@ -834,7 +834,7 @@ impl crate::game::ServerGame<'_> {
         uuid: Option<[i32; 4]>,
         transferred: Option<super::entity_initialization::TransferredEntityState>,
     ) {
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         if let Some(mut a) = entity_nbt::armor_stand_from_nbt(&tag, self.server.next_entity) {
             let mut tag = tag;
             let riders = self.take_passengers(&mut tag);
@@ -930,7 +930,7 @@ impl crate::game::ServerGame<'_> {
             );
             // EndCrystal's constructor takes an id from the
             // entity counter.
-            commit_next_entity_id(&mut self.server.next_entity);
+            advance_entity_id_counter(&mut self.server.next_entity);
             c.id = self.server.next_entity;
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(c.id, state);
@@ -950,7 +950,7 @@ impl crate::game::ServerGame<'_> {
         uuid: Option<[i32; 4]>,
         transferred: Option<super::entity_initialization::TransferredEntityState>,
     ) {
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         if let Some(mut f) = entity_nbt::item_frame_from_nbt(&tag, self.server.next_entity) {
             let item = f.item.take();
             f.set_item(item);
@@ -977,7 +977,7 @@ impl crate::game::ServerGame<'_> {
         uuid: Option<[i32; 4]>,
         transferred: Option<super::entity_initialization::TransferredEntityState>,
     ) {
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         if let Some(c) = entity_nbt::cushion_from_nbt(&tag, self.server.next_entity) {
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(c.id, state);

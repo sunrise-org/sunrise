@@ -3,7 +3,7 @@
 //! 60 to 120 ticks, then falls as an item or is fired straight down as a
 //! projectile (`spawnItem`). Saved with its chunk's entities (persist.rs).
 use crate::game::ServerGame;
-use crate::game::server_side::lan_entities::commit_next_entity_id;
+use crate::game::server_side::lan_entities::{advance_entity_id_counter, commit_next_entity_id};
 use sunrise_core::geometry::Vec3;
 use sunrise_gameplay_common::game::ominous_item_spawner_common::OminousItemSpawner;
 use sunrise_items::items::ItemStack;
@@ -38,7 +38,7 @@ pub(in crate::game::server_side) fn block(p: [f64; 3]) -> [i32; 3] {
 impl ServerGame<'_> {
     /// `OminousItemSpawner.create` added at `position`.
     pub fn add_ominous_item_spawner(&mut self, item: ItemStack, position: [f64; 3], delay: i32) {
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         self.common.ominous_spawners.push(OminousItemSpawner {
             attachment_lifetime: Default::default(),
             join: Default::default(),

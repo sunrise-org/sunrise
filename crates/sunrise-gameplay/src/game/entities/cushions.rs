@@ -7,6 +7,7 @@
 //! only an entity whose `Pos` is the click point's height. Placement uses
 //! outline bounds, collision shapes and suffocation predicates.
 use super::{Hit, InteractTarget, Keys};
+use crate::game::server_side::lan_entities::commit_next_entity_id;
 use sunrise_core::geometry::{Aabb, Vec3};
 use sunrise_gameplay_common::game::transactions::entities::EntityRemovalGameExt as _;
 use sunrise_items::items::ItemStack;
@@ -91,8 +92,7 @@ impl crate::game::ServerGame<'_> {
         {
             return false;
         }
-        self.server.next_entity += 1;
-        let id = self.server.next_entity;
+        let id = commit_next_entity_id(&mut self.server.next_entity);
         // `BlockAttachedEntity.setPos`: `BlockPos.containing(position)`.
         let attached = [
             position.x.floor() as i32,

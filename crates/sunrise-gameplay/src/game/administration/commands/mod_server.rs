@@ -10,7 +10,7 @@ use crate::game::commands::target_entity_mut;
 use crate::game::commands::texts;
 use crate::game::commands::without_knots;
 use crate::game::commands::wrap_degrees;
-use crate::game::server_side::lan_entities::commit_next_entity_id;
+use crate::game::server_side::lan_entities::{advance_entity_id_counter, commit_next_entity_id};
 use mod_api::CommandFeedback;
 use sunrise_command::{
     Arg, CommandError, Context,
@@ -921,7 +921,7 @@ impl crate::game::ServerGame<'_> {
                 _ if super::minecarts::CartKind::from_id(&kind).is_some() => {
                     let cart_kind = super::minecarts::CartKind::from_id(&kind)
                         .unwrap_or(super::minecarts::CartKind::Rideable);
-                    commit_next_entity_id(&mut self.server.next_entity);
+                    advance_entity_id_counter(&mut self.server.next_entity);
                     let mut cart = super::minecarts::Minecart::new(
                         self.server.next_entity,
                         cart_kind,

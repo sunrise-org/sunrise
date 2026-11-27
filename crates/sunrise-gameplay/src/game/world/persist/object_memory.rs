@@ -92,7 +92,7 @@ impl crate::game::ServerGame<'_> {
         uuid: Option<[i32; 4]>,
         transferred: Option<crate::game::entity_initialization::TransferredEntityState>,
     ) {
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         // `ItemEntity(EntityType, Level)` first: its own random draws UUID, bobOffs and yaw.
         let mut own = random_source::entity();
         let fresh = sunrise_sim::save::insecure_uuid(&mut own);
@@ -120,7 +120,7 @@ impl crate::game::ServerGame<'_> {
         mut transferred: Option<crate::game::entity_initialization::TransferredEntityState>,
     ) {
         for (i, mut orb) in entity_nbt::orbs_from_nbt(&tag).into_iter().enumerate() {
-            commit_next_entity_id(&mut self.server.next_entity);
+            advance_entity_id_counter(&mut self.server.next_entity);
             orb.id = self.server.next_entity;
             let id = orb.id;
             // Sunrise splits a saved `count` into orbs: the first is the saved one.
@@ -171,7 +171,7 @@ impl crate::game::ServerGame<'_> {
             self.claim_owner(&mut p);
             // An arrow that came through a portal keeps its
             // cooldown: it does not go straight back through.
-            commit_next_entity_id(&mut self.server.next_entity);
+            advance_entity_id_counter(&mut self.server.next_entity);
             p.id = self.server.next_entity;
             self.restore_portal_cooldown(p.id, &tag);
             self.remember_tags(p.id, &tag);
@@ -190,7 +190,7 @@ impl crate::game::ServerGame<'_> {
         let target = self.bullet_target(&tag);
         if let Some(mut p) = entity_nbt::spit_or_bullet_from_nbt(&tag, player_uuid, target) {
             self.claim_owner(&mut p);
-            commit_next_entity_id(&mut self.server.next_entity);
+            advance_entity_id_counter(&mut self.server.next_entity);
             p.id = self.server.next_entity;
             self.restore_portal_cooldown(p.id, &tag);
             self.prepare_loaded_projectile_before_install(&mut p, &tag, uuid, transferred);
@@ -209,7 +209,7 @@ impl crate::game::ServerGame<'_> {
         if let Some(mut p) = entity_nbt::fireball_from_nbt(&tag, player_uuid) {
             self.claim_owner(&mut p);
             // A projectile that came through a portal keeps its cooldown.
-            commit_next_entity_id(&mut self.server.next_entity);
+            advance_entity_id_counter(&mut self.server.next_entity);
             p.id = self.server.next_entity;
             self.restore_portal_cooldown(p.id, &tag);
             self.prepare_loaded_projectile_before_install(&mut p, &tag, uuid, transferred);
@@ -230,7 +230,7 @@ impl crate::game::ServerGame<'_> {
         {
             self.claim_owner(&mut p);
             // A projectile that came through a portal keeps its cooldown.
-            commit_next_entity_id(&mut self.server.next_entity);
+            advance_entity_id_counter(&mut self.server.next_entity);
             p.id = self.server.next_entity;
             self.restore_portal_cooldown(p.id, &tag);
             self.prepare_loaded_projectile_before_install(&mut p, &tag, uuid, transferred);
@@ -269,7 +269,7 @@ impl crate::game::ServerGame<'_> {
                 entity_nbt::falling_state_from_nbt(self.common.pack.assets.registry, &state)
         {
             let (no_gravity, drop_item) = entity_nbt::falling_block_flags(&tag);
-            commit_next_entity_id(&mut self.server.next_entity);
+            advance_entity_id_counter(&mut self.server.next_entity);
             let uuid = self.resolve_loaded_falling_uuid_before_install(&tag, uuid, transferred);
             self.common.falling.push(FallingBlock {
                 size_answer: None,
@@ -558,7 +558,7 @@ impl crate::game::ServerGame<'_> {
         {
             return Some(id);
         }
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         // Structure mobs that generation left to finish: saves from before
         // they were finalized at placement, or a placement that could not.
         let mut tag = tag;

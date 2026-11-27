@@ -7,7 +7,7 @@
 
 use super::native_pending_children::{BabyChildSlot, ChildConstraint, PendingMob, SplitChildList};
 use crate::game::ServerGame;
-use crate::game::server_side::lan_entities::commit_next_entity_id;
+use crate::game::server_side::lan_entities::{advance_entity_id_counter, commit_next_entity_id};
 use mod_api::{BabyEntitySpawnChild, MobSplitChildren, UnspawnedMob, UnspawnedMobError};
 use std::panic::{AssertUnwindSafe, catch_unwind, resume_unwind};
 use std::sync::atomic::{AtomicU64, Ordering};
@@ -163,7 +163,7 @@ impl ServerGame<'_> {
         action: u64,
         kind: &str,
     ) -> PendingMob {
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         let (random, uuid) = sunrise_sim::mobs::living_random();
         let mut child = Mob::with_random(
             self.server.next_entity,

@@ -4,7 +4,7 @@
 //! the default pose, the hit wobble and humanoid armor layers.
 use super::InteractTarget;
 use super::entity::Entity;
-use crate::game::server_side::lan_entities::{candidate_entity_id, commit_next_entity_id};
+use crate::game::server_side::lan_entities::{advance_entity_id_counter, candidate_entity_id};
 use sunrise_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
@@ -202,7 +202,7 @@ impl crate::game::ServerGame<'_> {
         // EntityType.create's spawn yaw, `level.getRandom().nextFloat() * 360`, before
         // ArmorStandItem.useOn turns the stand to face the player.
         self.common.world.random.next_float();
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         self.common.persist.uuids.insert(stand.id, uuid);
         self.server_play_sound(
             "minecraft:entity.armor_stand.place",

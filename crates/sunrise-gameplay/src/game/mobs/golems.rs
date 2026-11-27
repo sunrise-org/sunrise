@@ -3,7 +3,7 @@
 //! T of four iron blocks (arms along X or Z, nothing beside the legs) an iron
 //! golem. Players placing the pumpkin and dispensers share it.
 use crate::game::ServerGame;
-use crate::game::server_side::lan_entities::commit_next_entity_id;
+use crate::game::server_side::lan_entities::advance_entity_id_counter;
 use sunrise_game_data::Result;
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 use sunrise_sim::block_pattern::{
@@ -230,7 +230,7 @@ impl ServerGame<'_> {
         yaw: f32,
     ) -> Option<u32> {
         let t = self.common.res.mob_types().get(kind).cloned()?;
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         let mut mob = sunrise_sim::mobs::Mob::new(
             self.server.next_entity,
             t,

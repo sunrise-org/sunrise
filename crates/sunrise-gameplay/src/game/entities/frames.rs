@@ -3,7 +3,7 @@
 //! `hurtServer` (take the item out, then break the frame) and
 //! `ItemFrameRenderer` (the frame model and the item at a 45 degree step).
 use super::{Hit, InteractTarget};
-use crate::game::server_side::lan_entities::{candidate_entity_id, commit_next_entity_id};
+use crate::game::server_side::lan_entities::{advance_entity_id_counter, candidate_entity_id};
 use sunrise_core::{
     geometry::{Aabb, Vec3},
     position::BlockPos,
@@ -172,7 +172,7 @@ impl crate::game::ServerGame<'_> {
         if self.hanging_place_cancelled(kind, pos) {
             return true;
         }
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         self.server_play_sound(&sound(&frame, "place"), center(&frame), 1.0, 1.0);
         // HangingEntityItem.useOn: ENTITY_PLACE at the frame, by the player, before it is
         // added; ItemStack.useOn then counts the use.

@@ -5,7 +5,7 @@
 //! event and the smoke animation, event 2000).
 use super::{Dim, item_abilities::ability};
 #[allow(unused_imports)]
-use crate::game::server_side::lan_entities::commit_next_entity_id;
+use crate::game::server_side::lan_entities::advance_entity_id_counter;
 #[allow(unused_imports)]
 use mod_api::{LevelRef, LevelWriteError, SoundSource};
 #[allow(unused_imports)]
@@ -1118,7 +1118,7 @@ impl crate::game::ServerGame<'_> {
         facing: Direction,
         stack: &ItemStack,
     ) {
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         let (stand, uuid) = sunrise_sim::entities::ArmorStand::new_with_uuid(
             self.server.next_entity,
             foot,
@@ -1201,7 +1201,7 @@ impl crate::game::ServerGame<'_> {
         } else {
             return (self.dispense_default_in_level(pos, facing, stack), CLICK);
         };
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         let mut boat = sunrise_gameplay_common::game::boats_common::Boat::new(
             self.server.next_entity,
             wood.into(),
@@ -1264,7 +1264,7 @@ impl crate::game::ServerGame<'_> {
                 -0.9
             }
         };
-        commit_next_entity_id(&mut self.server.next_entity);
+        advance_entity_id_counter(&mut self.server.next_entity);
         let cart = super::minecarts::Minecart::new(
             self.server.next_entity,
             kind,
