@@ -987,7 +987,7 @@ mod tests {
                     address: format!("127.0.0.1:{}", 25560 + id).parse().unwrap(),
                     expected: false,
                 },
-                id,
+                id as i32,
                 pos,
                 4,
             );
