@@ -11,20 +11,49 @@ use sunrise_sim::lan::{
 };
 use {sunrise_core::nbt::Tag, sunrise_world::registry::BlockStateId};
 
+pub(in crate::game::server_side) fn candidate_entity_id(next: u32) -> u32 {
+    next + 1
+}
+
+pub(in crate::game::server_side) fn commit_next_entity_id(next: &mut u32) -> u32 {
+    *next += 1;
+    *next
+}
+
+pub(in crate::game::server_side) fn commit_decoded_entity_id(next: &mut u32, decoded_id: u32) {
+    *next = decoded_id;
+}
+
 /// Allocate once: a native summon may need its id before the tracking tick.
 pub(in crate::game::server_side) fn assign_entity_id(next: &mut u32, id: &mut u32) -> u32 {
     if *id == 0 {
-        *next += 1;
-        *id = *next;
+        *id = commit_next_entity_id(next);
     }
     *id
+}
+
+fn assign_thrown_potion_ids(
+    next: &mut u32,
+    potions: &mut sunrise_gameplay_common::game::potions_common::PotionState,
+) {
+    for id in crate::game::server_side::potions_server::thrown_ids(potions) {
+        assign_entity_id(next, id);
+    }
+}
+
+fn assign_thrown_eye_ids(
+    next: &mut u32,
+    end: &mut sunrise_gameplay_common::game::end_state::EndState,
+) {
+    for id in end.eye_ids() {
+        assign_entity_id(next, id);
+    }
 }
 
 impl ServerGame<'_> {
     /// `Entity.nextEntityId`: the id a new entity takes from the one counter.
     pub fn take_entity_id(&mut self) -> u32 {
-        self.server.next_entity += 1;
-        self.server.next_entity
+        commit_next_entity_id(&mut self.server.next_entity)
     }
     /// Whether the id counter is within [`ENTITY_ID_HEADROOM`] of the end: then a mod's spawn is
     /// refused and the tick spawns nothing of its own, named once in the log. Ids already handed
@@ -711,14 +740,8 @@ impl ServerGame<'_> {
         assign_resident_ids!(self.common.crystals, c, next, None);
         assign_resident_ids!(self.common.bolts, b, next, Some(&b.attachment_lifetime));
         assign_resident_ids!(self.common.ominous_spawners, o, next, None);
-        crate::game::server_side::potions_server::thrown_ids(&mut self.common.potions).for_each(
-            |id| {
-                assign_entity_id(next, id);
-            },
-        );
-        self.common.end.eye_ids().for_each(|id| {
-            assign_entity_id(next, id);
-        });
+        assign_thrown_potion_ids(next, &mut self.common.potions);
+        assign_thrown_eye_ids(next, &mut self.common.end);
         assign_resident_ids!(self.common.breath_clouds, b, next, None);
     }
 
@@ -995,37 +1018,8 @@ impl ServerGame<'_> {
                     chunks,
                     at(p.position),
                 )
-                && let Some(a) = p.arrow.as_deref()
-                && let (Some(spawn_pos), Some(spawn_vel), Some((pitch, yaw))) =
-                    (a.spawn_pos, a.spawn_velocity, a.spawn_rot)
+                && let Some(joined) = fresh_projectile_pairing_state(p, kind, data, uuid)
             {
-                let mut joined = state(p.id, kind, at(spawn_pos), yaw, false);
-                joined.pitch = pitch;
-                joined.velocity = at(spawn_vel);
-                joined.needs_sync = p.needs_sync;
-                joined.data = data;
-                joined.uuid = uuid;
-                if a.on_fire() {
-                    joined.meta.push((0, serializer::BYTE, Value::Byte(1)));
-                }
-                match &p.kind {
-                    K::Arrow { critical, .. } => {
-                        push_arrow_meta(&mut joined.meta, *critical, a.no_physics, a.pierce, false);
-                        let color = p.arrow_effect_color();
-                        if color != -1 {
-                            joined.meta.push((11, serializer::INT, Value::Int(color)));
-                        }
-                    }
-                    K::Trident => {
-                        push_arrow_meta(&mut joined.meta, false, a.no_physics, 0, false);
-                        if a.pickup_item.has_any_enchantments() {
-                            joined
-                                .meta
-                                .push((12, serializer::BOOLEAN, Value::Bool(true)));
-                        }
-                    }
-                    _ => {}
-                }
                 hub.note_fresh_joined(&[joined]);
             }
         }
@@ -1210,6 +1204,50 @@ fn push_arrow_meta(
     }
 }
 
+fn fresh_projectile_pairing_state(
+    p: &sunrise_sim::projectiles::Projectile,
+    kind: &str,
+    data: i32,
+    uuid: u128,
+) -> Option<EntityState> {
+    use sunrise_sim::projectiles::ProjectileKind as K;
+    let a = p.arrow.as_deref()?;
+    let (Some(spawn_pos), Some(spawn_vel), Some((pitch, yaw))) =
+        (a.spawn_pos, a.spawn_velocity, a.spawn_rot)
+    else {
+        return None;
+    };
+    let at = |p: sunrise_core::geometry::Vec3| [p.x, p.y, p.z];
+    let mut joined = state(p.id, kind, at(spawn_pos), yaw, false);
+    joined.pitch = pitch;
+    joined.velocity = at(spawn_vel);
+    joined.needs_sync = p.needs_sync;
+    joined.data = data;
+    joined.uuid = uuid;
+    if a.on_fire() {
+        joined.meta.push((0, serializer::BYTE, Value::Byte(1)));
+    }
+    match &p.kind {
+        K::Arrow { critical, .. } => {
+            push_arrow_meta(&mut joined.meta, *critical, a.no_physics, a.pierce, false);
+            let color = p.arrow_effect_color();
+            if color != -1 {
+                joined.meta.push((11, serializer::INT, Value::Int(color)));
+            }
+        }
+        K::Trident => {
+            push_arrow_meta(&mut joined.meta, false, a.no_physics, 0, false);
+            if a.pickup_item.has_any_enchantments() {
+                joined
+                    .meta
+                    .push((12, serializer::BOOLEAN, Value::Bool(true)));
+            }
+        }
+        _ => {}
+    }
+    Some(joined)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1230,6 +1268,100 @@ mod tests {
         assert_eq!(assign_entity_id(&mut next, &mut later), 44);
         assert_eq!(roots, returned);
         assert_eq!(next, 44);
+    }
+
+    #[test]
+    fn provisional_placement_and_decoded_id_commit_have_distinct_policies() {
+        let mut next = 40;
+        let candidate = candidate_entity_id(next);
+        assert_eq!(next, 40);
+        assert_eq!(candidate, 41);
+        assert_eq!(commit_next_entity_id(&mut next), 41);
+        assert_eq!(commit_next_entity_id(&mut next), 42);
+
+        let mut next = 40;
+        let decoded_id = candidate_entity_id(next);
+        commit_next_entity_id(&mut next);
+        commit_next_entity_id(&mut next);
+        commit_decoded_entity_id(&mut next, decoded_id);
+        assert_eq!(next, decoded_id);
+    }
+
+    #[test]
+    fn pending_crystal_publishes_only_after_assignment_and_keeps_its_join() {
+        use sunrise_core::geometry::Vec3;
+        use sunrise_gameplay_common::game::dragon_common::Crystal;
+        use sunrise_sim::join_seq::{
+            JoinList,
+            residency::{Change, Identity, Journal, Kind, Owner},
+        };
+
+        let journal = Journal::default();
+        let owner = Owner {
+            dimension: mod_api::DimensionKey::OVERWORLD,
+            kind: Kind::Crystal,
+        };
+        let mut crystals = JoinList::<Crystal>::default();
+        crystals.bind_residency(&journal, owner, |c| (c.id, c.join));
+        crystals.push(Crystal::new(0, Vec3::ZERO, false, 0));
+        let join = crystals[0].join;
+        assert!(join.is_joined());
+        let mut events = Vec::new();
+        journal.drain_into(&mut events);
+        assert!(events.is_empty());
+
+        let mut next = 40;
+        crate::game::entity_residency::assign_resident_ids!(crystals, c, &mut next, None);
+        journal.drain_into(&mut events);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].owner, owner);
+        assert_eq!(
+            events[0].change,
+            Change::Spawned(Identity::new(41, join).unwrap())
+        );
+        assert_eq!(crystals[0].join, join);
+
+        let stamp = crystals.stamp();
+        events.clear();
+        crate::game::entity_residency::assign_resident_ids!(crystals, c, &mut next, None);
+        journal.drain_into(&mut events);
+        assert!(events.is_empty());
+        assert_eq!(crystals.stamp(), stamp);
+        assert_eq!(next, 41);
+    }
+
+    #[test]
+    fn fresh_arrow_pairing_uses_launch_state_only_when_complete() {
+        use sunrise_core::geometry::Vec3;
+        use sunrise_sim::projectiles::{Projectile, ProjectileKind};
+
+        let mut p = Projectile::new(
+            ProjectileKind::Arrow {
+                base_damage: 2.0,
+                critical: false,
+                effect: None,
+            },
+            Vec3::new(8.0, 9.0, 10.0),
+            None,
+        );
+        p.id = 41;
+        p.stuck = true;
+        p.needs_sync = true;
+        let a = p.arrow.as_deref_mut().unwrap();
+        a.in_ground = true;
+        a.spawn_pos = Some(Vec3::new(1.0, 2.0, 3.0));
+        a.spawn_velocity = Some(Vec3::new(4.0, 5.0, 6.0));
+        assert!(fresh_projectile_pairing_state(&p, "minecraft:arrow", 42, 43).is_none());
+
+        p.arrow.as_deref_mut().unwrap().spawn_rot = Some((30.0, 60.0));
+        let joined = fresh_projectile_pairing_state(&p, "minecraft:arrow", 42, 43).unwrap();
+        assert_eq!(joined.position, [1.0, 2.0, 3.0]);
+        assert_eq!(joined.velocity, [4.0, 5.0, 6.0]);
+        assert_eq!((joined.pitch, joined.yaw), (30.0, 60.0));
+        assert_eq!((joined.id, joined.data, joined.uuid), (41, 42, 43));
+        assert!(joined.needs_sync);
+        assert!(!joined.on_ground);
+        assert!(joined.meta.iter().all(|(id, _, _)| *id != 10));
     }
 
     #[test]

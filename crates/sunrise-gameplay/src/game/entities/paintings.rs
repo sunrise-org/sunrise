@@ -3,6 +3,7 @@
 //! checks every 100 ticks, breaking by attack (`dropItem`), saving, and
 //! `PaintingRenderer` quads.
 use super::Hit;
+use crate::game::server_side::lan_entities::commit_next_entity_id;
 use std::sync::Arc;
 use sunrise_core::random::RandomSource;
 use sunrise_gameplay_common::game::{
@@ -34,7 +35,7 @@ impl crate::game::ServerGame<'_> {
             hit.pos[1],
             hit.pos[2] + hit.face[2],
         ];
-        self.server.next_entity += 1;
+        commit_next_entity_id(&mut self.server.next_entity);
         let mut candidate = Painting {
             attachment_lifetime: Default::default(),
             join: Default::default(),

@@ -238,17 +238,7 @@ impl crate::game::ServerGame<'_> {
                 },
             )
         {
-            // What an earlier held flush of this level told is constructed already; with a toss
-            // still asked it may have stopped short, so then everything since the mark is looked at.
-            let mut mark = self.common.persist.joined_seq;
-            if self.common.native_lifecycle.held_joins.is_empty() {
-                mark = mark.max(held_before);
-            }
-            while let Some((slot, id, seq)) = self.next_unannounced(mark, &[], None) {
-                mark = seq;
-                let kind = self.slot_kind_and_position(slot).0.into_owned();
-                self.construct_joining(id, &kind);
-            }
+            self.construct_held_join_batch(held_before);
             return true;
         }
         let latest = sunrise_sim::join_seq::JoinSeq::latest();
@@ -271,6 +261,20 @@ impl crate::game::ServerGame<'_> {
             .admitted_joins
             .retain(|&(seq, _)| seq > self.common.persist.joined_seq);
         kept
+    }
+
+    #[inline(always)]
+    fn construct_held_join_batch(&mut self, held_before: sunrise_sim::join_seq::JoinSeq) {
+        // A held toss may have stopped construction before the prior batch ceiling.
+        let mut mark = self.common.persist.joined_seq;
+        if self.common.native_lifecycle.held_joins.is_empty() {
+            mark = mark.max(held_before);
+        }
+        while let Some((slot, id, seq)) = self.next_unannounced(mark, &[], None) {
+            mark = seq;
+            let kind = self.slot_kind_and_position(slot).0.into_owned();
+            self.construct_joining(id, &kind);
+        }
     }
 
     /// The shared `PersistentEntitySectionManager.addEntity` boundary, for a fresh
@@ -332,14 +336,18 @@ impl crate::game::ServerGame<'_> {
         }
         if self.refresh_join_slot(id, slot).is_some() {
             // A teleported candidate already went through admission in its destination.
-            self.remember_join(id, kind);
-            // `addEntity` files it under its section, untold.
-            self.entity_section_joined(id, [at.x, at.y, at.z]);
+            self.file_admitted_join(id, kind, at);
             if let Some((id, item, count, position)) = spawn {
                 self.native_item_spawn(id, &item, count, position);
             }
         }
         true
+    }
+
+    #[inline(always)]
+    fn file_admitted_join(&mut self, id: u32, kind: String, at: Vec3) {
+        self.remember_join(id, kind);
+        self.entity_section_joined(id, [at.x, at.y, at.z]);
     }
 
     /// `Entity.<init>` comes before `addFreshEntity`: an entity that started on a path that

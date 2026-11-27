@@ -92,7 +92,7 @@ impl crate::game::ServerGame<'_> {
         uuid: Option<[i32; 4]>,
         transferred: Option<crate::game::entity_initialization::TransferredEntityState>,
     ) {
-        self.server.next_entity += 1;
+        commit_next_entity_id(&mut self.server.next_entity);
         // `ItemEntity(EntityType, Level)` first: its own random draws UUID, bobOffs and yaw.
         let mut own = random_source::entity();
         let fresh = sunrise_sim::save::insecure_uuid(&mut own);
@@ -103,8 +103,12 @@ impl crate::game::ServerGame<'_> {
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(e.id, state);
             }
-            self.remember(e.id, Some(uuid.unwrap_or(fresh)), tag);
-            self.bind_saved_entity_attachments(e.id, &mut e.attachment_lifetime);
+            self.remember_loaded_entity_before_bound_install(
+                e.id,
+                Some(uuid.unwrap_or(fresh)),
+                tag,
+                &mut e.attachment_lifetime,
+            );
             self.common.dropped.push(e);
         }
     }
@@ -116,7 +120,7 @@ impl crate::game::ServerGame<'_> {
         mut transferred: Option<crate::game::entity_initialization::TransferredEntityState>,
     ) {
         for (i, mut orb) in entity_nbt::orbs_from_nbt(&tag).into_iter().enumerate() {
-            self.server.next_entity += 1;
+            commit_next_entity_id(&mut self.server.next_entity);
             orb.id = self.server.next_entity;
             let id = orb.id;
             // Sunrise splits a saved `count` into orbs: the first is the saved one.
@@ -135,6 +139,22 @@ impl crate::game::ServerGame<'_> {
         }
     }
 
+    #[inline(always)]
+    fn prepare_loaded_projectile_before_install(
+        &mut self,
+        p: &mut sunrise_sim::projectiles::Projectile,
+        tag: &Tag,
+        uuid: Option<[i32; 4]>,
+        transferred: Option<crate::game::entity_initialization::TransferredEntityState>,
+    ) {
+        if let Some(state) = transferred {
+            self.adopt_transferred_entity_state(p.id, state);
+        }
+        let own_uuid = p.own_uuid(uuid);
+        self.remember_uuid(p.id, Some(own_uuid), tag);
+        self.bind_saved_entity_attachments(p.id, &mut p.attachment_lifetime);
+    }
+
     pub(in crate::game::server_side) fn load_arrow_transferred(
         &mut self,
         tag: Tag,
@@ -151,16 +171,11 @@ impl crate::game::ServerGame<'_> {
             self.claim_owner(&mut p);
             // An arrow that came through a portal keeps its
             // cooldown: it does not go straight back through.
-            self.server.next_entity += 1;
+            commit_next_entity_id(&mut self.server.next_entity);
             p.id = self.server.next_entity;
             self.restore_portal_cooldown(p.id, &tag);
             self.remember_tags(p.id, &tag);
-            if let Some(state) = transferred {
-                self.adopt_transferred_entity_state(p.id, state);
-            }
-            let own_uuid = p.own_uuid(uuid);
-            self.remember_uuid(p.id, Some(own_uuid), &tag);
-            self.bind_saved_entity_attachments(p.id, &mut p.attachment_lifetime);
+            self.prepare_loaded_projectile_before_install(&mut p, &tag, uuid, transferred);
             self.add_projectile(p);
         }
     }
@@ -175,15 +190,10 @@ impl crate::game::ServerGame<'_> {
         let target = self.bullet_target(&tag);
         if let Some(mut p) = entity_nbt::spit_or_bullet_from_nbt(&tag, player_uuid, target) {
             self.claim_owner(&mut p);
-            self.server.next_entity += 1;
+            commit_next_entity_id(&mut self.server.next_entity);
             p.id = self.server.next_entity;
             self.restore_portal_cooldown(p.id, &tag);
-            if let Some(state) = transferred {
-                self.adopt_transferred_entity_state(p.id, state);
-            }
-            let own_uuid = p.own_uuid(uuid);
-            self.remember_uuid(p.id, Some(own_uuid), &tag);
-            self.bind_saved_entity_attachments(p.id, &mut p.attachment_lifetime);
+            self.prepare_loaded_projectile_before_install(&mut p, &tag, uuid, transferred);
             self.add_projectile(p);
             self.remember_last_projectile_tags(&tag);
         }
@@ -199,15 +209,10 @@ impl crate::game::ServerGame<'_> {
         if let Some(mut p) = entity_nbt::fireball_from_nbt(&tag, player_uuid) {
             self.claim_owner(&mut p);
             // A projectile that came through a portal keeps its cooldown.
-            self.server.next_entity += 1;
+            commit_next_entity_id(&mut self.server.next_entity);
             p.id = self.server.next_entity;
             self.restore_portal_cooldown(p.id, &tag);
-            if let Some(state) = transferred {
-                self.adopt_transferred_entity_state(p.id, state);
-            }
-            let own_uuid = p.own_uuid(uuid);
-            self.remember_uuid(p.id, Some(own_uuid), &tag);
-            self.bind_saved_entity_attachments(p.id, &mut p.attachment_lifetime);
+            self.prepare_loaded_projectile_before_install(&mut p, &tag, uuid, transferred);
             self.add_projectile(p);
             self.remember_last_projectile_tags(&tag);
         }
@@ -225,18 +230,27 @@ impl crate::game::ServerGame<'_> {
         {
             self.claim_owner(&mut p);
             // A projectile that came through a portal keeps its cooldown.
-            self.server.next_entity += 1;
+            commit_next_entity_id(&mut self.server.next_entity);
             p.id = self.server.next_entity;
             self.restore_portal_cooldown(p.id, &tag);
-            if let Some(state) = transferred {
-                self.adopt_transferred_entity_state(p.id, state);
-            }
-            let own_uuid = p.own_uuid(uuid);
-            self.remember_uuid(p.id, Some(own_uuid), &tag);
-            self.bind_saved_entity_attachments(p.id, &mut p.attachment_lifetime);
+            self.prepare_loaded_projectile_before_install(&mut p, &tag, uuid, transferred);
             self.add_projectile(p);
             self.remember_last_projectile_tags(&tag);
         }
+    }
+
+    #[inline(always)]
+    fn resolve_loaded_falling_uuid_before_install(
+        &mut self,
+        tag: &Tag,
+        uuid: Option<[i32; 4]>,
+        transferred: Option<crate::game::entity_initialization::TransferredEntityState>,
+    ) -> [i32; 4] {
+        if let Some(state) = transferred {
+            self.adopt_transferred_entity_state(self.server.next_entity, state);
+        }
+        self.remember_uuid(self.server.next_entity, uuid, tag);
+        self.uuid_for(self.server.next_entity)
     }
 
     pub(in crate::game::server_side) fn load_falling_transferred(
@@ -255,13 +269,8 @@ impl crate::game::ServerGame<'_> {
                 entity_nbt::falling_state_from_nbt(self.common.pack.assets.registry, &state)
         {
             let (no_gravity, drop_item) = entity_nbt::falling_block_flags(&tag);
-            self.server.next_entity += 1;
-            // A summoned one has no UUID yet: `Entity` makes a random one.
-            if let Some(state) = transferred {
-                self.adopt_transferred_entity_state(self.server.next_entity, state);
-            }
-            self.remember_uuid(self.server.next_entity, uuid, &tag);
-            let uuid = self.uuid_for(self.server.next_entity);
+            commit_next_entity_id(&mut self.server.next_entity);
+            let uuid = self.resolve_loaded_falling_uuid_before_install(&tag, uuid, transferred);
             self.common.falling.push(FallingBlock {
                 size_answer: None,
                 attachment_lifetime: Default::default(),
@@ -300,6 +309,20 @@ impl crate::game::ServerGame<'_> {
         }
     }
 
+    #[inline(always)]
+    fn remember_loaded_entity_after_install(
+        &mut self,
+        id: u32,
+        uuid: Option<[i32; 4]>,
+        tag: Tag,
+        transferred: Option<crate::game::entity_initialization::TransferredEntityState>,
+    ) {
+        if let Some(state) = transferred {
+            self.adopt_transferred_entity_state(id, state);
+        }
+        self.remember(id, uuid, tag);
+    }
+
     pub(in crate::game::server_side) fn load_trident_transferred(
         &mut self,
         tag: Tag,
@@ -317,10 +340,7 @@ impl crate::game::ServerGame<'_> {
             // One that came through a portal keeps its cooldown.
             let id = t.id;
             self.common.tridents.push(t);
-            if let Some(state) = transferred {
-                self.adopt_transferred_entity_state(id, state);
-            }
-            self.remember(id, uuid, tag);
+            self.remember_loaded_entity_after_install(id, uuid, tag, transferred);
         }
     }
 
@@ -338,10 +358,7 @@ impl crate::game::ServerGame<'_> {
             // One that came through a portal keeps its cooldown.
             self.restore_portal_cooldown(id, &tag);
             self.common.rockets.push(rocket);
-            if let Some(state) = transferred {
-                self.adopt_transferred_entity_state(id, state);
-            }
-            self.remember(id, uuid, tag);
+            self.remember_loaded_entity_after_install(id, uuid, tag, transferred);
         }
     }
 
@@ -367,8 +384,7 @@ impl crate::game::ServerGame<'_> {
         let mut tag = tag;
         let riders = self.take_passengers(&mut tag);
         if let Some(position) = entity_nbt::position(&tag) {
-            self.server.next_entity += 1;
-            let id = self.server.next_entity;
+            let id = commit_next_entity_id(&mut self.server.next_entity);
             // getShortOr uses NumericTag.shortValue: floor floating values
             // to int before short narrowing; integer tags narrow directly.
             let fuse = tnt_fuse(&tag);
@@ -404,10 +420,7 @@ impl crate::game::ServerGame<'_> {
                     }),
                 });
             // `Entity.load`: the `PortalCooldown` of one that just came through.
-            if let Some(state) = transferred {
-                self.adopt_transferred_entity_state(id, state);
-            }
-            self.remember(id, uuid, tag);
+            self.remember_loaded_entity_after_install(id, uuid, tag, transferred);
             self.load_passengers(id, riders);
         }
     }
@@ -429,8 +442,7 @@ impl crate::game::ServerGame<'_> {
         if let Some((position, velocity, yaw)) = entity_nbt::boat_from_nbt(&tag) {
             let mut tag = tag;
             let riders = self.take_passengers(&mut tag);
-            self.server.next_entity += 1;
-            let id = self.server.next_entity;
+            let id = commit_next_entity_id(&mut self.server.next_entity);
             let (wood, chest) = sunrise_gameplay_common::game::boats_common::any_boat_wood(k)
                 .unwrap_or(("oak", false));
             let mut b = sunrise_gameplay_common::game::boats_common::Boat::new(
@@ -487,14 +499,14 @@ impl crate::game::ServerGame<'_> {
         let kind = sunrise_gameplay_common::game::minecarts::CartKind::from_id(k).unwrap();
         let mut tag = tag;
         let riders = self.take_passengers(&mut tag);
-        let id = self.server.next_entity + 1;
+        let id = candidate_entity_id(self.server.next_entity);
         if let Some(mut c) =
             sunrise_gameplay_common::game::minecarts::Minecart::from_nbt(&tag, id, kind)
         {
             sunrise_gameplay_common::game::minecarts::forget_unreadable_display(&mut c, |t| {
                 self.state_from_nbt(t).is_some()
             });
-            self.server.next_entity = id;
+            commit_decoded_entity_id(&mut self.server.next_entity, id);
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(id, state);
             }
@@ -546,7 +558,7 @@ impl crate::game::ServerGame<'_> {
         {
             return Some(id);
         }
-        self.server.next_entity += 1;
+        commit_next_entity_id(&mut self.server.next_entity);
         // Structure mobs that generation left to finish: saves from before
         // they were finalized at placement, or a placement that could not.
         let mut tag = tag;
@@ -896,7 +908,7 @@ impl crate::game::ServerGame<'_> {
                 .ok()
                 .flatten(),
             VehicleTreeKind::Stand => {
-                let id = self.server.next_entity + 1;
+                let id = candidate_entity_id(self.server.next_entity);
                 self.load_armor_stand_transferred(tag, uuid, Some(state));
                 self.common
                     .armor_stands

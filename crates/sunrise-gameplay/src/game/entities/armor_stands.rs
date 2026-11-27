@@ -4,6 +4,7 @@
 //! the default pose, the hit wobble and humanoid armor layers.
 use super::InteractTarget;
 use super::entity::Entity;
+use crate::game::server_side::lan_entities::{candidate_entity_id, commit_next_entity_id};
 use sunrise_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
@@ -153,7 +154,7 @@ impl crate::game::ServerGame<'_> {
         let Some((pos, mut stand, uuid)) = self.common.armor_stand_spawn(hit, stack) else {
             return false;
         };
-        stand.id = self.server.next_entity + 1;
+        stand.id = candidate_entity_id(self.server.next_entity);
         // EntityType.create(.., tryMoveDown, movedUp): the new stand falls onto what is under it,
         // up to two blocks (a bottom slab, the block under replaced grass).
         let drop = self.drop_offset_from(0.5, 1.975, (pos[0], pos[1], pos[2]), true);
@@ -193,7 +194,7 @@ impl crate::game::ServerGame<'_> {
         // EntityType.create's spawn yaw, `level.getRandom().nextFloat() * 360`, before
         // ArmorStandItem.useOn turns the stand to face the player.
         self.common.world.random.next_float();
-        self.server.next_entity += 1;
+        commit_next_entity_id(&mut self.server.next_entity);
         self.common.persist.uuids.insert(stand.id, uuid);
         self.server_play_sound(
             "minecraft:entity.armor_stand.place",

@@ -3,6 +3,7 @@
 //! `LeashFenceKnotEntity.interact`), loading and saving who holds what,
 //! breaking, and drawing the rope (`LeashFeatureRenderer`) and the knot.
 use super::commands_common::Target;
+use crate::game::server_side::lan_entities::commit_next_entity_id;
 use mod_api::LootDrops;
 use sunrise_core::nbt::Tag;
 use sunrise_gameplay_common::game::item_abilities::ability::SHEARS_HARVEST;
@@ -94,8 +95,7 @@ impl crate::game::ServerGame<'_> {
         if let Some(&id) = self.server.knot_ids.get(&fence) {
             return id;
         }
-        self.server.next_entity += 1;
-        let id = self.server.next_entity;
+        let id = commit_next_entity_id(&mut self.server.next_entity);
         self.server.knot_ids.insert(fence, id);
         self.common.resident_entities.knots.push(Knot {
             attachment_lifetime: Default::default(),

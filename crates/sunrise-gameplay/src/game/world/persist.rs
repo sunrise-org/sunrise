@@ -2,6 +2,9 @@
 //! entities (`entities/*.mca`, per chunk like vanilla's `EntityStorage`) and
 //! scheduled block/fluid ticks (chunk `block_ticks`/`fluid_ticks`).
 use crate::game::ServerGame;
+use crate::game::server_side::lan_entities::{
+    candidate_entity_id, commit_decoded_entity_id, commit_next_entity_id,
+};
 use sunrise_gameplay_common::game::GameGameExt3;
 #[path = "persist/display.rs"]
 pub mod display;
@@ -651,8 +654,7 @@ impl crate::game::ServerGame<'_> {
             }
             "minecraft:evoker_fangs" => {
                 if let Some(at) = entity_nbt::position(&tag) {
-                    self.server.next_entity += 1;
-                    let id = self.server.next_entity;
+                    let id = commit_next_entity_id(&mut self.server.next_entity);
                     let delay = sunrise_sim::save::number(tag.get("Warmup")).unwrap_or(0) as i32;
                     let owner = self.loaded_fangs_owner(&tag);
                     if let Some(state) = transferred.take() {
@@ -665,17 +667,7 @@ impl crate::game::ServerGame<'_> {
                         delay,
                         owner,
                     );
-                    let last = self.common.fangs.list.len() - 1;
-                    let motion = entity_nbt::loaded_motion(&tag);
-                    let fire = entity_nbt::fire_ticks_from_nbt(&tag);
-                    let has_visual_fire = entity_nbt::flag(&tag, "HasVisualFire");
-                    self.common.fangs.list.update(last, |f| {
-                        f.motion = motion;
-                        f.fire_ticks = fire;
-                        f.has_visual_fire = has_visual_fire;
-                    });
-                    let uuid = with_constructor_uuid(uuid);
-                    self.remember(id, uuid, tag);
+                    self.restore_installed_fangs(id, uuid, tag);
                 }
             }
             "minecraft:ominous_item_spawner" => {
@@ -727,6 +719,22 @@ impl crate::game::ServerGame<'_> {
         }
         Ok(())
     }
+
+    #[inline(always)]
+    fn restore_installed_fangs(&mut self, id: u32, uuid: Option<[i32; 4]>, tag: Tag) {
+        let last = self.common.fangs.list.len() - 1;
+        let motion = entity_nbt::loaded_motion(&tag);
+        let fire = entity_nbt::fire_ticks_from_nbt(&tag);
+        let has_visual_fire = entity_nbt::flag(&tag, "HasVisualFire");
+        self.common.fangs.list.update(last, |f| {
+            f.motion = motion;
+            f.fire_ticks = fire;
+            f.has_visual_fire = has_visual_fire;
+        });
+        let uuid = with_constructor_uuid(uuid);
+        self.remember(id, uuid, tag);
+    }
+
     /// A saved dropped item.
     pub fn load_item(&mut self, tag: Tag, uuid: Option<[i32; 4]>) {
         self.load_item_transferred(tag, uuid, None);
@@ -826,7 +834,7 @@ impl crate::game::ServerGame<'_> {
         uuid: Option<[i32; 4]>,
         transferred: Option<super::entity_initialization::TransferredEntityState>,
     ) {
-        self.server.next_entity += 1;
+        commit_next_entity_id(&mut self.server.next_entity);
         if let Some(mut a) = entity_nbt::armor_stand_from_nbt(&tag, self.server.next_entity) {
             let mut tag = tag;
             let riders = self.take_passengers(&mut tag);
@@ -838,8 +846,12 @@ impl crate::game::ServerGame<'_> {
             // Entity.<init>: its own random's first draws, saved UUID or not.
             let uuid = with_constructor_uuid(uuid);
             let id = a.id;
-            self.remember(id, uuid, tag);
-            self.bind_saved_entity_attachments(id, &mut a.attachment_lifetime);
+            self.remember_loaded_entity_before_bound_install(
+                id,
+                uuid,
+                tag,
+                &mut a.attachment_lifetime,
+            );
             self.common.armor_stands.push(a);
             self.load_passengers(id, riders);
         }
@@ -867,8 +879,8 @@ impl crate::game::ServerGame<'_> {
             // parts' from the entity counter.
             d.live
                 .retain_supplier(&self.common.motion.attributes, "minecraft:ender_dragon");
-            d.id = self.server.next_entity + 1;
-            self.server.next_entity += 9;
+            d.id = candidate_entity_id(self.server.next_entity);
+            super::dragon::commit_dragon_and_part_ids(&mut self.server.next_entity);
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(d.id, state);
             }
@@ -918,7 +930,7 @@ impl crate::game::ServerGame<'_> {
             );
             // EndCrystal's constructor takes an id from the
             // entity counter.
-            self.server.next_entity += 1;
+            commit_next_entity_id(&mut self.server.next_entity);
             c.id = self.server.next_entity;
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(c.id, state);
@@ -938,15 +950,19 @@ impl crate::game::ServerGame<'_> {
         uuid: Option<[i32; 4]>,
         transferred: Option<super::entity_initialization::TransferredEntityState>,
     ) {
-        self.server.next_entity += 1;
+        commit_next_entity_id(&mut self.server.next_entity);
         if let Some(mut f) = entity_nbt::item_frame_from_nbt(&tag, self.server.next_entity) {
             let item = f.item.take();
             f.set_item(item);
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(f.id, state);
             }
-            self.remember(f.id, uuid, tag);
-            self.bind_saved_entity_attachments(f.id, &mut f.attachment_lifetime);
+            self.remember_loaded_entity_before_bound_install(
+                f.id,
+                uuid,
+                tag,
+                &mut f.attachment_lifetime,
+            );
             self.common.item_frames.push(f);
         }
     }
@@ -961,7 +977,7 @@ impl crate::game::ServerGame<'_> {
         uuid: Option<[i32; 4]>,
         transferred: Option<super::entity_initialization::TransferredEntityState>,
     ) {
-        self.server.next_entity += 1;
+        commit_next_entity_id(&mut self.server.next_entity);
         if let Some(c) = entity_nbt::cushion_from_nbt(&tag, self.server.next_entity) {
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(c.id, state);
@@ -987,8 +1003,7 @@ impl crate::game::ServerGame<'_> {
         if let Some((pos, facing, variant)) = entity_nbt::painting_from_nbt(&tag)
             && let Some(v) = world_paintings!(self).saved_or_default(variant.as_deref())
         {
-            self.server.next_entity += 1;
-            let id = self.server.next_entity;
+            let id = commit_next_entity_id(&mut self.server.next_entity);
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(id, state);
             }
@@ -1277,7 +1292,7 @@ impl crate::game::ServerGame<'_> {
         // A missing mod's record is opaque, not a vanilla fallback entity to normalize.
         let quarantined = super::general::quarantined_kind(kind).then(|| tag.clone());
         strip_finalize(&mut tag);
-        let id = self.server.next_entity + 1;
+        let id = candidate_entity_id(self.server.next_entity);
         let other = self.other_from_nbt(&mut tag, id, kind)?;
         if let Some(display) = &other.display {
             display::strip_display_nbt(display, &mut tag);
@@ -1287,7 +1302,7 @@ impl crate::game::ServerGame<'_> {
         } else {
             Vec::new()
         };
-        self.server.next_entity = id;
+        commit_decoded_entity_id(&mut self.server.next_entity, id);
         let uuid = with_constructor_uuid(entity_nbt::uuid(&tag));
         if let Some(state) = transferred {
             self.adopt_transferred_entity_state(id, state);
@@ -1794,6 +1809,18 @@ impl crate::game::ServerGame<'_> {
         entity_nbt::sanitize_custom_name(&mut tag);
         self.common.persist.raw.insert(id, tag);
     }
+    #[inline(always)]
+    fn remember_loaded_entity_before_bound_install(
+        &mut self,
+        id: u32,
+        uuid: Option<[i32; 4]>,
+        tag: Tag,
+        lifetime: &mut sunrise_mod_runtime::attachments::AttachmentLifetime,
+    ) {
+        self.remember(id, uuid, tag);
+        self.bind_saved_entity_attachments(id, lifetime);
+    }
+
     /// The UUID entity `id` was loaded with, and the attachments `tag` saved under it.
     pub fn remember_uuid(&mut self, id: u32, uuid: Option<[i32; 4]>, tag: &Tag) {
         if let Some(u) = uuid {

@@ -1,6 +1,7 @@
 use super::{
     entity_initialization::TransferredEntityState, entity_server::ServerEntity, persist::ChunkKey,
 };
+use crate::game::server_side::lan_entities::commit_next_entity_id;
 use std::collections::HashSet;
 use sunrise_core::{geometry::Vec3, nbt::Tag};
 use sunrise_gameplay_common::game::{
@@ -277,12 +278,11 @@ impl crate::game::ServerGame<'_> {
             ),
             turn_riders,
         );
-        for (mut row, transient) in arrivals.into_iter().zip(transients) {
+        for (row, transient) in arrivals.into_iter().zip(transients) {
             if transient {
                 self.common.persist.transient.insert(row.id);
             }
-            row.join = JoinSeq::UNJOINED;
-            self.common.resident_entities.general.rows.push(row);
+            self.join_general_row_in_destination(row);
         }
         if let Err(error) = self.enter_level(source) {
             log::error!("could not reopen {}: {error}", source.id());
@@ -479,6 +479,12 @@ impl crate::game::ServerGame<'_> {
         id
     }
 
+    #[inline(always)]
+    fn join_general_row_in_destination(&mut self, mut row: GeneralRow) {
+        row.join = JoinSeq::UNJOINED;
+        self.common.resident_entities.general.rows.push(row);
+    }
+
     /// Publish one validated record; the caller owns its passenger traversal.
     pub(in crate::game::server_side) fn insert_general_row(
         &mut self,
@@ -488,8 +494,7 @@ impl crate::game::ServerGame<'_> {
         mount: Option<u32>,
         transferred: Option<TransferredEntityState>,
     ) -> u32 {
-        self.server.next_entity += 1;
-        let id = self.server.next_entity;
+        let id = commit_next_entity_id(&mut self.server.next_entity);
         // Install before `remember_uuid` (the same ordering a transferred
         // mob's state takes): the destination is the same logical entity.
         if let Some(state) = transferred {
