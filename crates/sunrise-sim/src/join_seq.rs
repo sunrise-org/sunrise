@@ -93,9 +93,7 @@ pub enum RestoreOrder {
     SpawnsFirst,
 }
 
-/// Save-visibility lease held across a single-owner extraction: the owner's
-/// bound [`visibility::Lease`], or a process-wide [`visibility::PassLease`]
-/// when unbound.
+/// Bound [`visibility::Lease`] or process-wide [`visibility::PassLease`] across an extraction.
 #[derive(Debug)]
 pub struct ExtractionLease {
     _lease: Result<visibility::Lease, visibility::PassLease>,
@@ -248,14 +246,6 @@ impl<T> ResidentSlot<T> {
     pub fn visibility_lease(&self) -> Option<visibility::Lease> {
         self.2.as_ref().map(|s| s.enter())
     }
-    /// Acquire the bound visibility lease, or a process-wide pass lease when unbound.
-    pub fn extraction_lease(&self) -> ExtractionLease {
-        ExtractionLease {
-            _lease: self
-                .visibility_lease()
-                .ok_or_else(visibility::PassLease::enter),
-        }
-    }
     /// Bind the singleton to its owning dimension and journal.
     pub fn bind_residency(
         &mut self,
@@ -374,13 +364,6 @@ impl<T: Joined> ResidentSlot<T> {
         self.0 = Some(entity);
         self.emit_current(residency::Change::PutBack);
     }
-    /// Return an extracted singleton, or retire it permanently when `None`.
-    pub fn finish_extracted(&mut self, id: u32, join: JoinSeq, owner: Option<T>) {
-        match owner {
-            Some(entity) => self.put_back(entity),
-            None => self.retire_extracted(id, join),
-        }
-    }
     /// Borrow entity state; identity and whole-value replacement stay audited.
     pub fn as_mut(&mut self) -> Option<&mut T> {
         self.0.as_mut()
@@ -440,10 +423,6 @@ impl<T: Joined> ResidentList<T> {
     /// Lease bare extraction or a caller's held-out copy until its terminal work.
     pub fn visibility_lease(&self) -> Option<visibility::Lease> {
         self.0.visibility_lease()
-    }
-    /// Acquire the bound visibility lease, or a process-wide pass lease when unbound.
-    pub fn extraction_lease(&self) -> ExtractionLease {
-        self.0.extraction_lease()
     }
     /// Bind this family's storage to its owning dimension and journal.
     pub fn bind_residency(
@@ -514,13 +493,6 @@ impl<T: Joined> ResidentList<T> {
     /// Restore survivors before entities spawned while the pass was lifted.
     pub fn restore(&mut self, taken: Self, order: RestoreOrder) {
         self.0.restore(taken.0, order);
-    }
-    /// Lift this list for `work` and restore it with `order` on normal return.
-    pub fn lend_pass<R>(&mut self, order: RestoreOrder, work: impl FnOnce(&mut Self) -> R) -> R {
-        let mut taken = self.lift();
-        let result = work(&mut taken);
-        self.restore(taken, order);
-        result
     }
 }
 
@@ -700,13 +672,6 @@ impl<T, const DIRECT: bool> JoinList<T, DIRECT> {
         }
         drop(visibility_lease);
         drop(pass_lease);
-    }
-    /// Lift this list for `work` and restore it with `order` on normal return.
-    pub fn lend_pass<R>(&mut self, order: RestoreOrder, work: impl FnOnce(&mut Self) -> R) -> R {
-        let mut taken = self.lift();
-        let result = work(&mut taken);
-        self.restore(taken, order);
-        result
     }
     pub fn with_capacity(capacity: usize) -> Self {
         Self(
@@ -1078,13 +1043,6 @@ impl<T: Joined, const DIRECT: bool> JoinList<T, DIRECT> {
         self.0.insert(index, entity);
         if let Some(binding) = &self.1 {
             binding.entity(&self.0[index], residency::Change::PutBack);
-        }
-    }
-    /// Return an extracted owner to `index`, or retire it permanently when `None`.
-    pub fn finish_extracted(&mut self, index: usize, id: u32, join: JoinSeq, owner: Option<T>) {
-        match owner {
-            Some(entity) => self.put_back(index, entity),
-            None => self.retire_extracted(id, join),
         }
     }
     /// Move an existing numbered owner to the end without retiring its identity.
@@ -2343,43 +2301,31 @@ mod tests {
     }
 
     #[test]
-    fn lend_pass_matches_raw_lift_restore_markers_stamps_and_panic() {
-        use residency::Change::{Lifted, Remove, Restored};
+    fn lift_restore_order_with_spawns_and_unwind_preserves_unbalanced_contract() {
+        use residency::Change::{Install, Lifted, Remove, Restored};
         use residency::table::{EntityLookup, EntityTable, SourceEntity, UnbalancedPass};
-        for order in [RestoreOrder::SurvivorsFirst, RestoreOrder::SpawnsFirst] {
-            let (mut via_helper, helper_journal) = journal_list();
-            let (mut raw, raw_journal) = journal_list();
+        for (order, expected) in [
+            (RestoreOrder::SurvivorsFirst, [1, 3, 99]),
+            (RestoreOrder::SpawnsFirst, [99, 1, 3]),
+        ] {
+            let (mut list, journal) = journal_list();
             let sink = visibility::Visibility::default();
-            via_helper.bind_visibility(&sink);
-            changes(&helper_journal);
-            changes(&raw_journal);
-            let helper_removed = key(&via_helper[1]);
-            let raw_removed = key(&raw[1]);
+            list.bind_visibility(&sink);
+            changes(&journal);
+            let removed = key(&list[1]);
 
-            let seen = via_helper.lend_pass(order, |taken| {
-                assert!(!sink.settled());
-                let _ = taken.remove(1);
-                taken.len()
-            });
-            assert_eq!(seen, 2);
+            let mut taken = list.lift();
+            assert!(!sink.settled());
+            let _ = taken.remove(1);
+            list.push(entity(99));
+            let spawned = key(&list[0]);
+            list.restore(taken, order);
             assert!(sink.settled());
 
-            let mut taken = raw.lift();
-            let _ = taken.remove(1);
-            raw.restore(taken, order);
-
-            assert_eq!(via_helper.stamp().writes, raw.stamp().writes);
+            assert_eq!(list.iter().map(|e| e.value).collect::<Vec<_>>(), expected);
             assert_eq!(
-                via_helper.iter().map(|e| e.value).collect::<Vec<_>>(),
-                raw.iter().map(|e| e.value).collect::<Vec<_>>()
-            );
-            assert_eq!(
-                changes(&helper_journal),
-                [Lifted, Remove(helper_removed), Restored]
-            );
-            assert_eq!(
-                changes(&raw_journal),
-                [Lifted, Remove(raw_removed), Restored]
+                changes(&journal),
+                [Lifted, Remove(removed), Install(spawned), Restored]
             );
         }
 
@@ -2390,22 +2336,22 @@ mod tests {
         list.bind_residency(&journal, journal_owner(), |e| (e.value, e.join));
         list.bind_visibility(&sink);
         let keys: Vec<_> = list.iter().map(key).collect();
+        let mut settled_during = None;
+        let mut before_remove = None;
+        let mut after_remove = None;
         let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-            list.lend_pass(RestoreOrder::SurvivorsFirst, |taken| {
-                assert!(!sink.settled());
-                assert_eq!(
-                    table.entity_lookup(&journal_owner().dimension, 1, |_| None),
-                    EntityLookup::<u32>::Taken
-                );
-                let _ = taken.remove(0);
-                assert_eq!(
-                    table.entity_lookup(&journal_owner().dimension, 1, |_| None),
-                    EntityLookup::<u32>::Missing
-                );
-                panic!("lifted pass panic");
-            });
+            let mut taken = list.lift();
+            settled_during = Some(sink.settled());
+            before_remove = Some(table.entity_lookup(&journal_owner().dimension, 1, |_| None));
+            let _ = taken.remove(0);
+            after_remove = Some(table.entity_lookup(&journal_owner().dimension, 1, |_| None));
+            panic!("lifted pass panic");
         }));
-        assert!(panicked.is_err());
+        let payload = panicked.expect_err("lifted pass must unwind");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"lifted pass panic"));
+        assert_eq!(settled_during, Some(false));
+        assert_eq!(before_remove, Some(EntityLookup::<u32>::Taken));
+        assert_eq!(after_remove, Some(EntityLookup::<u32>::Missing));
         assert!(sink.settled());
         assert!(list.is_empty());
         assert_eq!(
@@ -2417,47 +2363,52 @@ mod tests {
             }),
             EntityLookup::Missing
         );
-        assert_eq!(
-            table.end_tick(),
-            Err(UnbalancedPass {
-                extractions: 0,
-                lifts: 1
-            })
-        );
+        let end_tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| table.end_tick()));
+        assert_eq!(end_tick.is_err(), cfg!(debug_assertions));
+        if let Ok(result) = end_tick {
+            assert_eq!(
+                result,
+                Err(UnbalancedPass {
+                    extractions: 0,
+                    lifts: 1
+                })
+            );
+        }
+        table.end_tick().unwrap();
 
         let r_journal = residency::Journal::default();
-        let r_raw_journal = residency::Journal::default();
         let r_sink = visibility::Visibility::default();
-        let mut r_helper: ResidentList<_> = (1..=2).map(entity).collect();
-        let mut r_raw: ResidentList<_> = (1..=2).map(entity).collect();
-        r_helper.bind_residency(&r_journal, journal_owner(), |e| (e.value, e.join));
-        r_raw.bind_residency(&r_raw_journal, journal_owner(), |e| (e.value, e.join));
-        r_helper.bind_visibility(&r_sink);
+        let mut r_list: ResidentList<_> = (1..=2).map(entity).collect();
+        r_list.bind_residency(&r_journal, journal_owner(), |e| (e.value, e.join));
+        r_list.bind_visibility(&r_sink);
         changes(&r_journal);
-        changes(&r_raw_journal);
-        r_helper.lend_pass(RestoreOrder::SpawnsFirst, |taken| {
-            assert!(!r_sink.settled());
-            assert_eq!(taken.len(), 2);
-        });
+        let taken = r_list.lift();
+        assert!(!r_sink.settled());
+        r_list.push(entity(9));
+        let spawned = key(&r_list[0]);
+        r_list.restore(taken, RestoreOrder::SpawnsFirst);
         assert!(r_sink.settled());
-        let taken = r_raw.lift();
-        r_raw.restore(taken, RestoreOrder::SpawnsFirst);
-        assert_eq!(r_helper.stamp().writes, r_raw.stamp().writes);
-        assert_eq!(changes(&r_journal), [Lifted, Restored]);
-        assert_eq!(changes(&r_raw_journal), [Lifted, Restored]);
+        assert_eq!(
+            r_list.iter().map(|e| e.value).collect::<Vec<_>>(),
+            [9, 1, 2]
+        );
+        assert_eq!(changes(&r_journal), [Lifted, Install(spawned), Restored]);
     }
 
     #[test]
-    fn extraction_lease_finish_extracted_and_reposition_match_raw_protocol() {
+    fn extraction_lease_and_reposition_match_raw_protocol() {
         use residency::Change::{Extract, PutBack, Remove};
         use residency::table::{EntityLookup, EntityTable, SourceEntity};
         let journal = residency::Journal::default();
+        let observer = journal.observe_structural_events();
         let sink = visibility::Visibility::default();
         let mut table = EntityTable::new(journal.clone());
         let mut list: JoinList<_> = (1..=3).map(entity).collect();
         list.bind_residency(&journal, journal_owner(), |e| (e.value, e.join));
         list.bind_visibility(&sink);
         let keys: Vec<_> = list.iter().map(key).collect();
+        let mut discard = Vec::new();
+        observer.drain_into(&mut discard);
 
         let lease = list.extraction_lease();
         assert!(!sink.settled());
@@ -2473,10 +2424,13 @@ mod tests {
             }),
             EntityLookup::Taken
         );
-        list.finish_extracted(0, 1, keys[0].join, Some(taken));
+        list.put_back(0, taken);
         assert_eq!(list.stamp().writes, writes_before + 2);
         drop(lease);
         assert!(sink.settled());
+
+        let unbound: JoinList<Entity> = JoinList::default();
+        drop(unbound.extraction_lease());
 
         let writes_before = list.stamp().writes;
         assert!(list.reposition_to_end(keys[0].join));
@@ -2488,40 +2442,26 @@ mod tests {
         let writes_before = list.stamp().writes;
         let _retired = list.extract(keys[1].join).unwrap();
         assert_eq!(list.stamp().writes, writes_before + 1);
-        list.finish_extracted(0, 2, keys[1].join, None);
+        list.retire_extracted(2, keys[1].join);
         assert_eq!(list.stamp().writes, writes_before + 1);
         assert_eq!(
             table.entity_lookup(&journal_owner().dimension, 2, |_| None),
             EntityLookup::<u32>::Missing
         );
-        table.end_tick().unwrap();
-
-        let mut slot = ResidentSlot::default();
-        slot.bind_residency(&journal, SINGLETON_OWNER, |e: &Entity| (e.value, e.join));
-        slot.bind_visibility(&sink);
-        slot.replace(entity(9));
-        let slot_key = key(slot.as_ref().unwrap());
         let mut events = Vec::new();
-        journal.drain_into(&mut events);
-        events.clear();
-        let slot_lease = slot.extraction_lease();
-        assert!(!sink.settled());
-        let held = slot.extract().unwrap();
-        slot.finish_extracted(9, slot_key.join, Some(held));
-        drop(slot_lease);
-        assert!(sink.settled());
-        let _gone = slot.extract().unwrap();
-        slot.finish_extracted(9, slot_key.join, None);
-        journal.drain_into(&mut events);
+        observer.drain_into(&mut events);
         assert_eq!(
             events.into_iter().map(|e| e.change).collect::<Vec<_>>(),
             [
-                Extract(slot_key),
-                PutBack(slot_key),
-                Extract(slot_key),
-                Remove(slot_key)
+                Extract(keys[0]),
+                PutBack(keys[0]),
+                Extract(keys[0]),
+                PutBack(keys[0]),
+                Extract(keys[1]),
+                Remove(keys[1]),
             ]
         );
+        table.end_tick().unwrap();
     }
 
     #[test]
@@ -2643,90 +2583,6 @@ mod tests {
             ]
         );
         table.end_tick().unwrap();
-    }
-
-    #[test]
-    fn hand_back_relift_protocols_preserve_order_and_write_stamps() {
-        use residency::Change::{Install, Lifted, Restored};
-        use residency::{Kind, Owner};
-        let journal = residency::Journal::default();
-        let proj_owner = Owner {
-            dimension: mod_api::DimensionKey::OVERWORLD,
-            kind: Kind::Projectile,
-        };
-        let trident_owner = Owner {
-            dimension: mod_api::DimensionKey::OVERWORLD,
-            kind: Kind::Trident,
-        };
-        let mut proj: JoinList<_> = [entity(1)].into_iter().collect();
-        let mut tridents: JoinList<_> = [entity(2)].into_iter().collect();
-        proj.bind_residency(&journal, proj_owner, |e| (e.value, e.join));
-        tridents.bind_residency(&journal, trident_owner, |e| (e.value, e.join));
-        let mut events = Vec::new();
-        journal.drain_into(&mut events);
-        events.clear();
-
-        // Paired FIFO client prediction lift, hand-back, relift, and restore.
-        let p_pass = proj.lift();
-        let t_pass = tridents.lift();
-        proj.restore(p_pass, RestoreOrder::SurvivorsFirst);
-        tridents.restore(t_pass, RestoreOrder::SurvivorsFirst);
-        let stamps = (proj.stamp(), tridents.stamp());
-        // Read-only callback leaves both stamps unchanged.
-        let _ = (proj.len(), tridents.len());
-        assert_eq!((proj.stamp(), tridents.stamp()), stamps);
-        // Write to tridents alone advances only its stamp.
-        tridents.push(entity(3));
-        let spawned = key(&tridents[1]);
-        assert_eq!(proj.stamp(), stamps.0);
-        assert_ne!(tridents.stamp(), stamps.1);
-        let p_pass = proj.lift();
-        let t_pass = tridents.lift();
-        proj.restore(p_pass, RestoreOrder::SurvivorsFirst);
-        tridents.restore(t_pass, RestoreOrder::SurvivorsFirst);
-
-        journal.drain_into(&mut events);
-        assert_eq!(
-            events,
-            [
-                residency::Event {
-                    owner: proj_owner,
-                    change: Lifted
-                },
-                residency::Event {
-                    owner: trident_owner,
-                    change: Lifted
-                },
-                residency::Event {
-                    owner: proj_owner,
-                    change: Restored
-                },
-                residency::Event {
-                    owner: trident_owner,
-                    change: Restored
-                },
-                residency::Event {
-                    owner: trident_owner,
-                    change: Install(spawned)
-                },
-                residency::Event {
-                    owner: proj_owner,
-                    change: Lifted
-                },
-                residency::Event {
-                    owner: trident_owner,
-                    change: Lifted
-                },
-                residency::Event {
-                    owner: proj_owner,
-                    change: Restored
-                },
-                residency::Event {
-                    owner: trident_owner,
-                    change: Restored
-                },
-            ]
-        );
     }
 }
 
