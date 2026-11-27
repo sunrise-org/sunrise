@@ -732,19 +732,19 @@ mod tests {
 
     impl SideLevel for &TestSide {
         fn is_raining_at(&self, world: &World, pos: BlockPos) -> bool {
-            (*self).is_raining_at(world, pos)
+            TestSide::is_raining_at(self, world, pos)
         }
         fn enabled_features(&self) -> &Arc<[String]> {
-            (*self).enabled_features()
+            TestSide::enabled_features(self)
         }
         fn tag_items(&self) -> Option<&sunrise_items::items::Items> {
-            (*self).tag_items()
+            TestSide::tag_items(self)
         }
         fn damage_types(&self) -> &Catalog {
-            (*self).damage_types()
+            TestSide::damage_types(self)
         }
         fn block_entity(&self, world: &World, pos: BlockPos) -> Option<mod_api::BlockEntityRef> {
-            (*self).block_entity(world, pos)
+            TestSide::block_entity(self, world, pos)
         }
         fn block_entity_data(
             &self,
@@ -752,7 +752,7 @@ mod tests {
             registry: &BlockRegistry,
             entity: mod_api::BlockEntityRef,
         ) -> Option<mod_api::Compound> {
-            (*self).block_entity_data(world, registry, entity)
+            TestSide::block_entity_data(self, world, registry, entity)
         }
     }
 
@@ -823,7 +823,7 @@ mod tests {
         let collider_idx = items.len();
         items.push(make_item(
             id,
-            Vec3::new(10.5, 71.2, 10.5),
+            Vec3::new(10.5, 71.25, 10.5),
             Vec3::new(0.0, -0.5, 0.0),
         ));
         id += 1;
