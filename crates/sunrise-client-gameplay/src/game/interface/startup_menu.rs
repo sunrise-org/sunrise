@@ -27,6 +27,7 @@ pub struct StartupMenu {
     pub cursor: (f32, f32),
     pub pointer: PointerSample,
     window_pointer_space: std::cell::OnceCell<PointerSpace>,
+    safe_area: Option<([u32; 2], sunrise_hooks::Insets)>,
     modifiers: ModifiersState,
     physical_keys: HashSet<KeyCode>,
     dragging: bool,
@@ -572,8 +573,27 @@ impl Loading {
 
     #[inline(always)]
     pub fn gui_frame_for(&self, size: [u32; 2]) -> GuiFrame {
-        let inputs = self.settings.gui_scale_inputs();
-        GuiFrame::new(size, inputs.requested, inputs.unicode)
+        let insets = self
+            .menu
+            .safe_area
+            .filter(|(target, _)| *target == size)
+            .map(|(_, insets)| insets);
+        self.settings.gui_frame_with_insets(size, insets)
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn begin_menu_gui_frame(
+        &mut self,
+        size: [u32; 2],
+    ) -> GuiFrame {
+        let safe_area = sunrise_hooks::engine::safe_area(size).map(|insets| (size, insets));
+        let changed = self.menu.safe_area != safe_area;
+        self.menu.safe_area = safe_area;
+        let frame = self.gui_frame_for(size);
+        if self.menu.key_focus.is_none() && changed {
+            self.update_menu_cursor();
+        }
+        frame
     }
 
     #[inline(always)]
@@ -1175,6 +1195,20 @@ impl Loading {
         }
         // The real mouse takes the pointer back from the keyboard's focus.
         let synthetic = self.menu.key_synthetic;
+        if !synthetic
+            && matches!(
+                &event,
+                WindowEvent::MouseInput {
+                    state: ElementState::Pressed,
+                    ..
+                } | WindowEvent::MouseWheel { .. }
+            )
+        {
+            let frame = self.gui_frame();
+            if frame.clip().is_some() && !frame.contains(self.projected_menu_pointer().subpixel()) {
+                return Ok(());
+            }
+        }
         if !synthetic {
             self.menu_key_focus_mouse(&event);
         }
@@ -1422,10 +1456,14 @@ impl Loading {
         let cursor = if self.menu.key_focus.is_some() {
             self.menu.cursor
         } else {
-            frame
+            let pointer = frame
                 .with_pointer_space(self.menu_pointer_space(frame.target))
-                .pointer_to_gui(self.menu.pointer)
-                .pixel()
+                .pointer_to_gui(self.menu.pointer);
+            if frame.contains(pointer.subpixel()) {
+                pointer.pixel()
+            } else {
+                (-1.0e6, -1.0e6)
+            }
         };
         // `Gui.setScreen` clears the focus of the screen it leaves
         // (`Screen.clearFocus`): the title behind the options, and the one

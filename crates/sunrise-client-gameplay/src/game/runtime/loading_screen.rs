@@ -334,7 +334,7 @@ impl Loading {
         else {
             return;
         };
-        let gui_frame = self.gui_frame_for(size);
+        let gui_frame = self.begin_menu_gui_frame(size);
         let mut batch = HudBatch::for_frame(&gui_frame);
         self.draw_menu_in(gui_frame, &mut batch);
         self.menu.frame_drawn((batch.width, batch.height));

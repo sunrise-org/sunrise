@@ -1432,6 +1432,7 @@ pub struct ClientState {
     pub(in crate::game::client_side) world_geometry:
         Option<sunrise_client::world_geometry::WorldGeometry>,
     /// Read-only renderer snapshot cached while `self.renderer` is temporarily taken for `Renderer::render` so `ClientHost` queries still see framebuffer size and prepared-model limits.
+    pub(in crate::game) gui_safe_area: Option<([u32; 2], sunrise_hooks::Insets)>,
     pub(in crate::game) render_snapshot: std::cell::Cell<Option<RenderSnapshot>>,
     /// A session VSync change came while `Renderer::render` had the renderer out: the surface is reconfigured once it is back (`apply_pending_present_mode`).
     pub(in crate::game) present_mode_pending: bool,
@@ -2109,6 +2110,7 @@ impl ClientState {
             prepared_model_draws: Default::default(),
             model_copy_order: RefCell::default(),
             world_geometry: Some(Default::default()),
+            gui_safe_area: None,
             render_snapshot: std::cell::Cell::new(None),
             present_mode_pending: false,
             debug_renderers_version: None,

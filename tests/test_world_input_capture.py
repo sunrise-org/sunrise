@@ -122,8 +122,8 @@ mod window {
 }
 struct Settings;
 impl Settings {
-    fn gui_frame_for(&self, target: [u32; 2]) -> window::GuiFrame {
-        window::GuiFrame::new(target, 2, false)
+    fn gui_frame_with_insets(&self, target: [u32; 2], insets: Option<[u32; 4]>) -> window::GuiFrame {
+        window::GuiFrame::from_insets(target, 2, false, insets)
     }
 }
 struct Config { width: u32, height: u32 }
@@ -181,7 +181,7 @@ struct ClientState {
     window: (Option<Box<Window>>,), title: (Option<()>,),
     screen_state: (ScreenState,), renderer: (Option<Renderer>,),
     server_packs: (ServerPacks,), command_prompt: (Option<()>,),
-    settings: Settings, lan_acting: Option<u32>,
+    settings: Settings, gui_safe_area: Option<([u32; 2], [u32; 4])>, lan_acting: Option<u32>,
     focused: bool, agent_pointer: bool, mouse: Mouse,
     captured: bool, capture_mode: Option<CursorGrabMode>, regrab_on_refocus: bool, screen: Screen,
     studio: Studio, cursor: (f32, f32),
@@ -195,7 +195,7 @@ impl Default for ClientState {
         Self { window: (Some(Box::default()),), title: (None,),
             screen_state: (ScreenState::default(),), renderer: (None,),
             server_packs: (ServerPacks::default(),), command_prompt: (None,),
-            settings: Settings, lan_acting: None,
+            settings: Settings, gui_safe_area: None, lan_acting: None,
             focused: true, agent_pointer: false, mouse: Mouse::default(),
             captured: false, capture_mode: None, regrab_on_refocus: false,
             screen: Screen::Playing, studio: Studio::default(),

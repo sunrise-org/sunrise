@@ -218,15 +218,14 @@ impl crate::game::ClientGame<'_> {
             )
             .without_navigation()
         });
+        self.sample_gui_safe_area();
+        let Some(frame) = self.renderer_gui_frame() else {
+            return Ok(());
+        };
         let Some(renderer) = &mut self.client.renderer.0 else {
             return Ok(());
         };
-        let mut hud = HudBatch::for_frame(
-            &self
-                .client
-                .settings
-                .gui_frame_for([renderer.config.width, renderer.config.height]),
-        );
+        let mut hud = HudBatch::for_frame(&frame);
         let progress = match self.client.pending_save.0.as_ref().map(|save| &save.stage) {
             Some(Stage::Chunks(_)) => 0.25,
             Some(Stage::Entities(_)) => 0.5,

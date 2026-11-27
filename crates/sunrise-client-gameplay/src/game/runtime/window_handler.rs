@@ -220,6 +220,16 @@ impl crate::game::ClientGame<'_> {
         // Who caused it, before the event is handled: the trace wants the
         // window's own keys, never the ones the socket made up.
         self.trace_window_event(origin, &event, cursor_sample);
+        if matches!(
+            &event,
+            WindowEvent::MouseInput {
+                state: ElementState::Pressed,
+                ..
+            } | WindowEvent::MouseWheel { .. }
+        ) && self.pointer_in_gui_margin()
+        {
+            return;
+        }
         if let WindowEvent::KeyboardInput { event, .. } = &event
             && let PhysicalKey::Code(key) = event.physical_key
         {

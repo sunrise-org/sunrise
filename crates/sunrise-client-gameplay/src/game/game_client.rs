@@ -324,7 +324,32 @@ impl crate::game::ClientGame<'_> {
     }
     #[inline(always)]
     pub fn gui_frame_for(&self, framebuffer: [u32; 2]) -> sunrise_client::window::GuiFrame {
-        self.client.settings.gui_frame_for(framebuffer)
+        let insets = self
+            .client
+            .gui_safe_area
+            .filter(|(target, _)| *target == framebuffer)
+            .map(|(_, insets)| insets);
+        self.client
+            .settings
+            .gui_frame_with_insets(framebuffer, insets)
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn sample_gui_safe_area(&mut self) {
+        self.client.gui_safe_area = self.client.renderer.0.as_ref().and_then(|renderer| {
+            let target = [renderer.config.width, renderer.config.height];
+            sunrise_hooks::engine::safe_area(target).map(|insets| (target, insets))
+        });
+    }
+
+    #[inline(always)]
+    pub(in crate::game::client_side) fn pointer_in_gui_margin(&self) -> bool {
+        self.client.gui_safe_area.is_some()
+            && (!self.client.captured || self.client.screen_grab)
+            && self.renderer_gui_frame().is_some_and(|frame| {
+                self.project_window_cursor_in(frame)
+                    .is_some_and(|pointer| !frame.contains(pointer.subpixel()))
+            })
     }
     pub fn pointer_projection(
         &self,
@@ -1474,11 +1499,15 @@ impl crate::game::ClientGame<'_> {
                             .map_or([0.0; 2], |previous| projection.drag_delta(previous, sample));
                         self.set_window_cursor(sample, projection);
                         let [w, h] = projection.gui.size.map(|v| v as f32);
-                        if self.context_menu_hover([w, h]) {
+                        let margin = self.pointer_in_gui_margin();
+                        if !margin && self.context_menu_hover([w, h]) {
                             return Ok(());
                         }
                         let overlay = self.observed_overlay_now();
-                        if self.observed_screen_view().is_none() && self.studio_mouse_dragged(w) {
+                        if (!margin || !self.client.physical_buttons.is_empty())
+                            && self.observed_screen_view().is_none()
+                            && self.studio_mouse_dragged(w)
+                        {
                             return Ok(());
                         }
                         let button = if self.pad_synthetic_input() {
@@ -1492,7 +1521,10 @@ impl crate::game::ClientGame<'_> {
                                 .drag_button
                                 .filter(|b| self.client.physical_buttons.contains(b))
                         };
-                        if self.screen_mouse_moved(delta) {
+                        if margin && button.is_none() {
+                            return Ok(());
+                        }
+                        if !margin && self.screen_mouse_moved(delta) {
                             return Ok(());
                         }
                         if self.client.screen_state.0.screen_instance != initial_instance {
@@ -2823,8 +2855,15 @@ impl crate::game::ClientGame<'_> {
         // the projected fractions for input, but draw and hit-test hover at the frame's pixel.
         let frame = self.gui_frame_for(size);
         let pointer = self.project_window_cursor_in(frame);
-        if let Some(pointer) = pointer {
-            self.client.cursor = pointer.pixel();
+        let hover = pointer.map(|pointer| {
+            if frame.contains(pointer.subpixel()) {
+                pointer.pixel()
+            } else {
+                (-1.0e6, -1.0e6)
+            }
+        });
+        if let Some(hover) = hover {
+            self.client.cursor = hover;
         }
         // Off a world (title, options, Win, a prompt before joining) the HUD shows nothing to
         // keep clear of; `hud_layers` fills it in once the world's HUD draws.
@@ -2871,7 +2910,7 @@ impl crate::game::ClientGame<'_> {
         if let Some(pointer) = pointer {
             debug_assert_eq!(
                 self.client.cursor,
-                pointer.pixel(),
+                hover.unwrap(),
                 "drawing changed the input cursor"
             );
             self.client.cursor = pointer.subpixel();
@@ -3998,11 +4037,13 @@ impl crate::game::ClientGame<'_> {
         {
             self.apply_ui_settings();
         }
+        self.sample_gui_safe_area();
         self.follow_frame();
         self.observe_screen();
         // `Gui.setScreen` clears the focus of the screen it leaves: a menu
         // that comes back starts with no widget highlighted.
         self.drop_left_screen_focus();
+        let loading_gui = self.renderer_gui_frame();
         // Minecraft.doWorldLoad: the LevelLoadingScreen while single player's
         // server starts, with the server's chunk map and progress.
         if let Some(starting) = &self.client.integrated_starting {
@@ -4041,13 +4082,8 @@ impl crate::game::ClientGame<'_> {
             sunrise_client::widgets::begin_screen(|| {
                 screen_info::level_loading(progress, &screen_info::tr)
             });
-            if let Some(renderer) = &mut self.client.renderer.0 {
-                let mut hud = HudBatch::for_frame(
-                    &self
-                        .client
-                        .settings
-                        .gui_frame_for([renderer.config.width, renderer.config.height]),
-                );
+            if let (Some(renderer), Some(frame)) = (&mut self.client.renderer.0, loading_gui) {
+                let mut hud = HudBatch::for_frame(&frame);
                 let (w, h) = (hud.width, hud.height);
                 sunrise_client::ui::menu_background(
                     &mut hud,
@@ -4082,18 +4118,15 @@ impl crate::game::ClientGame<'_> {
             return Ok(false);
         }
         if self.client.pending_entry.0.is_some() {
-            if let (Some(renderer), Some(loader)) =
-                (&mut self.client.renderer.0, &self.common.rest_loader)
-            {
+            if let (Some(renderer), Some(loader), Some(frame)) = (
+                &mut self.client.renderer.0,
+                &self.common.rest_loader,
+                loading_gui,
+            ) {
                 sunrise_client::widgets::begin_screen(|| {
                     screen_info::level_loading(Some(loader.progress.fraction()), &screen_info::tr)
                 });
-                let mut hud = HudBatch::for_frame(
-                    &self
-                        .client
-                        .settings
-                        .gui_frame_for([renderer.config.width, renderer.config.height]),
-                );
+                let mut hud = HudBatch::for_frame(&frame);
                 sunrise_client::level_loading::draw_progress(
                     &mut hud,
                     &self.client.gui.atlas,

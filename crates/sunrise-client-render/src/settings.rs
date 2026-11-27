@@ -868,8 +868,21 @@ impl Settings {
     }
 
     pub fn gui_frame_for(&self, target: [u32; 2]) -> sunrise_client_input::window::GuiFrame {
+        self.gui_frame_with_insets(target, None)
+    }
+
+    pub fn gui_frame_with_insets(
+        &self,
+        target: [u32; 2],
+        insets: Option<sunrise_hooks::Insets>,
+    ) -> sunrise_client_input::window::GuiFrame {
         let inputs = self.gui_scale_inputs();
-        sunrise_client_input::window::GuiFrame::new(target, inputs.requested, inputs.unicode)
+        sunrise_client_input::window::GuiFrame::from_insets(
+            target,
+            inputs.requested,
+            inputs.unicode,
+            insets.map(sunrise_hooks::Insets::edges),
+        )
     }
 
     pub fn sim_settings(&self) -> SimSettings {

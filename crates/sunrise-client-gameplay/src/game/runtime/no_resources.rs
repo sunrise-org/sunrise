@@ -16,6 +16,7 @@ struct Missing {
     screen: NoResources,
     pointer: PointerSample,
     window_pointer_space: std::cell::OnceCell<PointerSpace>,
+    safe_area: Option<([u32; 2], sunrise_hooks::Insets)>,
     api: sunrise_client::graphics::GraphicsApi,
     settings: Settings,
     error: Option<Box<dyn std::error::Error>>,
@@ -42,6 +43,7 @@ pub fn show(looked_in: &std::path::Path, settings: &Settings) -> Result<()> {
         screen: NoResources::new(looked_in, sunrise_hooks::engine::get_the_game()),
         pointer: PointerSample::default(),
         window_pointer_space: std::cell::OnceCell::new(),
+        safe_area: None,
         api: settings.sunrise.api,
         settings: settings.clone(),
         error: None,
@@ -70,7 +72,10 @@ impl Missing {
 
     #[inline(always)]
     fn gui_frame_for(&self, size: [u32; 2]) -> GuiFrame {
-        let inputs = self.settings.gui_scale_inputs();
+        let insets = self
+            .safe_area
+            .filter(|(target, _)| *target == size)
+            .map(|(_, insets)| insets);
         let window = self.window.as_deref().map_or_else(
             || PointerSpace::new(size, 1.0),
             |window| {
@@ -79,7 +84,9 @@ impl Missing {
                     .get_or_init(|| PointerSpace::from_window(window))
             },
         );
-        GuiFrame::new(size, inputs.requested, inputs.unicode).with_pointer_space(window)
+        self.settings
+            .gui_frame_with_insets(size, insets)
+            .with_pointer_space(window)
     }
 
     /// `f` over a Ui of the window's size, the cursor where the pointer is.
@@ -96,13 +103,20 @@ impl Missing {
     }
 
     fn draw(&mut self) {
+        if self.renderer.is_some() {
+            let target = self.size();
+            self.safe_area =
+                sunrise_hooks::engine::safe_area(target).map(|insets| (target, insets));
+        }
         let frame = self.gui_frame();
         let mut batch = HudBatch::for_frame(&frame);
-        self.with_ui(
-            &mut batch,
-            frame.pointer_to_gui(self.pointer).pixel(),
-            |ui| self.screen.draw(ui),
-        );
+        let pointer = frame.pointer_to_gui(self.pointer);
+        let hover = if frame.contains(pointer.subpixel()) {
+            pointer.pixel()
+        } else {
+            (-1.0e6, -1.0e6)
+        };
+        self.with_ui(&mut batch, hover, |ui| self.screen.draw(ui));
         let Some(renderer) = &mut self.renderer else {
             return;
         };
@@ -122,6 +136,9 @@ impl Missing {
     fn click(&mut self, event_loop: &ActiveEventLoop) {
         let frame = self.gui_frame();
         let cursor = frame.pointer_to_gui(self.pointer).subpixel();
+        if !frame.contains(cursor) {
+            return;
+        }
         match self.screen.click(&self.gui.atlas, frame, cursor) {
             Some(Action::Open(address)) => packs::open_uri(address),
             Some(Action::Quit) => event_loop.exit(),
