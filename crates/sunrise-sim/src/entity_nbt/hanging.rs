@@ -8,8 +8,8 @@ use super::*;
 pub(super) fn loaded_pitch(raw: Option<&Tag>) -> f32 {
     raw.map_or(0.0, |tag| loaded_rotation(tag)[1])
 }
-/// Painting.addAdditionalSaveData: `facing`, `variant` and `block_pos`, after
-/// Entity.saveWithoutId's common fields.
+/// `Painting.addAdditionalSaveData`: `facing`, `block_pos` and, for a keyed
+/// holder only (`VariantUtils.writeVariant`), `variant`.
 pub fn painting_to_nbt(p: &Painting, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
     let (lo, hi) = p.bounds();
     let base = Base {
@@ -32,11 +32,16 @@ pub fn painting_to_nbt(p: &Painting, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
             .and_then(|raw| float(raw.get("fall_distance")))
             .unwrap_or(0.0),
     };
-    let mut tag = base.tag(raw);
-    put(&mut tag, "facing", Tag::Byte(p.facing as i8));
-    put(&mut tag, "variant", string(&p.variant));
-    put(&mut tag, "block_pos", Tag::IntArray(p.pos.to_vec()));
-    tag
+    let mut tag = EntityTagWriter::new(raw);
+    base.write(&mut tag, true);
+    tag.insert("facing".into(), Tag::Byte(p.facing as i8));
+    tag.insert("block_pos".into(), Tag::IntArray(p.pos.to_vec()));
+    if let Some(key) = &p.variant {
+        tag.insert("variant".into(), string(key));
+    } else {
+        tag.remove(&"variant".into());
+    }
+    tag.finish()
 }
 /// `BlockAttachedEntity.readAdditionalSaveData`: `block_pos` when saved and
 /// closer than 16 blocks to the block holding `Pos`; else (a summoned one
@@ -63,13 +68,6 @@ pub(super) fn attached_block_pos(tag: &Tag) -> Option<[i32; 3]> {
     };
     Some(stored.filter(near).unwrap_or(here))
 }
-/// The block position and facing of a saved painting (`HangingEntity`'s
-/// `facing`, a 2D direction).
-pub fn painting_placement_from_nbt(tag: &Tag) -> Option<([i32; 3], u8)> {
-    let pos = attached_block_pos(tag)?;
-    let facing = wrap_data_value(number(tag.get("facing")).unwrap_or(0), 4);
-    Some((pos, facing))
-}
 /// `Direction.from3DDataValue` / `from2DDataValue`: the byte read by
 /// `LEGACY_ID_CODEC` indexes the table as `abs(data % modulus)`, never clamped.
 pub(super) fn wrap_data_value(raw: impl TryInto<i64> + Copy, modulus: i64) -> u8 {
@@ -78,7 +76,8 @@ pub(super) fn wrap_data_value(raw: impl TryInto<i64> + Copy, modulus: i64) -> u8
 }
 /// The block position, facing and variant (if saved) of a painting.
 pub fn painting_from_nbt(tag: &Tag) -> Option<([i32; 3], u8, Option<String>)> {
-    let (pos, facing) = painting_placement_from_nbt(tag)?;
+    let pos = attached_block_pos(tag)?;
+    let facing = wrap_data_value(number(tag.get("facing")).unwrap_or(0), 4);
     Some((pos, facing, text(tag.get("variant"))))
 }
 
@@ -125,7 +124,7 @@ mod tests {
             id: 1,
             pos,
             facing,
-            variant: variant.unwrap().into(),
+            variant: variant.map(Into::into),
             asset: None,
             width: 1,
             height: 1,

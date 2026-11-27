@@ -290,7 +290,7 @@ fn a_painting_keeps_its_saved_pitch_and_takes_its_yaw_from_the_facing() {
             id: 1,
             pos,
             facing,
-            variant: variant.unwrap().into(),
+            variant: variant.map(Into::into),
             asset: None,
             width: 1,
             height: 1,

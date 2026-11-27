@@ -545,7 +545,7 @@ pub(crate) fn entity_data_validation_inline_painting_and_pre_login_bundle_case(c
                 wait_pong_in_game(game, &mut peer, 3);
 
                 let painting = game.paintings.iter().find(|p| p.id == 2002).unwrap();
-                assert_eq!(&*painting.variant, synced_name);
+                assert_eq!(painting.variant.as_deref(), Some(synced_name));
                 assert_eq!(
                     painting.asset.as_deref(),
                     Some(
@@ -578,7 +578,7 @@ pub(crate) fn entity_data_validation_inline_painting_and_pre_login_bundle_case(c
                 .unwrap();
                 wait_pong_in_game(game, &mut peer, 4);
                 let spawned = game.paintings.iter().find(|p| p.id == 2003).unwrap();
-                assert_eq!(&*spawned.variant, synced_name);
+                assert_eq!(spawned.variant.as_deref(), Some(synced_name));
                 assert_eq!(
                     spawned.asset.as_deref(),
                     Some(

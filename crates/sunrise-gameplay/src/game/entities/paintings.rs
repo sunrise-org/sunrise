@@ -41,7 +41,7 @@ impl crate::game::ServerGame<'_> {
             id: self.server.next_entity,
             pos,
             facing,
-            variant: Arc::from(""),
+            variant: None,
             asset: None,
             width: 1,
             height: 1,
@@ -70,12 +70,14 @@ impl crate::game::ServerGame<'_> {
             .next_int_bound(fitting.len() as i32)
             .unwrap_or(0) as usize;
         let v = &fitting[pick];
-        (candidate.variant, candidate.width, candidate.height) = (v.id.clone(), v.width, v.height);
+        (candidate.variant, candidate.width, candidate.height) =
+            (Some(v.id.clone()), v.width, v.height);
         // EntityType.createDefaultStackConfig -> Painting.applyImplicitComponents:
         // the stack's `painting/variant` replaces the random pick, and that
         // painting has to survive where it goes (else the use is CONSUME).
         if let Some(v) = world_paintings!(self).of_stack(stack).cloned() {
-            (candidate.variant, candidate.width, candidate.height) = (v.id, v.width, v.height);
+            (candidate.variant, candidate.width, candidate.height) =
+                (Some(v.id), v.width, v.height);
             if !self.common.painting_survives(&candidate) {
                 self.award_stat("used", &stack.item, 1);
                 return true;
@@ -91,12 +93,13 @@ impl crate::game::ServerGame<'_> {
             &own,
         );
         if let Some((_, _, Some(variant))) = sunrise_sim::entity_nbt::painting_from_nbt(&raw)
-            && *candidate.variant != *variant
+            && candidate.variant.as_deref() != Some(variant.as_str())
             && let Some(v) = world_paintings!(self)
                 .get(&sunrise_world::datafix::dynamic::namespaced(&variant))
                 .cloned()
         {
-            (candidate.variant, candidate.width, candidate.height) = (v.id, v.width, v.height);
+            (candidate.variant, candidate.width, candidate.height) =
+                (Some(v.id), v.width, v.height);
             if !self.common.painting_survives(&candidate) {
                 self.award_stat("used", &stack.item, 1);
                 return true;
@@ -327,7 +330,7 @@ pub(in crate::game) mod tests {
             id: 1,
             pos: [0, 0, 0],
             facing: 0,
-            variant: Arc::from("minecraft:kebab"),
+            variant: Some(Arc::from("minecraft:kebab")),
             asset: None,
             width: 1,
             height: 1,

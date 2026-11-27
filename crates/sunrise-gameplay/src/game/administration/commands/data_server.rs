@@ -445,10 +445,9 @@ impl crate::game::ServerGame<'_> {
                 // (`VariantUtils.readVariant(..).ifPresent`: an unknown or
                 // unreadable one keeps the painting's).
                 let uuid = self.uuid_for(id);
-                let (pos, facing) =
-                    entity_nbt::painting_placement_from_nbt(&tag).ok_or_else(stale)?;
-                let known = entity_nbt::painting_from_nbt(&tag)
-                    .and_then(|(_, _, v)| world_paintings!(self).get(&v?).cloned());
+                let (pos, facing, variant) =
+                    entity_nbt::painting_from_nbt(&tag).ok_or_else(stale)?;
+                let known = variant.and_then(|key| world_paintings!(self).get(&key).cloned());
                 let p = self
                     .common
                     .paintings
@@ -457,7 +456,7 @@ impl crate::game::ServerGame<'_> {
                     .ok_or_else(stale)?;
                 (p.pos, p.facing) = (pos, facing);
                 if let Some(v) = known {
-                    (p.variant, p.width, p.height) = (v.id, v.width, v.height);
+                    (p.variant, p.asset, p.width, p.height) = (Some(v.id), None, v.width, v.height);
                 }
                 set_key(&mut tag, "UUID", Tag::IntArray(uuid.to_vec()));
             }

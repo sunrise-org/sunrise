@@ -1,0 +1,2 @@
+# Saving a painting after keyed and inline metadata updates (#6805).
+sunrise-client-gameplay game::client_side::remote_objects::tests::painting_metadata_saves_only_registry_keys lib daily child-process

@@ -41,7 +41,7 @@ fn with_scene(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
             id: PAINTING,
             pos: [4, 70, 6],
             facing: 0,
-            variant: "minecraft:kebab".into(),
+            variant: Some("minecraft:kebab".into()),
             asset: None,
             width: 1,
             height: 1,
