@@ -2484,7 +2484,7 @@ impl Renderer {
             section_copies: None,
             section_copy_bytes: 0,
             shrink_gate: ShrinkGate::default(),
-            lightmap_uploaded: false,
+            lightmap_white: false,
             sprite_minimum_size,
             sprite_native: sprite_mips.iter().map(|s| s.native_size).collect(),
             mipmap_option: 4,

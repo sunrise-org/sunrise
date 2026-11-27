@@ -1,5 +1,6 @@
 //! The menu bundle's atlas loads a pack's core shaders (here `core/lightmap`) by telling the
-//! pack's files from the game's own resources at the launch's vanilla folder.
+//! pack's files from the game's own resources at the launch's vanilla folder; without a pack's
+//! the game's own lightmap pair is loaded.
 use sunrise_assets::resource_source::{Resource, ResourceSource};
 
 const SCREENQUAD: &str = "assets/minecraft/shaders/core/screenquad.vsh";
@@ -59,8 +60,14 @@ fn a_packs_lightmap_is_told_from_the_games_own_at_the_vanilla_folder() {
     let gui = crate::game::UiResources::load(&pack, &scratch.0).unwrap();
     let program = gui.atlas.lightmap_shader.expect("the pack's lightmap");
     assert_eq!(program.other, ["LightmapInfo"]);
-    // Without a pack, the game's own lightmap is no pack's: the native texture stays.
+    // Without a pack, the game's own pair draws the light texture, as vanilla's `Lightmap` does:
+    // its stage (SkyFactor in red), not the pack's (in green).
     let plain = stack(Resource::file(vanilla.clone(), LIGHTMAP.to_owned()));
     let gui = crate::game::UiResources::load(&plain, &scratch.0).unwrap();
-    assert!(gui.atlas.lightmap_shader.is_none());
+    let own = gui.atlas.lightmap_shader.expect("the game's own lightmap");
+    assert_eq!(own.other, ["LightmapInfo"]);
+    assert_ne!(
+        format!("{:?}", own.fragment),
+        format!("{:?}", program.fragment)
+    );
 }

@@ -1,8 +1,9 @@
-//! A resource pack's `core/lightmap` shader (26.3's `Lightmap.render`, `RenderPipelines.LIGHTMAP`):
-//! the 16x16 light texture drawn by the pack's GLSL from the frame's `LightmapInfo`, as a pack that
-//! darkens caves or tints the night expects (wiki "Lightmaps", 1.21.11 and up). Without one the
-//! texture is computed natively ([`native_lightmap`]). `Renderer::update_lightmap` is the one
-//! entry point for the frame's light texture, either way.
+//! The light texture (26.3's `Lightmap.render`, `RenderPipelines.LIGHTMAP`): 16x16, drawn by
+//! `core/screenquad` and `core/lightmap` from the frame's `LightmapInfo` into an 8-bit target, as
+//! vanilla draws it. The shaders are the game's own, or a resource pack's that replace them, as a
+//! pack that darkens caves or tints the night expects (wiki "Lightmaps", 1.21.11 and up): the
+//! bytes come from the GPU's own arithmetic and its unorm write, as vanilla's do.
+//! `Renderer::update_lightmap` is the one entry point for the frame's light texture.
 
 use crate::polytone_post::ExpressionUniform;
 use std::sync::Arc;
@@ -77,48 +78,6 @@ impl LightmapInfo {
         bytes.copy_from_slice(bytemuck::cast_slice(&floats));
         bytes
     }
-}
-
-/// The light texture `lightmap.fsh` draws for `info`, computed here: RGBA rows of sky level by
-/// block level, what the native path uploads.
-/// `lightmap.fsh`'s `notGamma` scale, its four multiplies in the shader's order: `powi(4)`
-/// squares twice and rounds differently.
-fn max_scaled(max: f32) -> f32 {
-    let inverted = 1.0 - max;
-    1.0 - inverted * inverted * inverted * inverted
-}
-
-pub(crate) fn native_lightmap(info: &LightmapInfo) -> [u8; 16 * 16 * 4] {
-    use glam::Vec3;
-    let brightness = |level: f32| level / (4.0 - 3.0 * level);
-    let mut pixels = [0u8; 16 * 16 * 4];
-    for s in 0..16 {
-        for b in 0..16 {
-            let block_level = b as f32 / 15.0;
-            let sky_level = s as f32 / 15.0;
-            let block_brightness = brightness(block_level) * info.block_factor;
-            let sky_brightness = brightness(sky_level) * info.sky_factor;
-            let mut color = Vec3::from(info.ambient_color)
-                .max(Vec3::from(info.night_vision_color) * info.night_vision);
-            color += Vec3::from(info.sky_light_color) * sky_brightness;
-            let parabolic = (2.0 * block_level - 1.0) * (2.0 * block_level - 1.0);
-            let block_color = Vec3::from(info.block_light_tint).lerp(Vec3::ONE, 0.9 * parabolic);
-            color += block_color * block_brightness;
-            // A boss bar mixes the light toward 70/60/60%.
-            color = color.lerp(color * Vec3::new(0.7, 0.6, 0.6), info.boss_darkening);
-            color -= Vec3::splat(info.darkness);
-            color = color.clamp(Vec3::ZERO, Vec3::ONE);
-            let max = color.max_element().max(1e-6);
-            let not_gamma = color * (max_scaled(max) / max);
-            color = color.lerp(not_gamma, info.brightness);
-            let i = (s * 16 + b) * 4;
-            pixels[i] = (color.x * 255.0) as u8;
-            pixels[i + 1] = (color.y * 255.0) as u8;
-            pixels[i + 2] = (color.z * 255.0) as u8;
-            pixels[i + 3] = 255;
-        }
-    }
-    pixels
 }
 
 /// A readback buffer's state.
@@ -434,32 +393,31 @@ impl CoreLightmap {
     }
 }
 
-/// What drew the light texture: the native path (computed here, white under fullbright), or a
-/// pack's shader.
+/// What the light texture holds: what the lightmap shader drew, or white (fullbright, or no
+/// lightmap pipeline).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub(crate) enum Drawn {
-    Native,
-    Pack,
+    White,
+    Shader,
 }
 
 impl Drawn {
-    /// What draws the frame's light texture: a pack's shader when one is loaded, unless
+    /// What the frame's light texture holds: the shader's, when its pipeline exists, unless
     /// fullbright keeps the texture white.
-    pub(crate) fn now(fullbright: bool, pack: bool) -> Self {
-        if pack && !fullbright {
-            Self::Pack
+    pub(crate) fn now(fullbright: bool, shader: bool) -> Self {
+        if shader && !fullbright {
+            Self::Shader
         } else {
-            Self::Native
+            Self::White
         }
     }
 }
 
 /// The light texture's pixels F3's lightmap chart paints (RGBA rows of sky level by block level),
-/// with what drew them. The native path's are current as soon as it computes them; a
-/// pack-drawn texture's arrive through the readback a frame later, and only while the chart is
-/// open. A sample from another source than the one drawing now is never shown: after the chart
-/// closes and opens again, or fullbright turns on or off, it paints nothing until the texture
-/// being drawn comes back.
+/// with what drew them. White is current at once; a drawn texture's arrive through the readback a
+/// frame later, and only while the chart is open. A sample from another source than the one
+/// drawing now is never shown: after the chart closes and opens again, or fullbright turns on or
+/// off, it paints nothing until the texture being drawn comes back.
 pub(crate) struct LightmapChart {
     pub(crate) pixels: [u8; 16 * 16 * 4],
     drawn: Option<Drawn>,
@@ -473,20 +431,20 @@ impl LightmapChart {
         }
     }
 
-    /// The native path's pixels, current at once.
-    fn native(&mut self, pixels: [u8; 16 * 16 * 4]) {
-        self.pixels = pixels;
-        self.drawn = Some(Drawn::Native);
+    /// The white texture, current at once.
+    fn white(&mut self) {
+        self.pixels = [255; 16 * 16 * 4];
+        self.drawn = Some(Drawn::White);
     }
 
-    /// A pack-drawn texture read back into `pixels`.
-    fn pack_copied(&mut self) {
-        self.drawn = Some(Drawn::Pack);
+    /// A drawn texture read back into `pixels`.
+    fn copied(&mut self) {
+        self.drawn = Some(Drawn::Shader);
     }
 
-    /// The readback closed: a pack-drawn sample is no longer kept current.
-    fn forget_pack(&mut self) {
-        if self.drawn == Some(Drawn::Pack) {
+    /// The readback closed: a drawn sample is no longer kept current.
+    fn forget_drawn(&mut self) {
+        if self.drawn == Some(Drawn::Shader) {
             self.drawn = None;
         }
     }
@@ -498,9 +456,9 @@ impl LightmapChart {
     }
 }
 
-/// The pack's lightmap pipeline for `program`, none without one or when it is past the device's
-/// limits (`sunrise_glsl::PastDeviceLimit`: the light texture is then computed natively), or the
-/// device's refusal of `LIGHTMAP`.
+/// The lightmap pipeline for `program`, none without one or when it is past the device's limits
+/// (`sunrise_glsl::PastDeviceLimit`: the light texture then stays white), or the device's refusal
+/// of `LIGHTMAP`.
 pub(super) fn lightmap_for(
     device: &wgpu::Device,
     program: Option<&Translated>,
@@ -519,32 +477,34 @@ pub(super) fn lightmap_for(
     .transpose()
 }
 
-/// The renderer's light texture: the pack's shader draws it, or it is computed here.
+/// The renderer's light texture: the lightmap shader draws it.
 impl super::Renderer {
-    /// The resource packs' `core/lightmap` (`HudAtlas::lightmap_shader`), or the native one.
+    /// The lightmap shader (`HudAtlas::lightmap_shader`): the game's own, or the resource packs'.
     /// The pipeline is built here: the backend's refusal of it, a pipeline vanilla requires, is
-    /// returned and fails the pack reload. Unlike the sky's and the block outline's, a pack's lightmap is kept
-    /// on a frame of linear light (docs/hdr-passes.md): it draws the 8-bit light texture, never
-    /// the frame, and the world's shaders read that texture the same way under either encoding
-    /// (they decode their result at the end, `linear_blend`), as they do the native one.
+    /// returned and fails the pack reload. Unlike the sky's and the block outline's, the lightmap
+    /// is kept on a frame of linear light (docs/hdr-passes.md): it draws the 8-bit light texture,
+    /// never the frame, and the world's shaders read that texture the same way under either
+    /// encoding (they decode their result at the end, `linear_blend`).
     pub fn set_lightmap_shader(
         &mut self,
         program: Option<&Translated>,
         expressions: &[ExpressionUniform],
     ) -> Result<(), String> {
         self.core_lightmap = lightmap_for(&self.device, program, expressions)?;
-        self.lightmap_uploaded = false;
+        if self.core_lightmap.is_none() {
+            log::error!("no lightmap pipeline: the light texture stays white");
+        }
+        self.lightmap_white = false;
         Ok(())
     }
 
-    /// Whether F3's lightmap chart is shown (the game's `debug_shows_lightmap`): only then is a
-    /// pack-drawn light texture read back for it (`lightmap_sample`). Without a pack's shader it
-    /// does nothing: the native pixels are there already.
+    /// Whether F3's lightmap chart is shown (the game's `debug_shows_lightmap`): only then is the
+    /// drawn light texture read back for it (`lightmap_sample`).
     pub fn set_lightmap_readback(&mut self, on: bool) {
         if let Some(core) = self.core_lightmap.as_mut() {
             core.set_readback(&self.device, on);
             if !on {
-                self.lightmap_chart.forget_pack();
+                self.lightmap_chart.forget_drawn();
             }
         }
     }
@@ -557,8 +517,8 @@ impl super::Renderer {
     }
 
     /// The frame's light texture (`LightmapRenderStateExtractor.extract`, then
-    /// `Lightmap.render`): a pack's `core/lightmap` draws it from the frame's `LightmapInfo`,
-    /// or its pixels are computed and uploaded when they change. Fullbright keeps it white.
+    /// `Lightmap.render`): the lightmap shader draws it from the frame's `LightmapInfo`.
+    /// Fullbright keeps it white, and so does a missing pipeline (logged when it was set).
     pub(super) fn update_lightmap(
         &mut self,
         encoder: &mut wgpu::CommandEncoder,
@@ -578,7 +538,7 @@ impl super::Renderer {
             ambient_color: sky.ambient_light_color,
             night_vision_color: [0.6; 3],
         };
-        // Only a pack's shader reads the globals: none are made without one.
+        // The shader's globals: none are made while it doesn't draw.
         let globals =
             (!self.fullbright && self.core_lightmap.is_some()).then(|| self.pack_globals(frame));
         if let Some(globals) = globals
@@ -586,28 +546,22 @@ impl super::Renderer {
         {
             core.upload(&mut self.uploads, encoder, globals, &info);
             if core.collect(&mut self.lightmap_chart.pixels) {
-                self.lightmap_chart.pack_copied();
+                self.lightmap_chart.copied();
             }
             core.draw(encoder, &self.lightmap, &self.lightmap_view);
-            // The native pixels go up again when the pack's shader stops drawing.
-            self.lightmap_uploaded = false;
+            // White goes up again when the shader stops drawing.
+            self.lightmap_white = false;
             return;
         }
-        // Fullbright stops a pack's shader: what it copied before must not be read as current
-        // when it draws again.
+        // Fullbright stops the shader: what it copied before must not be read as current when
+        // it draws again.
         if let Some(core) = self.core_lightmap.as_mut() {
             core.forget_copies();
         }
-        let mut pixels = native_lightmap(&info);
-        if self.fullbright {
-            pixels.fill(255);
-        }
-        // The lightmap changes with the time of day, flicker and effects,
-        // not every frame: upload only what differs from the texture.
-        if pixels == self.lightmap_chart.pixels && self.lightmap_uploaded {
-            self.lightmap_chart.native(pixels);
+        if self.lightmap_white {
             return;
         }
+        let pixels = [255u8; 16 * 16 * 4];
         self.uploads.texture(
             encoder,
             wgpu::TexelCopyTextureInfo {
@@ -620,8 +574,8 @@ impl super::Renderer {
             16,
             &pixels,
         );
-        self.lightmap_chart.native(pixels);
-        self.lightmap_uploaded = true;
+        self.lightmap_chart.white();
+        self.lightmap_white = true;
     }
 }
 

@@ -626,33 +626,32 @@ fn a_lightmap_shaders_blocks_count_for_the_stages_that_read_them() {
 #[test]
 fn the_lightmap_chart_never_shows_a_stale_sample() {
     let mut chart = LightmapChart::new();
-    let pack = Drawn::now(false, true);
-    let (native, white) = (Drawn::now(false, false), Drawn::now(true, true));
+    let drawn = Drawn::now(false, true);
+    let (no_pipeline, fullbright) = (Drawn::now(false, false), Drawn::now(true, true));
     assert_eq!(
-        (pack, native, white),
-        (Drawn::Pack, Drawn::Native, Drawn::Native)
+        (drawn, no_pipeline, fullbright),
+        (Drawn::Shader, Drawn::White, Drawn::White)
     );
-    assert_eq!(chart.shown(pack), None, "nothing read yet");
-    // The chart open: a pack-drawn copy lands.
+    assert_eq!(chart.shown(drawn), None, "nothing read yet");
+    // The chart open: a drawn copy lands.
     chart.pixels = [9; 16 * 16 * 4];
-    chart.pack_copied();
-    assert_eq!(chart.shown(pack), Some(&[9; 16 * 16 * 4]));
+    chart.copied();
+    assert_eq!(chart.shown(drawn), Some(&[9; 16 * 16 * 4]));
     // Closed, then opened again: nothing until a fresh copy.
-    chart.forget_pack();
-    assert_eq!(chart.shown(pack), None);
+    chart.forget_drawn();
+    assert_eq!(chart.shown(drawn), None);
     chart.pixels = [10; 16 * 16 * 4];
-    chart.pack_copied();
-    assert_eq!(chart.shown(pack), Some(&[10; 16 * 16 * 4]));
-    // Fullbright on: the pack's copy is not the white texture drawn now, until the native path
-    // writes it.
-    assert_eq!(chart.shown(white), None);
-    chart.native([255; 16 * 16 * 4]);
-    assert_eq!(chart.shown(white), Some(&[255; 16 * 16 * 4]));
-    // Fullbright off with the pack's shader: the white pixels are not its texture.
-    assert_eq!(chart.shown(pack), None);
-    // Closing the chart leaves a native sample alone: it is current.
-    chart.forget_pack();
-    assert_eq!(chart.shown(native), Some(&[255; 16 * 16 * 4]));
+    chart.copied();
+    assert_eq!(chart.shown(drawn), Some(&[10; 16 * 16 * 4]));
+    // Fullbright on: the drawn copy is not the white texture shown now, until white goes up.
+    assert_eq!(chart.shown(fullbright), None);
+    chart.white();
+    assert_eq!(chart.shown(fullbright), Some(&[255; 16 * 16 * 4]));
+    // Fullbright off with the shader drawing: the white pixels are not its texture.
+    assert_eq!(chart.shown(drawn), None);
+    // Closing the chart leaves the white sample alone: it is current.
+    chart.forget_drawn();
+    assert_eq!(chart.shown(fullbright), Some(&[255; 16 * 16 * 4]));
 }
 
 /// Fullbright stops a pack's shader with copies mapped or still in flight: once it draws again,
@@ -703,11 +702,4 @@ fn copies_from_before_fullbright_are_never_read() {
     frame(&mut core, &STATES[0], true);
     assert!(core.collect(&mut pixels));
     assert_eq!(pixels[2], 0);
-}
-
-/// The `notGamma` scale multiplies left to right as `lightmap.fsh` writes it. At 0.0015 Java's
-/// float `1.0f - x * x * x * x` (jshell) gives bits 1002711808; squaring twice gives 1002711680.
-#[test]
-fn the_not_gamma_scale_multiplies_in_the_shaders_order() {
-    assert_eq!(max_scaled(0.0015).to_bits(), 1_002_711_808);
 }

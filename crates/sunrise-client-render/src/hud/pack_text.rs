@@ -471,13 +471,34 @@ fn translate_required(
         pipeline: required[0].pipeline,
         why: e.to_string(),
     })?;
-    (required.iter().zip(&defines))
+    translate_programs(
+        root,
+        &stages,
+        names,
+        required,
+        &defines,
+        (modifiers, ids, own),
+    )
+    .map(Some)
+}
+
+/// Each of `required`'s pipelines' programs of the stage texts `stages` (vertex, fragment), its
+/// includes read from `root`, with its expression uniforms: `translate_required`'s checks.
+fn translate_programs(
+    root: &ResourceSource,
+    stages: &(String, String),
+    names: (&str, &str),
+    required: &[Required],
+    defines: &[Vec<&str>],
+    (modifiers, ids, own): Blocks<'_>,
+) -> Result<Vec<Checked>, RequiredShaderRefused> {
+    (required.iter().zip(defines))
         .map(|(r, defines)| {
             let refused = |why: String| RequiredShaderRefused {
                 pipeline: r.pipeline,
                 why,
             };
-            let program = translate_selected(root, &stages, names, defines, r.glue, &|_| true)
+            let program = translate_selected(root, stages, names, defines, r.glue, &|_| true)
                 .map_err(|e| refused(e.to_string()))?;
             let stage = r
                 .oit
@@ -489,8 +510,7 @@ fn translate_required(
                 (modifiers.resolve(ids, &program, &own)).map_err(|e| refused(e.to_string()))?;
             Ok((program, expressions))
         })
-        .collect::<Result<_, _>>()
-        .map(Some)
+        .collect()
 }
 
 /// A loaded pack shader program with its expression uniforms, as the atlas keeps them.
@@ -696,9 +716,13 @@ pub(super) fn load_shaders(
     Ok(())
 }
 
-/// The packs' `core/lightmap` with `core/screenquad`, when a pack replaces either stage or an
-/// include they keep: the pass gives it `LightmapInfo` besides vanilla's blocks, and the packs'
-/// expression uniforms (`modifiers`) of either stage's file. Unspecified float blocks read zero.
+/// `core/screenquad` with `core/lightmap`, which draw the light texture: the packs', when a pack
+/// replaces either stage or an include they keep, else the game's own, as vanilla's `Lightmap`
+/// draws it. The pass gives it `LightmapInfo` besides vanilla's blocks, and the packs' expression
+/// uniforms (`modifiers`) of either stage's file. Polytone binds those to whatever shader is
+/// active under the id (wiki "Shaders", "Expression Uniforms on Any Shader"); the game's own
+/// declares no such block, so none is bound to it. Unspecified float blocks read zero. The game's
+/// own pair failing to translate is Sunrise's error, logged; the light texture then stays white.
 fn load_lightmap(
     root: &ResourceSource,
     defaults: &ResourceSource,
@@ -711,10 +735,30 @@ fn load_lightmap(
         sunrise_polytone::globals::BLOCK,
     ];
     let blocks = (modifiers, (shaders[0], shaders[1]), &own[..]);
-    let Some(programs) = translate_required(root, defaults, names, &LIGHTMAP, blocks)? else {
-        return Ok(None);
+    if let Some(programs) = translate_required(root, defaults, names, &LIGHTMAP, blocks)? {
+        return Ok((programs.into_iter().next()).and_then(|p| loaded(p, LIGHTMAP[0].pipeline)));
+    }
+    let own_pair = || {
+        let stage = |name: &str, extension: &str| {
+            let path = format!("assets/minecraft/shaders/core/{name}.{extension}");
+            read_shader_file(root, &path)
+                .map_err(|e| e.to_string())?
+                .ok_or_else(|| format!("{path} is missing"))
+        };
+        let stages = (stage(names.0, "vsh")?, stage(names.1, "fsh")?);
+        let defines: Vec<Vec<&str>> = LIGHTMAP.iter().map(Required::all_defines).collect();
+        translate_programs(root, &stages, names, &LIGHTMAP, &defines, blocks)
+            .map_err(|e| e.to_string())
     };
-    Ok((programs.into_iter().next()).and_then(|p| loaded(p, LIGHTMAP[0].pipeline)))
+    match own_pair() {
+        Ok(programs) => Ok(programs.into_iter().next().map(|(p, e)| (Arc::new(p), e))),
+        Err(e) => {
+            log::error!(
+                "the game's lightmap shader didn't translate, so the light texture stays white: {e}"
+            );
+            Ok(None)
+        }
+    }
 }
 
 /// The pipeline and its resources.
@@ -926,6 +970,20 @@ pub(super) fn text_runs(
         }
     }
     runs
+}
+
+/// Whether `program`, the atlas's lightmap from the packs at `root`, is a pack's: one replaces
+/// either stage (`load_lightmap`'s choice); otherwise it is the game's own pair.
+#[cfg(test)]
+fn packs_lightmap(
+    program: Option<&Translated>,
+    root: &ResourceSource,
+    defaults: &ResourceSource,
+) -> bool {
+    let defines: Vec<Vec<&str>> = LIGHTMAP.iter().map(Required::all_defines).collect();
+    let variants: Vec<&[&str]> = defines.iter().map(Vec::as_slice).collect();
+    let names = ("screenquad", "lightmap");
+    program.is_some() && selected_stages(root, defaults, names, &variants).is_some()
 }
 
 #[cfg(test)]
@@ -1485,8 +1543,8 @@ mod tests {
     }
 
     /// A pack's `core/lightmap` is loaded with vanilla's `core/screenquad` (a stage of another
-    /// name), and the reverse; none when no pack replaces either; the load fails when it reads
-    /// an extra block whose layout the lightmap pass cannot bind.
+    /// name), and the reverse; the game's own pair when no pack replaces either; the load fails
+    /// when it reads an extra block whose layout the lightmap pass cannot bind.
     #[test]
     fn a_pack_replacing_either_lightmap_stage_is_loaded() {
         let red = "#version 330\nlayout(std140) uniform LightmapInfo {\n    float SkyFactor;\n} info;\n\
@@ -1501,9 +1559,13 @@ mod tests {
         let quad = "#version 330\nlayout(location = 0) out vec2 texCoord;\n\
                     void main() {\n    texCoord = vec2(0.5);\n    gl_Position = vec4(0.0, 0.0, 0.0, 1.0);\n}\n";
         assert!(lightmap(&[(vsh, quad)]).unwrap().is_some());
+        let (root, defaults) = lightmap_packs(&[(fsh, red)]);
+        assert!(packs_lightmap(Some(&*program), &root, &defaults));
+        let own = lightmap(&[]).unwrap().expect("the game's own lightmap");
+        let (root, defaults) = lightmap_packs(&[]);
         assert!(
-            matches!(lightmap(&[]), Ok(None)),
-            "no pack replaces either stage"
+            !packs_lightmap(Some(&*own), &root, &defaults),
+            "no pack replaces either stage: the game's own pair"
         );
         let other = red
             .replace("LightmapInfo", "Elsewhere")
