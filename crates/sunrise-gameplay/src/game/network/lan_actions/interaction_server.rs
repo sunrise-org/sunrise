@@ -667,17 +667,13 @@ impl crate::game::ServerGame<'_> {
             }
         };
         let (mut consumed, mut block_fell_through) = (false, false);
-        let Some(host) = self.server.lan.as_mut() else {
+        let Some(host) = self.server.lan.as_ref() else {
             return Err(ActionRefused::Stale);
         };
         // handleUseItemOn: within reach, then the hit point within
         // a block of the block's centre (logged when it isn't).
         let context = &host.hub.loop_context;
-        if !host
-            .hub
-            .guests
-            .update(gi, |g| g.reaches_block(context, hit.pos))
-        {
+        if !host.hub.guests[gi].within_interaction_range(context, hit.pos, 1.0) {
             return Err(ActionRefused::OutOfReach);
         }
         let inside = (0..3).all(|k| (hit.point[k] - f64::from(hit.pos[k]) - 0.5).abs() < 1.0000001);
