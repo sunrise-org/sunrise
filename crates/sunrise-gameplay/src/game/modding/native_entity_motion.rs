@@ -333,35 +333,27 @@ impl crate::game::ServerGame<'_> {
         if let Some(h) = self.common.native_walk_entity(entity.id()) {
             return Some(corners(with_entity!(self, h, e => e.bounds())));
         }
-        let (lo, hi) = match t {
-            Target::Other(id) => {
-                return self
-                    .server
-                    .others
-                    .0
-                    .iter()
-                    .find(|e| e.id == id)?
-                    .display_marker_or_interaction_bounds()
-                    .map(corners);
+        let bounds = match t {
+            Target::Other(_) | Target::DragonPart(_) | Target::Crystal(_) => {
+                return crate::game::server_side::commands_server::targets::with_server_entity_projection(
+                    self,
+                    t,
+                    sunrise_gameplay_common::game::entity::EntityProjection::projected_bounds,
+                )
+                .flatten()
+                .map(corners);
             }
-            Target::DragonPart(id) => {
-                let (dragon, part) = self.resident_dragon_part(id)?;
-                return Some(corners(dragon.part_geometry(part).1));
+            Target::Cushion(_) | Target::Frame(_) | Target::Painting(_) => {
+                crate::game::server_side::commands_server::targets::with_server_entity_projection(
+                    self,
+                    t,
+                    sunrise_gameplay_common::game::entity::EntityProjection::projected_bounds,
+                )
+                .flatten()?
             }
-            Target::Crystal(id) => {
-                let c = self.common.crystals.iter().find(|c| c.id == id)?;
-                return Some(corners(c.bounds()));
-            }
-            Target::Cushion(id) => self.common.cushions.iter().find(|c| c.id == id)?.bounds(),
-            Target::Frame(id) => self
-                .common
-                .item_frames
-                .iter()
-                .find(|f| f.id == id)?
-                .bounds(),
-            Target::Painting(id) => self.common.paintings.iter().find(|p| p.id == id)?.bounds(),
             _ => return None,
         };
+        let [lo, hi] = corners(bounds);
         if lo.iter().chain(&hi).any(|v| !v.is_finite()) {
             return None;
         }
@@ -479,8 +471,6 @@ impl crate::game::ServerGame<'_> {
 }
 
 use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;
-
-use sunrise_gameplay_common::game::dragon_common::DragonCommonGameExt1 as _;
 
 use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
 
