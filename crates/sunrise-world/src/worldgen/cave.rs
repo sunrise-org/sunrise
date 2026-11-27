@@ -14,13 +14,17 @@ use super::{
     tree::{TreeDecoder, TreeResult, kind, read, sample_state, write},
     tree_blocks::{self as tb, TreeBlocks},
     value_provider::IntProvider,
+    weighted::OptionalWeightedList,
 };
 use crate::registry::BlockStateId;
-use std::{collections::BTreeSet, sync::Arc};
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, RwLock},
+};
 use sunrise_core::{
     geometry::Direction,
     noise::{Noise, NormalNoise},
-    random::{LegacyRandom, RandomSource},
+    random::{InvalidBound, LegacyRandom, RandomSource},
 };
 
 fn query<E>(error: PlacementQueryError) -> FeatureExecutionError<E> {
@@ -250,6 +254,40 @@ const DUNGEON_MOBS: [&str; 4] = [
     "minecraft:zombie",
     "minecraft:spider",
 ];
+
+/// Per-world custom `neoforge:monster_room_mobs` override (`None` when the merged map
+/// equals vanilla's built-in starting entries, preserving vanilla's `Util.getRandom(MOBS)` draw).
+/// Shared by a generator's workers and by the live level, never process-global.
+#[derive(Clone, Default)]
+pub struct MonsterRoomMobs(Arc<RwLock<Option<Arc<OptionalWeightedList<String>>>>>);
+impl MonsterRoomMobs {
+    pub fn publish(&self, table: Option<Arc<OptionalWeightedList<String>>>) {
+        *self
+            .0
+            .write()
+            .unwrap_or_else(|poisoned| poisoned.into_inner()) = table;
+    }
+    pub fn current(&self) -> Option<Arc<OptionalWeightedList<String>>> {
+        self.0
+            .read()
+            .unwrap_or_else(|poisoned| poisoned.into_inner())
+            .clone()
+    }
+}
+
+/// Select the spawner entity for `MonsterRoomFeature`: keeps vanilla's exact
+/// `Util.getRandom(MOBS, random)` draw when `custom` is `None`, or draws from the
+/// weighted table (`MonsterRoomHooks.getRandomMonsterRoomMob`) when overridden.
+fn select_monster_room_mob<'a, R: RandomSource>(
+    custom: Option<&'a OptionalWeightedList<String>>,
+    random: &mut R,
+) -> Result<Option<&'a str>, InvalidBound> {
+    if let Some(mobs) = custom {
+        Ok(mobs.sample(random)?.map(String::as_str))
+    } else {
+        Ok(Some(DUNGEON_MOBS[random.next_int_bound(4)? as usize]))
+    }
+}
 /// Initial data for a fresh dungeon spawner, preserving the generation
 /// sink's fields and insertion order. The entity was already selected.
 pub(crate) fn dungeon_spawner_nbt(entity: &str) -> sunrise_core::nbt::Compound {
@@ -375,8 +413,10 @@ impl MonsterRoomFeature {
         let spawner = state(blocks, "minecraft:spawner")?;
         safe_set(world, origin, spawner, cannot)?;
         if read(world, origin)? == spawner {
-            let mob = DUNGEON_MOBS[random.next_int_bound(4)? as usize];
-            world.configure_spawner(origin, mob).map_err(query)?;
+            let custom = world.monster_room_mobs();
+            if let Some(mob) = select_monster_room_mob(custom.as_deref(), random)? {
+                world.configure_spawner(origin, mob).map_err(query)?;
+            }
         }
         Ok(true)
     }
@@ -758,5 +798,69 @@ mod dungeon_spawner_data_tests {
                 write_network(&Tag::Compound(expected), Limits::default()).unwrap()
             );
         }
+    }
+
+    #[test]
+    fn monster_room_mob_selection_keeps_vanilla_rng_parity_when_unmodified() {
+        for seed in -32..32 {
+            let mut vanilla_rng = LegacyRandom::new(seed);
+            let mut feature_rng = LegacyRandom::new(seed);
+            let expected = DUNGEON_MOBS[vanilla_rng.next_int_bound(4).unwrap() as usize];
+            let actual = select_monster_room_mob(None, &mut feature_rng).unwrap();
+            assert_eq!(actual, Some(expected), "seed {seed}");
+            assert_eq!(
+                feature_rng.next_long(),
+                vanilla_rng.next_long(),
+                "post-draw RNG state drifted for seed {seed}"
+            );
+        }
+    }
+
+    #[test]
+    fn monster_room_mob_selection_uses_weighted_table_when_overridden() {
+        let only_creeper =
+            OptionalWeightedList::new(vec![("minecraft:creeper".to_owned(), 100)]).unwrap();
+        for seed in 0..16 {
+            let mut rng = LegacyRandom::new(seed);
+            assert_eq!(
+                select_monster_room_mob(Some(&only_creeper), &mut rng).unwrap(),
+                Some("minecraft:creeper")
+            );
+        }
+
+        let weighted = OptionalWeightedList::new(vec![
+            ("minecraft:blaze".to_owned(), 1),
+            ("minecraft:creeper".to_owned(), 3),
+        ])
+        .unwrap();
+        let mut blazes = 0;
+        let mut creepers = 0;
+        for seed in 0..64 {
+            let mut expected_rng = LegacyRandom::new(seed);
+            let mut actual_rng = LegacyRandom::new(seed);
+            let expected = weighted
+                .sample(&mut expected_rng)
+                .unwrap()
+                .map(String::as_str);
+            let actual = select_monster_room_mob(Some(&weighted), &mut actual_rng).unwrap();
+            assert_eq!(actual, expected, "seed {seed}");
+            assert_eq!(actual_rng.next_long(), expected_rng.next_long());
+            match actual {
+                Some("minecraft:blaze") => blazes += 1,
+                Some("minecraft:creeper") => creepers += 1,
+                other => panic!("unexpected mob {other:?}"),
+            }
+        }
+        assert!(blazes > 0 && creepers > blazes);
+
+        // Empty / zero-weight list never panics and consumes no draw.
+        let empty = OptionalWeightedList::new(vec![]).unwrap();
+        let mut expected_rng = LegacyRandom::new(7);
+        let mut actual_rng = LegacyRandom::new(7);
+        assert_eq!(
+            select_monster_room_mob(Some(&empty), &mut actual_rng).unwrap(),
+            None
+        );
+        assert_eq!(actual_rng.next_long(), expected_rng.next_long());
     }
 }

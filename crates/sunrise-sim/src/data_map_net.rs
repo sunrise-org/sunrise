@@ -35,6 +35,7 @@ pub const BUILTIN_SYNCED_MAPS: &[(&str, &str)] = &[
         "minecraft:entity_type",
         "neoforge:acceptable_villager_distances",
     ),
+    ("minecraft:entity_type", "neoforge:monster_room_mobs"),
     ("minecraft:entity_type", "neoforge:parrot_imitations"),
     ("minecraft:worldgen/biome", "neoforge:villager_types"),
     ("minecraft:villager_profession", "neoforge:raid_hero_gifts"),

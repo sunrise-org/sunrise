@@ -152,6 +152,7 @@ impl OverworldGenerator {
             pipeline: Arc::new(pipeline),
             noise_clamped: None,
             mod_biome_keys: Default::default(),
+            monster_room_mobs: Default::default(),
         })
     }
 }

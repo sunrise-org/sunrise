@@ -9,6 +9,7 @@ use std::sync::{Arc, LazyLock};
 #[derive(Clone, Copy, Debug)]
 pub enum Kind {
     VillagerDistances,
+    MonsterRoomMobs,
     ParrotImitations,
     VillagerTypes,
     RaidHeroGifts,
@@ -19,6 +20,7 @@ impl Kind {
     pub const fn field(self) -> &'static str {
         match self {
             Self::VillagerDistances => "acceptable_villager_distance",
+            Self::MonsterRoomMobs => "weight",
             Self::ParrotImitations => "sound",
             Self::VillagerTypes => "villager_type",
             Self::RaidHeroGifts => "loot_table",
@@ -34,12 +36,18 @@ pub struct BuiltinMap {
     pub registry: &'static str,
     pub kind: Kind,
 }
-pub const MAPS: [BuiltinMap; 6] = [
+pub const MAPS: [BuiltinMap; 7] = [
     BuiltinMap {
         id: "neoforge:acceptable_villager_distances",
         directory: "entity_type",
         registry: "minecraft:entity_type",
         kind: Kind::VillagerDistances,
+    },
+    BuiltinMap {
+        id: "neoforge:monster_room_mobs",
+        directory: "entity_type",
+        registry: "minecraft:entity_type",
+        kind: Kind::MonsterRoomMobs,
     },
     BuiltinMap {
         id: "neoforge:parrot_imitations",
@@ -91,6 +99,14 @@ const GIFT_PROFESSIONS: [&str; 13] = [
 
 /// `WorkAtComposter.COMPOSTABLE_ITEMS`.
 const COMPOSTABLES: [&str; 2] = ["minecraft:wheat_seeds", "minecraft:beetroot_seeds"];
+
+/// `NeoForgeDataMapsProvider.java:81-84` from `MonsterRoomFeature.MOBS`
+/// (`[SKELETON, ZOMBIE, ZOMBIE, SPIDER]`, each occurrence weighted by 100).
+const VANILLA_MONSTER_ROOM_MOBS: [(&str, i32); 3] = [
+    ("minecraft:skeleton", 100),
+    ("minecraft:spider", 100),
+    ("minecraft:zombie", 200),
+];
 
 /// `SoundEvents.EMPTY`'s id: the happy ghast's silent imitation.
 const EMPTY_SOUND: &str = "minecraft:intentionally_empty";
@@ -175,9 +191,9 @@ pub fn decode_villager_type(value: &Value) -> Result<u8, String> {
 pub fn decode_gift(value: &Value) -> Result<String, String> {
     resource(value, "loot_table")
 }
-/// Gson's exact decimal intValue: truncate, retain the low 32 bits, then
-/// apply the codec's range. Work is bounded by input length, not its exponent.
-pub fn decode_frequency(value: &serde_json::value::RawValue) -> Result<i32, String> {
+/// Gson's exact decimal intValue: truncate and retain the low 32 bits.
+/// Work is bounded by input length, not its exponent.
+fn decode_java_int(value: &serde_json::value::RawValue) -> Result<i32, String> {
     let text = number(value)?;
     let negative = text.starts_with('-');
     let unsigned = text.strip_prefix('-').unwrap_or(text);
@@ -214,11 +230,24 @@ pub fn decode_frequency(value: &serde_json::value::RawValue) -> Result<i32, Stri
     if negative {
         bits = bits.wrapping_neg();
     }
-    let frequency = bits as i32;
+    Ok(bits as i32)
+}
+/// Gson's exact decimal intValue, then apply `VibrationFrequency.FREQUENCY_CODEC`'s 1..=15 range.
+pub fn decode_frequency(value: &serde_json::value::RawValue) -> Result<i32, String> {
+    let frequency = decode_java_int(value)?;
     if (1..=15).contains(&frequency) {
         Ok(frequency)
     } else {
         Err("frequency must truncate and wrap to 1..15".into())
+    }
+}
+/// `MonsterRoomMob.WEIGHT_CODEC` (`ExtraCodecs.NON_NEGATIVE_INT`, 0..=i32::MAX).
+pub fn decode_monster_room_weight(value: &serde_json::value::RawValue) -> Result<i32, String> {
+    let weight = decode_java_int(value)?;
+    if weight >= 0 {
+        Ok(weight)
+    } else {
+        Err("weight must be non-negative".into())
     }
 }
 pub fn decode_compostable(value: &Value) -> Result<bool, String> {
@@ -236,6 +265,10 @@ pub fn vanilla_layer(kind: Kind) -> BTreeMap<String, Value> {
                     json!({ "acceptable_villager_distance": vanilla_villager_distance(s)? }),
                 ))
             })
+            .collect(),
+        Kind::MonsterRoomMobs => VANILLA_MONSTER_ROOM_MOBS
+            .iter()
+            .map(|(entity, weight)| ((*entity).to_owned(), json!({ "weight": weight })))
             .collect(),
         Kind::ParrotImitations => vanilla_species()
             .filter_map(|(s, id)| {
@@ -284,6 +317,7 @@ pub fn vanilla_layer(kind: Kind) -> BTreeMap<String, Value> {
 #[derive(Debug, Default)]
 pub struct NeoForgeMobMaps {
     villager_distances: Option<HashMap<String, f32>>,
+    monster_room_mobs: Option<Arc<sunrise_world::worldgen::weighted::OptionalWeightedList<String>>>,
     parrot_imitations: Option<ParrotImitations>,
     villager_types: Option<HashMap<String, u8>>,
     hero_gifts: Option<HashMap<String, String>>,
@@ -324,6 +358,29 @@ impl NeoForgeMobMaps {
     }
     pub fn set_distances(&mut self, values: BTreeMap<String, f32>) {
         self.villager_distances = Some(keyed(values));
+    }
+    /// Install a non-vanilla `neoforge:monster_room_mobs` weighted table.
+    /// Invalid totals (overflowing `i32::MAX` or exceeding vanilla's 8192-entry cap)
+    /// log an error and keep the vanilla draw instead of panicking.
+    pub fn set_monster_room_mobs(&mut self, values: BTreeMap<String, i32>) {
+        match sunrise_world::worldgen::weighted::OptionalWeightedList::new(
+            values.into_iter().collect(),
+        ) {
+            Ok(list) => self.monster_room_mobs = Some(Arc::new(list)),
+            Err(error) => {
+                log::error!(
+                    "Sunrise: neoforge:monster_room_mobs weighted list invalid: {error}; keeping vanilla monster room mobs"
+                );
+                self.monster_room_mobs = None;
+            }
+        }
+    }
+    /// `None` when the merged map equals vanilla's starting entries, preserving
+    /// vanilla's `Util.getRandom(MOBS)` draw in `MonsterRoomFeature`.
+    pub fn monster_room_mobs(
+        &self,
+    ) -> Option<Arc<sunrise_world::worldgen::weighted::OptionalWeightedList<String>>> {
+        self.monster_room_mobs.clone()
     }
     pub fn set_parrots(&mut self, values: BTreeMap<String, &'static str>) {
         // Membership is vanilla union map keys. A removed vanilla entry uses

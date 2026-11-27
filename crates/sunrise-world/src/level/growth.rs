@@ -21,6 +21,8 @@ pub struct Growth {
     features: RwLock<Option<Arc<LiveFeatures>>>,
     /// The open world's biome keys, which mod features placed on the live level answer with.
     biome_keys: crate::worldgen::mod_features::ModBiomeKeys,
+    /// The open world's `neoforge:monster_room_mobs` override for live `/place feature`.
+    monster_room_mobs: crate::worldgen::cave::MonsterRoomMobs,
 }
 
 impl Behaviours {
@@ -48,6 +50,11 @@ impl Behaviours {
     /// publishes the open world's on each of its data loads.
     pub fn mod_biome_keys(&self) -> &crate::worldgen::mod_features::ModBiomeKeys {
         &self.growth.biome_keys
+    }
+    /// The `neoforge:monster_room_mobs` override used by live-level monster room placement
+    /// (`/place feature minecraft:monster_room`).
+    pub fn monster_room_mobs(&self) -> &crate::worldgen::cave::MonsterRoomMobs {
+        &self.growth.monster_room_mobs
     }
     /// The installed registry. Take it once per operation and reuse it.
     pub fn live_features(&self) -> Option<Arc<LiveFeatures>> {
