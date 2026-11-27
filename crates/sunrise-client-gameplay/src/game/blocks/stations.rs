@@ -1160,7 +1160,7 @@ impl crate::game::ClientGame<'_> {
         color: u32,
     ) {
         let atlas = &self.client.gui.atlas;
-        let Some(sheet) = atlas.sprites.get("font/ascii_sga").copied() else {
+        let Some(sheet) = atlas.galactic_sheet() else {
             batch.text(atlas, text, x, y, color, false);
             return;
         };

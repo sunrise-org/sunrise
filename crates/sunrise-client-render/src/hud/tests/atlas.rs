@@ -1736,6 +1736,50 @@ fn an_optifine_hd_font_sheet_is_packed_and_read() {
     );
 }
 
+/// The enchanting table's Standard Galactic text is drawn from the HD sheet too.
+#[test]
+fn the_galactic_sheet_is_the_hd_one_when_a_pack_has_it() {
+    let root = std::env::temp_dir().join(format!("sunrise-hd-galactic-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    // 16 x 16 cells: 8 pixels and fully used, or (HD) 16 pixels with 6 columns used.
+    write_columns_png(
+        &root,
+        "assets/minecraft/textures/font/ascii_sga.png",
+        128,
+        128,
+        |_| true,
+    );
+    let galactic = || {
+        let atlas = HudAtlas::build(&ResourceSource::directory(root.clone())).unwrap();
+        (
+            atlas.galactic_sheet().map(|r| r.w),
+            atlas.galactic_widths[0x41],
+        )
+    };
+    let def = root.join("assets/minecraft/font/default.json");
+    fs::create_dir_all(def.parent().unwrap()).unwrap();
+    let row = format!("\"{}\"", "a".repeat(16));
+    let rows = vec![row; 16].join(",");
+    fs::write(
+        &def,
+        format!(
+            r#"{{"providers":[{{"type":"bitmap","file":"minecraft:font/ascii_sga.png","ascent":7,"chars":[{rows}]}}]}}"#
+        ),
+    )
+    .unwrap();
+    assert_eq!(galactic(), (Some(128), 8), "the plain sheet");
+    write_columns_png(
+        &root,
+        "assets/minecraft/optifine/font/ascii_sga.png",
+        256,
+        256,
+        |x| x % 16 < 6,
+    );
+    let hd = galactic();
+    let _ = fs::remove_dir_all(&root);
+    assert_eq!(hd, (Some(256), 6), "the HD sheet");
+}
+
 /// A content mod's GUI textures join the atlas under its namespace;
 /// its other textures and vanilla's names stay as they were.
 #[test]

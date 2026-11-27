@@ -33,7 +33,8 @@ pub struct HudAtlas {
     /// has uploaded them: only rebuilding a renderer reads them again.
     pub(super) packed: Option<Arc<OnceLock<Vec<u8>>>>,
     /// The width each Standard Galactic letter uses in `font/ascii_sga`'s
-    /// cell, by ASCII code (the enchanting table's text), read when built.
+    /// cell (the HD sheet's, when a pack has one), by ASCII code (the
+    /// enchanting table's text), read when built.
     pub galactic_widths: [u16; 128],
     pub width: u32,
     pub height: u32,
@@ -186,6 +187,14 @@ pub(super) fn missing_glyph_rgba() -> Vec<u8> {
     rgba
 }
 
+/// The sprite of the Standard Galactic sheet (`font/ascii_sga`): a pack's OptiFine HD sheet
+/// for it when the atlas packs one (`sunrise_optifine::font`), else the plain sheet.
+fn galactic_sprite(sprites: &HashMap<String, Rect>) -> Option<&Rect> {
+    sunrise_optifine::font::hd_sheet("minecraft:font/ascii_sga.png")
+        .and_then(|hd| sprites.get(&hd.atlas_name))
+        .or_else(|| sprites.get("font/ascii_sga"))
+}
+
 /// The used width of each Standard Galactic letter (A-Z, a-z) in the
 /// `font/ascii_sga` sheet: one past its last column with a texel that isn't
 /// transparent.
@@ -196,7 +205,7 @@ pub(super) fn galactic_widths(
     height: u32,
 ) -> [u16; 128] {
     let mut widths = [0u16; 128];
-    let Some(sheet) = sprites.get("font/ascii_sga") else {
+    let Some(sheet) = galactic_sprite(sprites) else {
         return widths;
     };
     let cell = sheet.w / 16;
@@ -535,6 +544,11 @@ impl HudAtlas {
     /// glyphs such as the space), its box and advance.
     pub fn glyph_cell(&self, ch: char) -> crate::font::Glyph {
         self.font.glyph(ch)
+    }
+    /// The sprite of the Standard Galactic sheet the enchanting table's text is drawn from, and
+    /// the one `galactic_widths` measures.
+    pub fn galactic_sheet(&self) -> Option<Rect> {
+        galactic_sprite(&self.sprites).copied()
     }
     pub fn build(root: &ResourceSource) -> Result<Self> {
         Self::build_over(root, root)
