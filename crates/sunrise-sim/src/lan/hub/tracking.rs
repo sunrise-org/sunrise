@@ -601,9 +601,7 @@ impl Hub {
             &columns.chunks,
             world,
             &|x, z| ctx.streaming.and_then(|s| s.proto_sections(x, z)),
-            any_sync_groups.then_some(
-                block_changes::encode_chunk_connection_groups as fn(&Chunk) -> Vec<Vec<u8>>,
-            ),
+            any_sync_groups,
         );
         let mut encoded: Vec<Option<(Vec<u8>, Vec<Vec<u8>>)>> = encoded_results
             .into_iter()
@@ -661,7 +659,15 @@ impl Hub {
                             (
                                 body.clone(),
                                 if grouped && !groups.is_empty() {
-                                    groups.clone()
+                                    // Preserve writer capacity so outbox reservations match fresh encoding.
+                                    groups
+                                        .iter()
+                                        .map(|bytes| {
+                                            let mut copy = Vec::with_capacity(bytes.capacity());
+                                            copy.extend_from_slice(bytes);
+                                            copy
+                                        })
+                                        .collect()
                                 } else {
                                     Vec::new()
                                 },
@@ -987,7 +993,7 @@ mod tests {
                     address: format!("127.0.0.1:{}", 25560 + id).parse().unwrap(),
                     expected: false,
                 },
-                id as i32,
+                i32::try_from(id).unwrap(),
                 pos,
                 4,
             );
@@ -1091,13 +1097,46 @@ mod tests {
                     .all(|p| !matches!(p, C::LevelChunkWithLight(_) | C::BundleDelimiter(_))),
                 "no chunk bodies before ChunkBatchStart"
             );
+            let (cx, cz) = centers[guest_idx];
+            assert!(
+                packets[..start]
+                    .iter()
+                    .any(|p| matches!(p, C::SetChunkCacheCenter(c) if (c.x, c.z) == (cx, cz))),
+                "SetChunkCacheCenter must precede ChunkBatchStart for guest {guest_idx}"
+            );
             let mut coords = Vec::new();
             let mut delimiters = 0usize;
-            for p in &packets[start + 1..finish] {
-                match p {
-                    C::LevelChunkWithLight(c) => coords.push((c.x, c.z)),
-                    C::BundleDelimiter(_) => delimiters += 1,
-                    C::CustomPayload(c) if c.channel == connection_groups::CHANNEL => {}
+            let mut idx = start + 1;
+            while idx < finish {
+                match &packets[idx] {
+                    C::BundleDelimiter(_) => {
+                        delimiters += 1;
+                        idx += 1;
+                        let C::LevelChunkWithLight(c) = &packets[idx] else {
+                            panic!("bundle must open with LevelChunkWithLight");
+                        };
+                        coords.push((c.x, c.z));
+                        idx += 1;
+                        let mut group_count = 0usize;
+                        while matches!(
+                            &packets[idx],
+                            C::CustomPayload(p) if p.channel == connection_groups::CHANNEL
+                        ) {
+                            group_count += 1;
+                            idx += 1;
+                        }
+                        assert!(group_count > 0, "group bundle must carry group payloads");
+                        assert!(
+                            matches!(&packets[idx], C::BundleDelimiter(_)),
+                            "group bundle must close with BundleDelimiter"
+                        );
+                        delimiters += 1;
+                        idx += 1;
+                    }
+                    C::LevelChunkWithLight(c) => {
+                        coords.push((c.x, c.z));
+                        idx += 1;
+                    }
                     _ => panic!("unexpected packet inside chunk batch for guest {guest_idx}"),
                 }
             }
@@ -1110,12 +1149,354 @@ mod tests {
             } else {
                 assert_eq!(delimiters, 0);
             }
-            let (cx, cz) = centers[guest_idx];
             let dist = |(x, z): (i32, i32)| i64::from(x - cx).pow(2) + i64::from(z - cz).pow(2);
             assert!(
                 coords.windows(2).all(|w| dist(w[0]) <= dist(w[1])),
                 "columns must arrive in non-decreasing distance order for guest {guest_idx}: {coords:?}"
             );
         }
+    }
+
+    #[test]
+    fn grouped_column_clones_preserve_outbox_reservation_charge() {
+        use crate::lan::{Body, io_pool};
+        use std::sync::atomic::AtomicUsize;
+
+        let make_grouped_world = || {
+            let mut world = World::new(BlockStateId(0), 0);
+            for cx in 0..4 {
+                let mut chunk = Chunk::empty(cx, 0);
+                chunk.lit = true;
+                chunk.set(4, 64, 4, 2);
+                chunk.set_connection_group(4, 64, 4, Some((cx + 10) as u64));
+                world.chunks.insert((cx, 0), Arc::new(chunk));
+            }
+            world
+        };
+
+        // Measure fresh per-recipient charge vs shrunk-clone charge for the 4-column batch.
+        let oracle_world = make_grouped_world();
+        let states = ["minecraft:air", "minecraft:stone", "minecraft:water"]
+            .map(|n| (Arc::<str>::from(n), n.ends_with("water")));
+        let oracle_enc = ChunkEncoder::new(
+            states.clone(),
+            &sunrise_protocol::registry::Builtin::default(),
+            &[],
+            &[],
+            Default::default(),
+        );
+        let center_cost = io_pool::charge(
+            Body::Owned(C::SetChunkCacheCenter(play::SetChunkCacheCenter { x: 0, z: 0 }).encode())
+                .retained(),
+        );
+        let start_cost = io_pool::charge(
+            Body::Owned(C::ChunkBatchStart(sunrise_protocol::packets::Empty).encode()).retained(),
+        );
+        let mut fresh_batch_cost = 0usize;
+        let mut shrunk_batch_cost = 0usize;
+        for cx in 0..4 {
+            let chunk = &oracle_world.chunks[&(cx, 0)];
+            let body = oracle_enc.body_in(chunk, &oracle_world).unwrap();
+            let cloned_body = body.clone();
+            let fresh_groups = block_changes::encode_chunk_connection_groups(chunk);
+            let shrunk_groups: Vec<Vec<u8>> = fresh_groups.clone();
+            for frame in block_changes::group_bundle(cloned_body.clone(), fresh_groups) {
+                fresh_batch_cost += io_pool::charge(Body::Owned(frame).retained());
+            }
+            for frame in block_changes::group_bundle(cloned_body, shrunk_groups) {
+                shrunk_batch_cost += io_pool::charge(Body::Owned(frame).retained());
+            }
+        }
+        assert!(
+            fresh_batch_cost > shrunk_batch_cost,
+            "fresh group encoding must carry spare writer capacity over Vec::clone"
+        );
+        let finish_cost = io_pool::charge(
+            Body::Owned(C::ChunkBatchFinished(play::ChunkBatchFinished { size: 4 }).encode())
+                .retained(),
+        );
+
+        // Test both (grouped + vanilla) and (grouped + grouped) so guest 0 is not the last use.
+        for second_grouped in [false, true] {
+            let build = |initial_pending: usize| {
+                let mut world = make_grouped_world();
+                let sync = Arc::new(SyncData::empty());
+                let lan = Lan::start_with(
+                    sync.clone(),
+                    crate::lan::NetConfig {
+                        announce: false,
+                        listen: false,
+                        ..crate::lan::NetConfig::loopback(0, "GroupChargeTest".into(), 4)
+                    },
+                )
+                .unwrap();
+                let encoder = ChunkEncoder::new(
+                    states.clone(),
+                    &sunrise_protocol::registry::Builtin::default(),
+                    &[],
+                    &[],
+                    Default::default(),
+                );
+                let config = HubConfig {
+                    default_game_mode: 0,
+                    guest_commands: false,
+                    force_game_mode: false,
+                    hardcore: false,
+                    view_distance: 8,
+                    simulation_distance: 8,
+                    dimension: "minecraft:overworld".into(),
+                    allow_flight: false,
+                    seed: 0,
+                    max_players: 20,
+                    integrated: false,
+                    levels: Default::default(),
+                    level_seeds: Default::default(),
+                };
+                let mut hub = Hub::new(
+                    lan,
+                    sync,
+                    encoder,
+                    config,
+                    crate::test_resources::loop_context(
+                        sunrise_world::native_load_context::LoopSide::Server,
+                    ),
+                );
+                hub.ticks = 10;
+                let mut pendings = Vec::new();
+                let mut receivers = Vec::new();
+                for (id, grouped) in [(1u32, true), (2u32, second_grouped)] {
+                    let (tx, rx) = std::sync::mpsc::channel();
+                    let pending =
+                        Arc::new(AtomicUsize::new(if id == 1 { initial_pending } else { 0 }));
+                    let sender = if grouped {
+                        crate::lan::PlayerSender::new_with_payload_transport(
+                            tx,
+                            pending.clone(),
+                            transport_with_groups(),
+                        )
+                    } else {
+                        crate::lan::PlayerSender::new(tx, pending.clone())
+                    };
+                    let mut guest = Guest::new(
+                        crate::lan::Joined {
+                            conn: id,
+                            uuid: u128::from(id),
+                            name: format!("G{id}"),
+                            properties: Vec::new(),
+                            info: ClientInformation::new(4),
+                            brand: if grouped { "sunrise" } else { "vanilla" }.into(),
+                            sender,
+                            latency: Arc::new(std::sync::atomic::AtomicI32::new(0)),
+                            address: format!("127.0.0.1:{}", 25570 + id).parse().unwrap(),
+                            expected: false,
+                        },
+                        i32::try_from(id).unwrap(),
+                        [0.5, 64.0, 0.5],
+                        4,
+                    );
+                    guest.placed = true;
+                    guest.dimension = "minecraft:overworld".into();
+                    guest.max_unacknowledged = 64;
+                    guest.chunks_per_tick = 4.0;
+                    hub.guests.push(guest);
+                    pendings.push(pending);
+                    receivers.push(rx);
+                }
+                let border = crate::worldborder::WorldBorder::default();
+                let mut next_entity = 100;
+                let ctx = TickCtx {
+                    sea_level: 63,
+                    world: &mut world,
+                    entities: &[],
+                    next_entity: &mut next_entity,
+                    spawn: [0.5, 64.0, 0.5],
+                    spawn_angle: [0.0; 2],
+                    spawn_dimension: "minecraft:overworld",
+                    difficulty: 2,
+                    difficulty_locked: false,
+                    clock_rate: 1.0,
+                    tick_rate: 20.0,
+                    tick_frozen: false,
+                    tick_steps: Default::default(),
+                    collision: None,
+                    border: &border,
+                    streaming: None,
+                };
+                hub.update_chunks(&ctx);
+                (pendings, receivers)
+            };
+
+            // Full budget: exact pending delta matches fresh per-recipient encoding.
+            let (pendings, receivers) = build(0);
+            assert_eq!(
+                pendings[0].load(Ordering::Relaxed),
+                center_cost + start_cost + fresh_batch_cost + finish_cost
+            );
+            let packets: Vec<C> = drain_frames(&receivers[0])
+                .iter()
+                .map(|b| decode_packet(b))
+                .collect();
+            assert_eq!(
+                packets
+                    .iter()
+                    .filter(|p| matches!(p, C::LevelChunkWithLight(_)))
+                    .count(),
+                4
+            );
+
+            // Tight limit strictly between shrunk and fresh cost must reject like fresh encoding.
+            let allowed_for_batch = fresh_batch_cost - 1;
+            assert!(allowed_for_batch >= shrunk_batch_cost);
+            let tight_start = io_pool::MAX_PENDING - (center_cost + start_cost + allowed_for_batch);
+            let (_, tight_receivers) = build(tight_start);
+            let tight_packets: Vec<C> = drain_frames(&tight_receivers[0])
+                .iter()
+                .map(|b| decode_packet(b))
+                .collect();
+            assert_eq!(
+                tight_packets
+                    .iter()
+                    .filter(|p| matches!(p, C::LevelChunkWithLight(_)))
+                    .count(),
+                0
+            );
+        }
+    }
+
+    #[test]
+    fn memory_recipient_receives_handoff_matching_sent_bodies() {
+        let mut world = World::new(BlockStateId(0), 0);
+        let base_x = 9000;
+        let base_z = 9000;
+        for dx in 0..4 {
+            let mut chunk = Chunk::empty(base_x + dx, base_z);
+            chunk.lit = true;
+            chunk.set(dx + 1, 64, 2, 1);
+            world.chunks.insert((base_x + dx, base_z), Arc::new(chunk));
+        }
+
+        let sync = Arc::new(SyncData::empty());
+        let lan = Lan::start_with(
+            sync.clone(),
+            crate::lan::NetConfig {
+                announce: false,
+                listen: false,
+                ..crate::lan::NetConfig::loopback(0, "HandoffTest".into(), 2)
+            },
+        )
+        .unwrap();
+        let states = ["minecraft:air", "minecraft:stone"].map(|n| (Arc::<str>::from(n), false));
+        let encoder = ChunkEncoder::new(
+            states.clone(),
+            &sunrise_protocol::registry::Builtin::default(),
+            &[],
+            &[],
+            Default::default(),
+        );
+        let oracle = ChunkEncoder::new(
+            states,
+            &sunrise_protocol::registry::Builtin::default(),
+            &[],
+            &[],
+            Default::default(),
+        );
+        let config = HubConfig {
+            default_game_mode: 0,
+            guest_commands: false,
+            force_game_mode: false,
+            hardcore: false,
+            view_distance: 6,
+            simulation_distance: 6,
+            dimension: "minecraft:overworld".into(),
+            allow_flight: false,
+            seed: 0,
+            max_players: 4,
+            integrated: true,
+            levels: Default::default(),
+            level_seeds: Default::default(),
+        };
+        let mut hub = Hub::new(
+            lan,
+            sync,
+            encoder,
+            config,
+            crate::test_resources::loop_context(
+                sunrise_world::native_load_context::LoopSide::Server,
+            ),
+        );
+        hub.ticks = 10;
+
+        let (tx, rx) = std::sync::mpsc::channel();
+        let mut guest = Guest::new(
+            crate::lan::Joined {
+                conn: 1,
+                uuid: 1,
+                name: "Owner".into(),
+                properties: Vec::new(),
+                info: ClientInformation::new(4),
+                brand: "sunrise".into(),
+                sender: crate::lan::PlayerSender::new(tx, Arc::default()),
+                latency: Arc::new(std::sync::atomic::AtomicI32::new(0)),
+                address: super::super::conn::MEMORY_ADDRESS,
+                expected: false,
+            },
+            1,
+            [
+                f64::from(base_x * 16) + 0.5,
+                64.0,
+                f64::from(base_z * 16) + 0.5,
+            ],
+            4,
+        );
+        guest.placed = true;
+        guest.loaded = true;
+        guest.dimension = "minecraft:overworld".into();
+        guest.max_unacknowledged = 64;
+        guest.chunks_per_tick = 4.0;
+        hub.guests.push(guest);
+
+        let border = crate::worldborder::WorldBorder::default();
+        let mut next_entity = 100;
+        let ctx = TickCtx {
+            sea_level: 63,
+            world: &mut world,
+            entities: &[],
+            next_entity: &mut next_entity,
+            spawn: [0.5, 64.0, 0.5],
+            spawn_angle: [0.0; 2],
+            spawn_dimension: "minecraft:overworld",
+            difficulty: 2,
+            difficulty_locked: false,
+            clock_rate: 1.0,
+            tick_rate: 20.0,
+            tick_frozen: false,
+            tick_steps: Default::default(),
+            collision: None,
+            border: &border,
+            streaming: None,
+        };
+        with_bodies_test_mode(BodiesTestMode::ReverseWorkerOrder, || {
+            hub.update_chunks(&ctx);
+        });
+
+        let frames = drain_frames(&rx);
+        let mut seen = Vec::new();
+        for frame in &frames {
+            if let C::LevelChunkWithLight(packet) = decode_packet(frame) {
+                let server = &world.chunks[&(packet.x, packet.z)];
+                assert_eq!(frame, &oracle.body_in(server, &world).unwrap());
+                let mut client = Chunk::empty(packet.x, packet.z);
+                for (dst, src) in client.sections.iter_mut().zip(&server.sections) {
+                    *dst = Arc::new((**src).clone());
+                }
+                let taken = super::super::handoff::take(&mut client);
+                assert_eq!(taken, server.sections.len());
+                for (dst, src) in client.sections.iter().zip(&server.sections) {
+                    assert!(Arc::ptr_eq(dst, src));
+                }
+                seen.push((packet.x, packet.z));
+            }
+        }
+        assert_eq!(seen.len(), 4);
     }
 }
