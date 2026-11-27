@@ -579,7 +579,7 @@ pub(in crate::game) mod tests {
                 id: 15,
                 pos: [0, 64, 0],
                 facing: 0,
-                variant: "minecraft:kebab".into(),
+                variant: Some("minecraft:kebab".into()),
                 asset: None,
                 width: 1,
                 height: 1,

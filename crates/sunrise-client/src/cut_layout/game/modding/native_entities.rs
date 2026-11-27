@@ -486,7 +486,7 @@ pub(crate) mod tests {
                     id: base + 6,
                     pos: [0; 3],
                     facing: 0,
-                    variant: "minecraft:kebab".into(),
+                    variant: Some("minecraft:kebab".into()),
                     asset: None,
                     width: 1,
                     height: 1,

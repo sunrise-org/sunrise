@@ -409,15 +409,18 @@ fn unknown_painting_variant_keeps_the_default_one() {
         let (default, unknown) = (&game.paintings[0], &game.paintings[1]);
         // RegistryDataLoader registers the registry's entries sorted by id, so
         // VariantUtils.getAny is `minecraft:alban`.
-        assert_eq!(&*default.variant, "minecraft:alban");
+        assert_eq!(default.variant.as_deref(), Some("minecraft:alban"));
         assert_eq!(unknown.variant, default.variant);
         assert_eq!(
             (unknown.width, unknown.height),
             (default.width, default.height)
         );
-        assert_eq!(&*game.paintings[2].variant, "minecraft:kebab");
+        assert_eq!(
+            game.paintings[2].variant.as_deref(),
+            Some("minecraft:kebab")
+        );
         let variant = sunrise_gameplay_common::world_paintings!(game)
-            .get(&default.variant)
+            .get(default.variant.as_deref().unwrap())
             .expect("the default variant is a real one");
         assert_ne!(&*variant.id, "minecraft:nosuch");
     });
@@ -474,7 +477,10 @@ fn a_data_packs_placeable_painting_variant_is_placed() {
         assert!(game.painting_fits(&hit, &painting));
         assert!(game.place_painting(&hit, &painting));
         assert_eq!(game.paintings.len(), 1);
-        assert_eq!(&*game.paintings[0].variant, "test:big_square");
+        assert_eq!(
+            game.paintings[0].variant.as_deref(),
+            Some("test:big_square")
+        );
         assert_eq!((game.paintings[0].width, game.paintings[0].height), (2, 2));
         let _ = std::fs::remove_dir_all(&dir);
     });

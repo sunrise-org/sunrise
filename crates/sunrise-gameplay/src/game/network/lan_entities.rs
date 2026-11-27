@@ -554,9 +554,8 @@ impl ServerGame<'_> {
             let Some(host) = self.server.lan.as_ref() else {
                 return;
             };
-            if let Some(id) = host
-                .hub
-                .registry_id("minecraft:painting_variant", &p.variant)
+            if let Some(key) = p.variant.as_deref()
+                && let Some(id) = host.hub.registry_id("minecraft:painting_variant", key)
                 && id != 0
             {
                 let asset_id = p
@@ -569,13 +568,13 @@ impl ServerGame<'_> {
                             format!("minecraft:{a}")
                         }
                     })
-                    .unwrap_or_else(|| p.variant.to_string());
+                    .unwrap_or_else(|| key.to_owned());
                 e.meta.push((
                     9,
                     serializer::PAINTING_VARIANT,
                     Value::PaintingVariant(PaintingHolder::Reference {
                         id,
-                        name: p.variant.to_string(),
+                        name: key.to_owned(),
                         variant: PaintingVariant {
                             width: p.width,
                             height: p.height,

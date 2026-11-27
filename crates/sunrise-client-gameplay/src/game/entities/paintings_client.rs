@@ -92,12 +92,11 @@ impl crate::game::ClientGame<'_> {
             let Some(back) = sprites.get("painting/back").copied() else {
                 continue;
             };
-            let asset = match p.asset.as_deref() {
-                Some(asset) => asset,
-                None => match world_paintings!(self).get(&p.variant) {
-                    Some(v) => v.asset.as_str(),
-                    None => continue,
-                },
+            let Some(asset) = p.asset.as_deref().or_else(|| {
+                let key = p.variant.as_deref()?;
+                world_paintings!(self).get(key).map(|v| v.asset.as_str())
+            }) else {
+                continue;
             };
             let Some(front) = sprites.get(&format!("painting/{asset}")).copied() else {
                 continue;

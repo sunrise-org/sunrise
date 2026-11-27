@@ -576,7 +576,7 @@ mod tests {
             id: 952,
             pos: [2, 1, 0],
             facing: 0,
-            variant: "minecraft:kebab".into(),
+            variant: Some("minecraft:kebab".into()),
             asset: None,
             width: 1,
             height: 1,
