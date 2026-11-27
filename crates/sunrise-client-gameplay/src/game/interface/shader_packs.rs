@@ -11,7 +11,8 @@ use sunrise_client::shader_options::ShaderOptions;
 use sunrise_game_data::text::Text;
 use sunrise_mod_package::mod_list::ModList;
 use sunrise_shaders::{
-    BlockIds, BlockLayers, Macros, Pack, Properties, Tonemap, dimension_folder_named, load_post,
+    BlockIds, BlockLayers, Macros, Pack, Properties, Tonemap, dimension_folder_named,
+    load_post_cancellable,
 };
 
 use super::native_shaders::{fingerprint, outcome, refused, remember};
@@ -717,12 +718,12 @@ impl ShaderTranslation {
     }
 }
 
-fn translate_pack(request: TranslationRequest, cancel: &AtomicBool) -> Option<TranslatedPack> {
+fn translate_pack(request: TranslationRequest, cancel: &Arc<AtomicBool>) -> Option<TranslatedPack> {
     let _span = sunrise_level::spans::guard("shader_pack_translate");
     let started = Instant::now();
     let TranslationRequest {
         key,
-        pack,
+        mut pack,
         folder,
         properties,
         macros,
@@ -736,32 +737,51 @@ fn translate_pack(request: TranslationRequest, cancel: &AtomicBool) -> Option<Tr
     if cancel.load(Ordering::Relaxed) {
         return None;
     }
-    let mut post = load_post(&pack, &folder, &properties, &macros, &inputs);
+    let mut post = load_post_cancellable(
+        &mut pack,
+        &folder,
+        &properties,
+        &macros,
+        &inputs,
+        cancel.clone(),
+    )?;
     let resource_notes = {
         let _span = sunrise_level::spans::guard("shader_pack_resources");
         let read = |namespace: &str, path: &str| {
             resources.read(&format!("assets/{namespace}/{path}")).ok()
         };
-        sunrise_shaders::resolve_resources(&mut post.textures, &read)
+        sunrise_shaders::resolve_resources_cancellable(&mut post.textures, &read, cancel)
     };
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
     let names: Vec<&str> = biomes.iter().map(String::as_str).collect();
     post.custom.set_biomes(&names);
     let _ids = sunrise_level::spans::guard("shader_pack_ids");
     let text = pack.read_text("block.properties").unwrap_or_default();
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
     let block_properties = Properties::parse(&text, &macros);
     let blocks = BlockIds::parse(&block_properties);
     let layers = BlockLayers::parse(&block_properties);
     let text = pack.read_text("entity.properties");
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
     let entities = BlockIds::parse_kind(
         &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
         "entity",
     );
     let text = pack.read_text("item.properties");
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
     let items = BlockIds::parse_kind(
         &Properties::parse(text.as_deref().unwrap_or_default(), &macros),
         "item",
     );
-    let block_items = block_item_ids(&facts, registry, &blocks);
+    let block_items = block_item_ids(&facts, registry, &blocks, cancel)?;
     let lookup = |name: &str| {
         fluids
             .iter()
@@ -769,7 +789,7 @@ fn translate_pack(request: TranslationRequest, cancel: &AtomicBool) -> Option<Tr
             .map(|(id, _)| *id)
     };
     let started_ids = Instant::now();
-    let terrain_states = terrain_state_ids_with(registry, &blocks, lookup);
+    let terrain_states = terrain_state_ids_with(registry, &blocks, lookup, cancel)?;
     let matched = terrain_states
         .chunks(2)
         .filter(|pair| pair[0] != -1)
@@ -781,6 +801,9 @@ fn translate_pack(request: TranslationRequest, cancel: &AtomicBool) -> Option<Tr
         terrain_states.len() / 2,
         started_ids.elapsed().as_millis(),
     );
+    if cancel.load(Ordering::Relaxed) {
+        return None;
+    }
     Some(TranslatedPack {
         post,
         folder,
@@ -1747,13 +1770,17 @@ pub(in crate::game::client_side) fn rendered_item_id(
 /// The block items' `currentRenderedItemId`: for each block's default state, the item it gives
 /// (`StateFacts::item`) takes the state's id in `ids`, or 0. A block named as its item wins over
 /// another block giving that item.
-pub(in crate::game::client_side) fn block_item_ids(
+fn block_item_ids(
     facts: &sunrise_items::blocks::BlockFacts,
     registry: &sunrise_world::registry::BlockRegistry,
     ids: &BlockIds,
-) -> HashMap<String, i32> {
+    cancel: &AtomicBool,
+) -> Option<HashMap<String, i32>> {
     let mut out = HashMap::new();
     for (i, state) in facts.states.iter().enumerate() {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
         let id = sunrise_world::registry::BlockStateId(i as u32);
         if &*state.item == "minecraft:air" || registry.default_state(&state.name) != Some(id) {
             continue;
@@ -1768,7 +1795,7 @@ pub(in crate::game::client_side) fn block_item_ids(
             out.entry(state.item.to_string()).or_insert(value);
         }
     }
-    out
+    Some(out)
 }
 
 /// Spans for a native mod (`native_render::RenderNeeds::entity_spans`), without a pack.
@@ -1795,14 +1822,21 @@ fn terrain_state_ids(
     registry: &sunrise_world::registry::BlockRegistry,
     ids: &BlockIds,
 ) -> Vec<i32> {
-    terrain_state_ids_with(registry, ids, sunrise_world::fluid::mod_fluid_of_block_name)
+    terrain_state_ids_with(
+        registry,
+        ids,
+        sunrise_world::fluid::mod_fluid_of_block_name,
+        &AtomicBool::new(false),
+    )
+    .expect("uncancelled test translation")
 }
 
 fn terrain_state_ids_with(
     registry: &sunrise_world::registry::BlockRegistry,
     ids: &BlockIds,
     mod_fluid_of_block: impl Fn(&str) -> Option<sunrise_world::fluid::ModFluid>,
-) -> Vec<i32> {
+    cancel: &AtomicBool,
+) -> Option<Vec<i32>> {
     use sunrise_world::{
         fluid::{FluidKind, FluidState},
         registry::BlockStateId,
@@ -1811,31 +1845,37 @@ fn terrain_state_ids_with(
         ids.id(&state.name, |k| state.properties.get(k).map(String::as_str))
             .unwrap_or(-1)
     };
-    (0..registry.len())
-        .flat_map(|i| {
-            let Some(state) = registry.state(BlockStateId(i as u32)) else {
-                return [-1, -1];
-            };
-            let fluid = FluidState::from_block_with(state, &mod_fluid_of_block)
-                .unwrap_or(FluidState::EMPTY);
-            let name = match fluid.kind() {
-                FluidKind::Water | FluidKind::FlowingWater => "minecraft:water",
-                FluidKind::Lava | FluidKind::FlowingLava => "minecraft:lava",
-                FluidKind::Empty => return [material(state), -1],
-                FluidKind::Mod(_) | FluidKind::ModFlowing(_) => {
-                    return [material(state), material(state)];
-                }
-            };
-            let fluid = if state.name == name {
-                Some(state)
-            } else {
-                registry
-                    .default_state(name)
-                    .and_then(|id| registry.state(id))
-            };
-            [material(state), fluid.map_or(-1, material)]
-        })
-        .collect()
+    let pair = |i| {
+        let Some(state) = registry.state(BlockStateId(i as u32)) else {
+            return [-1, -1];
+        };
+        let fluid =
+            FluidState::from_block_with(state, &mod_fluid_of_block).unwrap_or(FluidState::EMPTY);
+        let name = match fluid.kind() {
+            FluidKind::Water | FluidKind::FlowingWater => "minecraft:water",
+            FluidKind::Lava | FluidKind::FlowingLava => "minecraft:lava",
+            FluidKind::Empty => return [material(state), -1],
+            FluidKind::Mod(_) | FluidKind::ModFlowing(_) => {
+                return [material(state), material(state)];
+            }
+        };
+        let fluid = if state.name == name {
+            Some(state)
+        } else {
+            registry
+                .default_state(name)
+                .and_then(|id| registry.state(id))
+        };
+        [material(state), fluid.map_or(-1, material)]
+    };
+    let mut table = Vec::with_capacity(registry.len() * 2);
+    for i in 0..registry.len() {
+        if cancel.load(Ordering::Relaxed) {
+            return None;
+        }
+        table.extend(pair(i));
+    }
+    Some(table)
 }
 
 #[cfg(test)]

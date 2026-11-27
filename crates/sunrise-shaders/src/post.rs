@@ -872,6 +872,33 @@ pub fn load_post(
     macros: &Macros,
     inputs: &GameInputs,
 ) -> Post {
+    load_post_inner(pack, folder, properties, macros, inputs)
+}
+
+/// Loads a pack on a worker and discards partial translation when cancelled.
+pub fn load_post_cancellable(
+    pack: &mut Pack,
+    folder: &str,
+    properties: &Properties,
+    macros: &Macros,
+    inputs: &GameInputs,
+    cancel: std::sync::Arc<std::sync::atomic::AtomicBool>,
+) -> Option<Post> {
+    pack.set_cancel(cancel);
+    if pack.cancelled() {
+        return None;
+    }
+    let post = load_post_inner(pack, folder, properties, macros, inputs);
+    (!pack.cancelled()).then_some(post)
+}
+
+fn load_post_inner(
+    pack: &Pack,
+    folder: &str,
+    properties: &Properties,
+    macros: &Macros,
+    inputs: &GameInputs,
+) -> Post {
     let limits = inputs.interface_limits;
     let mut post = Post {
         folder: folder.to_owned(),
@@ -935,6 +962,9 @@ pub fn load_post(
     // `indirect.<pass>`, by pass, read as each compute shader loads.
     let mut indirect = std::collections::BTreeMap::new();
     for e in &properties.entries {
+        if pack.cancelled() {
+            return post;
+        }
         if let Some(pass) = e.key.strip_prefix("indirect.") {
             indirect.insert(pass, e.value.as_str());
             continue;
@@ -983,6 +1013,9 @@ pub fn load_post(
     let (textures, notes) = crate::load_textures(pack, properties);
     post.textures = textures;
     post.notes.extend(notes);
+    if pack.cancelled() {
+        return post;
+    }
     let mut loader = Loader {
         pack,
         folder,
@@ -1008,6 +1041,9 @@ pub fn load_post(
             _ => Target::Buffers,
         };
         for name in names {
+            if pack.cancelled() {
+                return post;
+            }
             if let Some(mut p) = loader.load(name, group, |v, f| {
                 translate_composite(v, f, target, limits)
             }) {
@@ -1410,6 +1446,9 @@ fn load_shadow(
         std::iter::once("shadowcomp".to_owned()).chain((1..=99).map(|n| format!("shadowcomp{n}")));
     let limits = loader.limits;
     for name in names {
+        if loader.pack.cancelled() {
+            return;
+        }
         let program = loader.load(name, Group::ShadowComp, |v, f| {
             translate_composite(v, f, Target::Buffers, limits)
         });
@@ -1583,6 +1622,9 @@ impl Loader<'_> {
         group: Group,
         translate: impl FnOnce(&Preprocessed, &Preprocessed) -> Result<Program, Vec<crate::Error>>,
     ) -> Option<PostProgram> {
+        if self.pack.cancelled() {
+            return None;
+        }
         let path = |ext: &str| match self.folder {
             "" => format!("{name}.{ext}"),
             f => format!("{f}/{name}.{ext}"),
@@ -1652,6 +1694,9 @@ impl Loader<'_> {
         }
         let vertex = self.preprocess(&vsh);
         let fragment = self.preprocess(&fsh);
+        if self.pack.cancelled() {
+            return None;
+        }
         let notes = &mut self.post.notes;
         let problems: Vec<String> = [&vertex, &fragment]
             .iter()
@@ -1751,7 +1796,7 @@ impl Loader<'_> {
     /// (GLSL lets a write-only image omit it) get the one `image.*` gives them.
     fn preprocess(&self, path: &str) -> Preprocessed {
         let pp = preprocess(self.pack, path, self.macros);
-        if self.post.images.is_empty() || !pp.code().contains("image") {
+        if self.pack.cancelled() || self.post.images.is_empty() || !pp.code().contains("image") {
             return pp;
         }
         let source: Vec<&str> = pp.code().split('\n').collect();
@@ -1805,6 +1850,9 @@ impl Loader<'_> {
         inputs: &crate::GeometryInputs,
     ) -> Option<PostProgram> {
         let stages = [vsh, gsh, fsh].map(|p| self.preprocess(p));
+        if self.pack.cancelled() {
+            return None;
+        }
         let notes = &mut self.post.notes;
         let problems: Vec<String> = stages.iter().flat_map(diagnostics).collect();
         if !problems.is_empty() {
@@ -1868,6 +1916,9 @@ impl Loader<'_> {
         let names =
             std::iter::once(name.to_owned()).chain(('a'..='z').map(|c| format!("{name}_{c}")));
         for name in names {
+            if self.pack.cancelled() {
+                break;
+            }
             let path = match self.folder {
                 "" => format!("{name}.csh"),
                 f => format!("{f}/{name}.csh"),
@@ -1884,6 +1935,9 @@ impl Loader<'_> {
                 continue;
             }
             let pp = self.preprocess(&path);
+            if self.pack.cancelled() {
+                break;
+            }
             let problems = diagnostics(&pp);
             let notes = &mut self.post.notes;
             if !problems.is_empty() {

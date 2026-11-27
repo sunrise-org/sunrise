@@ -11,7 +11,10 @@ use std::path::{Path, PathBuf};
 /// The most bytes one file of a zipped pack unpacks to: far above any `.properties`, `.lang` or
 /// GLSL file, with room for the largest textures packs carry.
 pub const MAX_FILE: u64 = 64 << 20;
-use std::sync::Arc;
+use std::sync::{
+    Arc,
+    atomic::{AtomicBool, Ordering},
+};
 
 use zip::ZipArchive;
 
@@ -23,6 +26,7 @@ pub struct Pack {
     /// The values the player chose for the pack's options, applied to its sources as they are
     /// read (`options::apply`).
     chosen: BTreeMap<String, String>,
+    cancel: Option<Arc<AtomicBool>>,
 }
 
 enum Files {
@@ -80,6 +84,7 @@ impl Pack {
             name,
             files,
             chosen: BTreeMap::new(),
+            cancel: None,
         })
     }
 
@@ -90,6 +95,7 @@ impl Pack {
             name: name.to_owned(),
             files,
             chosen: BTreeMap::new(),
+            cancel: None,
         })
     }
 
@@ -129,6 +135,16 @@ impl Pack {
         self
     }
 
+    pub(crate) fn set_cancel(&mut self, cancel: Arc<AtomicBool>) {
+        self.cancel = Some(cancel);
+    }
+
+    pub(crate) fn cancelled(&self) -> bool {
+        self.cancel
+            .as_ref()
+            .is_some_and(|flag| flag.load(Ordering::Relaxed))
+    }
+
     /// The folder or file name the pack was opened from (`BSL.zip`).
     pub fn name(&self) -> &str {
         &self.name
@@ -145,8 +161,11 @@ impl Pack {
     /// nothing is allocated from the declared size, and the inflated bytes stop one past `cap`, so
     /// a deflate bomb in a downloaded pack (1.5 GiB of spaces zip to 1.5 MiB) can't abort the game.
     fn read_capped(&self, path: &str, cap: u64) -> Option<Vec<u8>> {
+        if self.cancelled() {
+            return None;
+        }
         let path = normalize(path)?;
-        match &self.files {
+        let bytes = match &self.files {
             Files::Folder(root) => fs::read(root.join(&path)).ok(),
             Files::Zip { archive, entries } => {
                 // A clone shares the bytes and the central directory; reading needs `&mut`.
@@ -159,7 +178,8 @@ impl Pack {
                 (&mut entry).take(cap + 1).read_to_end(&mut out).ok()?;
                 (out.len() as u64 <= cap).then_some(out)
             }
-        }
+        }?;
+        (!self.cancelled()).then_some(bytes)
     }
 
     /// A text file, decoded as UTF-8 (invalid bytes replaced) without its byte-order mark, with
@@ -169,14 +189,18 @@ impl Pack {
         let text = String::from_utf8_lossy(&bytes);
         let text = text.strip_prefix('\u{feff}').unwrap_or(&text);
         let source = !path.ends_with(".properties") && !path.ends_with(".lang");
-        Some(if source && !self.chosen.is_empty() {
+        let text = if source && !self.chosen.is_empty() {
             crate::options::apply(text, &self.chosen)
         } else {
             text.to_owned()
-        })
+        };
+        (!self.cancelled()).then_some(text)
     }
 
     pub fn exists(&self, path: &str) -> bool {
+        if self.cancelled() {
+            return false;
+        }
         let Some(path) = normalize(path) else {
             return false;
         };
@@ -220,11 +244,17 @@ impl Pack {
 
     /// Every file of the pack, by its path inside `shaders`, sorted.
     pub fn all_files(&self) -> Vec<String> {
+        if self.cancelled() {
+            return Vec::new();
+        }
         let mut names = match &self.files {
             Files::Folder(root) => {
                 let mut names = Vec::new();
                 let mut dirs = vec![String::new()];
                 while let Some(dir) = dirs.pop() {
+                    if self.cancelled() {
+                        return Vec::new();
+                    }
                     for e in fs::read_dir(root.join(&dir))
                         .into_iter()
                         .flatten()
