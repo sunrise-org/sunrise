@@ -114,7 +114,7 @@ pub(in crate::game) const LINGERING_WAIT: i32 = 10;
 pub(in crate::game) const REAPPLICATION_DELAY: i32 = 20;
 
 /// The entity type of a thrown potion or bottle.
-fn thrown_kind(stack: &ItemStack) -> &'static str {
+pub(in crate::game) fn thrown_kind(stack: &ItemStack) -> &'static str {
     match &*stack.item {
         "minecraft:lingering_potion" => "minecraft:lingering_potion",
         "minecraft:experience_bottle" => "minecraft:experience_bottle",
