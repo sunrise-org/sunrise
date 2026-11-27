@@ -1401,7 +1401,7 @@ impl ParsedStagePrelude {
         }
 
         // Helper: find what (if anything) the pack stage already declared under `name`.
-        let pack_decl_of = |stage: &Stage<'_>, name: &str| -> Option<PackDecl<'_>> {
+        fn pack_decl_of<'a>(stage: &'a Stage<'_>, name: &str) -> Option<PackDecl<'a>> {
             if let Some((_, ty, _)) = stage.uniforms.iter().find(|(n, _, _)| n == name) {
                 return Some(PackDecl::Uniform(ty.as_str()));
             }
@@ -1434,7 +1434,7 @@ impl ParsedStagePrelude {
                 return Some(PackDecl::Other);
             }
             None
-        };
+        }
 
         for item in &self.items {
             match item {
