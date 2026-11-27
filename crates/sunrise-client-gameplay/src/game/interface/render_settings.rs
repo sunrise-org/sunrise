@@ -240,7 +240,7 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn set_translucent_layers(&mut self, layers: Vec<bool>) {
         if *layers != *self.client.streaming.translucent_layers {
             self.client.streaming.translucent_layers = layers.into();
-            self.all_sections_changed();
+            self.client.native_shaders.translation.remesh = true;
         }
     }
 

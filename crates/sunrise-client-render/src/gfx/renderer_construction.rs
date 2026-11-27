@@ -2561,6 +2561,7 @@ impl Renderer {
             hdr_driver,
             pack_post: None,
             pack_loading: None,
+            translating_pack_reads_pages: None,
             pack_generation: 0,
             pass_timing: false,
             pass_detail: false,

@@ -181,9 +181,7 @@ impl ClientGame<'_> {
         } else if changed {
             self.client.streaming.layer_overrides = Arc::from([]);
         }
-        if changed {
-            self.all_sections_changed();
-        }
+        self.client.native_shaders.translation.remesh |= changed;
     }
 }
 

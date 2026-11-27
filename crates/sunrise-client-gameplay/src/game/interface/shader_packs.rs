@@ -346,7 +346,13 @@ impl PickHdr {
         if let Some(hdr) = self.hdr {
             return hdr;
         }
+        let _span = sunrise_level::spans::guard("shader_pack_hdr");
+        let started = Instant::now();
         let (hdr, notes) = read_pick_hdr(picked, path);
+        log::debug!(
+            "shader pack {picked}: HDR preflight in {} ms",
+            started.elapsed().as_millis()
+        );
         for note in self.unreported(notes) {
             log::warn!("shader pack {picked}: {note}");
         }
@@ -612,6 +618,7 @@ impl TranslationWorker {
 enum LoadStage {
     Translating(Option<Box<TranslationRequest>>),
     Building,
+    Installed { first_frame: bool },
     Finished,
 }
 
@@ -633,23 +640,29 @@ pub(in crate::game) struct ShaderTranslation {
     resource_generation: u64,
     renderer_epoch: u64,
     world_generation: u64,
+    pub(super) remesh: bool,
+    pick_time: Option<(String, Instant)>,
 }
 
 impl ShaderTranslation {
-    fn cancel(&mut self, renderer: Option<&mut sunrise_client_render::gfx::Renderer>) {
-        self.active = None;
+    fn cancel(&mut self, renderer: Option<&mut sunrise_client_render::gfx::Renderer>) -> bool {
+        let was_building = self
+            .active
+            .take()
+            .is_some_and(|job| matches!(job.stage, LoadStage::Building));
         self.cancel_translation();
         if let Some(build) = renderer.and_then(|r| r.cancel_shader_pack_build()) {
             self.retiring_build = Some(build);
         }
+        was_building
     }
 
     pub(in crate::game) fn renderer_replaced(
         &mut self,
         old: Option<&mut sunrise_client_render::gfx::Renderer>,
-    ) {
+    ) -> bool {
         self.renderer_epoch = self.renderer_epoch.wrapping_add(1);
-        self.cancel(old);
+        self.cancel(old)
     }
 
     pub(in crate::game) fn resources_changed(&mut self) {
@@ -666,6 +679,26 @@ impl ShaderTranslation {
         if let Some(worker) = &self.worker {
             worker.cancel.store(true, Ordering::Relaxed);
         }
+    }
+
+    pub(super) fn record_presented_pack(&mut self) {
+        let Some(job) = &mut self.active else {
+            return;
+        };
+        let LoadStage::Installed { first_frame } = &mut job.stage else {
+            return;
+        };
+        if !std::mem::take(first_frame) {
+            return;
+        }
+        let _span = sunrise_level::spans::guard("shader_pack_first_frame");
+        let picked = self.pick_time.as_ref().map_or(job.started, |(_, at)| *at);
+        log::info!(
+            "shader pack {}: first frame in {} ms from pick, {} ms from load",
+            job.name,
+            picked.elapsed().as_millis(),
+            job.started.elapsed().as_millis()
+        );
     }
 
     fn discard_obsolete_work(&mut self) {
@@ -811,18 +844,25 @@ impl crate::game::ClientGame<'_> {
             .active
             .as_ref()
             .is_some_and(|job| selection.as_ref() == Some(&job.key.selection));
-        if !still_selected {
-            translation.cancel(renderer.map(Box::as_mut));
-        }
+        let cancelled_build = !still_selected && translation.cancel(renderer.map(Box::as_mut));
         translation.discard_obsolete_work();
         if !enabled {
-            if self.client.pack_ids.take().is_some() {
-                self.set_translucent_layers(Vec::new());
-                if let Some(renderer) = &mut self.client.renderer.0 {
-                    renderer.drop_shader_packs();
-                }
-            }
+            translation.pick_time = None;
+            self.drop_published_shader_pack();
             return false;
+        }
+        if translation
+            .pick_time
+            .as_ref()
+            .is_none_or(|(pick, _)| *pick != selected)
+        {
+            translation.pick_time = Some((selected.clone(), Instant::now()));
+        }
+        if cancelled_build {
+            self.drop_published_shader_pack();
+            if let Some(renderer) = &mut self.client.renderer.0 {
+                renderer.follow_shader_pack_layout();
+            }
         }
         if !sunrise_client::sprites::labpbr_maps() {
             sunrise_client::sprites::set_labpbr_maps(true);
@@ -850,6 +890,7 @@ impl crate::game::ClientGame<'_> {
         let started = Instant::now();
         let stamp = fingerprint(&selection.path);
         if super::native_shaders::linear_frame_switch() && refused(&selection.path, stamp) {
+            self.drop_published_shader_pack();
             return;
         }
         let translation = &mut self.client.native_shaders.translation;
@@ -900,13 +941,14 @@ impl crate::game::ClientGame<'_> {
         dimension: i32,
     ) -> Result<TranslationRequest, sunrise_shaders::PackError> {
         let started = Instant::now();
-        let pack = Pack::open(&key.selection.path)?.with_chosen(chosen_shader_options(name));
         let renderer = self
             .client
             .renderer
             .0
             .as_mut()
             .expect("shader pack preflight needs a renderer");
+        renderer.begin_shader_translation();
+        let pack = Pack::open(&key.selection.path)?.with_chosen(chosen_shader_options(name));
         let mut macros = Macros::standard();
         renderer.define_pack_macros(&mut macros);
         // Its conditionals test the pack's options too.
@@ -1025,13 +1067,17 @@ impl crate::game::ClientGame<'_> {
             return;
         }
         if fingerprint(&job.key.selection.path) != job.key.fingerprint {
-            translation.cancel(Some(renderer));
+            if translation.cancel(Some(renderer)) {
+                self.drop_published_shader_pack();
+            }
         } else if build_ready {
             let mut job = translation.active.take().expect("building job");
+            job.stage = LoadStage::Finished;
             if let Some((_, _, _, report)) = renderer.poll_shader_pack() {
                 match report {
                     Ok(Some((programs, notes))) => {
                         remember(&job.key.selection.path, job.key.fingerprint, true);
+                        job.stage = LoadStage::Installed { first_frame: true };
                         for note in notes {
                             log::warn!("shader pack {}: {note}", job.name);
                         }
@@ -1043,7 +1089,10 @@ impl crate::game::ClientGame<'_> {
                             job.started.elapsed().as_millis()
                         );
                     }
-                    Ok(None) => remember(&job.key.selection.path, job.key.fingerprint, false),
+                    Ok(None) => {
+                        remember(&job.key.selection.path, job.key.fingerprint, false);
+                        self.shader_pack_without_pack(job.dimension);
+                    }
                     Err(refusal) if refusal.is_cancelled() => {
                         self.shader_pack_without_pack(job.dimension)
                     }
@@ -1056,7 +1105,6 @@ impl crate::game::ClientGame<'_> {
                     }
                 }
             }
-            job.stage = LoadStage::Finished;
             self.client.native_shaders.translation.active = Some(job);
         } else {
             let worker = translation.worker.take().expect("finished translation");
@@ -1102,6 +1150,7 @@ impl crate::game::ClientGame<'_> {
             .0
             .as_mut()
             .expect("translated pack needs a renderer");
+        renderer.end_shader_translation();
         renderer.load_shader_pack(
             job.dimension,
             pack.post,
@@ -1109,6 +1158,7 @@ impl crate::game::ClientGame<'_> {
             name.clone(),
             job.started,
         );
+        self.client.native_shaders.translation.remesh = true;
         if !renderer.shader_pack_build_pending() {
             self.client.pack_ids = None;
             job.stage = LoadStage::Finished;
@@ -1136,9 +1186,24 @@ impl crate::game::ClientGame<'_> {
 
     #[inline(always)]
     fn shader_pack_without_pack(&mut self, dimension: i32) {
-        self.client.pack_ids = None;
+        self.client.native_shaders.translation.remesh |= self.client.pack_ids.take().is_some();
+        self.set_translucent_layers(Vec::new());
         if let Some(renderer) = &mut self.client.renderer.0 {
             let _ = renderer.set_shader_pack(dimension, None, &[]);
+        }
+    }
+
+    #[inline(always)]
+    fn drop_published_shader_pack(&mut self) {
+        let had_metadata = self.client.pack_ids.take().is_some();
+        self.client.native_shaders.translation.remesh |= had_metadata;
+        self.set_translucent_layers(Vec::new());
+        if let Some(renderer) = &mut self.client.renderer.0
+            && (had_metadata
+                || renderer.is_translating_shader_pack()
+                || renderer.shader_pack_dimension().is_some())
+        {
+            renderer.drop_shader_packs();
         }
     }
 
@@ -1151,40 +1216,43 @@ impl crate::game::ClientGame<'_> {
         partial: f32,
         sky: &sunrise_level::environment::Sky,
     ) -> PackInputs {
-        // A `shaders/` pack lights the faces itself unless `oldLighting=true`: sections mesh
-        // without the game's face shading (the pack loaded or dropped below shows next frame).
+        let enabled = self.advance_shader_pack();
+        let _span = sunrise_level::spans::guard("shader_pack_mesh_state");
+        let shader_pack = self.client.pack_ids.is_some();
         let pack_lighting = self
             .client
             .pack_ids
             .as_ref()
             .is_some_and(|ids| !ids.old_lighting);
-        if self.client.streaming.shader_pack_lighting != pack_lighting {
-            self.client.streaming.shader_pack_lighting = pack_lighting;
-            self.all_sections_changed();
-        }
-        // Any `shaders/` pack (its `oldLighting` too) draws fluid tops split as Iris does.
-        let shader_pack = self.client.pack_ids.is_some();
-        if self.client.streaming.shader_pack != shader_pack {
-            self.client.streaming.shader_pack = shader_pack;
-            self.all_sections_changed();
-        }
-        // The renderer keeps the meshes' sources while they carry them, and frees them after.
-        if let Some(renderer) = &mut self.client.renderer.0 {
-            renderer.keep_pack_sources(shader_pack);
-        }
         let separate_ao = self
             .client
             .pack_ids
             .as_ref()
             .is_some_and(|ids| ids.separate_ao);
-        if self.client.streaming.separate_ao != separate_ao {
-            self.client.streaming.separate_ao = separate_ao;
-            self.all_sections_changed();
-        }
-        // Its `layer.*` rules (4.2), none without a pack: in the frame after it loads or drops, as
-        // the flags above, so one meshing of every section takes them all.
+        let streaming = &mut self.client.streaming;
+        let mut remesh = streaming.shader_pack != shader_pack
+            || streaming.shader_pack_lighting != pack_lighting
+            || streaming.separate_ao != separate_ao;
+        streaming.shader_pack = shader_pack;
+        streaming.shader_pack_lighting = pack_lighting;
+        streaming.separate_ao = separate_ao;
         self.sync_pack_layers();
-        if !self.advance_shader_pack() {
+        remesh |= std::mem::take(&mut self.client.native_shaders.translation.remesh);
+        if let Some(renderer) = &mut self.client.renderer.0 {
+            renderer.keep_pack_sources(shader_pack);
+            remesh |= renderer.follow_shader_pack_layout();
+        }
+        if remesh {
+            let _span = sunrise_level::spans::guard("shader_pack_remesh");
+            let started = Instant::now();
+            self.all_sections_changed();
+            log::debug!(
+                "shader pack terrain invalidation in {} ms",
+                started.elapsed().as_millis()
+            );
+        }
+        drop(_span);
+        if !enabled {
             return PackInputs::default();
         }
         let lerp = |(old, new): (f32, f32)| old + (new - old) * partial;

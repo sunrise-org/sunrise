@@ -1002,12 +1002,33 @@ impl Renderer {
             self.sections.set_sections(layout.sections() as i32);
         }
     }
+    pub fn follow_shader_pack_layout(&mut self) -> bool {
+        let previous = self.shader_pack_section_layout();
+        self.follow_arena_layout();
+        self.follow_translucent_layout();
+        self.follow_packed_layout();
+        let dropped = self.take_dropped_sections();
+        previous != self.shader_pack_section_layout() || dropped
+    }
+
+    pub fn shader_pack_section_layout(&self) -> (bool, bool, bool, bool) {
+        (
+            self.arena_storage,
+            self.arena.has_normals(),
+            self.translucent_arena.is_some(),
+            self.packed_quads,
+        )
+    }
+
     /// Lays the sections out as `translucent_split` says for the shader pack that
     /// runs, before a world frame draws them. A change drops every section and far
     /// tile, as a new renderer has none, and changes the sorted indices' arena with
     /// them (large pages beside the translucent arena, else pages flat draws bind):
     /// the game meshes them again (`take_dropped_sections`).
     pub(super) fn follow_translucent_layout(&mut self) {
+        if self.is_translating_shader_pack() {
+            return;
+        }
         let pack = self.pack_post.as_ref().and_then(|p| p.1.as_ref());
         let pending = self.pack_pending().unwrap_or_default();
         let split = translucent_split(
@@ -1081,7 +1102,10 @@ impl Renderer {
     /// Whether a `shaders/` pack's terrain or shadow programs read the section arena's pages in
     /// per-section draws (`pack_atlas::TerrainDraws::Pages`).
     pub(super) fn pack_reads_pages(&self) -> bool {
-        self.pack_terrain_draws() == pack_atlas::TerrainDraws::Pages && self.pack_draws_sections()
+        self.translating_pack_reads_pages.unwrap_or_else(|| {
+            self.pack_terrain_draws() == pack_atlas::TerrainDraws::Pages
+                && self.pack_draws_sections()
+        })
     }
     /// Whether a `shaders/` pack's terrain or shadow programs read the normal stream in
     /// per-section draws (`pack_atlas::TerrainDraws::Normals`).
@@ -1095,6 +1119,9 @@ impl Renderer {
     /// meshes them again (`take_dropped_sections`). The arena keeps its quad sources as
     /// `keep_pack_sources` says for that pack.
     pub(super) fn follow_arena_layout(&mut self) {
+        if self.is_translating_shader_pack() {
+            return;
+        }
         let storage = arena_storage(self.flat.is_some(), self.pack_reads_pages());
         let normals = self.pack_reads_normals();
         let normals_changed = normals != self.arena.has_normals();
@@ -1144,6 +1171,9 @@ impl Renderer {
     /// programs outside flat draws (flat ones unpack the records, `pack_atlas::PULL_FLAT`).
     /// Leaving it drops every section and far tile for the game to mesh again.
     pub(super) fn follow_packed_layout(&mut self) {
+        if self.is_translating_shader_pack() {
+            return;
+        }
         // Any pack, a post-only one too, as once it runs; one still building counts.
         let pack = self.pack_pending().is_some()
             || self.pack_post.as_ref().and_then(|p| p.1.as_ref()).is_some();

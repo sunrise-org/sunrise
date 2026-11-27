@@ -453,6 +453,7 @@ pub struct Renderer {
     pub(crate) pack_post: Option<(i32, Option<pack_post::PackPost>)>,
     /// A `shaders/` pack whose pipelines build on a thread of their own (`load_shader_pack`).
     pub(crate) pack_loading: Option<PackLoading>,
+    pub(crate) translating_pack_reads_pages: Option<bool>,
     /// Counts shader packs loaded, switched or turned off (`ShaderPackState::generation`).
     pub(crate) pack_generation: u32,
     /// Time the shader pack's passes on the GPU (F3, or a capture made with `--gpu`).

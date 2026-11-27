@@ -12,6 +12,7 @@ impl Renderer {
         pack: Option<sunrise_shaders::Post>,
         block_ids: &[i32],
     ) -> std::result::Result<Option<(Vec<String>, Vec<String>)>, pack_post::Refused> {
+        self.end_shader_translation();
         if pack.is_none() {
             self.forget_pack_atlas();
         }
@@ -268,7 +269,10 @@ impl Renderer {
             .unwrap_or_default();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cancelled = cancel.clone();
+        let build_label = label.clone();
         let build = move || {
+            let _span = crate::spans::guard("shader_pack_gpu_build");
+            let build_started = std::time::Instant::now();
             let buffers = pack_terrain_buffers();
             let buffers = &buffers[..terrain_buffer_count(draws)];
             let mod_vertex_buffers = [Some(mod_pipelines::PipelineVertex::buffer_layout())];
@@ -308,6 +312,10 @@ impl Renderer {
                 &cancelled,
             );
             // The ids come back with it, for `install_shader_pack`.
+            log::debug!(
+                "shader pack {build_label}: GPU build in {} ms",
+                build_started.elapsed().as_millis()
+            );
             (post, block_ids)
         };
         // A pack is not the game's code: a panic building it turns the pack off (#3525).
@@ -412,8 +420,26 @@ impl Renderer {
         )
     }
 
+    pub fn begin_shader_translation(&mut self) {
+        if self.translating_pack_reads_pages.is_none() {
+            self.translating_pack_reads_pages = Some(self.pack_reads_pages());
+            if self.pack_post.take().is_some() {
+                self.pack_changed();
+            }
+        }
+    }
+
+    pub fn end_shader_translation(&mut self) {
+        self.translating_pack_reads_pages = None;
+    }
+
+    pub fn is_translating_shader_pack(&self) -> bool {
+        self.translating_pack_reads_pages.is_some()
+    }
+
     /// Drops the running shader pack.
     pub fn drop_shader_packs(&mut self) {
+        self.end_shader_translation();
         self.pack_loading = None;
         self.pack_changed();
         self.pack_post = None;

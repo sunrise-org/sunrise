@@ -269,10 +269,14 @@ impl ClientGame<'_> {
     }
 
     pub fn set_renderer(&mut self, renderer: Box<Renderer>) {
-        self.client
+        if self
+            .client
             .native_shaders
             .translation
-            .renderer_replaced(self.client.renderer.0.as_deref_mut());
+            .renderer_replaced(self.client.renderer.0.as_deref_mut())
+        {
+            self.client.pack_ids = None;
+        }
         let gpu = renderer.mod_gpu();
         if let Some(previous) = &self.client.mod_gpu {
             gpu.continue_ids_from(previous);

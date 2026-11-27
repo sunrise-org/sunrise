@@ -5041,6 +5041,12 @@ impl crate::game::ClientGame<'_> {
         let _cleanup = spans::guard("pr_cleanup");
         // A frame the surface refused (occluded, lost, timed out) is `Ok(false)`.
         self.client.frame_drawn = matches!(result, Ok(true));
+        if self.client.frame_drawn && self.client.pack_frame_state.get().is_some() {
+            self.client
+                .native_shaders
+                .translation
+                .record_presented_pack();
+        }
         // Restore storage even when rendering fails (for example, a lost surface).
         self.client.entity_vertices = entities;
         self.client.explicit_particle_quads = explicit_particle_quads;
