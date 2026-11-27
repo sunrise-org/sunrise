@@ -1214,6 +1214,69 @@ class PrebuiltContentsTests(unittest.TestCase):
             {"name": "native-sys", "version": "1.0.0", "library": "native"},
         ])
 
+    def test_runtime_feature_facts_follow_target_artifacts_and_normal_aliases(self):
+        target = Path("/target/triple")
+        edges = {"host": {"common_loan": "common", "sim": "server", "ui": "client"}}
+        packages = []
+        nodes = []
+        artifacts = []
+        for owner in ("host", "common", "server", "client"):
+            name = f"fixture_{owner}"
+            lib = {"name": name, "kind": ["lib"]}
+            packages.append({"id": owner, "name": owner, "version": "0.1.0", "targets": [lib]})
+            nodes.append({"id": owner, "deps": [
+                {"name": alias, "pkg": dep, "dep_kinds": [{"kind": None}]}
+                for alias, dep in edges.get(owner, {}).items()
+            ]})
+            artifacts.append({"reason": "compiler-artifact", "package_id": owner, "target": lib,
+                              "features": [f"feature-{owner}"], "filenames": [str(target / name)]})
+        host_artifact = dict(artifacts[1], features=["host-only"], filenames=["/target/debug/common"])
+        metadata = {"packages": packages, "resolve": {"nodes": nodes}}
+
+        desktop = prebuilt_game.runtime_role_facts(metadata, "host", artifacts + [host_artifact], target, "client")
+        dedicated = prebuilt_game.runtime_role_facts(metadata, "host", artifacts[:-1], target, "server")
+        self.assertEqual(desktop["libraries"]["common@0.1.0:fixture_common"], {
+            "package": "common", "library": "fixture_common", "features": ["feature-common"], "aliases": {}, "artifacts": [],
+        })
+        self.assertEqual(desktop["libraries"]["host@0.1.0:fixture_host"]["aliases"], {
+            "common_loan": "common@0.1.0:fixture_common", "sim": "server@0.1.0:fixture_server",
+            "ui": "client@0.1.0:fixture_client",
+        })
+        self.assertEqual(dedicated["side"], "server")
+        self.assertNotIn("client@0.1.0:fixture_client", dedicated["libraries"])
+        self.assertNotIn("ui", dedicated["libraries"]["host@0.1.0:fixture_host"]["aliases"])
+
+    def test_split_identity_keeps_features_of_the_target_shell(self):
+        root = self.folder()
+        marker = root / "crates/sunrise-mod-api-gen/source-layout"
+        marker.parent.mkdir(parents=True)
+        marker.write_text("split")
+        target = Path("/target/triple")
+        packages, nodes, artifacts = [], [], []
+        for package in (prebuilt_game.GAME, "sunrise-client", "sunrise-gameplay"):
+            library = {"name": package.replace("-", "_"), "kind": ["lib"]}
+            packages.append({"id": package, "name": package, "version": "0.1.0", "targets": [library]})
+            children = {"sunrise-client": ["sunrise-gameplay"], prebuilt_game.GAME: ["sunrise-client"]}
+            nodes.append({"id": package, "deps": [
+                {"name": dep.replace("-", "_"), "pkg": dep, "dep_kinds": [{"kind": None}]}
+                for dep in children.get(package, [])
+            ]})
+            artifacts.append({"reason": "compiler-artifact", "package_id": package, "target": library,
+                              "features": [package], "filenames": [str(target / library["name"])]})
+        host_shell = dict(artifacts[1], features=["host-shell"], filenames=["/target/debug/sunrise_client"])
+        metadata = {"packages": packages, "resolve": {"nodes": nodes}}
+
+        for server in (False, True):
+            with self.subTest(server=server):
+                identity = prebuilt_game.runtime_feature_fields(root, metadata, [host_shell, *artifacts],
+                                                                target, server)
+                self.assertEqual(identity["game_features"], ["sunrise-client"])
+                self.assertEqual(identity["runtime_role"]["libraries"]["sunrise-gameplay@0.1.0:sunrise_gameplay"]
+                                 ["features"], ["sunrise-gameplay"])
+        with self.assertRaisesRegex(ValueError, "exactly one sunrise-client runtime library, found 0"):
+            prebuilt_game.runtime_feature_fields(root, metadata, [host_shell, artifacts[0], artifacts[2]],
+                                                 target, True)
+
     def test_sdk_assertion_refuses_a_duplicate_eligible_facade_on_every_os(self):
         root = self.folder("deps/libsunrise_core-one.rmeta", "deps/libmod_api-one.rmeta",
                            "deps/libsunrise_mod_package-one.rmeta")

@@ -42,6 +42,9 @@ pub fn fresh_case_command(name: &str, flag: &str, case: &str) -> std::process::C
     command
 }
 
+#[doc(hidden)]
+#[path = "testing/engine_platform.rs"]
+pub mod engine_platform;
 #[path = "testing/journal.rs"]
 mod journal;
 #[path = "testing/level.rs"]

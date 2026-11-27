@@ -2,14 +2,15 @@
 // No `#![recursion_limit]` or other inner attribute horizon-mixins doesn't know here: the
 // launcher's horizon-mixins then rejects every native mod targeting this crate (#8169).
 #![forbid(unsafe_code)]
+
+#[cfg(test)]
+#[used]
+static KEEP_TEST_PLATFORM: fn() = mod_platform::__private::test_platform::keep;
 extern crate self as sunrise_client;
+#[cfg(feature = "client")]
 pub use sunrise_client_lib::carrier_store;
+#[cfg(feature = "client")]
 pub use sunrise_client_lib::*;
-// The parity fixtures' build compiles the lib test's helpers without the tests that use most of them.
-#[cfg_attr(
-    sunrise_parity_fixtures,
-    allow(dead_code, unused_imports, unused_macros)
-)]
 #[doc(hidden)]
 pub mod entry;
 
@@ -20,17 +21,11 @@ pub mod entry;
 #[cfg(not(feature = "system-allocator"))]
 #[global_allocator]
 static ALLOCATOR: sunrise_threads::GameAllocator = sunrise_threads::GAME_ALLOCATOR;
-#[cfg_attr(
-    sunrise_parity_fixtures,
-    allow(dead_code, unused_imports, unused_macros)
-)]
-pub mod game;
-pub mod orb_limits;
+mod cut_layout;
+pub mod game_facade;
+pub use cut_layout::game;
+pub use sunrise_sim::orb_limits;
 #[cfg(test)]
 mod test_game_dir;
 
-/// The parity harnesses' fixtures program: crates/sunrise-parity-fixtures compiles this file as its root.
-#[cfg(sunrise_parity_fixtures)]
-fn main() {
-    game::parity_fixtures::main();
-}
+pub use sunrise_level::{crash, logging, spans};
