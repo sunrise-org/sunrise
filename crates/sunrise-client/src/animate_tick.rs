@@ -357,7 +357,7 @@ impl AnimateTables {
             .collect();
         let bundle: BTreeMap<String, String> =
             serde_json::from_slice(&std::fs::read(root.join("block-tags.json"))?)?;
-        let mut definitions = TagDefinitions::default();
+        let mut definitions = TagDefinitions::with_conventions("block")?;
         for (name, text) in bundle {
             definitions.apply_json(&name, "vanilla", &text)?;
         }
@@ -2784,3 +2784,7 @@ mod biome_particle_tests;
 #[cfg(test)]
 #[path = "animate_tick_parts_tests.rs"]
 mod parts_tests;
+
+#[cfg(test)]
+#[path = "startup_convention_tags_tests.rs"]
+mod startup_convention_tags_tests;

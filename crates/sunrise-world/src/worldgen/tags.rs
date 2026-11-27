@@ -1,6 +1,6 @@
 //! Version-pinned tag codecs, resource-stack merging and dependency resolution.
 use super::{DecodeError, Object, optional, required};
-use crate::tag_layers::dependency_order;
+use crate::tag_layers::{convention, dependency_order};
 use serde_json::value::RawValue;
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -127,6 +127,16 @@ impl std::fmt::Display for TagBuildError {
 }
 impl std::error::Error for TagBuildError {}
 impl TagDefinitions {
+    /// Start a registry's definitions with its built-in convention tags, before
+    /// applying prepared resources and higher-priority pack layers.
+    pub fn with_conventions(kind: &str) -> Result<Self, DecodeError> {
+        let mut definitions = Self::default();
+        for (id, json) in convention::json_entries(kind) {
+            definitions.apply_json(id, "sunrise:convention", json)?;
+        }
+        Ok(definitions)
+    }
+
     /// Apply resources in their pack priority order. A successfully decoded
     /// replace file clears earlier entries; a rejected file changes nothing.
     pub fn add(&mut self, name: &str, source: &str, file: TagFile) -> Result<(), DecodeError> {

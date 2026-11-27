@@ -62,6 +62,7 @@ workspace = true
 
 [dev-dependencies]
 tempfile = "3"
+sunrise-core = { path = "../sunrise-core", features = ["test-support"] }
 mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["testing"] }
 mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab", features = ["testing"] }
 sunrise-items = { path = "../sunrise-items", features = ["test-support"] }

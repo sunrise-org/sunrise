@@ -197,9 +197,8 @@ mod tests {
     }
 
     #[test]
-    #[ignore = "daily"]
     fn four_slot_menu_transfer_asks_each_armor_slot_until_accepted() {
-        super::super::tests::with_menu(Kind::Inventory, |env, menu| {
+        super::super::tests::with_bare_menu(Kind::Inventory, |env, menu| {
             let parts = FeetOnly::default();
             let env = Env {
                 can_equip: Some(&parts),

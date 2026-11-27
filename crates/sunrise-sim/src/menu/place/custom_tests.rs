@@ -1,4 +1,5 @@
 use super::*;
+use crate::menu::tests::bare_env;
 use crate::{
     crafting::{Ingredient, Placement},
     recipe_book::slot_layout::CheckedSlotLayout,
@@ -18,17 +19,6 @@ fn kind() -> Kind {
         crafting: None,
         links: None,
     })))
-}
-fn with_env(test: impl FnOnce(&Env)) {
-    let mut ran = false;
-    crate::menu::tests::with_menu(Kind::Crafting, |env, _| {
-        ran = true;
-        test(env);
-    });
-    assert!(
-        ran,
-        "prepared resources are required for this explicitly ignored test"
-    );
 }
 fn single(item: &str) -> MenuPlacement {
     let layout = CheckedSlotLayout::new(
@@ -92,9 +82,8 @@ fn stack(id: &str, count: u32) -> Option<ItemStack> {
 }
 
 #[test]
-#[ignore = "daily"]
 fn noncontiguous_roles_place_one_increment_and_max_without_granting_a_result() {
-    with_env(|env| {
+    bare_env(|env| {
         let mut menu = Menu::new(kind());
         menu.set_player_item(0, stack("minecraft:oak_planks", 10));
         menu.set_player_item(5, stack("minecraft:cobblestone", 4));
@@ -116,9 +105,8 @@ fn noncontiguous_roles_place_one_increment_and_max_without_granting_a_result() {
     });
 }
 #[test]
-#[ignore = "daily"]
 fn ingredient_shortage_returns_old_inputs_but_never_fills_fuel_or_output() {
-    with_env(|env| {
+    bare_env(|env| {
         let mut menu = Menu::new(kind());
         menu.load_slot(4, stack("minecraft:dirt", 1));
         menu.load_slot(7, stack("minecraft:coal", 3));
@@ -136,9 +124,8 @@ fn ingredient_shortage_returns_old_inputs_but_never_fills_fuel_or_output() {
     });
 }
 #[test]
-#[ignore = "daily"]
 fn full_inventory_refuses_unchanged_in_survival_and_defers_creative_drops() {
-    with_env(|env| {
+    bare_env(|env| {
         let mut menu = Menu::new(kind());
         for slot in 0..36 {
             menu.set_player_item(slot, stack("minecraft:stone", 64));
@@ -160,9 +147,8 @@ fn full_inventory_refuses_unchanged_in_survival_and_defers_creative_drops() {
     });
 }
 #[test]
-#[ignore = "daily"]
 fn furnace_preflights_only_the_input_and_clears_the_output() {
-    with_env(|env| {
+    bare_env(|env| {
         let mut menu = Menu::new(kind());
         for slot in 0..36 {
             menu.set_player_item(slot, stack("minecraft:stone", 64));
@@ -189,9 +175,8 @@ fn furnace_preflights_only_the_input_and_clears_the_output() {
 }
 
 #[test]
-#[ignore = "daily"]
 fn per_slot_caps_limit_max_and_policy_refusal_is_not_a_missing_ingredient_ghost() {
-    with_env(|env| {
+    bare_env(|env| {
         let mut menu = Menu::new(kind());
         menu.set_player_item(0, stack("minecraft:iron_ore", 10));
         let mut limits = vec![None; 10];
@@ -212,9 +197,8 @@ fn per_slot_caps_limit_max_and_policy_refusal_is_not_a_missing_ingredient_ghost(
     });
 }
 #[test]
-#[ignore = "daily"]
 fn a_slot_whose_backing_takes_one_gets_one_craft_not_a_plan_it_would_roll_back() {
-    with_env(|env| {
+    bare_env(|env| {
         let mut menu = Menu::new(kind());
         menu.set_player_item(0, stack("minecraft:iron_ore", 10));
         let plan = single("minecraft:iron_ore");
@@ -235,9 +219,8 @@ fn a_slot_whose_backing_takes_one_gets_one_craft_not_a_plan_it_would_roll_back()
     });
 }
 #[test]
-#[ignore = "daily"]
 fn component_distinct_stacks_never_pool_into_one_destination() {
-    with_env(|env| {
+    bare_env(|env| {
         let mut menu = Menu::new(kind());
         menu.set_player_item(
             0,
@@ -264,9 +247,8 @@ fn component_distinct_stacks_never_pool_into_one_destination() {
 }
 
 #[test]
-#[ignore = "daily"]
 fn a_persistent_six_cell_grid_preserves_cooked_output_and_fuel() {
-    with_env(|env| {
+    bare_env(|env| {
         let layout = crate::recipe_book::menu_layout::compile(
             RecipeBookLayout::Crafting {
                 width: 3,
@@ -318,9 +300,8 @@ fn a_persistent_six_cell_grid_preserves_cooked_output_and_fuel() {
 }
 
 #[test]
-#[ignore = "daily"]
 fn existing_damaged_input_is_usable_but_inventory_damaged_tools_are_not_autofilled() {
-    with_env(|env| {
+    bare_env(|env| {
         let mut damaged = ItemStack::new("minecraft:iron_pickaxe", 1);
         damaged.damage = 1;
         let plan = single("minecraft:iron_pickaxe");

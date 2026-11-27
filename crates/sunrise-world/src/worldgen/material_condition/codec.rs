@@ -5,6 +5,7 @@ use crate::worldgen::{
 };
 use serde_json::{Value, value::RawValue};
 use std::{
+    borrow::Cow,
     collections::{BTreeMap, BTreeSet},
     sync::Arc,
 };
@@ -131,14 +132,16 @@ impl MaterialConditionRegistry {
             loader.resolve(&name, 0)?;
         }
         Ok(Self {
-            values: loader.values,
+            values: loader.values.into_owned(),
             biomes: loader.biomes,
         })
     }
     pub fn decode(&self, json: &str) -> Result<MaterialCondition, DecodeError> {
         let raw: Box<RawValue> = serde_json::from_str(json)?;
+        // Borrowed: an inline condition only reads the accepted registry, and a decode has no
+        // definitions of its own to resolve into it.
         Loader {
-            values: self.values.clone(),
+            values: Cow::Borrowed(&self.values),
             biomes: self.biomes.clone(),
             ..Loader::default()
         }
@@ -164,14 +167,14 @@ impl MaterialConditionRegistry {
     }
 }
 #[derive(Default)]
-struct Loader {
+struct Loader<'a> {
     definitions: BTreeMap<String, Box<RawValue>>,
-    values: BTreeMap<String, Arc<MaterialCondition>>,
+    values: Cow<'a, BTreeMap<String, Arc<MaterialCondition>>>,
     active: BTreeSet<String>,
     biomes: Option<Arc<BiomeCatalog>>,
     nodes: usize,
 }
-impl Loader {
+impl Loader<'_> {
     fn resolve(&mut self, name: &str, depth: usize) -> Result<Arc<MaterialCondition>, DecodeError> {
         if depth >= 256 {
             return Err(DecodeError::Field("material condition depth"));
@@ -192,7 +195,7 @@ impl Loader {
         }
         let value = Arc::new(self.node(&json, depth + 1)?);
         self.active.remove(name);
-        self.values.insert(name.to_owned(), value.clone());
+        self.values.to_mut().insert(name.to_owned(), value.clone());
         Ok(value)
     }
     fn node(&mut self, raw: &RawValue, depth: usize) -> Result<MaterialCondition, DecodeError> {

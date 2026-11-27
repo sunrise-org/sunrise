@@ -1995,20 +1995,52 @@ mod tests {
         &'static sunrise_world::registry::BlockRegistry,
         crate::game::functions::PackStack,
     ) {
+        use serde_json::json;
+        use std::collections::{BTreeMap, BTreeSet};
         use sunrise_assets::resource_source::ResourceRoot;
         use sunrise_level::datapack::DataPack;
+        use sunrise_world::{registry::BlockRegistry, worldgen::tags::TagDefinitions};
+
         let root = tempfile::tempdir().unwrap();
         let dir = root.path().join("data/minecraft/worldgen/biome");
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::create_dir_all(root.path().join("worldgen")).unwrap();
         for name in ["fixture", "plains"] {
             std::fs::write(dir.join(format!("{name}.json")), PACK_BIOME).unwrap();
         }
+        let worldgen = root.path().join("worldgen");
+        std::fs::create_dir_all(&worldgen).unwrap();
+        let air = ["minecraft:air", "minecraft:cave_air", "minecraft:void_air"];
+        let mut block_ids = BTreeSet::from(air);
+        let mut block_tags = BTreeMap::new();
+        let conventions = TagDefinitions::with_conventions("block").unwrap();
+        let definitions = conventions.definitions();
+        // Supply holders and the bundle's external tags without replacing the embedded tags.
+        for entry in definitions.values().flatten().map(|sourced| &sourced.entry) {
+            if !entry.required {
+                continue;
+            }
+            if !entry.tag {
+                block_ids.insert(entry.id.as_str());
+            } else if !definitions.contains_key(&entry.id) {
+                block_tags.insert(entry.id.as_str(), r#"{"values":[]}"#);
+            }
+        }
+        std::fs::write(
+            worldgen.join("block_tags.json"),
+            serde_json::to_vec(&block_tags).unwrap(),
+        )
+        .unwrap();
+        let (defaults, states): (BTreeMap<_, _>, Vec<_>) = block_ids
+            .into_iter()
+            .enumerate()
+            .map(|(index, id)| ((id, index), (id, air.contains(&id), false, "", id)))
+            .unzip();
+        let facts = json!({"defaults": defaults, "states": states}).to_string();
+        let blocks: &'static _ = Box::leak(Box::new(
+            BlockRegistry::from_facts_json(facts.as_bytes()).unwrap(),
+        ));
         let resources = ResourceRoot::directory(root.path().to_owned());
         let base = Arc::new(Biomes::load_for_server(&resources).unwrap());
-        let blocks: &'static _ = Box::leak(Box::new(sunrise_world::registry::BlockRegistry::from_facts_json(
-            br#"{"defaults":{"minecraft:air":0,"minecraft:cave_air":1,"minecraft:void_air":2},"states":[["a",true,false,"","minecraft:air"],["c",true,false,"","minecraft:cave_air"],["v",true,false,"","minecraft:void_air"]]}"#.as_slice(),
-        ).unwrap()));
         let stack = crate::game::functions::PackStack {
             builtin: None,
             content: DataPack::from_source("sunrise-content".into(), resources.data().clone()),
@@ -2189,6 +2221,57 @@ mod tests {
         .unwrap();
         assert!(admitted.table.contains("demo:incoming"));
         assert_eq!(conditions.check_errors(), Ok(()));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn biome_admission_binds_convention_block_tags_with_prepared_resources() {
+        use serde_json::{Value, json};
+        use std::fs::File;
+        use sunrise_assets::resource_source::ResourceRoot;
+        use sunrise_level::datapack::DataPack;
+        use sunrise_world::{loot::PackOverlay, registry::BlockRegistry};
+
+        const BIOME: &str = "demo:convention_tags";
+        let root = crate::prepared_test_root::prepared_root(&[
+            sunrise_core::prepared_test_support::WORLDGEN_INPUTS,
+            &["block-behaviours.json"],
+        ]);
+        let blocks = Box::leak(Box::new(
+            BlockRegistry::from_facts_json(File::open(root.join("facts.json")).unwrap()).unwrap(),
+        ));
+        let resources = ResourceRoot::directory(root);
+        let base = Arc::new(Biomes::load_vanilla_for_server(&resources).unwrap());
+        let mut payload: Value = serde_json::from_str(PACK_BIOME).unwrap();
+        payload["features"] = json!([[{
+            "feature": {"type": "minecraft:no_op", "config": {}},
+            "placement": [{
+                "type": "minecraft:block_predicate_filter",
+                "predicate": {"type": "minecraft:matching_blocks", "blocks": "#c:barrels"}
+            }]
+        }]]);
+        let files = [(
+            format!("worldgen/biome/{BIOME}"),
+            vec![serde_json::to_vec(&payload).unwrap()],
+        )];
+        let stack = crate::game::functions::PackStack {
+            builtin: None,
+            content: DataPack::from_source("sunrise-content".into(), Default::default()),
+            packs: Vec::new(),
+            enabled: Vec::new(),
+            features: Vec::new(),
+        };
+        let admitted = WorldBiomeRegistry::load(
+            &base,
+            resources.prepared(),
+            blocks,
+            &stack,
+            &stack.data_packs(Vec::new()),
+            &PackOverlay::new(&files),
+            &Default::default(),
+        )
+        .unwrap();
+        assert!(admitted.table.contains(BIOME));
     }
 
     #[test]

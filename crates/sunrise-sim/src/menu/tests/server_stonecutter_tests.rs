@@ -57,6 +57,7 @@ fn the_servers_list_becomes_the_clients_recipes_in_its_order() {
 /// The client's own table lists bricks before slab; the server's list has the slab first, and
 /// the client's menu follows the server's.
 #[test]
+#[ignore = "daily"]
 fn a_client_menu_lists_the_servers_stonecutter_recipes_not_its_own() {
     with_menu(Kind::Stonecutter, |env, menu| {
         let sent = [

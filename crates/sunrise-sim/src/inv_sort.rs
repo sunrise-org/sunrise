@@ -185,6 +185,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn the_clicks_sort_a_chest_in_the_menu_engine() {
         // The planned clicks replayed as left PICKUPs on a ChestMenu: the
         // engine (checked against the server jar) ends in the planned order.

@@ -3233,7 +3233,8 @@ impl Menu {
 #[cfg(test)]
 pub(crate) mod tests {
     use super::*;
-    use crate::{banner::Banners, brewing::Brewing, crafting::Recipes};
+    use crate::{banner::Banners, brewing::Brewing, crafting::Recipes, prepared_test_root};
+    use sunrise_core::prepared_test_support::SERVER_INPUTS;
     use sunrise_world::loot::PackOverlay;
 
     pub(crate) fn stack(item: &str, count: u32) -> Option<ItemStack> {
@@ -3247,7 +3248,7 @@ pub(crate) mod tests {
 
     /// An item tab's ItemPickerMenu: the 45 display slots show `shown`.
     fn with_picker(shown: &str, test: impl FnOnce(&Env, &mut Menu)) {
-        with_menu(Kind::ItemPicker, |env, menu| {
+        with_bare_menu(Kind::ItemPicker, |env, menu| {
             assert_eq!(menu.slot_count(), 54);
             for i in 0..45 {
                 menu.set_slot(env, i, stack(shown, 1));
@@ -3260,7 +3261,7 @@ pub(crate) mod tests {
     /// vanilla's default of one, so two cannot merge into one slot.
     #[test]
     fn a_removed_max_stack_size_leaves_one_per_slot() {
-        with_menu(Kind::Inventory, |env, menu| {
+        with_bare_menu(Kind::Inventory, |env, menu| {
             let removed = || {
                 Some(sunrise_core::nbt::Tag::compound(Vec::<(
                     &str,
@@ -3281,24 +3282,13 @@ pub(crate) mod tests {
         });
     }
 
-    /// The game's prepared data: `SUNRISE_TEST_RESOURCES`, else
-    /// `.local/sunrise-client` in the checkout.
-    pub(crate) fn resource_root() -> std::path::PathBuf {
-        std::env::var_os("SUNRISE_TEST_RESOURCES")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
-                    .join("../../.local/sunrise-client")
-                    .join(sunrise_core::VANILLA_VERSION)
-            })
+    fn resource_root() -> std::path::PathBuf {
+        prepared_test_root::prepared_root(&[SERVER_INPUTS])
     }
 
-    /// A menu over the game's data (`resource_root`); skipped without it.
+    /// A menu over the game's prepared data, for daily tests.
     pub(crate) fn with_menu(kind: Kind, test: impl FnOnce(&Env, &mut Menu)) {
         let root = resource_root();
-        if !root.join("items.json").exists() {
-            return;
-        }
         let defaults = sunrise_world::item_defaults::read(&root).unwrap();
         let items = Items::catalog(&root, &PackOverlay::NONE, &defaults).unwrap();
         let recipes = Recipes::load(
@@ -3426,7 +3416,7 @@ pub(crate) mod tests {
 
     #[test]
     fn inventory_add_respects_component_cap_and_remainder() {
-        with_menu(Kind::Inventory, |env, menu| {
+        with_bare_menu(Kind::Inventory, |env, menu| {
             menu.creative = false;
             let mut item = ItemStack::new("minecraft:stone", 15);
             item.data_mut().set_other(
@@ -3446,7 +3436,7 @@ pub(crate) mod tests {
 
     #[test]
     fn swap_self_does_not_duplicate_and_container_slot_is_distinct() {
-        with_menu(Kind::Crafting, |env, menu| {
+        with_bare_menu(Kind::Crafting, |env, menu| {
             menu.set_player_item(0, stack("minecraft:stone", 8));
             menu.click(env, 37, 0, Input::Swap).unwrap();
             assert_eq!(menu.player_item(0).unwrap().count, 8);
@@ -3456,7 +3446,7 @@ pub(crate) mod tests {
                 .sum();
             assert_eq!(total, 8);
         });
-        with_menu(Kind::Chest(3), |env, menu| {
+        with_bare_menu(Kind::Chest(3), |env, menu| {
             menu.set_slot(env, 0, stack("minecraft:dirt", 2));
             menu.set_player_item(0, stack("minecraft:stone", 8));
             menu.click(env, 0, 0, Input::Swap).unwrap();
@@ -3469,7 +3459,7 @@ pub(crate) mod tests {
     /// part of the recipe book's craftable contents.
     #[test]
     fn a_crafters_grid_counts_for_the_recipe_book() {
-        with_menu(Kind::CrafterBlock, |env, menu| {
+        with_bare_menu(Kind::CrafterBlock, |env, menu| {
             menu.containers[MAIN][0] = Some(ItemStack::new("minecraft:oak_planks", 4));
             let stacked = menu.stacked_contents(env);
             let planks = crate::crafting::Ingredient::of(vec!["minecraft:oak_planks".to_owned()]);
@@ -3616,6 +3606,7 @@ pub(crate) mod tests {
 
     /// The Mouse Tweaks wheel's targets: vanilla's routing of one item.
     #[test]
+    #[ignore = "daily"]
     fn quick_move_landing_routes_a_furnace_like_vanilla() {
         with_menu(Kind::Furnace("smelting"), |env, menu| {
             menu.creative = false;
@@ -3661,6 +3652,7 @@ pub(crate) mod tests {
     /// table's addition slot take, against the real recipes: with no mod
     /// an apple goes to none of them.
     #[test]
+    #[ignore = "daily"]
     fn mod_additions_to_the_property_sets_reach_every_reader() {
         let check = |added: bool| {
             with_menu(Kind::Furnace("smelting"), |env, menu| {
@@ -3817,8 +3809,16 @@ pub(crate) mod tests {
     #[path = "remainder_tests.rs"]
     mod remainder;
 
-    /// A test `Env` with no vanilla data: the anvil's and grindstone's own
-    /// results don't matter where the mods answer.
+    /// A menu with no prepared data, for tests that supply their own inputs.
+    pub(crate) fn with_bare_menu(kind: Kind, test: impl FnOnce(&Env, &mut Menu)) {
+        bare_env(|env| {
+            let mut menu = Menu::new(kind);
+            menu.creative = true;
+            test(env, &mut menu);
+        });
+    }
+
+    /// A test `Env` with no prepared data.
     pub(crate) fn bare_env(test: impl FnOnce(&Env)) {
         bare_env_in(&crate::test_resources::loop_context(LoopSide::Server), test)
     }
@@ -4248,7 +4248,7 @@ pub(crate) mod tests {
 
     #[test]
     fn quick_move_landing_never_fills_a_result() {
-        with_menu(Kind::Furnace("smelting"), |env, menu| {
+        with_bare_menu(Kind::Furnace("smelting"), |env, menu| {
             menu.creative = false;
             menu.set_slot(env, 2, stack("iron_ingot", 5));
             menu.set_slot(env, 30, stack("iron_ingot", 5));
@@ -4256,14 +4256,14 @@ pub(crate) mod tests {
             assert_eq!(menu.quick_move_landing(env, 30), [3]);
             assert_eq!(menu.slot(2).map(|s| s.count), Some(5));
         });
-        with_menu(Kind::Furnace("smelting"), |env, menu| {
+        with_bare_menu(Kind::Furnace("smelting"), |env, menu| {
             menu.creative = false;
             // The whole output moves: into the partial stack, then an empty slot.
             menu.set_slot(env, 2, stack("iron_ingot", 5));
             menu.set_slot(env, 20, stack("iron_ingot", 62));
             assert_eq!(menu.quick_move_landing(env, 2), [20, 38]);
         });
-        with_menu(Kind::Furnace("smelting"), |env, menu| {
+        with_bare_menu(Kind::Furnace("smelting"), |env, menu| {
             menu.creative = false;
             // A full inventory: the output stays, nothing to land on.
             menu.set_slot(env, 2, stack("iron_ingot", 5));
@@ -4275,6 +4275,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn quick_move_landing_routes_a_crafting_table_like_vanilla() {
         with_menu(Kind::Crafting, |env, menu| {
             menu.creative = false;
@@ -4295,6 +4296,7 @@ pub(crate) mod tests {
     /// listens: the inputs before the take used them and the stack taken.
     /// A shift-click records it too (`onQuickCraft`).
     #[test]
+    #[ignore = "daily"]
     fn taking_a_smithing_result_records_its_inputs() {
         for input in [Input::Pickup, Input::QuickMove] {
             with_menu(Kind::Smithing, |env, menu| {
@@ -4335,6 +4337,7 @@ pub(crate) mod tests {
     /// A crafting grid's result taken is recorded for `native_item_crafted`:
     /// the recipe the grid matched and the stack the player took.
     #[test]
+    #[ignore = "daily"]
     fn taking_a_crafting_result_records_the_crafted_stack() {
         with_menu(Kind::Crafting, |env, menu| {
             menu.creative = false;
@@ -4357,6 +4360,7 @@ pub(crate) mod tests {
     /// The inventory's own 2x2 grid is recorded as its 4 cells, the log in
     /// the cell it was in.
     #[test]
+    #[ignore = "daily"]
     fn an_inventory_craft_records_its_four_grid_cells() {
         with_menu(Kind::Inventory, |env, menu| {
             menu.creative = false;
@@ -4377,6 +4381,7 @@ pub(crate) mod tests {
     /// A shift-click that crafts three times records three takes, each with
     /// the grid as it was before that craft.
     #[test]
+    #[ignore = "daily"]
     fn a_shift_click_craft_records_each_batch_with_its_grid() {
         with_menu(Kind::Crafting, |env, menu| {
             menu.creative = false;
@@ -4395,6 +4400,7 @@ pub(crate) mod tests {
     /// `StonecutterMenu`'s `lastSoundTime`: a shift-click crafting a whole
     /// stack plays the take sound once, not once per item.
     #[test]
+    #[ignore = "daily"]
     fn a_stonecutter_shift_click_plays_the_take_sound_once() {
         with_menu(Kind::Stonecutter, |env, menu| {
             menu.creative = false;
@@ -4427,13 +4433,13 @@ pub(crate) mod tests {
             (Kind::Dispenser, 9),
             (Kind::Chest(3), 27),
         ] {
-            with_menu(kind, |env, menu| {
+            with_bare_menu(kind, |env, menu| {
                 menu.creative = false;
                 let hotbar = size + 27;
                 menu.set_slot(env, hotbar, stack("stone", 3));
                 assert_eq!(menu.quick_move_landing(env, hotbar), [0]);
             });
-            with_menu(kind, |env, menu| {
+            with_bare_menu(kind, |env, menu| {
                 menu.creative = false;
                 menu.set_slot(env, 0, stack("stone", 3));
                 assert_eq!(menu.quick_move_landing(env, 0), [size + 35]);
@@ -4442,6 +4448,7 @@ pub(crate) mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn takes_one_follows_the_slots_rules() {
         with_menu(Kind::Furnace("smelting"), |env, menu| {
             menu.creative = false;
@@ -4465,6 +4472,7 @@ pub(crate) mod tests {
     /// `HorseInventoryMenu`: a shift-click wears horse armour, then saddles,
     /// then fills the chest; the body slot takes only what the mount may wear.
     #[test]
+    #[ignore = "daily"]
     fn mount_menu_slots_take_what_the_mount_wears() {
         with_menu(Kind::Mount(5), |env, menu| {
             menu.creative = false;
@@ -4524,6 +4532,7 @@ pub(crate) mod tests {
     /// `onEquipItem` runs from the armour and off-hand slots' `setByPlayer`
     /// when the item changes: never from `Inventory.setItem` (a swap's source).
     #[test]
+    #[ignore = "daily"]
     fn armour_and_off_hand_slots_report_what_is_equipped() {
         with_menu(Kind::Inventory, |env, menu| {
             menu.creative = false;
@@ -4878,6 +4887,7 @@ pub(crate) mod tests {
     /// vanilla): the same clicks on both leave the same slots, cursor, drops
     /// and crafted recipes, remainders and shift-crafting included.
     #[test]
+    #[ignore = "daily"]
     fn a_mod_crafting_grid_crafts_as_the_crafting_table() {
         type Step = (&'static [(usize, &'static str, u32)], i32, i32, Input);
         let steps: [Step; 7] = [
@@ -4951,6 +4961,7 @@ pub(crate) mod tests {
     /// hold, the inventory gives first, then the sources in order, and a
     /// refused transfer leaves them as they were.
     #[test]
+    #[ignore = "daily"]
     fn recipe_placement_takes_from_the_sources_after_the_inventory() {
         with_menu(Kind::Crafting, |env, table| {
             let station = &mut Menu::new(mod_crafting_table());
@@ -4987,6 +4998,7 @@ pub(crate) mod tests {
     /// its slots shows what they craft, and the slots it keeps leave the
     /// result out.
     #[test]
+    #[ignore = "daily"]
     fn a_mod_crafting_result_is_the_menus_own() {
         with_menu(mod_crafting_table(), |env, menu| {
             let mut items = vec![None; 10];
@@ -5002,7 +5014,7 @@ pub(crate) mod tests {
 
     #[test]
     fn a_quick_craft_drag_previews_each_slot_and_the_rest_in_hand() {
-        with_menu(Kind::Inventory, |env, menu| {
+        with_bare_menu(Kind::Inventory, |env, menu| {
             // 9 + 36 player slots: 9 is the first main inventory slot.
             menu.set_slot(env, 10, stack("stone", 60));
             menu.set_slot(env, 11, stack("dirt", 1));
@@ -5072,7 +5084,7 @@ pub(crate) mod tests {
     /// answers.
     #[test]
     fn a_chest_quick_move_keeps_the_next_one_working() {
-        with_menu(Kind::Chest(6), |env, menu| {
+        with_bare_menu(Kind::Chest(6), |env, menu| {
             menu.creative = false;
             // The hotbar holds two stacks; the chest is empty.
             menu.set_slot(env, 81, stack("cobblestone", 64));
@@ -5097,7 +5109,7 @@ pub(crate) mod tests {
     /// quick move during it only ends the drag (`doClick`'s resetQuickCraft).
     #[test]
     fn a_quick_move_during_a_drag_only_ends_it() {
-        with_menu(Kind::Chest(3), |env, menu| {
+        with_bare_menu(Kind::Chest(3), |env, menu| {
             menu.creative = false;
             menu.set_slot(env, 27, stack("dirt", 10));
             menu.carried = stack("cobblestone", 64);
@@ -5138,7 +5150,7 @@ pub(crate) mod tests {
         );
         // ... and the hotbar slot keeps it: it is not the uncraftable
         // potion, which is a `minecraft:potion` with no contents at all.
-        with_menu(Kind::ItemPicker, |env, menu| {
+        with_bare_menu(Kind::ItemPicker, |env, menu| {
             menu.carried = carried;
             menu.click(env, 45, 0, Input::Pickup).unwrap();
             let in_hand = menu.slot(45).expect("the hotbar slot");

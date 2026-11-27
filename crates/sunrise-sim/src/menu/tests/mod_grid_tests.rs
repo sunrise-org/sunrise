@@ -10,6 +10,7 @@ use super::*;
 /// crafts again. Ten clicks on planks are ten crafts of sticks, on the
 /// crafting table and on a mod menu type's grid alike.
 #[test]
+#[ignore = "daily"]
 fn rapid_clicks_on_a_crafting_result_each_craft() {
     const CLICKS: u32 = 10;
     with_menu(Kind::Crafting, |env, table| {
@@ -60,6 +61,7 @@ fn pickup_takes_the_shown_result_instead_of_reassembling_a_registered_recipe() {
 /// transfer fill a mod crafting grid as the crafting table's, and a
 /// placement without the items leaves the grid empty for a ghost.
 #[test]
+#[ignore = "daily"]
 fn recipes_place_in_a_mod_crafting_grid_as_in_the_table() {
     with_menu(Kind::Crafting, |env, table| {
         let station = &mut Menu::new(mod_crafting_table());
@@ -87,6 +89,7 @@ fn recipes_place_in_a_mod_crafting_grid_as_in_the_table() {
 /// inside the grid, the result's names `Result`, and either context reads a grid slot and the
 /// result from the staged menu.
 #[test]
+#[ignore = "daily"]
 fn slot_rules_read_a_mod_grid_slot_and_the_result() {
     use mod_api::MenuContainer::{Grid, Result};
     type Asked = (

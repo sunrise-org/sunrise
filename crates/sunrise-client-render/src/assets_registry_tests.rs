@@ -1,17 +1,41 @@
 //! Exercise the actual asset-loader delegation with independent resource roots.
-use super::Assets;
-use std::sync::Arc;
+use super::{Assets, MATERIALS};
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    sync::Arc,
+};
+use sunrise_world::{tag_layers::convention, worldgen::tags::TagFile};
 
 fn root() -> tempfile::TempDir {
     let root = tempfile::tempdir().unwrap();
-    let names = [
-        "minecraft:bedrock",
-        "minecraft:dirt",
-        "minecraft:stone",
-        "minecraft:sand",
-        "minecraft:oak_planks",
-        "minecraft:bricks",
-    ];
+    let mut names: BTreeSet<_> = MATERIALS.map(|name| format!("minecraft:{name}")).into();
+    let empty_tag = r#"{"values":[]}"#.to_owned();
+    let mut tags = BTreeMap::from([
+        (
+            "minecraft:blocks_motion_in_heightmap".to_owned(),
+            empty_tag.clone(),
+        ),
+        (
+            "minecraft:blocks_motion_in_heightmap_no_leaves".to_owned(),
+            empty_tag.clone(),
+        ),
+        ("minecraft:blocks_fluid_flow".to_owned(), empty_tag.clone()),
+    ]);
+    // The synthetic registry still supplies everything the built-in tags require.
+    for (_, json) in convention::json_entries("block") {
+        for entry in TagFile::from_json(json)
+            .unwrap()
+            .entries
+            .into_iter()
+            .filter(|e| e.required)
+        {
+            if !entry.tag {
+                names.insert(entry.id);
+            } else if !convention::has_tag("block", &entry.id) {
+                tags.entry(entry.id).or_insert_with(|| empty_tag.clone());
+            }
+        }
+    }
     let defaults: serde_json::Map<_, _> = names
         .iter()
         .enumerate()
@@ -31,20 +55,9 @@ fn root() -> tempfile::TempDir {
         serde_json::json!({"defaults": defaults, "states": states}).to_string(),
     )
     .unwrap();
-    let mut tags = serde_json::Map::new();
-    for name in [
-        "minecraft:blocks_motion_in_heightmap",
-        "minecraft:blocks_motion_in_heightmap_no_leaves",
-        "minecraft:blocks_fluid_flow",
-    ] {
-        tags.insert(
-            name.to_owned(),
-            serde_json::json!(serde_json::json!({"values": []}).to_string()),
-        );
-    }
     std::fs::write(
         root.path().join("block-tags.json"),
-        serde_json::Value::Object(tags).to_string(),
+        serde_json::to_vec(&tags).unwrap(),
     )
     .unwrap();
     root
@@ -58,7 +71,14 @@ impl mod_api::Hooks for Hooks {
 }
 
 #[test]
+#[ignore = "daily"]
 fn asset_loading_shares_equal_roots_only_within_the_installed_metadata_epoch() {
+    if !crate::test_process::isolated(concat!(
+        "assets::registry_tests::",
+        "asset_loading_shares_equal_roots_only_within_the_installed_metadata_epoch",
+    )) {
+        return;
+    }
     let first_root = root();
     let equal_root = root();
     let first_mods: mod_api::Mods =
