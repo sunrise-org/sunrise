@@ -311,6 +311,12 @@ read-write storage in `read_write_storage`, and `float32_filterable` says whethe
 target can be sampled with `SamplerFilter::Linear`; where it cannot, the target is read with nearest filtering. A device refusal of the allocation itself is
 `RenderTargetError::Device`.
 
+The sizes every GPU call is checked against are the device's own, and `host.render_capabilities().limits`
+(`RenderLimits`) reads them: `max_buffer_size`, `max_storage_buffer_binding_size`,
+`max_uniform_buffer_binding_size`, `max_compute_workgroups_per_dimension` and
+`max_texture_dimension_2d`. Size buffers, dispatches and targets from these instead of trying an
+allocation and reading the refusal.
+
 Free the target with `target.release(host)`. See `RenderTargetRef` for the lifetime of a target
 and its contents.
 

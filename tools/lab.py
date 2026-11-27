@@ -10,6 +10,7 @@ from collections import Counter
 import getpass
 import hashlib
 import json
+import math
 import os
 import platform
 from pathlib import Path, PurePosixPath
@@ -231,6 +232,79 @@ def fbits(value):
 def dbits(value):
     """A double's IEEE 754 bits in hex, as the Java oracles print them."""
     return struct.pack(">d", value).hex()
+
+
+class JsonNumber(float):
+    """A JSON number that keeps its text, so `f32_bits` reads a binary32 from it in one rounding."""
+    __slots__ = ('text',)
+
+    def __new__(cls, text):
+        number = super().__new__(cls, text)
+        number.text = text
+        return number
+
+
+def exact_json(text):
+    """`json.loads`, with every non-integer number a `JsonNumber`."""
+    return json.loads(text, parse_float=JsonNumber)
+
+
+def f32_bits(value):
+    """The binary32 bits of a printed float, rounded once from its exact decimal value, ties to even.
+    Parsing to a double and then to a float rounds twice, which can land one ULP off."""
+    from fractions import Fraction
+    if value is None:
+        raise ValueError('no number')
+    if isinstance(value, float) and value != value or value in (float('inf'), float('-inf')):
+        return struct.unpack('>I', struct.pack('>f', value))[0]
+    text = getattr(value, 'text', None)
+    exact = Fraction(text) if text is not None else Fraction(value)
+    if exact == 0:
+        negative = text.lstrip().startswith('-') if text is not None else math.copysign(1.0, value) < 0
+        return 0x80000000 if negative else 0
+    try:
+        near = struct.unpack('>I', struct.pack('>f', float(exact)))[0]
+    except OverflowError:
+        near = 0xFF7FFFFF if exact < 0 else 0x7F7FFFFF
+    sign = near & 0x80000000
+    best = None
+    for magnitude in ((near & 0x7FFFFFFF) + step for step in (-1, 0, 1)):
+        if magnitude < 0 or magnitude > 0x7F800000:
+            continue
+        candidate = sign | magnitude
+        value32 = struct.unpack('>f', struct.pack('>I', candidate))[0]
+        if value32 in (float('inf'), float('-inf')):
+            # Overflow: the value rounds to infinity past the largest float plus half an ULP.
+            limit = Fraction(struct.unpack('>f', struct.pack('>I', sign | 0x7F7FFFFF))[0]) + Fraction(2) ** 103 * (1 if exact > 0 else -1)
+            if abs(exact) < abs(limit):
+                continue
+            return candidate
+        error = abs(Fraction(value32) - exact)
+        if best is None or error < best[0] or error == best[0] and not candidate & 1:
+            best = (error, candidate)
+    return best[1]
+
+
+def f64_bits(value):
+    """The binary64 bits of a printed double (Python's float parsing already rounds once)."""
+    return struct.unpack('>Q', struct.pack('>d', float(value)))[0]
+
+
+def ulps(a, b, width=32):
+    """How many representable values of that width lie between two bit patterns (0 when identical)."""
+    sign = 1 << (width - 1)
+    def ordered(bits):
+        return -(bits & (sign - 1)) if bits & sign else bits
+    return abs(ordered(a) - ordered(b))
+
+
+def float_difference(expected, got, width=32):
+    """None when two printed numbers are the same float of that width, else how far apart they are."""
+    bits = f32_bits if width == 32 else f64_bits
+    if expected is None or got is None:
+        return None if expected is got else 'missing'
+    a, b = bits(expected), bits(got)
+    return None if a == b else f'{ulps(a, b, width)} ulp'
 
 
 def settled(lines):

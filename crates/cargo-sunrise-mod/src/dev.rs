@@ -1,7 +1,7 @@
-//! `build` and `run` for a native mod, with no launcher: the pinned SDK's compiled slices fetched
-//! and verified into a per-user cache, the Rust the SDK names, then the same compile the launcher's
-//! `native-build` runs (`sunrise_native_build::contract::run`, docs/modding/src/reference/sdk/08-native-build.md),
-//! and for `run` the result staged beside the SDK's game executable and started.
+//! `build` and `run` for a native mod: fetch and verify the pinned SDK's compiled slices into a
+//! per-user cache, use the Rust the SDK names, and compile with the native builder
+//! (docs/modding/src/reference/sdk/08-native-build.md). `run` stages the result beside the SDK's
+//! game executable and starts it.
 use crate::sdk_fetch::{self, Base, CacheStamp};
 use std::collections::BTreeMap;
 use std::fs;

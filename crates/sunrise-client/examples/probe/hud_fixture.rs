@@ -179,7 +179,7 @@ fn encode(draws: &[GuiDraw]) -> Vec<Value> {
                 continue;
             }
         };
-        if pose != IDENTITY {
+        if !hud_layout::is_identity(&pose) {
             v["matrix"] = json!(pose);
         }
         out.push(v);

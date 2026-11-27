@@ -786,10 +786,10 @@ enum DispatchPick {
 impl FrameGraphRunner {
     /// Compile `recorded` for `oit_on` and prepare a runner, returning `None` when empty or
     /// when a cycle is detected (logging each distinct cycle once without panicking).
-    pub fn prepare(
+    pub(super) fn prepare(
         recorded: RecordedFrameGraph,
         oit_on: bool,
-        warned_cycles: &mut std::collections::HashSet<Vec<String>>,
+        warned: &mut std::collections::HashSet<super::mod_gpu::FrameGraphWarning>,
     ) -> Option<Self> {
         if recorded.is_empty() {
             return None;
@@ -808,7 +808,7 @@ impl FrameGraphRunner {
                 })
             }
             Err(FrameGraphError::Cycle { passes }) => {
-                if warned_cycles.insert(passes.clone()) {
+                if warned.insert(super::mod_gpu::FrameGraphWarning::Cycle(passes.clone())) {
                     log::warn!(
                         "Sunrise: frame graph cycle detected between {}; skipping mod frame graph",
                         passes.join(", ")

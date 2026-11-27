@@ -52,6 +52,7 @@ name = "world_probe"
 path = "examples/probe/main.rs"
 
 [dev-dependencies]
+sunrise-core = { path = "../sunrise-core", features = ["test-support"] }
 tar = { version = "0.4", default-features = false }
 ureq = { version = "2", default-features = false, features = ["tls"] }
 

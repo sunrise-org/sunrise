@@ -417,5 +417,36 @@ class FreePortTests(unittest.TestCase):
                 handle.close()
 
 
+class ExactFloatTests(unittest.TestCase):
+    def test_a_printed_float_reads_back_to_its_own_bits(self):
+        for bits in [0x00000001, 0x007FFFFF, 0x00800000, 0x3DCCCCCD, 0x3F800000, 0x3F800001, 0x7F7FFFFF,
+                     0xBF800000, 0xC2C80001, 0x80000001]:
+            value = struct.unpack(">f", struct.pack(">I", bits))[0]
+            for text in [repr(value), f"{value:.9g}"]:
+                self.assertEqual(lab.f32_bits(lab.exact_json(f"[{text}]")[0]), bits, text)
+
+    def test_a_decimal_near_a_midpoint_rounds_once(self):
+        # Parsed to a double first, this lands on 1.0; the exact value is just past the midpoint.
+        number = lab.exact_json("[1.00000005960464477539062501]")[0]
+        self.assertEqual(struct.unpack(">I", struct.pack(">f", number))[0], 0x3F800000)
+        self.assertEqual(lab.f32_bits(number), 0x3F800001)
+
+    def test_signed_zero_integers_and_overflow(self):
+        self.assertEqual(lab.f32_bits(lab.exact_json("[-0.0]")[0]), 0x80000000)
+        self.assertEqual(lab.f32_bits(lab.exact_json("[0]")[0]), 0)
+        self.assertEqual(lab.f32_bits(lab.exact_json("[1]")[0]), 0x3F800000)
+        self.assertEqual(lab.f32_bits(lab.exact_json("[3.5e38]")[0]), 0x7F800000)
+        self.assertEqual(lab.f64_bits(lab.exact_json("[-0.0]")[0]), 0x8000000000000000)
+
+    def test_ulps_count_across_zero(self):
+        self.assertEqual(lab.ulps(0x3F800000, 0x3F800002), 2)
+        self.assertEqual(lab.ulps(0x80000001, 0x00000001), 2)
+        self.assertEqual(lab.ulps(0x80000000, 0x00000000), 0)
+        self.assertIsNone(lab.float_difference(lab.exact_json("[0.1]")[0], lab.exact_json("[0.10000000149011612]")[0]))
+        self.assertEqual(lab.float_difference(lab.exact_json("[0.1]")[0], lab.exact_json("[0.1]")[0], 64), None)
+        self.assertEqual(lab.float_difference(lab.exact_json("[0.1]")[0], lab.exact_json("[0.10000000149011612]")[0], 64),
+                         "107374182 ulp")
+
+
 if __name__ == "__main__":
     unittest.main()

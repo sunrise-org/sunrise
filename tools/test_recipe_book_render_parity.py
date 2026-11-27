@@ -25,7 +25,7 @@ from pathlib import Path
 
 ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
-from tools import interaction_lab as lib, test_model_baking_parity as baking, test_rust_parity as base
+from tools import interaction_lab as lib, lab, test_model_baking_parity as baking, test_rust_parity as base
 
 TABS = {'crafting': 5, 'furnace': 4, 'blast_furnace': 3, 'smoker': 2}
 TYPES = {'crafting': ('minecraft:crafting_shaped', 'minecraft:crafting_shapeless'), 'furnace': ('minecraft:smelting',),
@@ -98,11 +98,41 @@ def cases(count, seed):
     return out
 
 
+# The fields both emitters print as binary32: a blit's u and v, and the pose matrix.
+FLOAT_FIELDS = frozenset({'u', 'v', 'm'})
+
+
+def binary32(x, y):
+    """Two printed binary32 values (or lists of them) agree to the bit, so -0.0 is not 0.0."""
+    if isinstance(x, list) or isinstance(y, list):
+        return isinstance(x, list) and isinstance(y, list) and len(x) == len(y) and all(map(binary32, x, y))
+    numeric = (int, float)
+    return (isinstance(x, numeric) and isinstance(y, numeric) and not isinstance(x, bool)
+            and not isinstance(y, bool) and lab.f32_bits(x) == lab.f32_bits(y))
+
+
+def typed(x, y):
+    """Equal values of the same type, element by element: an integer field such as a packed colour,
+    in a call or in a styled run, never matches a float-looking value."""
+    if isinstance(x, list) or isinstance(y, list):
+        return isinstance(x, list) and isinstance(y, list) and len(x) == len(y) and all(map(typed, x, y))
+    if isinstance(x, float) or isinstance(y, float):
+        return isinstance(x, float) and isinstance(y, float) and lab.f64_bits(x) == lab.f64_bits(y)
+    return type(x) is type(y) and x == y
+
+
 def same(a, b):
-    """Calls agree: every field exactly, poses within float printing."""
+    """Calls agree: the float fields as binary32 bits, every other field by type and value."""
     if a is None or b is None or set(a) != set(b):
         return False
-    return all(all(abs(x - y) <= 1e-3 for x, y in zip(a[k], b[k])) if k == 'm' else a[k] == b[k] for k in a)
+    return all(binary32(a[k], b[k]) if k in FLOAT_FIELDS else typed(a[k], b[k]) for k in a)
+
+
+def pose_ulps(a, b):
+    """ULPs between each pose entry of two calls, or None when a call or its pose is missing."""
+    if not a or not b or 'm' not in a or 'm' not in b or len(a['m']) != len(b['m']):
+        return None
+    return [lab.ulps(lab.f32_bits(x), lab.f32_bits(y)) for x, y in zip(a['m'], b['m'])]
 
 
 def main():
@@ -131,8 +161,8 @@ def main():
         print(run.stderr[-4000:])
         sys.exit('oracle failed')
     lib.cargo_example('sunrise-client', 'recipe_book_render_fixture', lib.RESOURCES, inputs, work / 'rust.jsonl')
-    vanilla = [json.loads(l) for l in (work / 'vanilla.jsonl').read_text().splitlines()]
-    rust = [json.loads(l) for l in (work / 'rust.jsonl').read_text().splitlines()]
+    vanilla = [lab.exact_json(l) for l in (work / 'vanilla.jsonl').read_text().splitlines()]
+    rust = [lab.exact_json(l) for l in (work / 'rust.jsonl').read_text().splitlines()]
     assert len(vanilla) == len(rust) == len(chosen), (len(vanilla), len(rust), len(chosen))
     errors, failures, passed = {}, {}, 0
     for case, v, r in zip(chosen, vanilla, rust):
@@ -154,6 +184,7 @@ def main():
             print(f'    {json.dumps(brief)[:700]}')
             print(f'      call {i}: vanilla {json.dumps(x)}')
             print(f'      call {i}: sunrise {json.dumps(y)}')
+            print(f'      call {i}: pose ulp {pose_ulps(x, y)}')
     print(f'{passed}/{len(chosen)} cases match')
     if errors or failures:
         sys.exit(1)

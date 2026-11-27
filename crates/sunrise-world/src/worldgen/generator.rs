@@ -3086,24 +3086,15 @@ mod tests {
     /// A pack's level on a generator nobody registered: opening it is an
     /// error for the caller to report, and the noise levels still build.
     #[test]
+    #[ignore = "daily"]
     fn a_level_stem_naming_an_unknown_generator_is_an_error() {
-        let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3")
-            });
-        if !root.join("worldgen/world_presets.json").exists() {
-            eprintln!("skipping: no worldgen bundle at {}", root.display());
-            return;
-        }
-        let registry = Box::leak(Box::new(crate::level::data::load_registry(&root).unwrap()));
         let mut ov = WorldgenOverrides::default();
         ov.set(
             overrides::DIMENSIONS,
             "test:gone",
             r#"{"type":"minecraft:overworld","generator":{"type":"test:gone"}}"#.to_owned(),
         );
-        let data = GeneratorData::load_with(&root.join("worldgen"), registry, &ov).unwrap();
+        let data = prepared_with(&ov);
         let open = |dimension| {
             OverworldGenerator::for_world(data.clone(), 0, "minecraft:normal", dimension, false)
         };
@@ -3116,16 +3107,9 @@ mod tests {
         assert!(open("minecraft:overworld").is_ok());
     }
     #[test]
+    #[ignore = "daily"]
     fn a_pack_level_stem_names_taller_noise_which_clamps_to_the_build_height() {
-        let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3")
-            });
-        if !root.join("worldgen/world_presets.json").exists() {
-            eprintln!("skipping: no worldgen bundle at {}", root.display());
-            return;
-        }
+        let root = worldgen_root();
         let registry = Box::leak(Box::new(crate::level::data::load_registry(&root).unwrap()));
         let dir = root.join("worldgen");
         let vanilla = GeneratorData::load(&dir, registry).unwrap();
@@ -3155,18 +3139,10 @@ mod tests {
         assert!(plain.noise_clamped().is_none());
     }
     #[test]
+    #[ignore = "daily"]
     fn end_identity_surface_matches_normal_surface_and_rejects_custom_rules() {
-        let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3")
-            });
-        if !root.join("worldgen/world_presets.json").exists() {
-            eprintln!("skipping: no worldgen bundle at {}", root.display());
-            return;
-        }
-        let registry = Box::leak(Box::new(crate::level::data::load_registry(&root).unwrap()));
-        let data = GeneratorData::load(&root.join("worldgen"), registry).unwrap();
+        let data = prepared_data();
+        let registry = data.registry();
         let preset: Value = serde_json::from_str(&data.world_presets["minecraft:normal"]).unwrap();
         let settings: Value = serde_json::from_str(&data.settings["minecraft:end"]).unwrap();
         let mut pipeline = Pipeline::new(
@@ -3349,21 +3325,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn far_surface_matches_undecorated_land_and_keeps_end_void() {
-        let root = std::env::var_os("SUNRISE_TEST_RESOURCES")
-            .or_else(|| std::env::var_os("SUNRISE_RESOURCES"))
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3")
-            });
-        if !root.join("worldgen/world_presets.json").exists() {
-            eprintln!("skipping: no worldgen bundle at {}", root.display());
-            return;
-        }
-        let registry: &'static BlockRegistry = Box::leak(Box::new(
-            crate::level::data::load_registry(&root).expect("registry"),
-        ));
-        let data = GeneratorData::load(&root.join("worldgen"), registry).expect("worldgen data");
+        let data = prepared_data();
         let generator =
             OverworldGenerator::without_structures(data.clone(), 1234).expect("generator");
         let mut worker = generator.worker();
@@ -3410,20 +3374,9 @@ mod tests {
     }
 
     #[test]
+    #[ignore = "daily"]
     fn local_carver_cache_is_worker_owned_and_eviction_preserves_terrain() {
-        let root = std::env::var_os("SUNRISE_RESOURCES")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3")
-            });
-        if !root.join("worldgen/world_presets.json").exists() {
-            eprintln!("skipping: no worldgen bundle at {}", root.display());
-            return;
-        }
-        let registry = Box::leak(Box::new(
-            crate::level::data::load_registry(&root).expect("registry"),
-        ));
-        let data = GeneratorData::load(&root.join("worldgen"), registry).unwrap();
+        let data = prepared_data();
         let generator = OverworldGenerator::new(data.clone(), 12345).unwrap();
         let mut first = generator.worker();
         let mut second = generator.worker();
@@ -3460,34 +3413,28 @@ mod tests {
         assert_eq!(second.state.carver_biomes, expected);
     }
 
-    /// The prepared resources' root, if this checkout has them.
-    pub(super) fn prepared_root() -> Option<std::path::PathBuf> {
-        let root = std::env::var_os("SUNRISE_RESOURCES")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3")
-            });
-        if !root.join("worldgen/world_presets.json").exists() {
-            eprintln!("skipping: no worldgen bundle at {}", root.display());
-            return None;
-        }
-        Some(root)
+    const GENERATOR_INPUTS: &[&str] = &["worldgen/world_presets.json"];
+
+    /// The prepared resources' root for worldgen tests.
+    pub(super) fn worldgen_root() -> std::path::PathBuf {
+        crate::prepared_test_root::prepared_root(&[
+            sunrise_core::prepared_test_support::WORLDGEN_INPUTS,
+            GENERATOR_INPUTS,
+        ])
     }
 
-    /// The prepared worldgen data under the data packs' files `overrides`, if this checkout has it.
-    pub(super) fn prepared_with(overrides: &WorldgenOverrides) -> Option<Arc<GeneratorData>> {
-        let root = prepared_root()?;
+    /// The prepared worldgen data under the data packs' files `overrides`.
+    pub(super) fn prepared_with(overrides: &WorldgenOverrides) -> Arc<GeneratorData> {
+        let root = worldgen_root();
         let registry: &'static BlockRegistry = Box::leak(Box::new(
             crate::level::data::load_registry(&root).expect("registry"),
         ));
-        Some(
-            GeneratorData::load_with(&root.join("worldgen"), registry, overrides)
-                .expect("worldgen data"),
-        )
+        GeneratorData::load_with(&root.join("worldgen"), registry, overrides)
+            .expect("worldgen data")
     }
 
-    /// The prepared worldgen data, if this checkout has it.
-    fn prepared_data() -> Option<Arc<GeneratorData>> {
+    /// The prepared worldgen data.
+    fn prepared_data() -> Arc<GeneratorData> {
         prepared_with(&WorldgenOverrides::default())
     }
 
@@ -3497,10 +3444,9 @@ mod tests {
     /// structure steps (plains' monster rooms are underground structures); nothing of the
     /// biome when every layer is air, unless the biome is the_void.
     #[test]
+    #[ignore = "daily"]
     fn a_superflat_world_keeps_what_adjust_generation_settings_keeps() {
-        let Some(data) = prepared_data() else {
-            return;
-        };
+        let data = prepared_data();
         use super::super::generator_decoration::{Decoration, FlatDecoration};
         let plains = ResolvedBiomeSource::Fixed(super::super::biome_source::FixedBiomeSource {
             biome: "minecraft:plains".into(),
@@ -3569,7 +3515,7 @@ mod tests {
         use super::super::{generator_decoration::Decoration, structure::jigsaw::FeatureKey};
         use sunrise_core::random::LegacyRandom;
 
-        let data = prepared_data().expect("prepared resources");
+        let data = prepared_data();
         let plains = ResolvedBiomeSource::Fixed(super::super::biome_source::FixedBiomeSource {
             biome: "minecraft:plains".into(),
         });
@@ -3598,10 +3544,9 @@ mod tests {
     /// its quarts through fresh resolvers, which broke climate ties their own
     /// way: three of the 128 were up to 6 chunks off.
     #[test]
+    #[ignore = "daily"]
     fn stronghold_rings_match_vanilla() {
-        let Some(data) = prepared_data() else {
-            return;
-        };
+        let data = prepared_data();
         let generator = OverworldGenerator::new(data, 1234).expect("generator");
         let rings = generator
             .worker()
@@ -3622,10 +3567,9 @@ mod tests {
     /// wholly in (-26, 24): its own chunk still holds the start, as vanilla's
     /// getAllStarts does, though no piece reaches it.
     #[test]
+    #[ignore = "daily"]
     fn a_chunk_holds_its_starts_whose_pieces_lie_elsewhere() {
-        let Some(data) = prepared_data() else {
-            return;
-        };
+        let data = prepared_data();
         let generator = OverworldGenerator::new(data, 8675309).expect("generator");
         let mut worker = generator.worker();
         let proto = worker
@@ -3641,10 +3585,9 @@ mod tests {
     /// Chunks no ring search can end near are decided without the rings,
     /// which stay unsearched, and get the starts they get with them.
     #[test]
+    #[ignore = "daily"]
     fn chunks_far_from_the_rings_do_not_search_them() {
-        let Some(data) = prepared_data() else {
-            return;
-        };
+        let data = prepared_data();
         let generator = OverworldGenerator::new(data.clone(), 4321).expect("generator");
         let mut worker = generator.worker();
         let summary = |worker: &mut GeneratorWorker, c: ChunkPos| -> Vec<(String, i32, i32)> {
@@ -3677,10 +3620,9 @@ mod tests {
     /// set around the camp TiesB2007's map went looking from, a skipped structure is never
     /// one the chunk's full starts hold, and some are skipped.
     #[test]
+    #[ignore = "daily"]
     fn may_start_never_skips_a_start_the_chunk_holds() {
-        let Some(data) = prepared_data() else {
-            return;
-        };
+        let data = prepared_data();
         let generator = OverworldGenerator::new(data, -3292718948513116954).expect("generator");
         let mut worker = generator.worker();
         let (mut held, mut skipped) = (0, 0);
@@ -3713,10 +3655,9 @@ mod tests {
     /// Generators of one seed and dimension share their ring positions;
     /// another seed or generator gets its own, and old entries go.
     #[test]
+    #[ignore = "daily"]
     fn ring_positions_are_shared_by_seed_and_dimension() {
-        let Some(data) = prepared_data() else {
-            return;
-        };
+        let data = prepared_data();
         let first = OverworldGenerator::new(data.clone(), 1234).expect("generator");
         let again = OverworldGenerator::new(data.clone(), 1234).expect("generator");
         {
@@ -3752,10 +3693,9 @@ mod tests {
     /// Generators of every seed share their biome source's decoration, the
     /// one the world screens' preload built; another dimension gets its own.
     #[test]
+    #[ignore = "daily"]
     fn decoration_is_shared_by_biome_source() {
-        let Some(data) = prepared_data() else {
-            return;
-        };
+        let data = prepared_data();
         data.prepare_decoration("minecraft:normal", "minecraft:overworld")
             .expect("decoration");
         let built = |i: usize| {
@@ -3832,20 +3772,9 @@ mod tests {
     /// Emptying the shared caches (every worker idle) changes no chunk: the
     /// chunks generated after it have the same blocks and biomes.
     #[test]
+    #[ignore = "daily"]
     fn released_caches_generate_the_same_chunks() {
-        let root = std::env::var_os("SUNRISE_RESOURCES")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3")
-            });
-        if !root.join("worldgen/world_presets.json").exists() {
-            eprintln!("skipping: no worldgen bundle at {}", root.display());
-            return;
-        }
-        let registry = Box::leak(Box::new(
-            crate::level::data::load_registry(&root).expect("registry"),
-        ));
-        let data = GeneratorData::load(&root.join("worldgen"), registry).expect("worldgen data");
+        let data = prepared_data();
         let preset: Value = serde_json::from_str(&data.world_presets["minecraft:normal"]).unwrap();
         let generator_json = &preset["dimensions"]["minecraft:overworld"]["generator"];
         let settings: Value =
@@ -3911,20 +3840,9 @@ mod tests {
     /// structure pieces. Exercise cold ring startup before work coordination,
     /// then cache eviction and explicit start invalidation with old Arcs alive.
     #[test]
+    #[ignore = "daily"]
     fn concurrent_neighbours_share_results_and_survive_invalidation() {
-        let root = std::env::var_os("SUNRISE_RESOURCES")
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3")
-            });
-        if !root.join("worldgen/world_presets.json").exists() {
-            eprintln!("skipping: no worldgen bundle at {}", root.display());
-            return;
-        }
-        let registry = Box::leak(Box::new(
-            crate::level::data::load_registry(&root).expect("registry"),
-        ));
-        let data = GeneratorData::load(&root.join("worldgen"), registry).expect("worldgen data");
+        let data = prepared_data();
         let preset: Value = serde_json::from_str(&data.world_presets["minecraft:normal"]).unwrap();
         let generator_json = &preset["dimensions"]["minecraft:overworld"]["generator"];
         let settings: Value =
@@ -4005,15 +3923,6 @@ mod tests {
         }
     }
 
-    /// The resources the worldgen tests read.
-    fn test_root() -> std::path::PathBuf {
-        std::env::var_os("SUNRISE_TEST_RESOURCES")
-            .or_else(|| std::env::var_os("SUNRISE_RESOURCES"))
-            .map(std::path::PathBuf::from)
-            .unwrap_or_else(|| {
-                Path::new(env!("CARGO_MANIFEST_DIR")).join("../../.local/sunrise-client/26.3")
-            })
-    }
     #[test]
     #[ignore = "daily"]
     fn saved_starts_match_generated_layouts() {
@@ -4167,24 +4076,13 @@ mod tests {
             }
         }
     }
-    /// The block registry the worldgen bundle needs. `GeneratorData` keeps it
-    /// for as long as the generator lives, so it is shared, not freed.
-    static TEST_REGISTRY: std::sync::LazyLock<BlockRegistry> = std::sync::LazyLock::new(|| {
-        crate::level::data::load_registry(&test_root()).expect("registry")
-    });
-
     /// The world presets with their own noise settings generate the terrain
     /// those settings describe: the amplified and large-biome presets are not
     /// the overworld's terrain under another name.
     #[test]
+    #[ignore = "daily"]
     fn world_presets_use_their_own_noise_settings() {
-        let root = test_root();
-        if !root.join("worldgen/world_presets.json").exists() {
-            eprintln!("skipping: no worldgen bundle at {}", root.display());
-            return;
-        }
-        let data =
-            GeneratorData::load(&root.join("worldgen"), &TEST_REGISTRY).expect("worldgen data");
+        let data = prepared_data();
         let surface = |preset: &str| {
             let generator = OverworldGenerator::for_world(
                 data.clone(),

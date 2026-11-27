@@ -151,6 +151,7 @@ mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab", featur
 # ui_theme's unit tests draw text in the design system's fonts.
 sunrise-theme = { path = "../sunrise-theme" }
 sunrise-client-render = { path = "../sunrise-client-render", features = ["test-support"] }
+sunrise-core = { path = "../sunrise-core", features = ["test-support"] }
 sunrise-items = { path = "../sunrise-items", features = ["test-support"] }
 sunrise-sim = { path = "../sunrise-sim", features = ["test-support"] }
 sunrise-world = { path = "../sunrise-world", features = ["test-support"] }

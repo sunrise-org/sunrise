@@ -3721,10 +3721,10 @@ pub fn in_own_process(name: &str, body: impl FnOnce()) {
         String::from_utf8_lossy(&out.stdout),
         String::from_utf8_lossy(&out.stderr)
     );
-    assert!(
-        out.status.success() && report.contains("test result: ok. 1 passed;"),
-        "{name} failed in its own process:\n{report}"
-    );
+    if !(out.status.success() && report.contains("test result: ok. 1 passed;")) {
+        eprint!("{report}");
+        panic!("child test process failed");
+    }
 }
 #[allow(unused_imports)]
 pub use {

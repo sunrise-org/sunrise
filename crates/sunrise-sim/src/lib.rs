@@ -7,6 +7,8 @@ mod rule_replacements;
 #[cfg(any(test, feature = "test-support"))]
 pub(crate) mod test_fixtures;
 #[cfg(test)]
+mod test_game_dir;
+#[cfg(test)]
 mod test_log;
 
 pub use sunrise_assets::resource_source;
