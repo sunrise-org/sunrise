@@ -1,5 +1,5 @@
 use super::native_entity_refs::tests::{run_fresh_cases, with_client_game};
-use super::native_shaders::outcome;
+use super::native_shaders::{fingerprint, outcome, remember};
 use super::shader_packs::TranslationTestAction;
 use crate::game::ClientGame;
 use crate::game::native_hooks::particle_count_tests::frame_scene;
@@ -203,9 +203,31 @@ fn assert_running_pack(game: &ClientGame<'_>, old_layout: Layout, revision: u64,
     );
 }
 
+fn assert_stopped(game: &ClientGame<'_>, vanilla: Layout, notices: u64) {
+    assert_boundary(game, None, notices);
+    assert_eq!(layout(game), vanilla);
+    assert!(!game.client.native_shaders.translation.is_translating());
+    assert_eq!(renderer(game).shader_pack_kind(), None);
+    assert_eq!(
+        renderer(game).installed_pack_block_id_for_test(stone_index(game)),
+        None
+    );
+    assert!(game.client.native_shaders.running.is_empty());
+    assert!(game.client.streaming.translucent_layers.is_empty());
+}
+
 #[test]
 #[ignore = "daily"]
 fn a_packs_separate_ao_reaches_the_terrain() {
+    if sunrise_gameplay_common::game::test_fixtures::run_fresh_cases_with_env(
+        NAME,
+        CASE,
+        &["hdr", "memo-refused"],
+        1,
+        &[("SUNRISE_HDR_FRAME", "float")],
+    ) {
+        return;
+    }
     if run_fresh_cases(
         NAME,
         CASE,
@@ -224,6 +246,7 @@ fn a_packs_separate_ao_reaches_the_terrain() {
             "gpu-spawn-failure",
             "mod-off",
             "open-failure",
+            "unsupported",
             "translation-panic",
             "translation-spawn-failure",
             "cancel-translation",
@@ -236,9 +259,21 @@ fn a_packs_separate_ao_reaches_the_terrain() {
     let case = std::env::var(CASE).unwrap();
     let scratch = tempfile::tempdir().unwrap();
     let a = scratch.path().join("native-first");
-    let b = scratch.path().join("second");
+    let b = scratch.path().join("native-second");
+    let c = scratch.path().join("third");
     write_pack(&a, 41, "separateAo = true\n");
     write_pack(&b, 72, "separateAo = false\nbufferObject.0 = 64\n");
+    if case == "hdr" {
+        write_pack(&a, 41, "separateAo = true\nsunrise.hdr = true\n");
+        write_pack(
+            &b,
+            72,
+            "separateAo = false\nsunrise.hdr = true\nsunrise.hdr.tonemap = sunrise\n",
+        );
+    }
+    if case == "late-failure" {
+        write_pack(&c, 93, "separateAo = false\n");
+    }
     if case == "options" {
         std::fs::write(
             a.join("shaders/shaders.properties"),
@@ -271,8 +306,8 @@ fn a_packs_separate_ao_reaches_the_terrain() {
         }
         if case == "mod-off" {
             game.client.settings.mods.installed.push(Installed {
-                id: "first".into(),
-                title: "First".into(),
+                id: "second".into(),
+                title: "Second".into(),
                 description: String::new(),
                 problem: None,
                 dev: false,
@@ -313,231 +348,65 @@ fn a_packs_separate_ao_reaches_the_terrain() {
         assert_boundary(game, None, notices);
         assert_eq!(layout(game), vanilla);
 
-        let mut translating_layout = vanilla;
+        gate.send(TranslationTestAction::Complete).unwrap();
+        finish_translation(
+            game,
+            (41, true),
+            notices,
+            if case == "dimensions" { "first" } else { "" },
+        );
+        if case == "on" {
+            return;
+        }
+        let old_layout = layout(game);
+        assert_ne!(
+            old_layout, vanilla,
+            "per-section shader terrain changes the layout"
+        );
+        upload_test_section(game);
+        let old_inputs = renderer(game).shader_pack_inputs_for_test();
+        let old_revision = renderer(game).block_entity_revision();
+        assert!(old_inputs.0);
+        assert_eq!(old_inputs.1, Some(true));
+        assert_eq!(old_inputs.2, [1, 2]);
+        game.client.native_shaders.translation.test_lava_layers = Some(vec![3, 4]);
+        let target = if case == "options" || case == "dimensions" {
+            &a
+        } else {
+            &b
+        };
+        pick(game, target);
+
         match case.as_str() {
-            "on"
-            | "switch"
-            | "off"
-            | "renderer"
-            | "cancel-build"
-            | "refuse-build"
-            | "gpu-spawn-failure"
-            | "open-failure"
-            | "translation-spawn-failure"
-            | "translation-panic"
-            | "cancel-translation"
-            | "disconnect"
-            | "fingerprint" => {
-                gate.send(TranslationTestAction::Complete).unwrap();
-                finish_translation(game, (41, true), notices, "");
-                if case == "on" {
-                    return;
-                }
-                let old_layout = layout(game);
-                assert_ne!(
-                    old_layout, vanilla,
-                    "per-section shader terrain changes the layout"
-                );
-                upload_test_section(game);
-                let old_inputs = renderer(game).shader_pack_inputs_for_test();
-                let old_revision = renderer(game).block_entity_revision();
-                let sections = renderer(game).resident_sections();
-                assert!(old_inputs.0);
-                assert_eq!(old_inputs.1, Some(true));
-                assert_eq!(old_inputs.2, [1, 2]);
-                game.client.native_shaders.translation.test_lava_layers = Some(vec![3, 4]);
-                pick(game, &b);
-                let next = match case.as_str() {
+            "open-failure" | "translation-spawn-failure" | "unsupported" | "memo-refused" => {
+                let (clear_pick, remembered) = match case.as_str() {
                     "open-failure" => {
                         std::fs::remove_dir_all(&b).unwrap();
-                        None
+                        (false, Some(false))
                     }
                     "translation-spawn-failure" => {
                         game.client.native_shaders.translation.test_spawn_failure = true;
-                        None
+                        (false, None)
                     }
-                    _ => Some(game.client.native_shaders.translation.block_next()),
-                };
-                frame(game);
-                assert_running_pack(game, old_layout, old_revision, notices);
-                assert_eq!(renderer(game).resident_sections(), sections);
-                assert_eq!(renderer(game).shader_pack_inputs_for_test(), old_inputs);
-                match case.as_str() {
-                    "switch" => {
-                        next.unwrap().send(TranslationTestAction::Complete).unwrap();
-                        finish_translation(game, (72, false), notices, "");
-                        let inputs = renderer(game).shader_pack_inputs_for_test();
-                        assert!(!inputs.0);
-                        assert_eq!(inputs.1, Some(false));
-                        assert_eq!(inputs.2, [3, 4]);
-                        assert_eq!(inputs.3.buffer_objects, 1);
-                    }
-                    "off" => {
-                        game.client.settings.sunrise.shader_pack.clear();
-                        frame(game);
-                        assert_boundary(game, None, notices);
-                        assert_eq!(layout(game), vanilla);
-                        next.unwrap().send(TranslationTestAction::Fail).unwrap();
-                        game.client
-                            .native_shaders
-                            .translation
-                            .wait_for_translation();
-                        frame(game);
-                        assert!(game.client.settings.sunrise.shader_pack.is_empty());
-                        assert_eq!(outcome(&b), None);
-                        assert_boundary(game, None, notices);
-                        assert_eq!(layout(game), vanilla);
-                    }
-                    "renderer" => {
-                        #[allow(deprecated)]
-                        let window = event_loop
-                            .create_window(
-                                winit::window::Window::default_attributes()
-                                    .with_visible(false)
-                                    .with_inner_size(winit::dpi::PhysicalSize::new(320, 240)),
-                            )
-                            .unwrap();
-                        let replacement = game.new_renderer(std::sync::Arc::new(window)).unwrap();
-                        game.set_renderer(replacement);
-                        assert!(game.client.pack_ids.is_none());
-                        next.unwrap().send(TranslationTestAction::Fail).unwrap();
-                        game.client
-                            .native_shaders
-                            .translation
-                            .wait_for_translation();
-                        frame(game);
-                        assert_boundary(game, None, notices);
-                        assert_eq!(outcome(&b), None);
-                        finish_translation(game, (72, false), notices, "");
-                    }
-                    "cancel-build" | "refuse-build" | "gpu-spawn-failure" => {
-                        let mode = match case.as_str() {
-                            "cancel-build" => ShaderPackBuildTestMode::Immediate,
-                            "refuse-build" => ShaderPackBuildTestMode::Refuse,
-                            _ => ShaderPackBuildTestMode::SpawnFailure,
-                        };
-                        renderer_mut(game).set_shader_pack_build_test_mode(mode);
-                        if case == "gpu-spawn-failure" {
-                            game.set_translucent_layers(vec![true]);
-                        }
-                        next.unwrap().send(TranslationTestAction::Complete).unwrap();
-                        game.client
-                            .native_shaders
-                            .translation
-                            .wait_for_translation();
-                        frame(game);
-                        if case != "gpu-spawn-failure" {
-                            assert_boundary(game, Some((72, false)), notices);
-                            assert_ne!(layout(game), vanilla);
-                            assert!(renderer(game).shader_pack_build_ready());
-                            if case == "cancel-build" {
-                                game.client.settings.sunrise.shader_pack.clear();
-                            }
-                            frame(game);
-                        }
-                        let refused = case == "refuse-build";
-                        assert_boundary(game, None, notices + u64::from(refused));
-                        assert_eq!(layout(game), vanilla);
-                        assert_eq!(renderer(game).shader_pack_kind(), None);
-                        assert_eq!(
-                            renderer(game).installed_pack_block_id_for_test(stone_index(game)),
-                            None
-                        );
-                        assert!(game.client.streaming.translucent_layers.is_empty());
-                        assert_eq!(outcome(&b), refused.then_some(false));
-                        assert_eq!(
-                            game.client.settings.sunrise.shader_pack,
-                            if case == "gpu-spawn-failure" {
-                                b.to_str().unwrap()
-                            } else {
-                                ""
-                            },
-                        );
+                    "memo-refused" => {
+                        remember(&b, fingerprint(&b), false);
+                        (false, Some(false))
                     }
                     _ => {
-                        match case.as_str() {
-                            "translation-panic" => {
-                                next.unwrap().send(TranslationTestAction::Panic).unwrap()
-                            }
-                            "cancel-translation" | "disconnect" => drop(next.unwrap()),
-                            "fingerprint" => {
-                                std::fs::write(
-                                    b.join("shaders/item.properties"),
-                                    "item.1947=minecraft:stick
-",
-                                )
-                                .unwrap();
-                                next.unwrap().send(TranslationTestAction::Complete).unwrap();
-                            }
-                            _ => assert!(next.is_none()),
-                        }
-                        if matches!(
-                            case.as_str(),
-                            "translation-panic" | "cancel-translation" | "fingerprint"
-                        ) {
-                            game.client
-                                .native_shaders
-                                .translation
-                                .wait_for_translation();
-                        } else if case == "disconnect" {
-                            game.client.native_shaders.translation.disconnect_worker();
-                        }
-                        let panicked = case == "translation-panic";
-                        for _ in 0..2 {
-                            frame(game);
-                            assert!(!game.client.native_shaders.translation.is_translating());
-                            assert_running_pack(
-                                game,
-                                old_layout,
-                                old_revision,
-                                notices + u64::from(panicked),
-                            );
-                            assert_eq!(renderer(game).shader_pack_inputs_for_test(), old_inputs);
-                            assert_eq!(renderer(game).resident_sections(), sections);
-                            assert_eq!(outcome(&a), Some(true));
-                            assert_eq!(
-                                outcome(&b),
-                                (panicked || case == "open-failure").then_some(false)
-                            );
-                            assert_eq!(
-                                game.client.settings.sunrise.shader_pack,
-                                if panicked { "" } else { b.to_str().unwrap() }
-                            );
-                        }
+                        std::fs::write(b.join("sunrise-shaders.toml"), "").unwrap();
+                        (true, None)
                     }
-                }
-                return;
-            }
-            "mod-off" => {
-                game.client.settings.mods.disabled.insert("first".into());
+                };
                 frame(game);
-                assert!(!game.client.native_shaders.translation.is_translating());
-                assert_boundary(game, None, notices);
-                assert_eq!(layout(game), vanilla);
-                gate.send(TranslationTestAction::Fail).unwrap();
-                game.client
-                    .native_shaders
-                    .translation
-                    .wait_for_translation();
-                frame(game);
-                assert_boundary(game, None, notices);
-                assert_eq!(layout(game), vanilla);
+                assert_stopped(game, vanilla, notices + u64::from(clear_pick));
+                assert_eq!(outcome(&b), remembered);
                 assert_eq!(
                     game.client.settings.sunrise.shader_pack,
-                    a.to_str().unwrap()
+                    if clear_pick { "" } else { b.to_str().unwrap() },
                 );
-                assert_eq!(outcome(&a), None);
-                game.client.settings.mods.disabled.remove("first");
                 frame(game);
-                finish_translation(game, (41, true), notices, "");
+                assert_stopped(game, vanilla, notices + u64::from(clear_pick));
                 return;
-            }
-            "late-failure" => {
-                pick(game, &b);
-                frame(game);
-                assert_boundary(game, None, notices);
-                assert_eq!(layout(game), vanilla);
-                gate.send(TranslationTestAction::Fail).unwrap();
             }
             "options" => {
                 game.open_shader_options();
@@ -549,18 +418,120 @@ fn a_packs_separate_ao_reaches_the_terrain() {
                     .chosen
                     .insert("TEST_AO".into(), "false".into());
                 game.save_shader_options();
-                gate.send(TranslationTestAction::Complete).unwrap();
             }
             "dimensions" => {
                 game.common.dim = Dim::Extra(mod_api::__private::dimension_key("test:second"));
-                gate.send(TranslationTestAction::Complete).unwrap();
+            }
+            "hdr" => {
+                assert_eq!(
+                    renderer(game).pack_hdr,
+                    Some(sunrise_shaders::Tonemap::Pack)
+                );
+                game.follow_frame();
+                assert_eq!(
+                    renderer(game).pack_hdr,
+                    Some(sunrise_shaders::Tonemap::Pack)
+                );
+            }
+            _ => {}
+        }
+
+        let next = game.client.native_shaders.translation.block_next();
+        frame(game);
+        assert_running_pack(game, old_layout, old_revision, notices);
+        assert_eq!(renderer(game).resident_sections(), 1);
+        assert_eq!(renderer(game).shader_pack_inputs_for_test(), old_inputs);
+        assert_eq!(game.client.native_shaders.running, a.to_str().unwrap());
+        match case.as_str() {
+            "switch" | "options" | "dimensions" => {
+                next.send(TranslationTestAction::Complete).unwrap();
+                let (expected, folder) = match case.as_str() {
+                    "options" => ((41, false), ""),
+                    "dimensions" => ((41, true), "second"),
+                    _ => ((72, false), ""),
+                };
+                finish_translation(game, expected, notices, folder);
+                let inputs = renderer(game).shader_pack_inputs_for_test();
+                assert_eq!(inputs.0, expected.1);
+                assert_eq!(inputs.1, Some(expected.1));
+                assert_eq!(inputs.2, [3, 4]);
+                assert_eq!(inputs.3.buffer_objects, u32::from(case == "switch"));
+            }
+            "hdr" => {
+                use sunrise_shaders::Tonemap;
+                game.follow_frame();
+                assert_eq!(renderer(game).pack_hdr, Some(Tonemap::Pack));
+                renderer_mut(game)
+                    .set_shader_pack_build_test_mode(ShaderPackBuildTestMode::Immediate);
+                next.send(TranslationTestAction::Complete).unwrap();
+                game.client
+                    .native_shaders
+                    .translation
+                    .wait_for_translation();
+                frame(game);
+                assert_boundary(game, Some((72, false)), notices);
+                assert!(renderer(game).shader_pack_build_ready());
+                assert_eq!(renderer(game).pack_hdr, Some(Tonemap::Sunrise));
+                game.follow_frame();
+                frame(game);
+                assert!(!game.client.native_shaders.translation.is_translating());
+                assert_boundary(game, Some((72, false)), notices);
+                assert_eq!(renderer(game).shader_pack_kind(), Some("iris"));
+                assert_eq!(outcome(&b), Some(true));
+            }
+            "off" | "mod-off" => {
+                if case == "off" {
+                    game.client.settings.sunrise.shader_pack.clear();
+                } else {
+                    game.client.settings.mods.disabled.insert("second".into());
+                }
+                frame(game);
+                assert_stopped(game, vanilla, notices);
+                next.send(TranslationTestAction::Fail).unwrap();
+                game.client
+                    .native_shaders
+                    .translation
+                    .wait_for_translation();
+                frame(game);
+                assert_stopped(game, vanilla, notices);
+                assert_eq!(outcome(&b), None);
+                assert_eq!(
+                    game.client.settings.sunrise.shader_pack,
+                    if case == "off" {
+                        ""
+                    } else {
+                        b.to_str().unwrap()
+                    }
+                );
+                if case == "mod-off" {
+                    game.client.settings.mods.disabled.remove("second");
+                    frame(game);
+                    finish_translation(game, (72, false), notices, "");
+                }
+            }
+            "late-failure" => {
+                pick(game, &c);
+                frame(game);
+                assert_running_pack(game, old_layout, old_revision, notices);
+                next.send(TranslationTestAction::Fail).unwrap();
+                game.client
+                    .native_shaders
+                    .translation
+                    .wait_for_translation();
+                frame(game);
+                assert_running_pack(game, old_layout, old_revision, notices);
+                assert_eq!(outcome(&b), None);
+                assert_eq!(
+                    game.client.settings.sunrise.shader_pack,
+                    c.to_str().unwrap()
+                );
+                finish_translation(game, (93, false), notices, "");
             }
             "resources" => {
                 game.reload_packs();
                 frame(game);
-                assert_boundary(game, None, notices);
-                assert_eq!(layout(game), vanilla);
-                gate.send(TranslationTestAction::Fail).unwrap();
+                assert_running_pack(game, old_layout, old_revision, notices);
+                next.send(TranslationTestAction::Fail).unwrap();
                 let mut reload = game
                     .client
                     .pack_reload
@@ -569,36 +540,114 @@ fn a_packs_separate_ao_reaches_the_terrain() {
                     .expect("resource reload started");
                 let staged = reload.handle.take().unwrap().join().unwrap().unwrap();
                 game.apply_staged_pack(staged).unwrap();
-                translating_layout = layout(game);
+                assert_stopped(game, vanilla, notices);
+                game.client
+                    .native_shaders
+                    .translation
+                    .wait_for_translation();
+                frame(game);
+                assert_stopped(game, vanilla, notices);
+                assert_eq!(outcome(&b), None);
+                finish_translation(game, (72, false), notices, "");
+            }
+            "renderer" => {
+                #[allow(deprecated)]
+                let window = event_loop
+                    .create_window(
+                        winit::window::Window::default_attributes()
+                            .with_visible(false)
+                            .with_inner_size(winit::dpi::PhysicalSize::new(320, 240)),
+                    )
+                    .unwrap();
+                let replacement = game.new_renderer(std::sync::Arc::new(window)).unwrap();
+                game.set_renderer(replacement);
+                assert_boundary(game, None, notices);
+                next.send(TranslationTestAction::Fail).unwrap();
+                game.client
+                    .native_shaders
+                    .translation
+                    .wait_for_translation();
+                frame(game);
+                assert_boundary(game, None, notices);
+                assert_eq!(outcome(&b), None);
+                finish_translation(game, (72, false), notices, "");
+            }
+            "cancel-build" | "refuse-build" | "gpu-spawn-failure" => {
+                let mode = match case.as_str() {
+                    "cancel-build" => ShaderPackBuildTestMode::Immediate,
+                    "refuse-build" => ShaderPackBuildTestMode::Refuse,
+                    _ => ShaderPackBuildTestMode::SpawnFailure,
+                };
+                renderer_mut(game).set_shader_pack_build_test_mode(mode);
+                if case == "gpu-spawn-failure" {
+                    game.set_translucent_layers(vec![true]);
+                }
+                next.send(TranslationTestAction::Complete).unwrap();
+                game.client
+                    .native_shaders
+                    .translation
+                    .wait_for_translation();
+                frame(game);
+                if case != "gpu-spawn-failure" {
+                    assert_boundary(game, Some((72, false)), notices);
+                    assert_ne!(layout(game), vanilla);
+                    assert!(renderer(game).shader_pack_build_ready());
+                    game.set_translucent_layers(vec![true]);
+                    assert_eq!(*game.client.streaming.translucent_layers, [true]);
+                    if case == "cancel-build" {
+                        game.client.settings.sunrise.shader_pack.clear();
+                    }
+                    frame(game);
+                }
+                let refused = case == "refuse-build";
+                assert_stopped(game, vanilla, notices + u64::from(refused));
+                assert_eq!(outcome(&b), refused.then_some(false));
+                assert_eq!(
+                    game.client.settings.sunrise.shader_pack,
+                    if case == "gpu-spawn-failure" {
+                        b.to_str().unwrap()
+                    } else {
+                        ""
+                    },
+                );
+            }
+            "translation-panic" | "cancel-translation" | "disconnect" | "fingerprint" => {
+                match case.as_str() {
+                    "translation-panic" => next.send(TranslationTestAction::Panic).unwrap(),
+                    "cancel-translation" | "disconnect" => drop(next),
+                    _ => {
+                        std::fs::write(
+                            b.join("shaders/item.properties"),
+                            "item.1947=minecraft:stick\n",
+                        )
+                        .unwrap();
+                        next.send(TranslationTestAction::Complete).unwrap();
+                    }
+                }
+                if case == "disconnect" {
+                    game.client.native_shaders.translation.disconnect_worker();
+                } else {
+                    game.client
+                        .native_shaders
+                        .translation
+                        .wait_for_translation();
+                }
+                let panicked = case == "translation-panic";
+                frame(game);
+                assert_stopped(game, vanilla, notices + u64::from(panicked));
+                if panicked {
+                    game.common.dim = Dim::Nether;
+                }
+                frame(game);
+                assert_stopped(game, vanilla, notices + u64::from(panicked));
+                assert_eq!(outcome(&a), Some(true));
+                assert_eq!(outcome(&b), panicked.then_some(false));
+                assert_eq!(
+                    game.client.settings.sunrise.shader_pack,
+                    if panicked { "" } else { b.to_str().unwrap() }
+                );
             }
             _ => panic!("unknown shader pack case {case}"),
         }
-        game.client
-            .native_shaders
-            .translation
-            .wait_for_translation();
-        frame(game);
-        assert_boundary(game, None, notices);
-        assert_eq!(layout(game), translating_layout);
-        assert_eq!(
-            game.client.settings.sunrise.shader_pack,
-            if case == "late-failure" {
-                b.to_str().unwrap()
-            } else {
-                a.to_str().unwrap()
-            }
-        );
-        assert_eq!(outcome(&a), None);
-        let expected = match case.as_str() {
-            "late-failure" => (72, false),
-            "options" => (41, false),
-            _ => (41, true),
-        };
-        finish_translation(
-            game,
-            expected,
-            notices,
-            if case == "dimensions" { "second" } else { "" },
-        );
     });
 }
