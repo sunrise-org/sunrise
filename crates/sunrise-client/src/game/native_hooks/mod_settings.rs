@@ -965,11 +965,12 @@ mod tests {
                 let _ = mod_api::__private::take_hook_panics();
                 alpha_panic.store(true, Ordering::Relaxed);
                 assert_eq!(
-                    game.set_setting(alpha_on, SettingValue::Toggle(false)),
+                    game.set_setting(alpha_on, SettingValue::Toggle(true)),
                     Ok(true)
                 );
-                assert_eq!(game.setting_bool(alpha_on), Ok(false));
-                assert_eq!(fs::read_to_string(&on_file).unwrap(), "false");
+                assert_eq!(game.setting_bool(alpha_on), Ok(true));
+                assert_eq!(*ui_row(game), NativeSettingValue::Toggle(true));
+                assert_eq!(fs::read_to_string(&on_file).unwrap(), "true");
                 let notices = mod_api::__private::take_hook_panics();
                 assert!(
                     notices
@@ -979,10 +980,12 @@ mod tests {
 
                 alpha_panic.store(false, Ordering::Relaxed);
                 assert_eq!(
-                    game.set_setting(alpha_on, SettingValue::Toggle(true)),
+                    game.set_setting(alpha_on, SettingValue::Toggle(false)),
                     Ok(true)
                 );
-                assert_eq!(*ui_row(game), NativeSettingValue::Toggle(true));
+                assert_eq!(game.setting_bool(alpha_on), Ok(false));
+                assert_eq!(*ui_row(game), NativeSettingValue::Toggle(false));
+                assert_eq!(fs::read_to_string(&on_file).unwrap(), "false");
                 assert_eq!(alpha_seen.lock().unwrap().len(), seen_before_panic);
                 assert_eq!(
                     game.set_setting(beta_on, SettingValue::Toggle(false)),
