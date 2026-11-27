@@ -20,6 +20,7 @@ pub mod cit;
 pub mod color;
 pub mod ctm;
 pub mod emissive;
+pub mod font;
 pub mod fusion;
 pub mod matchers;
 pub mod paths;
