@@ -150,6 +150,17 @@ impl Renderer {
     fn pack_changed(&mut self) {
         self.pack_generation = self.pack_generation.wrapping_add(1);
     }
+    /// The last `ShaderPackState::generation` this renderer counted, to hand to the renderer
+    /// that replaces it ([`Self::continue_pack_generation`]).
+    pub fn pack_generation(&self) -> u32 {
+        self.pack_generation
+    }
+    /// Before this renderer is published in place of one whose last generation was `previous`,
+    /// continue that count, keeping the pack changes this one already counted. The count wraps
+    /// around after `u32::MAX`, as every pack change counts it.
+    pub fn continue_pack_generation(&mut self, previous: u32) {
+        self.pack_generation = previous.wrapping_add(self.pack_generation);
+    }
     /// The running pack as a mod reads it this frame, or `None` while the panorama shows or no
     /// pack runs. `frame` gives the camera, so the shadow matrices are this frame's.
     pub fn shader_pack_state(&self, frame: &Frame<'_>) -> Option<mod_api::ShaderPackState> {
