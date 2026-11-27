@@ -403,16 +403,14 @@ pub(super) fn write_atlas_border(
     copy_px(pixels, src_right, src_bottom, x + w, y + h);
 }
 
-/// The texture of every `bitmap` font provider. A provider's `file` may name
-/// any texture, so a pack's glyph sheet need not live under `textures/font`.
-pub(super) fn bitmap_font_textures(root: &ResourceSource) -> Vec<String> {
+/// The `file` of every `bitmap` font provider, in definition order.
+fn bitmap_font_files(root: &ResourceSource) -> Vec<String> {
     let defs = root
         .namespaces("assets")
         .into_iter()
         .flat_map(|ns| root.list(&format!("assets/{ns}/font/")))
         .filter(|path| path.ends_with(".json"));
     let mut out = Vec::new();
-    let mut seen = HashSet::new();
     for def in defs {
         let Ok(bytes) = root.read(&def) else { continue };
         let bytes = bytes.strip_prefix(b"\xEF\xBB\xBF").unwrap_or(&bytes);
@@ -423,17 +421,38 @@ pub(super) fn bitmap_font_textures(root: &ResourceSource) -> Vec<String> {
             if p["type"] != "bitmap" {
                 continue;
             }
-            let Some(file) = p["file"].as_str() else {
-                continue;
-            };
-            let (ns, path) = file.split_once(':').unwrap_or(("minecraft", file));
-            let path = format!("assets/{ns}/textures/{path}");
-            if root.contains(&path) && seen.insert(path.clone()) {
-                out.push(path);
+            if let Some(file) = p["file"].as_str() {
+                out.push(file.to_owned());
             }
         }
     }
     out
+}
+
+/// The texture of every `bitmap` font provider. A provider's `file` may name
+/// any texture, so a pack's glyph sheet need not live under `textures/font`.
+pub(super) fn bitmap_font_textures(root: &ResourceSource) -> Vec<String> {
+    let mut seen = HashSet::new();
+    bitmap_font_files(root)
+        .iter()
+        .map(String::as_str)
+        .filter_map(|file| {
+            let (ns, path) = file.split_once(':').unwrap_or(("minecraft", file));
+            let path = format!("assets/{ns}/textures/{path}");
+            (root.contains(&path) && seen.insert(path.clone())).then_some(path)
+        })
+        .collect()
+}
+
+/// The OptiFine HD sheets the packs have for the sheets of `bitmap` font providers: those
+/// providers read them instead (`sunrise_optifine::font`).
+pub(super) fn hd_font_sheets(root: &ResourceSource) -> Vec<sunrise_optifine::font::HdSheet> {
+    let mut seen = HashSet::new();
+    bitmap_font_files(root)
+        .iter()
+        .filter_map(|file| sunrise_optifine::font::find(root, file))
+        .filter(|sheet| seen.insert(sheet.resource.clone()))
+        .collect()
 }
 
 /// Folders of `assets/minecraft/textures/` that [`HudAtlas::pack`] walks for

@@ -379,7 +379,8 @@ fn hex_advance(h: &HexGlyph) -> f32 {
 }
 /// `BitmapProvider.Definition.load`: each character's glyph, from the atlas
 /// when the sheet is in it (`pixels` its RGBA), else from the sheet's own
-/// pixels, copied into the atlas when first drawn.
+/// pixels, copied into the atlas when first drawn. The sheet is the pack's
+/// OptiFine HD one when it has one (`sunrise_optifine::font`).
 fn load_bitmap(
     source: &ResourceSource,
     p: &serde_json::Value,
@@ -392,12 +393,21 @@ fn load_bitmap(
     let file = p["file"].as_str().unwrap_or("");
     let (ns, name) = file.split_once(':').unwrap_or(("minecraft", file));
     let name = name.trim_end_matches(".png");
-    // The atlas names the default namespace's textures by their path and every
-    // other namespace's as `namespace:path` (HudAtlas::build).
-    let atlas_name = if ns == "minecraft" {
-        name.to_owned()
-    } else {
-        format!("{ns}:{name}")
+    let (atlas_name, resource) = match sunrise_optifine::font::find(source, file) {
+        // OptiFine's HD fonts: a pack's `optifine/<path>` stands in for the sheet
+        // `textures/<path>`. Its cells are bigger and its grid the same, so the glyphs below
+        // scale by the cell's height as for any sheet and keep their size in GUI pixels.
+        Some(hd) => (hd.atlas_name, hd.resource),
+        // The atlas names the default namespace's textures by their path and every
+        // other namespace's as `namespace:path` (HudAtlas::build).
+        None => (
+            if ns == "minecraft" {
+                name.to_owned()
+            } else {
+                format!("{ns}:{name}")
+            },
+            resource_path(file, "textures", ""),
+        ),
     };
     let in_atlas = sheets.get(&atlas_name).copied();
     // The sheet: its size, and its pixels when they are not in the atlas.
@@ -407,7 +417,7 @@ fn load_bitmap(
             (w, h, None)
         }
         None => match source
-            .read(&resource_path(file, "textures", ""))
+            .read(&resource)
             .map_err(Into::into)
             .and_then(|bytes| crate::hud::decode_bytes(&bytes))
         {
@@ -1807,6 +1817,108 @@ mod tests {
                 "{ns}: the atlas sheet is not copied into the run-time region"
             );
         }
+    }
+
+    /// OptiFine's HD fonts: a pack's `optifine/<path>` replaces the provider's sheet
+    /// `textures/<path>`. Its cells are four times as wide and tall and hold the same glyphs, so
+    /// the box and the advance stay in GUI pixels and the cells copied are the HD ones.
+    #[test]
+    fn an_hd_sheet_replaces_the_plain_one_in_gui_pixels() {
+        let plain = png(16, 8, |x, _| x < 2 || (8..14).contains(&x));
+        // 'a' is 12 columns wide of its 32 (3 GUI pixels), 'b' 20 (5).
+        let hd = png(64, 32, |x, _| x < 12 || (32..52).contains(&x));
+        for (ns, file, plain_path, hd_path) in [
+            (
+                "minecraft",
+                "minecraft:font/ascii.png",
+                "assets/minecraft/textures/font/ascii.png",
+                "assets/minecraft/optifine/font/ascii.png",
+            ),
+            (
+                "demo",
+                "demo:font/sheet.png",
+                "assets/demo/textures/font/sheet.png",
+                "assets/demo/optifine/font/sheet.png",
+            ),
+        ] {
+            let def = format!(
+                r#"{{"providers":[{{"type":"bitmap","file":"{file}","ascent":7,"chars":["ab"]}}]}}"#
+            );
+            let with_hd = root(
+                &format!("hd-{ns}"),
+                &[
+                    ("assets/minecraft/font/default.json", def.as_bytes()),
+                    (plain_path, plain.as_slice()),
+                    (hd_path, hd.as_slice()),
+                ],
+            );
+            let without_hd = root(
+                &format!("plain-{ns}"),
+                &[
+                    ("assets/minecraft/font/default.json", def.as_bytes()),
+                    (plain_path, plain.as_slice()),
+                ],
+            );
+            let (with_hd_font, without_hd_font) = (load(&with_hd), load(&without_hd));
+            let _ = std::fs::remove_dir_all(&with_hd);
+            let _ = std::fs::remove_dir_all(&without_hd);
+            let (a, b) = (with_hd_font.glyph('a'), with_hd_font.glyph('b'));
+            assert_eq!((a.advance, b.advance), (4.0, 6.0), "{ns}");
+            assert_eq!(
+                (a.left, a.top, a.right, a.bottom),
+                (0.0, 0.0, 8.0, 8.0),
+                "{ns}: the box is the cell scaled to the provider's height"
+            );
+            let cells: Vec<_> = with_hd_font
+                .take_patches()
+                .iter()
+                .map(|patch| (patch.width, patch.height))
+                .collect();
+            assert_eq!(cells, [(32, 32), (32, 32)], "{ns}");
+            // Without the HD sheet the provider keeps its own.
+            let (a, b) = (without_hd_font.glyph('a'), without_hd_font.glyph('b'));
+            assert_eq!((a.advance, b.advance), (3.0, 7.0), "{ns}");
+            assert_eq!((a.right, a.bottom), (8.0, 8.0), "{ns}");
+        }
+    }
+
+    /// The atlas names an HD sheet apart from the sheet it replaces (`sunrise_optifine::font`):
+    /// the provider reads the glyphs from it there, and nothing is copied at run time.
+    #[test]
+    fn an_hd_sheet_in_the_atlas_is_read_from_it() {
+        let hd = png(64, 32, |x, _| x < 12 || (32..52).contains(&x));
+        let (_, _, pixels) = crate::hud::decode_bytes(&hd).unwrap();
+        let rect = Rect {
+            u0: 0.0,
+            v0: 0.0,
+            u1: 1.0,
+            v1: 1.0,
+            w: 64,
+            h: 32,
+        };
+        let def = br#"{"providers":[{"type":"bitmap","file":"minecraft:font/ascii.png","ascent":7,"chars":["ab"]}]}"#;
+        // The pack's plain sheet is neither in the atlas nor on disk: only the HD one is.
+        let root = root(
+            "hd-atlas",
+            &[
+                ("assets/minecraft/font/default.json", def.as_slice()),
+                ("assets/minecraft/optifine/font/ascii.png", hd.as_slice()),
+            ],
+        );
+        let sprites = HashMap::from([("minecraft:optifine/font/ascii".to_string(), rect)]);
+        let font = Font::load(
+            &ResourceSource::directory(root.clone()),
+            &sprites,
+            &pixels,
+            (64, 32),
+            (0, 32),
+            white(),
+        );
+        let _ = std::fs::remove_dir_all(&root);
+        let a = font.glyph('a');
+        assert_eq!((a.advance, font.glyph('b').advance), (4.0, 6.0));
+        assert!(a.rect.is_some());
+        assert!(font.take_patches().is_empty());
     }
 
     #[test]

@@ -1687,6 +1687,55 @@ fn a_bitmap_font_sheet_outside_font_is_packed() {
     assert_eq!(rect.texels((atlas.width, atlas.height)), (16, 8));
 }
 
+/// OptiFine's HD fonts: the sheet a pack keeps under `optifine/` for a provider's is packed
+/// under a name of its own, whatever its size, and the font reads it instead of the plain one.
+#[test]
+fn an_optifine_hd_font_sheet_is_packed_and_read() {
+    let root = std::env::temp_dir().join(format!("sunrise-hd-font-pack-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    // Two rows of sixteen glyphs. Plain, a cell is 8 pixels and opaque; HD, 128, and a glyph
+    // fills its first 64 columns (4 GUI pixels).
+    write_columns_png(
+        &root,
+        "assets/minecraft/textures/font/sheet.png",
+        128,
+        16,
+        |_| true,
+    );
+    write_columns_png(
+        &root,
+        "assets/minecraft/optifine/font/sheet.png",
+        2048,
+        256,
+        |x| x % 128 < 64,
+    );
+    let def = root.join("assets/minecraft/font/default.json");
+    fs::create_dir_all(def.parent().unwrap()).unwrap();
+    fs::write(
+        &def,
+        r#"{"providers":[{"type":"bitmap","file":"minecraft:font/sheet.png","ascent":7,"chars":["abcdefghijklmnop","qrstuvwxyz012345"]}]}"#,
+    )
+    .unwrap();
+    let atlas = HudAtlas::build(&ResourceSource::directory(root.clone())).unwrap();
+    let _ = fs::remove_dir_all(&root);
+    let hd = atlas
+        .sprites
+        .get("minecraft:optifine/font/sheet")
+        .expect("the HD sheet is packed under its own name, however wide");
+    assert_eq!(hd.texels((atlas.width, atlas.height)), (2048, 256));
+    assert!(
+        atlas.sprites.contains_key("font/sheet"),
+        "the plain sheet stays packed"
+    );
+    let glyph = atlas.font.glyph('a');
+    assert_eq!(glyph.advance, 5.0, "4 GUI pixels and the gap");
+    assert!(glyph.rect.is_some());
+    assert!(
+        atlas.font.take_patches().is_empty(),
+        "the glyphs are read from the atlas, not copied at run time"
+    );
+}
+
 /// A content mod's GUI textures join the atlas under its namespace;
 /// its other textures and vanilla's names stay as they were.
 #[test]

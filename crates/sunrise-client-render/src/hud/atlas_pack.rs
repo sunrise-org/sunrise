@@ -103,6 +103,15 @@ impl HudAtlas {
                     .filter(|p| seen.insert(p.clone())),
             );
         }
+        // OptiFine's HD fonts: the sheets a pack keeps under `optifine/` for those the font
+        // providers name. They are outside `textures/`, so they are packed under names of their
+        // own, beside the sheets they replace.
+        let hd_fonts = if folders.contains(&"font") {
+            hd_font_sheets(root)
+        } else {
+            Vec::new()
+        };
+        files.extend(hd_fonts.iter().map(|sheet| sheet.resource.clone()));
         // Native and content resources may use any namespace in the resolved pack.
         for namespace in root
             .namespaces("assets")
@@ -195,6 +204,11 @@ impl HudAtlas {
             extra.sort();
             files.extend(extra);
         }
+        named.extend(
+            hd_fonts
+                .iter()
+                .map(|sheet| (sheet.resource.clone(), sheet.atlas_name.clone())),
+        );
         // A texture's LabPBR maps, as decoded (width, height, RGBA8), for shader packs.
         type Maps = [Option<(u32, u32, Vec<u8>)>; 2];
         let read_maps = full && crate::sprites::labpbr_maps();
@@ -259,7 +273,9 @@ impl HudAtlas {
                 .starts_with("gui/atlases/");
             // Vanilla particle atlases accept sprites of any size.
             let particle = name.starts_with("particle/") || name.contains(":particle/");
-            let (gw, gh) = if particle || registered_atlas {
+            // An HD font sheet is many times the size of the vanilla one.
+            let hd_font = hd_fonts.iter().any(|sheet| sheet.resource == *path);
+            let (gw, gh) = if particle || registered_atlas || hd_font {
                 (0, 0)
             } else {
                 gui_size.unwrap_or((w, h))
@@ -340,7 +356,12 @@ impl HudAtlas {
                 name.clone_from(&key);
             }
         }
-        let mut cit_names = HashSet::new();
+        // What the atlas may do without when the images do not all fit: Custom Item Textures
+        // and HD font sheets (a font reads the sheet from its pack instead).
+        let mut optional: HashSet<String> = hd_fonts
+            .iter()
+            .map(|sheet| sheet.atlas_name.clone())
+            .collect();
         let mut gui_files = HashMap::new();
         let mut gui_names = Vec::new();
         let mut non_gui = HashSet::new();
@@ -359,7 +380,7 @@ impl HudAtlas {
             gui_names = found.gui;
             non_gui = found.non_gui;
             for (image, image_flags, is_animated) in cit_sprites(root, &images) {
-                cit_names.insert(image.0.clone());
+                optional.insert(image.0.clone());
                 if let Some(f) = image_flags {
                     flags.insert(image.0.clone(), f);
                 }
@@ -404,21 +425,21 @@ impl HudAtlas {
             pad_sprite_borders(&mut base_images, &flags, u32::MAX)?;
         base_images.sort_by(|a, b| b.2.cmp(&a.2).then(b.1.cmp(&a.1)));
         let (width, placements, glyph_region) =
-            Self::layout_leaving_out(&mut base_images, &mut animated, &cit_names, max_atlas_size)
+            Self::layout_leaving_out(&mut base_images, &mut animated, &optional, max_atlas_size)
                 .or_else(|error| -> Result<_> {
-                let models = reducible_model_sprites(root, &base_images, &blur_bordered);
-                let layout = Self::layout_reducing_models_with_borders(
-                    &mut base_images,
-                    &mut gui_sizes,
-                    &models,
-                    &clamp_bordered,
-                    max_atlas_size,
-                )?;
-                log::warn!(
-                    "reduced HUD model texture resolution to keep the resource pack: {error}"
-                );
-                Ok(layout)
-            })?;
+                    let models = reducible_model_sprites(root, &base_images, &blur_bordered);
+                    let layout = Self::layout_reducing_models_with_borders(
+                        &mut base_images,
+                        &mut gui_sizes,
+                        &models,
+                        &clamp_bordered,
+                        max_atlas_size,
+                    )?;
+                    log::warn!(
+                        "reduced HUD model texture resolution to keep the resource pack: {error}"
+                    );
+                    Ok(layout)
+                })?;
         // A multiple of 1024 rather than a power of two: the default resources
         // need 4096x5120 (8192 rows before), Faithful 32x 4096x12288 (16384).
         let height = glyph_region.saturating_add(GLYPH_ROWS).saturating_add(1023) / 1024 * 1024;
