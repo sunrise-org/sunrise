@@ -1431,12 +1431,14 @@ mod tests {
     #[test]
     #[ignore = "daily"]
     fn lan_ids_keep_family_and_unbound_vector_order() {
-        use sunrise_core::{geometry::Vec3, nbt::parse_snbt, random::LegacyRandom};
+        use sunrise_core::{geometry::Vec3, random::LegacyRandom};
         use sunrise_gameplay_common::game::{
+            FallingBlock,
             dragon_common::{Breath, Crystal},
             fireworks::Rocket,
             lightning_common::Bolt,
             potions_common::ThrownPotion,
+            tnt_common::PrimedTnt,
         };
         use sunrise_items::items::ItemStack;
         use sunrise_sim::{
@@ -1445,17 +1447,57 @@ mod tests {
         };
 
         crate::game::native_entity_refs::tests::with_game(|game| {
-            game.load_tnt(
-                parse_snbt("{id:'minecraft:tnt',Pos:[1d,70d,1d]}")
-                    .unwrap()
-                    .0,
-                None,
-            );
-            game.common.tnts.update(0, |t| t.id = 0);
-            let air = game.common.world.air;
-            game.spawn_falling_block_entity(air, Vec3::ZERO, Vec3::ZERO, false, Default::default())
-                .unwrap();
-            game.common.falling.update(0, |f| f.id = 0);
+            let journal = game.common.resident_entities.table.borrow().producer();
+            let mut events = Vec::new();
+            journal.drain_into(&mut events);
+            events.clear();
+
+            game.common.tnts.push(PrimedTnt {
+                size_answer: None,
+                attachment_lifetime: Default::default(),
+                rotation: [0.0; 2],
+                join: Default::default(),
+                no_gravity: false,
+                id: 0,
+                position: Vec3::ZERO,
+                previous: Vec3::ZERO,
+                velocity: Vec3::ZERO,
+                fuse: 80,
+                ticks: 0,
+                ground: Default::default(),
+                fall_distance: 0.0,
+                stuck: Vec3::ZERO,
+                in_water: false,
+                owner: None,
+                guest: None,
+                power: 4.0,
+                used_portal: false,
+                block_state: None,
+            });
+            game.common.falling.push(FallingBlock {
+                size_answer: None,
+                attachment_lifetime: Default::default(),
+                rotation: [0.0; 2],
+                join: Default::default(),
+                id: 0,
+                state: game.common.world.air,
+                blocks_building: false,
+                start_pos: Default::default(),
+                position: Vec3::ZERO,
+                previous: Vec3::ZERO,
+                velocity: Vec3::ZERO,
+                age: 0,
+                no_gravity: false,
+                portal: Default::default(),
+                drop_item: false,
+                fall_distance: 0.0,
+                ground: Default::default(),
+                fire_ticks: 0,
+                sync_velocity: false,
+                stuck: Vec3::ZERO,
+                damage: Default::default(),
+                saved: None,
+            });
             game.common.creatures.projectiles.push(Projectile::new(
                 ProjectileKind::Snowball,
                 Vec3::ZERO,
@@ -1471,8 +1513,7 @@ mod tests {
                 .crystals
                 .push(Crystal::new(0, Vec3::ZERO, false, 0));
             game.common.bolts.push(Bolt::new(0, [0.0; 3], false).0);
-            game.add_ominous_item_spawner(ItemStack::new("minecraft:stone", 1), [0.0; 3], 60);
-            game.common.ominous_spawners.update(0, |row| row.id = 0);
+            game.common.add_remote_ominous_item_spawner(0, [0.0; 3]);
             game.common.potions.thrown.push(ThrownPotion {
                 id: 0,
                 stack: ItemStack::new("minecraft:splash_potion", 1),
@@ -1504,6 +1545,9 @@ mod tests {
                 victims: Vec::new(),
                 potion: None,
             });
+            journal.drain_into(&mut events);
+            assert!(events.is_empty());
+
             let next = game.server.next_entity;
             game.lan_assign_ids();
             let ids = [
@@ -1521,6 +1565,20 @@ mod tests {
             ];
             assert_eq!(ids, std::array::from_fn(|index| next + index as u32 + 1));
             assert_eq!(game.server.next_entity, next + 11);
+            journal.drain_into(&mut events);
+            let published: Vec<_> = events
+                .iter()
+                .map(|event| match event.change {
+                    sunrise_sim::join_seq::residency::Change::Spawned(identity) => {
+                        identity.id.get()
+                    }
+                    other => panic!("unexpected structural event {other:?}"),
+                })
+                .collect();
+            assert_eq!(
+                published,
+                ids.into_iter().take(8).chain([ids[10]]).collect::<Vec<_>>()
+            );
         });
     }
 
@@ -1649,6 +1707,16 @@ mod tests {
                     tag("evoker_fangs", ""),
                 )
                 .unwrap();
+                game.load_item_frame(tag("item_frame", ""), Some([6, 0, 0, 0]));
+                game.load_item(
+                    tag("item", ",Item:{id:'minecraft:stone',count:1}"),
+                    Some([7, 0, 0, 0]),
+                );
+                game.load_spit_or_bullet(tag("llama_spit", ""), Some([8, 0, 0, 0]), None);
+                game.load_fireball(tag("small_fireball", ""), Some([9, 0, 0, 0]), None);
+                game.load_throwable(tag("snowball", ""), Some([10, 0, 0, 0]), None);
+                game.load_trident(tag("trident", ""), Some([11, 0, 0, 0]));
+                game.load_rocket(tag("firework_rocket", ""), Some([12, 0, 0, 0]), None);
                 assert_eq!(
                     seen.lock()
                         .unwrap()
@@ -1662,9 +1730,69 @@ mod tests {
                         ("minecraft:falling_block", EntityResidency::Gone),
                         ("minecraft:tnt", EntityResidency::InPlace),
                         ("minecraft:evoker_fangs", EntityResidency::InPlace),
+                        ("minecraft:item_frame", EntityResidency::Gone),
+                        ("minecraft:item", EntityResidency::Gone),
+                        ("minecraft:llama_spit", EntityResidency::Gone),
+                        ("minecraft:small_fireball", EntityResidency::Gone),
+                        ("minecraft:snowball", EntityResidency::Gone),
+                        ("minecraft:trident", EntityResidency::InPlace),
+                        ("minecraft:firework_rocket", EntityResidency::InPlace),
                     ],
                 );
             });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn player_and_dispenser_install_configured_armor_stands() {
+        use sunrise_core::{
+            geometry::Direction,
+            nbt::{Tag, parse_snbt},
+        };
+        use sunrise_gameplay_common::{game::GameGameExt1 as _, hit::Hit};
+        use sunrise_items::items::ItemStack;
+
+        crate::game::native_entity_refs::tests::with_resident_game(|game| {
+            let mut stack = ItemStack::new("minecraft:armor_stand", 1);
+            let (entity_data, _) = parse_snbt("{id:'minecraft:armor_stand',Small:1b}").unwrap();
+            stack
+                .data_mut()
+                .set_other("minecraft:entity_data", Some(entity_data));
+            stack.data_mut().custom_name = Some(Tag::String("Configured stand".into()));
+            game.common.creative = true;
+            game.set_state_named([5, 69, 5], "minecraft:stone", &[])
+                .unwrap();
+            let next = game.server.next_entity;
+            let hit = Hit {
+                pos: [5, 69, 5],
+                face: [0, 1, 0],
+                point: [5.5, 70.0, 5.5],
+                inside: false,
+            };
+            assert!(game.place_armor_stand(&hit, &stack));
+            assert_eq!(
+                game.common
+                    .persist
+                    .raw
+                    .get(&(next + 1))
+                    .and_then(|tag| tag.get("Small")),
+                Some(&Tag::Byte(1))
+            );
+
+            game.dispense_armor_stand((8, 70, 5), Direction::East, stack);
+            assert_eq!(game.server.next_entity, next + 2);
+            let [placed, dispensed] = [&game.common.armor_stands[0], &game.common.armor_stands[1]];
+            assert_eq!((placed.id, dispensed.id), (next + 1, next + 2));
+            assert!(placed.join < dispensed.join);
+            for stand in [placed, dispensed] {
+                assert!(stand.small);
+                assert_eq!(
+                    stand.custom_name.as_ref().unwrap().plain(),
+                    "Configured stand"
+                );
+                assert!(game.common.persist.uuids.contains_key(&stand.id));
+            }
         });
     }
 
