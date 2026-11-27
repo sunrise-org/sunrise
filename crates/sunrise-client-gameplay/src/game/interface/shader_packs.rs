@@ -1337,11 +1337,12 @@ impl crate::game::ClientGame<'_> {
             let LoadStage::Translating { gpu, .. } = stage else {
                 unreachable!("a ready worker belongs to a translating pack");
             };
-            match worker
-                .finish()
-                .filter(|reply| reply.key == job.key)
-                .map(|reply| reply.outcome)
-            {
+            let reply = worker.finish();
+            if reply.as_ref().is_some_and(|reply| reply.key != job.key) {
+                self.client.native_shaders.translation.active = Some(job);
+                return;
+            }
+            match reply.map(|reply| reply.outcome) {
                 Some(Ok(Some(pack))) => {
                     self.reconcile_shader_pack_frame();
                     if self.client.native_shaders.translation.renderer_epoch
@@ -1492,6 +1493,7 @@ impl crate::game::ClientGame<'_> {
     fn shader_pack_without_pack(&mut self, dimension: i32) {
         self.clear_published_shader_metadata();
         if let Some(renderer) = &mut self.client.renderer.0 {
+            renderer.set_separate_ao(false);
             let _ = renderer.set_shader_pack(dimension, None, &[]);
         }
     }
