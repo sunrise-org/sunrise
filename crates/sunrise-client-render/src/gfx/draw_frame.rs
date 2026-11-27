@@ -149,6 +149,7 @@ impl Renderer {
         laps.lap("r_acquire");
         // TAA runs where the world post pass does, not under a shader pack's own.
         let taa = !frame.title && self.pack_post.as_ref().is_none_or(|p| p.1.is_none());
+        let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
         let hdr_lighting = self.shader_pack_kind().is_none();
         if let Some(hdr) = &mut self.hdr {
             hdr.lighting = hdr_lighting && hdr.look;
@@ -175,6 +176,15 @@ impl Renderer {
             frame.camera,
         );
         let jittered = jitter * view_proj;
+        // Prepare the scaled world target before mod frame hooks run so `TextureSource::WorldDepth`
+        // publishes the depth attachment this frame's world pass draws into.
+        let scaled = self.world_post.prepare(
+            &self.device,
+            [self.config.width, self.config.height],
+            pack_post || fg,
+        );
+        self.mod_gpu
+            .publish_world_depth(scaled.as_ref().map_or(&self.depth, |(_, depth)| depth));
         if frame.title {
             self.panorama.prepare(
                 &self.device,
@@ -1085,8 +1095,6 @@ impl Renderer {
             format: Some(self.output.frame.format),
             ..Default::default()
         });
-        // The world's targets: the screen, or the scaled target of `post`.
-        let pack_post = !frame.title && self.pack_post.as_ref().is_some_and(|p| p.1.is_some());
         let pack_draws_sky = pack_post
             && self
                 .pack_post
@@ -1107,11 +1115,6 @@ impl Renderer {
             .and_then(|p| p.1.as_ref())
             .map(|p| p.sky_switches())
             .unwrap_or_default();
-        let scaled = self.world_post.prepare(
-            &self.device,
-            [self.config.width, self.config.height],
-            pack_post || fg,
-        );
         let pack_world_runs = pack_post && scaled.is_some();
         let after_pack_features = live_hooks
             && pack_world_runs
@@ -3980,6 +3983,7 @@ impl Renderer {
                 serial,
                 cpu,
                 lifts_world,
+                export_opaque_depth: frame_graph_needs_world_depth,
                 frame_graph,
             },
             if pack_world_runs { hooks } else { None },

@@ -562,6 +562,7 @@ fn pack_boundaries_fire_in_order_and_draw_pack_custom_depth_tests_mod_pipelines(
             translucent_blocks: true,
             weather: true,
             custom_geometry: true,
+            export_opaque_depth: false,
         },
         |enc, boundary| match boundary {
             WorldBoundary::AfterSky => {
