@@ -574,6 +574,24 @@ fn collect_uses(
     }
 }
 
+fn item_attrs(item: &Item) -> &[Attribute] {
+    match item {
+        Item::Const(item) => &item.attrs,
+        Item::Enum(item) => &item.attrs,
+        Item::Fn(item) => &item.attrs,
+        Item::Impl(item) => &item.attrs,
+        Item::Macro(item) => &item.attrs,
+        Item::Mod(item) => &item.attrs,
+        Item::Static(item) => &item.attrs,
+        Item::Struct(item) => &item.attrs,
+        Item::Trait(item) => &item.attrs,
+        Item::Type(item) => &item.attrs,
+        Item::Union(item) => &item.attrs,
+        Item::Use(item) => &item.attrs,
+        _ => &[],
+    }
+}
+
 impl Analysis {
     pub fn new(seeds: Seeds) -> Self {
         let mut names = Interner::default();
@@ -602,9 +620,13 @@ impl Analysis {
     /// name it.
     pub fn add(&mut self, module: &str, file: &str, source: &str) -> Result<(), String> {
         let parsed = syn::parse_file(source).map_err(|e| format!("{file}: {e}"))?;
+        let mut cfg = mod_source::modules::cfg_conditions(&parsed.attrs);
+        if !crate::may_compile_in_tests(&cfg) {
+            return Ok(());
+        }
         let module = self.module(module);
         self.files.push(file.to_owned());
-        self.items(module, self.files.len() - 1, &parsed.items);
+        self.items(module, self.files.len() - 1, &parsed.items, &mut cfg);
         Ok(())
     }
 
@@ -775,8 +797,14 @@ impl Analysis {
         id
     }
 
-    fn items(&mut self, module: usize, file: usize, items: &[Item]) {
+    fn items(&mut self, module: usize, file: usize, items: &[Item], cfg: &mut Vec<String>) {
         for item in items {
+            let saved = cfg.len();
+            cfg.extend(mod_source::modules::cfg_conditions(item_attrs(item)));
+            if !crate::may_compile_in_tests(cfg) {
+                cfg.truncate(saved);
+                continue;
+            }
             match item {
                 Item::Fn(function) => {
                     let visible = self.visibility(module, &function.vis);
@@ -859,7 +887,7 @@ impl Analysis {
                     let child = self.module(&path);
                     self.modules[child].cfg_test |= is_cfg_test(&declared.attrs);
                     if let Some((_, inner)) = &declared.content {
-                        self.items(child, file, inner);
+                        self.items(child, file, inner, cfg);
                     }
                 }
                 Item::Struct(defined) => {
@@ -906,6 +934,7 @@ impl Analysis {
                     for entry in &defined.items {
                         if let TraitItem::Fn(function) = entry
                             && let Some(block) = &function.default
+                            && crate::attrs_may_compile_in_tests(cfg, &function.attrs)
                         {
                             // A trait's functions are as visible as the trait (bounded by it, in `finish`).
                             let node = self.function(
@@ -940,7 +969,9 @@ impl Analysis {
                         cfg_test: is_cfg_test(&implementation.attrs),
                     });
                     for entry in &implementation.items {
-                        if let ImplItem::Fn(function) = entry {
+                        if let ImplItem::Fn(function) = entry
+                            && crate::attrs_may_compile_in_tests(cfg, &function.attrs)
+                        {
                             // The functions of a trait impl take the trait's visibility, not their own.
                             let visible = if implementation.trait_.is_some() {
                                 0
@@ -960,6 +991,7 @@ impl Analysis {
                 }
                 _ => {}
             }
+            cfg.truncate(saved);
         }
     }
 
@@ -1715,6 +1747,38 @@ mod tests {
         );
         assert!(names(&records, "reaches", "legacy").is_empty());
         assert!(names(&records, "unresolved", "boundary").is_empty());
+    }
+
+    #[test]
+    fn compiled_out_items_do_not_reach_the_boundary() {
+        let records = run(&[
+            ("fixtures", "fixtures.rs", FIXTURES),
+            (
+                "dead",
+                "dead.rs",
+                "#![cfg(any())] fn from_dead_file() { crate::fixtures::prepared_root(); }",
+            ),
+            (
+                "",
+                "lib.rs",
+                r#"
+                use crate::fixtures::prepared_root;
+                #[cfg(any())] fn from_dead_function() { prepared_root(); }
+                #[cfg_attr(test, cfg(any()))] mod dead_module {
+                    fn from_dead_module() { crate::fixtures::prepared_root(); }
+                }
+                struct Example;
+                impl Example {
+                    #[cfg(false)] fn from_dead_method(&self) { prepared_root(); }
+                }
+                trait Other {
+                    #[cfg(not(all()))] fn from_dead_default(&self) { prepared_root(); }
+                }
+                #[cfg(test)] #[test] fn routed() { prepared_root(); }
+            "#,
+            ),
+        ]);
+        assert_eq!(names(&records, "reaches", "boundary"), ["routed"]);
     }
 
     #[test]

@@ -86,9 +86,6 @@ sunrise-client cut_layout::game::server_side::block_entity_ticks::add_blocks_tes
 sunrise-client cut_layout::game::server_side::block_entity_ticks::furnace_changed_tests::a_finished_smelt_marks_the_chunk lib daily resources
 sunrise-client cut_layout::game::server_side::block_entity_ticks::furnace_changed_tests::a_refuel_while_lit_marks_the_chunk lib daily resources
 sunrise-client cut_layout::game::server_side::block_entity_ticks::jukebox_stop_tests::a_jukebox_that_stops_tells_the_listeners lib daily resources
-sunrise-client cut_layout::game::server_side::block_entity_ticks::own_block_entity_tests::a_mods_block_entity_on_a_vanilla_block_is_only_its_own_mods lib daily resources
-sunrise-client cut_layout::game::server_side::block_entity_ticks::own_block_entity_tests::an_entity_replaced_by_another_mods_type_does_not_tick_as_the_old_one lib daily resources
-sunrise-client cut_layout::game::server_side::block_entity_ticks::own_block_entity_tests::each_slot_counts_only_its_own_mods_block_entities lib daily child-process
 sunrise-client cut_layout::game::server_side::block_entity_ticks::slot_guard_tests::a_slot_is_entered_as_its_mod_before_and_after_an_entry lib daily resources
 sunrise-client cut_layout::game::server_side::block_entity_ticks::slot_mutation_tests::a_caught_nested_panic_leaves_the_enclosing_pass_its_scratch lib daily resources
 sunrise-client cut_layout::game::server_side::block_entity_ticks::slot_mutation_tests::a_nested_pass_leaves_the_enclosing_pass_its_scratch lib daily resources
@@ -219,7 +216,6 @@ sunrise-client cut_layout::game::server_side::clone_dimensions_tests::a_clone_to
 sunrise-client cut_layout::game::server_side::clone_dimensions_tests::an_unknown_clone_dimension_fails_and_clones_nothing lib daily resources
 sunrise-client cut_layout::game::closest_space::tests::a_player_is_pushed_out_of_ice_and_a_closed_shulker_box_but_not_glass lib daily resources
 sunrise-client cut_layout::game::server_side::combat::guest_hit_tests::an_effect_hit_on_a_guest_credits_the_mob_that_swung lib daily resources
-sunrise-client cut_layout::game::server_side::combat::infested_roll_tests::a_starving_infested_player_rolls_the_infested_effect lib daily resources
 sunrise-client cut_layout::game::server_side::combat::infested_roll_tests::an_absorbed_hit_still_rolls_the_infested_effect lib daily resources
 sunrise-client cut_layout::game::server_side::combat::pet_credit_tests::a_tame_mod_wolf_types_hit_is_its_owners lib daily resources
 sunrise-client cut_layout::game::server_side::combat::zombie_ignite_tests::a_burning_zombies_burn_rides_a_blow_that_landed lib daily resources
@@ -668,7 +664,6 @@ sunrise-client cut_layout::game::server_side::functions::tests::pack_changes_pub
 sunrise-gameplay game::server_side::functions::tests::prepared_function_calls_keep_causality_and_fallback_boundaries lib daily resources
 sunrise-client cut_layout::game::server_side::functions::tests::refused_item_key_reload_keeps_previous_world_generation lib daily resources
 sunrise-client cut_layout::game::server_side::functions::tests::unless_function_keeps_a_fallthrough_after_running_it_once lib daily resources
-sunrise-gameplay game::server_side::functions::tests::world_open_loads_functions_before_first_tick lib daily resources
 sunrise-client cut_layout::game::server_side::game_tests::added_test_summary_context_tests::added_issuer_actor_missing_guest_and_restoration_controls lib daily resources
 sunrise-client cut_layout::game::server_side::game_tests::completed_test_coordinate_feedback_tests::actual_completed_test_retains_player_source_for_coordinate_feedback lib daily resources
 sunrise-client cut_layout::game::server_side::game_tests::registered_game_test_tests::registered_game_tests_report_pass_failure_and_unknown_in_real_level lib daily resources
@@ -718,7 +713,6 @@ sunrise-client cut_layout::game::server_side::golem_defense_tests::a_golem_targe
 sunrise-client cut_layout::game::server_side::golem_defense_tests::control_a_hated_host_does_not_turn_the_golem_on_the_selected_guest lib daily resources
 sunrise-client cut_layout::game::server_side::golem_defense_tests::control_with_the_guest_as_the_level_player_the_golem_targets_it lib daily resources
 sunrise-client-gameplay game::client_side::growth::tests::a_data_packs_feature_is_in_the_live_registry lib daily resources
-sunrise-client-gameplay game::client_side::growth::tests::a_dispensers_bonemeal_follows_the_cancel_and_the_edited_stack lib daily resources
 sunrise-client-gameplay game::client_side::growth::tests::the_hand_keeps_the_mods_stack_and_a_creative_count lib daily resources
 sunrise-gameplay game::client_side::growth::tests::the_live_features_follow_the_world_being_opened lib daily resources
 sunrise-client cut_layout::game::client_side::gui_layer_tests::mod_layers_draw_in_their_place_and_hide_like_vanilla_layers lib daily resources
@@ -743,7 +737,6 @@ sunrise-client cut_layout::game::server_side::inline_loot_reference_tests::inlin
 sunrise-client cut_layout::game::server_side::integrated::tests::client_session_identifies_only_its_own_integrated_server lib daily resources
 sunrise-client cut_layout::game::server_side::integrated::tests::integrated_rules_screen_shares_server_session_registry lib daily resources
 sunrise-client cut_layout::game::server_side::integrated::tests::integrated_tick_panic_saves_changed_world lib daily child-process
-sunrise-client cut_layout::game::server_side::integrated::tests::posted_native_panic_writes_one_server_report lib daily resources
 sunrise-client cut_layout::game::server_side::interaction_data_tests::data_edits_reach_the_same_live_interaction lib daily resources
 sunrise-client cut_layout::game::server_side::interaction_data_tests::the_live_settings_are_what_the_interaction_saves lib daily resources
 sunrise-client cut_layout::game::invulnerable_time_tests::a_hurt_cooldown_survives_an_edit_and_is_not_saved lib daily resources
@@ -814,7 +807,6 @@ sunrise-gameplay game::server_side::lan::tests::datapack_damage_unrelated_packs_
 sunrise-gameplay game::server_side::lan::tests::datapack_damage_world_open_replaces_preload_atomically lib daily resources
 sunrise-gameplay game::server_side::lan::tests::datapack_damage_world_open_reuses_the_no_pack_preload lib daily resources
 sunrise-gameplay game::server_side::lan::tests::enderman_target_flags_are_tracked_and_cleared lib daily resources
-sunrise-gameplay game::server_side::lan::tests::guest_climbable_glide lib daily resources
 sunrise-gameplay game::server_side::lan::tests::server_chat_replies_reach_the_sender_alone lib daily resources
 sunrise-client cut_layout::game::server_side::lan::world_spawn_sync_tests::guest_respawn_without_a_known_world_spawn_never_advertises_the_hosts_personal_point lib daily resources
 sunrise-client cut_layout::game::server_side::lan::world_spawn_sync_tests::join_and_respawn_contexts_use_world_spawn_not_a_personal_spawn lib daily resources
@@ -827,7 +819,6 @@ sunrise-client cut_layout::game::lan_actions::crack_feedback_tests::crack_packet
 sunrise-client cut_layout::game::lan_actions::guest_body::tests::accepted_hit_moves_through_teleport_restore_but_not_respawn lib daily resources
 sunrise-client cut_layout::game::lan_actions::guest_body::tests::co_located_guests_own_distinct_streams_and_restore_the_saved_body lib daily resources
 sunrise-client cut_layout::game::lan_actions::guest_body::tests::fall_reset::a_guest_move_that_goes_up_ends_its_fall lib daily child-process
-sunrise-client cut_layout::game::server_side::lan_actions_server::guest_close_listener_tests::ordinary_guest_final_close_posts_to_actual_listener lib daily resources
 sunrise-gameplay game::lan_actions::hotbar_tests::a_hotbar_switch_fires_pre_then_post_and_pre_can_keep_the_slot lib daily resources
 sunrise-client cut_layout::game::lan_actions::item_on_block_cooldown_tests::actual_guest_placement_starts_its_cooldown lib daily resources
 sunrise-client cut_layout::game::lan_actions::item_on_block_cooldown_tests::actual_guest_second_placement_is_rejected lib daily resources
@@ -851,7 +842,6 @@ sunrise-gameplay game::lan_actions::tests::block_part_use_item_on_consumes_once 
 sunrise-client cut_layout::game::server_side::lan_actions_server::tests::block_parts_pick_and_use_on_the_server_and_for_a_guest lib daily resources
 sunrise-gameplay game::lan_actions::tests::crafting_guest_self_swap_keeps_eight_items lib daily resources
 sunrise-client cut_layout::game::server_side::lan_actions_server::tests::fake_body_does_not_count_toward_sleep lib daily resources
-sunrise-gameplay game::lan_actions::tests::menu_rules_match_guest_packets_and_prediction lib daily resources
 sunrise-gameplay game::lan_actions::tests::replacing_empty_note_block_use_does_not_award_vanilla_stats lib daily resources
 sunrise-client cut_layout::game::lan_actions::tick::building_cache_tests::a_guest_killed_mid_tick_no_longer_blocks lib daily resources
 sunrise-client cut_layout::game::lan_actions::tick::building_cache_tests::a_guest_put_in_spectator_mid_tick_no_longer_blocks lib daily resources
@@ -877,7 +867,6 @@ sunrise-client cut_layout::game::server_side::lan_menus_tests::menu_owners_stay_
 sunrise-client cut_layout::game::server_side::lan_menus_tests::removing_a_fake_player_drops_its_menu_owners lib daily resources
 sunrise-client cut_layout::game::server_side::lan_mount_menu::tests::horse_inventory_click_keeps_complete_body_stack lib daily resources
 sunrise-client cut_layout::game::server_side::lan_trading::tests::a_lowered_level_still_levels_up_with_the_next_trade_set lib daily resources
-sunrise-client cut_layout::game::server_side::lan_trading::tests::a_trade_hook_fired_by_a_real_select_can_write_the_open_trade lib daily resources
 sunrise-client cut_layout::game::server_side::lan_trading::tests::a_type_change_reaches_the_open_session_before_a_level_up lib daily resources
 sunrise-client cut_layout::game::server_side::lan_trading::tests::changing_an_open_merchant_to_an_unknown_profession_closes_without_trading lib daily resources
 sunrise-client cut_layout::game::server_side::lan_trading::tests::explicit_nbt_offers_and_xp_override_the_live_trade lib daily resources
@@ -908,7 +897,6 @@ sunrise-client cut_layout::game::lightning_item_tests::lightning_items_take_five
 sunrise-client cut_layout::game::server_side::living_attributes::tests::a_base_write_preserves_covered_for_damage_and_attribute_sync lib daily resources
 sunrise-client cut_layout::game::server_side::living_attributes::tests::a_changed_held_stack_hits_by_its_own_modifiers lib daily resources
 sunrise-client cut_layout::game::server_side::living_attributes::tests::a_held_sword_raises_the_attack_damage_until_it_is_put_away lib daily resources
-sunrise-client cut_layout::game::server_side::living_attributes::tests::a_hits_armor_follows_the_live_map_at_once lib daily resources
 sunrise-client cut_layout::game::server_side::living_attributes::tests::a_mods_item_modifiers_reach_the_wearer lib daily resources
 sunrise-client cut_layout::game::server_side::living_attributes::tests::a_mods_modifiers_on_a_mobs_speed_reach_its_gameplay lib daily resources
 sunrise-client cut_layout::game::server_side::living_attributes::tests::a_mods_writes_outlive_a_rebuilt_map lib daily resources
@@ -951,7 +939,6 @@ sunrise-gameplay game::server_side::machines::native_energy::tests::a_buffers_en
 sunrise-gameplay game::server_side::machines::native_energy::tests::entity_energy_and_fluids_move_and_roll_back lib daily resources
 sunrise-gameplay game::server_side::machines::native_fluids::tests::a_cauldron_move_the_target_takes_part_of_gives_the_whole_levels_that_fit lib daily resources
 sunrise-client cut_layout::game::server_side::machines::native_fluids::tests::a_mods_cauldron_fills_and_drains_by_its_levels_and_a_refusal_names_both_sides lib daily resources
-sunrise-client cut_layout::game::server_side::machines::native_fluids::tests::a_scoped_tank_can_refuse_a_fluid lib daily resources
 sunrise-client cut_layout::game::server_side::machines::part_front_tests::a_dropper_and_a_crafter_put_into_a_mod_part_in_front_of_them lib daily resources
 sunrise-client cut_layout::game::server_side::machines::part_front_tests::a_part_handing_a_crafters_output_back_into_its_grid_loses_none lib daily resources
 sunrise-client cut_layout::game::server_side::machines::part_front_tests::a_part_handing_a_droppers_item_back_into_it_loses_none lib daily resources
@@ -971,7 +958,6 @@ sunrise-client cut_layout::game::server_side::maps_server::live_frame_tests::liv
 sunrise-client cut_layout::game::server_side::melee::hit_tests::a_creative_player_hurts_an_invulnerable_mob lib daily resources
 sunrise-client cut_layout::game::server_side::melee::hit_tests::a_hit_that_deals_no_damage_has_no_knockback_anger_or_exhaustion lib daily resources
 sunrise-client cut_layout::game::server_side::melee::hit_tests::the_melee_knockback_scales_with_the_attackers_attack_knockback lib daily resources
-sunrise-gameplay game::server_side::memory::tests::a_servers_report_names_its_entities_and_players_and_leaves_the_rest_unattributed lib daily resources
 sunrise-client cut_layout::game::server_side::mending_pick_tests::a_negative_orb_with_no_piece_to_mend_is_handed_back_unchanged lib daily resources
 sunrise-client cut_layout::game::server_side::mending_pick_tests::a_zero_or_negative_orb_spends_itself_on_a_picked_piece_and_repairs_nothing lib daily resources
 sunrise-client cut_layout::game::server_side::mending_pick_tests::mending_pick_data_pack_effect lib daily resources
@@ -1141,20 +1127,12 @@ sunrise-client-gameplay game::client_side::native_custom_geometry::tests::persis
 sunrise-client-gameplay game::client_side::native_custom_geometry::tests::persistent_groups_match_batch lib daily resources
 sunrise-client cut_layout::game::server_side::native_damage_tests::a_cancelled_deaths_post_fires_once_after_the_death_hooks lib daily resources
 sunrise-client cut_layout::game::server_side::native_damage_tests::a_game_built_level_has_every_damage_hook lib daily resources
-sunrise-client cut_layout::game::server_side::native_damage_tests::a_hit_inside_the_cooldown_no_stronger_than_the_last_fires_no_post lib daily resources
 sunrise-client cut_layout::game::server_side::native_damage_tests::a_hit_on_the_dragon_fires_pre_and_post lib daily resources
 sunrise-client cut_layout::game::server_side::native_damage_tests::a_killing_blows_post_fires_once_after_the_death_hooks lib daily resources
 sunrise-client cut_layout::game::server_side::native_damage_tests::arrow_hits_name_the_projectile_on_players_mobs_and_the_dragon lib daily resources
-sunrise-client cut_layout::game::server_side::native_damage_tests::mob_and_dragon_post_records_fresh_hit_decision lib daily resources
 sunrise-client cut_layout::game::server_side::native_damage_tests::post_fires_for_a_player_hit_a_shield_blocked_whole lib daily resources
 sunrise-client cut_layout::game::server_side::native_damage_tests::post_fires_for_a_player_hit_that_absorption_took_whole lib daily resources
 sunrise-client cut_layout::game::server_side::native_damage_tests::post_fires_once_for_a_killing_blow_on_a_mob lib daily resources
-sunrise-client cut_layout::game::server_side::native_damage_tests::pre_draws_from_the_level_random_of_the_hit lib daily resources
-sunrise-client cut_layout::game::server_side::native_damage_tests::pre_fires_for_a_hit_its_reductions_took_to_zero lib daily resources
-sunrise-client cut_layout::game::server_side::native_damage_tests::pre_sets_health_lost_but_cooldown_compares_the_outer_hit lib daily resources
-sunrise-client cut_layout::game::server_side::native_damage_tests::snapshot_crosses_the_real_damage_hook_with_reductions lib daily resources
-sunrise-client cut_layout::game::server_side::native_damage_tests::the_container_names_what_armor_took lib daily resources
-sunrise-client cut_layout::game::server_side::native_damage_tests::the_original_damage_is_the_hit_before_the_incoming_hook lib daily resources
 sunrise-client cut_layout::game::native_data_bound::tests::a_remote_login_announces_the_client_cause_before_the_tags lib daily resources
 sunrise-client cut_layout::game::native_data_bound::tests::defaults_are_announced_bound_before_the_tags lib daily resources
 sunrise-client cut_layout::game::native_data_bound::tests::the_first_open_announces_bound_defaults_readable lib daily resources
@@ -1201,7 +1179,6 @@ sunrise-client cut_layout::game::server_side::native_entity_invulnerable::tests:
 sunrise-client cut_layout::game::server_side::native_entity_invulnerable::tests::the_piercing_query_follows_the_flag_or_the_window_of_every_kind lib daily resources
 sunrise-client cut_layout::game::server_side::native_entity_invulnerable::tests::the_players_flag_and_window_ride_the_save lib daily resources
 sunrise-client cut_layout::game::server_side::native_entity_invulnerable::tests::the_players_permanent_flag_is_apart_from_their_abilities lib daily resources
-sunrise-client cut_layout::game::server_side::native_entity_invulnerable::tests::the_window_refuses_damage_and_hides_the_mob_from_enemies lib daily resources
 sunrise-client cut_layout::game::native_entity_layers_tests::a_failing_layer_skips_only_that_frame_and_stays_active lib daily child-process
 sunrise-client cut_layout::game::native_entity_layers_tests::a_living_type_draws_its_layers_in_the_order_they_were_added lib daily child-process
 sunrise-client cut_layout::game::native_entity_layers_tests::a_mob_looks_up_only_its_own_types_or_models_layers lib daily child-process
@@ -1265,21 +1242,6 @@ sunrise-client cut_layout::game::native_entity_renderers_tests::a_failed_rendere
 sunrise-client cut_layout::game::native_entity_renderers_tests::a_registered_thrown_type_draws_the_later_renderer_and_no_item lib daily child-process
 sunrise-client cut_layout::game::native_entity_renderers_tests::a_vanilla_boat_is_unchanged_by_a_registration_for_its_type lib daily child-process
 sunrise-client cut_layout::game::native_entity_renderers_tests::an_unregistered_thrown_type_still_draws_its_item lib daily child-process
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::a_nested_tree_lists_passengers_depth_first_and_shares_its_root lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::a_player_boards_ahead_of_a_mob_and_behind_a_player_as_add_passenger_says lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::a_player_gets_off_along_their_own_yaw_on_their_turn_or_not lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::boat_and_cart_interactions_use_shared_mount_path lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::camel_admits_multiple_mob_passengers_but_not_a_fourth lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::canceled_dismount_keeps_old_mount_and_mount_hook_fires_once lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::dismount_location_answers_without_a_ride_or_a_live_handle lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::entity_drops_gates_a_dying_mobs_lead_in_the_tick_not_in_detach lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::full_vehicle_checks_distinguish_forced_mobs_from_storage_limits lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::generic_seat_mount_payloads_cancellation_and_capacity lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::handles_reject_held_out_and_stale_entities lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::leash_writes_change_the_holder_and_tell_the_mods lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::mount_rejects_cycles_and_respects_cooldown_unless_forced lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::passengers_keep_the_order_they_boarded_in_not_the_mob_list lib daily resources
-sunrise-gameplay-common game::server_side::native_entity_riding::tests::the_first_passenger_controls_only_what_it_can_steer lib daily resources
 sunrise-client cut_layout::game::server_side::native_entity_sounds::tests::game_and_entity_events_come_from_the_entity lib daily resources
 sunrise-client cut_layout::game::server_side::native_entity_sounds::tests::only_a_spectator_player_is_a_spectator lib daily resources
 sunrise-client cut_layout::game::server_side::native_entity_sounds::tests::play_sound_queues_at_the_entity_in_its_source lib daily resources
@@ -1297,8 +1259,6 @@ sunrise-gameplay game::server_side::native_entity_state::tests::portal_cooldown_
 sunrise-gameplay game::server_side::native_entity_state::tests::portal_cooldown_write_reaches_an_item lib daily resources
 sunrise-client cut_layout::game::server_side::native_entity_state::tests::secondary_use_reads_reachable_client_handles_and_keeps_server_flags lib daily resources
 sunrise-client cut_layout::game::server_side::native_entity_state::tests::tick_count_reads_supported_entities_and_refuses_others lib daily resources
-sunrise-gameplay game::server_side::native_falling::tests::falling_client_tick_commits_state_without_detaching_its_owner lib daily resources
-sunrise-gameplay game::server_side::native_falling::tests::falling_lifecycle_commands_unload_park_and_remote lib daily resources
 sunrise-gameplay game::server_side::native_falling::tests::falling_parked_swap_preserves_state_and_owner_until_discard lib daily resources
 sunrise-gameplay game::server_side::native_falling::tests::falling_tick_preserves_its_owner_on_success_and_collision_error lib daily resources
 sunrise-client cut_layout::game::native_fire_odds_tests::a_block_part_answers_fire_odds_for_one_face lib daily resources
@@ -1380,7 +1340,6 @@ sunrise-client cut_layout::game::native_held_out_tests::cart_tick_refuses_a_writ
 sunrise-client cut_layout::game::native_held_out_tests::leash_interaction_keeps_the_stored_boat_writable lib daily resources
 sunrise-client cut_layout::game::native_held_out_tests::nested_held_out_entities_both_refuse lib daily resources
 sunrise-client cut_layout::game::native_held_out_tests::statue_conversion_refuses_a_write_from_an_item_spawn_hook lib daily resources
-sunrise-client cut_layout::game::server_side::native_hit_attempt_tests::hit_attempts_reach_the_listener_once_including_refusals lib daily resources
 sunrise-client cut_layout::game::server_side::native_hooks_server::incoming_tests::held_durability_retains_the_stack_hand_and_explicit_break_slot lib daily resources
 sunrise-client cut_layout::game::client_side::native_hooks_client::base::screen_open_tests::a_cancelled_mapping_press_is_dropped_and_its_release_is_not lib daily resources
 sunrise-client cut_layout::game::client_side::native_hooks_client::base::screen_open_tests::a_cancelled_repeat_keeps_the_hold_and_a_cancelled_first_press_is_never_held lib daily resources
@@ -1430,7 +1389,6 @@ sunrise-client cut_layout::game::native_hooks::client_text::tests::plain_text_re
 sunrise-client cut_layout::game::native_hooks::client_text::tests::styled_text_reads_use_live_font_language_and_wrapping_outside_drawing lib daily resources
 sunrise-client cut_layout::game::native_hooks::client_visual_text::tests::visual_read_uses_live_translations_styles_and_bidi_outside_drawing lib daily child-process
 sunrise-client cut_layout::game::native_hooks::component_hover::component_hover_tests::a_mod_sees_each_hover_and_may_draw_its_own lib daily resources
-sunrise-client cut_layout::game::native_hooks::customize_boss_event_progress::customize_boss_event_progress_tests::a_client_mod_hides_and_spaces_boss_bars lib daily resources
 sunrise-client cut_layout::game::client_side::native_hooks_client::customize_chat_overlay::customize_chat_overlay_tests::a_client_mod_moves_the_chat lib daily resources
 sunrise-client cut_layout::game::native_hooks::death_source_tests::cancelled_body_reconstruction_keeps_the_hit_and_original_twenty_tick_deadline lib daily resources
 sunrise-client cut_layout::game::native_hooks::death_source_tests::cancelled_corpse_ordinary_saved_load_does_not_retry_death_or_restart_its_clock lib daily resources
@@ -1529,7 +1487,6 @@ sunrise-client cut_layout::game::native_hooks::trident_family_tests::type_only_d
 sunrise-client cut_layout::game::native_hooks::trident_family_tests::unlistened_projectile_factory_keeps_family_without_copying_weapon lib daily resources
 sunrise-client cut_layout::game::native_ignited_by_lava_tests::a_block_part_decides_whether_lava_lights_it lib daily resources
 sunrise-client cut_layout::game::server_side::native_invulnerability_check_tests::an_explicit_query_asks_the_listener_with_the_vanilla_answer lib daily resources
-sunrise-client cut_layout::game::server_side::native_invulnerability_check_tests::mod_can_refuse_one_damage_type_but_allow_another_on_the_same_mob lib daily resources
 sunrise-client cut_layout::game::native_is_fire_source_tests::a_block_part_decides_whether_it_keeps_a_fire_burning lib daily resources
 sunrise-client cut_layout::game::native_is_piglin_currency_tests::a_loved_coin_from_the_ground_is_admired_and_bartered lib daily resources
 sunrise-client cut_layout::game::native_is_piglin_currency_tests::a_part_makes_a_coin_currency_and_refuses_the_gold_ingot lib daily resources
@@ -1582,14 +1539,11 @@ sunrise-gameplay game::server_side::native_item_places_effects_tests::tests::sta
 sunrise-client cut_layout::game::server_side::native_item_places::tests::whole_stack_component_edit_rolls_back_with_its_transaction lib daily resources
 sunrise-client cut_layout::game::client_side::native_key_mappings::tests::opening_and_closing_a_direct_screen_discards_pending_clicks lib daily resources
 sunrise-client cut_layout::game::client_side::native_key_mappings_tests::a_control_socket_key_counts_as_a_window_key lib daily resources
-sunrise-client cut_layout::game::server_side::native_knockback_tests::a_canceled_push_is_reported lib daily resources
 sunrise-client cut_layout::game::server_side::native_knockback_tests::a_guest_blow_on_a_guest_names_the_attacker_and_the_sword lib daily resources
 sunrise-client cut_layout::game::server_side::native_knockback_tests::a_mobs_fireball_on_the_player_names_the_shooter_and_its_bow lib daily resources
 sunrise-client cut_layout::game::server_side::native_knockback_tests::a_player_melee_hit_names_the_player_and_the_held_sword lib daily resources
 sunrise-client cut_layout::game::server_side::native_knockback_tests::a_sweep_names_the_player_and_the_held_sword lib daily resources
 sunrise-client cut_layout::game::server_side::native_knockback_tests::the_attack_scope_nests_restores_and_a_guest_swap_hides_it lib daily resources
-sunrise-client cut_layout::game::server_side::native_knockback_tests::the_bridge_names_the_attacker_and_what_it_holds lib daily resources
-sunrise-client cut_layout::game::server_side::native_knockback_tests::the_push_draws_the_same_stream_with_and_without_a_mod_and_a_canceled_one_draws_nothing lib daily resources
 sunrise-client cut_layout::game::server_side::native_knockback_tests::thorns_name_the_wearer_not_the_incoming_attacker lib daily resources
 sunrise-client cut_layout::game::server_side::native_level_events::tests::a_global_level_event_reaches_every_player_or_falls_back_to_a_plain_one lib daily resources
 sunrise-client cut_layout::game::server_side::native_level_events::tests::a_level_event_in_a_write_hook_joins_the_events_in_order lib daily resources
@@ -1697,7 +1651,6 @@ sunrise-client cut_layout::game::server_side::native_living_refs::tests::a_handl
 sunrise-client cut_layout::game::server_side::native_living_refs::tests::a_mobs_last_attacker_names_a_mob_the_host_and_none_when_displaced lib daily resources
 sunrise-client cut_layout::game::server_side::native_living_refs::tests::a_sleepers_bed_orientation lib daily resources
 sunrise-client cut_layout::game::server_side::native_living_refs::tests::a_wolf_throws_and_reads_tamed_and_owner lib daily resources
-sunrise-client cut_layout::game::server_side::native_living_refs::tests::absorbed_player_hit_still_remembers_the_living_attacker lib daily resources
 sunrise-client cut_layout::game::server_side::native_living_refs::tests::armor_hit_matches_old_draws_and_break_order lib daily resources
 sunrise-client cut_layout::game::server_side::native_living_refs::tests::armor_stand_drop_does_not_swing lib daily resources
 sunrise-client cut_layout::game::server_side::native_living_refs::tests::armor_stand_first_tick_equipment_change_fires_after_base_tick lib daily resources
@@ -1906,11 +1859,7 @@ sunrise-client cut_layout::game::server_side::native_server_server::tests::nativ
 sunrise-client cut_layout::game::native_server::tests::native_unauthorized_commands_never_reach_the_listener lib daily child-process
 sunrise-client cut_layout::game::native_server::tests::server_events_are_posted_only_on_the_dedicated_role lib daily resources
 sunrise-client cut_layout::game::native_server::tests::the_hubs_chunk_watches_reach_the_mods_in_order lib daily resources
-sunrise-client cut_layout::game::server_side::native_shield_totem_tests::a_blocked_damage_above_the_hit_is_clamped_to_it lib daily resources
 sunrise-client cut_layout::game::server_side::native_shield_totem_tests::an_uncanceled_totem_saves_the_mob lib daily resources
-sunrise-client cut_layout::game::server_side::native_shield_totem_tests::setting_blocked_false_blocks_nothing lib daily resources
-sunrise-client cut_layout::game::server_side::native_shield_totem_tests::the_shield_hook_draws_from_the_hits_random lib daily resources
-sunrise-client cut_layout::game::server_side::native_shield_totem_tests::the_shield_hook_sees_the_hit_before_armor_and_enchantment_reductions lib daily resources
 sunrise-client cut_layout::game::server_side::native_shield_totem_tests::the_totem_hook_fires_after_the_health_is_gone_and_a_cancel_lets_the_mob_die lib daily resources
 sunrise-client cut_layout::game::native_smoke_source_tests::a_block_part_decides_whether_the_campfire_above_is_a_signal_fire lib daily resources
 sunrise-client cut_layout::game::server_side::native_sound_refs::tests::queued_sounds_draw_sound_seeds_at_play_and_cut_at_the_range_edge lib daily resources
@@ -1936,7 +1885,6 @@ sunrise-client cut_layout::game::client_side::native_visuals::tests::a_mod_built
 sunrise-client cut_layout::game::native_world_read_common::tests::fluid_sameness_buckets_and_bucket_sounds_follow_vanilla lib daily resources
 sunrise-client cut_layout::game::native_world_read_common::tests::recipes_of_type_answers_vanilla_types_from_the_live_table lib daily resources
 sunrise-client cut_layout::game::native_world_read_common::tests::tag_and_fluid_reads_follow_vanilla_and_load_nothing lib daily resources
-sunrise-gameplay-common game::native_worldgen::tests::fresh_game_lifetimes_keep_worker_and_generator_snapshots_separate lib daily resources
 sunrise-client cut_layout::game::server_side::natural_spawning::tests::alive_player_near_tests_guests_where_they_stand lib daily resources
 sunrise-client cut_layout::game::server_side::natural_spawning::tests::authoritative_world_border_gates_positions_and_whole_chunks lib daily resources
 sunrise-client cut_layout::game::server_side::natural_spawning::tests::end_spawning_reads_the_level_range_not_the_widened_column lib daily resources
@@ -2036,10 +1984,6 @@ sunrise-client cut_layout::game::server_side::passengers::off_level_tests::inval
 sunrise-client cut_layout::game::server_side::passengers::off_level_tests::synchronization_preserves_retained_controller_and_frozen_descendant lib daily resources
 sunrise-client cut_layout::game::server_side::passengers::trap_scatter_tests::enchant_item_on_an_empty_slot_draws_nothing lib daily resources
 sunrise-client cut_layout::game::server_side::passengers::trap_scatter_tests::spring_skeleton_trap_draws_scatter_from_trap_horse_after_each_rider lib daily resources
-sunrise-client cut_layout::game::payload_transport::config_tests::tcp_configuration_reply_precedes_finish lib daily resources
-sunrise-client cut_layout::game::payload_transport::disconnect_tests::a_payload_handler_disconnects_once_and_the_poll_logs_out_once lib daily resources
-sunrise-client cut_layout::game::payload_transport::raw_fault_tests::a_failing_raw_handler_rolls_back_alone_and_the_next_one_commits lib daily resources
-sunrise-client cut_layout::game::payload_transport::sender_tests::published_tcp_attributes_players_and_orders_actions lib daily resources
 sunrise-client cut_layout::game::payload_transport::tests::integrated_memory_delivers_registered_raw_payload_and_reply lib daily child-process
 sunrise-client cut_layout::game::server_side::persist::anger_tests::h13076_loaded_anger_end_time_is_kept lib daily resources
 sunrise-client cut_layout::game::server_side::persist::attribute_instance_save_tests::a_mob_saves_the_attribute_instances_it_has lib daily resources
@@ -2121,8 +2065,6 @@ sunrise-client cut_layout::game::server_side::place_feature_tests::an_inline_sim
 sunrise-client cut_layout::game::server_side::place_feature_tests::inline_and_named_features_fail_and_succeed_alike lib daily resources
 sunrise-client cut_layout::game::client_side::play_keys::creative_close_tests::leaving_the_creative_inventory_tells_the_server lib daily resources
 sunrise-client cut_layout::game::client_side::play_keys::pause_close_tests::escape_out_of_the_pause_menu_closes_no_container lib daily resources
-sunrise-gameplay game::server_side::play_keys_server::swap_hands_tests::a_guest_swap_through_its_connection_is_heard_once_and_sends_the_hands lib daily resources
-sunrise-client cut_layout::game::server_side::play_keys_server::swap_hands_tests::the_own_player_swap_asks_the_listener_for_each_hand lib daily resources
 sunrise-client cut_layout::game::server_side::play_ping_tests::dead_guest_play_ping_is_transport_not_an_action lib daily resources
 sunrise-client cut_layout::game::server_side::play_ping_tests::handover_guest_play_ping_survives_the_acknowledgement_filter lib daily resources
 sunrise-client cut_layout::game::server_side::play_ping_tests::held_guest_play_ping_survives_the_acknowledgement_filter lib daily resources
@@ -2414,7 +2356,6 @@ sunrise-client cut_layout::game::server_side::stand_command_hurt_tests::fire_fro
 sunrise-client cut_layout::game::server_side::stand_command_hurt_tests::igniting_a_frozen_stand_clears_its_freeze_while_burning_keeps_it lib daily resources
 sunrise-client cut_layout::game::stand_equipment_change_tests::a_stands_body_and_saddle_writes_are_told_once_each lib daily resources
 sunrise-client cut_layout::game::client_side::startup_menu::tests::live_gui_scale_uses_the_current_owner lib daily resources
-sunrise-client-gameplay game::client_side::startup_menu::tests::queued_creation_is_reconciled_at_handoff lib daily resources
 sunrise-client cut_layout::game::client_side::startup_menu::tests::resource_pack_drops_import_from_startup_and_game_options lib daily resources
 sunrise-client cut_layout::game::state_at_viewpoint_tests::the_camera_reads_the_state_a_block_part_says_it_sees lib daily resources
 sunrise-client cut_layout::game::stateful_block_entity_tests::stateful_creation_uses_actual_state_and_preserves_existing_entity lib daily resources
@@ -2463,7 +2404,6 @@ sunrise-client cut_layout::game::sulfur_prime_phase_tests::control_an_adopted_cu
 sunrise-client-gameplay game::client_side::sync_background_tests::cancelled_background_keeps_custom_geometry_and_one_blur_request lib daily resources
 sunrise-client cut_layout::game::server_side::test_pos_guest_tests::test_pos_as_a_guest_uses_the_guest_s_view lib daily resources
 sunrise-client cut_layout::game::server_side::test_pos_guest_tests::test_pos_refuses_other_sources_and_restores_the_views lib daily resources
-sunrise-gameplay game::server_side::text_displays_server::tests::handle_teleport_keeps_display_easing lib daily resources
 sunrise-client cut_layout::game::server_side::tnt::entity_collision_tests::tnt_sand_and_orbs_land_on_boats_and_shulkers lib daily resources
 sunrise-client cut_layout::game::server_side::tnt::tests::live_data_commands_adopt_into_the_existing_tnt lib daily resources
 sunrise-client cut_layout::game::server_side::tnt::tests::portal_blast_sulfur_cube_uses_only_positive_cooldown lib daily resources

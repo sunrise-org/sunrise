@@ -6,7 +6,7 @@ sunrise-sim mobs::shulker::space_tests::shulker_space_parity_fixture tools/test_
 sunrise-sim save::loot_tests::opened_loot_parity_fixture tools/test_opened_loot_parity.py harness
 sunrise-sim mobs::leash::tests::happy_ghast_leash_dispatch_matches_vanilla tools/test_happy_ghast_leash_parity.py harness
 sunrise-client-gameplay dragon_render::tests::dragon_render_parity_fixture tools/test_dragon_render_parity.py harness
-sunrise-gameplay game::mobs::dragon::tests::dragon_spawn_parity_fixture tools/test_dragon_spawn_parity.py harness
+sunrise-gameplay game::server_side::dragon::tests::dragon_spawn_parity_fixture tools/test_dragon_spawn_parity.py harness
 sunrise-client-gameplay game::client_side::entity_model_loading_tests::entity_model_document_benchmark ENTITY_MODEL_BENCH_DOCUMENT harness
 sunrise-sim entity_nbt::equipment_tests::write_fixtures SUNRISE_WRITE_FIXTURES harness
 sunrise-gameplay game::server_side::maps_server::save_tests::saved_map_codec_fixture tools/test_map_saved_data_parity.py harness

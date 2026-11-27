@@ -204,14 +204,16 @@ def target_kind(member, path):
     return "bin" if inside == "src/main.rs" else "lib"
 
 
-def ignored_functions(root=ROOT):
+def ignored_functions(root=ROOT, reachable=None):
     """(path, line, function name, packages, target kind, daily) of every unconditionally `#[ignore]`d test
-    function in the tracked sources of every workspace."""
+    in tracked workspace sources, restricted to `reachable` relative paths when supplied."""
     owners = source_packages()
     listing = subprocess.run(["git", "ls-files", "-z", "--", "*.rs"], cwd=root, capture_output=True, text=True,
                              check=True)
     found = []
     for path in filter(None, listing.stdout.split("\0")):
+        if reachable is not None and path not in reachable:
+            continue
         folder = max((member for member in owners if path.startswith(member + "/")), key=len, default=None)
         if folder is None:
             continue
@@ -437,7 +439,8 @@ if __name__ == "__main__":
     problems = daily_problems(daily, ignored_shards.workspace_targets(),
                               [*ignored_shards.expand(ignored_shards.SHARDS), *ignored_shards.DAILY_ROWS_LEGS.values()])
     problems += windows_target_problems(daily)
-    ignored = ignored_functions()
+    reachable = set(ignored_inventory.discovery(ROOT, ("--files",)))
+    ignored = ignored_functions(reachable=reachable)
     functions = [(path, line, name, packages) for path, line, name, packages, _, daily in ignored if daily]
     problems += source_problems(daily, functions)
     problems += rowless_problems(rows, ignored)

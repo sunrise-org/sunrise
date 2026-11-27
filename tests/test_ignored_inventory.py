@@ -23,12 +23,28 @@ class IgnoredInventory(unittest.TestCase):
             put("Cargo.toml", '[workspace]\nmembers = ["crates/sunrise-client", "crates/sunrise-relay"]\n')
             put("launcher/Cargo.toml", '[package]\nname = "sunrise-launcher"\n[workspace]\nmembers = []\n')
             put("crates/sunrise-client/Cargo.toml", '[package]\nname = "sunrise-client"\n')
-            put("crates/sunrise-client/src/lib.rs", "mod game;\n")
+            put("crates/sunrise-client/src/lib.rs", """\
+mod game;
+mod culled_file;
+#[cfg(any())] mod culled_external;
+#[cfg(any())] mod culled_inline {
+    #[test] #[ignore = "daily"] fn culled() {}
+}
+#[cfg(any())] #[test] #[ignore = "daily"] fn culled_fn() {}
+#[cfg_attr(test, cfg(any()))] #[test] #[ignore = "daily"] fn culled_attr() {}
+#[cfg(any())] include!("missing.rs");
+#[cfg_attr(test, cfg(any()))] include!("without_tests.rs");
+""")
+            put("crates/sunrise-client/src/culled_file.rs",
+                '#![cfg(any())]\n#[test] #[ignore = "daily"] fn culled() {}\n')
+            put("crates/sunrise-client/src/culled_external.rs",
+                '#[test] #[ignore = "daily"] fn culled() {}\n')
+            put("crates/sunrise-client/src/without_tests.rs", 'fn helper() {}\n')
             put("crates/sunrise-client/src/game.rs", '#[path = "game/blocks/widget.rs"]\nmod widget;\n')
             put("crates/sunrise-client/src/game/blocks/widget.rs",
                 'mod tests { include!("widget_parts/tests.rs"); }\n')
             put("crates/sunrise-client/src/game/blocks/widget_parts/tests.rs",
-                '#[test] #[ignore = "daily"] fn daily_test() { assert_eq!(1, 1); }\n')
+                '#[cfg(test)] #[test] #[ignore = "daily"] fn daily_test() { assert_eq!(1, 1); }\n')
             put("crates/sunrise-relay/Cargo.toml",
                 '[package]\nname = "sunrise-relay"\n[lib]\npath = "../relay-shared/lib.rs"\n')
             put("crates/relay-shared/lib.rs",
@@ -49,6 +65,19 @@ class IgnoredInventory(unittest.TestCase):
             allowed = {("sunrise-relay", "lib", "tests::otherwise_unselected", "needs prepared resources"): {
                 "rationale": "An external runner supplies this private fixture."}}
             self.assertEqual(ignored_inventory.problems([daily], functions, allowed), [])
+            for name in ("culled_file::culled", "culled_external::culled", "culled_inline::culled",
+                         "culled_fn", "culled_attr"):
+                with self.subTest(name=name):
+                    stale = daily._replace(test=name)
+                    errors = ignored_inventory.problems([daily, stale], functions, allowed)
+                    self.assertEqual(len(errors), 1)
+                    self.assertIn(f'{name}: daily row selects no #[ignore = "daily"] test', errors[0])
+            paths = set(ignored_inventory.discovery(root, ("--files",)))
+            self.assertIn("crates/sunrise-client/src/lib.rs", paths)
+            gated = {f"crates/sunrise-client/src/{name}.rs"
+                     for name in ("culled_file", "culled_external", "without_tests")}
+            self.assertTrue(gated.isdisjoint(paths))
+            self.assertEqual(set(ignored_inventory.discovery(root, ("--declared-files",))) - paths, gated)
             changed = [function._replace(reason="new descriptive ignore")
                        if function.package == "sunrise-relay" else function for function in functions]
             self.assertEqual(len(ignored_inventory.problems([daily], changed, allowed)), 1)

@@ -6,6 +6,28 @@ use std::{fs, path::Path};
 pub mod exports;
 pub mod references;
 
+/// Whether a test build can satisfy all `conditions`; feature and platform atoms may vary.
+pub fn may_compile_in_tests(conditions: &[String]) -> bool {
+    if conditions.is_empty() {
+        return true;
+    }
+    let mut gated = Vec::with_capacity(conditions.len() + 1);
+    gated.extend_from_slice(conditions);
+    // `include_tests` lets `test` vary; conjoining `test` fixes it to true.
+    gated.push("test".to_owned());
+    mod_source::modules::may_compile(&gated, true)
+}
+
+/// Whether a test build can compile an item carrying `attrs` inside enclosing `conditions`.
+pub fn attrs_may_compile_in_tests(conditions: &[String], attrs: &[syn::Attribute]) -> bool {
+    let mut local = mod_source::modules::cfg_conditions(attrs);
+    if local.is_empty() {
+        return may_compile_in_tests(conditions);
+    }
+    local.extend_from_slice(conditions);
+    may_compile_in_tests(&local)
+}
+
 /// The `*.rs` file stems of `directory` but `mod`, sorted, each checked to be a Rust identifier.
 pub fn module_files(directory: &Path) -> Result<Vec<String>, String> {
     let mut names = Vec::new();
