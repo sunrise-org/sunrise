@@ -497,6 +497,7 @@ fn terrain_pack(program: &str, fragment: &str) -> Post {
             attributes: vec![],
             after: String::new(),
             alpha_test: None,
+            prelude: None,
         }),
         ..Default::default()
     };
@@ -748,7 +749,7 @@ fn bind_images(
         mod_depth_target: std::cell::Cell::new(None),
         depth_compare: std::cell::Cell::new(wgpu::CompareFunction::LessEqual),
         mod_depth_bias: Default::default(),
-        mod_vertex: Default::default(),
+        mod_layouts: Default::default(),
     };
     let mut notes = Vec::new();
     let bound = bindings(

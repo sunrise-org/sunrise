@@ -878,6 +878,11 @@ struct PipelineSource {
     group: wgpu::BindGroup,
     pack_group: wgpu::BindGroup,
     globals_layout: wgpu::BindGroupLayout,
+    /// Full set-0 layout and bind group (all frame uniform blocks + sprite texture when textured,
+    /// `VERTEX_FRAGMENT`) for shader-pack preludes that read `set = 0` resources the mod's own
+    /// standalone shader did not read.
+    pack_globals_layout: Option<wgpu::BindGroupLayout>,
+    pack_globals_group: Option<wgpu::BindGroup>,
     sprite: Option<(wgpu::TextureView, [f32; 4])>,
     vertex_shader: wgpu::ShaderModule,
     fragment_shader: wgpu::ShaderModule,
@@ -2052,6 +2057,67 @@ impl ModPipelines {
         };
         let group = make_group("Mod pipeline", &self.vanilla);
         let pack_group = make_group("Mod pipeline (pack)", &self.pack_vanilla);
+        let (pack_globals_layout, pack_globals_group) = if built.has_pack_prelude {
+            let all_stages = wgpu::ShaderStages::VERTEX_FRAGMENT;
+            let mut full_layout_entries = Vec::with_capacity(7);
+            let mut full_entries = Vec::with_capacity(7);
+            for b in 0..4u32 {
+                full_layout_entries.push(block_entry(b, VANILLA_SIZES[b as usize], all_stages));
+                full_entries.push(wgpu::BindGroupEntry {
+                    binding: b,
+                    resource: wgpu::BindingResource::Buffer(wgpu::BufferBinding {
+                        buffer: &self.pack_vanilla,
+                        offset: VANILLA_OFFSETS[b as usize],
+                        size: wgpu::BufferSize::new(VANILLA_SIZES[b as usize]),
+                    }),
+                });
+            }
+            if let Some((view, _)) = &sprite_binding {
+                full_layout_entries.push(wgpu::BindGroupLayoutEntry {
+                    binding: 4,
+                    visibility: all_stages,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                });
+                full_layout_entries.push(wgpu::BindGroupLayoutEntry {
+                    binding: 5,
+                    visibility: all_stages,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                });
+                full_entries.push(wgpu::BindGroupEntry {
+                    binding: 4,
+                    resource: wgpu::BindingResource::TextureView(view),
+                });
+                full_entries.push(wgpu::BindGroupEntry {
+                    binding: 5,
+                    resource: wgpu::BindingResource::Sampler(&self.sampler),
+                });
+            }
+            if let Some(buf) = &sprite_rect_buf {
+                full_layout_entries.push(block_entry(SPRITE_RECT_BINDING, 16, all_stages));
+                full_entries.push(wgpu::BindGroupEntry {
+                    binding: SPRITE_RECT_BINDING,
+                    resource: buf.as_entire_binding(),
+                });
+            }
+            let full_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                label: Some("Mod pipeline (pack prelude globals)"),
+                entries: &full_layout_entries,
+            });
+            let full_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+                label: Some("Mod pipeline (pack prelude globals)"),
+                layout: &full_layout,
+                entries: &full_entries,
+            });
+            (Some(full_layout), Some(full_group))
+        } else {
+            (None, None)
+        };
         let internal = pollster::block_on(internal.pop());
         let validation = pollster::block_on(validation.pop());
         if let Some(error) = internal.or(validation) {
@@ -2062,6 +2128,8 @@ impl ModPipelines {
             group,
             pack_group,
             globals_layout: group_layout,
+            pack_globals_layout,
+            pack_globals_group,
             sprite: sprite_binding,
             vertex_shader,
             fragment_shader,
@@ -2432,17 +2500,17 @@ impl ModPipelines {
         Ok(())
     }
 
-    /// Each pipeline slot's own vertex stage with its layouts, for a shader-pack pass that runs it
-    /// beside the pack's fragment stage (`ModProgramMode::ModVertexPackFragment`).
-    pub fn pack_vertex_stages(
+    /// Each pipeline slot's vertex buffer layouts and set-0/set-1 bind-group layouts for
+    /// shader-pack passes (prelude `set = 0` maps to `MOD_SET_BASE`, `set = 1` to
+    /// `MOD_SET_BASE + 1`).
+    pub fn pack_mod_layouts(
         &self,
-    ) -> Vec<Option<sunrise_render_shaderpack::pack_post::ModVertexStage>> {
+    ) -> Vec<Option<sunrise_render_shaderpack::pack_post::ModPipelineLayouts>> {
         self.pipelines
             .iter()
             .map(|slot| {
                 let c = slot.as_ref()?;
-                Some(sunrise_render_shaderpack::pack_post::ModVertexStage {
-                    module: c.source.recipe.program.vertex.clone(),
+                Some(sunrise_render_shaderpack::pack_post::ModPipelineLayouts {
                     buffers: c
                         .source
                         .vertex_layouts
@@ -2454,18 +2522,15 @@ impl ModPipelines {
                             attributes: l.attributes.clone(),
                         })
                         .collect(),
-                    globals_layout: c.source.globals_layout.clone(),
+                    globals_layout: c
+                        .source
+                        .pack_globals_layout
+                        .as_ref()
+                        .unwrap_or(&c.source.globals_layout)
+                        .clone(),
                     set1_layout: c.set1_layout.clone(),
                 })
             })
-            .collect()
-    }
-
-    /// Borrow each pipeline slot's optional set-1 `wgpu::BindGroupLayout` (for `PackPost`).
-    pub fn set1_bind_group_layouts(&self) -> Vec<Option<&wgpu::BindGroupLayout>> {
-        self.pipelines
-            .iter()
-            .map(|slot| slot.as_ref().and_then(|c| c.set1_layout.as_ref()))
             .collect()
     }
 
@@ -3833,7 +3898,14 @@ impl ModPipelines {
     /// Slot's frame-uniform group for a shader pack's target.
     fn pack_globals(&self, slot: usize) -> Option<wgpu::BindGroup> {
         let compiled = self.pipelines.get(slot)?.as_ref()?;
-        Some(compiled.source.pack_group.clone())
+        Some(
+            compiled
+                .source
+                .pack_globals_group
+                .as_ref()
+                .unwrap_or(&compiled.source.pack_group)
+                .clone(),
+        )
     }
 
     /// Stage all per-frame inline uniforms, push constants, and texel buffers from `batch` into

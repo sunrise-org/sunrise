@@ -667,38 +667,15 @@ pub enum PackPassSlot {
     AfterWeather,
 }
 
-/// Which stages of a pipeline's pass in a shader pack come from the pack
-/// ([`PackBinding::program_mode`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-// no wire: local client shader-pack program mode.
-pub enum PackProgramMode {
-    /// The pack's matched program (`.vsh` and `.fsh`) replaces both of the mod's stages; its
-    /// vertex stage reads the pipeline's vertices.
-    #[default]
-    PackVertexAndFragment,
-    /// The mod's own vertex stage, with its [`VertexFormat`] and its bind group, is linked to the
-    /// fragment stage of the pack's matched program, which writes the pack's draw buffers.
-    ///
-    /// The stages link by GLSL varying name: each varying the pack's fragment stage reads must be
-    /// written by the mod's vertex stage under the same name (a struct member or `out` variable),
-    /// type and interpolation, and the engine renumbers the mod's outputs to the locations the
-    /// pack's translation gave them. Works only when the pack ships a program for one of the
-    /// pipeline's stems without a geometry stage (that needs the pack's own vertex stage). When
-    /// a varying is missing, unnamed or mistyped, the pack has no such program, or the device
-    /// cannot hold the mod's bind groups after the pack's (its own `max_bind_groups`), the pipeline is unbound
-    /// ([`crate::RenderAssets::pipeline_pack_bound`] is `false`) and the mod's own shaders draw. The
-    /// mod's bind groups go after the pack's, which stay as the pack declared them.
-    ModVertexPackFragment,
-}
-
 /// Optional Iris/OptiFine shader-pack extras attached to a [`RenderPipeline`]
 /// ([`RenderPipeline::pack_binding`]). All identifiers are supplied by the mod; the engine
 /// hardcodes none.
 ///
 /// Startup refuses invalid GLSL identifiers, multi-line or comment-bearing define values,
-/// collisions with reserved built-in pack samplers or uniforms, and cross-mod collisions on
-/// pack samplers, uniforms, defines, or depth-target IDs (naming both mods).
+/// invalid preludes (syntax, reserved/injected/implicit names, missing `sunrise_pack_vertex_init`,
+/// invalid sets or bindings, stage visibility violations), collisions with reserved built-in pack
+/// samplers or uniforms, and cross-mod collisions on pack samplers, uniforms, defines, or
+/// depth-target IDs (naming both mods).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 // no wire: local client render-pipeline shader-pack binding descriptor.
@@ -718,15 +695,43 @@ pub struct PackBinding {
     /// Per-frame pack uniforms supplied by the mod under pack-side GLSL names. See
     /// [`PackUniformDecl`] for type mismatches.
     pub frame_uniforms: Vec<PackUniformDecl>,
-    /// Mapping from the pipeline's vertex or per-draw inputs to pack-side GLSL names.
-    pub glsl_bindings: Vec<PackGlslInput>,
-    /// Which stages of the matched pack program run; [`PackProgramMode::PackVertexAndFragment`]
-    /// by default.
-    pub program_mode: PackProgramMode,
+    /// Optional GLSL prelude prepended into the matched pack program's vertex stage.
+    ///
+    /// Declares optional vertex inputs (`layout(location = N) in ...`, matching this pipeline's
+    /// `VertexFormat` by location — or none at all), mod bind-group resources
+    /// (`layout(set = 0, binding = N)` / `layout(set = 1, binding = N)`), globals, varyings
+    /// `out`, loose pack uniforms/samplers, constants, and helper functions. Must define one
+    /// `void sunrise_pack_vertex_init()`, which the engine calls first in the pack's vertex
+    /// `main` to populate the standard compatibility inputs (`gl_Vertex`, `gl_Color`,
+    /// `gl_MultiTexCoord0..2`, `gl_Normal`) and any pack-declared attributes; anything left unset
+    /// keeps the engine's defaults. Every attribute the pack declares becomes a private global
+    /// rather than a vertex input.
+    pub vertex_prelude: Option<String>,
+    /// Optional GLSL prelude prepended into the matched pack program's fragment stage.
+    ///
+    /// Declares optional varyings `in`, mod bind-group resources
+    /// (`layout(set = 0, binding = N)` / `layout(set = 1, binding = N)`), loose pack
+    /// uniforms/samplers, constants, and helper functions. Must not define
+    /// `sunrise_pack_vertex_init`.
+    ///
+    /// May optionally define one `bool sunrise_pack_fragment_discard()`. In non-shadow passes, the
+    /// translated pack fragment `main` calls it before the pack's `main` and keeps the boolean
+    /// answer; the pack's `main` then runs whole and unchanged, followed by output copies and the
+    /// alpha test; last, if the answer was `true`, the fragment is discarded. Because the function
+    /// runs before the pack's `main`, any `gl_FragDepth` written by the pack does not feed it.
+    /// Inside a pack program, `gl_FragCoord` uses standard-Z (`[0, 1]`, near = `0`, far = `1`) and
+    /// GL rows (`y = 0.5` at the bottom), so a prelude comparing against a reversed-Z, top-down
+    /// texture performs its own `1.0 - gl_FragCoord.z` and row flip. The engine never calls
+    /// `sunrise_pack_fragment_discard()` in [`PackPassSlot::Shadow`]. If the prelude defines it
+    /// and the matched pack fragment shader writes storage images/buffers or declares
+    /// `early_fragment_tests`, this mod pipeline is left unbound (logged once) without rejecting
+    /// the pack.
+    pub fragment_prelude: Option<String>,
 }
 
 impl PackBinding {
-    /// An empty shader-pack binding with no extra programs, defines, depth target, or uniforms.
+    /// An empty shader-pack binding with no extra programs, defines, depth target, uniforms, or
+    /// preludes.
     pub fn new() -> Self {
         Self::default()
     }
@@ -767,15 +772,17 @@ impl PackBinding {
         self
     }
 
-    /// Choose which stages of the matched pack program run (see [`PackProgramMode`]).
-    pub fn program_mode(mut self, mode: PackProgramMode) -> Self {
-        self.program_mode = mode;
+    /// Attach a GLSL prelude to the matched pack program's vertex stage
+    /// (see [`PackBinding::vertex_prelude`]).
+    pub fn vertex_prelude(mut self, glsl: impl Into<String>) -> Self {
+        self.vertex_prelude = Some(glsl.into());
         self
     }
 
-    /// Declare one mapping from a pipeline input to a pack-side GLSL input or uniform name.
-    pub fn glsl_binding(mut self, input: PackGlslInput) -> Self {
-        self.glsl_bindings.push(input);
+    /// Attach a GLSL prelude to the matched pack program's fragment stage
+    /// (see [`PackBinding::fragment_prelude`]).
+    pub fn fragment_prelude(mut self, glsl: impl Into<String>) -> Self {
+        self.fragment_prelude = Some(glsl.into());
         self
     }
 
@@ -879,20 +886,6 @@ impl PackBinding {
                 previous_uniforms.insert(prev.as_str());
             }
         }
-        for input in &self.glsl_bindings {
-            if !is_valid_glsl_identifier(&input.source) {
-                return Err(format!(
-                    "invalid pack GLSL binding source {:?}: expected a valid GLSL identifier",
-                    input.source
-                ));
-            }
-            if !is_valid_glsl_identifier(&input.glsl_name) {
-                return Err(format!(
-                    "invalid pack GLSL binding target {:?}: expected a valid GLSL identifier",
-                    input.glsl_name
-                ));
-            }
-        }
         Ok(())
     }
 }
@@ -910,10 +903,6 @@ impl PackBinding {
 /// against the pack's main depth (`depthtex0`), and only [`PackPassSlot::AfterOpaqueGbuffers`]
 /// can write it. Choose [`Self::Main`] to allow writes to main depth in other non-shadow slots,
 /// or [`Self::Aux`] to declare a separate depth plane.
-///
-/// When targeting main depth, a mod's own vertex stage can emit depth in the world's projection
-/// directly, so a mod projecting its own geometry needs no separate depth copy. The fragment
-/// stage is the pack's, so `gl_FragDepth` is not the mod's to write.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 // no wire: local client shader-pack depth target descriptor.
@@ -1012,7 +1001,7 @@ impl PackUniformDecl {
     }
 }
 
-/// GLSL value type for a [`PackUniformDecl`] or [`PackGlslInput`].
+/// GLSL value type for a [`PackUniformDecl`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 // no wire: local client shader-pack uniform GLSL type selector.
@@ -1157,35 +1146,6 @@ impl PackUniformValue {
             Self::Vec4(_) => PackUniformType::Vec4,
             Self::Mat3(_) => PackUniformType::Mat3,
             Self::Mat4(_) => PackUniformType::Mat4,
-        }
-    }
-}
-
-/// Mapping from a pipeline vertex attribute or per-draw value to a pack-side GLSL input name.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-// no wire: local client shader-pack GLSL input binding descriptor.
-pub struct PackGlslInput {
-    /// Pipeline-side attribute or per-draw input name.
-    pub source: String,
-    /// Target GLSL identifier seen by the shader pack program (e.g. `gl_Vertex` or a named
-    /// attribute or uniform).
-    pub glsl_name: String,
-    /// GLSL value type of the bound input.
-    pub ty: PackUniformType,
-}
-
-impl PackGlslInput {
-    /// Map pipeline input `source` to pack-side GLSL name `glsl_name` of type `ty`.
-    pub fn new(
-        source: impl Into<String>,
-        glsl_name: impl Into<String>,
-        ty: PackUniformType,
-    ) -> Self {
-        Self {
-            source: source.into(),
-            glsl_name: glsl_name.into(),
-            ty,
         }
     }
 }
@@ -4981,11 +4941,8 @@ mod tests {
                 PackUniformDecl::new("modProjection", PackUniformType::Mat4)
                     .with_previous("modPreviousProjection"),
             )
-            .glsl_binding(PackGlslInput::new(
-                "position",
-                "gl_Vertex",
-                PackUniformType::Vec4,
-            ));
+            .vertex_prelude("void sunrise_pack_vertex_init() {}")
+            .fragment_prelude("vec4 customHelper() { return vec4(1.0); }");
         assert_eq!(valid.validate_syntax(), Ok(()));
 
         for bad_define in ["", "1BAD", "BAD-NAME", "GL_RESERVED", "has space"] {
@@ -5084,17 +5041,23 @@ mod tests {
     }
 
     #[test]
-    fn program_mode_and_depth_target_builders() {
-        assert_eq!(
-            PackBinding::new().program_mode,
-            PackProgramMode::PackVertexAndFragment
-        );
-        let own = PackBinding::new()
-            .program_mode(PackProgramMode::ModVertexPackFragment)
+    fn prelude_and_depth_target_builders() {
+        assert_eq!(PackBinding::new().vertex_prelude, None);
+        assert_eq!(PackBinding::new().fragment_prelude, None);
+        let with_prelude = PackBinding::new()
+            .vertex_prelude("void sunrise_pack_vertex_init() {}")
+            .fragment_prelude("float helper() { return 1.0; }")
             .depth_target(PackDepthTarget::Main);
-        assert_eq!(own.program_mode, PackProgramMode::ModVertexPackFragment);
-        assert_eq!(own.depth_target, Some(PackDepthTarget::Main));
-        assert_eq!(own.validate_syntax(), Ok(()));
+        assert_eq!(
+            with_prelude.vertex_prelude.as_deref(),
+            Some("void sunrise_pack_vertex_init() {}")
+        );
+        assert_eq!(
+            with_prelude.fragment_prelude.as_deref(),
+            Some("float helper() { return 1.0; }")
+        );
+        assert_eq!(with_prelude.depth_target, Some(PackDepthTarget::Main));
+        assert_eq!(with_prelude.validate_syntax(), Ok(()));
         // The main depth has no samplers of its own: the builders leave it as it is.
         assert_eq!(
             PackDepthTarget::Main.depth_sampler("modDepth"),

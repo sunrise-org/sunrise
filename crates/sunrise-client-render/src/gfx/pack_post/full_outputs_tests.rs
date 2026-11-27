@@ -63,6 +63,7 @@ fn pack(outputs: u32, limits: naga::front::glsl::InterfaceLimits) -> Post {
             attributes: vec![],
             after: String::new(),
             alpha_test: None,
+            prelude: None,
         }),
         interface_limits: limits,
         ..Default::default()

@@ -1138,6 +1138,7 @@ impl PackAtlas {
             paged_maps: false,
             water_mask: false,
             water_patches: false,
+            prelude: None,
         }
     }
 }
