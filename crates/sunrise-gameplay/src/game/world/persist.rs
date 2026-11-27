@@ -20,13 +20,13 @@ mod unload_sweep;
 
 use super::FallingBlock;
 use {
-    crate::game::server_side::potions_server::potion_cloud_to_nbt,
     sunrise_gameplay_common::game::end_state::SummonedEye,
     sunrise_gameplay_common::game::entity_memory::EntityMemory,
     sunrise_gameplay_common::game::entity_memory::OffLevel,
     sunrise_gameplay_common::game::interactions_common::InteractionState,
     sunrise_gameplay_common::game::interactions_common::is_interaction,
     sunrise_gameplay_common::game::piston_nbt::block_entity_pos,
+    sunrise_gameplay_common::game::potions_common::area_effect_cloud_to_nbt,
 };
 
 /// Levels of NBT nesting kept clear under the writer's guard for what surrounds a passenger
@@ -2108,7 +2108,7 @@ impl crate::game::ServerGame<'_> {
                 .get(&c.id)
                 .copied()
                 .unwrap_or_else(random_uuid);
-            let mut tag = potion_cloud_to_nbt(c, uuid, self.common.persist.raw.get(&c.id));
+            let mut tag = area_effect_cloud_to_nbt(c, uuid, self.common.persist.raw.get(&c.id));
             let key = chunk_of(at);
             match write_attachments(&mut tag, c.id, &self.common.entity_attachments) {
                 Ok(()) => roots

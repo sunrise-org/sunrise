@@ -1,12 +1,15 @@
-use crate::game::dragon_common::FightWho;
+use crate::game::dragon_common::{Breath, FightWho};
 use sunrise_core::{geometry::Vec3, nbt::Tag, random::LegacyRandom};
-use sunrise_game_data::text::Text;
+use sunrise_game_data::{
+    potions::{BASE_POTION_COLOR, namespaced},
+    text::Text,
+};
 use sunrise_items::items::ItemStack;
 use sunrise_level::{
     effects::PlayerEffects,
     particle_options::{ParticleOptions, ParticleType},
 };
-use sunrise_sim::mobs::Who;
+use sunrise_sim::{entity_nbt, mobs::Who};
 
 /// Per-cloud settings; natural lingering clouds keep their creation defaults.
 pub struct CloudSettings {
@@ -76,6 +79,117 @@ pub struct PotionCloud {
     pub owner: Option<Who>,
     /// On a server, the guest (by connection) who threw it.
     pub guest: Option<u32>,
+}
+
+/// `AreaEffectCloud.addAdditionalSaveData` on the live cloud, shared by
+/// chunk persistence and command reads. Raw NBT supplies unmodeled fields.
+pub fn area_effect_cloud_to_nbt(c: &Breath, uuid: [i32; 4], raw: Option<&Tag>) -> Tag {
+    let [x, y, z] = c.at;
+    let [vx, vy, vz] = c.motion;
+    let mut tag = entity_nbt::entity_base_tag(
+        "minecraft:area_effect_cloud",
+        Vec3::new(x, y, z),
+        Vec3::new(vx, vy, vz),
+        // The cloud never turns, so keep its loaded rotation.
+        raw.map_or([0.0; 2], entity_nbt::loaded_rotation),
+        uuid,
+        raw,
+    );
+    let Tag::Compound(map) = &mut tag else {
+        unreachable!("entity_base_tag always writes a compound");
+    };
+    let potion = c.potion.as_ref();
+    let settings = potion.map(|p| &p.settings);
+    for (key, value) in [
+        (
+            "fall_distance",
+            Tag::Double(if c.fall_distance == 0.0 {
+                0
+            } else {
+                c.fall_distance.to_bits()
+            }),
+        ),
+        ("Fire", Tag::Short(c.fire_ticks as i16)),
+        ("Age", Tag::Int(c.age)),
+        ("Duration", Tag::Int(c.duration)),
+        ("WaitTime", Tag::Int(settings.map_or(20, |s| s.wait_time))),
+        (
+            "ReapplicationDelay",
+            Tag::Int(settings.map_or(REAPPLICATION_DELAY, |s| s.reapplication_delay)),
+        ),
+        (
+            "DurationOnUse",
+            Tag::Int(settings.map_or(0, |s| s.duration_on_use)),
+        ),
+        (
+            "RadiusOnUse",
+            Tag::Float(settings.map_or(0.0, |s| s.radius_on_use).to_bits()),
+        ),
+        (
+            "RadiusPerTick",
+            Tag::Float(potion.map_or(0.0, |p| p.radius_per_tick).to_bits()),
+        ),
+        ("Radius", Tag::Float(c.radius.to_bits())),
+    ] {
+        map.insert(key.into(), value);
+    }
+
+    if let Some(potion) = potion {
+        map.remove(&"custom_particle".into());
+        if let Some(particle) = &potion.custom_particle {
+            let saved = match &particle.options.typed_particle {
+                Some((value, _)) => match mod_api::__private::encode_particle_map(value) {
+                    Ok(fields) => Some(Tag::Compound(fields)),
+                    Err(error) => {
+                        log::warn!(
+                            "Cannot save cloud particle {:?}: {error}",
+                            particle.options.mod_particle
+                        );
+                        None
+                    }
+                },
+                None => particle.vanilla_tag.clone(),
+            };
+            if let Some(saved) = saved {
+                map.insert("custom_particle".into(), saved);
+            }
+        }
+
+        map.remove(&"potion_contents".into());
+        if !potion.effects.is_empty() || potion.color != BASE_POTION_COLOR {
+            let effects = potion
+                .effects
+                .iter()
+                .map(|&(id, duration, amplifier)| {
+                    let mut effect = sunrise_core::nbt::Compound::new();
+                    effect.insert("id".into(), Tag::String(namespaced(id).into()));
+                    effect.insert("duration".into(), Tag::Int(duration));
+                    effect.insert("amplifier".into(), Tag::Int(amplifier));
+                    if potion.hidden.contains(&id) {
+                        effect.insert("show_particles".into(), Tag::Byte(0));
+                    }
+                    if potion.ambient.contains(&id) {
+                        effect.insert("ambient".into(), Tag::Byte(1));
+                    }
+                    Tag::Compound(effect)
+                })
+                .collect();
+            map.insert(
+                "potion_contents".into(),
+                Tag::compound([
+                    ("custom_effects", Tag::List(effects)),
+                    ("custom_color", Tag::Int(potion.color as i32)),
+                ]),
+            );
+        }
+    }
+    let scale = settings.map_or(1.0, |s| s.duration_scale);
+    if scale != 1.0 {
+        map.insert("potion_duration_scale".into(), Tag::Float(scale.to_bits()));
+    } else {
+        map.remove(&"potion_duration_scale".into());
+    }
+    tag
 }
 
 /// What a player's body was last given for its effects and enchantments:

@@ -16,10 +16,12 @@ pub(crate) mod tests {
 
     use sunrise_gameplay_common::game::dragon_common::Breath;
 
-    use sunrise_gameplay_common::game::potions_common::{CloudSettings, PotionCloud};
+    use sunrise_gameplay_common::game::potions_common::{
+        CloudSettings, PotionCloud, area_effect_cloud_to_nbt,
+    };
 
     use crate::game::server_side::potions_server::{
-        collect_dragon_breath, mob_can_be_affected, potion_cloud_from_nbt, potion_cloud_to_nbt,
+        collect_dragon_breath, mob_can_be_affected, potion_cloud_from_nbt,
     };
 
     /// `AreaEffectCloud.updateParticle` with a `custom_particle`: the codec's
@@ -59,23 +61,89 @@ pub(crate) mod tests {
         assert_eq!(effect.ty, ParticleType::EntityEffect);
         assert_eq!(effect.color[..3], [1.0, 128.0 / 255.0, 0.0]);
     }
-    /// `AreaEffectCloud.addAdditionalSaveData` writes `custom_particle` back.
+    /// `AreaEffectCloud.addAdditionalSaveData` writes the live optional fields,
+    /// but omits the default duration scale.
     #[test]
-    fn cloud_custom_particle_survives_a_save() {
+    fn cloud_saves_live_particle_and_potion_contents_without_raw_nbt() {
         let particle = Tag::compound([("type", Tag::String("flame".into()))]);
         let tag = Tag::compound([
             ("Pos", Tag::List(vec![Tag::Double(0f64.to_bits()); 3])),
             ("Radius", flt(3.0)),
             ("Duration", Tag::Int(200)),
             ("custom_particle", particle.clone()),
+            (
+                "potion_contents",
+                Tag::compound([("custom_color", Tag::Int(0x33_FF44))]),
+            ),
         ]);
-        let (at, cloud) = potion_cloud_from_nbt(&tag).unwrap();
-        let _ = at;
-        let saved = potion_cloud_to_nbt(&cloud, [1, 2, 3, 4], None);
-        let Tag::Compound(map) = saved else {
-            panic!("not a compound");
+        let (_, mut cloud) = potion_cloud_from_nbt(&tag).unwrap();
+        let uuid = [1, 2, 3, 4];
+        let saved = area_effect_cloud_to_nbt(&cloud, uuid, None);
+        assert_eq!(saved.get("custom_particle"), Some(&particle));
+        assert_eq!(
+            saved.get("potion_contents").unwrap().get("custom_color"),
+            Some(&Tag::Int(0x33_FF44))
+        );
+        assert_eq!(saved.get("potion_duration_scale"), None);
+
+        let potion = cloud.potion.as_mut().unwrap();
+        potion.custom_particle = None;
+        potion.color = sunrise_game_data::potions::BASE_POTION_COLOR;
+        let stale = Tag::compound([
+            ("custom_particle", particle),
+            (
+                "potion_contents",
+                saved.get("potion_contents").unwrap().clone(),
+            ),
+            ("potion_duration_scale", flt(0.5)),
+        ]);
+        let saved = area_effect_cloud_to_nbt(&cloud, uuid, Some(&stale));
+        for key in [
+            "custom_particle",
+            "potion_contents",
+            "potion_duration_scale",
+        ] {
+            assert_eq!(saved.get(key), None, "stale {key}");
+        }
+    }
+
+    #[test]
+    fn cloud_without_a_potion_saves_vanilla_defaults() {
+        let cloud = Breath {
+            attachment_lifetime: Default::default(),
+            join: Default::default(),
+            id: 0,
+            at: [0.0, 64.0, 0.0],
+            motion: [-0.0, 0.0, 0.0],
+            fall_distance: -0.0,
+            fire_ticks: 0,
+            first_tick: true,
+            radius: 3.0,
+            age: 0,
+            duration: 200,
+            from_dragon: true,
+            victims: Vec::new(),
+            potion: None,
         };
-        assert_eq!(map.get(&"custom_particle".into()), Some(&particle));
+        let uuid = [1, 2, 3, 4];
+        let saved = area_effect_cloud_to_nbt(&cloud, uuid, None);
+        for (key, value) in [
+            ("WaitTime", Tag::Int(20)),
+            ("ReapplicationDelay", Tag::Int(20)),
+            ("DurationOnUse", Tag::Int(0)),
+            ("RadiusOnUse", flt(0.0)),
+            ("RadiusPerTick", flt(0.0)),
+            ("Motion", Tag::List(vec![Tag::Double(0); 3])),
+            ("fall_distance", Tag::Double(0)),
+        ] {
+            assert_eq!(saved.get(key), Some(&value), "{key}");
+        }
+        assert_eq!(saved.get("potion_duration_scale"), None);
+
+        let particle = Tag::compound([("type", Tag::String("minecraft:dragon_breath".into()))]);
+        let raw = Tag::compound([("custom_particle", particle.clone())]);
+        let saved = area_effect_cloud_to_nbt(&cloud, uuid, Some(&raw));
+        assert_eq!(saved.get("custom_particle"), Some(&particle));
     }
     /// A mod effect's damage type keeps its registry id and tags whether it is
     /// vanilla's or a datapack's, and one the registry lacks is refused.
@@ -152,7 +220,8 @@ pub(crate) mod tests {
                 guest: None,
             }),
         };
-        let tag = potion_cloud_to_nbt(&cloud, [1, 2, 3, 4], None);
+        let tag = area_effect_cloud_to_nbt(&cloud, [1, 2, 3, 4], None);
+        assert_eq!(tag.get("potion_duration_scale"), Some(&flt(0.5)));
         let (at, back) = potion_cloud_from_nbt(&tag).expect("the cloud reads back");
         assert_eq!(at, Vec3::new(1.5, 64.0, -2.5), "the position");
         assert_eq!(back.motion, [0.6, 0.0, 0.0], "the motion");
