@@ -100,6 +100,7 @@ impl Category {
             Self::Misc => "misc",
         }
     }
+    #[inline]
     pub fn from_name(name: &str) -> Self {
         match name {
             "monster" => Self::Monster,
@@ -141,12 +142,10 @@ impl Category {
 }
 
 impl MobType {
-    /// Cached [`Category`] for this type, falling back to parsing `category` on synthetic types.
+    /// Parsed [`Category`] of `self.category`.
     #[inline]
     pub fn spawn_category(&self) -> Category {
-        self.flags
-            .spawn_category
-            .unwrap_or_else(|| Category::from_name(&self.category))
+        Category::from_name(&self.category)
     }
 }
 
@@ -2307,14 +2306,13 @@ mod tests {
     }
 
     #[test]
-    fn mob_type_spawn_category_uses_cached_flag_and_matches_from_name() {
+    fn mob_type_spawn_category_follows_category_string() {
         for category in Category::ALL {
             assert_eq!(Category::from_name(category.name()), category);
         }
         assert_eq!(Category::from_name("unknown"), Category::Misc);
 
         let mut kind = (*super::super::sensor_scan_tests::kind()).clone();
-        kind.flags.spawn_category = None;
         for category in Category::ALL {
             kind.category = category.name().into();
             assert_eq!(kind.spawn_category(), category);
@@ -2323,7 +2321,8 @@ mod tests {
         assert_eq!(kind.spawn_category(), Category::Misc);
 
         kind.category = "creature".into();
-        kind.flags.spawn_category = Some(Category::Monster);
+        assert_eq!(kind.spawn_category(), Category::Creature);
+        kind.category = "monster".into();
         assert_eq!(kind.spawn_category(), Category::Monster);
     }
 }
