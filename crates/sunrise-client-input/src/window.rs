@@ -1248,6 +1248,8 @@ mod tests {
         );
 
         let space = PointerSpace::new([857, 483], 1.25);
+        let os_extent = [686, 386];
+        assert_eq!(space.screen, os_extent);
         let frame =
             GuiFrame::from_insets(target, 2, true, Some([15, 9, 7, 3])).with_pointer_space(space);
         assert_eq!(frame.origin(), [8, 5]);
@@ -1256,7 +1258,10 @@ mod tests {
         let at = (17.25, 22.5);
         assert_eq!(frame.gui_to_target([at.0, at.1]), [50.5, 55.0]);
         let physical = |x: f64, y: f64| {
-            PhysicalPosition::new(x * 857.0 / 853.0 * 1.25, y * 483.0 / 481.0 * 1.25)
+            PhysicalPosition::new(
+                x * f64::from(os_extent[0]) / 853.0 * 1.25,
+                y * f64::from(os_extent[1]) / 481.0 * 1.25,
+            )
         };
         let expected = physical(50.5, 55.0);
         let warped = projection.window_pointer(at);
