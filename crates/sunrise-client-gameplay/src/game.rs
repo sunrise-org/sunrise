@@ -214,6 +214,7 @@ pub(in crate::game) struct SessionVideo {
 /// Read-only renderer state cached while `Game::renderer` is temporarily taken for `Renderer::render` so `ClientHost` queries keep working inside stage callbacks.
 #[derive(Clone, Copy)]
 pub(in crate::game) struct RenderSnapshot {
+    pub(in crate::game) gui_frame: Option<sunrise_client::window::GuiFrame>,
     pub(in crate::game) framebuffer: [u32; 2],
     pub(in crate::game) prepared_generation: Option<u64>,
     pub(in crate::game) staged_prepared_draws: u64,

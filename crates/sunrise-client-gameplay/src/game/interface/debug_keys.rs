@@ -416,20 +416,26 @@ impl crate::game::ClientGame<'_> {
             .as_ref()
             .filter(|_| self.debug_shows_lightmap())
             .and_then(|r| r.lightmap_sample());
-        let layout = (
-            size,
-            batch.scale.to_bits(),
-            self.client.gui.atlas.font.epoch(),
-            lightmap.is_some(),
-        );
+        let layout = debug_overlay::PaintLayout {
+            framebuffer: size,
+            gui_size: [batch.width.to_bits(), batch.height.to_bits()],
+            scale: batch.scale.to_bits(),
+            origin: batch.gui_origin().map(f32::to_bits),
+            clip: batch.content_clip(),
+            font_epoch: self.client.gui.atlas.font.epoch(),
+            lightmap: lightmap.is_some(),
+        };
         if let Some(vertices) = self.client.debug_paint.borrow().fresh(now, layout) {
             batch.vertices.extend_from_slice(vertices);
             return;
         }
         let first_vertex = batch.vertices.len();
         let framebuffer = size.map(|v| v as i32);
+        let content = batch
+            .content_clip()
+            .map_or(framebuffer, |[l, t, r, b]| [(r - l) as i32, (b - t) as i32]);
         let (scale, [width, height]) = debug_overlay::scale(
-            framebuffer,
+            content,
             batch.scale as i32,
             self.client.settings.file.int("debugGuiScale"),
             self.client.settings.force_unicode,

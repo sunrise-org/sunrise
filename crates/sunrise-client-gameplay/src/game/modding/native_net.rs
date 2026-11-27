@@ -136,6 +136,7 @@ mod tests {
                 game.client
                     .render_snapshot
                     .set(Some(crate::game::RenderSnapshot {
+                        gui_frame: None,
                         framebuffer: [800, 600],
                         prepared_generation: None,
                         staged_prepared_draws: 0,

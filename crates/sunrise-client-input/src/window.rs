@@ -185,6 +185,14 @@ pub fn centered_gui_origin((w, h): (f32, f32), width: f32, height: f32) -> (f32,
     (((w - width) / 2.0).trunc(), ((h - height) / 2.0).trunc())
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct GuiGeometry {
+    pub target: [u32; 2],
+    pub gui: GuiSize,
+    pub origin: [u32; 2],
+    pub clip: [u32; 4],
+}
+
 /// The geometry of one GUI target, with its OS pointer space when needed.
 #[derive(Clone, Copy, Debug)]
 pub struct GuiFrame {
@@ -248,10 +256,20 @@ impl GuiFrame {
         self.clip
     }
 
+    pub fn geometry(self) -> Option<GuiGeometry> {
+        self.clip.map(|clip| GuiGeometry {
+            target: self.target,
+            gui: self.gui,
+            origin: self.origin,
+            clip,
+        })
+    }
+
     pub fn contains(self, point: (f32, f32)) -> bool {
         self.clip.is_none_or(|[l, t, r, b]| {
-            let [x, y] = self.gui_to_target([point.0, point.1]);
-            x >= l as f32 && x < r as f32 && y >= t as f32 && y < b as f32
+            let w = f64::from(r - l) / f64::from(self.gui.scale);
+            let h = f64::from(b - t) / f64::from(self.gui.scale);
+            point.0 >= 0.0 && f64::from(point.0) < w && point.1 >= 0.0 && f64::from(point.1) < h
         })
     }
 

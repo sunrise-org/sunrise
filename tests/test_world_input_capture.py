@@ -122,10 +122,12 @@ mod window {
 }
 struct Settings;
 impl Settings {
-    fn gui_frame_with_insets(&self, target: [u32; 2], insets: Option<[u32; 4]>) -> window::GuiFrame {
-        window::GuiFrame::from_insets(target, 2, false, insets)
+    fn gui_frame_for(&self, target: [u32; 2]) -> window::GuiFrame {
+        window::GuiFrame::new(target, 2, false)
     }
 }
+#[derive(Clone, Copy)]
+struct RenderSnapshot { gui_frame: Option<window::GuiFrame> }
 struct Config { width: u32, height: u32 }
 struct Renderer { config: Config }
 #[derive(Default)]
@@ -181,12 +183,13 @@ struct ClientState {
     window: (Option<Box<Window>>,), title: (Option<()>,),
     screen_state: (ScreenState,), renderer: (Option<Renderer>,),
     server_packs: (ServerPacks,), command_prompt: (Option<()>,),
-    settings: Settings, gui_safe_area: Option<([u32; 2], [u32; 4])>, lan_acting: Option<u32>,
+    settings: Settings, gui_safe_area: Option<window::GuiFrame>, lan_acting: Option<u32>,
     focused: bool, agent_pointer: bool, mouse: Mouse,
     captured: bool, capture_mode: Option<CursorGrabMode>, regrab_on_refocus: bool, screen: Screen,
     studio: Studio, cursor: (f32, f32),
     window_cursor: Option<window::PointerSample>,
     window_pointer_space: std::cell::OnceCell<window::PointerSpace>,
+    render_snapshot: Cell<Option<RenderSnapshot>>,
     unclaimed_window: bool, focus_after_run: Option<bool>, screen_grab: bool,
     unclaimed_modifiers: Option<u8>,
 }
@@ -201,6 +204,7 @@ impl Default for ClientState {
             screen: Screen::Playing, studio: Studio::default(),
             cursor: (0.0, 0.0), window_cursor: None,
             window_pointer_space: std::cell::OnceCell::new(),
+            render_snapshot: Cell::new(None),
             unclaimed_window: false,
             focus_after_run: None, screen_grab: false, unclaimed_modifiers: None }
     }

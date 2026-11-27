@@ -441,6 +441,7 @@ struct RoomMemo {
 #[derive(Default)]
 pub struct ScreenBuildState {
     pub current: Option<ScreenBuild>,
+    geometry: Option<sunrise_client::window::GuiGeometry>,
     /// The frame's effects answer, while this frame asked for one.
     effects: std::cell::Cell<Option<EffectsMemo>>,
     /// The frame's `screen_room` answer, while this frame asked for one.
@@ -450,6 +451,18 @@ pub struct ScreenBuildState {
 }
 
 impl ScreenBuildState {
+    #[inline(always)]
+    fn use_geometry(&mut self, geometry: Option<sunrise_client::window::GuiGeometry>) -> bool {
+        if self.geometry == geometry {
+            return false;
+        }
+        self.geometry = geometry;
+        self.current = None;
+        self.effects.set(None);
+        self.room.set(None);
+        true
+    }
+
     /// A fresh overlay instance must build even when its kind is unchanged.
     pub fn reopened(&mut self) {
         self.current = None;
@@ -638,6 +651,12 @@ impl crate::game::ClientGame<'_> {
             || self.client.title.0.is_some()
             || self.screen_over_playing();
         let frame = self.gui_frame_for(framebuffer);
+        let state = &mut self.client.screen_state.0;
+        if state.build.use_geometry(frame.geometry()) {
+            state.regions.0 = None;
+            state.regions.1.clear();
+            state.drawn_book_tabs.set(None);
+        }
         let gui = frame.gui;
         let identity = self
             .client
@@ -1126,6 +1145,22 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn a_changed_safe_origin_rebuilds_the_same_content_extent() {
+        use sunrise_client::window::GuiFrame;
+
+        let first = GuiFrame::from_insets([853, 481], 1, false, Some([18, 7, 6, 3]));
+        let second = GuiFrame::from_insets([853, 481], 1, false, Some([6, 3, 18, 7]));
+        assert_eq!(first.gui, second.gui);
+        let mut state = ScreenBuildState::default();
+        assert!(state.use_geometry(first.geometry()));
+        state.sync(Screen::Paused, true, None, first.gui, None);
+        assert!(!state.use_geometry(first.geometry()));
+        assert!(state.use_geometry(second.geometry()));
+        state.sync(Screen::Paused, true, None, second.gui, None);
+        assert_eq!(state.builds, 2);
     }
 
     #[cfg(feature = "client")]

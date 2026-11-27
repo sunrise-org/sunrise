@@ -324,22 +324,37 @@ impl crate::game::ClientGame<'_> {
     }
     #[inline(always)]
     pub fn gui_frame_for(&self, framebuffer: [u32; 2]) -> sunrise_client::window::GuiFrame {
-        let insets = self
-            .client
-            .gui_safe_area
-            .filter(|(target, _)| *target == framebuffer)
-            .map(|(_, insets)| insets);
-        self.client
-            .settings
-            .gui_frame_with_insets(framebuffer, insets)
+        let frame = if self.client.renderer.0.is_some() {
+            self.client.gui_safe_area
+        } else {
+            self.client
+                .render_snapshot
+                .get()
+                .and_then(|snapshot| snapshot.gui_frame)
+                .or(self.client.gui_safe_area)
+        };
+        frame
+            .filter(|frame| frame.target == framebuffer)
+            .unwrap_or_else(|| self.client.settings.gui_frame_for(framebuffer))
     }
 
     #[inline(always)]
     pub(in crate::game::client_side) fn sample_gui_safe_area(&mut self) {
-        self.client.gui_safe_area = self.client.renderer.0.as_ref().and_then(|renderer| {
+        let before = self.client.gui_safe_area.and_then(|frame| frame.geometry());
+        let frame = self.client.renderer.0.as_ref().and_then(|renderer| {
             let target = [renderer.config.width, renderer.config.height];
-            sunrise_hooks::engine::safe_area(target).map(|insets| (target, insets))
+            let insets = sunrise_hooks::engine::safe_area(target)?;
+            let frame = self
+                .client
+                .settings
+                .gui_frame_with_insets(target, Some(insets));
+            frame.geometry().map(|_| frame)
         });
+        self.client.gui_safe_area = frame;
+        if before != frame.and_then(|frame| frame.geometry()) {
+            self.refresh_window_cursor();
+            self.notify_window_resize();
+        }
     }
 
     #[inline(always)]
@@ -5064,6 +5079,7 @@ impl crate::game::ClientGame<'_> {
                 });
                 renderer.stage_prepared_draws(&prepared_draws);
                 self.client.render_snapshot.set(Some(RenderSnapshot {
+                    gui_frame: self.client.gui_safe_area,
                     framebuffer: [renderer.config.width, renderer.config.height],
                     prepared_generation: renderer.prepared_generation(),
                     staged_prepared_draws: prepared_draws.len() as u64,

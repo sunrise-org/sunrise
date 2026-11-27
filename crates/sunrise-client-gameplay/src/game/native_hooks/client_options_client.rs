@@ -20,6 +20,11 @@ impl crate::game::ClientGame<'_> {
             .0
             .as_ref()
             .and_then(|_| self.renderer_framebuffer());
+        if let Some(frame) = framebuffer.map(|target| self.gui_frame_for(target))
+            && frame.geometry().is_some()
+        {
+            return Some(frame.gui.scale);
+        }
         resolved_gui_scale(
             framebuffer,
             self.client.settings.gui_scale,

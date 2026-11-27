@@ -35,11 +35,16 @@ pub struct PaintCache {
     painted: Option<(Instant, PaintLayout)>,
 }
 
-/// What the painted vertices depend on besides the lines: the framebuffer size, the GUI scale's
-/// bits, `Font::epoch` (glyphs move in the atlas when it changes), and whether the lightmap
-/// chart had a current sample to paint (`Renderer::lightmap_sample`), so a sample that stops
-/// being current is not painted again from the cache.
-pub type PaintLayout = ([u32; 2], u32, u64, bool);
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct PaintLayout {
+    pub framebuffer: [u32; 2],
+    pub gui_size: [u32; 2],
+    pub scale: u32,
+    pub origin: [u32; 2],
+    pub clip: Option<[u32; 4]>,
+    pub font_epoch: u64,
+    pub lightmap: bool,
+}
 
 impl PaintCache {
     /// The vertices, while they are recent and painted for this `layout`.
@@ -634,7 +639,15 @@ mod tests {
             light: 0,
             text: 1,
         };
-        let layout = ([1920, 1080], 2.0f32.to_bits(), 5, true);
+        let layout = PaintLayout {
+            framebuffer: [1920, 1080],
+            gui_size: [960, 540],
+            scale: 2.0f32.to_bits(),
+            origin: [0; 2],
+            clip: None,
+            font_epoch: 5,
+            lightmap: true,
+        };
         let start = Instant::now();
         let mut cache = PaintCache::default();
         assert!(cache.fresh(start, layout).is_none());
@@ -646,10 +659,34 @@ mod tests {
         // Another window size, GUI scale or glyph layout, or the lightmap chart's sample no
         // longer current, repaints at once.
         for other in [
-            ([1280, 720], layout.1, layout.2, layout.3),
-            (layout.0, 3.0f32.to_bits(), layout.2, layout.3),
-            (layout.0, layout.1, 6, layout.3),
-            (layout.0, layout.1, layout.2, false),
+            PaintLayout {
+                framebuffer: [1280, 720],
+                ..layout
+            },
+            PaintLayout {
+                scale: 3.0f32.to_bits(),
+                ..layout
+            },
+            PaintLayout {
+                font_epoch: 6,
+                ..layout
+            },
+            PaintLayout {
+                lightmap: false,
+                ..layout
+            },
+            PaintLayout {
+                gui_size: [940, 520],
+                ..layout
+            },
+            PaintLayout {
+                origin: [6, 7],
+                ..layout
+            },
+            PaintLayout {
+                clip: Some([12, 14, 1880, 1020]),
+                ..layout
+            },
         ] {
             assert!(cache.fresh(just_before, other).is_none());
         }

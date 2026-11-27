@@ -794,7 +794,9 @@ impl crate::game::ClientGame<'_> {
             return;
         };
         let now = self.resize_state_of(winit::dpi::PhysicalSize::new(width, height));
-        if now.differs_from(&mut self.client.resize_state) {
+        let geometry = self.gui_frame().geometry();
+        let old_geometry = std::mem::replace(&mut self.client.resize_gui_geometry, geometry);
+        if now.differs_from(&mut self.client.resize_state) || geometry != old_geometry {
             self.native_window_resize(
                 now.size.width,
                 now.size.height,
