@@ -4295,6 +4295,8 @@ impl crate::game::ClientGame<'_> {
                 biome: Some(attributes_of(biome)),
                 post_blend: Some(&post_blend),
                 post_biome: Some(post_of(biome)),
+                level_id: Some(self.common.dim.id()),
+                biome_id: Some(&biomes.get(biome).name),
             },
             &sample_clock,
         );

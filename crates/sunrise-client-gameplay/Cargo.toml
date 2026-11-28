@@ -67,6 +67,7 @@ sunrise-mod-runtime = { path = "../sunrise-mod-runtime", features = ["test-work-
 sunrise-threads = { path = "../sunrise-threads", features = ["test-allocation-count", "test-game-dir"] }
 mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab", features = ["testing"] }
 sunrise-items = { path = "../sunrise-items", features = ["test-support"] }
+sunrise-level = { path = "../sunrise-level", features = ["test-support"] }
 sunrise-world = { path = "../sunrise-world", features = ["test-support"] }
 
 [lints]

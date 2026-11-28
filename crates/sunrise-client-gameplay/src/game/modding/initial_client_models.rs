@@ -36,6 +36,7 @@ impl crate::game::ClientGame<'_> {
         self.client.stitching_block_atlas.0 = Some(atlas.clone());
         self.native_texture_atlas_stitched(mod_api::TextureAtlas::Blocks);
         self.client.gui = gui;
+        self.client.warned_celestial_sprites.clear();
         sunrise_client::ui_theme::reset_atlas();
         self.native_texture_atlas_stitched(mod_api::TextureAtlas::Gui);
         prepared

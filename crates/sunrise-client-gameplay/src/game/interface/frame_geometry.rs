@@ -3,6 +3,7 @@
 //! `first_person_arm`) and the rain and snow around the camera (`weather_geometry`).
 use super::{weather::precipitation_at, *};
 use crate::game::client_side::item_use_client::use_pose;
+use std::collections::HashSet;
 use sunrise_client::{gfx::CelestialBody, mobs::ModelNormals};
 use sunrise_gameplay_common::game::maps::map_id;
 use sunrise_gameplay_common::game::native_hooks::camera_math::hand_pose_matrix;
@@ -74,7 +75,7 @@ impl crate::game::ClientGame<'_> {
     /// frame and brightness (the renderer keeps their geometry, built once). The bodies fade
     /// with the rain (`rainBrightness = 1 - rainLevel`, their colour's alpha).
     pub(in crate::game::client_side) fn celestial_geometry(
-        &self,
+        &mut self,
         sky: &sunrise_level::environment::Sky,
         rain: f32,
     ) -> (Vec<Vertex>, Vec<CelestialBody>, Option<(glam::Mat4, f32)>) {
@@ -92,8 +93,13 @@ impl crate::game::ClientGame<'_> {
         ];
         let phase = phases[(self.common.world.day_time / 24000).rem_euclid(8) as usize];
         let moon = format!("environment/celestial/moon/{phase}");
-        let (out, bodies) =
-            celestial_bodies(&self.client.gui.atlas.sprites, sky, &moon, body_color);
+        let (out, bodies) = celestial_bodies(
+            &self.client.gui.atlas.sprites,
+            sky,
+            &moon,
+            body_color,
+            &mut self.client.warned_celestial_sprites,
+        );
         // SkyRenderer.renderStars: the static star buffer on the same frame.
         let stars = (sky.star_brightness > 0.0)
             .then(|| (celestial_frame(sky.star_angle), sky.star_brightness));
@@ -588,11 +594,16 @@ fn celestial_bodies(
     sky: &sunrise_level::environment::Sky,
     moon: &str,
     color: u32,
+    warned: &mut HashSet<String>,
 ) -> (Vec<Vertex>, Vec<CelestialBody>) {
     let mut out = Vec::new();
     let mut bodies = Vec::new();
     let mut body = |name: &str, angle: f32, size: f32, kind: CelestialBody| {
         let Some(r) = sprites.get(name).copied() else {
+            if !warned.contains(name) {
+                warned.insert(name.to_owned());
+                log::warn!("celestial sprite {name} is missing from the GUI atlas");
+            }
             return;
         };
         bodies.push(kind);
@@ -701,9 +712,8 @@ mod celestial_body_tests {
     const SUN: &str = "environment/celestial/sun";
     const MOON: &str = "environment/celestial/moon/full_moon";
 
-    /// The quads and bodies with a sprite for each of `names`; the sun's sprite starts at u 0.25,
-    /// the moon's at 0.5.
-    fn bodies(names: &[&str]) -> (Vec<[f32; 2]>, Vec<sunrise_client::gfx::CelestialBody>) {
+    /// The sun's sprite starts at u 0.25, the moon's at 0.5.
+    fn sprites(names: &[&str]) -> std::collections::HashMap<String, sunrise_client::hud::Rect> {
         let rect = |u0: f32| sunrise_client::hud::Rect {
             u0,
             v0: 0.0,
@@ -712,12 +722,18 @@ mod celestial_body_tests {
             w: 16,
             h: 16,
         };
-        let sprites = names
+        names
             .iter()
             .map(|&name| (name.to_owned(), rect(if name == SUN { 0.25 } else { 0.5 })))
-            .collect();
+            .collect()
+    }
+
+    fn bodies(
+        sprites: &std::collections::HashMap<String, sunrise_client::hud::Rect>,
+        warned: &mut HashSet<String>,
+    ) -> (Vec<[f32; 2]>, Vec<CelestialBody>) {
         let sky = sunrise_level::environment::Sky::default();
-        let (quads, bodies) = celestial_bodies(&sprites, &sky, MOON, u32::MAX);
+        let (quads, bodies) = celestial_bodies(sprites, &sky, MOON, u32::MAX, warned);
         assert_eq!(quads.len(), bodies.len() * 4, "one entry a quad");
         (quads.iter().step_by(4).map(|v| v.uv).collect(), bodies)
     }
@@ -726,24 +742,37 @@ mod celestial_body_tests {
     fn the_sun_then_the_moon() {
         // The moon's UVs run the other way round: its first corner is (u1, v1).
         assert_eq!(
-            bodies(&[SUN, MOON]),
+            bodies(&sprites(&[SUN, MOON]), &mut HashSet::new()),
             (vec![[0.25, 0.0], [0.625, 0.125]], vec![Sun, Moon])
         );
     }
 
     #[test]
-    fn the_moon_alone_is_the_first_quad_and_the_moon() {
-        assert_eq!(bodies(&[MOON]), (vec![[0.625, 0.125]], vec![Moon]));
+    fn the_moon_alone_is_the_first_quad_and_the_missing_sun_warns_once() {
+        let sprites = sprites(&[MOON]);
+        let mut warned = HashSet::new();
+        let (frames, warnings) =
+            sunrise_level::test_log::capture(|| [0, 1].map(|_| bodies(&sprites, &mut warned)));
+        for frame in frames {
+            assert_eq!(frame, (vec![[0.625, 0.125]], vec![Moon]));
+        }
+        assert_eq!(
+            warnings,
+            ["celestial sprite environment/celestial/sun is missing from the GUI atlas"]
+        );
     }
 
     #[test]
     fn the_sun_alone_is_the_sun() {
-        assert_eq!(bodies(&[SUN]), (vec![[0.25, 0.0]], vec![Sun]));
+        assert_eq!(
+            bodies(&sprites(&[SUN]), &mut HashSet::new()),
+            (vec![[0.25, 0.0]], vec![Sun])
+        );
     }
 
     #[test]
     fn no_sprite_no_body() {
-        assert_eq!(bodies(&[]), (vec![], vec![]));
+        assert_eq!(bodies(&sprites(&[]), &mut HashSet::new()), (vec![], vec![]));
     }
 }
 

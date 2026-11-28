@@ -1193,6 +1193,9 @@ pub struct ClientState {
     pub client_pack: resource_tables_client::ClientPackResources,
     /// The title and menu bundle (GUI atlas, font and panorama).
     pub gui: resource_tables_client::UiResources,
+    /// Missing sun and moon sprites already reported for the installed GUI atlas.
+    #[cfg(feature = "client")]
+    pub(in crate::game::client_side) warned_celestial_sprites: std::collections::HashSet<String>,
     pub streaming: sunrise_client_render::streaming::MeshStreamer,
     /// Client-ticked block-entity animation state.
     pub be_anims: sunrise_client_render::block_entity_anim::BlockEntityAnims,
@@ -1971,6 +1974,8 @@ impl ClientState {
             client_res,
             client_pack,
             gui,
+            #[cfg(feature = "client")]
+            warned_celestial_sprites: Default::default(),
             streaming,
             be_anims,
             settings,

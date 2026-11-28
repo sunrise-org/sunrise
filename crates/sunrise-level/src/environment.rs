@@ -4,8 +4,8 @@
 use crate::Result;
 use crate::pack_tags::Tags;
 use serde_json::Value as Json;
-use std::collections::{BTreeMap, HashMap};
-use std::sync::{Arc, LazyLock, OnceLock, RwLock};
+use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::sync::{Arc, LazyLock, Mutex, OnceLock, RwLock};
 use sunrise_assets::resource_source::ResourceSource;
 use sunrise_world::environment_attributes::{
     AMBIENT_PARTICLES, Attribute, AttributeMap, Value, attribute,
@@ -50,6 +50,8 @@ pub struct Environment {
     source: ResourceSource,
     dimension: String,
     modifiers: Option<Arc<dyn AttributeModifiers>>,
+    /// A cached dimension type can serve more than one level.
+    warned_sky_attributes: Mutex<HashMap<String, BTreeSet<&'static str>>>,
 }
 
 /// A world's `minecraft:timeline` registry and its bound `minecraft:timeline` tags, supplied
@@ -147,6 +149,9 @@ pub struct Sample<'a> {
     /// The same for the packs' biome post-process group.
     pub post_blend: Option<&'a BiomeBlend<'a>>,
     pub post_biome: Option<&'a AttributeMap>,
+    /// The level and camera biome IDs for sky sampling diagnostics, when known.
+    pub level_id: Option<&'a str>,
+    pub biome_id: Option<&'a str>,
 }
 
 /// What a pack's expression can ask about the frame (wiki "Scripting Expressions": the global,
@@ -415,6 +420,7 @@ impl Environment {
             frame,
             biomes,
             post,
+            warned_sky_attributes: Mutex::default(),
         })
     }
 
@@ -544,17 +550,47 @@ impl Environment {
     /// The sky state the renderer draws, reading each timeline's own `WorldClock`.
     pub fn sample_with_clock(&self, at: &Sample, clock: &dyn Fn(&str) -> i64) -> Sky {
         let value = |id: &str| attribute(id).and_then(|attr| self.value_at(attr, at, clock));
-        let float = |id: &str| match value(id) {
+        let warn = |id: &'static str, expected: &str| {
+            let level = at.level_id.unwrap_or(&self.dimension);
+            let first = {
+                let mut warned = self
+                    .warned_sky_attributes
+                    .lock()
+                    .unwrap_or_else(std::sync::PoisonError::into_inner);
+                if let Some(attributes) = warned.get_mut(level) {
+                    attributes.insert(id)
+                } else {
+                    warned.insert(level.to_owned(), BTreeSet::from([id]));
+                    true
+                }
+            };
+            if first {
+                let biome = at.biome_id.unwrap_or("unknown");
+                log::warn!(
+                    "sky attribute minecraft:{id} did not resolve to {expected} in level {level} (biome {biome})"
+                );
+            }
+        };
+        let float = |id: &'static str| match value(id) {
             Some(Value::Float(f)) => f,
-            _ => 0.0,
+            _ => {
+                warn(id, "a float");
+                0.0
+            }
         };
-        let rgb = |id: &str| match value(id) {
+        let rgb = |id: &'static str| match value(id) {
             Some(Value::Rgb(c)) => c,
-            _ => [0.0; 3],
+            _ => {
+                warn(id, "an RGB color");
+                [0.0; 3]
+            }
         };
-        let argb = |id: &str| match value(id) {
+        let argb = |id: &'static str| match value(id) {
             Some(Value::Argb(c)) => c,
-            _ => [0.0; 4],
+            _ => {
+                warn(id, "an ARGB color");
+                [0.0; 4]
+            }
         };
         Sky {
             sky_color: rgb("visual/sky_color"),
@@ -699,6 +735,46 @@ mod tests {
             assert_eq!(sky_darken(&environment, 0, 0.0, 0.0), expected);
             assert!(Environment::load_dimension(&source, "missing").is_err());
         }
+    }
+
+    #[test]
+    fn an_invalid_sky_attribute_warns_once_per_environment() {
+        use sunrise_assets::resource_source::Resource;
+        use sunrise_world::environment_attributes::Entry;
+
+        let source = ResourceSource::indexed(BTreeMap::from([(
+            "data/minecraft/dimension_type/overworld.json".into(),
+            Resource::bytes(br#"{"attributes":{}}"#.to_vec()),
+        )]));
+        let sample = Sample {
+            level_id: Some("test:sky_level"),
+            biome_id: Some("minecraft:plains"),
+            ..Sample::default()
+        };
+        // No timelines still leaves valid attribute defaults. Supply a wrong-typed entry
+        // through the code-built map to exercise the fallback without changing those defaults.
+        let mut builder = Builder::default();
+        builder.constant_layer(&AttributeMap::from_entries([(
+            attribute("visual/sun_angle").unwrap(),
+            Entry::Override(Value::Bool(true)),
+        )]));
+        let mut environment = Environment::load(&source).unwrap();
+        let (default_angle, default_warnings) =
+            crate::test_log::capture(|| environment.sample(&sample).sun_angle);
+        assert_eq!(default_angle, 0.0);
+        assert!(default_warnings.is_empty());
+
+        environment.system = builder.build();
+        let (angles, warnings) = crate::test_log::capture(|| {
+            [0, 1].map(|day_time| environment.sample(&Sample { day_time, ..sample }).sun_angle)
+        });
+        assert_eq!(angles, [0.0; 2]);
+        assert_eq!(
+            warnings,
+            [
+                "sky attribute minecraft:visual/sun_angle did not resolve to a float in level test:sky_level (biome minecraft:plains)"
+            ]
+        );
     }
 
     fn overworld() -> Option<Environment> {
