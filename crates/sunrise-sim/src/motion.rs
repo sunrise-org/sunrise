@@ -29,8 +29,8 @@ use sunrise_world::{
     attribute_map::ValueKind,
     attributes::{
         Modifier, Operation,
-        entity::Catalog,
-        live::{LiveAttributes, Supplier},
+        entity::{AttributeId, Catalog},
+        live::{Key, LiveAttributes, Supplier},
     },
     block_collision::BlockCollisionRegistry,
     block_landing::BlockLandingRegistry,
@@ -169,6 +169,7 @@ pub use surface::{
 
 pub struct MotionResources {
     player_supplier: Supplier,
+    player_movement_speed: AttributeId,
     initial_player_health: crate::health::PlayerHealth,
     pub blocks: BoundMovementProperties,
     pub climbable: BTreeSet<String>,
@@ -223,7 +224,7 @@ impl MotionResources {
         conditions: &sunrise_world::conditions::LoadConditions,
         finalize_attributes: impl FnOnce(Catalog) -> Result<Catalog>,
     ) -> Result<Self> {
-        let (player_supplier, maximum_health) =
+        let (player_supplier, maximum_health, player_movement_speed) =
             player_init::load_player_attributes(root, finalize_attributes)?;
         let file = BlockTableFile::open(&root.join("movement-properties.nbt"), assets.registry)?;
         let properties = MovementProperties::from_table(file.table("movement")?)?;
@@ -258,6 +259,7 @@ impl MotionResources {
             health,
             fluids: FluidResources::new(assets, facts)?,
             player_supplier,
+            player_movement_speed,
             blocks: properties.bind(&MovementTags {
                 fences: tag("minecraft:fences"),
                 walls: tag("minecraft:walls"),
@@ -564,6 +566,7 @@ pub struct PlayerMotion {
     pub teleported_delta: [bool; 3],
     pub events: Vec<MotionEvent>,
     pub attributes: LiveAttributes<Box<dyn sunrise_world::attributes::live::Identities>>,
+    walking_speed_attribute: Key,
     pub impulse: ImpulseContext,
     /// `ServerPlayer.spawnExtraParticlesOnFall`: a mace smash on a grounded
     /// target makes the next landing throw up the block below.
@@ -681,10 +684,10 @@ impl PlayerMotion {
             self.fall_distance = level.fall_distance;
             // LivingEntity.readAdditionalSaveData applies the saved attributes
             // before it reads the health (a raised max_health keeps its hearts).
-            self.apply_saved_attributes(extra.and_then(|t| t.get("attributes")))?;
-            self.set_health(level.health, false)?;
+            self.apply_saved_attributes(extra.and_then(|t| t.get("attributes")));
+            self.set_loaded_health(level.health);
             // LivingEntity.readAdditionalSaveData: internalSetAbsorptionAmount.
-            self.internal_set_absorption(level.absorption)?;
+            self.internal_set_absorption(level.absorption);
             self.health.food.food = level.food;
             self.health.food.saturation = level.saturation;
             self.flying = level.flying;
@@ -873,29 +876,30 @@ impl PlayerMotion {
     fn packed_attributes(&self, modifiers: bool) -> sunrise_core::nbt::Tag {
         sunrise_core::nbt::Tag::List(crate::living_attributes::pack(&self.attributes, modifiers))
     }
+    /// `LivingEntity.getMaxHealth` on the validated player supplier.
+    pub fn max_health(&mut self) -> f32 {
+        self.attribute("minecraft:max_health")
+            .expect("validated player max health") as f32
+    }
     /// `AttributeMap.apply` of a saved `attributes` list
     /// (LivingEntity.readAdditionalSaveData): each known attribute takes its
     /// saved base and permanent modifiers; unknown ones are skipped.
-    pub fn apply_saved_attributes(&mut self, saved: Option<&sunrise_core::nbt::Tag>) -> Result<()> {
+    pub fn apply_saved_attributes(&mut self, saved: Option<&sunrise_core::nbt::Tag>) {
         crate::living_attributes::apply_saved(&mut self.attributes, saved)
+            .expect("saved attributes decoded against the player's own live map");
     }
     /// `Player.readAdditionalSaveData`: the movement speed's base is the abilities' walking speed.
-    pub fn set_walking_speed_base(&mut self, speed: f32) -> Result<()> {
-        let key = self
-            .attributes
-            .key("minecraft:movement_speed")
-            .ok_or("missing movement speed")?;
+    pub fn set_walking_speed_base(&mut self, speed: f32) {
         let handle = self
             .attributes
-            .get_instance(Some(key))
-            .map_err(attribute_error)?
-            .ok_or("player has no movement speed")?;
+            .get_instance(Some(self.walking_speed_attribute.clone()))
+            .expect("attribute key from the player's supplier")
+            .expect("movement speed bound at resource load");
         self.attributes
             .edit(&handle, |value, observer| {
                 value.set_base_value(f64::from(speed), observer)
             })
-            .map_err(attribute_error)?;
-        Ok(())
+            .expect("movement speed instance from this body");
     }
     pub fn set_sprinting(&mut self, sprinting: bool) -> Result<()> {
         self.sprinting = sprinting;

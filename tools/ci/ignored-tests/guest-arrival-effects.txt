@@ -1,0 +1,1 @@
+sunrise-sim lan::arrivals::hub_tests::an_effects_only_arrival_saves_the_added_or_removed_speed_modifier lib daily resources

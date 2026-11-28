@@ -374,10 +374,23 @@ impl<G: FnMut() -> i32> LiveAttributes<G> {
         &self.data.catalog
     }
     pub fn key(&self, name: &str) -> Option<Key> {
-        self.data
-            .catalog
-            .id(name)
-            .map(|id| self.data.keys[id.index()].clone())
+        self.data.catalog.id(name).map(|id| self.key_by_id(id))
+    }
+    pub fn key_by_id(&self, id: AttributeId) -> Key {
+        self.data.keys[id.index()].clone()
+    }
+    /// A whole-record replacement starts from the supplier, not a merge of
+    /// the old and new instances. Queue supplier values for the attributes
+    /// the client may already have received before the replacement.
+    pub fn reset_to_supplier(&mut self) {
+        let old = std::mem::take(&mut self.data.nodes);
+        self.data.owner = Arc::new(());
+        self.map = AttributeMap::default();
+        for node in old {
+            self.get_instance(Some(node.key))
+                .expect("existing attribute key from the same supplier")
+                .expect("existing attribute provided by the supplier");
+        }
     }
     pub fn keys(&self) -> &[Key] {
         &self.data.keys

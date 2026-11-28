@@ -239,6 +239,7 @@ pub struct LevelTeleport {
     pub dim: Dim,
     pub at: [f64; 3],
     pub rotation: Option<[f32; 2]>,
+    pub motion: crate::teleport_transition::TeleportMotion,
     /// `TeleportTransition.asPassenger`: the vehicle already moved with its tree.
     pub vehicle: Option<u32>,
 }
@@ -1291,6 +1292,7 @@ impl crate::game::ServerGame<'_> {
                                 at: [found.at.x, found.at.y, found.at.z],
                                 rotation: (!legacy_personal_point)
                                     .then_some([found.yaw, found.pitch]),
+                                motion: crate::teleport_transition::TeleportMotion::Stop,
                                 vehicle: None,
                             },
                             LevelTeleportKind::EndExit {
@@ -1403,7 +1405,8 @@ impl crate::game::ServerGame<'_> {
                 continue;
             }
             // A portal's trip (`start_server_trip`): its client waits to land.
-            let portal = trip.end || trip.plan.is_some();
+            let nether = trip.plan.is_some();
+            let portal = trip.end || nether;
             self.resolve_arrivals();
             let slot = trip
                 .arrival_actor
@@ -1413,13 +1416,13 @@ impl crate::game::ServerGame<'_> {
             else {
                 return;
             };
-            let yaw = player.guest.yaw;
+            let source_yaw = player.guest.yaw;
             let (position, yaw) = if let Some(job) = trip.gateway {
                 match self.resolve_gateway(job, trip.target) {
-                    Ok(at) => (at, yaw),
+                    Ok(at) => (at, source_yaw),
                     Err(e) => {
                         log::error!("End gateway exit: {e}");
-                        (trip.target, yaw)
+                        (trip.target, source_yaw)
                     }
                 }
             } else if trip.end {
@@ -1445,7 +1448,7 @@ impl crate::game::ServerGame<'_> {
                                 view.guest.pitch = pitch
                             });
                         }
-                        (at, turned.unwrap_or(yaw))
+                        (at, turned.unwrap_or(source_yaw))
                     }
                     Ok(None) => {
                         self.server.server_trips.insert(k, trip);
@@ -1454,7 +1457,7 @@ impl crate::game::ServerGame<'_> {
                     }
                     Err(e) => {
                         log::error!("End arrival: {e}");
-                        (trip.target, yaw)
+                        (trip.target, source_yaw)
                     }
                 }
             } else {
@@ -1465,16 +1468,18 @@ impl crate::game::ServerGame<'_> {
                 match (trip.plan, exit) {
                     (Some(plan), Some(exit)) => {
                         let (at, rotation) = self.arrival(&plan, exit);
-                        (at, yaw + rotation)
+                        (at, rotation)
                     }
-                    _ => (trip.target, yaw),
+                    _ if nether => (trip.target, 0.0),
+                    _ => (trip.target, source_yaw),
                 }
             };
             // The vehicle the player rode comes with it, and waits for it
             // where it arrives (`Entity.teleportCrossDimension` carries the
             // passengers).
             if let Some(vehicle) = trip.vehicle {
-                self.arrive_vehicle(trip.source, vehicle, position, yaw);
+                let vehicle_yaw = if nether { source_yaw + yaw } else { yaw };
+                self.arrive_vehicle(trip.source, vehicle, position, vehicle_yaw);
             }
             // Player.getDimensionChangingDelay.
             let slot = trip
@@ -1486,19 +1491,28 @@ impl crate::game::ServerGame<'_> {
             if !trip.hold {
                 host.play.entry(trip.conn).or_default().portal.cooldown = 10;
             }
-            PlayerWrite::update(&mut host.hub.guests, slot, |view| {
-                let g = view.guest;
-                g.yaw = yaw;
-                // A new body at the exit: no fall distance or motion carried over,
-                // but the player's attributes (ServerPlayer.teleport keeps the entity).
-                if !trip.hold {
-                    g.new_body(true);
-                }
-            });
-            let at = [position.x, position.y, position.z];
+            let at = position.components();
             if portal {
-                host.hub.land(slot, at);
+                use play::relative::{DELTA_X, DELTA_Y, DELTA_Z, ROTATE_DELTA, X_ROT, Y_ROT};
+                let delta = DELTA_X | DELTA_Y | DELTA_Z | ROTATE_DELTA;
+                let relatives = if nether {
+                    delta | X_ROT | Y_ROT
+                } else if trip.entering {
+                    delta | X_ROT
+                } else {
+                    // The End exit uses the player's absolute respawn transition.
+                    0
+                };
+                host.hub.land(slot, at, yaw, relatives);
             } else {
+                PlayerWrite::update(&mut host.hub.guests, slot, |view| {
+                    let g = view.guest;
+                    g.yaw = yaw;
+                    if let Some(body) = g.motion.as_mut() {
+                        body.yaw = yaw;
+                        body.position = position;
+                    }
+                });
                 host.hub.teleport(slot, Some(at));
             }
             self.tell_mods_changed_dimension(trip.conn, trip.left, trip.dim);
@@ -1702,30 +1716,15 @@ impl crate::game::ServerGame<'_> {
         let [yaw, pitch] = t.rotation.unwrap_or([guest.yaw, guest.pitch]);
         let origin = guest.position;
         let cooldown = host.play.get(&t.conn).map_or(0, |p| p.portal.cooldown);
-        let change = host
+        let mut change = host
             .hub
             .begin_level_change(i, t.at, yaw, Some(pitch), cooldown, &ctx);
+        change.keep_motion = matches!(t.motion, crate::teleport_transition::TeleportMotion::Keep);
         self.send_player_command_tree(t.conn);
         let ctx = server_ctx!(self);
         if let Some(host) = self.server.lan.as_mut() {
-            let passenger_body = host.hub.guests.update(i, |g| {
-                // A new body there: no fall distance or motion carried over, but
-                // the player's attributes (ServerPlayer.teleport keeps the entity).
-                if t.vehicle.is_some() {
-                    g.motion.take()
-                } else {
-                    g.new_body(true);
-                    None
-                }
-            });
             host.hub.finish_level_change(i, change, false, &ctx);
-            host.hub.guests.update(i, |g| {
-                g.vehicle = t.vehicle;
-                if let Some(mut body) = passenger_body {
-                    body.position = Vec3::new(t.at[0], t.at[1], t.at[2]);
-                    g.motion = Some(body);
-                }
-            });
+            host.hub.guests.update(i, |g| g.vehicle = t.vehicle);
         }
         self.bind_player_attachments(t.conn, false);
         if let Some(hold) = menu_hold {

@@ -554,6 +554,31 @@ pub trait HeldItemsGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         }
     }
 
+    /// `EnchantmentHelper.getDamageProtection` for a player's own armor, including
+    /// a guest whose body is parked at the save or restore boundary.
+    fn armor_damage_protection(&self, armor: &[Option<ItemStack>]) -> Vec<(String, f32)> {
+        let mut table = Vec::new();
+        let e = &self.stations().enchantments;
+        let mut random = sunrise_core::random::LegacyRandom::new(0);
+        for (_, def) in self.health_resources.damage.entries() {
+            let ctx = sunrise_items::enchant::EffectContext {
+                items: Some(self.items()),
+                damage_type: Some(&def.name),
+                this: Some("minecraft:player"),
+                ..Default::default()
+            };
+            let total: f32 = armor
+                .iter()
+                .flatten()
+                .map(|s| e.preview_value(s, "minecraft:damage_protection", &ctx, &mut random))
+                .sum();
+            if total > 0.0 {
+                table.push((def.name.clone(), total));
+            }
+        }
+        table
+    }
+
     /// `EnchantmentHelper.getDamageProtection` after equipment changes.
     fn refresh_armor_protection(&mut self) {
         let armor: Vec<Option<ItemStack>> = self.armor.to_vec();
@@ -565,25 +590,7 @@ pub trait HeldItemsGameExt1<'__sg>: crate::game::SideGame<'__sg> {
                 *generation == self.damage_tag_generation && cached == &armor
             })
         {
-            let mut table = Vec::new();
-            let e = &self.stations().enchantments;
-            let mut random = sunrise_core::random::LegacyRandom::new(0);
-            for (_, def) in self.health_resources.damage.entries() {
-                let ctx = sunrise_items::enchant::EffectContext {
-                    items: Some(self.items()),
-                    damage_type: Some(&def.name),
-                    this: Some("minecraft:player"),
-                    ..Default::default()
-                };
-                let total: f32 = armor
-                    .iter()
-                    .flatten()
-                    .map(|s| e.preview_value(s, "minecraft:damage_protection", &ctx, &mut random))
-                    .sum();
-                if total > 0.0 {
-                    table.push((def.name.clone(), total));
-                }
-            }
+            let table = self.armor_damage_protection(&armor);
             self.potions.protection_for = Some((self.damage_tag_generation, armor));
             if let Some(p) = self.player.as_mut() {
                 p.status.protection = table;

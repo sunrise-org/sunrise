@@ -2570,6 +2570,16 @@ impl crate::game::ServerGame<'_> {
                 return;
             }
         }
+        let motion = self.common.motion;
+        if self
+            .install_guest_body(conn, |g| {
+                let at = prepared.map_or(g.position, |spawn| spawn.position);
+                g.health = g.build_motion(motion, at).health.health();
+            })
+            .is_none()
+        {
+            return;
+        }
         self.initialize_server_player(uuid, conn);
         let Some(host) = self.server.lan.as_mut() else {
             return;
@@ -2579,7 +2589,7 @@ impl crate::game::ServerGame<'_> {
         let root = self.server.world_root.clone();
         let in_place = host.hub.config.dimension.clone();
         let owner = host.owner.as_mut();
-        let Some((known, name)) = host.hub.update_guest(conn, |g| {
+        let Some((known, name, cooldown)) = host.hub.update_guest(conn, |g| {
             // PlayerList.loadPlayerData: the owner gets the world's player file,
             // everyone else their own.
             let known = match owner.filter(|o| o.uuid == g.uuid) {
@@ -2594,10 +2604,24 @@ impl crate::game::ServerGame<'_> {
             }
             // PlayerEvent.LoadFromFile: the player's data is read and applied,
             // the player not yet placed.
-            (known, g.name.clone())
+            g.apply_loaded_motion(true);
+            if let Some(body) = g.motion.as_mut()
+                && g.saved.is_some()
+            {
+                // Entity.load initializes body yaw from the saved view rotation.
+                body.body_yaw = g.yaw;
+            }
+            let cooldown = g
+                .saved
+                .as_ref()
+                .and_then(|tag| sunrise_sim::save::number(tag.get("PortalCooldown")))
+                .unwrap_or(0) as i32;
+            (known, g.name.clone(), cooldown)
         }) else {
             return;
         };
+        host.play.entry(conn).or_default().portal.cooldown = cooldown;
+        self.refresh_parked_guest_protection(conn);
         self.native_player_load_from_file(uuid, &name, &playerdata::directory(&root));
         let Some(host) = self.server.lan.as_mut() else {
             return;
@@ -2619,6 +2643,21 @@ impl crate::game::ServerGame<'_> {
                     g.game_mode = default_mode;
                     // ServerPlayerGameMode.setGameModeForPlayer: the abilities of the mode chosen.
                     g.abilities.update_for_mode(default_mode);
+                }
+                let spectator = g.spectator();
+                if let Some(body) = g.motion.as_mut() {
+                    if let Some(prepared) = prepared {
+                        let [x, y, z] = prepared.position;
+                        body.position = sunrise_core::geometry::Vec3::new(x, y, z);
+                    }
+                    body.yaw = g.yaw;
+                    body.pitch = g.pitch;
+                    body.spectator = spectator;
+                    body.local_spectator = spectator;
+                    body.may_fly = g.abilities.may_fly;
+                    body.flying = g.abilities.flying;
+                    body.flying_speed = g.abilities.flying_speed;
+                    body.invulnerable = g.abilities.invulnerable || g.handover.is_some();
                 }
             })
             .is_none()

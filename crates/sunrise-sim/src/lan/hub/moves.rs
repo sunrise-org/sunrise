@@ -609,7 +609,14 @@ impl Hub {
             return false;
         };
         if self.ticks - guest.teleport_tick > 20 {
-            self.send_position_correction(i, Some(at), 0, [0.0; 3], guest.pending_travel_velocity);
+            self.send_position_correction(
+                i,
+                Some(at),
+                0,
+                [0.0; 3],
+                0.0,
+                guest.pending_travel_velocity,
+            );
         }
         true
     }

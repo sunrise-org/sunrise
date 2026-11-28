@@ -22,10 +22,38 @@ impl PlayerMotion {
     pub fn refresh_attributes(&mut self) -> Result<()> {
         live_updates::refresh(self)
     }
+    /// `MobEffect.addAttributeModifiers` or `removeAttributeModifiers` on the player.
+    pub fn write_effect_modifiers(&mut self, index: Option<usize>, amplifier: Option<i32>) {
+        use sunrise_world::effect_attribute_modifiers::{Definitions, Template, add_definition};
+        let Some(effect) = index.and_then(sunrise_game_data::potions::effect_by_index) else {
+            return;
+        };
+        let mut definitions = Definitions::default();
+        for (attribute, id, amount, operation) in crate::effects::effect_modifiers(effect) {
+            if let Some(key) = self.attributes.key(attribute)
+                && let Ok(template) = Template::new(id, amount, operation)
+            {
+                add_definition(&mut definitions, Some(key), template);
+            }
+        }
+        let result = match amplifier {
+            Some(amplifier) => self
+                .attributes
+                .add_effect_modifiers(&mut definitions, amplifier),
+            None => self.attributes.remove_effect_modifiers(&mut definitions),
+        };
+        if let Err(error) = result {
+            log::error!(
+                "Could not update player attribute modifiers for {}: {error:?}",
+                effect.id
+            );
+        }
+    }
     /// `Player.internalSetAbsorptionAmount`: the amount as given, unclamped
     /// (the saved `AbsorptionAmount`, or what a client's server sent).
-    pub fn internal_set_absorption(&mut self, value: f32) -> Result<()> {
+    pub fn internal_set_absorption(&mut self, value: f32) {
         self.store_absorption(value)
+            .expect("absorption float bound at resource load");
     }
 }
 impl HealthWorld for PlayerMotion {

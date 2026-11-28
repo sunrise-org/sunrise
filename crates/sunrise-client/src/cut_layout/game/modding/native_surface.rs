@@ -121,7 +121,7 @@ mod tests {
             // The player's ground travel reads the block through its motion world.
             let player = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
                 let mut player = PlayerMotion::new(game.motion, Vec3::new(5.5, 65.0, 5.5));
-                player.set_walking_speed_base(0.1).unwrap();
+                player.set_walking_speed_base(0.1);
                 player.ground.on_ground = true;
                 player.velocity = Vec3::new(0.2, 0.0, 0.0);
                 let (player_uuid, level, session_lock) = game.side_game_side_meta();

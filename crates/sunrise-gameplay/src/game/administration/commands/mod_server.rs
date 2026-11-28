@@ -1984,6 +1984,7 @@ impl crate::game::ServerGame<'_> {
                 dim: level,
                 at: pos,
                 rotation,
+                motion,
                 vehicle: None,
             });
         Ok(true)

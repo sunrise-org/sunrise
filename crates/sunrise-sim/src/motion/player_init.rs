@@ -3,7 +3,7 @@ use super::*;
 pub(super) fn load_player_attributes(
     root: &Path,
     finalize: impl FnOnce(Catalog) -> Result<Catalog>,
-) -> Result<(Supplier, f32)> {
+) -> Result<(Supplier, f32, AttributeId)> {
     let path = root.join("attributes.json");
     let prepared = Catalog::from_json(&sunrise_world::json_file::read(&path)?)
         .map_err(|error| format!("{}: {error}", path.display()))?;
@@ -21,7 +21,13 @@ pub(super) fn load_player_attributes(
         .base(max_health)
         .ok_or_else(|| invalid("missing minecraft:max_health base for minecraft:player"))?;
     let maximum = catalog.attribute(max_health).definition.sanitize(base) as f32;
-    Ok((supplier, maximum))
+    let movement_speed = catalog
+        .id("minecraft:movement_speed")
+        .ok_or_else(|| invalid("missing minecraft:movement_speed definition"))?;
+    supplier
+        .base(movement_speed)
+        .ok_or_else(|| invalid("missing minecraft:movement_speed base for minecraft:player"))?;
+    Ok((supplier, maximum, movement_speed))
 }
 
 impl PlayerMotion {
@@ -138,6 +144,7 @@ impl PlayerMotion {
             teleported: false,
             teleported_delta: [false; 3],
             events: Vec::new(),
+            walking_speed_attribute: attributes.key_by_id(resources.player_movement_speed),
             attributes,
             fluids: PlayerFluids::default(),
             in_powder_snow: false,
@@ -188,6 +195,7 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         let health = "minecraft:max_health";
         let absorption = "minecraft:max_absorption";
+        let speed = "minecraft:movement_speed";
         let complete_row =
             || json!({"minecraft:player": {"minecraft:max_health": "4034000000000000"}});
         for (entities, definitions, cause) in [
@@ -216,6 +224,16 @@ mod tests {
                 vec![absorption],
                 "missing minecraft:max_health definition referenced by minecraft:player supplier",
             ),
+            (
+                complete_row(),
+                vec![health, absorption],
+                "missing minecraft:movement_speed definition",
+            ),
+            (
+                complete_row(),
+                vec![health, absorption, speed],
+                "missing minecraft:movement_speed base for minecraft:player",
+            ),
         ] {
             prepared_catalog(root.path(), entities, &definitions);
             let error = load_player_attributes(root.path(), Ok).err().unwrap();
@@ -231,12 +249,16 @@ mod tests {
         let root = tempfile::tempdir().unwrap();
         prepared_catalog(
             root.path(),
-            json!({"minecraft:player": {"minecraft:max_health": "4034000000000000"}}),
-            &["minecraft:max_health", "minecraft:max_absorption"],
+            json!({"minecraft:player": {"minecraft:max_health": "4034000000000000", "minecraft:movement_speed": "3fb999999999999a"}}),
+            &[
+                "minecraft:max_health",
+                "minecraft:max_absorption",
+                "minecraft:movement_speed",
+            ],
         );
-        let (_, original) = load_player_attributes(root.path(), Ok).unwrap();
+        let (_, original, _) = load_player_attributes(root.path(), Ok).unwrap();
         assert_eq!(original, 20.0);
-        let (supplier, changed) = load_player_attributes(root.path(), |catalog| {
+        let (supplier, changed, _) = load_player_attributes(root.path(), |catalog| {
             catalog
                 .with_entity_additions(
                     "minecraft:player",

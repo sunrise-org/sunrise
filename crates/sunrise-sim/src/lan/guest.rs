@@ -1156,6 +1156,63 @@ impl Guest {
             self.send(p);
         }
     }
+    /// Construct a `ServerPlayer` body, before applying saved or copied state.
+    /// The seed belongs to the new entity; moving it does not start another stream.
+    pub fn build_motion(
+        &mut self,
+        resources: &crate::motion::MotionResources,
+        at: [f64; 3],
+    ) -> &mut PlayerMotion {
+        let [x, y, z] = at;
+        let position = Vec3::new(x, y, z);
+        let mut body = PlayerMotion::new(resources, position);
+        body.entity_id = self.entity_id;
+        body.random = sunrise_core::random::EntityRandom::own(crate::mobs::entity_random(
+            self.entity_id as u32,
+            position,
+        ));
+        self.motion.insert(Box::new(body)).as_mut()
+    }
+
+    /// Apply the decoded living and entity fields to the owned body. Import calls
+    /// this after merging its selected parts, without constructing another body.
+    pub fn apply_loaded_motion(&mut self, reload_attributes: bool) {
+        let spectator = self.spectator();
+        let Some(body) = self.motion.as_mut() else {
+            return;
+        };
+        if let Some(saved) = self.loaded_body.take() {
+            saved.apply(body);
+            if reload_attributes {
+                body.set_walking_speed_base(self.abilities.walking_speed);
+                body.apply_saved_attributes(
+                    self.saved.as_ref().and_then(|tag| tag.get("attributes")),
+                );
+            }
+        }
+        if let Some(absorption) = self.saved_absorption.take() {
+            body.internal_set_absorption(absorption);
+        }
+        body.set_loaded_health(self.health);
+        body.health.food.food = self.food;
+        body.health.food.saturation = self.saturation;
+        let [x, y, z] = self.position;
+        body.position = Vec3::new(x, y, z);
+        body.yaw = self.yaw;
+        body.pitch = self.pitch;
+        body.ground.on_ground = self.on_ground;
+        body.fall_flying = self.fall_flying;
+        body.spectator = spectator;
+        body.local_spectator = spectator;
+        body.may_fly = self.abilities.may_fly;
+        body.flying = self.abilities.flying;
+        body.flying_speed = self.abilities.flying_speed;
+        body.invulnerable = self.abilities.invulnerable || self.handover.is_some();
+        let mut status = self.effects.status();
+        status.protection = std::mem::take(&mut body.status.protection);
+        body.status = status;
+    }
+
     /// A new player at `at` (`ChunkMap.addEntity`; the tickets start there).
     pub fn place(&mut self, at: [f64; 3]) {
         (
@@ -1266,17 +1323,6 @@ impl Guest {
             self.carried_tick_count = None;
         }
         Some(m)
-    }
-    /// `ServerPlayer.restoreFrom(old, false)`'s `setHealth(getMaxHealth())`:
-    /// the health a player comes back from a death with, the max health of
-    /// the base values their next body takes over, before its equipment
-    /// modifies it (40 after `/attribute @s minecraft:max_health base set
-    /// 40`, not 20).
-    pub fn respawn_health(&self, resources: &crate::motion::MotionResources) -> f32 {
-        let mut body = PlayerMotion::new(resources, Vec3::ZERO);
-        let _ = body.apply_saved_attributes(self.carried_attributes.as_ref());
-        body.attribute("minecraft:max_health")
-            .map_or(20.0, |max| max as f32)
     }
     /// `Entity.getBoundingBox`.
     pub fn bounds(&self) -> Aabb {
@@ -1667,12 +1713,11 @@ mod tests {
                 .edit(&handle, |a, o| a.add_permanent(bonus, o))
                 .unwrap();
             g.motion = Some(Box::new(m));
-            assert!(g.new_body(false).is_some());
-            assert_eq!(g.respawn_health(&resources), want, "base {base}");
+            let old = g.motion.take().unwrap();
+            let body = g.build_motion(&resources, [0.5, 64.0, 0.5]);
+            body.apply_saved_attributes(Some(&old.carried_attributes(false)));
+            assert_eq!(body.max_health(), want, "base {base}");
         }
-        // No body to take anything from: the default.
-        let g = guest_at([0.5, 64.0, 0.5]);
-        assert_eq!(g.respawn_health(&resources), 20.0);
     }
 
     /// #3684: a glide the client announced (`START_FALL_FLYING`) is the
