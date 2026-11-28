@@ -333,7 +333,7 @@ impl crate::game::ServerGame<'_> {
         else {
             return;
         };
-        let allowed = g.creative() && g.permission >= 2;
+        let allowed = g.abilities.instabuild && g.permission >= 2;
         let edit = CommandBlockEdit {
             pos: (p.pos[0], p.pos[1], p.pos[2]),
             command: p.command,
@@ -360,7 +360,7 @@ impl crate::game::ServerGame<'_> {
         if !host
             .hub
             .guest(conn)
-            .is_some_and(|g| g.creative() && g.permission >= 2)
+            .is_some_and(|g| g.abilities.instabuild && g.permission >= 2)
         {
             return;
         }

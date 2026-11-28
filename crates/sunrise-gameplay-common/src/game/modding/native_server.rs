@@ -528,6 +528,18 @@ impl PlayerRead<'_> {
         self.mode() == Some(1)
     }
 
+    /// `Player.getAbilities().instabuild`: creative mode sets it, but a mod or
+    /// a command can set it on another mode too, and only the ability counts.
+    pub fn instabuild(&self) -> bool {
+        match self {
+            Self::Acting {
+                abilities: Some(a), ..
+            } => a.instabuild,
+            Self::Guest(guest) => guest.abilities.instabuild,
+            Self::Acting { mode, .. } => *mode == Some(1),
+        }
+    }
+
     pub(in crate::game) fn may_build(&self) -> bool {
         match self {
             Self::Acting {

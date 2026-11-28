@@ -178,7 +178,7 @@ impl crate::game::ServerGame<'_> {
         else {
             return;
         };
-        let allowed = g.creative() && g.permission >= 2;
+        let allowed = g.abilities.instabuild && g.permission >= 2;
         let reply = self
             .as_guest_messaged(conn, |game| {
                 allowed
