@@ -31,18 +31,18 @@ ORACLES = [
     ('VanillaProjectilesParityOracle', 'projectiles_120_124_witness.json'),
 ]
 TESTS = [
-    'game::creatures::projectile_targets_tests::witness_armor_stand_targets',
-    'game::creatures::projectile_targets_tests::witness_painting_and_cushion_targets',
-    'game::creatures::projectile_targets_tests::witness_item_frame_targets',
-    'game::creatures::projectile_targets_tests::witness_leash_knot_targets',
-    'game::creatures::projectile_targets_tests::witness_falling_block_targets',
-    'game::server_side::fishing::fishing_targets_tests::witness_fishing_bobber_targets',
-    'game::creatures::projectiles_120_124_tests::witness_spectator_player_120',
-    'game::creatures::projectiles_120_124_tests::witness_wind_charge_end_crystal_121',
-    'game::creatures::projectiles_120_124_tests::witness_trident_enderman_dodge_122',
-    'game::creatures::projectiles_120_124_tests::witness_piercing_arrow_multihit_123',
-    'game::creatures::projectiles_120_124_tests::witness_firework_rocket_targets_124',
-    'game::creatures::projectiles_120_124_tests::witness_review_round1_regressions',
+    'cut_layout::game::creatures::projectile_targets_tests::witness_armor_stand_targets',
+    'cut_layout::game::creatures::projectile_targets_tests::witness_painting_and_cushion_targets',
+    'cut_layout::game::creatures::projectile_targets_tests::witness_item_frame_targets',
+    'cut_layout::game::creatures::projectile_targets_tests::witness_leash_knot_targets',
+    'cut_layout::game::creatures::projectile_targets_tests::witness_falling_block_targets',
+    'cut_layout::game::server_side::fishing::fishing_targets_tests::witness_fishing_bobber_targets',
+    'cut_layout::game::creatures::projectiles_120_124_tests::witness_spectator_player_120',
+    'cut_layout::game::creatures::projectiles_120_124_tests::witness_wind_charge_end_crystal_121',
+    'cut_layout::game::creatures::projectiles_120_124_tests::witness_trident_enderman_dodge_122',
+    'cut_layout::game::creatures::projectiles_120_124_tests::witness_piercing_arrow_multihit_123',
+    'cut_layout::game::creatures::projectiles_120_124_tests::witness_firework_rocket_targets_124',
+    'cut_layout::game::creatures::projectiles_120_124_tests::witness_review_round1_regressions',
 ]
 
 

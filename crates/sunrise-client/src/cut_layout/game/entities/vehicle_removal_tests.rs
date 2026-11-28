@@ -7,10 +7,9 @@ use std::sync::{
 };
 use sunrise_core::{geometry::Vec3, position::ChunkPos};
 use sunrise_gameplay_common::game::commands_common::Target;
-use sunrise_sim::{
-    entities::{ArmorStand, Cushion},
-    mobs::Mob,
-};
+#[cfg(test)]
+use sunrise_sim::entities::{ArmorStand, Cushion};
+use sunrise_sim::mobs::Mob;
 
 pub(crate) const AT: Vec3 = Vec3::new(4.5, 64.0, 4.5);
 
@@ -340,4 +339,5 @@ use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCo
 
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt2 as _;
 
+#[cfg(test)]
 use sunrise_gameplay_common::game::native_ticks::NativeTicksGameExt1 as _;

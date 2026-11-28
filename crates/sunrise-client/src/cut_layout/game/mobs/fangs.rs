@@ -1,5 +1,5 @@
-#![cfg(test)]
-#[cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "fangs/current_tests.rs"]
 pub(crate) mod current_tests;
 
@@ -121,6 +121,6 @@ pub(crate) mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "fangs/ticking_tests.rs"]
 pub(crate) mod ticking_tests;

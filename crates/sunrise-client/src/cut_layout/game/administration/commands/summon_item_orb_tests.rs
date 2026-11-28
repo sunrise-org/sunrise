@@ -3,6 +3,7 @@
 //! the orb is never unstuck, and an empty item is discarded while loading
 //! (`ItemEntity.readAdditionalSaveData`) yet the command still succeeds.
 use std::sync::Arc;
+#[cfg(test)]
 use sunrise_core::geometry::Vec3;
 use sunrise_level::chunk::Chunk;
 use {
@@ -76,7 +77,6 @@ fn summon_replies_with_the_custom_name_of_every_kind() {
     run_summon_replies_with_the_custom_name_of_every_kind();
 }
 
-#[allow(unused_imports)]
 pub(crate) use crate::game::server_side::commands_server::summon_item_orb_tests::run_summon_replies_with_the_custom_name_of_every_kind;
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

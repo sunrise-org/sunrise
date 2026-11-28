@@ -1164,7 +1164,6 @@ fn witness_firework_rocket_targets_124() {
     run_witness_firework_rocket_targets_124();
 }
 
-#[allow(unused_imports)]
 pub(crate) use crate::game::server_side::creatures_server::projectiles_120_124_tests::run_witness_firework_rocket_targets_124;
 
 #[derive(Clone, Copy)]

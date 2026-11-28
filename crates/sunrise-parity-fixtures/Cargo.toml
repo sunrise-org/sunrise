@@ -24,6 +24,7 @@ doc = false
 workspace = true
 
 [dependencies]
+mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["engine-test-platform"], optional = true }
 sunrise-client = { path = "../sunrise-client", optional = true, default-features = false }
 sunrise-client-gameplay = { path = "../sunrise-client-gameplay", optional = true, default-features = false }
 sunrise-gameplay = { path = "../sunrise-gameplay", optional = true, default-features = false }
@@ -31,4 +32,4 @@ sunrise-gameplay-common = { path = "../sunrise-gameplay-common", optional = true
 
 [features]
 client-defaults = ["fixtures", "dep:sunrise-client-gameplay", "dep:sunrise-client", "sunrise-client-gameplay/parity-fixtures", "sunrise-client/parity-fixtures", "sunrise-client/client", "sunrise-client/audio", "sunrise-client/controllers", "sunrise-client/sunrise-extras"]
-fixtures = ["dep:sunrise-gameplay-common", "dep:sunrise-gameplay", "sunrise-gameplay-common/parity-fixtures", "sunrise-gameplay/parity-fixtures"]
+fixtures = ["dep:mod_platform", "dep:sunrise-gameplay-common", "dep:sunrise-gameplay", "sunrise-gameplay-common/parity-fixtures", "sunrise-gameplay/parity-fixtures"]

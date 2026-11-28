@@ -4645,6 +4645,7 @@ dependencies = [
  "sunrise-command",
  "sunrise-core",
  "sunrise-game-data",
+ "sunrise-game-discovery",
  "sunrise-gameplay",
  "sunrise-gameplay-common",
  "sunrise-hooks",
@@ -4701,6 +4702,7 @@ dependencies = [
  "sunrise-dualsense",
  "sunrise-friends",
  "sunrise-game-data",
+ "sunrise-game-discovery",
  "sunrise-gameplay-common",
  "sunrise-hooks",
  "sunrise-items",
@@ -4997,6 +4999,7 @@ dependencies = [
  "serde_json",
  "sunrise-mod-source",
  "syn 2.0.119",
+ "tempfile",
 ]
 
 [[package]]
@@ -5014,6 +5017,7 @@ dependencies = [
  "sunrise-command",
  "sunrise-core",
  "sunrise-game-data",
+ "sunrise-game-discovery",
  "sunrise-gameplay-common",
  "sunrise-items",
  "sunrise-java-properties",
@@ -5052,6 +5056,7 @@ dependencies = [
  "sunrise-command",
  "sunrise-core",
  "sunrise-game-data",
+ "sunrise-game-discovery",
  "sunrise-hooks",
  "sunrise-items",
  "sunrise-level",
@@ -5479,6 +5484,7 @@ dependencies = [
  "sunrise-client-gameplay",
  "sunrise-gameplay",
  "sunrise-gameplay-common",
+ "sunrise-mod-api",
 ]
 
 [[package]]

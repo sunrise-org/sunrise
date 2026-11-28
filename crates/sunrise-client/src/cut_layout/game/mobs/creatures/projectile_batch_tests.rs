@@ -1,16 +1,28 @@
-use mod_api::{Flow, Hooks, ProjectileImpactEvent, ServerHost};
-use std::sync::{Mutex, atomic::Ordering};
+#[cfg(test)]
+use mod_api::ProjectileImpactEvent;
+use mod_api::{Flow, Hooks, ServerHost};
+use std::sync::Mutex;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
+#[cfg(test)]
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;
-use sunrise_gameplay_common::game::creatures::{Arc, Projectile, ProjectileKind, Vec3};
+use sunrise_gameplay_common::game::creatures::{Arc, Vec3};
+#[cfg(test)]
+use sunrise_gameplay_common::game::creatures::{Projectile, ProjectileKind};
+#[cfg(test)]
 use sunrise_level::chunk::Chunk;
+#[cfg(test)]
 use sunrise_mod_runtime::attachments::{
     AttachmentType, Attachments, HasAttachmentLifetime, Holder, index::AttachmentIndex,
 };
+#[cfg(test)]
 use sunrise_sim::join_seq::JoinSeq;
+#[cfg(test)]
 use {
     crate::game::server_side::native_projectiles::impact_probe::{Action, with_probe},
     sunrise_gameplay::game::native_entity_refs::tests::run_fresh_cases,
 };
+#[cfg(test)]
 pub(crate) static VALUE: AttachmentType<i32> = AttachmentType {
     namespace: "test",
     name: "projectile_lifetime",
@@ -20,12 +32,14 @@ pub(crate) static VALUE: AttachmentType<i32> = AttachmentType {
     sync_codec: None,
 };
 
+#[cfg(test)]
 pub(crate) struct BoundProjectiles {
     pub(crate) _values: [Attachments; 2],
     pub(crate) index: Arc<Mutex<AttachmentIndex<mod_api::EntityRef>>>,
     pub(crate) registrations: [sunrise_mod_runtime::attachments::AttachmentRegistration; 2],
 }
 
+#[cfg(test)]
 impl BoundProjectiles {
     pub(crate) fn bind_two(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> Self {
         let index = Arc::new(Mutex::new(AttachmentIndex::default()));
@@ -49,6 +63,7 @@ impl BoundProjectiles {
     }
 }
 
+#[cfg(test)]
 #[derive(Clone, Default)]
 pub(crate) struct Observed {
     pub(in crate::game) impacts: Vec<u32>,
@@ -57,8 +72,10 @@ pub(crate) struct Observed {
     pub(in crate::game) remove: Option<u32>,
 }
 
+#[cfg(test)]
 pub(crate) struct CancelImpacts(pub(crate) Arc<Mutex<Observed>>);
 
+#[cfg(test)]
 #[mod_api::__subscriptions]
 impl Hooks for CancelImpacts {
     fn vanilla_game_event(
@@ -111,6 +128,7 @@ impl Hooks for CancelImpacts {
     }
 }
 
+#[cfg(test)]
 pub(crate) fn with_batch(
     remove: bool,
     test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>, [u32; 3], [JoinSeq; 3], u32, u32),
@@ -337,6 +355,7 @@ fn a_projectile_removed_in_its_impact_hook_stays_removed_after_replay() {
     });
 }
 
+#[cfg(test)]
 pub(crate) fn terminal_egg(action: Action, abort: bool) {
     use sunrise_core::random::LegacyRandom;
 
@@ -457,6 +476,7 @@ fn two_discarded_eggs_leave_once_without_dying() {
     });
 }
 
+#[cfg(test)]
 pub(crate) fn shoot_arrow_at_wall(
     game: &mut sunrise_gameplay::game::ServerGame<'_>,
     wall_x: i32,
@@ -917,7 +937,7 @@ fn continuing_wind_charge_keeps_tick_order_and_skips_relaunch_in_batched_pass() 
     run_continuing_wind_charge_keeps_tick_order_and_skips_relaunch_in_batched_pass();
 }
 
-#[allow(unused_imports)]
 pub(crate) use crate::game::server_side::creatures_server::projectile_batch_tests::run_continuing_wind_charge_keeps_tick_order_and_skips_relaunch_in_batched_pass;
 
+#[cfg(test)]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;

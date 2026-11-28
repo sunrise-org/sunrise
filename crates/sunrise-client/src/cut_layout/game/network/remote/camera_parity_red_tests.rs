@@ -144,7 +144,6 @@ fn any_tracked_entity_resolves_as_camera_26_3() {
     run_any_tracked_entity_resolves_as_camera_26_3();
 }
 
-#[allow(unused_imports)]
 pub(in crate::game) use crate::game::client_side::remote_client::tests::camera_parity_red_tests::run_any_tracked_entity_resolves_as_camera_26_3;
 
 /// Item 12: Interaction eye height, rotation, move/teleport interpolation, and far snap (26.3).
@@ -154,7 +153,6 @@ fn interaction_camera_eye_rotation_move_and_teleport_26_3() {
     run_interaction_camera_eye_rotation_move_and_teleport_26_3();
 }
 
-#[allow(unused_imports)]
 pub(in crate::game) use crate::game::client_side::remote_client::tests::camera_parity_red_tests::run_interaction_camera_eye_rotation_move_and_teleport_26_3;
 
 /// Item 12: RemoveEntities retains the detached camera entity and post effect until SetCamera (26.3).
@@ -164,7 +162,6 @@ fn removing_camera_entity_keeps_detached_camera_26_3() {
     run_removing_camera_entity_keeps_detached_camera_26_3();
 }
 
-#[allow(unused_imports)]
 pub(in crate::game) use crate::game::client_side::remote_client::tests::camera_parity_red_tests::run_removing_camera_entity_keeps_detached_camera_26_3;
 
 /// Item 6: bob, fog, dark disc, vignette, border warning, and F1 hide_gui follow 26.3 camera rules.
@@ -174,7 +171,6 @@ fn camera_consumers_bob_fog_dark_disc_and_vignette_26_3() {
     run_camera_consumers_bob_fog_dark_disc_and_vignette_26_3();
 }
 
-#[allow(unused_imports)]
 pub(in crate::game) use crate::game::client_side::remote_client::tests::camera_parity_red_tests::run_camera_consumers_bob_fog_dark_disc_and_vignette_26_3;
 
 /// Item 6: streaming center, particles, F3 debug entries/gizmos, and spectator crosshair (26.3).
@@ -184,7 +180,6 @@ fn camera_consumers_streaming_particles_debug_and_spectator_crosshair_26_3() {
     run_camera_consumers_streaming_particles_debug_and_spectator_crosshair_26_3();
 }
 
-#[allow(unused_imports)]
 pub(in crate::game) use crate::game::client_side::remote_client::tests::camera_parity_red_tests::run_camera_consumers_streaming_particles_debug_and_spectator_crosshair_26_3;
 
 /// Item 6: frozen-level camera partial tick matches 26.3 `Camera.getCameraEntityPartialTicks`.
@@ -401,7 +396,6 @@ fn sleeping_spectated_living_entity_bed_view_and_visibility_26_3() {
     run_sleeping_spectated_living_entity_bed_view_and_visibility_26_3();
 }
 
-#[allow(unused_imports)]
 pub(in crate::game) use crate::game::client_side::remote_client::tests::camera_parity_red_tests::run_sleeping_spectated_living_entity_bed_view_and_visibility_26_3;
 
 /// Parity #3: `Camera.tickFov` reads the camera player's own `getFieldOfViewModifier` (movement
@@ -414,7 +408,6 @@ fn camera_player_fov_modifier_and_death_isolation_26_3() {
     run_camera_player_fov_modifier_and_death_isolation_26_3();
 }
 
-#[allow(unused_imports)]
 pub(in crate::game) use crate::game::client_side::remote_client::tests::camera_parity_red_tests::run_camera_player_fov_modifier_and_death_isolation_26_3;
 
 /// Parity #33: `Minecraft.pick` / `ProjectileUtil.getEntityHitResult` excludes the camera entity
@@ -524,7 +517,6 @@ fn camera_entity_hidden_in_first_person_for_all_kinds_and_local_player_hidden_26
     run_camera_entity_hidden_in_first_person_for_all_kinds_and_local_player_hidden_26_3();
 }
 
-#[allow(unused_imports)]
 pub(in crate::game) use crate::game::client_side::remote_client::tests::camera_parity_red_tests::run_camera_entity_hidden_in_first_person_for_all_kinds_and_local_player_hidden_26_3;
 
 /// Addendum (b): a spectated entity (mob or non-living) riding a living vehicle — including a
@@ -720,7 +712,6 @@ fn particle_camera_before_first_frame_and_after_reset_26_3() {
     run_particle_camera_before_first_frame_and_after_reset_26_3();
 }
 
-#[allow(unused_imports)]
 pub(in crate::game) use crate::game::client_side::remote_client::tests::camera_parity_red_tests::run_particle_camera_before_first_frame_and_after_reset_26_3;
 
 /// Review follow-up parity checks against vanilla 26.3 (`review_followup` witness).
@@ -730,7 +721,6 @@ fn review_followup_camera_parity_26_3() {
     run_review_followup_camera_parity_26_3();
 }
 
-#[allow(unused_imports)]
 pub(in crate::game) use crate::game::client_side::remote_client::tests::camera_parity_red_tests::run_review_followup_camera_parity_26_3;
 
 use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;

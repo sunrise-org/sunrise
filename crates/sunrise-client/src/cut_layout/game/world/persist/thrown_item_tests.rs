@@ -7,7 +7,6 @@ use sunrise_core::position::ChunkPos;
 use sunrise_gameplay::game::server_side::persist::ChunkKey;
 use sunrise_gameplay_common::game::GameGameExt1;
 use sunrise_gameplay_common::game::commands_common::Target;
-#[cfg(test)]
 use sunrise_sim::entity_nbt;
 use sunrise_sim::save::uuid_text;
 use {

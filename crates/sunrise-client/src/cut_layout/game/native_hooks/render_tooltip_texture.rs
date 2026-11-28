@@ -1,10 +1,10 @@
-#![cfg(test)]
-#[cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod render_tooltip_texture_tests {
+    #[cfg(test)]
     #[cfg(feature = "client")]
-    use mod_api::ModEntry;
-    #[cfg(feature = "client")]
-    use mod_api::{ClientHost, Hooks, Identifier, RenderTooltipTextureEvent};
+    use mod_api::{ClientHost, Hooks, Identifier, ModEntry, RenderTooltipTextureEvent};
+    #[cfg(test)]
     #[cfg(feature = "client")]
     use mod_platform::testing::with_mods;
     #[cfg(feature = "client")]
@@ -13,8 +13,10 @@ pub(crate) mod render_tooltip_texture_tests {
     use sunrise_items::items::ItemStack;
 
     /// Gives a stick's tooltip the `lobby:gold` style and a text tooltip a red background.
+    #[cfg(test)]
     #[cfg(feature = "client")]
     struct Gold;
+    #[cfg(test)]
     #[cfg(feature = "client")]
     #[mod_api::__subscriptions]
     impl Hooks for Gold {
@@ -49,6 +51,7 @@ pub(crate) mod render_tooltip_texture_tests {
             h: 100,
         }
     }
+    #[cfg(test)]
     #[cfg(feature = "client")]
     fn drawn(
         game: &sunrise_client_gameplay::game::ClientGame<'_>,
@@ -58,6 +61,7 @@ pub(crate) mod render_tooltip_texture_tests {
         game.tooltip_box(&mut batch, stack, 40.0, 30.0, 60.0, 8.0);
         batch.vertices.iter().map(|v| (v.uv, v.color)).collect()
     }
+    #[cfg(test)]
     #[cfg(feature = "client")]
     fn in_sprite(uv: [f32; 2], r: Rect) -> bool {
         (r.u0..=r.u1).contains(&uv[0]) && (r.v0..=r.v1).contains(&uv[1])

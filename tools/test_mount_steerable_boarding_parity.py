@@ -15,7 +15,7 @@ from tools import lab, oracle_harness, test_rust_parity as base
 
 NAME = 'steerable-boarding'
 ORACLE = 'VanillaSteerableBoardingOracle'
-TEST = 'game::server_side::mounts::steerable_boarding_tests::interact_with_a_pig_or_strider'
+TEST = 'cut_layout::game::server_side::mounts::steerable_boarding_tests::interact_with_a_pig_or_strider'
 CASES = {f'{kind}/{case}' for kind in ('pig', 'strider')
          for case in ('empty', 'occupied', 'secondary', 'occupied_feed', 'occupied_saddle',
                       'player_occupied', 'player_occupied_saddle')}

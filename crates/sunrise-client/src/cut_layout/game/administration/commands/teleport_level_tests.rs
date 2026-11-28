@@ -106,6 +106,7 @@ fn a_mod_sends_a_minecart_to_another_level_with_its_known_movement() {
 /// Summons `kind` with `nbt` at 0.5 80 0.5 in the Overworld, where `id` finds it, and sends
 /// it to 3.5 70 -2.5 in the Nether by a mod's `teleport_to_level`: the call is true and the
 /// Overworld holds it no more. The Nether is left in place.
+#[cfg(test)]
 fn sent_to_the_nether(
     game: &mut sunrise_gameplay::game::ServerGame<'_>,
     kind: &str,

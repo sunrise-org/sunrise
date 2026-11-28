@@ -46,6 +46,7 @@ def render():
         *(f"sunrise-client/{name}" for name in client.get("features", {}).get("default", [])),
     ]
     dependencies = {
+        "mod_platform": {"package": "sunrise-mod-api", "path": "../sunrise-mod-api", "features": ["engine-test-platform"], "optional": True},
         "sunrise-client": {"path": "../sunrise-client", "optional": True, "default-features": False},
         "sunrise-client-gameplay": {"path": "../sunrise-client-gameplay", "optional": True, "default-features": False},
         "sunrise-gameplay": {"path": "../sunrise-gameplay", "optional": True, "default-features": False},
@@ -54,6 +55,7 @@ def render():
     features = {
         "client-defaults": client_defaults,
         "fixtures": [
+            "dep:mod_platform",
             "dep:sunrise-gameplay-common",
             "dep:sunrise-gameplay",
             "sunrise-gameplay-common/parity-fixtures",

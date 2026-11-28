@@ -4,16 +4,16 @@ use crate::game::creatures::projectile_batch_tests::assert_boat_matches_witness;
 use crate::game::creatures::projectile_batch_tests::assert_vec3_bits;
 use crate::game::creatures::projectile_batch_tests::load_wind_continuation_witness_26_3;
 use crate::game::creatures::projectile_batch_tests::wind_continuation_witness_26_3;
-use std::sync::{Arc, atomic::Ordering};
+#[cfg(test)]
+use crate::game::server_side::native_projectiles::impact_probe::{Action, with_probe};
+use std::sync::Arc;
+#[cfg(test)]
+use std::sync::atomic::Ordering;
 use sunrise_core::geometry::Vec3;
+use sunrise_gameplay::game::native_entity_refs::tests::run_fresh_cases;
 use sunrise_level::chunk::Chunk;
 use sunrise_sim::projectiles::Projectile;
 use sunrise_sim::projectiles::ProjectileKind;
-use {
-    crate::game::server_side::native_projectiles::impact_probe::Action,
-    crate::game::server_side::native_projectiles::impact_probe::with_probe,
-    sunrise_gameplay::game::native_entity_refs::tests::run_fresh_cases,
-};
 
 #[test]
 #[ignore = "daily"]
@@ -247,4 +247,5 @@ pub(crate) fn run_continuing_wind_charge_keeps_tick_order_and_skips_relaunch_in_
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;
 
+#[cfg(test)]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;

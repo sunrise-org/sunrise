@@ -1,10 +1,10 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 
 #[cfg(test)]
 pub(crate) use super::server_side::native_entity_refs;
 
 #[cfg(feature = "client")]
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "blocks/beacon_cull_tests.rs"]
 pub(crate) mod beacon_cull_tests;
 #[cfg(feature = "client")]
@@ -12,7 +12,7 @@ pub(crate) mod beacon_cull_tests;
 #[path = "runtime/core_tests_client.rs"]
 pub(crate) mod core_tests_client;
 #[cfg(feature = "client")]
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "entities/crosshair_pick_tests.rs"]
 pub(crate) mod crosshair_pick_tests;
 #[cfg(feature = "client")]
@@ -107,7 +107,7 @@ pub(crate) mod server_packs;
 #[path = "interface/tests/sign_chain_tests.rs"]
 pub(crate) mod sign_chain_tests;
 #[cfg(feature = "client")]
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "mobs/spawner_client_tick_tests.rs"]
 pub(crate) mod spawner_client_tick_tests;
 #[cfg(feature = "client")]
