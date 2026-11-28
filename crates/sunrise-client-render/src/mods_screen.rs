@@ -336,7 +336,9 @@ impl ModsScreen {
                 icon: has_icon.then_some(key),
                 index: Some(index),
                 config: installed.native.as_ref().is_some_and(|page| {
-                    (page.own_screen && mods.is_on(index)) || !page.settings.is_empty()
+                    (page.own_screen && mods.is_on(index))
+                        || !page.settings.is_empty()
+                        || !page.mappings.is_empty()
                 }),
                 status,
                 note,
@@ -1257,6 +1259,12 @@ mod tests {
                 value: crate::mod_list::NativeSettingValue::Toggle(true),
                 category: None,
                 visible_when: None,
+            }],
+            mappings: vec![crate::mod_list::KeyMapping {
+                id: "zoom".into(),
+                label: "key.zoom".into(),
+                key: "key.keyboard.z".into(),
+                ..Default::default()
             }],
             ..NativePage::default()
         };
