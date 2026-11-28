@@ -9,10 +9,14 @@ use wgpu::TextureFormat as T;
 
 use super::*;
 
-const VSH: &str = "#version 120\nvoid main() { gl_Position = ftransform(); }\n";
+pub(super) const VSH: &str = "#version 120\nvoid main() { gl_Position = ftransform(); }\n";
 
 /// The program `name` of a pack of `files`, loaded with `properties` (the shadow pass forced on).
-fn program(files: &[(&str, &str)], properties: &str, name: &str) -> sunrise_shaders::PostProgram {
+pub(super) fn program(
+    files: &[(&str, &str)],
+    properties: &str,
+    name: &str,
+) -> sunrise_shaders::PostProgram {
     let dir = tempfile::tempdir().unwrap();
     let shaders = dir.path().join("shaders");
     std::fs::create_dir_all(&shaders).unwrap();
@@ -39,7 +43,7 @@ fn program(files: &[(&str, &str)], properties: &str, name: &str) -> sunrise_shad
 /// Builds `p` with its buffers in `formats` and the screen in `Rgba8Unorm` (a format that
 /// blends), draws it once into one attachment per output location, each of `attachments`'
 /// format and cleared to its colour first, and returns the first texel of each, as bytes.
-fn draw(
+pub(super) fn draw(
     p: sunrise_shaders::PostProgram,
     formats: &[wgpu::TextureFormat; BUFFERS],
     attachments: &[(wgpu::TextureFormat, wgpu::Color)],
