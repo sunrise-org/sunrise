@@ -1,13 +1,20 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
+#[cfg(test)]
 use sunrise_core::geometry::Aabb;
+#[cfg(test)]
 use sunrise_core::geometry::Direction;
 use sunrise_core::geometry::Vec3;
 use sunrise_core::nbt::Tag;
+#[cfg(test)]
 use sunrise_gameplay::game::server_side::potions_server::PotionOwner;
 use sunrise_items::items::ItemStack;
+#[cfg(test)]
 use sunrise_level::brewing;
+#[cfg(test)]
 use sunrise_level::effects::EffectInstance;
+#[cfg(test)]
 use sunrise_level::effects::PlayerEffects;
+#[cfg(test)]
 use sunrise_sim::mobs::Mob;
 use sunrise_sim::projectiles::Projectile;
 use sunrise_sim::projectiles::ProjectileKind;
@@ -860,7 +867,7 @@ pub(crate) mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "potions/cloud_water_tests_server.rs"]
 pub(crate) mod cloud_water_tests;
 
@@ -1660,7 +1667,7 @@ pub(crate) mod depleted_absorption_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod arrow_contents {
     //! Actual in-memory Game potion paths. No run loop, world load or server startup.
     use super::*;

@@ -1,8 +1,8 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 use sunrise_core::geometry::Vec3;
 use sunrise_items::items::ItemStack;
 use sunrise_world::teleport_consume::TeleportConsume;
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod teleport_hook_tests {
     use sunrise_core::random::RandomSource;
     use sunrise_gameplay::game::server_side::consume::teleport_hook_tests::ConsumptionProbe;
@@ -12,7 +12,7 @@ pub(crate) mod teleport_hook_tests {
 
     use super::*;
 
-    use crate::game::native_entity_refs::tests::with_game;
+    use crate::game::server_side::native_entity_refs::tests::with_game;
 
     use mod_api::ModEntry;
 
@@ -121,7 +121,7 @@ pub(crate) mod teleport_hook_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod fox_consumption_hook_tests {
     use super::*;
     use mod_api::{Flow, Hand, Hooks, ItemConsumptionTeleportEvent, ModEntry, ServerHost};

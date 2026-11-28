@@ -55,5 +55,4 @@ fn a_cloud_in_water_resets_its_fall_distance_and_a_dry_one_keeps_it() {
     run_a_cloud_in_water_resets_its_fall_distance_and_a_dry_one_keeps_it();
 }
 
-#[allow(unused_imports)]
 pub(crate) use crate::game::server_side::potions_server::cloud_water_tests::run_a_cloud_in_water_resets_its_fall_distance_and_a_dry_one_keeps_it;

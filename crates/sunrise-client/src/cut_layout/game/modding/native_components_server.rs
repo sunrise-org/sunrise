@@ -1,6 +1,6 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod item_resource_property_tests {
     use crate::game::native_components::item_resource_property_tests::engine;
     use crate::game::native_components::item_resource_property_tests::*;

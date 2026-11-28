@@ -447,7 +447,7 @@ pub(in crate::game) mod item_on_block_cooldown_tests {
 #[path = "tests/boat_holder_movement_tests.rs"]
 pub(in crate::game) mod boat_holder_movement_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "tests/crack_feedback_tests.rs"]
 pub(in crate::game) mod crack_feedback_tests;
 

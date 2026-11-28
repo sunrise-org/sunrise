@@ -1,6 +1,11 @@
 pub use crate::game_facade::*;
+
+#[cfg(feature = "parity-fixtures")]
+include!(concat!(env!("OUT_DIR"), "/parity_fixtures.rs"));
 #[cfg(test)]
-pub(crate) use resource_load::{load_resources, load_resources_skip_lang, load_resources_uncached};
+pub(crate) use resource_load::load_resources_skip_lang;
+#[cfg(any(test, feature = "parity-fixtures"))]
+pub(crate) use resource_load::{load_resources, load_resources_uncached};
 #[cfg(all(test, feature = "client"))]
 pub(crate) use sunrise_client_gameplay::game::client_side::test_key_codes::{
     drop_held_behind_dialog, gameplay_has_keyboard, glfw_button, glfw_modifiers, keyboard_button,
@@ -89,7 +94,7 @@ mod attachment_instruction_bench;
 #[cfg(test)]
 #[path = "game/modding/baked_model_keys_tests.rs"]
 mod baked_model_keys_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "game/blocks/block_entity_reach_draw_tests.rs"]
 pub(crate) mod block_entity_reach_draw_tests;
 #[cfg(test)]
@@ -224,7 +229,7 @@ mod lightning_item_tests;
 #[cfg(test)]
 #[path = "game/entities/mannequin_save_tests.rs"]
 mod mannequin_save_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "game/mobs/mob_discard_tests.rs"]
 mod mob_discard_tests;
 #[cfg(test)]
@@ -414,7 +419,7 @@ mod spawn_yaw_tests;
 #[cfg(test)]
 #[path = "game/interface/stand_equipment_change_tests.rs"]
 mod stand_equipment_change_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "game/entities/stand_low_health_tests.rs"]
 mod stand_low_health_tests;
 #[cfg(test)]
@@ -869,11 +874,11 @@ pub(crate) use server_side::{
 #[doc(hidden)]
 pub mod transactions;
 
-#[cfg(all(test, feature = "client"))]
+#[cfg(all(any(test, feature = "parity-fixtures"), feature = "client"))]
 #[path = "game/runtime/resource_load.rs"]
 #[doc(hidden)]
 pub mod resource_load;
-#[cfg(all(test, not(feature = "client")))]
+#[cfg(all(any(test, feature = "parity-fixtures"), not(feature = "client")))]
 #[path = "game/runtime/resource_load_server_tests.rs"]
 #[doc(hidden)]
 pub mod resource_load;
@@ -1041,7 +1046,7 @@ pub mod fireworks;
 #[doc(hidden)]
 pub mod closest_space;
 
-#[cfg(all(test, feature = "client"))]
+#[cfg(all(any(test, feature = "parity-fixtures"), feature = "client"))]
 #[path = "game/client_side.rs"]
 #[doc(hidden)]
 pub mod client_side;
@@ -1062,6 +1067,6 @@ pub mod cauldron_interactions;
 #[doc(hidden)]
 pub mod block_items;
 
-#[cfg(all(test, feature = "client"))]
+#[cfg(all(any(test, feature = "parity-fixtures"), feature = "client"))]
 #[path = "game/integrated_pair.rs"]
 mod integrated_pair;

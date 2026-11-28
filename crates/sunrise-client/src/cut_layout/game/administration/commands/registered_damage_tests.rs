@@ -1,9 +1,12 @@
 use sunrise_gameplay::game::native_entity_refs::tests::with_game;
 use sunrise_gameplay_common::game::GameGameExt1;
+use sunrise_sim::mobs::Who;
+#[cfg(test)]
 use sunrise_sim::{
     health::{damage_type, source_damage_type},
-    mobs::{Damage, DamageKind, NamedDamage as Tags, Who, gear},
+    mobs::{Damage, DamageKind, NamedDamage as Tags, gear},
 };
+#[cfg(test)]
 use sunrise_world::damage_source::Catalog;
 
 #[path = "registered_damage_tests/creaking_borrowed.rs"]
@@ -325,11 +328,9 @@ fn projectile_and_command_targets_classify_actual_direct_entity_families() {
     }
 }
 
-#[allow(unused_imports)]
-pub(crate) use crate::game::server_side::commands_server::world_cmds::registered_damage_tests::setup_live_damage_world;
-
-#[allow(unused_imports)]
-pub(crate) use crate::game::server_side::commands_server::world_cmds::registered_damage_tests::spawn_test_projectile;
+use crate::game::server_side::commands_server::world_cmds::registered_damage_tests::{
+    setup_live_damage_world, spawn_test_projectile,
+};
 
 #[test]
 #[ignore = "daily"]
@@ -871,4 +872,5 @@ fn live_damage_and_blast_ghast_reflected_fireball() {
     });
 }
 
+#[cfg(test)]
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

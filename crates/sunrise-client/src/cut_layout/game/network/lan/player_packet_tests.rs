@@ -13,7 +13,6 @@ use sunrise_core::{
 use sunrise_gameplay_common::game::GameGameExt1;
 use sunrise_gameplay_common::game::lan_common::LanSettings;
 use sunrise_level::chunk::Chunk;
-#[cfg(test)]
 use sunrise_protocol::packets::play;
 use sunrise_protocol::packets::play::Clientbound as C;
 use sunrise_protocol::{

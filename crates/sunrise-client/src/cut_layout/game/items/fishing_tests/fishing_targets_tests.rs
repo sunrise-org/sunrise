@@ -409,11 +409,7 @@ pub(crate) fn spawn_test_hook(
     game.install_fishing_hook(hook);
 }
 
-#[allow(unused_imports)]
-pub(crate) use crate::game::client_side::fishing_client::fishing_targets_tests::run_case;
-
-#[allow(unused_imports)]
-pub(crate) use crate::game::client_side::fishing_client::fishing_targets_tests::run_extra_case;
+use crate::game::client_side::fishing_client::fishing_targets_tests::{run_case, run_extra_case};
 
 #[test]
 #[ignore = "run by tools/test_projectile_targets_parity.py"]

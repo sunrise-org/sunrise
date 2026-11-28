@@ -1,8 +1,8 @@
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "summon_item_orb_tests_server.rs"]
 pub(crate) mod summon_item_orb_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "summon_bolt_tests_server.rs"]
 pub(crate) mod summon_bolt_tests;
 

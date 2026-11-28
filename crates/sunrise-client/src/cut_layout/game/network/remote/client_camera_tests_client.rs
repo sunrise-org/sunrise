@@ -1,3 +1,4 @@
+#[cfg(test)]
 use mod_api::ClientHost;
 use sunrise_client::level_loading::Reason;
 use sunrise_client_gameplay::game::client_side::remote_client::session_state::RemoteDimensionEntry;

@@ -15,7 +15,7 @@ ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(ROOT))
 from tools import lab, test_rust_parity as base
 
-TEST = 'game::server_side::block_entity_anims::tests::replacing_a_gateway_discards_its_old_cooldown'
+TEST = 'cut_layout::game::server_side::block_entity_anims::tests::replacing_a_gateway_discards_its_old_cooldown'
 
 
 def main():

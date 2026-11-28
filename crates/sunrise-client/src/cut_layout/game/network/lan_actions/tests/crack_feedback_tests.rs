@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 use std::sync::{Arc, atomic::AtomicI32, mpsc};
 use sunrise_gameplay_common::game::lan_actions::C;
 use sunrise_protocol::packets::configuration::ClientInformation;
@@ -61,5 +61,4 @@ fn crack_packets_follow_start_clock_and_strict_observer_radius() {
     run_crack_packets_follow_start_clock_and_strict_observer_radius();
 }
 
-#[allow(unused_imports)]
 pub(in crate::game) use crate::game::server_side::lan_actions_server::crack_feedback_tests::run_crack_packets_follow_start_clock_and_strict_observer_radius;

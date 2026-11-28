@@ -1,5 +1,8 @@
+#[cfg(test)]
 use sunrise_gameplay::game::native_entity_refs::tests::with_game;
-use sunrise_sim::mobs::{Damage, Who};
+#[cfg(test)]
+use sunrise_sim::mobs::Damage;
+use sunrise_sim::mobs::Who;
 
 #[test]
 #[ignore = "daily"]
@@ -346,10 +349,13 @@ pub(crate) fn spawn_test_projectile(
     id
 }
 
+#[cfg(test)]
 use sunrise_gameplay_common::game::creatures::world_view::WorldViewExt as _;
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;
 
+#[cfg(test)]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
+#[cfg(test)]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt6 as _;

@@ -1,7 +1,11 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
+#[cfg(test)]
 use sunrise_core::geometry::Vec3;
+#[cfg(test)]
 use sunrise_core::nbt::Tag;
+#[cfg(test)]
 use sunrise_core::position::{BlockPos, ChunkPos};
+#[cfg(test)]
 use sunrise_gameplay_common::game::Dim;
 #[cfg(test)]
 #[path = "tests/portal_spawn_tests.rs"]
@@ -552,11 +556,11 @@ pub(crate) mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "tests/portal_cooldown_tests.rs"]
 pub(crate) mod cooldown_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "nether_portal/arrival_effects_tests.rs"]
 pub(crate) mod arrival_effects_tests;
 

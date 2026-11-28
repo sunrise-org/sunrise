@@ -1,8 +1,13 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
+#[cfg(test)]
 use sunrise_core::geometry::Vec3;
+#[cfg(test)]
 use sunrise_items::items::EntityTypeTags;
+#[cfg(test)]
 use sunrise_items::items::ItemStack;
+#[cfg(test)]
 use sunrise_sim::mobs::Mob;
+#[cfg(test)]
 use sunrise_sim::mobs::Who;
 #[cfg(test)]
 pub(crate) mod tests {
@@ -486,7 +491,7 @@ pub(crate) mod sneak_dismount_tests;
 #[path = "tests/strider_lava_boarding_tests.rs"]
 pub(crate) mod strider_lava_boarding_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "tests/steerable_boarding_tests.rs"]
 pub(crate) mod steerable_boarding_tests;
 
@@ -497,4 +502,5 @@ pub(crate) mod ride_dismount_tests;
 #[cfg(test)]
 #[path = "tests/ride_seat_tests.rs"]
 pub(crate) mod ride_seat_tests;
+#[cfg(test)]
 use sunrise_gameplay_common::game::tables::GameItems as _;

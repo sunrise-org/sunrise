@@ -18,7 +18,7 @@ pub(crate) mod fishing_find_tests;
 #[path = "fishing_tests/fishing_medium_tests.rs"]
 pub(crate) mod fishing_medium_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "fishing_tests/fishing_targets_tests.rs"]
 pub(crate) mod fishing_targets_tests;
 #[path = "fishing/impact.rs"]

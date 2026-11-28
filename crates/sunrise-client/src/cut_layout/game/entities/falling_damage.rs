@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 #[cfg(test)]
 mod tests {
     use mod_api::{
@@ -208,6 +208,6 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "falling_damage/helmet_tests.rs"]
 pub(crate) mod helmet_tests;

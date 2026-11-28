@@ -1,26 +1,40 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 
-#[cfg(test)]
 pub(crate) mod tests {
 
+    #[cfg(test)]
     use super::super::native_entity_refs::tests::{record_key, with_game};
+    #[cfg(test)]
     use mod_api::{
         BlockPart, EntityRef, Hooks, LivingRef, LoopContext, MakesOpenTrapdoorAboveClimbableEvent,
         Registrar, WorldEpoch,
     };
+    #[cfg(test)]
     use sunrise_core::geometry::Vec3;
+    #[cfg(test)]
     use sunrise_core::position::BlockPos;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::block_props::BlockPropsGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt6;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_living_body::NativeLivingBodyGameExt4;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::test_fixtures::fixture_resident_column;
+    #[cfg(test)]
     use sunrise_gameplay_common::game_side;
+    #[cfg(test)]
     use sunrise_sim::entities::ArmorStand;
+    #[cfg(test)]
     use sunrise_sim::mobs::{Mob, villager};
+    #[cfg(test)]
     use sunrise_sim::motion::{MotionWorld, PlayerMotion};
 
+    #[cfg(test)]
     /// A live cow `id` at `(5.5, 64, 5.5)`, with its handle.
     fn cow(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32) -> LivingRef {
         fixture_resident_column(&mut game.world, (0, 0));
@@ -266,6 +280,7 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg(test)]
     pub(crate) fn guest(
         game: &mut sunrise_gameplay::game::ServerGame<'_>,
         conn: u32,
@@ -307,6 +322,7 @@ pub(crate) mod tests {
         (living, rx)
     }
 
+    #[cfg(test)]
     fn bed(game: &mut sunrise_gameplay::game::ServerGame<'_>, name: &str, pos: [i32; 3]) {
         let head = game
             .pack
@@ -329,6 +345,7 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(test)]
     pub(crate) fn sync_guests(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
         use sunrise_sim::lan::hub::TickCtx;
         let mut ctx = TickCtx {
@@ -357,6 +374,7 @@ pub(crate) mod tests {
             .tick_level(&mut ctx, None);
     }
 
+    #[cfg(test)]
     pub(crate) fn packets(
         rx: &std::sync::mpsc::Receiver<sunrise_sim::lan::Out>,
     ) -> Vec<sunrise_protocol::packets::play::Clientbound> {
@@ -376,6 +394,7 @@ pub(crate) mod tests {
             .collect()
     }
 
+    #[cfg(test)]
     fn has_bed_packet(
         packets: &[sunrise_protocol::packets::play::Clientbound],
         bed: Option<[i32; 3]>,
@@ -632,6 +651,7 @@ pub(crate) mod tests {
     }
 
     /// Observable body, bed and pending wake/teleport state of a sleep write.
+    #[cfg(test)]
     #[derive(Debug, PartialEq)]
     struct SleepState {
         position: Option<Vec3>,
@@ -646,6 +666,7 @@ pub(crate) mod tests {
         teleport_counter: i32,
     }
 
+    #[cfg(test)]
     impl SleepState {
         fn acting(game: &sunrise_gameplay::game::ServerGame<'_>) -> Self {
             Self {
@@ -1026,6 +1047,7 @@ pub(crate) mod tests {
 
     /// The vertical velocity left to a sneaking player at `(5.5, 64, 5.5)` falling at -0.3
     /// after `handle_on_climbable`.
+    #[cfg(test)]
     fn sneaking_slide(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> f64 {
         let mut player = PlayerMotion::new(game.motion, Vec3::new(5.5, 64.0, 5.5));
         player.shift_key_down = true;
@@ -1058,6 +1080,7 @@ pub(crate) mod tests {
 
     /// Whether the player, as entity `id` at `(5.5, 64, 5.5)`, climbs by its own motion, and the
     /// block it then remembers climbing.
+    #[cfg(test)]
     fn player_climbs(
         game: &mut sunrise_gameplay::game::ServerGame<'_>,
         id: i32,
@@ -1090,11 +1113,14 @@ pub(crate) mod tests {
         (climbing, player.last_climbable)
     }
 
+    #[cfg(test)]
     /// The spruce trapdoor's key, kept across the fixture's repeat registration.
     static SPRUCE_TRAPDOOR: std::sync::OnceLock<mod_api::BlockKey> = std::sync::OnceLock::new();
 
+    #[cfg(test)]
     /// Makes an open trapdoor above oak planks climb.
     struct Planks;
+    #[cfg(test)]
     #[mod_api::sunrise_part]
     impl BlockPart for Planks {
         fn makes_open_trapdoor_above_climbable(
@@ -1106,8 +1132,10 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(test)]
     /// Refuses a spruce trapdoor above a ladder, and leaves the others to vanilla.
     struct Ladder;
+    #[cfg(test)]
     #[mod_api::sunrise_part]
     impl BlockPart for Ladder {
         fn makes_open_trapdoor_above_climbable(
@@ -1121,7 +1149,9 @@ pub(crate) mod tests {
         }
     }
 
+    #[cfg(test)]
     struct TrapdoorLadderMod;
+    #[cfg(test)]
     #[mod_api::__subscriptions]
     impl Hooks for TrapdoorLadderMod {
         fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {

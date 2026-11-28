@@ -1,12 +1,14 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 use sunrise_core::geometry::Vec3;
 use sunrise_core::position::BlockPos;
 use sunrise_items::items::ItemStack;
-use sunrise_sim::mobs::Who;
 #[cfg(test)]
+use sunrise_sim::mobs::Who;
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod tests {
 
     use sunrise_core::random::RandomSource;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2;
     use sunrise_gameplay_common::game::creatures::ModGameExt1;
     use sunrise_gameplay_common::game::server_side::tnt::tests::on_big_stack;
@@ -873,4 +875,5 @@ pub(crate) mod entity_collision_tests {
         });
     }
 }
+#[cfg(test)]
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

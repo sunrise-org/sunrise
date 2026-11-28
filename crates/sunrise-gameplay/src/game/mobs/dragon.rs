@@ -4400,16 +4400,21 @@ use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;
 
 use sunrise_gameplay_common::game::scoreboard_common::CommonGameExt1 as _;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(in crate::game) mod tests {
+    #[cfg(test)]
     use sunrise_gameplay_common::game::server_side::dragon::tests::HIT;
 
+    #[cfg(test)]
     use sunrise_gameplay_common::game::server_side::dragon::tests::dragon_as;
 
+    #[cfg(test)]
     use sunrise_gameplay_common::game::server_side::dragon::tests::flying;
 
+    #[cfg(test)]
     use sunrise_gameplay_common::game::server_side::dragon::tests::hooks;
 
+    #[cfg(test)]
     pub fn player(who: FightWho, x: f64, creative: bool, spectator: bool) -> FightPlayer {
         let position = Vec3::new(x, 64.0, 0.0);
         FightPlayer {
@@ -4422,13 +4427,17 @@ pub(in crate::game) mod tests {
         }
     }
 
+    #[cfg(test)]
     use sunrise_gameplay_common::game::server_side::dragon::tests::player_box;
 
+    #[cfg(test)]
     use sunrise_gameplay_common::game::server_side::dragon::tests::dragon;
 
+    #[cfg(test)]
     use sunrise_gameplay_common::game::server_side::dragon::tests::seen;
 
     use super::*;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::dragon_common::{dragon_part_index, dragon_part_wire_id};
 
     /// The pinned vanilla 26.3 side is `VanillaTurnOracle`'s `dragon.txt`
