@@ -1126,6 +1126,9 @@ pub(in crate::game) mod tables_client;
 #[cfg(feature = "client")]
 #[path = "administration/test_instances_client.rs"]
 pub(in crate::game) mod test_instances_client;
+#[cfg(all(feature = "client", any(test, feature = "test-support")))]
+#[path = "runtime/test_resource_cache.rs"]
+pub mod test_resource_cache;
 #[cfg(feature = "client")]
 #[path = "interface/toast_manager_client.rs"]
 pub(in crate::game) mod toast_manager_client;

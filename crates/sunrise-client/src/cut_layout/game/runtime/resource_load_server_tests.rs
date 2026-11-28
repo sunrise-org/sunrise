@@ -1,13 +1,12 @@
 use std::{path::Path, sync::Arc, time::Instant};
 use sunrise_assets::resource_source::ResourceRoot;
 use sunrise_client_lib::settings::Settings;
-use sunrise_game_data::{Result, lang};
-use sunrise_gameplay::game::server_side::resource_load_server::load_resources_for_role;
+use sunrise_game_data::Result;
+use sunrise_gameplay::game::native_entity_refs::tests::{
+    load_server_resources_cached, load_server_resources_uncached,
+};
 use sunrise_gameplay_common::game::{
-    PackResources, Resources,
-    mods::LoadRole,
-    resource_load::{Progress, with_skip_facts_memo},
-    test_fixtures::acquire_in_process_load_permit,
+    PackResources, Resources, mods::LoadRole, resource_load::Progress,
 };
 use sunrise_level::datapack::DataPack;
 
@@ -30,47 +29,74 @@ pub(crate) fn load_resources(
 ) -> Result<Loaded> {
     let role = role.into();
     assert!(launch_world.is_none() && !menu && !role.execution.is_client());
-    let _permit = acquire_in_process_load_permit();
-    let (resources, pack) = with_skip_facts_memo(|| {
-        load_resources_for_role(
-            root,
-            additional_data,
-            vanilla_root,
-            role,
-            1,
-            started,
-            &Default::default(),
-            progress,
-            true,
-        )
-    })?;
+    mod_platform::__private::test_platform::install();
+    let (resources, pack) = load_server_resources_cached(
+        root,
+        additional_data,
+        vanilla_root,
+        role,
+        1,
+        started,
+        false,
+        progress,
+        true,
+    )?;
     Ok(Loaded { resources, pack })
 }
 
-pub(crate) use load_resources as load_resources_uncached;
+pub(crate) fn load_resources_uncached(
+    root: ResourceRoot,
+    additional_data: Vec<Arc<DataPack>>,
+    launch_world: Option<&str>,
+    vanilla_root: &Path,
+    _settings: &Settings,
+    started: Instant,
+    menu: bool,
+    role: impl Into<LoadRole>,
+    progress: &Progress,
+    _publish: &mut dyn FnMut((), &Path),
+) -> Result<Loaded> {
+    let role = role.into();
+    assert!(launch_world.is_none() && !menu && !role.execution.is_client());
+    mod_platform::__private::test_platform::install();
+    let (resources, pack) = load_server_resources_uncached(
+        root,
+        additional_data,
+        vanilla_root,
+        role,
+        1,
+        started,
+        false,
+        progress,
+        true,
+    )?;
+    Ok(Loaded { resources, pack })
+}
 
 pub(crate) fn load_resources_skip_lang(
     root: ResourceRoot,
     additional_data: Vec<Arc<DataPack>>,
     launch_world: Option<&str>,
     vanilla_root: &Path,
-    settings: &Settings,
+    _settings: &Settings,
     started: Instant,
     role: impl Into<LoadRole>,
     progress: &Progress,
-    publish: &mut dyn FnMut((), &Path),
+    _publish: &mut dyn FnMut((), &Path),
 ) -> Result<Loaded> {
-    let _language = lang::isolate_publication(lang::Language::of("en_us", []));
-    load_resources(
+    let role = role.into();
+    assert!(launch_world.is_none() && !role.execution.is_client());
+    mod_platform::__private::test_platform::install();
+    let (resources, pack) = load_server_resources_cached(
         root,
         additional_data,
-        launch_world,
         vanilla_root,
-        settings,
-        started,
-        false,
         role,
+        1,
+        started,
+        true,
         progress,
-        publish,
-    )
+        true,
+    )?;
+    Ok(Loaded { resources, pack })
 }

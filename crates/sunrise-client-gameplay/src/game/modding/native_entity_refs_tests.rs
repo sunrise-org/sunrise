@@ -3,9 +3,7 @@ pub use sunrise_gameplay_common::game::test_fixtures::{
     FRESH_CASE_LIMIT, fixture_block_names, fixture_root, output_within, ran_one_test, record_key,
     resolve_parts, run_fresh_cases, run_fresh_cases_at_once, run_with_game_stack,
 };
-use sunrise_gameplay_common::game::test_fixtures::{
-    acquire_in_process_load_permit, fixture_facts_mut, offline_profiles, tempfile,
-};
+use sunrise_gameplay_common::game::test_fixtures::{fixture_facts_mut, offline_profiles, tempfile};
 
 /// Create a hidden desktop window during winit's initial `Resumed` callback.
 /// Keep the returned event loop alive while the fixture uses the window.
@@ -69,7 +67,7 @@ pub fn with_client_game(test: impl FnOnce(&mut crate::game::ClientGame<'_>)) {
 }
 
 pub fn with_uncached_client_game(test: impl FnOnce(&mut crate::game::ClientGame<'_>)) {
-    with_client_game(test);
+    with_fixture_game(fixture_root(), ExecutionRole::Client, false, None, test);
 }
 
 pub fn with_game_role_client(
@@ -88,42 +86,49 @@ pub fn with_game_role_and_facts_client(
     >,
     test: impl FnOnce(&mut crate::game::ClientGame<'_>),
 ) {
+    with_fixture_game(root, role, configure.is_none(), configure, test);
+}
+
+fn with_fixture_game(
+    root: std::path::PathBuf,
+    role: ExecutionRole,
+    cached: bool,
+    configure: Option<
+        fn(&sunrise_world::registry::BlockRegistry, &mut sunrise_items::blocks::BlockFacts),
+    >,
+    test: impl FnOnce(&mut crate::game::ClientGame<'_>),
+) {
+    use crate::game::client_side::test_resource_cache;
     use crate::game::{Audio, Settings};
     use sunrise_gameplay_common::game::{Options, resource_load::Progress};
 
+    #[cfg(test)]
+    mod_platform::__private::test_platform::install();
     sunrise_gameplay_common::game::test_fixtures::prepare_game_boot(
         &root,
         mod_api::testing::engine_platform::register_game_keys,
     );
     let saves = tempfile::tempdir().unwrap();
-    let mut settings = Settings::default();
-    let mut loaded = {
-        use crate::game::client_side::resource_load_client::{
-            StartupLoadContext, load_resources_sync,
-        };
-        let _permit = acquire_in_process_load_permit();
-        let mut loaded = load_resources_sync(
-            sunrise_assets::resource_source::ResourceRoot::directory(root.clone()).into(),
-            Vec::new(),
-            StartupLoadContext {
-                vanilla_root: &root,
-                launch_world: None,
-                started: std::time::Instant::now(),
-            },
-            &mut settings,
-            ExecutionRole::Client,
-            &Progress::new(),
-            &Default::default(),
-        )
-        .unwrap();
-        if let Some(gui) = loaded.gui.as_mut() {
-            gui.atlas.pack_pixels_sync();
-        }
-        if let Some(client_pack) = &loaded.client_pack {
-            client_pack.render.pixels.pack_sync();
-        }
-        loaded
+    let settings = Settings::default();
+    let load = if cached {
+        test_resource_cache::load
+    } else {
+        test_resource_cache::load_uncached
     };
+    let mut loaded = load(
+        sunrise_assets::resource_source::ResourceRoot::directory(root.clone()).into(),
+        Vec::new(),
+        None,
+        &root,
+        &settings,
+        std::time::Instant::now(),
+        false,
+        false,
+        ExecutionRole::Client.into(),
+        &Progress::new(),
+        &mut |_, _| unreachable!(),
+    )
+    .unwrap();
     if let Some(configure) = configure {
         configure(
             loaded.pack.assets.registry,
