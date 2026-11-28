@@ -49,7 +49,7 @@ mod tests {
     }
 
     /// Daily test (§6 & §13 Q1): every vanilla 26.3 core shader (expanded with its includes)
-    /// passes `guard::refusal` with comfortable margin under `MAX_EXPANDED_BYTES`.
+    /// passes `sunrise_glsl::guard::refusal` with comfortable margin under `MAX_EXPANDED_BYTES`.
     #[test]
     #[ignore = "daily"]
     fn vanilla_core_shaders_pass_guard_with_margin() {

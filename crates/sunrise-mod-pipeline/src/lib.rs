@@ -792,10 +792,10 @@ pub fn translate_compute(
     })
 }
 
-/// Expand includes once, check the expanded source with [`guard::refusal`], and pass that same
-/// [`Expanded`] text to [`sunrise_glsl::translate_compute_expanded`] so validation and translation
-/// share one expansion without re-reading includes, keeping each refusal at its authored source
-/// position when known.
+/// Expand includes once, check the expanded source with [`sunrise_glsl::guard::refusal`], and pass
+/// that same [`Expanded`] text to [`sunrise_glsl::translate_compute_expanded`] so validation and
+/// translation share one expansion without re-reading includes, keeping each refusal at its
+/// authored source position when known.
 fn translate_compute_inner(
     sources: &ComputeSources<'_>,
     options: &ComputeOptions<'_>,
