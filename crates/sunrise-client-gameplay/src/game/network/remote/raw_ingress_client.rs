@@ -438,8 +438,12 @@ impl crate::game::ClientGame<'_> {
                 }
                 self.remove_local_player_body();
                 self.client.post_effects.clear();
+                // clearClientLevel drops the LocalPlayer: the next login's new one has
+                // sent no input and no sprint yet (`Input.EMPTY`, `wasSprinting` false).
                 if let Some(r) = self.client.remote.as_mut() {
                     r.camera = None;
+                    r.last_input = 0;
+                    r.was_sprinting = false;
                 }
                 self.clear_spectated_entity_post_effect();
                 self.set_screen(Screen::Playing);

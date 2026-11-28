@@ -615,11 +615,15 @@ impl crate::game::ClientGame<'_> {
             self.player_score = 0;
             // KEEP_ENTITY_DATA copies the old player's synched data
             // (its shared flags) to the new one; without it they reset.
+            // createPlayer without KEEP_ENTITY_DATA: the new LocalPlayer has sent
+            // no input and no sprint yet (`Input.EMPTY`, `wasSprinting` false).
             if let Some(r) = self.client.remote.as_mut() {
                 r.own_invisible = false;
                 r.own_on_fire = false;
                 r.glowing.remove(&r.entity_id);
                 r.local_entity_silent = false;
+                r.last_input = 0;
+                r.was_sprinting = false;
             }
         }
         // handleRespawn compares the levels' keys: a mod's level is
