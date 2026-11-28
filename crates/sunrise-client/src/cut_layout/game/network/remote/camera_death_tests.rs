@@ -5,5 +5,4 @@ fn a_spectated_dying_living_entity_squeezes_the_fov_26_3() {
     run_a_spectated_dying_living_entity_squeezes_the_fov_26_3();
 }
 
-#[allow(unused_imports)]
 pub(in crate::game) use crate::game::client_side::remote_client::tests::camera_death_tests::run_a_spectated_dying_living_entity_squeezes_the_fov_26_3;

@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 #[cfg(test)]
 pub(crate) mod allay_owner_damage_tests {
     use sunrise_core::geometry::Vec3;
@@ -71,11 +71,11 @@ pub(crate) mod allay_owner_damage_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "registered_damage_tests_server.rs"]
 pub(crate) mod registered_damage_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod datapack_damage_tests {
 
     use sunrise_gameplay::game::server_side::commands::world_cmds::datapack_damage_tests::with_pack;

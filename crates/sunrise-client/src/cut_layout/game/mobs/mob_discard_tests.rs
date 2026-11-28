@@ -217,7 +217,9 @@ pub(crate) fn run_discarded_mob_leaves_selectors_and_saves_while_frozen() {
 }
 
 /// A registered selector type keeps every candidate it is offered.
+#[cfg(test)]
 struct Fallen;
+#[cfg(test)]
 impl mod_api::EntitySelectorType for Fallen {
     fn base(&self) -> mod_api::SelectorBase {
         mod_api::SelectorBase::new(false, None, mod_api::SelectorSort::Arbitrary, "test.fallen")
@@ -231,7 +233,9 @@ impl mod_api::EntitySelectorType for Fallen {
         true
     }
 }
+#[cfg(test)]
 struct FallenMod;
+#[cfg(test)]
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for FallenMod {
     fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {

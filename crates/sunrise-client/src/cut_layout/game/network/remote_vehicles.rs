@@ -1,16 +1,19 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
+#[cfg(test)]
 use sunrise_client_gameplay::game::client_side::remote_vehicles::{
     client_moves, mount_move, riding_jump,
 };
 use sunrise_core::geometry::Vec3;
+#[cfg(test)]
 use sunrise_protocol::packets::play;
 use sunrise_protocol::packets::play::Serverbound as S;
 use sunrise_sim::mobs::Mob;
 use sunrise_sim::mobs::equine;
 use sunrise_sim::sprint::Keys;
+#[cfg(test)]
 use sunrise_world::stepped_interpolation::PosRot;
 #[cfg(feature = "client")]
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod tests {
     #[test]
     fn local_player_on_block_display_and_interaction() {
@@ -341,6 +344,7 @@ pub(crate) mod tests {
     }
 
     /// A mob of the prepared resources' type `kind` (None without them).
+    #[cfg(test)]
     fn mob(kind: &str) -> Option<Mob> {
         let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
             .join("../../.local/sunrise-client")

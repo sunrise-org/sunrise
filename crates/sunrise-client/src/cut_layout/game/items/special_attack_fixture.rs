@@ -1,6 +1,6 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod tests {
     use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1;
     /// Invoke the actual attack methods in an empty scratch Game, without

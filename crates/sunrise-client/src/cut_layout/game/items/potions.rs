@@ -1,4 +1,5 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
+#[cfg(test)]
 use sunrise_level::particle_options::ParticleType;
 #[cfg(test)]
 #[cfg(feature = "client")]
@@ -75,6 +76,6 @@ pub(crate) mod tests {
 }
 
 #[cfg(feature = "client")]
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "potions/cloud_water_tests.rs"]
 pub(crate) mod cloud_water_tests;

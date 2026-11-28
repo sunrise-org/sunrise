@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 #[cfg(test)]
 pub(crate) mod equippable_slot_tests {
     use sunrise_gameplay_common::game::native_components::NativeComponentsGameExt1;
@@ -131,7 +131,7 @@ pub(crate) mod enchantment_conflict_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod item_resource_property_tests {
     #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::api_values::test_snapshot;
@@ -161,8 +161,7 @@ pub(crate) mod item_resource_property_tests {
         run_effective_resource_properties_match_vanilla();
     }
 
-    #[allow(unused_imports)]
-pub(crate) use crate::game::server_side::native_components_server::item_resource_property_tests::run_effective_resource_properties_match_vanilla;
+    pub(crate) use crate::game::server_side::native_components_server::item_resource_property_tests::run_effective_resource_properties_match_vanilla;
     /// Changed defaults and a patched mod consumable exercise the real game consumers.
     #[cfg(feature = "client")]
     #[test]
@@ -962,6 +961,8 @@ pub(crate) mod combat_query_tests {
     }
 }
 
+#[cfg(test)]
 use sunrise_gameplay_common::game::native_components::NativeComponentsGameExt1 as _;
 
+#[cfg(test)]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;

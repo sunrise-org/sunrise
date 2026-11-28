@@ -30,7 +30,7 @@ pub(crate) mod general_creature_tests;
 #[path = "breeding_tests_server.rs"]
 pub(crate) mod breeding_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "projectile_batch_tests_server.rs"]
 pub(crate) mod projectile_batch_tests;
 
@@ -42,7 +42,7 @@ pub(crate) mod conversion_subscriber_tests;
 #[path = "living_drops_tests_server.rs"]
 pub(crate) mod living_drops_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "mob_pearl_hook_tests_server.rs"]
 pub(crate) mod mob_pearl_hook_tests;
 
@@ -74,7 +74,7 @@ pub(crate) mod pending_birth_tests;
 #[path = "../../entities/tests/leash_without_item_postbaseline_controls_server.rs"]
 pub(crate) mod leash_without_item_postbaseline_controls;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "projectiles_120_124_tests_server.rs"]
 pub(crate) mod projectiles_120_124_tests;
 #[path = "pufferfish_player_server.rs"]

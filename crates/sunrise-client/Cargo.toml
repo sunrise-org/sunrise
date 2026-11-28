@@ -10,6 +10,8 @@ autoexamples = false
 autotests = false
 
 [dependencies]
+mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["engine-test-platform"], optional = true }
+tempfile = { version = "3", optional = true }
 sunrise-hooks = { path = "../sunrise-hooks" }
 sunrise-mod-runtime = { path = "../sunrise-mod-runtime" }
 mod_api = { package = "sunrise-mod-vocab", path = "../sunrise-mod-vocab" }
@@ -102,8 +104,24 @@ rustix = { version = "1", default-features = false, features = ["std", "time", "
 # Controllers' gilrs turns this on through nix on Linux: pinned like the shared features above.
 libc = { version = "0.2", features = ["extra_traits"], optional = true }
 
+[build-dependencies]
+sunrise-game-discovery = { path = "../sunrise-game-discovery" }
+
 [features]
-parity-fixtures = []
+parity-fixtures = [
+    "test-support",
+    "dep:mod_platform",
+    "dep:tempfile",
+    "mod_api/testing",
+    "sunrise-core/test-support",
+    "sunrise-gameplay/test-support",
+    "sunrise-gameplay-common/test-support",
+    "sunrise-game-data/test-language-publication",
+    "sunrise-client-render?/test-support",
+    "sunrise-client-lib/test-resource-cache",
+    "sunrise-client-lib/test-support",
+    "sunrise-threads/test-game-dir",
+]
 default = ["client", "audio", "controllers", "sunrise-extras"]
 # Interactive client gameplay, UI, rendering hooks, and client-side modules.
 # Without it (`--no-default-features`, released as sunrise-engine; docs/server.md),

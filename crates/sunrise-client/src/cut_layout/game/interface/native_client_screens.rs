@@ -1,19 +1,29 @@
-#![cfg(test)]
-use mod_api::SignEditView;
-use sunrise_core::position::BlockPos;
-use sunrise_gameplay_common::game::Screen;
+#![cfg(any(test, feature = "parity-fixtures"))]
 #[cfg(test)]
+use mod_api::SignEditView;
+#[cfg(test)]
+use sunrise_core::position::BlockPos;
+#[cfg(test)]
+use sunrise_gameplay_common::game::Screen;
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod client_screen_tests {
+    #[cfg(test)]
     use super::*;
     use crate::game::remote::tests::connect_menu_test;
     use crate::game::server_side::native_entity_refs::tests::with_client_game;
+    #[cfg(test)]
     use sunrise_client_gameplay::game::books::BookScreen;
+    #[cfg(test)]
     use sunrise_core::geometry::Vec3;
+    #[cfg(test)]
     use sunrise_items::items::ItemStack;
+    #[cfg(test)]
     use sunrise_level::containers::BlockEntity;
+    #[cfg(test)]
     use sunrise_level::signs_data::{SignData, SignText};
     use sunrise_protocol::connection::ConnReader;
     use sunrise_protocol::packets::play::{self, Clientbound as C, Serverbound as S};
+    #[cfg(test)]
     use sunrise_sim::mobs::Mob;
 
     /// What the window sent since the last call, as play packets.
@@ -72,9 +82,11 @@ pub(crate) mod client_screen_tests {
     }
 
     /// The chest menu's network id, from the prepared registries report.
+    #[cfg(test)]
     fn chest_menu() -> i32 {
         menu_id("minecraft:generic_9x3")
     }
+    #[cfg(test)]
     fn menu_id(name: &str) -> i32 {
         let root = std::path::PathBuf::from(
             std::env::var_os("SUNRISE_TEST_RESOURCES")

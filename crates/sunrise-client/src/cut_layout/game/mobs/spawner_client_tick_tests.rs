@@ -650,10 +650,12 @@ fn client_tick_case(
 // The ticker list's order and the animated block entities' lifetimes, case by case (not vanilla
 // logs: each states the vanilla rule it follows).
 
+#[cfg(test)]
 fn who(at: [f64; 3]) -> serde_json::Value {
     serde_json::json!({ "pos": at, "dead": false, "spectator": false })
 }
 
+#[cfg(test)]
 fn case_of(
     time: i64,
     at: [f64; 3],
@@ -666,17 +668,20 @@ fn case_of(
     })
 }
 
+#[cfg(test)]
 fn campfire_json(pos: [i32; 3], lit: bool) -> serde_json::Value {
     serde_json::json!({ "kind": "campfire", "pos": pos, "items": [true, true, true, true],
         "lit": lit, "signal": false, "facing": "north" })
 }
 
+#[cfg(test)]
 fn spawner_json(pos: [i32; 3]) -> serde_json::Value {
     serde_json::json!({ "kind": "spawner", "pos": pos, "range": -1, "delay": 20 })
 }
 
 /// One tick of a client's whole block entity phase (`tick_remote_block_entities`), then the
 /// particle engine as `tick_remote_player` runs it: what it requested, and the game time moves on.
+#[cfg(test)]
 fn tick_phase(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) -> Vec<serde_json::Value> {
     let start = sunrise_client::particles::requested_count();
     game.tick_remote_block_entities();
@@ -686,6 +691,7 @@ fn tick_phase(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) -> Vec<s
     events
 }
 
+#[cfg(test)]
 fn x_of(event: &serde_json::Value) -> f64 {
     f64::from_bits(u64::from_str_radix(event[2].as_str().unwrap(), 16).unwrap())
 }

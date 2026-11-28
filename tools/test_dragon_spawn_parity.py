@@ -31,7 +31,7 @@ except ImportError:
 NAME = 'dragon-spawn-parity'
 SEEDS = list(range(200)) + [123456789, -7, 2**62]
 ORACLE = 'VanillaFinalizeSpawnOracle'
-FIXTURE = 'game::dragon::tests::dragon_spawn_parity_fixture'
+FIXTURE = 'game::server_side::dragon::tests::dragon_spawn_parity_fixture'
 
 
 def cases():

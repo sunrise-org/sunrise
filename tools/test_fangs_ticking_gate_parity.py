@@ -21,8 +21,8 @@ sys.path.insert(0, str(ROOT))
 from tools import lab
 
 TESTS = [
-    'game::server_side::fangs::ticking_tests::fangs_and_an_ominous_item_spawner_outside_the_ticking_chunks_do_not_tick',
-    'game::server_side::fangs::ticking_tests::fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_removal_and_resume_26_3',
+    'cut_layout::game::server_side::fangs::ticking_tests::fangs_and_an_ominous_item_spawner_outside_the_ticking_chunks_do_not_tick',
+    'cut_layout::game::server_side::fangs::ticking_tests::fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_removal_and_resume_26_3',
 ]
 
 

@@ -31,7 +31,7 @@ LIB_TESTS = [
 ]
 CLIENT_TESTS = [
     'game::server_side::dragon::tests::the_scanning_turn_matches_the_pinned_oracle',
-    'game::remote::tests::client_read_tests::look_at_matches_the_pinned_oracle',
+    'cut_layout::game::remote::tests::client_read_tests::look_at_matches_the_pinned_oracle',
 ]
 
 

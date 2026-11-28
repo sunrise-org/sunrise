@@ -126,44 +126,66 @@ pub(crate) mod general_handle_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod tests {
 
+    pub use sunrise_gameplay::game::native_entity_refs::tests::prepare_entity_ticking_neighborhood;
+    #[cfg(test)]
     pub use sunrise_gameplay::game::native_entity_refs::tests::{
         bind_local_player, collect_all_entities, collect_entities_in, collect_game_entities_in,
-        lever_on, piston_pulls_above, prepare_entity_ticking_neighborhood,
+        lever_on, piston_pulls_above,
     };
     #[cfg(not(feature = "client"))]
     pub use sunrise_gameplay::game::native_entity_refs::tests::{
         with_game, with_game_at, with_game_role, with_resident_game,
     };
+    #[cfg(test)]
     use sunrise_gameplay_common::game::GameGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::game_mode_common::GameModeCommonGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt5;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_level_refs_common::NativeLevelRefsCommonGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_lifecycle_common::NativeLifecycleCommonGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_player_food::NativePlayerFoodGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt3;
+    #[cfg(test)]
     #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1;
+    pub use sunrise_gameplay_common::game::test_fixtures::fixture_root;
     #[cfg(feature = "client")]
     pub use sunrise_gameplay_common::game::test_fixtures::{fixture_facts_mut, resolve_parts};
-    pub use sunrise_gameplay_common::game::test_fixtures::{
-        fixture_root, record_key, run_fresh_cases,
-    };
-    use sunrise_gameplay_common::{game_side, world_biomes};
+    #[cfg(test)]
+    pub use sunrise_gameplay_common::game::test_fixtures::{record_key, run_fresh_cases};
+    #[cfg(test)]
+    use sunrise_gameplay_common::game_side;
+    #[cfg(test)]
+    use sunrise_gameplay_common::world_biomes;
 
+    #[cfg(test)]
     #[allow(unused_imports)]
     use core::ops::ControlFlow;
+    #[cfg(test)]
     #[allow(unused_imports)]
     use mod_api::__private::game::*;
+    #[cfg(test)]
     #[allow(unused_imports)]
     use mod_api::{EntityRef, LevelReadError, LevelRef};
+    #[cfg(test)]
     #[allow(unused_imports)]
     use sunrise_gameplay_common::game::api_values::TryIntoApi;
 
@@ -181,6 +203,7 @@ pub(crate) mod tests {
     }
 
     /// The parent runs and checks an isolated child; the child loads the Part fixtures' types.
+    #[cfg(test)]
     pub(crate) fn declared_part_root(name: &str) -> Option<std::path::PathBuf> {
         if run_fresh_cases(name, "SUNRISE_DECLARED_PART_GAME_CHILD", &["valid"]) {
             return None;
@@ -213,7 +236,7 @@ pub(crate) mod tests {
     }
 
     /// Boots a server with the origin's entity-ticking neighbourhood loaded.
-    #[cfg(feature = "client")]
+    #[cfg(all(test, feature = "client"))]
     pub(crate) fn with_resident_game(
         test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>),
     ) {
@@ -247,6 +270,7 @@ pub(crate) mod tests {
     }
 
     #[cfg(feature = "client")]
+    #[cfg(test)]
     pub(crate) fn with_uncached_client_game(
         test: impl FnOnce(&mut sunrise_client_gameplay::game::ClientGame<'_>),
     ) {
@@ -1297,6 +1321,7 @@ pub(crate) mod tests {
         );
     }
 
+    #[cfg(test)]
     pub(crate) fn block_part_bounce_restitution_in_own_process() {
         use sunrise_core::position::BlockPos;
         use sunrise_sim::block_contact::{Contact, bounce_restitution};
@@ -3889,6 +3914,7 @@ pub(crate) mod tests {
     }
 
     /// The hit of a ray that found one; any other outcome fails the test.
+    #[cfg(test)]
     fn hit_of(outcome: Result<mod_api::ClipOutcome, mod_api::ClipError>) -> mod_api::ClipHit {
         match outcome {
             Ok(mod_api::ClipOutcome::Hit(hit)) => hit,

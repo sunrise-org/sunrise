@@ -41,7 +41,7 @@ SERVER_EDGES = [(16 * 3, d, 3) for d in (6, 32)] + [(16 * 7, 12, 7), (16 * 6, 6,
 # items, beacon beams, moving pistons, and the frame's off-screen selection for the End gateway).
 GAME_BLOCKS = ['minecraft:campfire', 'minecraft:soul_campfire', 'minecraft:oak_shelf', 'minecraft:suspicious_sand',
                'minecraft:beacon', 'minecraft:moving_piston', 'minecraft:end_gateway']
-GAME_TEST = 'game::block_entity_reach_draw_tests::block_entity_draws_match_the_vanilla_cases'
+GAME_TEST = 'cut_layout::game::block_entity_reach_draw_tests::block_entity_draws_match_the_vanilla_cases'
 
 
 def cameras(pos, edges=None):

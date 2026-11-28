@@ -46,7 +46,7 @@ pub(crate) mod tests {
 #[path = "data/orb_uuid_tests.rs"]
 pub(crate) mod orb_uuid_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "data/eye_item_tests.rs"]
 pub(crate) mod eye_item_tests;
 
@@ -470,7 +470,7 @@ pub(crate) mod loot_table_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "data/portal_cooldown_tests.rs"]
 pub(crate) mod portal_cooldown_tests;
 
@@ -480,14 +480,14 @@ pub(crate) mod compute_tests;
 #[cfg(test)]
 pub(crate) mod saved_tag_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "data/stand_living_tests.rs"]
 pub(crate) mod stand_living_tests;
 
 #[cfg(test)]
 pub(crate) mod mod_block_entity_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "data/fire_tests.rs"]
 pub(crate) mod fire_tests;
 
@@ -497,7 +497,7 @@ pub(crate) mod residency_tests;
 #[cfg(test)]
 pub(crate) mod hopper_cooldown_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "data/rotation_tests.rs"]
 pub(crate) mod rotation_tests;
 

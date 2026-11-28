@@ -73,6 +73,7 @@ pub(crate) fn load_resources_uncached(
     Ok(Loaded { resources, pack })
 }
 
+#[cfg(test)]
 pub(crate) fn load_resources_skip_lang(
     root: ResourceRoot,
     additional_data: Vec<Arc<DataPack>>,

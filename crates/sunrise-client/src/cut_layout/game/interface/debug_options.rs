@@ -1,9 +1,9 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 use std::time::Instant;
 use sunrise_client::hud::HudBatch;
 use sunrise_gameplay_common::game::execution_role;
 use winit::keyboard::KeyCode;
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod tests {
 
     use sunrise_client_gameplay::game::client_side::debug_options::footer;

@@ -3,14 +3,18 @@ use crate::game::remote::tests::client_hud_camera_tests::MOB;
 use crate::game::remote::tests::client_hud_camera_tests::WATCHED;
 use crate::game::remote::tests::client_hud_camera_tests::attributes;
 use crate::game::remote::tests::client_hud_camera_tests::data;
+#[cfg(test)]
 use crate::game::remote::tests::client_hud_camera_tests::drawn_groups;
 use crate::game::remote::tests::client_hud_camera_tests::id;
 use crate::game::remote::tests::client_hud_camera_tests::mount;
 use crate::game::remote::tests::client_hud_camera_tests::num;
 use crate::game::remote::tests::client_hud_camera_tests::spawn;
+#[cfg(test)]
+use crate::game::server_side::native_entity_refs::tests::with_client_game;
 use sunrise_client::level_loading::Reason;
 use sunrise_client_gameplay::game::client_side::remote_client::session_state::RemoteDimensionEntry;
 use sunrise_core::geometry::Vec3;
+use sunrise_gameplay_common::game::native_lifecycle_common::NativeLifecycle;
 use sunrise_items::items::ItemStack;
 use sunrise_protocol::{
     connection::Pipe,
@@ -19,10 +23,6 @@ use sunrise_protocol::{
     packets::play::{self, Clientbound as C, SpawnInfo},
 };
 use sunrise_sim::motion::PlayerMotion;
-use {
-    crate::game::server_side::native_entity_refs::tests::with_client_game,
-    sunrise_gameplay_common::game::native_lifecycle_common::NativeLifecycle,
-};
 
 /// `Hud.getPlayerVehicleWithHealth` and `Hud.getAirBubbleYLine`: the watched rider can
 /// ride the dragon or the local player, but a boat leaves the food and air rows unchanged.
