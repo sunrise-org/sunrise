@@ -1,4 +1,5 @@
 use super::{Hit, InteractTarget, Keys, entity::Entity};
+use crate::game::server_side::lan_entities::advance_entity_id_counter;
 #[allow(unused_imports)]
 use std::sync::Arc;
 use sunrise_core::{
@@ -1191,7 +1192,7 @@ impl crate::game::ServerGame<'_> {
             f64::from(hit.pos[1]) + 0.0625 + offset,
             f64::from(hit.pos[2]) + 0.5,
         );
-        self.server.next_entity += 1;
+        advance_entity_id_counter(&mut self.server.next_entity);
         let cart = Minecart::new(self.server.next_entity, kind, at);
         self.common
             .world

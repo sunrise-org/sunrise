@@ -625,9 +625,8 @@ fn force_cached_regions(
     result
 }
 
-impl Drop for SaveDir {
-    /// Finish queued writes before the world is let go.
-    fn drop(&mut self) {
+impl SaveDir {
+    fn retire_writer(&mut self) {
         if let Some(writer) = self.writer.get_mut().ok().and_then(Option::take) {
             drop(writer.send);
             let _ = writer.thread.join();
@@ -635,9 +634,41 @@ impl Drop for SaveDir {
     }
 }
 
+impl Drop for SaveDir {
+    /// Finish queued writes before the world is let go.
+    fn drop(&mut self) {
+        self.retire_writer();
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn dropping_save_directory_closes_writer_input_before_joining() {
+        use std::sync::atomic::AtomicBool;
+
+        let dir = tempfile::tempdir().unwrap();
+        let save = SaveDir::new(dir.path().to_path_buf(), LevelShape::OVERWORLD, None);
+        let (send, receive) = mpsc::channel();
+        let closed = Arc::new(AtomicBool::new(false));
+        let observed = closed.clone();
+        *save.writer.lock().unwrap() = Some(Writer {
+            send,
+            thread: std::thread::spawn(move || {
+                observed.store(
+                    matches!(
+                        receive.recv_timeout(std::time::Duration::from_secs(5)),
+                        Err(mpsc::RecvTimeoutError::Disconnected)
+                    ),
+                    Ordering::Release,
+                );
+            }),
+        });
+        drop(save);
+        assert!(closed.load(Ordering::Acquire));
+    }
 
     #[test]
     #[cfg(debug_assertions)]

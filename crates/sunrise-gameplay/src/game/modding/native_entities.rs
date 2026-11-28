@@ -5,6 +5,7 @@
 use super::commands::Target;
 #[cfg(test)]
 use super::commands::{data::summon_position_ok, place_summoned};
+use crate::game::server_side::lan_entities::candidate_entity_id;
 use mod_api::{EntityRef, LevelRef, LevelWriteError};
 use sunrise_core::geometry::Vec3;
 use sunrise_core::nbt::Compound;
@@ -58,7 +59,7 @@ impl crate::game::ServerGame<'_> {
                 if !game.common.world.chunks.contains_key(&chunk) {
                     return Ok(None);
                 }
-                let first = game.server.next_entity + 1;
+                let first = candidate_entity_id(game.server.next_entity);
                 let deferred = (
                     game.common.tnts.len(),
                     game.common.falling.len(),
@@ -238,17 +239,7 @@ impl crate::game::ServerGame<'_> {
                 },
             )
         {
-            // What an earlier held flush of this level told is constructed already; with a toss
-            // still asked it may have stopped short, so then everything since the mark is looked at.
-            let mut mark = self.common.persist.joined_seq;
-            if self.common.native_lifecycle.held_joins.is_empty() {
-                mark = mark.max(held_before);
-            }
-            while let Some((slot, id, seq)) = self.next_unannounced(mark, &[], None) {
-                mark = seq;
-                let kind = self.slot_kind_and_position(slot).0.into_owned();
-                self.construct_joining(id, &kind);
-            }
+            self.construct_held_join_batch(held_before);
             return true;
         }
         let latest = sunrise_sim::join_seq::JoinSeq::latest();
@@ -271,6 +262,20 @@ impl crate::game::ServerGame<'_> {
             .admitted_joins
             .retain(|&(seq, _)| seq > self.common.persist.joined_seq);
         kept
+    }
+
+    #[inline(always)]
+    fn construct_held_join_batch(&mut self, held_before: sunrise_sim::join_seq::JoinSeq) {
+        // A held toss may have stopped construction before the prior batch ceiling.
+        let mut mark = self.common.persist.joined_seq;
+        if self.common.native_lifecycle.held_joins.is_empty() {
+            mark = mark.max(held_before);
+        }
+        while let Some((slot, id, seq)) = self.next_unannounced(mark, &[], None) {
+            mark = seq;
+            let kind = self.slot_kind_and_position(slot).0.into_owned();
+            self.construct_joining(id, &kind);
+        }
     }
 
     /// The shared `PersistentEntitySectionManager.addEntity` boundary, for a fresh
@@ -313,17 +318,7 @@ impl crate::game::ServerGame<'_> {
                     .remove(index)
             });
         if canceled || admission.is_err() {
-            // A listener may have written other rows before unwinding. Retire this
-            // admission only, and do not use an index that may now name another row.
-            if let Some(slot) = self.refresh_join_slot(id, slot) {
-                let retained = admission.is_ok()
-                    && matches!(slot, Slot::Walk(super::entity::EntityHandle::Mob(index))
-                        if self.detach_natural_candidate(id, index));
-                if !retained {
-                    self.discard_slot(slot, id);
-                }
-            }
-            self.forget_entity(id);
+            self.retire_refused_join(slot, id, &admission);
             if let Err(payload) = admission {
                 std::panic::resume_unwind(payload);
             }
@@ -332,14 +327,18 @@ impl crate::game::ServerGame<'_> {
         }
         if self.refresh_join_slot(id, slot).is_some() {
             // A teleported candidate already went through admission in its destination.
-            self.remember_join(id, kind);
-            // `addEntity` files it under its section, untold.
-            self.entity_section_joined(id, [at.x, at.y, at.z]);
+            self.file_admitted_join(id, kind, at);
             if let Some((id, item, count, position)) = spawn {
                 self.native_item_spawn(id, &item, count, position);
             }
         }
         true
+    }
+
+    #[inline(always)]
+    fn file_admitted_join(&mut self, id: u32, kind: String, at: Vec3) {
+        self.remember_join(id, kind);
+        self.entity_section_joined(id, [at.x, at.y, at.z]);
     }
 
     /// `Entity.<init>` comes before `addFreshEntity`: an entity that started on a path that
@@ -557,6 +556,20 @@ impl crate::game::ServerGame<'_> {
         };
         apart.map(Slot::Apart)
     }
+    #[inline(always)]
+    fn retire_refused_join(&mut self, slot: Slot, id: u32, admission: &std::thread::Result<()>) {
+        // A listener may have changed which row occupies the original index.
+        if let Some(slot) = self.refresh_join_slot(id, slot) {
+            let retained = admission.is_ok()
+                && matches!(slot, Slot::Walk(super::entity::EntityHandle::Mob(index))
+                    if self.detach_natural_candidate(id, index));
+            if !retained {
+                self.discard_slot(slot, id);
+            }
+        }
+        self.forget_entity(id);
+    }
+
     /// Takes the entity out of the level, before it ever ticked.
     fn discard_slot(&mut self, slot: Slot, id: u32) {
         match slot {
@@ -835,6 +848,59 @@ mod tests {
 
             game.enter_command_level(Dim::Overworld).unwrap();
             assert_eq!(game.entity(pig.id()), Some(pig));
+        });
+    }
+}
+
+#[cfg(test)]
+mod departure_order_tests {
+    use super::*;
+    use crate::game::{
+        native_entity_refs::tests::with_resident_game, natural_spawning::NaturalAdmission,
+    };
+    use sunrise_sim::mobs::Mob;
+
+    #[test]
+    #[ignore = "daily"]
+    fn refused_join_detaches_a_vetoed_candidate_before_forgetting_and_drops_a_panicking_one() {
+        with_resident_game(|game| {
+            let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+            for admission in [
+                Ok(()),
+                Err(Box::new("join panicked") as Box<dyn std::any::Any + Send>),
+            ] {
+                let id = game.take_entity_id();
+                game.common
+                    .mobs
+                    .push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
+                game.server.natural_admission = Some(NaturalAdmission::Placed {
+                    level: game.common.dim,
+                    id,
+                    join: game.common.mobs[0].join,
+                });
+                game.common.persist.raw.insert(
+                    id,
+                    Tag::compound([("Tags", Tag::List(vec![Tag::String("candidate".into())]))]),
+                );
+
+                game.retire_refused_join(
+                    Slot::Walk(super::super::entity::EntityHandle::Mob(0)),
+                    id,
+                    &admission,
+                );
+
+                match &game.server.natural_admission {
+                    Some(NaturalAdmission::Detached(mob)) if admission.is_ok() => {
+                        assert_eq!(mob.extra.spawn_tags, ["candidate"]);
+                    }
+                    Some(NaturalAdmission::Placed { id: candidate, .. }) if admission.is_err() => {
+                        assert_eq!(*candidate, id);
+                    }
+                    _ => panic!("wrong natural candidate ownership after refusal"),
+                }
+                assert!(game.common.mobs.is_empty());
+                assert!(!game.common.persist.raw.contains_key(&id));
+            }
         });
     }
 }

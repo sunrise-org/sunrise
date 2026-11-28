@@ -638,10 +638,17 @@ pub use crate::with_entity;
 
 #[path = "entity/list_borrows.rs"]
 pub mod list_borrows;
+#[path = "entity/projection.rs"]
+pub mod projection;
 #[allow(unused_imports)]
 pub use list_borrows::entity_lists_of;
 #[allow(unused_imports)]
 pub use list_borrows::{borrow_level_list, borrow_lists};
+#[allow(unused_imports)]
+pub use projection::{
+    DragonPartRef, EntityProjection, common_saved_uuid, extents_aabb, knot_bounds,
+    with_common_entity_projection,
+};
 #[doc(hidden)]
 #[macro_export]
 macro_rules! walk_lists {

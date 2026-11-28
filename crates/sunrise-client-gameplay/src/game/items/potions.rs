@@ -72,32 +72,38 @@ impl crate::game::ClientGame<'_> {
         );
         self.apply_effect_status();
     }
+    #[inline(always)]
+    fn with_lifted_remote_thrown(&mut self, work: impl FnOnce(&mut Self, &mut Vec<ThrownPotion>)) {
+        let mut thrown = std::mem::take(&mut self.common.potions.thrown);
+        work(self, &mut thrown);
+        self.common.potions.thrown = thrown;
+    }
     /// `ThrowableProjectile.tick` on a server's client: it falls and moves
     /// by itself between the server's updates and stops at a block; only
     /// the server breaks it.
     pub fn step_remote_thrown(&mut self) {
-        let mut thrown = std::mem::take(&mut self.common.potions.thrown);
-        for t in &mut thrown {
-            t.previous = t.position;
-            t.age += 1;
-            self.common.thrown_potion_motion(t);
-            let next = Vec3::new(
-                t.position.x + t.velocity.x,
-                t.position.y + t.velocity.y,
-                t.position.z + t.velocity.z,
-            );
-            let state = self.common.world.block(
-                next.x.floor() as i32,
-                next.y.floor() as i32,
-                next.z.floor() as i32,
-            );
-            if self.common.res.facts().get(state).full_collision {
-                t.velocity = Vec3::ZERO;
-            } else {
-                t.position = next;
+        self.with_lifted_remote_thrown(|game, thrown| {
+            for t in thrown {
+                t.previous = t.position;
+                t.age += 1;
+                game.common.thrown_potion_motion(t);
+                let next = Vec3::new(
+                    t.position.x + t.velocity.x,
+                    t.position.y + t.velocity.y,
+                    t.position.z + t.velocity.z,
+                );
+                let state = game.common.world.block(
+                    next.x.floor() as i32,
+                    next.y.floor() as i32,
+                    next.z.floor() as i32,
+                );
+                if game.common.res.facts().get(state).full_collision {
+                    t.velocity = Vec3::ZERO;
+                } else {
+                    t.position = next;
+                }
             }
-        }
-        self.common.potions.thrown = thrown;
+        });
     }
     /// `ThrownItemRenderer` for thrown splash and lingering potions and
     /// experience bottles: the item (GROUND) facing the camera at scale 1,

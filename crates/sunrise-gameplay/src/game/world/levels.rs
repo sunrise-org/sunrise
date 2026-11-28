@@ -248,6 +248,19 @@ impl Parked {
         self.save = save;
     }
 
+    #[inline(always)]
+    fn extract_mob_passenger_for_transfer(&mut self, id: u32) -> Option<Mob> {
+        if let Some(index) = self.mobs.iter().position(|m| m.id == id) {
+            Some(self.mobs.remove_for_transfer(index))
+        } else {
+            // Boats and carts are only roots, which the caller takes.
+            match self.persist.off_level.remove(&id) {
+                Some(OffLevel::Mob(mob)) => Some(mob),
+                _ => None,
+            }
+        }
+    }
+
     /// The exact body restored by a cross-level transfer during natural-spawn admission.
     pub(in crate::game) fn natural_spawn_mob(
         &self,
@@ -1526,16 +1539,7 @@ impl crate::game::ServerGame<'_> {
             if let Some(state) = p.portal_states.entities.remove(&id) {
                 self.server.portals.level.entities.insert(id, state);
             }
-            let mob = if let Some(index) = p.mobs.iter().position(|m| m.id == id) {
-                Some(p.mobs.remove_for_transfer(index))
-            } else {
-                // Boats and carts are only roots, which the caller takes.
-                match p.persist.off_level.remove(&id) {
-                    Some(OffLevel::Mob(mob)) => Some(mob),
-                    _ => None,
-                }
-            };
-            if let Some(mut mob) = mob {
+            if let Some(mut mob) = p.extract_mob_passenger_for_transfer(id) {
                 mob.join = sunrise_sim::join_seq::JoinSeq::UNJOINED;
                 moved.push(mob);
             }
@@ -1565,7 +1569,7 @@ impl crate::game::ServerGame<'_> {
         let level = self.common.dim;
         self.common.entity_attachments.move_collider(id, level);
         if self.uuid_admission_refused(self.common.persist.uuids.get(&id).copied()) {
-            self.common.persist.off_level.insert(id, object);
+            self.retain_refused_admission(id, object);
             return;
         }
         match object {
@@ -1815,13 +1819,7 @@ impl crate::game::ServerGame<'_> {
             // server tick is in it when the tick ends (`addDuringTeleport`).
             if running == Some(true) {
                 let _span = sunrise_level::spans::guard("late_portal_arrivals");
-                let mut moved = false;
-                for &earlier in &order[..k] {
-                    if self.has_portal_arrivals(earlier) && self.enter_level(earlier).is_ok() {
-                        self.land_portal_arrivals();
-                        moved = true;
-                    }
-                }
+                let moved = self.land_arrivals_in_earlier_levels(&order[..k]);
                 if moved && k + 1 < n {
                     result = self.enter_level(dim);
                     if result.is_err() {
@@ -2494,6 +2492,18 @@ impl crate::game::ServerGame<'_> {
 }
 
 impl crate::game::ServerGame<'_> {
+    #[inline(always)]
+    fn land_arrivals_in_earlier_levels(&mut self, earlier_levels: &[Dim]) -> bool {
+        let mut moved = false;
+        for &earlier in earlier_levels {
+            if self.has_portal_arrivals(earlier) && self.enter_level(earlier).is_ok() {
+                self.land_portal_arrivals();
+                moved = true;
+            }
+        }
+        moved
+    }
+
     /// Rebind only an already-owning transfer, before installing it in this level.
     /// Memory still belongs to the parked source until the caller moves it.
     pub fn rebind_transferred_entity(
@@ -2835,6 +2845,33 @@ mod tests {
             *notices.lock().unwrap(),
             [Notice::Chunk([1, 0]), Notice::Entities([1, 0], 1)]
         );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn destructive_entity_snapshot_captures_rows_before_section_eviction() {
+        use crate::game::native_entity_refs::tests::with_resident_game;
+        use std::collections::HashSet;
+        use sunrise_items::items::ItemStack;
+
+        with_resident_game(|game| {
+            game.spawn_item(
+                ItemStack::new("minecraft:diamond", 1),
+                [0.5, 64.0, 0.5],
+                [0.0; 3],
+                0,
+            );
+            let id = game.common.dropped[0].id;
+            let uuid = game.uuid_for(id);
+            let sections = game.entity_chunks(&HashSet::from([(0, 0)]), true);
+            assert_eq!(sections.len(), 1);
+            let (chunk, records) = &sections[0];
+            assert_eq!(*chunk, (0, 0));
+            assert_eq!(records.len(), 1);
+            assert_eq!(sunrise_sim::entity_nbt::uuid(&records[0]), Some(uuid));
+            assert!(game.common.dropped.is_empty());
+            assert!(!game.common.persist.uuids.contains_key(&id));
+        });
     }
 
     #[test]
@@ -3829,6 +3866,76 @@ mod tests {
                 assert_eq!(parked_ow.lan_queues.critical_hits, vec![(None, 602, false)]);
                 assert_eq!(parked_ow.lan_queues.critical_hits.as_ptr(), ow_crit_ptr);
             });
+        });
+    }
+}
+
+#[cfg(test)]
+mod departure_order_tests {
+    use super::*;
+    use crate::game::{
+        native_entity_refs::tests::with_resident_game,
+        nether_portal::{Arrival, Plan, TransferredArrivalState},
+    };
+    use sunrise_core::{geometry::Vec3, nbt::Tag, position::BlockPos};
+    use sunrise_level::chunk::Chunk;
+
+    #[test]
+    #[ignore = "daily"]
+    fn mounted_portal_arrival_lands_passenger_before_root_in_an_earlier_level() {
+        with_resident_game(|game| {
+            let saves = tempfile::tempdir().unwrap();
+            game.server.world_root = saves.path().to_owned();
+            let earlier = game.common.dim;
+            let layout = game.common.world.layout();
+            for x in -1..=1 {
+                for z in -1..=1 {
+                    game.server
+                        .streaming
+                        .insert_remote(&mut game.common.world, Chunk::with_layout(x, z, layout));
+                }
+            }
+            game.common
+                .world
+                .loaded_entities
+                .push(((5, 5), vec![Tag::Int(17).into()]));
+            game.enter_level(Dim::End).unwrap();
+
+            let boat = game.take_entity_id();
+            let rider = game.take_entity_id();
+            let at = Vec3::new(0.5, 64.0, 0.5);
+            game.common
+                .boats
+                .push(Boat::new(boat, "oak".into(), at, 0.0));
+            let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
+            let mut mob = Mob::new(rider, kind, at, 0.0);
+            mob.extra.mount = Some(boat);
+            mob.extra.passenger = true;
+            game.common.mobs.push(mob);
+            let tag = game.vehicle_tree_nbt_for(boat, true).unwrap();
+            let state = game.capture_vehicle_tree_state(boat).unwrap();
+            game.remove_portal_vehicle_tree(boat);
+            game.server.portals.arrivals.push(Arrival {
+                plan: Plan::end_portal(Dim::End, earlier, BlockPos::new(0, 64, 0), 1.0, 1.0),
+                tag,
+                tnt_used_portal: false,
+                transferred: Some(TransferredArrivalState::VehicleTree(state)),
+            });
+            assert!(!game.land_arrivals_in_earlier_levels(&[]));
+            assert_eq!(game.server.portals.arrivals.len(), 1);
+
+            assert!(game.land_arrivals_in_earlier_levels(&[earlier]));
+
+            assert_eq!(game.common.dim, earlier);
+            assert!(game.server.portals.arrivals.is_empty());
+            assert_eq!(game.common.world.loaded_entities.len(), 1);
+            assert_eq!(game.common.world.loaded_entities[0].0, (5, 5));
+            assert_eq!((game.common.boats.len(), game.common.mobs.len()), (1, 1));
+            let boat = &game.common.boats[0];
+            let rider = &game.common.mobs[0];
+            assert_eq!(rider.extra.mount, Some(boat.id));
+            assert!(rider.join < boat.join);
+            assert!(rider.id < boat.id);
         });
     }
 }

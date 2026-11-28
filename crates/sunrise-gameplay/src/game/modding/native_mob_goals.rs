@@ -193,51 +193,53 @@ impl crate::game::ServerGame<'_> {
                 )
             })
             .collect();
-        let mut mobs = self.common.mobs.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        let mut lent = sunrise_sim::health::LentLevel::take(&mut self.common.world);
-        let mut w = self.mob_world_base(&snapshot);
-        let pos = mobs[index].position;
-        w.difficulty = self.common.local_difficulty([pos.x, pos.y, pos.z]);
-        let mut events = Vec::new();
-        let removed = {
-            let mut level = sunrise_sim::health::DamageLevel::lent(
-                &self.common.world,
-                self.common.pack.assets.registry,
-                &mut lent,
-                Some(world_items!(self)),
-                Some(&self.common.pack.block_registries),
-                &self.common.damage_hooks,
-            )
-            .with_variants(world_variants!(self))
-            .with_mob_uuids(&self.common.persist.uuids)
-            .with_reads(crate::game::server_side::entity_server::hit_reads_of!(self));
-            let m = &mut mobs[index];
-            let mut selector = if targets {
-                std::mem::take(&mut m.ai.targets)
-            } else {
-                std::mem::take(&mut m.ai.goals)
-            };
-            let mut cx = Cx {
-                w: &w,
-                level: &mut level,
-                events: &mut events,
-            };
-            let removed = selector.remove_all(|g| goal_id(g.name()) == id, m, &mut cx);
-            if targets {
-                mobs[index].ai.targets = selector;
-            } else {
-                mobs[index].ai.goals = selector;
-            }
-            mobs::apply_brain_events(&mut mobs, &mut level, &mut events, 0, &w.teams);
-            removed
-        };
-        drop(w);
-        lent.give_back(&mut self.common.world);
-        self.common
-            .mobs
-            .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+        let (removed, events) = self.with_lifted_mobs(
+            sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+            |game, mobs| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                let mut lent = sunrise_sim::health::LentLevel::take(&mut game.common.world);
+                let mut w = game.mob_world_base(&snapshot);
+                let pos = mobs[index].position;
+                w.difficulty = game.common.local_difficulty([pos.x, pos.y, pos.z]);
+                let mut events = Vec::new();
+                let removed = {
+                    let mut level = sunrise_sim::health::DamageLevel::lent(
+                        &game.common.world,
+                        game.common.pack.assets.registry,
+                        &mut lent,
+                        Some(world_items!(game)),
+                        Some(&game.common.pack.block_registries),
+                        &game.common.damage_hooks,
+                    )
+                    .with_variants(world_variants!(game))
+                    .with_mob_uuids(&game.common.persist.uuids)
+                    .with_reads(crate::game::server_side::entity_server::hit_reads_of!(game));
+                    let m = &mut mobs[index];
+                    let mut selector = if targets {
+                        std::mem::take(&mut m.ai.targets)
+                    } else {
+                        std::mem::take(&mut m.ai.goals)
+                    };
+                    let mut cx = Cx {
+                        w: &w,
+                        level: &mut level,
+                        events: &mut events,
+                    };
+                    let removed = selector.remove_all(|g| goal_id(g.name()) == id, m, &mut cx);
+                    if targets {
+                        mobs[index].ai.targets = selector;
+                    } else {
+                        mobs[index].ai.goals = selector;
+                    }
+                    mobs::apply_brain_events(mobs, &mut level, &mut events, 0, &w.teams);
+                    removed
+                };
+                drop(w);
+                lent.give_back(&mut game.common.world);
+                (removed, events)
+            },
+        );
         self.handle_mob_events(events).ok();
         removed
     }

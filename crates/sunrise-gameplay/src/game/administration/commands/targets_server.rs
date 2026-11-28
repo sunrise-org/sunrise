@@ -1,5 +1,32 @@
 use super::*;
 pub(in crate::game::server_side) use crate::game::commands::targets::non_player_entity_id;
+use sunrise_gameplay_common::game::entity::{
+    DragonPartRef, EntityProjection, with_common_entity_projection,
+};
+
+/// Read-only lookup of a server entity target through [`EntityProjection`].
+#[inline(always)]
+pub(in crate::game) fn with_server_entity_projection<R>(
+    game: &crate::game::ServerGame<'_>,
+    target: Target,
+    visit: impl FnOnce(&dyn EntityProjection) -> R,
+) -> Option<R> {
+    match target {
+        Target::Guest(conn) => game.command_guest(conn).map(|g| visit(g)),
+        Target::Other(id) => game
+            .server
+            .others
+            .0
+            .iter()
+            .find(|o| o.id == id)
+            .map(|o| visit(o)),
+        Target::Hook(id) => game.fishing_hook_by_id(id).map(|(h, _)| visit(h)),
+        Target::DragonPart(id) => game
+            .resident_dragon_part(id)
+            .map(|(d, i)| visit(&DragonPartRef::new(id, d, i))),
+        other => with_common_entity_projection(&game.common, other, visit),
+    }
+}
 
 impl crate::game::ServerGame<'_> {
     /// The level `t` is in (`Entity.level`): a server's players have their
@@ -16,163 +43,14 @@ impl crate::game::ServerGame<'_> {
     }
     pub fn target_position(&self, t: Target) -> Option<[f64; 3]> {
         match t {
-            Target::Player => self
-                .common
-                .player
-                .as_ref()
-                .map(|p| [p.position.x, p.position.y, p.position.z]),
-            Target::Guest(conn) => self.command_guest(conn).map(|g| g.position),
-            Target::Mob(id) => self
-                .common
-                .mobs
-                .iter()
-                .find(|m| m.id == id)
-                .map(|m| [m.position.x, m.position.y, m.position.z]),
-            Target::Item(id) => self
-                .common
-                .dropped
-                .iter()
-                .find(|i| i.id == id)
-                .map(|i| [i.position.x, i.position.y, i.position.z]),
-            Target::Orb(id) => self
-                .common
-                .orbs
-                .iter()
-                .find(|o| o.id == id)
-                .map(|o| [o.position.x, o.position.y, o.position.z]),
-            Target::Projectile(id) => self
-                .common
-                .creatures
-                .projectiles
-                .iter()
-                .find(|a| a.id == id)
-                .map(|a| [a.position.x, a.position.y, a.position.z]),
-            Target::Stand(id) => self
-                .common
-                .armor_stands
-                .iter()
-                .find(|a| a.id == id)
-                .map(|a| [a.position.x, a.position.y, a.position.z]),
-            Target::Frame(id) => self
-                .common
-                .item_frames
-                .iter()
-                .find(|f| f.id == id)
-                .map(|f| {
-                    let (lo, hi) = f.bounds();
-                    [
-                        (lo[0] + hi[0]) / 2.0,
-                        (lo[1] + hi[1]) / 2.0,
-                        (lo[2] + hi[2]) / 2.0,
-                    ]
-                }),
-            Target::Painting(id) => self.common.paintings.iter().find(|p| p.id == id).map(|p| {
-                let (lo, hi) = p.bounds();
-                [
-                    (lo[0] + hi[0]) / 2.0,
-                    (lo[1] + hi[1]) / 2.0,
-                    (lo[2] + hi[2]) / 2.0,
-                ]
-            }),
-            Target::Boat(id) => self
-                .common
-                .boats
-                .iter()
-                .find(|b| b.id == id)
-                .map(|b| [b.position.x, b.position.y, b.position.z]),
-            Target::Cart(id) => self
-                .common
-                .carts
-                .iter()
-                .find(|c| c.id == id)
-                .map(|c| [c.position.x, c.position.y, c.position.z]),
-            Target::Other(id) => self
-                .server
-                .others
-                .0
-                .iter()
-                .find(|o| o.id == id)
-                .map(|o| [o.position.x, o.position.y, o.position.z]),
-            Target::Crystal(id) => self
-                .common
-                .crystals
-                .iter()
-                .find(|c| c.id == id)
-                .map(|c| [c.position.x, c.position.y, c.position.z]),
-            Target::Dragon(id) => self
-                .common
-                .dragon
-                .as_ref()
-                .filter(|d| d.id == id)
-                .map(|d| [d.position.x, d.position.y, d.position.z]),
-            Target::Cushion(id) => self
-                .common
-                .cushions
-                .iter()
-                .find(|c| c.id == id)
-                .map(|c| [c.position.x, c.position.y, c.position.z]),
-            Target::DragonPart(id) => self.resident_dragon_part(id).map(|(d, i)| {
-                let p = d.parts[i].0;
-                [p.x, p.y, p.z]
-            }),
-            Target::Tnt(id) => self
-                .common
-                .tnts
-                .iter()
-                .find(|t| t.id == id)
-                .map(|t| [t.position.x, t.position.y, t.position.z]),
-            Target::Falling(id) => self
-                .common
-                .falling
-                .iter()
-                .find(|f| f.id == id)
-                .map(|f| [f.position.x, f.position.y, f.position.z]),
-            Target::Rocket(id) => self
-                .common
-                .rockets
-                .iter()
-                .find(|r| r.id == id)
-                .map(|r| [r.position.x, r.position.y, r.position.z]),
-            Target::Cloud(id) => self
-                .common
-                .breath_clouds
-                .iter()
-                .find(|c| c.id == id)
-                .map(|c| c.at),
-            Target::Bolt(id) => self.common.bolts.iter().find(|b| b.id == id).map(|b| b.at),
-            Target::Hook(id) => self.fishing_hook_by_id(id).map(|(h, _)| {
-                let p = h.position;
-                [p.x, p.y, p.z]
-            }),
-            Target::Trident(id) => self
-                .common
-                .tridents
-                .iter()
-                .find(|t| t.id == id)
-                .map(|t| [t.position.x, t.position.y, t.position.z]),
-            Target::Fangs(id) => self
-                .common
-                .fangs
-                .list
-                .iter()
-                .find(|f| f.id == id)
-                .map(|f| f.pos),
-            Target::Spawner(id) => self
-                .common
-                .ominous_spawners
-                .iter()
-                .find(|s| s.id == id)
-                .map(|s| s.position),
             Target::Knot(id) => self.natural_knot(id).map(|fence| {
                 let p = sunrise_sim::mobs::leash::knot_state(fence).position;
                 [p.x, p.y, p.z]
             }),
-            Target::General(id) => self
-                .common
-                .resident_entities
-                .general
-                .row(id)
-                .map(|row| [row.position.x, row.position.y, row.position.z]),
+            other => with_server_entity_projection(self, other, |entity| {
+                let p = entity.projected_position();
+                [p.x, p.y, p.z]
+            }),
         }
     }
 }
@@ -180,3 +58,78 @@ impl crate::game::ServerGame<'_> {
 use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;
 
 use sunrise_gameplay_common::game::dragon_common::DragonCommonGameExt1 as _;
+
+#[cfg(test)]
+mod projection_tests {
+    use super::*;
+    use sunrise_core::geometry::Vec3;
+    use sunrise_gameplay_common::game::{entity::Entity, entity_memory::OffLevel};
+    use sunrise_sim::mobs::Mob;
+
+    #[test]
+    fn mob_and_off_level_mob_projection_match_body() {
+        let mut mob = Mob::new(
+            301,
+            sunrise_sim::mobs::sensor_scan_tests::kind(),
+            Vec3::new(4.0, 64.0, -5.0),
+            90.0,
+        );
+        mob.head_pitch = -12.0;
+        mob.velocity = Vec3::new(0.1, -0.05, 0.2);
+        mob.ground.on_ground = true;
+        mob.fire_ticks = 42;
+        mob.air = 195;
+        mob.removed = true;
+        assert_eq!(mob.projected_id(), mob.id);
+        assert_eq!(mob.projected_kind(), Entity::native_type(&mob));
+        assert_eq!(mob.projected_position(), mob.position);
+        assert_eq!(mob.projected_velocity(), Some(mob.velocity));
+        assert_eq!(mob.projected_rotation(), Some([mob.yaw, mob.head_pitch]));
+        assert_eq!(mob.projected_bounds(), Some(mob.bounds()));
+        assert_eq!(mob.projected_on_ground(), Some(mob.ground.on_ground));
+        assert_eq!(mob.projected_body_fire_ticks(), Some(mob.fire_ticks));
+        assert_eq!(mob.projected_air_supply(), Some(mob.air));
+        assert_eq!(mob.projected_body_removed(), Some(mob.removed));
+        assert_eq!(mob.projected_body_uuid(), None);
+
+        let expected_bounds = mob.bounds();
+        let off = OffLevel::Mob(mob);
+        assert_eq!(off.projected_id(), 301);
+        assert_eq!(off.projected_kind(), "minecraft:cow");
+        assert_eq!(off.projected_bounds(), Some(expected_bounds));
+        assert_eq!(off.projected_body_fire_ticks(), Some(42));
+        assert_eq!(off.projected_air_supply(), Some(195));
+        assert_eq!(off.projected_body_removed(), Some(true));
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn player_motion_projection_matches_body() {
+        let root = crate::game::native_entity_refs::tests::fixture_root();
+        let assets = sunrise_level::assets::Assets::load(&root).unwrap();
+        let resources = sunrise_sim::motion::MotionResources::load(&root, &assets).unwrap();
+        let mut player =
+            sunrise_sim::motion::PlayerMotion::new(&resources, Vec3::new(1.0, 64.0, 2.0));
+        player.entity_id = 302;
+        player.velocity = Vec3::new(0.2, 0.0, -0.1);
+        player.yaw = 75.0;
+        player.pitch = -10.0;
+        player.ground.on_ground = true;
+        player.fire_ticks = 35;
+        player.air = 260;
+        assert_eq!(player.projected_id(), player.entity_id as u32);
+        assert_eq!(player.projected_kind(), "minecraft:player");
+        assert_eq!(player.projected_position(), player.position);
+        assert_eq!(player.projected_velocity(), Some(player.velocity));
+        assert_eq!(
+            player.projected_rotation(),
+            Some([player.yaw, player.pitch])
+        );
+        assert_eq!(player.projected_bounds(), Some(player.bounds()));
+        assert_eq!(player.projected_on_ground(), Some(player.ground.on_ground));
+        assert_eq!(player.projected_body_fire_ticks(), Some(player.fire_ticks));
+        assert_eq!(player.projected_air_supply(), Some(player.air));
+        assert_eq!(player.projected_body_removed(), None);
+        assert_eq!(player.projected_body_uuid(), None);
+    }
+}

@@ -261,9 +261,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn vehicle_of_any(&self, id: u32) -> Option<u32> {
         match self.player_vehicle(id) {
             Some(player) => self.native_player_vehicle_id(player),
-            None => self
-                .native_vehicle_id(Target::Mob(id))
-                .or_else(|| self.native_vehicle_id(Target::General(id))),
+            None => crate::game::server_side::boarding::non_player_vehicle_of(self, id),
         }
     }
 
@@ -279,8 +277,6 @@ impl crate::game::ServerGame<'_> {
 use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;
 
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
-
-use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt2 as _;
 
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt5 as _;
 

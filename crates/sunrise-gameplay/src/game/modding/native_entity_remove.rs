@@ -11,6 +11,7 @@
 //! lists the game is walking. A container vehicle spills before its logical removal;
 //! only taking the row out of its list waits for the sweep.
 use super::commands::Target;
+use crate::game::server_side::lan_entities::candidate_entity_id;
 use mod_api::{EntityRef, LevelWriteError, RemovalReason};
 use sunrise_core::geometry::Vec3;
 use sunrise_items::items::ItemStack;
@@ -174,7 +175,7 @@ impl crate::game::ServerGame<'_> {
             _ => at,
         };
         // Found by its id: the hooks the spawn runs may add entities after it.
-        let id = self.server.next_entity + 1;
+        let id = candidate_entity_id(self.server.next_entity);
         self.spawn_at_location(Vec3::new(x, y, z), f64::from(y_offset), stack);
         self.common
             .dropped
@@ -282,8 +283,14 @@ impl crate::game::ServerGame<'_> {
         // Keep every deferred vehicle logically removed while callbacks in
         // this sweep can inspect the remaining physical owning slots.
         let pending = std::mem::take(&mut self.common.persist.removals);
+        let already_marked = self.retire_projectiles_and_mark_deferred_vehicles(&pending);
+        self.retire_remaining_deferred_entities(pending, &already_marked);
+    }
+
+    #[inline(always)]
+    fn retire_projectiles_and_mark_deferred_vehicles(&mut self, pending: &[Target]) -> Vec<Target> {
         let mut already_marked = Vec::new();
-        for &target in &pending {
+        for &target in pending {
             match target {
                 // Discard already announced the leave. Remove these owning rows
                 // before any callback in the sweep can resolve them again.
@@ -300,6 +307,15 @@ impl crate::game::ServerGame<'_> {
                 _ => {}
             }
         }
+        already_marked
+    }
+
+    #[inline(always)]
+    fn retire_remaining_deferred_entities(
+        &mut self,
+        pending: Vec<Target>,
+        already_marked: &[Target],
+    ) {
         for t in pending {
             match t {
                 Target::Projectile(_) | Target::Trident(_) => {}
@@ -362,6 +378,45 @@ mod tests {
         sunrise_gameplay_common::game::api_values::TryIntoApi,
         sunrise_gameplay_common::game::api_values::test_snapshot,
     };
+    #[test]
+    #[ignore = "daily"]
+    fn pending_item_removal_retracts_membership_before_the_retirement_callback() {
+        use super::super::native_entity_refs::tests::with_resident_game;
+        use sunrise_gameplay_common::game::commands_common::Target;
+        use sunrise_items::items::ItemStack;
+        use sunrise_sim::join_seq::residency::Change;
+
+        with_resident_game(|game| {
+            game.spawn_item(
+                ItemStack::new("minecraft:diamond", 1),
+                [0.5, 64.0, 0.5],
+                [0.0; 3],
+                0,
+            );
+            let id = game.common.dropped[0].id;
+            let journal = game
+                .common
+                .resident_entities
+                .table
+                .borrow()
+                .producer()
+                .observe_structural_events();
+            game.common.persist.removals.push(Target::Item(id));
+            let mut retired = Vec::new();
+            game.native_item_removals_flush(|item| {
+                let mut events = Vec::new();
+                journal.drain_into(&mut events);
+                assert!(events.iter().any(|event| matches!(
+                    event.change,
+                    Change::Remove(identity) if identity.id.get() == item.id
+                )));
+                retired.push(item.id);
+            });
+            assert_eq!(retired, [id]);
+            assert!(game.common.dropped.is_empty());
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn destroying_a_cart_spills_all_slots_before_removing_its_row() {
@@ -441,14 +496,16 @@ mod tests {
     #[ignore = "daily"]
     fn removal_dismounts_and_tells_mods_once_at_the_call() {
         use super::super::{boats_common::Boat, native_entity_refs::tests::with_resident_game};
-        use mod_api::{EntityLeaveLevelEvent, Hooks, ServerHost};
+        use mod_api::{EntityLeaveLevelEvent, EntityRef, Hooks, ServerHost};
         use std::sync::{Arc, Mutex};
         use sunrise_core::geometry::Vec3;
         use sunrise_sim::mobs::Mob;
 
-        /// The entities heard leaving, and whether each read as gone by then.
         #[derive(Clone, Default)]
-        struct Observer(Arc<Mutex<Vec<(u32, bool)>>>);
+        struct Observer {
+            rider: Arc<Mutex<Option<EntityRef>>>,
+            notices: Arc<Mutex<Vec<(u32, bool, bool)>>>,
+        }
         #[mod_api::__subscriptions]
         impl Hooks for Observer {
             fn entity_leave_level(
@@ -457,7 +514,15 @@ mod tests {
                 event: &mut EntityLeaveLevelEvent<'_>,
             ) {
                 let gone = host.entity(event.entity).is_none();
-                self.0.lock().unwrap().push((event.entity, gone));
+                let dismounted = self
+                    .rider
+                    .lock()
+                    .unwrap()
+                    .is_some_and(|rider| rider.is_passenger(host) == Some(false));
+                self.notices
+                    .lock()
+                    .unwrap()
+                    .push((event.entity, gone, dismounted));
             }
         }
         let observer = Observer::default();
@@ -486,16 +551,23 @@ mod tests {
                 assert!(game.entity_start_riding(mob, boat, true).is_ok());
                 assert_eq!(game.entity_vehicle(mob), Some(boat));
 
+                *observer.rider.lock().unwrap() = Some(mob);
                 assert!(boat.discard(game));
                 // Told, and off the vehicle, with the boat still in its list.
                 assert!(game.boats.iter().any(|b| b.id == boat_id));
-                assert_eq!(*observer.0.lock().unwrap(), vec![(boat_id, true)]);
+                assert_eq!(
+                    *observer.notices.lock().unwrap(),
+                    vec![(boat_id, true, true)]
+                );
                 assert_eq!(game.entity_vehicle(mob), None);
                 assert!(!game.mobs.iter().any(|m| m.extra.mount == Some(boat_id)));
 
                 game.native_leaves_flush();
                 assert!(!game.boats.iter().any(|b| b.id == boat_id));
-                assert_eq!(*observer.0.lock().unwrap(), vec![(boat_id, true)]);
+                assert_eq!(
+                    *observer.notices.lock().unwrap(),
+                    vec![(boat_id, true, true)]
+                );
             });
         });
     }
@@ -828,5 +900,103 @@ mod tests {
             assert_eq!(cow.kill(game), Err(LevelWriteError::Unavailable));
             game.options.execution_role = role;
         });
+    }
+}
+
+#[cfg(test)]
+mod departure_order_tests {
+    use super::*;
+    use crate::game::native_entity_refs::tests::with_resident_game;
+    use mod_api::{EntityLeaveLevelEvent, Hooks, ServerHost};
+    use std::sync::{Arc, Mutex};
+    use sunrise_gameplay_common::game::boats_common::Boat;
+    use sunrise_sim::{
+        join_seq::residency::{Change, Journal},
+        projectiles::{Projectile, ProjectileKind},
+    };
+
+    #[derive(Default)]
+    struct Observations {
+        setup: Option<(u32, u32, Journal)>,
+        at_first_leave: Option<(Vec<u32>, bool)>,
+    }
+
+    struct Observer(Arc<Mutex<Observations>>);
+
+    #[mod_api::__subscriptions]
+    impl Hooks for Observer {
+        fn entity_leave_level(
+            &self,
+            host: &mut dyn ServerHost,
+            event: &mut EntityLeaveLevelEvent<'_>,
+        ) {
+            let mut observations = self.0.lock().unwrap();
+            let Some((first, second, journal)) = &observations.setup else {
+                return;
+            };
+            if event.entity != *first {
+                return;
+            }
+            let mut events = Vec::new();
+            journal.drain_into(&mut events);
+            let removed = events
+                .into_iter()
+                .filter_map(|event| match event.change {
+                    Change::Remove(identity) => Some(identity.id.get()),
+                    _ => None,
+                })
+                .collect::<Vec<_>>();
+            observations.at_first_leave = Some((removed, host.entity(*second).is_none()));
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn pending_sweep_retracts_projectiles_before_earlier_queued_non_projectiles() {
+        let observations = Arc::new(Mutex::new(Observations::default()));
+        mod_platform::testing::with_mods(
+            vec![mod_api::ModEntry::new(
+                "departure-order",
+                Box::new(Observer(observations.clone())),
+            )]
+            .into(),
+            || {
+                with_resident_game(|game| {
+                    let first = game.take_entity_id();
+                    let second = game.take_entity_id();
+                    let projectile = game.take_entity_id();
+                    let at = Vec3::new(0.5, 64.0, 0.5);
+                    for id in [first, second] {
+                        game.common.boats.push(Boat::new(id, "oak".into(), at, 0.0));
+                    }
+                    let mut shot = Projectile::new(ProjectileKind::Snowball, at, None);
+                    shot.id = projectile;
+                    game.common.creatures.projectiles.push(shot);
+                    game.native_joins_flush(false, 0);
+                    assert!(game.entity(second).is_some());
+                    let journal = game
+                        .common
+                        .resident_entities
+                        .table
+                        .borrow()
+                        .producer()
+                        .observe_structural_events();
+                    observations.lock().unwrap().setup = Some((first, second, journal));
+                    game.common.persist.removals.extend([
+                        Target::Boat(first),
+                        Target::Projectile(projectile),
+                        Target::Boat(second),
+                    ]);
+
+                    game.native_removals_flush();
+
+                    assert_eq!(
+                        observations.lock().unwrap().at_first_leave,
+                        Some((vec![projectile, first], true))
+                    );
+                    assert!(game.common.boats.is_empty());
+                })
+            },
+        );
     }
 }

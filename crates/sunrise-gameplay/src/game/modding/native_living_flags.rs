@@ -145,21 +145,23 @@ impl crate::game::ServerGame<'_> {
                 let Some(at) = self.sleeping_position(pos) else {
                     return false;
                 };
-                let mut mobs = self.common.mobs.lift();
-                #[cfg(any(test, feature = "test-support"))]
-                crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-                let w = self.mob_world_base(&[]);
-                let mut events = Vec::new();
-                let slept = mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
-                    let slept = villager::start_sleeping(m, pos, &w, &mut events);
-                    if slept {
-                        sunrise_sim::mobs::living::teleports::set_pos(m, at);
-                    }
-                    slept
-                });
-                self.common
-                    .mobs
-                    .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+                let (slept, events) = self.with_lifted_mobs(
+                    sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+                    |game, mobs| {
+                        #[cfg(any(test, feature = "test-support"))]
+                        crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                        let w = game.mob_world_base(&[]);
+                        let mut events = Vec::new();
+                        let slept = mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
+                            let slept = villager::start_sleeping(m, pos, &w, &mut events);
+                            if slept {
+                                sunrise_sim::mobs::living::teleports::set_pos(m, at);
+                            }
+                            slept
+                        });
+                        (slept, events)
+                    },
+                );
                 let _ = self.handle_mob_events(events);
                 slept
             }
@@ -189,17 +191,19 @@ impl crate::game::ServerGame<'_> {
                 if !villager::sleeping(m) {
                     return false;
                 }
-                let mut mobs = self.common.mobs.lift();
-                #[cfg(any(test, feature = "test-support"))]
-                crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-                let w = self.mob_world_base(&[]);
-                let mut events = Vec::new();
-                if let Some(m) = mobs.iter_mut().find(|m| m.id == id) {
-                    villager::stop_sleeping(m, &w, &mut events);
-                }
-                self.common
-                    .mobs
-                    .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+                let events = self.with_lifted_mobs(
+                    sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+                    |game, mobs| {
+                        #[cfg(any(test, feature = "test-support"))]
+                        crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                        let w = game.mob_world_base(&[]);
+                        let mut events = Vec::new();
+                        if let Some(m) = mobs.iter_mut().find(|m| m.id == id) {
+                            villager::stop_sleeping(m, &w, &mut events);
+                        }
+                        events
+                    },
+                );
                 let _ = self.handle_mob_events(events);
                 true
             }

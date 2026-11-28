@@ -20,6 +20,7 @@ class RemoteOwnRocketTests(unittest.TestCase):
             rust_fn("follow_own_player", owner="sunrise-gameplay-common"),
             rust_fn("rocket_spark", owner="sunrise-client-gameplay"),
             rust_fn("remote_player_id", owner="sunrise-client-gameplay"),
+            rust_fn("with_lifted_rockets", owner="sunrise-client-gameplay"),
             rust_fn("tick_own_rockets", owner="sunrise-client-gameplay"),
         ])
         fixture = r'''
@@ -49,6 +50,8 @@ mod sunrise_world {
 mod sunrise_sim {
     pub mod join_seq { pub enum RestoreOrder { SurvivorsFirst } }
 }
+use sunrise_sim::join_seq::RestoreOrder;
+type JoinList<T> = Vec<T>;
 trait Lift: Default + Sized {
     fn lift(&mut self) -> Self { std::mem::take(self) }
     fn restore(&mut self, taken: Self, order: sunrise_sim::join_seq::RestoreOrder);

@@ -19,41 +19,43 @@ impl crate::game::ServerGame<'_> {
         let Some(index) = self.common.dropped.iter().position(|item| item.id == id) else {
             return false;
         };
-        let mut items = self.common.dropped.lift();
-        let hurt = self.hurt_lent_item_entity(
-            &mut items[index],
-            amount,
-            damage_type,
-            direct,
-            causing,
-            position,
-        );
-        if items[index].health <= 0 {
-            let at = items[index].position;
-            let deferred = self
-                .server
-                .item_destroyed_damage
-                .take_if(|(destroyed_id, _)| *destroyed_id == id)
-                .map(|(_, ty)| ty);
-            if let Some(ty) = deferred {
-                self.common.put_back_dropped(items);
-                let contents =
-                    if let Some(k) = self.common.dropped.iter().position(|item| item.id == id) {
-                        self.destroy_item_entity_drops(k, &ty)
-                    } else {
-                        Vec::new()
-                    };
-                if let Some(k) = self.common.dropped.iter().position(|item| item.id == id) {
-                    self.common.dropped.remove(k);
+        let (hurt, deferred) = self.with_lifted_dropped(|game, items| {
+            let hurt = game.hurt_lent_item_entity(
+                &mut items[index],
+                amount,
+                damage_type,
+                direct,
+                causing,
+                position,
+            );
+            let mut deferred = None;
+            if items[index].health <= 0 {
+                let at = items[index].position;
+                let pending = game
+                    .server
+                    .item_destroyed_damage
+                    .take_if(|(destroyed_id, _)| *destroyed_id == id)
+                    .map(|(_, ty)| ty);
+                if let Some(ty) = pending {
+                    deferred = Some((ty, at));
+                } else {
+                    items.remove(index);
                 }
-                self.spawn_destroyed_contents(
-                    contents.into_iter().map(|stack| (stack, at)).collect(),
-                );
-                return hurt;
             }
-            items.remove(index);
+            (hurt, deferred)
+        });
+        if let Some((ty, at)) = deferred {
+            let contents =
+                if let Some(k) = self.common.dropped.iter().position(|item| item.id == id) {
+                    self.destroy_item_entity_drops(k, &ty)
+                } else {
+                    Vec::new()
+                };
+            if let Some(k) = self.common.dropped.iter().position(|item| item.id == id) {
+                self.common.dropped.remove(k);
+            }
+            self.spawn_destroyed_contents(contents.into_iter().map(|stack| (stack, at)).collect());
         }
-        self.common.put_back_dropped(items);
         hurt
     }
 

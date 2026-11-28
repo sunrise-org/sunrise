@@ -2,6 +2,7 @@
 //! power 4, `TntRenderer` swell and white flash, and `TntBlock.useItemOn`
 //! (flint and steel / fire charge).
 use crate::game::ServerGame;
+use crate::game::server_side::lan_entities::advance_entity_id_counter;
 use sunrise_core::{
     geometry::{Aabb, Vec3},
     position::BlockPos,
@@ -74,7 +75,7 @@ impl ServerGame<'_> {
             f64::from(pos.z) + 0.5,
         );
         // An id from the entity counter at once, so a command can name it.
-        self.server.next_entity += 1;
+        advance_entity_id_counter(&mut self.server.next_entity);
         // Entity: the UUID is the first two draws of the TNT's own random.
         let uuid = sunrise_sim::save::insecure_uuid(&mut sunrise_level::random_source::entity());
         self.common

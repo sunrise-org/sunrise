@@ -367,20 +367,22 @@ impl crate::game::ServerGame<'_> {
         shoots: &mut Vec<ProjectileShot>,
     ) -> FxHashMap<JoinSeq, PendingImpact> {
         // Close the already-lifted pass, not a new one over the spawn buffer.
-        self.common.creatures.projectiles.restore(
-            projectiles.take_owned_pass(),
+        let canceled = self.hand_back_projectile_pass(
+            projectiles,
             sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+            |game| {
+                let mut canceled = Vec::with_capacity(impacts.len());
+                for impact in &impacts {
+                    canceled.push(
+                        !impact.wind_vehicle
+                            && impact.index.is_some()
+                            && game.entity(impact.before.id).is_some()
+                            && game.native_projectile_impact_canceled(&impact.before, impact.hit),
+                    );
+                }
+                canceled
+            },
         );
-        let mut canceled = Vec::with_capacity(impacts.len());
-        for impact in &impacts {
-            canceled.push(
-                !impact.wind_vehicle
-                    && impact.index.is_some()
-                    && self.entity(impact.before.id).is_some()
-                    && self.native_projectile_impact_canceled(&impact.before, impact.hit),
-            );
-        }
-        *projectiles = self.common.creatures.projectiles.lift();
         let places: FxHashMap<_, _> = projectiles
             .iter()
             .enumerate()
@@ -528,11 +530,8 @@ impl crate::game::ServerGame<'_> {
             if keep {
                 let to = through.position;
                 self.common.creatures.projectiles.store_back(index, through);
-                if !pending.keep
-                    && let Some(owner) = self.common.creatures.projectiles.extract(p.join)
-                {
-                    let end = self.common.creatures.projectiles.len();
-                    self.common.creatures.projectiles.put_back(end, owner);
+                if !pending.keep {
+                    self.common.creatures.projectiles.reposition_to_end(p.join);
                 }
                 self.entity_section_step(p.id, p.position.components(), to.components());
             } else {

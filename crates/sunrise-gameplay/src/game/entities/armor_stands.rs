@@ -4,6 +4,7 @@
 //! the default pose, the hit wobble and humanoid armor layers.
 use super::InteractTarget;
 use super::entity::Entity;
+use crate::game::server_side::lan_entities::{advance_entity_id_counter, candidate_entity_id};
 use sunrise_core::{
     geometry::{Aabb, Vec3},
     random::RandomSource,
@@ -141,6 +142,14 @@ pub(in crate::game::server_side) fn armor_stand_cart_shove(
     })
 }
 impl crate::game::ServerGame<'_> {
+    #[inline(always)]
+    fn install_player_stand_after_stack_config(
+        &mut self,
+        stand: sunrise_sim::entities::ArmorStand,
+    ) {
+        self.common.armor_stands.push(stand);
+    }
+
     /// `ArmorStandItem.useOn`.
     pub(in crate::game::server_side) fn place_armor_stand(
         &mut self,
@@ -153,7 +162,7 @@ impl crate::game::ServerGame<'_> {
         let Some((pos, mut stand, uuid)) = self.common.armor_stand_spawn(hit, stack) else {
             return false;
         };
-        stand.id = self.server.next_entity + 1;
+        stand.id = candidate_entity_id(self.server.next_entity);
         // EntityType.create(.., tryMoveDown, movedUp): the new stand falls onto what is under it,
         // up to two blocks (a bottom slab, the block under replaced grass).
         let drop = self.drop_offset_from(0.5, 1.975, (pos[0], pos[1], pos[2]), true);
@@ -193,7 +202,7 @@ impl crate::game::ServerGame<'_> {
         // EntityType.create's spawn yaw, `level.getRandom().nextFloat() * 360`, before
         // ArmorStandItem.useOn turns the stand to face the player.
         self.common.world.random.next_float();
-        self.server.next_entity += 1;
+        advance_entity_id_counter(&mut self.server.next_entity);
         self.common.persist.uuids.insert(stand.id, uuid);
         self.server_play_sound(
             "minecraft:entity.armor_stand.place",
@@ -208,7 +217,7 @@ impl crate::game::ServerGame<'_> {
             .world
             .modified
             .insert((pos[0] >> 4, pos[2] >> 4));
-        self.common.armor_stands.push(stand);
+        self.install_player_stand_after_stack_config(stand);
         if !self.common.creative {
             self.consume_held();
         }

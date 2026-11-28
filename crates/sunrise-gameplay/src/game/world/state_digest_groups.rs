@@ -274,7 +274,7 @@ fn entity_values(
     live.air.or_else(|| number("Air")).hash(h);
     let portal = live
         .active_portal
-        .or_else(|| game.server.portals.entities.get(&id).copied());
+        .or_else(|| game.server.portals.level.entities.get(&id).copied());
     live.portal
         .or_else(|| portal.map(|p| p.cooldown))
         .or_else(|| number("PortalCooldown"))
@@ -555,10 +555,10 @@ fn decorations(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items, 
             },
         );
     }
-    let mut fence_ids: Vec<_> = game.server.knot_ids.iter().collect();
+    let mut fence_ids: Vec<_> = game.server.knot_state.knot_ids.iter().collect();
     fence_ids.sort_unstable();
     fence_ids.hash(&mut knots.hash);
-    game.server.broken_knots.hash(&mut knots.hash);
+    game.server.knot_state.broken_knots.hash(&mut knots.hash);
     for e in game
         .common
         .mobs

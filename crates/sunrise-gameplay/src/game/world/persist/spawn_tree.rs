@@ -1,5 +1,6 @@
 //! Configured spawner NBT, decoded once and held until the spawn pass finishes.
 use super::{Mob, Tag, entity_nbt};
+use crate::game::server_side::lan_entities::commit_next_entity_id;
 use sunrise_core::fast_hash::FxHashSet;
 use sunrise_gameplay_common::game::general::GeneralEntityRecord;
 
@@ -144,8 +145,7 @@ impl SpawnTree {
             let mount = parent.and_then(|i| ids[i]);
             let id = match node {
                 Node::Mob(mut mob) => {
-                    game.server.next_entity += 1;
-                    mob.id = game.server.next_entity;
+                    mob.id = commit_next_entity_id(&mut game.server.next_entity);
                     mob.attach_mod_parts();
                     let tags = std::mem::take(&mut mob.extra.spawn_tags);
                     if !spawn_tags(&tag).eq(tags.iter().cloned())
@@ -208,8 +208,7 @@ impl crate::game::ServerGame<'_> {
             });
             let provisional = body.id;
             body.extra.rider = None;
-            self.server.next_entity += 1;
-            body.id = self.server.next_entity;
+            body.id = commit_next_entity_id(&mut self.server.next_entity);
             let id =
                 self.install_loaded_mob((body, uuid), Tag::Compound(tag), mount, None, false, None);
             ids.push((provisional, id));

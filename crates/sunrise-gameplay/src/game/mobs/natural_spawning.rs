@@ -2,6 +2,7 @@
 //! it reads, the spawning chunks and caps of `ServerChunkCache.tickChunks`,
 //! and the mobs it adds (finalized with the game's `finalizeSpawn`).
 use super::Dim;
+use crate::game::server_side::lan_entities::{advance_entity_id_counter, commit_next_entity_id};
 use mod_api::{SpawnCheck, SpawnFlags, SpawnLimits};
 use std::collections::HashMap;
 use sunrise_core::{
@@ -1410,7 +1411,7 @@ impl<'a> crate::game::ServerGame<'a> {
         links: &mut HashMap<u32, u32>,
     ) {
         for body in bodies {
-            self.server.next_entity += 1;
+            advance_entity_id_counter(&mut self.server.next_entity);
             links.insert(body.id, self.server.next_entity);
             body.id = self.server.next_entity;
         }
@@ -1870,8 +1871,7 @@ impl<'a> crate::game::ServerGame<'a> {
         let provisional = mob.id;
         ids.clear();
         if passengers.is_empty() {
-            self.server.next_entity += 1;
-            mob.id = self.server.next_entity;
+            mob.id = commit_next_entity_id(&mut self.server.next_entity);
         } else {
             self.assign_spawn_ids(
                 std::iter::once(&mut mob).chain(passengers.iter_mut().map(|(body, _)| body)),

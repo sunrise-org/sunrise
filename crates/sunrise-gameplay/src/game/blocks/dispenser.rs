@@ -6,6 +6,8 @@
 #[allow(unused_imports)]
 use super::{Dim, item_abilities::ability};
 #[allow(unused_imports)]
+use crate::game::server_side::lan_entities::advance_entity_id_counter;
+#[allow(unused_imports)]
 use mod_api::{LevelRef, LevelWriteError, SoundSource};
 #[allow(unused_imports)]
 use std::ops::ControlFlow;
@@ -861,6 +863,22 @@ impl crate::game::ServerGame<'_> {
         self.player_equipped(name, Some(one));
         self.apply_equipment();
     }
+    #[inline(always)]
+    fn with_extracted_mob_global_lease<R>(
+        &mut self,
+        index: usize,
+        work: impl FnOnce(&mut Self, &mut sunrise_sim::mobs::Mob) -> R,
+    ) -> (sunrise_sim::join_seq::visibility::PassLease, R) {
+        let lease = sunrise_sim::join_seq::visibility::PassLease::enter();
+        let mut mob = self
+            .common
+            .mobs
+            .extract(self.common.mobs[index].join)
+            .unwrap();
+        let result = work(self, &mut mob);
+        self.common.mobs.put_back(index, mob);
+        (lease, result)
+    }
     /// After `EntityType.spawn` / `MobBucketItem.spawn`: `mob.playAmbientSound()`.
     pub(in crate::game::server_side) fn mob_ambient(&mut self, id: u32) -> Result<()> {
         if self.dragon_spawn_ambient(id) {
@@ -869,14 +887,14 @@ impl crate::game::ServerGame<'_> {
         let Some(i) = self.common.mobs.iter().position(|m| m.id == id) else {
             return Ok(());
         };
-        let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();
-        let mut m = self.common.mobs.extract(self.common.mobs[i].join).unwrap();
-        let mut events = Vec::new();
-        {
-            let w = self.mob_world_base(&[]);
-            sunrise_sim::mobs::ai::ambient_sound(&mut m, &w, &mut events);
-        }
-        self.common.mobs.put_back(i, m);
+        let (_save_lease, events) = self.with_extracted_mob_global_lease(i, |game, m| {
+            let mut events = Vec::new();
+            {
+                let w = game.mob_world_base(&[]);
+                sunrise_sim::mobs::ai::ambient_sound(m, &w, &mut events);
+            }
+            events
+        });
         self.handle_mob_events(events)
     }
     /// A mob a bucket emptied (`MobBucketItem.spawn`): the bucket's components
@@ -1105,7 +1123,19 @@ impl crate::game::ServerGame<'_> {
         );
         // EntityType.create rolls a yaw from the level random before the stack config turns it.
         let _ = self.common.world.random.next_float();
-        self.server.next_entity += 1;
+        self.install_dispensed_stand_before_stack_config(front, foot, facing, &stack);
+        (shrink(stack), CLICK)
+    }
+
+    #[inline(always)]
+    fn install_dispensed_stand_before_stack_config(
+        &mut self,
+        front: Pos,
+        foot: Vec3,
+        facing: Direction,
+        stack: &ItemStack,
+    ) {
+        advance_entity_id_counter(&mut self.server.next_entity);
         let (stand, uuid) = sunrise_sim::entities::ArmorStand::new_with_uuid(
             self.server.next_entity,
             foot,
@@ -1125,10 +1155,9 @@ impl crate::game::ServerGame<'_> {
         self.apply_item_stack_config(
             super::commands::Target::Stand(self.server.next_entity),
             "minecraft:armor_stand",
-            &stack,
+            stack,
             false,
         );
-        (shrink(stack), CLICK)
     }
     /// A tame donkey, mule or llama in front without a chest gets it.
     pub(in crate::game::server_side) fn dispense_chest(
@@ -1189,7 +1218,7 @@ impl crate::game::ServerGame<'_> {
         } else {
             return (self.dispense_default_in_level(pos, facing, stack), CLICK);
         };
-        self.server.next_entity += 1;
+        advance_entity_id_counter(&mut self.server.next_entity);
         let mut boat = sunrise_gameplay_common::game::boats_common::Boat::new(
             self.server.next_entity,
             wood.into(),
@@ -1252,7 +1281,7 @@ impl crate::game::ServerGame<'_> {
                 -0.9
             }
         };
-        self.server.next_entity += 1;
+        advance_entity_id_counter(&mut self.server.next_entity);
         let cart = super::minecarts::Minecart::new(
             self.server.next_entity,
             kind,

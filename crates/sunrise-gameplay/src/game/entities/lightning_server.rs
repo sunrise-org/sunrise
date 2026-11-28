@@ -155,6 +155,11 @@ impl crate::game::ServerGame<'_> {
     pub fn spawn_bolt(&mut self, at: [f64; 3], visual_only: bool) {
         let id = self.take_entity_id();
         let (bolt, uuid) = Bolt::new(id, at, visual_only);
+        self.install_bolt_with_constructor_uuid(id, uuid, bolt);
+    }
+
+    #[inline(always)]
+    fn install_bolt_with_constructor_uuid(&mut self, id: u32, uuid: [i32; 4], bolt: Bolt) {
         self.common.persist.uuids.insert(id, uuid);
         self.common.bolts.push(bolt);
     }

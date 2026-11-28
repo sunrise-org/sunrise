@@ -73,22 +73,29 @@ impl crate::game::ServerGame<'_> {
                 if !self.common.mobs.iter().any(|m| m.id == id && !m.removed) {
                     return false;
                 }
-                let mut mobs = self.common.mobs.lift();
-                #[cfg(any(test, feature = "test-support"))]
-                crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-                let w = self.mob_world_base(&[]);
-                let mut events = Vec::new();
-                let mut teleported = None;
-                let moved = mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
-                    let from = m.position;
-                    let moved =
-                        sunrise_sim::mobs::living::random_teleport(m, &w, at, avoid, &mut events);
-                    teleported = moved.then_some((from, m.position));
-                    moved
-                });
-                self.common
-                    .mobs
-                    .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+                let (moved, events, teleported) = self.with_lifted_mobs(
+                    sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+                    |game, mobs| {
+                        #[cfg(any(test, feature = "test-support"))]
+                        crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                        let w = game.mob_world_base(&[]);
+                        let mut events = Vec::new();
+                        let mut teleported = None;
+                        let moved = mobs.iter_mut().find(|m| m.id == id).is_some_and(|m| {
+                            let from = m.position;
+                            let moved = sunrise_sim::mobs::living::random_teleport(
+                                m,
+                                &w,
+                                at,
+                                avoid,
+                                &mut events,
+                            );
+                            teleported = moved.then_some((from, m.position));
+                            moved
+                        });
+                        (moved, events, teleported)
+                    },
+                );
                 let _ = self.handle_mob_events(events);
                 // `teleportTo` is one position update, told at once.
                 if let Some((from, to)) = teleported {

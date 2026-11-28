@@ -11,20 +11,53 @@ use sunrise_sim::lan::{
 };
 use {sunrise_core::nbt::Tag, sunrise_world::registry::BlockStateId};
 
+pub(in crate::game::server_side) fn candidate_entity_id(next: u32) -> u32 {
+    next + 1
+}
+
+pub(in crate::game::server_side) fn advance_entity_id_counter(next: &mut u32) {
+    *next += 1;
+}
+
+pub(in crate::game::server_side) fn commit_next_entity_id(next: &mut u32) -> u32 {
+    advance_entity_id_counter(next);
+    *next
+}
+
+pub(in crate::game::server_side) fn commit_decoded_entity_id(next: &mut u32, decoded_id: u32) {
+    *next = decoded_id;
+}
+
 /// Allocate once: a native summon may need its id before the tracking tick.
 pub(in crate::game::server_side) fn assign_entity_id(next: &mut u32, id: &mut u32) -> u32 {
     if *id == 0 {
-        *next += 1;
-        *id = *next;
+        *id = commit_next_entity_id(next);
     }
     *id
+}
+
+fn assign_thrown_potion_ids(
+    next: &mut u32,
+    potions: &mut sunrise_gameplay_common::game::potions_common::PotionState,
+) {
+    for id in crate::game::server_side::potions_server::thrown_ids(potions) {
+        assign_entity_id(next, id);
+    }
+}
+
+fn assign_thrown_eye_ids(
+    next: &mut u32,
+    end: &mut sunrise_gameplay_common::game::end_state::EndState,
+) {
+    for id in end.eye_ids() {
+        assign_entity_id(next, id);
+    }
 }
 
 impl ServerGame<'_> {
     /// `Entity.nextEntityId`: the id a new entity takes from the one counter.
     pub fn take_entity_id(&mut self) -> u32 {
-        self.server.next_entity += 1;
-        self.server.next_entity
+        commit_next_entity_id(&mut self.server.next_entity)
     }
     /// Whether the id counter is within [`ENTITY_ID_HEADROOM`] of the end: then a mod's spawn is
     /// refused and the tick spawns nothing of its own, named once in the log. Ids already handed
@@ -717,14 +750,8 @@ impl ServerGame<'_> {
         assign_resident_ids!(self.common.crystals, c, next, None);
         assign_resident_ids!(self.common.bolts, b, next, Some(&b.attachment_lifetime));
         assign_resident_ids!(self.common.ominous_spawners, o, next, None);
-        crate::game::server_side::potions_server::thrown_ids(&mut self.common.potions).for_each(
-            |id| {
-                assign_entity_id(next, id);
-            },
-        );
-        self.common.end.eye_ids().for_each(|id| {
-            assign_entity_id(next, id);
-        });
+        assign_thrown_potion_ids(next, &mut self.common.potions);
+        assign_thrown_eye_ids(next, &mut self.common.end);
         assign_resident_ids!(self.common.breath_clouds, b, next, None);
     }
 
@@ -1001,37 +1028,8 @@ impl ServerGame<'_> {
                     chunks,
                     at(p.position),
                 )
-                && let Some(a) = p.arrow.as_deref()
-                && let (Some(spawn_pos), Some(spawn_vel), Some((pitch, yaw))) =
-                    (a.spawn_pos, a.spawn_velocity, a.spawn_rot)
+                && let Some(joined) = fresh_projectile_pairing_state(p, kind, data, uuid)
             {
-                let mut joined = state(p.id, kind, at(spawn_pos), yaw, false);
-                joined.pitch = pitch;
-                joined.velocity = at(spawn_vel);
-                joined.needs_sync = p.needs_sync;
-                joined.data = data;
-                joined.uuid = uuid;
-                if a.on_fire() {
-                    joined.meta.push((0, serializer::BYTE, Value::Byte(1)));
-                }
-                match &p.kind {
-                    K::Arrow { critical, .. } => {
-                        push_arrow_meta(&mut joined.meta, *critical, a.no_physics, a.pierce, false);
-                        let color = p.arrow_effect_color();
-                        if color != -1 {
-                            joined.meta.push((11, serializer::INT, Value::Int(color)));
-                        }
-                    }
-                    K::Trident => {
-                        push_arrow_meta(&mut joined.meta, false, a.no_physics, 0, false);
-                        if a.pickup_item.has_any_enchantments() {
-                            joined
-                                .meta
-                                .push((12, serializer::BOOLEAN, Value::Bool(true)));
-                        }
-                    }
-                    _ => {}
-                }
                 hub.note_fresh_joined(&[joined]);
             }
         }
@@ -1219,6 +1217,50 @@ fn push_arrow_meta(
     }
 }
 
+fn fresh_projectile_pairing_state(
+    p: &sunrise_sim::projectiles::Projectile,
+    kind: &str,
+    data: i32,
+    uuid: u128,
+) -> Option<EntityState> {
+    use sunrise_sim::projectiles::ProjectileKind as K;
+    let a = p.arrow.as_deref()?;
+    let (Some(spawn_pos), Some(spawn_vel), Some((pitch, yaw))) =
+        (a.spawn_pos, a.spawn_velocity, a.spawn_rot)
+    else {
+        return None;
+    };
+    let at = |p: sunrise_core::geometry::Vec3| [p.x, p.y, p.z];
+    let mut joined = state(p.id, kind, at(spawn_pos), yaw, false);
+    joined.pitch = pitch;
+    joined.velocity = at(spawn_vel);
+    joined.needs_sync = p.needs_sync;
+    joined.data = data;
+    joined.uuid = uuid;
+    if a.on_fire() {
+        joined.meta.push((0, serializer::BYTE, Value::Byte(1)));
+    }
+    match &p.kind {
+        K::Arrow { critical, .. } => {
+            push_arrow_meta(&mut joined.meta, *critical, a.no_physics, a.pierce, false);
+            let color = p.arrow_effect_color();
+            if color != -1 {
+                joined.meta.push((11, serializer::INT, Value::Int(color)));
+            }
+        }
+        K::Trident => {
+            push_arrow_meta(&mut joined.meta, false, a.no_physics, 0, false);
+            if a.pickup_item.has_any_enchantments() {
+                joined
+                    .meta
+                    .push((12, serializer::BOOLEAN, Value::Bool(true)));
+            }
+        }
+        _ => {}
+    }
+    Some(joined)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -1239,6 +1281,528 @@ mod tests {
         assert_eq!(assign_entity_id(&mut next, &mut later), 44);
         assert_eq!(roots, returned);
         assert_eq!(next, 44);
+    }
+
+    #[test]
+    fn provisional_placement_and_decoded_id_commit_have_distinct_policies() {
+        let mut next = 40;
+        let candidate = candidate_entity_id(next);
+        assert_eq!(next, 40);
+        assert_eq!(candidate, 41);
+        assert_eq!(commit_next_entity_id(&mut next), 41);
+        assert_eq!(commit_next_entity_id(&mut next), 42);
+
+        let mut next = 40;
+        let decoded_id = candidate_entity_id(next);
+        advance_entity_id_counter(&mut next);
+        advance_entity_id_counter(&mut next);
+        commit_decoded_entity_id(&mut next, decoded_id);
+        assert_eq!(next, decoded_id);
+    }
+
+    #[test]
+    fn pending_crystal_publishes_only_after_assignment_and_keeps_its_join() {
+        use sunrise_core::geometry::Vec3;
+        use sunrise_gameplay_common::game::dragon_common::Crystal;
+        use sunrise_sim::join_seq::{
+            JoinList,
+            residency::{Change, Identity, Journal, Kind, Owner},
+        };
+
+        let journal = Journal::default();
+        let owner = Owner {
+            dimension: mod_api::DimensionKey::OVERWORLD,
+            kind: Kind::Crystal,
+        };
+        let mut crystals = JoinList::<Crystal>::default();
+        crystals.bind_residency(&journal, owner, |c| (c.id, c.join));
+        crystals.push(Crystal::new(0, Vec3::ZERO, false, 0));
+        let join = crystals[0].join;
+        assert!(join.is_joined());
+        let mut events = Vec::new();
+        journal.drain_into(&mut events);
+        assert!(events.is_empty());
+
+        let mut next = 40;
+        crate::game::entity_residency::assign_resident_ids!(crystals, c, &mut next, None);
+        journal.drain_into(&mut events);
+        assert_eq!(events.len(), 1);
+        assert_eq!(events[0].owner, owner);
+        assert_eq!(
+            events[0].change,
+            Change::Spawned(Identity::new(41, join).unwrap())
+        );
+        assert_eq!(crystals[0].join, join);
+
+        let stamp = crystals.stamp();
+        events.clear();
+        crate::game::entity_residency::assign_resident_ids!(crystals, c, &mut next, None);
+        journal.drain_into(&mut events);
+        assert!(events.is_empty());
+        assert_eq!(crystals.stamp(), stamp);
+        assert_eq!(next, 41);
+    }
+
+    #[test]
+    fn fresh_arrow_pairing_uses_launch_state_only_when_complete() {
+        use sunrise_core::geometry::Vec3;
+        use sunrise_sim::projectiles::{Projectile, ProjectileKind};
+
+        let mut p = Projectile::new(
+            ProjectileKind::Arrow {
+                base_damage: 2.0,
+                critical: true,
+                effect: Some(("minecraft:poison", 0)),
+            },
+            Vec3::new(8.0, 9.0, 10.0),
+            None,
+        );
+        p.id = 41;
+        p.stuck = true;
+        p.needs_sync = true;
+        let a = p.arrow.as_deref_mut().unwrap();
+        a.in_ground = true;
+        a.fire_ticks = 10;
+        a.spawn_pos = Some(Vec3::new(1.0, 2.0, 3.0));
+        a.spawn_velocity = Some(Vec3::new(4.0, 5.0, 6.0));
+        assert!(fresh_projectile_pairing_state(&p, "minecraft:arrow", 42, 43).is_none());
+
+        p.arrow.as_deref_mut().unwrap().spawn_rot = Some((30.0, 60.0));
+        let joined = fresh_projectile_pairing_state(&p, "minecraft:arrow", 42, 43).unwrap();
+        assert_eq!(joined.position, [1.0, 2.0, 3.0]);
+        assert_eq!(joined.velocity, [4.0, 5.0, 6.0]);
+        assert_eq!((joined.pitch, joined.yaw), (30.0, 60.0));
+        assert_eq!((joined.id, joined.data, joined.uuid), (41, 42, 43));
+        assert!(joined.needs_sync);
+        assert!(!joined.on_ground);
+        assert!(joined.meta.contains(&(0, serializer::BYTE, Value::Byte(1))));
+        assert!(joined.meta.contains(&(8, serializer::BYTE, Value::Byte(1))));
+        assert!(joined.meta.iter().all(|(id, _, _)| *id != 10));
+        assert!(joined.meta.iter().any(|(id, _, _)| *id == 11));
+
+        p.kind = ProjectileKind::Trident;
+        p.arrow
+            .as_deref_mut()
+            .unwrap()
+            .pickup_item
+            .enchant("minecraft:loyalty", 1);
+        let joined = fresh_projectile_pairing_state(&p, "minecraft:trident", 42, 43).unwrap();
+        assert!(
+            joined
+                .meta
+                .contains(&(12, serializer::BOOLEAN, Value::Bool(true)))
+        );
+        assert!(
+            joined
+                .meta
+                .iter()
+                .all(|(id, _, _)| !matches!(*id, 8 | 10 | 11))
+        );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn pending_dragon_and_parts_publish_before_crystals() {
+        use sunrise_core::geometry::Vec3;
+        use sunrise_gameplay_common::game::dragon_common::{Crystal, Dragon};
+        use sunrise_sim::join_seq::residency::Change;
+
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            let next = game.server.next_entity;
+            let journal = game.common.resident_entities.table.borrow().producer();
+            let mut events = Vec::new();
+            journal.drain_into(&mut events);
+            events.clear();
+            game.common.dragon.replace(Dragon::new(Vec3::ZERO, 0.0, 7));
+            game.common
+                .crystals
+                .push(Crystal::new(0, Vec3::ZERO, false, 0));
+            let dragon_join = game.common.dragon.as_ref().unwrap().join;
+            let crystal_join = game.common.crystals[0].join;
+            game.assign_dragon_and_crystal_ids();
+            assert_eq!(game.common.dragon.as_ref().unwrap().id, next + 1);
+            assert_eq!(game.common.crystals[0].id, next + 10);
+            assert_eq!(game.server.next_entity, next + 10);
+            journal.drain_into(&mut events);
+            let spawned: Vec<_> = events
+                .iter()
+                .filter_map(|event| match event.change {
+                    Change::Spawned(identity) => Some((identity.id.get(), identity.join)),
+                    _ => None,
+                })
+                .collect();
+            let mut expected: Vec<_> = (next + 1..=next + 9).map(|id| (id, dragon_join)).collect();
+            expected.push((next + 10, crystal_join));
+            assert_eq!(spawned, expected);
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn lan_ids_keep_family_and_unbound_vector_order() {
+        use sunrise_core::{geometry::Vec3, random::LegacyRandom};
+        use sunrise_gameplay_common::game::{
+            FallingBlock,
+            dragon_common::{Breath, Crystal},
+            fireworks::Rocket,
+            lightning_common::Bolt,
+            potions_common::ThrownPotion,
+            tnt_common::PrimedTnt,
+        };
+        use sunrise_items::items::ItemStack;
+        use sunrise_sim::{
+            projectiles::{Projectile, ProjectileKind},
+            thrown_trident::ThrownTrident,
+        };
+
+        crate::game::native_entity_refs::tests::with_game(|game| {
+            let journal = game.common.resident_entities.table.borrow().producer();
+            let mut events = Vec::new();
+            journal.drain_into(&mut events);
+            events.clear();
+
+            game.common.tnts.push(PrimedTnt {
+                size_answer: None,
+                attachment_lifetime: Default::default(),
+                rotation: [0.0; 2],
+                join: Default::default(),
+                no_gravity: false,
+                id: 0,
+                position: Vec3::ZERO,
+                previous: Vec3::ZERO,
+                velocity: Vec3::ZERO,
+                fuse: 80,
+                ticks: 0,
+                ground: Default::default(),
+                fall_distance: 0.0,
+                stuck: Vec3::ZERO,
+                in_water: false,
+                owner: None,
+                guest: None,
+                power: 4.0,
+                used_portal: false,
+                block_state: None,
+            });
+            game.common.falling.push(FallingBlock {
+                size_answer: None,
+                attachment_lifetime: Default::default(),
+                rotation: [0.0; 2],
+                join: Default::default(),
+                id: 0,
+                state: game.common.world.air,
+                blocks_building: false,
+                start_pos: Default::default(),
+                position: Vec3::ZERO,
+                previous: Vec3::ZERO,
+                velocity: Vec3::ZERO,
+                age: 0,
+                no_gravity: false,
+                portal: Default::default(),
+                drop_item: false,
+                fall_distance: 0.0,
+                ground: Default::default(),
+                fire_ticks: 0,
+                sync_velocity: false,
+                stuck: Vec3::ZERO,
+                damage: Default::default(),
+                saved: None,
+            });
+            game.common.creatures.projectiles.push(Projectile::new(
+                ProjectileKind::Snowball,
+                Vec3::ZERO,
+                None,
+            ));
+            game.common
+                .tridents
+                .push(ThrownTrident::remote(0, Vec3::ZERO, 0.0, 0.0));
+            game.common
+                .rockets
+                .push(Rocket::remote(0, Vec3::ZERO, Vec3::ZERO));
+            game.common
+                .crystals
+                .push(Crystal::new(0, Vec3::ZERO, false, 0));
+            game.common.bolts.push(Bolt::new(0, [0.0; 3], false).0);
+            game.common.add_remote_ominous_item_spawner(0, [0.0; 3]);
+            game.common.potions.thrown.push(ThrownPotion {
+                id: 0,
+                stack: ItemStack::new("minecraft:splash_potion", 1),
+                previous: Vec3::ZERO,
+                position: Vec3::ZERO,
+                velocity: Vec3::ZERO,
+                age: 0,
+                owner: None,
+                thrower: None,
+                guest: None,
+                left_owner: false,
+                last_deflected_by: None,
+                random: LegacyRandom::new(0),
+            });
+            game.common.end.add_remote_eye(0, [0.0; 3], [0.0; 3]);
+            game.common.breath_clouds.push(Breath {
+                attachment_lifetime: Default::default(),
+                join: Default::default(),
+                id: 0,
+                at: [0.0; 3],
+                motion: [0.0; 3],
+                fall_distance: 0.0,
+                fire_ticks: 0,
+                first_tick: true,
+                radius: 3.0,
+                age: 0,
+                duration: 20,
+                from_dragon: true,
+                victims: Vec::new(),
+                potion: None,
+            });
+            journal.drain_into(&mut events);
+            assert!(events.is_empty());
+
+            let next = game.server.next_entity;
+            game.lan_assign_ids();
+            let ids = [
+                game.common.tnts[0].id,
+                game.common.falling[0].id,
+                game.common.creatures.projectiles[0].id,
+                game.common.tridents[0].id,
+                game.common.rockets[0].id,
+                game.common.crystals[0].id,
+                game.common.bolts[0].id,
+                game.common.ominous_spawners[0].id,
+                game.common.potions.thrown[0].id,
+                game.common.end.eyes_tracked().next().unwrap().0,
+                game.common.breath_clouds[0].id,
+            ];
+            assert_eq!(ids, std::array::from_fn(|index| next + index as u32 + 1));
+            assert_eq!(game.server.next_entity, next + 11);
+            journal.drain_into(&mut events);
+            let published: Vec<_> = events
+                .iter()
+                .map(|event| match event.change {
+                    sunrise_sim::join_seq::residency::Change::Spawned(identity) => {
+                        identity.id.get()
+                    }
+                    other => panic!("unexpected structural event {other:?}"),
+                })
+                .collect();
+            assert_eq!(
+                published,
+                ids.into_iter().take(8).chain([ids[10]]).collect::<Vec<_>>()
+            );
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn hanging_veto_keeps_frame_id_but_consumes_painting_id() {
+        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_resident_game};
+        use sunrise_gameplay_common::game::GameGameExt1 as _;
+        use sunrise_items::items::ItemStack;
+
+        struct Veto(std::sync::Arc<std::sync::Mutex<Vec<String>>>);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Veto {
+            fn hanging_place(
+                &self,
+                _: &mut dyn mod_api::ServerHost,
+                event: &mut mod_api::HangingPlaceEvent<'_>,
+            ) -> mod_api::Flow {
+                self.0.lock().unwrap().push(event.kind.to_owned());
+                mod_api::Flow::Cancel
+            }
+        }
+
+        if run_fresh_cases(
+            "game::server_side::lan_entities::tests::hanging_veto_keeps_frame_id_but_consumes_painting_id",
+            "SUNRISE_HANGING_ID_CHILD",
+            &["veto"],
+        ) {
+            return;
+        }
+        let heard = std::sync::Arc::new(std::sync::Mutex::new(Vec::new()));
+        let entry = mod_api::ModEntry::new("hanging-id", Box::new(Veto(heard.clone())));
+        mod_platform::testing::with_mods(std::sync::Arc::from([entry]), || {
+            with_resident_game(|game| {
+                for y in 65..=75 {
+                    for x in 2..=12 {
+                        game.set_state_named([x, y, 5], "minecraft:stone", &[])
+                            .unwrap();
+                    }
+                }
+                game.server.lan_acting_uuid = Some(17);
+                game.server.lan_acting_name = Some("guest".into());
+                let hit = sunrise_gameplay_common::hit::Hit {
+                    pos: [7, 70, 5],
+                    face: [0, 0, 1],
+                    point: [7.5, 70.5, 6.0],
+                    inside: false,
+                };
+                let next = game.server.next_entity;
+                assert!(game.place_item_frame(&hit, &ItemStack::new("minecraft:item_frame", 1)));
+                assert_eq!(game.server.next_entity, next);
+                assert!(game.common.item_frames.is_empty());
+                assert!(game.place_painting(&hit, &ItemStack::new("minecraft:painting", 1)));
+                assert_eq!(game.server.next_entity, next + 1);
+                assert!(game.common.paintings.is_empty());
+                assert_eq!(
+                    &*heard.lock().unwrap(),
+                    &["minecraft:item_frame", "minecraft:painting"]
+                );
+            });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn saved_constructor_observes_its_family_install_boundary() {
+        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_resident_game};
+        use mod_api::{
+            EntityConstructingEvent, EntityRef, EntityResidency, Holder, HostSide, WorldEpoch,
+        };
+        use std::sync::{Arc, Mutex};
+        use sunrise_core::nbt::parse_snbt;
+
+        type Observations = (Option<WorldEpoch>, Vec<(String, EntityResidency)>);
+        struct Observe(Arc<Mutex<Observations>>);
+        #[mod_api::__subscriptions]
+        impl mod_api::Hooks for Observe {
+            fn entity_constructing(
+                &self,
+                host: HostSide<'_>,
+                event: &mut EntityConstructingEvent<'_>,
+            ) {
+                let (HostSide::Server(host), Holder::Entity(id)) = (host, event.holder) else {
+                    return;
+                };
+                let Some(epoch) = self.0.lock().unwrap().0 else {
+                    return;
+                };
+                let residency = EntityRef::new(epoch, id).residency(host);
+                self.0
+                    .lock()
+                    .unwrap()
+                    .1
+                    .push((event.kind.to_owned(), residency));
+            }
+        }
+
+        if run_fresh_cases(
+            "game::server_side::lan_entities::tests::saved_constructor_observes_its_family_install_boundary",
+            "SUNRISE_SAVED_ADMISSION_CHILD",
+            &["order"],
+        ) {
+            return;
+        }
+        let seen = Arc::new(Mutex::new((None, Vec::new())));
+        let entry = mod_api::ModEntry::new("saved-admission", Box::new(Observe(seen.clone())));
+        mod_platform::testing::with_mods(Arc::from([entry]), || {
+            with_resident_game(|game| {
+                seen.lock().unwrap().0 = Some(game.common.native_lifecycle.epoch().unwrap());
+                let tag = |kind, extra| {
+                    parse_snbt(&format!("{{id:'minecraft:{kind}',Pos:[1d,70d,1d]{extra}}}"))
+                        .unwrap()
+                        .0
+                };
+                game.load_armor_stand(tag("armor_stand", ""), Some([1, 0, 0, 0]));
+                game.load_arrow(tag("arrow", ""), Some([2, 0, 0, 0]), None);
+                game.load_falling(
+                    tag("falling_block", ",BlockState:{Name:'minecraft:sand'}"),
+                    Some([3, 0, 0, 0]),
+                );
+                game.load_tnt(tag("tnt", ""), Some([4, 0, 0, 0]));
+                game.load_unlisted(
+                    (0, 0),
+                    "minecraft:evoker_fangs",
+                    Some([5, 0, 0, 0]),
+                    tag("evoker_fangs", ""),
+                )
+                .unwrap();
+                game.load_item_frame(tag("item_frame", ""), Some([6, 0, 0, 0]));
+                game.load_item(
+                    tag("item", ",Item:{id:'minecraft:stone',count:1}"),
+                    Some([7, 0, 0, 0]),
+                );
+                game.load_spit_or_bullet(tag("llama_spit", ""), Some([8, 0, 0, 0]), None);
+                game.load_fireball(tag("small_fireball", ""), Some([9, 0, 0, 0]), None);
+                game.load_throwable(tag("snowball", ""), Some([10, 0, 0, 0]), None);
+                game.load_trident(tag("trident", ""), Some([11, 0, 0, 0]));
+                game.load_rocket(tag("firework_rocket", ""), Some([12, 0, 0, 0]), None);
+                assert_eq!(
+                    seen.lock()
+                        .unwrap()
+                        .1
+                        .iter()
+                        .map(|(kind, state)| (kind.as_str(), *state))
+                        .collect::<Vec<_>>(),
+                    [
+                        ("minecraft:armor_stand", EntityResidency::Gone),
+                        ("minecraft:arrow", EntityResidency::Gone),
+                        ("minecraft:falling_block", EntityResidency::Gone),
+                        ("minecraft:tnt", EntityResidency::InPlace),
+                        ("minecraft:evoker_fangs", EntityResidency::InPlace),
+                        ("minecraft:item_frame", EntityResidency::Gone),
+                        ("minecraft:item", EntityResidency::Gone),
+                        ("minecraft:llama_spit", EntityResidency::Gone),
+                        ("minecraft:small_fireball", EntityResidency::Gone),
+                        ("minecraft:snowball", EntityResidency::Gone),
+                        ("minecraft:trident", EntityResidency::InPlace),
+                        ("minecraft:firework_rocket", EntityResidency::InPlace),
+                    ],
+                );
+            });
+        });
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn player_and_dispenser_install_configured_armor_stands() {
+        use sunrise_core::{
+            geometry::Direction,
+            nbt::{Tag, parse_snbt},
+        };
+        use sunrise_gameplay_common::{game::GameGameExt1 as _, hit::Hit};
+        use sunrise_items::items::ItemStack;
+
+        crate::game::native_entity_refs::tests::with_resident_game(|game| {
+            let mut stack = ItemStack::new("minecraft:armor_stand", 1);
+            let (entity_data, _) = parse_snbt("{id:'minecraft:armor_stand',Small:1b}").unwrap();
+            stack
+                .data_mut()
+                .set_other("minecraft:entity_data", Some(entity_data));
+            stack.data_mut().custom_name = Some(Tag::String("Configured stand".into()));
+            game.common.creative = true;
+            game.set_state_named([5, 69, 5], "minecraft:stone", &[])
+                .unwrap();
+            let next = game.server.next_entity;
+            let hit = Hit {
+                pos: [5, 69, 5],
+                face: [0, 1, 0],
+                point: [5.5, 70.0, 5.5],
+                inside: false,
+            };
+            assert!(game.place_armor_stand(&hit, &stack));
+            assert_eq!(
+                game.common
+                    .persist
+                    .raw
+                    .get(&(next + 1))
+                    .and_then(|tag| tag.get("Small")),
+                Some(&Tag::Byte(1))
+            );
+
+            game.dispense_armor_stand((8, 70, 5), Direction::East, stack);
+            assert_eq!(game.server.next_entity, next + 2);
+            let [placed, dispensed] = [&game.common.armor_stands[0], &game.common.armor_stands[1]];
+            assert_eq!((placed.id, dispensed.id), (next + 1, next + 2));
+            assert!(placed.join < dispensed.join);
+            for stand in [placed, dispensed] {
+                assert!(stand.small);
+                assert_eq!(
+                    stand.custom_name.as_ref().unwrap().plain(),
+                    "Configured stand"
+                );
+                assert!(game.common.persist.uuids.contains_key(&stand.id));
+            }
+        });
     }
 
     #[test]

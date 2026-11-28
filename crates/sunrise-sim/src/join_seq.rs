@@ -93,6 +93,12 @@ pub enum RestoreOrder {
     SpawnsFirst,
 }
 
+/// Bound [`visibility::Lease`] or process-wide [`visibility::PassLease`] across an extraction.
+#[derive(Debug)]
+pub struct ExtractionLease {
+    _lease: Result<visibility::Lease, visibility::PassLease>,
+}
+
 /// Implements [`Joined`] for a struct with a `join: JoinSeq` field.
 #[macro_export]
 macro_rules! impl_joined {
@@ -301,6 +307,11 @@ impl<T> ResidentSlot<T> {
     }
     pub fn finish_loan(&self) {
         self.emit_current(residency::Change::PutBack);
+    }
+    /// Begin loaning out `self`'s current owner and swap in an already-loaned slot.
+    pub fn swap_in_loan(&mut self, incoming: &mut Self) {
+        self.begin_loan();
+        std::mem::swap(self, incoming);
     }
     /// Report the existing allocator's delayed zero-to-live id assignment.
     pub fn id_assigned(&self) {
@@ -526,6 +537,14 @@ impl<T, const DIRECT: bool> JoinList<T, DIRECT> {
     /// so its caller must hold this across put_back OR permanent retirement.
     pub fn visibility_lease(&self) -> Option<visibility::Lease> {
         self.3.as_ref().map(|b| b.sink.enter())
+    }
+    /// Acquire the bound visibility lease, or a process-wide pass lease when unbound.
+    pub fn extraction_lease(&self) -> ExtractionLease {
+        ExtractionLease {
+            _lease: self
+                .visibility_lease()
+                .ok_or_else(visibility::PassLease::enter),
+        }
     }
     /// This list's identity and write generation. Any mutable element access or
     /// structural operation invalidates earlier stamps, even if it is a no-op.
@@ -1025,6 +1044,15 @@ impl<T: Joined, const DIRECT: bool> JoinList<T, DIRECT> {
         if let Some(binding) = &self.1 {
             binding.entity(&self.0[index], residency::Change::PutBack);
         }
+    }
+    /// Move an existing numbered owner to the end without retiring its identity.
+    pub fn reposition_to_end(&mut self, join: JoinSeq) -> bool {
+        let Some(owner) = self.extract(join) else {
+            return false;
+        };
+        let end = self.len();
+        self.put_back(end, owner);
+        true
     }
 
     fn number(entity: &mut T) {
@@ -1977,6 +2005,64 @@ mod tests {
     }
 
     #[test]
+    fn list_and_slot_publish_removals_before_dropping_owners() {
+        use residency::Change::Remove;
+        use std::rc::Rc;
+
+        struct Owner {
+            id: u32,
+            join: JoinSeq,
+            journal: residency::Journal,
+            on_drop: Rc<std::cell::RefCell<Vec<(u32, Vec<residency::Change>)>>>,
+        }
+        impl Joined for Owner {
+            fn join_seq(&self) -> JoinSeq {
+                self.join
+            }
+            fn set_join_seq(&mut self, join: JoinSeq) {
+                self.join = join;
+            }
+        }
+        impl Drop for Owner {
+            fn drop(&mut self) {
+                self.on_drop
+                    .borrow_mut()
+                    .push((self.id, changes(&self.journal)));
+            }
+        }
+        let journal = residency::Journal::default();
+        let on_drop = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let owner = |id| Owner {
+            id,
+            join: JoinSeq::UNJOINED,
+            journal: journal.clone(),
+            on_drop: on_drop.clone(),
+        };
+
+        let mut list = JoinList::<Owner>::default();
+        list.bind_residency(&journal, journal_owner(), |row| (row.id, row.join));
+        list.push(owner(1));
+        list.push(owner(2));
+        let first = residency::Identity::new(1, list[0].join).unwrap();
+        let second = residency::Identity::new(2, list[1].join).unwrap();
+        changes(&journal);
+        drop(list);
+        assert_eq!(
+            *on_drop.borrow(),
+            [(1, vec![Remove(first), Remove(second)]), (2, vec![])]
+        );
+
+        on_drop.borrow_mut().clear();
+        let mut slot = ResidentSlot::default();
+        slot.bind_residency(&journal, journal_owner(), |row: &Owner| (row.id, row.join));
+        assert!(slot.install(owner(3)).is_ok());
+        let third = residency::Identity::new(3, slot.as_ref().unwrap().join).unwrap();
+        changes(&journal);
+        drop(slot);
+        assert_eq!(*on_drop.borrow(), [(3, vec![Remove(third)])]);
+    }
+
+    #[test]
     fn journal_singleton_replacement_and_extraction_have_distinct_terminals() {
         use residency::Change::{Extract, Install, PutBack, Remove};
         let journal = residency::Journal::default();
@@ -2270,6 +2356,291 @@ mod tests {
         journal.drain_into(&mut events);
         assert_eq!(events, expected);
         assert_eq!(target.iter().map(key).collect::<Vec<_>>(), keys);
+    }
+
+    #[test]
+    fn lift_restore_order_with_spawns_and_unwind_preserves_unbalanced_contract() {
+        use residency::Change::{Install, Lifted, Remove, Restored};
+        use residency::table::{EntityLookup, EntityTable, SourceEntity, UnbalancedPass};
+        for (order, expected) in [
+            (RestoreOrder::SurvivorsFirst, [1, 3, 99]),
+            (RestoreOrder::SpawnsFirst, [99, 1, 3]),
+        ] {
+            let (mut list, journal) = journal_list();
+            let sink = visibility::Visibility::default();
+            list.bind_visibility(&sink);
+            changes(&journal);
+            let removed = key(&list[1]);
+
+            let mut taken = list.lift();
+            assert!(!sink.settled());
+            let _ = taken.remove(1);
+            list.push(entity(99));
+            let spawned = key(&list[0]);
+            list.restore(taken, order);
+            assert!(sink.settled());
+
+            assert_eq!(list.iter().map(|e| e.value).collect::<Vec<_>>(), expected);
+            assert_eq!(
+                changes(&journal),
+                [Lifted, Remove(removed), Install(spawned), Restored]
+            );
+        }
+
+        let journal = residency::Journal::default();
+        let mut table = EntityTable::new(journal.clone());
+        let sink = visibility::Visibility::default();
+        let mut list: JoinList<_> = (1..=2).map(entity).collect();
+        list.bind_residency(&journal, journal_owner(), |e| (e.value, e.join));
+        list.bind_visibility(&sink);
+        let keys: Vec<_> = list.iter().map(key).collect();
+        let mut settled_during = None;
+        let mut before_remove = None;
+        let mut after_remove = None;
+        let panicked = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut taken = list.lift();
+            settled_during = Some(sink.settled());
+            before_remove = Some(table.entity_lookup(&journal_owner().dimension, 1, |_| None));
+            let _ = taken.remove(0);
+            after_remove = Some(table.entity_lookup(&journal_owner().dimension, 1, |_| None));
+            panic!("lifted pass panic");
+        }));
+        let payload = panicked.expect_err("lifted pass must unwind");
+        assert_eq!(payload.downcast_ref::<&str>(), Some(&"lifted pass panic"));
+        assert_eq!(settled_during, Some(false));
+        assert_eq!(before_remove, Some(EntityLookup::<u32>::Taken));
+        assert_eq!(after_remove, Some(EntityLookup::<u32>::Missing));
+        assert!(sink.settled());
+        assert!(list.is_empty());
+        assert_eq!(
+            table.entity_lookup(&journal_owner().dimension, keys[1].id.get(), |at| {
+                list.locate(at.join).map(|i| SourceEntity {
+                    id: list[i].value,
+                    value: list[i].value,
+                })
+            }),
+            EntityLookup::Missing
+        );
+        let end_tick = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| table.end_tick()));
+        assert_eq!(end_tick.is_err(), cfg!(debug_assertions));
+        if let Ok(result) = end_tick {
+            assert_eq!(
+                result,
+                Err(UnbalancedPass {
+                    extractions: 0,
+                    lifts: 1
+                })
+            );
+        }
+        table.end_tick().unwrap();
+
+        let r_journal = residency::Journal::default();
+        let r_sink = visibility::Visibility::default();
+        let mut r_list: ResidentList<_> = (1..=2).map(entity).collect();
+        r_list.bind_residency(&r_journal, journal_owner(), |e| (e.value, e.join));
+        r_list.bind_visibility(&r_sink);
+        changes(&r_journal);
+        let taken = r_list.lift();
+        assert!(!r_sink.settled());
+        r_list.push(entity(9));
+        let spawned = key(&r_list[0]);
+        r_list.restore(taken, RestoreOrder::SpawnsFirst);
+        assert!(r_sink.settled());
+        assert_eq!(
+            r_list.iter().map(|e| e.value).collect::<Vec<_>>(),
+            [9, 1, 2]
+        );
+        assert_eq!(changes(&r_journal), [Lifted, Install(spawned), Restored]);
+    }
+
+    #[test]
+    fn extraction_lease_and_reposition_match_raw_protocol() {
+        use residency::Change::{Extract, PutBack, Remove};
+        use residency::table::{EntityLookup, EntityTable, SourceEntity};
+        let journal = residency::Journal::default();
+        let observer = journal.observe_structural_events();
+        let sink = visibility::Visibility::default();
+        let mut table = EntityTable::new(journal.clone());
+        let mut list: JoinList<_> = (1..=3).map(entity).collect();
+        list.bind_residency(&journal, journal_owner(), |e| (e.value, e.join));
+        list.bind_visibility(&sink);
+        let keys: Vec<_> = list.iter().map(key).collect();
+        let mut discard = Vec::new();
+        observer.drain_into(&mut discard);
+
+        let lease = list.extraction_lease();
+        assert!(!sink.settled());
+        let writes_before = list.stamp().writes;
+        let taken = list.extract(keys[0].join).unwrap();
+        assert_eq!(list.stamp().writes, writes_before + 1);
+        assert_eq!(
+            table.entity_lookup(&journal_owner().dimension, 1, |at| {
+                list.locate(at.join).map(|i| SourceEntity {
+                    id: list[i].value,
+                    value: list[i].value,
+                })
+            }),
+            EntityLookup::Taken
+        );
+        list.put_back(0, taken);
+        assert_eq!(list.stamp().writes, writes_before + 2);
+        drop(lease);
+        assert!(sink.settled());
+
+        let unbound: JoinList<Entity> = JoinList::default();
+        drop(unbound.extraction_lease());
+
+        let writes_before = list.stamp().writes;
+        assert!(list.reposition_to_end(keys[0].join));
+        assert_eq!(list.stamp().writes, writes_before + 2);
+        assert_eq!(list.iter().map(|e| e.value).collect::<Vec<_>>(), [2, 3, 1]);
+        assert!(!list.reposition_to_end(JoinSeq::UNJOINED));
+        assert_eq!(list.stamp().writes, writes_before + 3);
+
+        let writes_before = list.stamp().writes;
+        let _retired = list.extract(keys[1].join).unwrap();
+        assert_eq!(list.stamp().writes, writes_before + 1);
+        list.retire_extracted(2, keys[1].join);
+        assert_eq!(list.stamp().writes, writes_before + 1);
+        assert_eq!(
+            table.entity_lookup(&journal_owner().dimension, 2, |_| None),
+            EntityLookup::<u32>::Missing
+        );
+        let mut events = Vec::new();
+        observer.drain_into(&mut events);
+        assert_eq!(
+            events.into_iter().map(|e| e.change).collect::<Vec<_>>(),
+            [
+                Extract(keys[0]),
+                PutBack(keys[0]),
+                Extract(keys[0]),
+                PutBack(keys[0]),
+                Extract(keys[1]),
+                Remove(keys[1]),
+            ]
+        );
+        table.end_tick().unwrap();
+    }
+
+    #[test]
+    fn slot_swap_in_loan_and_member_preserve_guest_turn_marker_order() {
+        use residency::Change::{Extract, PutBack};
+        use residency::table::{EntityLookup, EntityTable, SourceEntity};
+        use residency::{Kind, Owner, Source};
+        let journal = residency::Journal::default();
+        let observer = journal.observe_structural_events();
+        let mut table = EntityTable::new(journal.clone());
+        let dim = mod_api::DimensionKey::OVERWORLD;
+        let player_owner = Owner {
+            dimension: dim,
+            kind: Kind::Player,
+        };
+        let hook_owner = Owner {
+            dimension: dim,
+            kind: Kind::Hook,
+        };
+        let mut outer_actor = residency::member::Member::default();
+        outer_actor.bind(&journal, player_owner, 1, Source::LocalPlayer, None);
+        let mut guest_actor = residency::member::Member::default();
+        guest_actor.bind(&journal, player_owner, 2, Source::Guest(7), None);
+
+        let mut active_hook = ResidentSlot::default();
+        active_hook.bind_residency_specialized(
+            &journal,
+            hook_owner,
+            |e: &Entity| (e.value, e.join),
+            Source::Hook { caster: None },
+            None,
+            None,
+        );
+        active_hook.replace(entity(11));
+
+        let mut guest_hook = ResidentSlot::default();
+        guest_hook.bind_residency_specialized(
+            &journal,
+            hook_owner,
+            |e: &Entity| (e.value, e.join),
+            Source::Hook { caster: Some(7) },
+            None,
+            None,
+        );
+        guest_hook.replace(entity(12));
+
+        let outer_id = outer_actor.identity().unwrap();
+        let guest_id = guest_actor.identity().unwrap();
+        let outer_hook_id =
+            key(active_hook.as_ref().unwrap()).at_source(Source::Hook { caster: None });
+        let guest_hook_id =
+            key(guest_hook.as_ref().unwrap()).at_source(Source::Hook { caster: Some(7) });
+        table.drain();
+        let mut discard = Vec::new();
+        observer.drain_into(&mut discard);
+
+        // Entry bracket in turns_server.rs order.
+        guest_actor.extract();
+        guest_hook.begin_loan();
+        outer_actor.extract();
+        active_hook.swap_in_loan(&mut guest_hook);
+        guest_actor.put_back();
+        active_hook.finish_loan();
+
+        // Mid-loan handle states: guest actor/hook Found, outer actor/hook Taken.
+        assert!(matches!(
+            table.entity_lookup(&dim, 2, |at| {
+                (at.join == guest_actor.join()).then_some(SourceEntity { id: 2, value: 2 })
+            }),
+            EntityLookup::Found { value: 2, .. }
+        ));
+        assert!(matches!(
+            table.entity_lookup(&dim, 12, |at| {
+                active_hook
+                    .locate(at.join)
+                    .map(|_| SourceEntity { id: 12, value: 12 })
+            }),
+            EntityLookup::Found { value: 12, .. }
+        ));
+        assert_eq!(
+            table.entity_lookup(&dim, 1, |_| None),
+            EntityLookup::<u32>::Taken
+        );
+        assert_eq!(
+            table.entity_lookup(&dim, 11, |at| {
+                active_hook
+                    .locate(at.join)
+                    .map(|_| SourceEntity { id: 11, value: 11 })
+            }),
+            EntityLookup::Taken
+        );
+
+        // Exit bracket in turns_server.rs order.
+        guest_actor.extract();
+        active_hook.begin_loan();
+        std::mem::swap(&mut active_hook, &mut guest_hook);
+        guest_actor.put_back();
+        guest_hook.finish_loan();
+        outer_actor.put_back();
+        active_hook.finish_loan();
+
+        let mut events = Vec::new();
+        observer.drain_into(&mut events);
+        assert_eq!(
+            events.into_iter().map(|e| e.change).collect::<Vec<_>>(),
+            [
+                Extract(guest_id),
+                Extract(guest_hook_id),
+                Extract(outer_id),
+                Extract(outer_hook_id),
+                PutBack(guest_id),
+                PutBack(guest_hook_id),
+                Extract(guest_id),
+                Extract(guest_hook_id),
+                PutBack(guest_id),
+                PutBack(guest_hook_id),
+                PutBack(outer_id),
+                PutBack(outer_hook_id),
+            ]
+        );
+        table.end_tick().unwrap();
     }
 }
 

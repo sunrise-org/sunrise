@@ -6,6 +6,7 @@
 //! server's players, and in-frame on the window's own level. Clients get the
 //! new entities through the tracker, as any other.
 use crate::game::ServerGame;
+use crate::game::server_side::lan_entities::candidate_entity_id;
 use mod_api::{EntityRef, LevelRef};
 pub use sunrise_gameplay_common::game::spill_common as spill;
 use sunrise_items::items::ItemStack;
@@ -30,7 +31,7 @@ impl ServerGame<'_> {
         pickup_delay: i32,
     ) -> Option<EntityRef> {
         // `spawn_item` takes the next id.
-        let id = self.server.next_entity + 1;
+        let id = candidate_entity_id(self.server.next_entity);
         self.add_item_entity(stack, at, motion, pickup_delay);
         self.common
             .dropped

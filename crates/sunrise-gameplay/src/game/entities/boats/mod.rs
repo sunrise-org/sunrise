@@ -5,6 +5,7 @@
 pub(in crate::game) mod below_world;
 
 use super::InteractTarget;
+use crate::game::server_side::lan_entities::commit_next_entity_id;
 use std::sync::Arc;
 use sunrise_core::nbt::Tag;
 use sunrise_core::{
@@ -627,8 +628,7 @@ impl crate::game::ServerGame<'_> {
         let Some(mut boat) = self.boat_to_place(stack) else {
             return false;
         };
-        self.server.next_entity += 1;
-        boat.id = self.server.next_entity;
+        boat.id = commit_next_entity_id(&mut self.server.next_entity);
         let key = (
             boat.position.x.floor() as i32 >> 4,
             boat.position.z.floor() as i32 >> 4,

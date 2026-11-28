@@ -51,8 +51,7 @@ impl ServerGame<'_> {
                 .any(|mob| !mob.removed && mob.extra.mount == Some(id))
             && self.common.general_passengers(id).next().is_none()
         {
-            self.common.persist.removed_vehicles.remove(&id);
-            self.forget_entity(id);
+            self.retire_unreferenced_vehicle(id);
         }
     }
 

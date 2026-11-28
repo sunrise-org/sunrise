@@ -72,14 +72,14 @@ impl crate::game::ServerGame<'_> {
         // The pathfinder reads terrain only. Take the mob list so its selected
         // mob can be mutably borrowed alongside the shared MobWorld, just as
         // the mob tick does. No mod hook fires during pathfinding.
-        let mut mobs = self.common.mobs.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        let moved = mobs[index].nav_move_to(&self.mob_world_base(&[]), at, speed);
-        self.common
-            .mobs
-            .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
-        moved
+        self.with_lifted_mobs(
+            sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+            |game, mobs| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                mobs[index].nav_move_to(&game.mob_world_base(&[]), at, speed)
+            },
+        )
     }
 
     /// `PathNavigation.moveTo(Path, speed)`: follow a path the mod computed.
@@ -113,13 +113,14 @@ impl crate::game::ServerGame<'_> {
         // The pathfinder reads terrain only. Take the mob list so its selected
         // mob can be mutably borrowed alongside the shared MobWorld, as the
         // mob tick does. No mod hook fires during classification.
-        let mut mobs = self.common.mobs.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        let followed = mobs[index].nav_move_to_supplied(&self.mob_world_base(&[]), &nodes, speed);
-        self.common
-            .mobs
-            .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+        let followed = self.with_lifted_mobs(
+            sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+            |game, mobs| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                mobs[index].nav_move_to_supplied(&game.mob_world_base(&[]), &nodes, speed)
+            },
+        );
         supplied_path_refusal(followed)
     }
 

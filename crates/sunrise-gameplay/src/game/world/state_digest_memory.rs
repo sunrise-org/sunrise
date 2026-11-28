@@ -37,7 +37,7 @@ pub(super) fn level(
     retained(game, shared, items).append(out, "retained_entities");
     saved(game, shared).append(out, "entity_memory");
     let mut portals = Group::default();
-    for (&id, &state) in ordered(game.server.portals.entities.iter()) {
+    for (&id, &state) in ordered(game.server.portals.level.entities.iter()) {
         portal_values(state).hash(portals.row(id, JoinSeq::UNJOINED));
     }
     portals.append(out, "entity_portals");

@@ -158,29 +158,30 @@ impl ServerGame<'_> {
         else {
             return;
         };
-        let mut mobs = self.common.mobs.lift();
-        #[cfg(any(test, feature = "test-support"))]
-        crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
-        let w = self.mob_world_base(&[]);
-        for m in &mut mobs {
-            if m.species() == Species::Panda
-                && !m.is_baby()
-                && m.ground.on_ground
-                && !m.fluids.in_water
-                && panda::can_perform_action(m, panda::scared(m))
-                && area.intersects(m.bounds())
-            {
-                // LivingEntity.jumpFromGround.
-                m.needs_sync = true;
-                let power = f64::from(m.jump_power(&w));
-                if power > 1.0e-5 {
-                    m.velocity.y = power.max(m.velocity.y);
+        self.with_lifted_mobs(
+            sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
+            |game, mobs| {
+                #[cfg(any(test, feature = "test-support"))]
+                crate::game::server_side::entity_server::taken_pass_tests::after_take(game);
+                let w = game.mob_world_base(&[]);
+                for m in mobs.iter_mut() {
+                    if m.species() == Species::Panda
+                        && !m.is_baby()
+                        && m.ground.on_ground
+                        && !m.fluids.in_water
+                        && panda::can_perform_action(m, panda::scared(m))
+                        && area.intersects(m.bounds())
+                    {
+                        // LivingEntity.jumpFromGround.
+                        m.needs_sync = true;
+                        let power = f64::from(m.jump_power(&w));
+                        if power > 1.0e-5 {
+                            m.velocity.y = power.max(m.velocity.y);
+                        }
+                    }
                 }
-            }
-        }
-        self.common
-            .mobs
-            .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
+            },
+        );
     }
 }
 
