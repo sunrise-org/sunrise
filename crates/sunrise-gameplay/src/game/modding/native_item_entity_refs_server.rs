@@ -232,6 +232,7 @@ impl crate::game::ServerGame<'_> {
 }
 
 use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;
+use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt5 as _;
 use sunrise_gameplay_common::game::transactions::TransactionsGameExt as _;
 
@@ -862,10 +863,10 @@ mod tests {
         mod_platform::testing::with_mods(mods, || {
             with_game(|game| {
                 fixture_resident_column(&mut game.world, (0, 0));
-                game.player = Some(
-                    sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0))
-                        .unwrap(),
-                );
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    Vec3::new(3.0, 64.0, 5.0),
+                ));
                 crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
                 let player = game.player(123).unwrap();
                 game.server.xp_delay = 0;
@@ -987,10 +988,10 @@ mod tests {
         mod_platform::testing::with_mods(mods, || {
             with_game(|game| {
                 fixture_resident_column(&mut game.world, (0, 0));
-                game.player = Some(
-                    sunrise_sim::motion::PlayerMotion::new(game.motion, Vec3::new(3.0, 64.0, 5.0))
-                        .unwrap(),
-                );
+                game.player = Some(sunrise_sim::motion::PlayerMotion::new(
+                    game.motion,
+                    Vec3::new(3.0, 64.0, 5.0),
+                ));
                 crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
                 let player = game.player(123).unwrap();
                 for mode in [1, 2] {
