@@ -1404,21 +1404,7 @@ impl Guest {
     /// guest's body in its pose (crouching, swimming, gliding), with its
     /// `block_interaction_range` (4.5, 5 in creative, more with `/attribute`).
     pub fn may_reach_block(&mut self, pos: [i32; 3]) -> bool {
-        let eye = self
-            .motion
-            .as_ref()
-            .map_or_else(|| self.eye_height(), |m| f64::from(m.dimensions.eye_height));
-        let otherwise = if self.creative() { 5.0 } else { 4.5 };
-        let range = self
-            .motion
-            .as_mut()
-            .and_then(|m| m.attribute("minecraft:block_interaction_range").ok())
-            .unwrap_or(otherwise);
-        within_block_range(
-            [self.position[0], self.position[1] + eye, self.position[2]],
-            range + 1.0,
-            pos,
-        )
+        self.within_block_range(pos, 1.0)
     }
     /// The inventory menu's 46 slots (ServerPlayer.inventoryMenu): 0 crafting
     /// result, 1..=4 crafting grid, 5..=8 armor, 9..=35 main, 36..=44 hotbar,
