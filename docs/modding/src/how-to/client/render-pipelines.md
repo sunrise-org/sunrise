@@ -141,9 +141,10 @@ shader program under `assets/<namespace>/shaders/core/` with the same `sunrise-m
 layer the game uses, including SPIR-V (Vulkan), Metal (MSL), and DirectX 12 (HLSL) backend
 translation checks.
 
-When `SUNRISE_RESOURCES` points to your prepared 26.3 resources, `minecraft:` includes and
-vertex shaders are read directly from them. When prepared resources are absent (such as in CI or
-registry checks), the tool falls back to Sunrise-written interface-only stubs for `minecraft:*`
+When `SUNRISE_RESOURCES` is set, it must point to a prepared 26.3 resources directory (an invalid
+or missing path is refused rather than falling back to stubs); `minecraft:` includes and vertex
+shaders are read directly from it without stub fallback. When `SUNRISE_RESOURCES` is unset (such
+as in CI or registry checks), the tool uses Sunrise-written interface-only stubs for `minecraft:*`
 includes and standard vertex shaders so every interface error is still caught offline; the game's
 resource load remains the authority. Because the tool does not execute your Rust registration
 code, a `.fsh` with no `.vsh` beside it is checked against `minecraft:core/position_tex_color`,
