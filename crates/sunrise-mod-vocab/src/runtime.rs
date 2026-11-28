@@ -280,7 +280,11 @@ pub(crate) enum Callback {
     TooltipImage(usize),
     DamageReduction,
     Registration,
+    DataMapMerge,
+    DataMapRemove,
 }
+
+const EXTRA_CALLBACKS: usize = 4;
 
 impl From<generated::HookId> for Callback {
     fn from(hook: generated::HookId) -> Self {
@@ -289,12 +293,14 @@ impl From<generated::HookId> for Callback {
 }
 
 impl Callback {
-    fn index(self) -> usize {
+    pub(crate) fn index(self) -> usize {
         match self {
             Self::Hook(hook) | Self::IndependentHook(hook) => hook as usize,
             Self::TooltipImage(_) => HookId::TooltipImage as usize,
             Self::DamageReduction => generated::HOOK_COUNT,
             Self::Registration => generated::HOOK_COUNT + 1,
+            Self::DataMapMerge => generated::HOOK_COUNT + 2,
+            Self::DataMapRemove => generated::HOOK_COUNT + 3,
         }
     }
 
@@ -326,8 +332,9 @@ fn poison(callback: Callback, id: &'static str) -> bool {
 
 fn poison_installed(installed: &Installed, callback: Callback, id: &'static str) -> bool {
     let mut poisons = installed.poisons.lock().unwrap_or_else(|e| e.into_inner());
-    let sets = poisons
-        .get_or_insert_with(|| std::vec![None; generated::HOOK_COUNT + 2].into_boxed_slice());
+    let sets = poisons.get_or_insert_with(|| {
+        std::vec![None; generated::HOOK_COUNT + EXTRA_CALLBACKS].into_boxed_slice()
+    });
     let first = sets[callback.index()]
         .get_or_insert_with(std::collections::HashSet::new)
         .insert(callback.poison_key(id));
@@ -607,11 +614,8 @@ pub(crate) fn contain_callback<T>(
     }
 }
 
-/// Check the session's enablement for a callback identified across reloads or peers.
-// hidden: the game owns the session’s callback enablement and diagnostics.
-#[doc(hidden)]
-pub fn session_callback_enabled(
-    hook: generated::HookId,
+pub(crate) fn session_named_callback_enabled(
+    callback: Callback,
     owner: &'static str,
     id: &Identifier,
 ) -> bool {
@@ -624,16 +628,13 @@ pub fn session_callback_enabled(
                 .named_poison
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .get(&(hook as usize, owner))
+                .get(&(callback.index(), owner))
                 .is_some_and(|poisoned| poisoned.contains(id))
     })
 }
 
-/// Invoke an enabled named callback through the same failure boundary as a hook subscriber.
-// hidden: the game owns the session’s callback enablement and diagnostics.
-#[doc(hidden)]
-pub fn call_session_callback<T>(
-    hook: generated::HookId,
+pub(crate) fn call_session_named_callback<T>(
+    callback: Callback,
     owner: &'static str,
     id: &Identifier,
     operation: &'static str,
@@ -647,7 +648,7 @@ pub fn call_session_callback<T>(
                 .named_poison
                 .lock()
                 .unwrap_or_else(|e| e.into_inner())
-                .entry((hook as usize, owner))
+                .entry((callback.index(), owner))
                 .or_default()
                 .insert(id.clone())
         });
@@ -656,6 +657,30 @@ pub fn call_session_callback<T>(
         }
     })
     .ok_or_else(|| format!("mod {owner}: {operation} ({id}) panicked"))
+}
+
+/// Check the session's enablement for a callback identified across reloads or peers.
+// hidden: the game owns the session’s callback enablement and diagnostics.
+#[doc(hidden)]
+pub fn session_callback_enabled(
+    hook: generated::HookId,
+    owner: &'static str,
+    id: &Identifier,
+) -> bool {
+    session_named_callback_enabled(Callback::Hook(hook), owner, id)
+}
+
+/// Invoke an enabled named callback through the same failure boundary as a hook subscriber.
+// hidden: the game owns the session’s callback enablement and diagnostics.
+#[doc(hidden)]
+pub fn call_session_callback<T>(
+    hook: generated::HookId,
+    owner: &'static str,
+    id: &Identifier,
+    operation: &'static str,
+    call: impl FnOnce() -> T,
+) -> Result<T, String> {
+    call_session_named_callback(Callback::Hook(hook), owner, id, operation, call)
 }
 
 /// Retained wrappers may delegate engine paint. The engine's own panic keeps its usual policy.

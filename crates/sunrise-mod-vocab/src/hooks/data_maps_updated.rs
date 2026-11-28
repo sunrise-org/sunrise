@@ -7,15 +7,18 @@ pub trait Hooks {
     /// (`minecraft:item`, `minecraft:block`) and `cause` says how they arrived.
     /// A listener cannot cancel or change anything.
     ///
-    /// `ServerReload`: the server merged the values of the types mods registered
-    /// (`data_map_types`) from the world's data packs and mods' files.
-    /// Fires once for each registry that has a type, right after
+    /// `ServerReload`: the server merged the values of the data maps registered
+    /// during startup (`Registrar::register_data_map` /
+    /// `Registrar::register_data_map_by_name`) from the world's data packs and
+    /// mods' files. Fires once for each registry that has a map, right after
     /// `tags_updated`'s `ServerDataLoad` (tags are bound), on a world's first open
     /// and after every `/reload`. `context.data_map(...)`, `context.data_map_value(...)`
     /// and `context.data_map_entries(...)` read the new values.
     ///
-    /// `ClientSync`: data maps are server-side and not synced to clients, so
-    /// this cause does not fire; it comes with the sync.
+    /// `ClientSync`: the client received and installed a synced data-map snapshot
+    /// for `registry` from the server (on initial join and after every server
+    /// `/reload`). `context.data_map(...)`, `context.data_map_value(...)` and
+    /// `context.data_map_entries(...)` read the newly synced values.
     ///
     /// Receives a [`ReloadContext`] for published data queries; world handles and
     /// transactions are not present on this context.

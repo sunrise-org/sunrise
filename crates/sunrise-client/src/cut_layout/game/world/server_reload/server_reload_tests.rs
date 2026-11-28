@@ -1235,8 +1235,9 @@ fn server_completion_reads_published_data_without_world_access_on_first_open() {
 #[ignore = "daily"]
 fn data_maps_updated_fires_for_each_registry_on_first_open_and_every_reload() {
     use mod_api::{
-        BlockKey, DataMap, DataMapError, DataMapTypesEvent, DataMapsUpdateCause,
-        DataMapsUpdatedEvent, DataPackFilesEvent, ItemKey, ReloadContext, ServerHost, Tag,
+        BlockKey, DataMap, DataMapError, DataMapsUpdateCause, DataMapsUpdatedEvent,
+        DataPackFilesEvent, ItemKey, Registrar, RegistrationContext, ReloadContext, ServerHost,
+        Tag,
     };
     use std::sync::atomic::AtomicUsize;
 
@@ -1281,9 +1282,9 @@ fn data_maps_updated_fires_for_each_registry_on_first_open_and_every_reload() {
     }
     #[mod_api::__subscriptions]
     impl Hooks for Probe {
-        fn data_map_types(&self, _: &mut dyn ServerHost, event: &mut DataMapTypesEvent<'_>) {
-            event.types.push(FUEL.ty());
-            event.types.push(Hardness.ty());
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            r.register_data_map(FUEL);
+            r.register_data_map(Hardness);
         }
         fn data_pack_files(&self, _: &mut dyn ServerHost, event: &mut DataPackFilesEvent<'_>) {
             let load = self.loads.fetch_add(1, Ordering::SeqCst) + 1;

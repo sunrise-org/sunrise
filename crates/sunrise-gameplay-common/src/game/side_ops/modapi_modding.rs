@@ -242,6 +242,14 @@ pub trait ModapiModdingSideGameExt<'__sg>: crate::game::SideGame<'__sg> {
         <Self::State as SideOps>::side_received_registry_datapacks(self.side_state())
     }
 
+    #[inline(always)]
+    fn side_custom_tag_source<'s>(&'s self) -> crate::game::native_tags::CustomTagSource<'s>
+    where
+        '__sg: 's,
+    {
+        <Self::State as SideOps>::side_custom_tag_source(self.side_state())
+    }
+
     fn side_level_handle_current(&self, level: LevelRef) -> bool {
         <Self::State as SideOps>::side_level_handle_current(self, level)
     }
@@ -579,6 +587,9 @@ pub trait SideOps: Sized {
     ) -> Option<Arc<DatapackRegistrySet>>;
     fn side_received_registry_datapacks(&self) -> Option<Arc<DatapackRegistrySet>> {
         None
+    }
+    fn side_custom_tag_source(&self) -> crate::game::native_tags::CustomTagSource<'_> {
+        crate::game::native_tags::CustomTagSource::None
     }
     fn side_level_handle_current(game: &Self::Game<'_>, level: LevelRef) -> bool;
     fn side_level_is_raining_at(

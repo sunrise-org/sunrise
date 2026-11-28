@@ -814,7 +814,6 @@ mod stubs {
     pub(super) struct MerchantOffer;
     pub(super) struct ModFluidTanks;
     pub(super) struct ModEnergyBuffer;
-    pub(super) struct DataMapType;
     pub(super) struct MapDecoration;
     pub(super) struct MapInfo<'a>(pub &'a ());
     pub(super) struct PlayerRender<'a>(pub &'a ());

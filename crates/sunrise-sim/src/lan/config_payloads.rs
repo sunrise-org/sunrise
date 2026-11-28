@@ -59,6 +59,8 @@ pub(super) struct EngineChannels {
     pub viewed_levels: super::viewed_levels::capability::Capability,
     /// Its `sunrise:menu_extra` revision answer.
     pub menu_extra_rev: super::menu_extra_rev::Capability,
+    /// Its `sunrise:data_map_known_reply` answer, if received during configuration.
+    pub known_data_maps: Option<crate::data_map_net::KnownDataMaps>,
 }
 impl EngineChannels {
     /// Whether `payload` was one of these channels' and is taken, or the reason that closes the
@@ -82,6 +84,10 @@ impl EngineChannels {
             self.menu_extra_rev
                 .receive(&payload.data)
                 .map_err(|error| error.to_string())?;
+            return Ok(true);
+        }
+        if payload.channel == crate::data_map_net::KNOWN_REPLY_CHANNEL {
+            self.known_data_maps = Some(crate::data_map_net::decode_known_reply(&payload.data)?);
             return Ok(true);
         }
         Ok(false)

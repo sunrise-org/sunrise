@@ -1,0 +1,6 @@
+# Integration tests for data map configuration negotiation and play sync (#1097).
+sunrise-client-lib client_required_map_missing_on_optional_server_disconnects_naming_map test:data_map_sync daily network
+sunrise-client-lib optional_and_required_maps_sync_on_join_and_update_on_reload test:data_map_sync daily network
+sunrise-client-lib optional_only_server_allows_vanilla_client_and_sunrise_client_without_map test:data_map_sync daily network
+sunrise-client-lib required_map_disconnects_vanilla_client test:data_map_sync daily network
+sunrise-client-lib required_map_missing_on_client_disconnects_naming_map test:data_map_sync daily network

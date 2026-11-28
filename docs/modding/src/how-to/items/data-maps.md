@@ -7,18 +7,20 @@ what the server made of them, so a server pack can rebalance a mod's numbers wit
 
 Describe the map once with `DataMap`: its id, the registry its entries are in (`Entry`: an
 `ItemKey`, `BlockKey`, `FluidKey`, `EffectKey`, `EntityTypeKey`, `EnchantmentKey`,
-`BlockEntityTypeKey` or `ProfessionKey`), and how a value decodes. Values arrive as the NBT form of the JSON a
-file held: a whole number is an `Int`, or a `Long` past `i32`, a fraction a `Double`, a boolean a
-`Byte`, an object a `Compound` and an array a `List`. Integer tokens must fit signed
-64-bit NBT `Long`; larger unsigned integers are never rounded to `Double`.
+`BlockEntityTypeKey`, `ProfessionKey`, `BiomeKey`, `GameEventKey`, or a custom static registry's
+`EntryKey<T>` where `T: CustomRegistryEntry`), how a value decodes, and optional `sync`,
+`network_value`, `merge`, `remove_partial`, and `supports_tags` policies. Values arrive as the NBT
+form of the JSON a file held: a whole number is an `Int`, or a `Long` past `i32`, a fraction a
+`Double`, a boolean a `Byte`, an object a `Compound` and an array a `List`. Integer tokens must fit
+signed 64-bit NBT `Long`; larger unsigned integers are never rounded to `Double`.
 Fractional/exponent tokens use the JSON parser's `f64`
 value (including an integral value written as `1.0`). A file containing an
-out-of-range integer or a JSON `null` anywhere in a value cannot be converted to
+out-of-range integer or a JSON `null` anywhere in a value or remover cannot be converted to
 NBT and is skipped atomically at load time with an error log, preserving earlier layers.
 Empty and heterogeneous arrays preserve their elements as in-memory `List` values.
 
 ```rust,ignore
-use mod_api::{DataMap, DataMapTypesEvent, ItemKey, ServerHost, Tag};
+use mod_api::{DataMap, DataMapSync, Hooks, ItemKey, Registrar, RegistrationContext, Tag};
 
 /// `mymod:emc`: an item's value.
 struct Emc;
@@ -35,19 +37,29 @@ impl DataMap for Emc {
             _ => None,
         }
     }
+    fn sync(&self) -> DataMapSync {
+        DataMapSync::Optional
+    }
 }
 
-// In `impl Hooks`: register it each time the server loads its data.
-fn data_map_types(&self, _: &mut dyn ServerHost, event: &mut DataMapTypesEvent<'_>) {
-    event.types.push(Emc.ty());
+// In `impl Hooks`: register it once during startup.
+fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+    r.register_data_map(Emc);
 }
 ```
+
+For registries without a typed key (such as mod-declared datapack registries), register by name
+with `r.register_data_map_by_name(RawDataMap::new(registry, id))` and read via `data_map_value`
+and `data_map_entries`.
 
 Its values are `data/mymod/data_maps/item/emc.json` in any data pack, and files the mod pushes
 through `data_pack_files` under `data_maps/mymod:item/emc`. The folder is the registry's path for
 a `minecraft` registry (`entity_type`, `worldgen/biome`) and `<namespace>/<path>` for another.
 An id the registry doesn't hold is skipped, with one warning per file. A layer must have a
-`values` object. If present, `replace` must be a boolean and `remove` a list of removal keys.
+`values` object. If present, `replace` must be a boolean and `remove` may be an array of keys,
+an array of `{"key": ..., "remover": ...}` objects, or an object mapping keys to remover payloads.
+When a later layer writes an entry already present without `"replace": true`, the map's `merge`
+callback combines the layers (default last-wins); partial removers invoke `remove_partial`.
 A malformed layer is logged and skipped without changing earlier layers. A value may carry
 its own load conditions (`WithConditions`), including on an unwrapped object: it counts only
 when they hold, and the condition metadata isn't part of the value. A top-level
@@ -79,20 +91,21 @@ copy only when needed: `data_map_value(host, registry, entry, map)?.cloned()` fo
 - `Ok(Some(value))`: the merged value. The newest file wins, a `#tag` gives every entry in it the
   value, `replace` drops what earlier files set and `remove` takes entries away.
 - `Ok(None)`: the map gives this entry no value.
-- `Err(DataMapError::UnknownType)`: neither the engine nor a mod registered the map for that registry in this load.
+- `Err(DataMapError::UnknownType)`: neither the engine nor a mod registered the map for that registry during startup.
 - `Err(DataMapError::Undecodable)`: a typed read's `decode` refused the entry's NBT value.
-- `Err(DataMapError::Unavailable)`: no maps are loaded here. Data maps live on the server (the
-  single player server thread included) and are not synced to clients, so a client returns
-  this error, as does a server before its world's data first loads.
+- `Err(DataMapError::Unavailable)`: no maps are loaded here (a client that has not received
+  synced data maps, a server before its world's data first loads, or a host without a game).
 
 A known empty map yields an empty slice. As with a point read, an unknown map type or an
 unavailable publication is an error.
 
 The server merges every map when its data loads: a world's first open and every `/reload`. A
 read sees the last load whole, never part of one, and a value a reload drops is gone at once.
-`data_maps_updated` fires after each load. Use it to rebuild anything computed from the
-values. Reads also work in world hooks. A lookup reads the loaded map: it parses nothing and
-touches no file.
+Maps marked `DataMapSync::Optional` or `DataMapSync::Required` sync to Sunrise clients on join
+and on every `/reload` (with `DataMapSync::Required` negotiated during configuration).
+`data_maps_updated` fires after each server load (`ServerReload`) and each client sync
+(`ClientSync`). Use it to rebuild anything computed from the values. Reads also work in world
+hooks. A lookup reads the loaded map: it parses nothing and touches no file.
 
 
 ## NeoForge's built-in mob and item maps
@@ -126,8 +139,9 @@ loot tables are resource identifiers. Compostability is boolean.
 Builtin reads return canonical NBT compounds with the field above, rather than the
 input's shorthand: distances are `Float`, frequencies `Int`, compostability `Byte`, and
 identifiers `String`. Infinity remains an NBT Float, never JSON null. Use `BiomeKey`
-to query biome values and `GameEventKey` to query game-event values.
-Registering these stores and firing `data_maps_updated` does not sync them to clients.
+to query biome values and `GameEventKey` to query game-event values. All nine built-in NeoForge
+maps (these six and the three block maps below) are optional synced maps (`DataMapSync::Optional`)
+sent to Sunrise clients on join and on every `/reload`.
 
 The gameplay readers and structure generation use immutable world-owned snapshots.
 Villager types apply to finalizeSpawn only; bred villagers retain the existing biome-facts

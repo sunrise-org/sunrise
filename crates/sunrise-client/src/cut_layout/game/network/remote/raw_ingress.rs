@@ -322,6 +322,7 @@ pub(crate) mod tests {
                     Event::Joined {
                         registries: invalid,
                         datapacks: Default::default(),
+                        custom_registries: Default::default(),
                         uuid: 1,
                         name: "Alex".into(),
                     },
@@ -354,6 +355,7 @@ pub(crate) mod tests {
                     Event::Joined {
                         registries: valid,
                         datapacks: Default::default(),
+                        custom_registries: Default::default(),
                         uuid: 2,
                         name: "Steve".into(),
                     },
@@ -386,6 +388,7 @@ pub(crate) mod tests {
                     Event::Reconfigured {
                         registries: invalid,
                         datapacks: Default::default(),
+                        custom_registries: Default::default(),
                     },
                     Event::Packet(Box::new(login_packet())),
                 ],
@@ -426,6 +429,7 @@ pub(crate) mod tests {
                     Event::Joined {
                         registries: std::sync::Arc::new(registries),
                         datapacks: Default::default(),
+                        custom_registries: Default::default(),
                         uuid: 1,
                         name: "Alex".into(),
                     },

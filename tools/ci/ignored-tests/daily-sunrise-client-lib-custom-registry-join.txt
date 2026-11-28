@@ -1,0 +1,5 @@
+# Integration tests for configuration-phase sync of mod-declared static custom registries (#5140).
+sunrise-client-lib client_missing_non_empty_synced_registry_disconnects_naming_registry test:custom_registry_join daily network
+sunrise-client-lib client_missing_synced_entry_disconnects_naming_registry_and_entry test:custom_registry_join daily network
+sunrise-client-lib matching_synced_registries_join_and_decode_tags_across_differing_orders test:custom_registry_join daily network
+sunrise-client-lib vanilla_client_joins_without_custom_registry_payload_or_disconnect test:custom_registry_join daily network

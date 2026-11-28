@@ -29,6 +29,11 @@ pub trait TablesSideGameExt<'__sg>: crate::game::SideGame<'__sg> {
     }
 
     #[inline(always)]
+    fn side_data_maps(&self) -> Option<&crate::game::native_data_maps_common::DataMaps> {
+        <Self::State as SideOps>::side_data_maps(self)
+    }
+
+    #[inline(always)]
     fn side_acting_player_uuid(&self) -> Option<u128> {
         <Self::State as SideOps>::side_acting_player_uuid(self)
     }
@@ -92,6 +97,9 @@ pub trait SideOps: Sized {
     fn side_world_tables<'__side_g>(
         game: &'__side_g Self::Game<'_>,
     ) -> Option<&'__side_g WorldTables>;
+    fn side_data_maps<'__side_g>(
+        game: &'__side_g Self::Game<'_>,
+    ) -> Option<&'__side_g crate::game::native_data_maps_common::DataMaps>;
     fn side_acting_player_uuid(game: &Self::Game<'_>) -> Option<u128>;
     fn side_tags_ready(game: &Self::Game<'_>) -> bool;
     fn side_resolve_enchant_particles(game: &Self::Game<'_>);

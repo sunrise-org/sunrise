@@ -51,38 +51,97 @@ impl Key {
     }
 }
 
-/// A validated file: callers cannot apply a half-decoded file.
-struct File<T> {
-    replace: bool,
-    values: Vec<(Key, T)>,
-    remove: Vec<Key>,
+/// A decoded removal entry: full removal or partial removal with a validated remover payload.
+enum Removal<R> {
+    Full(Key),
+    Partial(Key, R),
 }
 
-impl<T: Clone> File<T> {
-    fn apply<I: IntoIterator<Item: AsRef<str>>>(
+/// A validated file: callers cannot apply a half-decoded file.
+struct File<T, R = ()> {
+    replace: bool,
+    values: Vec<(Key, bool, T)>,
+    remove: Vec<Removal<R>>,
+}
+
+impl<T: Clone, R> File<T, R> {
+    fn filter_disallowed_tags(&mut self, id: &Identifier, registry: &str, context: &str) {
+        let disallowed: Vec<String> = self
+            .values
+            .iter()
+            .filter_map(|(key, _, _)| match key {
+                Key::Tag(tag) => Some(format!("#{tag}")),
+                Key::Entry(_) => None,
+            })
+            .collect();
+        if !disallowed.is_empty() {
+            log::error!(
+                "Sunrise: data map {id} on {registry}: {context}: data map does not support attaching values via tags; ignoring tag entries: {}",
+                disallowed.join(", ")
+            );
+            self.values
+                .retain(|(key, _, _)| matches!(key, Key::Entry(_)));
+        }
+    }
+
+    fn apply_with_hooks<I: IntoIterator<Item: AsRef<str>>>(
         self,
         map: &mut BTreeMap<String, T>,
         tags: &impl Fn(&str) -> I,
         known: impl Fn(&str) -> bool,
+        merge: &impl Fn(&str, &T, &T) -> Result<T, String>,
+        remove_partial: &impl Fn(&str, &T, &R) -> Result<Option<T>, String>,
         context: &str,
     ) {
         if self.replace {
             map.clear();
         }
         let mut unknown = BTreeSet::new();
-        for (key, value) in self.values {
+        for (key, entry_replace, value) in self.values {
             key.visit(tags, |id| {
                 if known(id) {
-                    map.insert(id.to_owned(), value.clone());
+                    if entry_replace || !map.contains_key(id) {
+                        map.insert(id.to_owned(), value.clone());
+                    } else if let Some(existing) = map.get(id) {
+                        match merge(id, existing, &value) {
+                            Ok(merged) => {
+                                map.insert(id.to_owned(), merged);
+                            }
+                            Err(error) => log::warn!(
+                                "Sunrise: {context}: merge failed for {id}: {error}; keeping existing value"
+                            ),
+                        }
+                    }
                 } else {
                     unknown.insert(id.to_owned());
                 }
             });
         }
-        for key in self.remove {
-            key.visit(tags, |id| {
-                map.remove(id);
-            });
+        for removal in self.remove {
+            match removal {
+                Removal::Full(key) => {
+                    key.visit(tags, |id| {
+                        map.remove(id);
+                    });
+                }
+                Removal::Partial(key, remover) => {
+                    key.visit(tags, |id| {
+                        if let Some(existing) = map.get(id) {
+                            match remove_partial(id, existing, &remover) {
+                                Ok(None) => {
+                                    map.remove(id);
+                                }
+                                Ok(Some(reduced)) => {
+                                    map.insert(id.to_owned(), reduced);
+                                }
+                                Err(error) => log::error!(
+                                    "Sunrise: {context}: partial removal failed for {id}: {error}; keeping existing value"
+                                ),
+                            }
+                        }
+                    });
+                }
+            }
         }
         if !unknown.is_empty() {
             log::warn!(
@@ -90,6 +149,23 @@ impl<T: Clone> File<T> {
                 unknown.into_iter().collect::<Vec<_>>().join(", ")
             );
         }
+    }
+
+    fn apply<I: IntoIterator<Item: AsRef<str>>>(
+        self,
+        map: &mut BTreeMap<String, T>,
+        tags: &impl Fn(&str) -> I,
+        known: impl Fn(&str) -> bool,
+        context: &str,
+    ) {
+        self.apply_with_hooks(
+            map,
+            tags,
+            known,
+            &|_, _, incoming| Ok(incoming.clone()),
+            &|_, _, _| Err("data map does not support partial removers".into()),
+            context,
+        );
     }
 }
 
@@ -113,30 +189,70 @@ fn read_field<T: DeserializeOwned>(raw: &mut RawObject, field: &str) -> Result<O
         .transpose()
 }
 
+fn decode_removals<R>(
+    raw: Option<Value>,
+    decode_remover: impl Fn(&Value) -> Result<R, String>,
+) -> Result<Vec<Removal<R>>, String> {
+    let Some(raw) = raw else {
+        return Ok(Vec::new());
+    };
+    match raw {
+        Value::Array(items) => items
+            .iter()
+            .map(|removal| {
+                if let Some(key) = removal.as_str() {
+                    Ok(Removal::Full(Key::decode(key)?))
+                } else if let Some(object) = removal.as_object() {
+                    let key = object
+                        .get("key")
+                        .and_then(Value::as_str)
+                        .ok_or("data map removal must name a key")?;
+                    let key = Key::decode(key)?;
+                    if let Some(remover) = object.get("remover") {
+                        Ok(Removal::Partial(key, decode_remover(remover)?))
+                    } else {
+                        Ok(Removal::Full(key))
+                    }
+                } else {
+                    Err("data map removal must name a key".into())
+                }
+            })
+            .collect(),
+        Value::Object(entries) => entries
+            .iter()
+            .map(|(key, remover)| {
+                Ok(Removal::Partial(
+                    Key::decode(key)?,
+                    decode_remover(remover)?,
+                ))
+            })
+            .collect(),
+        _ => Err("remove: expected array or object".into()),
+    }
+}
+
 fn decode<T, V: DeserializeOwned>(
     bytes: &[u8],
     value: impl Fn(V) -> Result<Option<T>, String>,
 ) -> Result<File<T>, String> {
+    decode_with_removers(bytes, |raw| Ok(value(raw)?.map(|v| (false, v))), |_| Ok(()))
+}
+
+fn decode_with_removers<T, R, V: DeserializeOwned>(
+    bytes: &[u8],
+    value: impl Fn(V) -> Result<Option<(bool, T)>, String>,
+    decode_remover: impl Fn(&Value) -> Result<R, String>,
+) -> Result<File<T, R>, String> {
     let mut raw: RawObject = serde_json::from_slice(bytes).map_err(|error| error.to_string())?;
     let replace = read_field::<bool>(&mut raw, "replace")?.unwrap_or_default();
     let entries =
         read_field::<BTreeMap<String, V>>(&mut raw, "values")?.ok_or("missing data map values")?;
-    let remove = read_field::<Vec<Value>>(&mut raw, "remove")?
-        .unwrap_or_default()
-        .iter()
-        .map(|removal| {
-            let key = removal
-                .as_str()
-                .or_else(|| removal.get("key").and_then(Value::as_str))
-                .ok_or("data map removal must name a key")?;
-            Key::decode(key)
-        })
-        .collect::<Result<_, _>>()?;
+    let remove = decode_removals(read_field::<Value>(&mut raw, "remove")?, decode_remover)?;
     let mut values = Vec::new();
     for (key, raw) in entries {
         let key = Key::decode(&key)?;
-        if let Some(value) = value(raw)? {
-            values.push((key, value));
+        if let Some((entry_replace, value)) = value(raw)? {
+            values.push((key, entry_replace, value));
         }
     }
     Ok(File {
@@ -219,6 +335,75 @@ pub fn load<T: Clone, I: IntoIterator<Item: AsRef<str>>>(
         },
         known,
     )
+}
+
+#[allow(clippy::too_many_arguments)]
+pub fn load_registered<T: Clone, R, I: IntoIterator<Item: AsRef<str>>>(
+    id: &Identifier,
+    registry: &str,
+    supports_tags: bool,
+    overlay: &sunrise_world::loot::PackOverlay<'_>,
+    tags: impl Fn(&str) -> I,
+    decode_value: impl Fn(&Value) -> Result<(bool, T), String>,
+    decode_remover: impl Fn(&Value) -> Result<R, String>,
+    known: impl Fn(&str) -> bool,
+    merge: impl Fn(&str, &T, &T) -> Result<T, String>,
+    remove_partial: impl Fn(&str, &T, &R) -> Result<Option<T>, String>,
+) -> BTreeMap<String, T> {
+    let (namespace, path) = (id.namespace(), id.path());
+    let directory = folder(registry);
+    let wanted = format!("data_maps/{namespace}:{directory}/{path}");
+    let mut map = BTreeMap::new();
+    if let Some((_, versions)) = overlay.files.iter().find(|(key, _)| *key == wanted) {
+        for (layer, bytes) in versions.iter().enumerate() {
+            let source = format!(
+                "data/{namespace}/data_maps/{directory}/{path}.json (layer {})",
+                layer + 1
+            );
+            let prepared = decode_with_removers(
+                bytes,
+                |mut raw: Value| {
+                    // A value's own conditions are NeoForge's element conditions alone.
+                    const KEY: &str = sunrise_world::conditions::NEOFORGE_KEY;
+                    if let Some(conditions) = raw.get(KEY)
+                        && !overlay.conditions.allows_file_isolated(
+                            &serde_json::json!({ KEY: conditions }),
+                            &source,
+                        )?
+                    {
+                        return Ok(None);
+                    }
+                    if let Some(object) = raw.as_object_mut()
+                        && object.remove("neoforge:conditions").is_some()
+                        && let Some(payload) = object.remove("neoforge:value")
+                    {
+                        raw = payload;
+                    }
+                    decode_value(&raw).map(Some)
+                },
+                &decode_remover,
+            );
+            match prepared {
+                Ok(mut file) => {
+                    if !supports_tags {
+                        file.filter_disallowed_tags(id, registry, &source);
+                    }
+                    file.apply_with_hooks(
+                        &mut map,
+                        &tags,
+                        &known,
+                        &merge,
+                        &remove_partial,
+                        &source,
+                    );
+                }
+                Err(error) => log::error!(
+                    "Sunrise: data map {id} on {registry}: {source}: file skipped: {error}"
+                ),
+            }
+        }
+    }
+    map
 }
 
 pub struct NumberCodec<F> {

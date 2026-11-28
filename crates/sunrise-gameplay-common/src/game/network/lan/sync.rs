@@ -4,7 +4,7 @@ use sunrise_items::items::Items;
 use sunrise_sim::{
     advancements::Tree,
     crafting::ResolvedSources,
-    lan::data::{FrozenDamage, PackRegistryDefinitions, SyncData, WorldTags},
+    lan::data::{FrozenDamage, PackRegistryDefinitions, PackTags, SyncData, WorldTags},
 };
 use sunrise_world::item_defaults::ItemData;
 
@@ -300,14 +300,19 @@ pub fn prepare_world_sync_data(
     damage: &sunrise_world::damage_source::Catalog,
     biomes: Option<(Arc<sunrise_level::biome::Biomes>, bool)>,
     items: Arc<Items>,
+    pack_tags: Option<&Arc<PackTags>>,
     packed_registries: Option<Arc<PackRegistryDefinitions>>,
     advancements: Arc<Tree>,
 ) -> std::result::Result<SyncCache, String> {
+    let mut world_tags = WorldTags::new(items.clone(), damage);
+    if let Some(pack_tags) = pack_tags {
+        world_tags = world_tags.with_pack_tags(Arc::clone(pack_tags));
+    }
     let mut staged = SyncCache {
         data: SYNC.lock().unwrap_or_else(|e| e.into_inner()).data.clone(),
         biomes,
         packed_registries,
-        world_tags: Some(WorldTags::new(items.clone(), damage)),
+        world_tags: Some(world_tags),
         advancements: Some(advancements),
         ..Default::default()
     };

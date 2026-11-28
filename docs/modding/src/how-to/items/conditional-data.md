@@ -117,16 +117,15 @@ their old snapshot.
 ## Registering custom conditions
 
 Implement `LoadCondition` as a handler that reads the condition's JSON, then
-register it from `Hooks::register_load_conditions` using its `RegistrationContext` and
-`event.conditions.register(Identifier::parse("testmod:flag").unwrap(), Flag)`.
-Registration happens once per mod load, with one handler per id and a read-only
-`RegistrationContext`. Any mod may register an unused ID in any namespace:
-mod B can register `a:x` while mod A registers `a:y`. Built-in IDs such as
-`neoforge:always`, `neoforge:never` and `neoforge:mod_loaded` cannot be replaced.
-A duplicate ID names both mods in the error. A completed listener's registration error
-refuses admission even if the listener ignores it. A
-[failed registration callback](../../concepts/load-phases.md#registration-and-setup) publishes
-neither handlers nor preparation errors; later listeners can still register those IDs.
+register it from `Hooks::register` via
+`r.register_load_condition("testmod:flag", Flag)`.
+Registration happens once at startup, with one handler per id. Any mod may register an
+unused ID in any namespace: mod B can register `a:x` while mod A registers `a:y`.
+Built-in `neoforge:*` and `fabric:*` IDs (such as `neoforge:always`, `neoforge:never`,
+`neoforge:mod_loaded`, and `fabric:all_mods_loaded`) cannot be replaced.
+A duplicate ID names both mods and refuses startup. A
+[failed registration callback](../../concepts/load-phases.md#registration-and-setup) rolls back
+its registrations; later mods can still register those IDs.
 
 ```rust,ignore
 struct Flag;

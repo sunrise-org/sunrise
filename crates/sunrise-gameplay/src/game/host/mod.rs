@@ -107,7 +107,8 @@ sunrise_gameplay_common::game::native_tags::impl_tags!(
     ServerGame<'_>,
     game,
     sunrise_gameplay_common::game::tables::WorldTablesExt::native_tag_items(game),
-    sunrise_gameplay_common::game::tables::WorldTablesExt::loaded_biome_keys(game)
+    sunrise_gameplay_common::game::tables::WorldTablesExt::loaded_biome_keys(game),
+    sunrise_gameplay_common::game::side_ops::modapi_modding::ModapiModdingSideGameExt::side_custom_tag_source(game)
 );
 
 include!(concat!(env!("OUT_DIR"), "/game_host_generated.rs"));

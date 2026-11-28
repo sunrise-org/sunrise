@@ -216,6 +216,16 @@ jobs:
         run: >-
           cargo test --locked -p cargo-sunrise-mod --test m2m_mod_events --
           --ignored --exact two_separately_built_mods_cross_a_mod_event_in_a_real_game
+      - name: Two separately built mods share custom static registries and tags
+        if: inputs.own_sdk
+        run: >-
+          cargo test --locked -p cargo-sunrise-mod --test m2m_custom_registries --
+          --ignored --exact two_separately_built_mods_share_custom_static_registry_and_tags
+      - name: Two separately built mods share data maps, mergers, and load conditions
+        if: inputs.own_sdk
+        run: >-
+          cargo test --locked -p cargo-sunrise-mod --test m2m_data_maps --
+          --ignored --exact two_separately_built_mods_share_data_maps_mergers_and_load_conditions
       - name: A library built against another build of its dependency is refused
         if: inputs.own_sdk
         run: >-

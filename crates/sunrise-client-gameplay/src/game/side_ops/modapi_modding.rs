@@ -232,6 +232,18 @@ impl SideOps for crate::game::client_side::ClientState {
     fn side_received_registry_datapacks(&self) -> Option<Arc<DatapackRegistrySet>> {
         self.remote.as_ref()?.datapacks.received().cloned()
     }
+    fn side_custom_tag_source(
+        &self,
+    ) -> sunrise_gameplay_common::game::native_tags::CustomTagSource<'_> {
+        let Some(remote) = self.remote.as_ref() else {
+            return sunrise_gameplay_common::game::native_tags::CustomTagSource::None;
+        };
+        sunrise_gameplay_common::game::native_tags::CustomTagSource::Client {
+            tags_loaded: remote.tags.is_some(),
+            dynamic: &remote.registries,
+            custom_registries: &remote.custom_registries,
+        }
+    }
     fn side_level_handle_current(game: &Self::Game<'_>, level: LevelRef) -> bool {
         game.client_level_handle_current(level)
     }

@@ -106,10 +106,23 @@ pub(crate) fn check_namespace(name: &str, manifest: &Manifest) -> Result<(), Str
             ));
         }
     }
+    // NeoForge data maps live at `data/<map namespace>/data_maps/<registry folder>/<map path>.json`,
+    // so any mod contributing entries to another mod's or NeoForge's data map writes under that
+    // map's namespace (`DataMapLoader.getFolderLocation`).
+    let data_map = top == "data"
+        && rest
+            .strip_prefix("data_maps/")
+            .and_then(|s| s.strip_suffix(".json"))
+            .is_some_and(|path| {
+                path.split_once('/').is_some_and(|(dir, leaf)| {
+                    !dir.is_empty() && !leaf.is_empty() && !leaf.ends_with('/')
+                })
+            });
     let allowed = owned
         || (top == "data" && shared && rest.starts_with("tags/"))
         || atlas
         || extension
+        || data_map
         || name == RECIPE_PRIORITIES_PATH;
     if !allowed {
         return Err(format!(
@@ -5142,6 +5155,32 @@ capabilities = ["registries"]
         ] {
             let error =
                 smod("nonshared-priority-path", MANIFEST_TEXT, &[(path, b"{}")]).unwrap_err();
+            assert!(error.contains(path), "{error}");
+        }
+    }
+
+    #[test]
+    fn packages_can_supply_foreign_data_maps_but_not_malformed_or_neighbouring_paths() {
+        for path in [
+            "data/chemlib/data_maps/item/fuel.json",
+            "data/chemlib/data_maps/chemlib/gas/gas_heat.json",
+            "data/neoforge/data_maps/worldgen/biome/villager_types.json",
+        ] {
+            let content = smod("data-maps-ok", MANIFEST_TEXT, &[(path, b"{}")]).unwrap();
+            assert!(
+                content.files.iter().any(|file| file == path),
+                "expected {path} to be admitted"
+            );
+        }
+        for path in [
+            "data/chemlib/data_maps/fuel.json",
+            "data/chemlib/data_maps/item/.json",
+            "data/chemlib/data_maps/chemlib/gas/.json",
+            "data/chemlib/data_maps/item/fuel.txt",
+            "assets/chemlib/data_maps/item/fuel.json",
+            "data/chemlib/recipe/fuel.json",
+        ] {
+            let error = smod("data-maps-bad", MANIFEST_TEXT, &[(path, b"{}")]).unwrap_err();
             assert!(error.contains(path), "{error}");
         }
     }

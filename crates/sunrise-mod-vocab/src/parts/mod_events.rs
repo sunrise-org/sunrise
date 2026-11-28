@@ -11,8 +11,6 @@ pub(crate) struct ModEventListener {
     pub(crate) mod_index: usize,
     /// The event's id.
     pub(crate) event_id: &'static str,
-    /// The event's Rust type name, for the refusal of one id with two types.
-    pub(crate) event_type: &'static str,
     pub(crate) client: bool,
     pub(crate) priority: i32,
     pub(crate) receive_cancelled: bool,

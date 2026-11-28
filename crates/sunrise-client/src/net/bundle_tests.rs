@@ -24,6 +24,7 @@ fn play_reader(
             &transport,
             &Arc::default(),
             &Arc::default(),
+            &LocalInventory::default(),
         )
     })
 }
@@ -383,6 +384,7 @@ fn malformed_play_packets_fail_decode_before_bundling() {
                 &Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &LocalInventory::default(),
             )
         })
         .join()

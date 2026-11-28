@@ -629,6 +629,9 @@ impl crate::game::ClientGame<'_> {
             loaded_sent: false,
             heard_level: None,
             datapacks: Default::default(),
+            custom_registries: Default::default(),
+            client_data_maps: Default::default(),
+            client_data_maps_received: false,
             constructing_level: None,
             level_load: sunrise_client_render::level_loading::LevelLoadTracker::new(0),
             sent_info: info,
@@ -917,6 +920,9 @@ impl crate::game::ClientGame<'_> {
             loaded_sent: false,
             heard_level: None,
             datapacks: Default::default(),
+            custom_registries: Default::default(),
+            client_data_maps: Default::default(),
+            client_data_maps_received: false,
             constructing_level: None,
             level_load: sunrise_client_render::level_loading::LevelLoadTracker::new(0),
             sent_info: info,
@@ -1094,6 +1100,7 @@ impl crate::game::ClientGame<'_> {
                 lang.clone(),
                 item_data,
                 Arc::clone(&self.client.client_reports.0),
+                sunrise_client_lib::net::LocalInventory::installed(),
             ),
             (None, Some(cookies)) => Session::connect_transferred(
                 address,
@@ -1104,6 +1111,7 @@ impl crate::game::ClientGame<'_> {
                 cookies,
                 item_data,
                 Arc::clone(&self.client.client_reports.0),
+                sunrise_client_lib::net::LocalInventory::installed(),
             ),
             (None, None) => {
                 let connect = if lan {
@@ -1119,6 +1127,7 @@ impl crate::game::ClientGame<'_> {
                     lang.clone(),
                     item_data,
                     Arc::clone(&self.client.client_reports.0),
+                    sunrise_client_lib::net::LocalInventory::installed(),
                 )
             }
         };

@@ -1172,6 +1172,34 @@ check it already passes at join: a client without the mod cannot join. A save ke
 the mod is there; once it is gone, the load clamps the base into the bounds and logs it, once per attribute in each
 world load.
 
+#### Custom static registries
+
+A library mod can declare a typed static registry in `Hooks::register` with `Registrar::declare_registry`
+(NeoForge's `NewRegistryEvent`) so dependent mods can register entries of its Rust type with
+`Registrar::register_entry`. Once registration finishes, the registry freezes for the run and any mod
+reads it through `HostRegistries::registry` (`host.registry(KEY)`):
+
+```rust,ignore
+// In library mod `chemlib`:
+pub struct Gas { pub color: u32 }
+pub const GASES: mod_api::RegistryKey<Gas> = mod_api::RegistryKey::new("chemlib:gas");
+
+// In Hooks::register:
+r.declare_registry(GASES, mod_api::RegistryOptions::new().default_key("chemlib:empty").sync(true));
+let oxygen = r.register_entry(GASES, "chemlib:oxygen", Gas { color: 0xAA_DD_FF });
+
+// Later in any hook with a Host (import `mod_api::HostRegistries`):
+if let Some(gases) = host.registry(chemlib::GASES) {
+    let _gas = gases.get(oxygen);
+}
+```
+
+Tags for a custom static registry live at `data/<ns>/tags/<registry_ns>/<registry_path>/<name>.json`
+(for `chemlib:gas`, `data/<ns>/tags/chemlib/gas/<name>.json`). Use
+`host.tags().is_in_custom_tag(GASES, entry, tag_key)` to check one entry without building a list,
+and `host.tags().entries(GASES, tag_key)` to read all members in tag order.
+Persist canonical entry IDs (`gases.id_of(entry)`), not `EntryKey` handles.
+
 #### Custom datapack registries
 
 A code mod can declare a datapack registry of its own with `Registrar::declare_datapack_registry(path, sync,

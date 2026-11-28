@@ -321,6 +321,7 @@ impl crate::game::ServerGame<'_> {
                     || self.common.res.shared_items(),
                     |tables| tables.items.clone(),
                 ),
+                tables.tables.as_ref().map(|tables| &tables.pack_tags),
                 tables
                     .tables
                     .as_ref()

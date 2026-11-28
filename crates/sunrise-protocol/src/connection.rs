@@ -333,6 +333,10 @@ enum Next {
     Partial(usize),
 }
 impl ConnReader {
+    /// Whether this reader sits on an in-process memory pipe rather than a network socket.
+    pub fn is_memory(&self) -> bool {
+        self.memory
+    }
     fn header(&self) -> Result<Option<(usize, usize)>> {
         let bytes = &self.buffer[self.start..self.end];
         if !self.memory {

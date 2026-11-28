@@ -50,6 +50,15 @@ impl SideOps for crate::game::client_side::ClientState {
     ) -> Option<&'__side_g WorldTables> {
         game.client_world_tables()
     }
+    fn side_data_maps<'__side_g>(
+        game: &'__side_g Self::Game<'_>,
+    ) -> Option<&'__side_g sunrise_gameplay_common::game::native_data_maps_common::DataMaps> {
+        game.client
+            .remote
+            .as_ref()
+            .filter(|remote| remote.client_data_maps_received)
+            .map(|remote| &remote.client_data_maps)
+    }
     fn side_acting_player_uuid(game: &Self::Game<'_>) -> Option<u128> {
         game.client_acting_player_uuid()
     }

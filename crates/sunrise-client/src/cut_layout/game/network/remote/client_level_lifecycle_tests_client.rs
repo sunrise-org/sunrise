@@ -217,6 +217,7 @@ fn client_level_notices_pair_across_replacement_reconfiguration_leave_and_quit()
                 tx.send(Event::Reconfigured {
                     registries: game.client.remote.as_ref().unwrap().registries.clone(),
                     datapacks: receiver(&next_set),
+                    custom_registries: Default::default(),
                 })
                 .unwrap();
                 game.client.remote.as_mut().unwrap().backlog.extend(

@@ -159,7 +159,7 @@ impl adv::World for View<'_, '_> {
     }
     fn in_tag(&self, registry: &str, tag: &str, id: &str) -> bool {
         let tags = TagSources {
-            pack_tags: self.0.server.world_tables.0.as_ref().map(|t| &t.pack_tags),
+            pack_tags: self.0.server.world_tables.0.as_ref().map(|t| &*t.pack_tags),
             items: self.0.items(),
             mob_data: self.0.res.mob_data(),
             damage: &self.0.health_resources.damage,

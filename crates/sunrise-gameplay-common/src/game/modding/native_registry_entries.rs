@@ -117,7 +117,18 @@ pub trait NativeRegistryReads<'g>: crate::game::SideGame<'g> {
         self.side_registry_sync()
     }
 
+    fn custom_registry(
+        registry: &str,
+    ) -> Option<&'static std::sync::Arc<dyn mod_api::__private::RegistryDirectory>> {
+        mod_api::__private::custom_registry_directories()
+            .iter()
+            .find(|dir| dir.id() == registry)
+    }
+
     fn registry_has_entry(&self, registry: &str, id: &str) -> bool {
+        if let Some(dir) = Self::custom_registry(registry) {
+            return dir.contains_id(id);
+        }
         if let Some(names) = self.side_remote_registry_names() {
             if registry == "minecraft:game_rule" {
                 return self.ui.rules.registry().position(id).is_some();
@@ -186,6 +197,14 @@ pub trait NativeRegistryReads<'g>: crate::game::SideGame<'g> {
             return Err(RegistryReadError::Unavailable);
         }
         let registry = normalized(registry);
+        if let Some(dir) = Self::custom_registry(&registry) {
+            for id in dir.entry_ids() {
+                if visit(&id.to_string()).is_break() {
+                    return Ok(ControlFlow::Break(()));
+                }
+            }
+            return Ok(ControlFlow::Continue(()));
+        }
         if let Some(set) = self.registry_datapacks(&registry)
             && let Ok(mut entries) = set.entries(&registry)
         {
@@ -246,6 +265,14 @@ pub trait NativeRegistryReads<'g>: crate::game::SideGame<'g> {
             return None;
         }
         let tag = normalized(tag);
+        if Self::custom_registry(&registry).is_some() {
+            return crate::game::native_tags::custom_tag_by_name(
+                ModdingSideOps::side_custom_tag_source(self.side_state()),
+                &registry,
+                &tag,
+            )
+            .contains(&entry.id);
+        }
         if let Some(set) = self.registry_datapacks(&registry)
             && let Some(found) = set.tag_contains(&registry, &id, &tag)
         {

@@ -337,6 +337,9 @@ pub struct PlayerSender {
     wire: Option<Arc<Counters>>,
     /// Registry negotiation belongs to this live connection, never a process-wide UUID cache.
     pub datapack_offer: Option<Arc<[u8]>>,
+    /// Synced data maps the client advertised during configuration
+    /// (`RegistryManager.ATTRIBUTE_KNOWN_DATA_MAPS`).
+    pub known_data_maps: Option<Arc<crate::data_map_net::KnownDataMaps>>,
     /// The plugin channels the client announced, in configuration and play.
     pub announced: Arc<super::announced_channels::AnnouncedChannels>,
     /// Its `sunrise:levels` answer: its revision and the levels besides its own it can view.
@@ -419,6 +422,7 @@ impl PlayerSender {
             payload_transport: Transport::empty(),
             virtual_host: None,
             datapack_offer: None,
+            known_data_maps: None,
             announced: Arc::default(),
             viewed_levels: Default::default(),
             menu_extra_rev: 0,
@@ -460,6 +464,7 @@ impl PlayerSender {
             ),
             wire: None,
             datapack_offer: None,
+            known_data_maps: None,
             announced: Arc::default(),
             viewed_levels: Default::default(),
             menu_extra_rev: 0,
@@ -505,6 +510,7 @@ impl PlayerSender {
             payload_transport: Transport::empty(),
             virtual_host: None,
             datapack_offer: None,
+            known_data_maps: None,
             announced: Arc::default(),
             viewed_levels: Default::default(),
             menu_extra_rev: 0,
@@ -1841,10 +1847,66 @@ fn login_and_configure(
             return Ok(None);
         }
     }
+    // Mod-declared sync(true) static custom registries (ConfigurationInitialization:38-41:
+    // skipped on in-process single-player memory connections; LAN guests still sync).
+    if let Some(data) = crate::custom_registry_net::server_payload(
+        &shared.custom_registries,
+        brand == "sunrise",
+        c.is_memory(),
+    )? {
+        for data in crate::custom_registry_net::chunks(&data)? {
+            send(
+                c,
+                cfg::Clientbound::CustomPayload(cfg::CustomPayload {
+                    channel: crate::custom_registry_net::CHANNEL.into(),
+                    data,
+                }),
+            )?;
+        }
+    }
+    // Synced registry data maps negotiation (`RegistryDataMapNegotiation.run:36-62`).
+    if brand != "sunrise" {
+        if let Some(text) = crate::data_map_net::refuse_vanilla_reason(&shared.data_maps_known) {
+            let reason =
+                sunrise_core::nbt::Tag::String(sunrise_core::nbt::JavaString::from(text.as_str()));
+            let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
+            lost(shared, &format!("{name} ({})", uuid_string(uuid)), &text);
+            return Ok(None);
+        }
+    } else {
+        let data = crate::data_map_net::encode_known(shared.data_maps_known.entries())?;
+        send(
+            c,
+            cfg::Clientbound::CustomPayload(cfg::CustomPayload {
+                channel: crate::data_map_net::KNOWN_CHANNEL.into(),
+                data,
+            }),
+        )?;
+        // When the server has any mandatory map, block for the client's reply before sending
+        // registries and verify the reply covers every server-mandatory map. When every server
+        // map is optional, keep configuration non-blocking: real Sunrise clients still process
+        // `sunrise:data_map_known` before `FinishConfiguration` (disconnecting if the server
+        // lacks any client-mandatory map, or replying into `c.channels.known_data_maps`).
+        if shared.data_maps_known.has_mandatory()
+            && let Some(text) = await_data_maps_reply(
+                c,
+                &shared.data_maps_known,
+                &mut info,
+                &payload_transport,
+                &mut payload_negotiation,
+            )?
+        {
+            let reason =
+                sunrise_core::nbt::Tag::String(sunrise_core::nbt::JavaString::from(text.as_str()));
+            let _ = send(c, cfg::Clientbound::Disconnect(cfg::Disconnect { reason }));
+            lost(shared, &format!("{name} ({})", uuid_string(uuid)), &text);
+            return Ok(None);
+        }
+    }
     for packet in sync.registry_packets(known_pack, &shared.config.levels) {
         send(c, cfg::Clientbound::RegistryData(packet))?;
     }
-    send(c, cfg::Clientbound::UpdateTags(sync.tags.clone()))?;
+    send(c, cfg::Clientbound::UpdateTags(sync.tags_for_brand(&brand)))?;
     // addOptionalTasks: the code of conduct task comes first.
     if let Some(text) =
         super::code_of_conduct::pick(&shared.config.code_of_conducts, &info.language)
@@ -1969,6 +2031,32 @@ fn await_payload_answer(
         }
     }
     Ok(())
+}
+/// Wait for a Sunrise client's `sunrise:data_map_known_reply` when the server has any
+/// `DataMapSync::Required` map, then verify the reply covers every server-mandatory map.
+fn await_data_maps_reply(
+    c: &mut ConfigIo<'_>,
+    server_known: &crate::data_map_net::LocalDataMaps,
+    info: &mut ClientInformation,
+    transport: &Transport,
+    negotiation: &mut sunrise_protocol::payload_negotiation::Negotiation,
+) -> Result<Option<String>, String> {
+    while c.channels.known_data_maps.is_none() {
+        let (id, payload) = c.recv().map_err(|e| e.to_string())?;
+        match receive_configuration(c, id, &payload, transport, negotiation)? {
+            Some(cfg::Serverbound::FinishConfiguration(_)) => {
+                return Err("Unexpected configuration task".to_owned());
+            }
+            Some(cfg::Serverbound::ClientInformation(i)) => *info = i,
+            _ => {}
+        }
+    }
+    let known = c
+        .channels
+        .known_data_maps
+        .as_ref()
+        .expect("loop exits once known_data_maps arrives");
+    Ok(crate::data_map_net::validate_client_reply(server_known, known).err())
 }
 fn payload_disconnect(c: &mut ConfigIo<'_>, error: String) -> String {
     let reason = sunrise_core::nbt::Tag::String(error.as_str().into());
@@ -2366,6 +2454,7 @@ fn play(
         payload_transport: parts.payload_transport.clone(),
         virtual_host: virtual_host.map(Arc::new),
         datapack_offer: parts.datapack_offer.map(Into::into),
+        known_data_maps: parts.channels.known_data_maps.map(Arc::new),
         announced: parts.channels.announced.clone().unwrap_or_default(),
         viewed_levels: parts.channels.viewed_levels.answer(),
         menu_extra_rev: parts.channels.menu_extra_rev.revision(),
@@ -4400,6 +4489,7 @@ mod outgoing_budget_tests {
             ),
             wire: None,
             datapack_offer: None,
+            known_data_maps: None,
             announced: Arc::default(),
             viewed_levels: Default::default(),
             menu_extra_rev: 0,

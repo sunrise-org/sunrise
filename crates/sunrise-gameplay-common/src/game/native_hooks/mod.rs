@@ -22,7 +22,6 @@ pub use super::{
     execution_role::{self, ExecutionRole},
     mod_api_host,
 };
-pub use crate::game::native_data_maps_common::DataMapType;
 pub use mod_api::__private::game::{
     BlockStateDefinitionRegistration, ItemModelRegistration, ItemTintSourceRegistration,
     JsonAnimationTypeRegistration, LayerDefinitionRegistration, ModelLoaderRegistration,
@@ -38,10 +37,10 @@ pub use mod_api::{
     ClientMiningPrediction, ClientReloadListeners, ColorResolvers, EnchantmentEffects,
     EnchantmentInfo, EntityLayers, EntityRef, EntityRenderers, ExperienceOrbRef, GuiLayerRegistrar,
     HandDrawContext, HandRender, InsideEffects, InteractionAttempt, InteractionKey, ItemEntityRef,
-    LifecycleContext, LivingRef, LoadConditions, NoteBlockChange, ParticleProviders,
-    PathComputationType, Placement, PlayerRef, PoiTypeExtensions, RecipeBookCategory,
-    ScreenOpening, ScreenWidgets, ScreenshotImage, ServerReloadListeners, ServerTickPhase,
-    SpecialModelRenderers, ToolUse, VillagerProfessions,
+    LifecycleContext, LivingRef, NoteBlockChange, ParticleProviders, PathComputationType,
+    Placement, PlayerRef, PoiTypeExtensions, RecipeBookCategory, ScreenOpening, ScreenWidgets,
+    ScreenshotImage, ServerReloadListeners, ServerTickPhase, SpecialModelRenderers, ToolUse,
+    VillagerProfessions,
 };
 pub use mod_api::{
     ActiveEffect, AttachmentStore, BlockClick, BlockUpdateFlags, BonemealSource, ChunkRef,
@@ -547,7 +546,6 @@ pub mod register_item_models;
 pub mod register_item_tint_sources;
 pub mod register_json_animation_types;
 pub mod register_layer_definitions;
-pub mod register_load_conditions;
 pub mod register_model_loaders;
 pub mod register_particle_groups;
 pub mod register_particle_providers;
@@ -698,8 +696,6 @@ pub use register_item_tint_sources::native_register_item_tint_sources;
 pub use register_json_animation_types::native_register_json_animation_types;
 #[allow(unused_imports)]
 pub use register_layer_definitions::native_register_layer_definitions;
-#[allow(unused_imports)]
-pub use register_load_conditions::native_register_load_conditions;
 #[allow(unused_imports)]
 pub use register_model_loaders::native_register_model_loaders;
 #[allow(unused_imports)]

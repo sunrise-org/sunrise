@@ -461,6 +461,7 @@ impl crate::game::ServerGame<'_> {
         self.server.server_loot.0.set(None);
         self.common.server_items = None;
         self.server.world_tables.0 = None;
+        sunrise_sim::data_map_net::serve(None);
         self.server.session_lock.0 = None;
         self.server.world_adopted = false;
         self.server.startup_ticket_restore_pending = false;
@@ -2582,7 +2583,7 @@ impl crate::game::ServerGame<'_> {
                 dimension: self.common.dim.id(),
                 end: &self.common.end,
                 tags: advancements_common::TagSources {
-                    pack_tags: self.server.world_tables.0.as_ref().map(|t| &t.pack_tags),
+                    pack_tags: self.server.world_tables.0.as_ref().map(|t| &*t.pack_tags),
                     items: server_world_items!(self),
                     mob_data: self.common.res.mob_data(),
                     damage: &self.common.health_resources.damage,

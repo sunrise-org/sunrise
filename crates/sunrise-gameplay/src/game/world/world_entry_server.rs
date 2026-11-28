@@ -72,6 +72,13 @@ impl crate::game::ServerGame<'_> {
             world.pois.clear();
         }
         sunrise_sim::datapack_net::serve(self.common.mods.datapack_registries.clone());
+        sunrise_sim::data_map_net::serve(
+            self.server
+                .world_tables
+                .0
+                .as_ref()
+                .map(|t| Arc::new(t.data_maps.synced_snapshot())),
+        );
         self.refresh_recipe_property_context();
         self.server.structure_spawns = structure_spawns;
         self.refresh_infiniburn();
@@ -194,6 +201,13 @@ impl crate::game::ServerGame<'_> {
         self.share_biome_keys();
         self.sync_test_registry_ids();
         sunrise_sim::datapack_net::serve(self.common.mods.datapack_registries.clone());
+        sunrise_sim::data_map_net::serve(
+            self.server
+                .world_tables
+                .0
+                .as_ref()
+                .map(|t| Arc::new(t.data_maps.synced_snapshot())),
+        );
         Ok(())
     }
 
@@ -309,7 +323,10 @@ impl crate::game::ServerGame<'_> {
             |tables| tables.items.clone(),
         );
         let parts = self.prepare_parts(&items)?;
-        let wire_tags = sunrise_sim::lan::data::WorldTags::new(items.clone(), &health.damage);
+        let mut wire_tags = sunrise_sim::lan::data::WorldTags::new(items.clone(), &health.damage);
+        if let Some(tables) = &tables {
+            wire_tags = wire_tags.with_pack_tags(Arc::clone(&tables.pack_tags));
+        }
         let overlay = pack_files(&tables);
         let kept = self
             .server
@@ -498,7 +515,13 @@ impl crate::game::ServerGame<'_> {
             EntityTypeTags::REGISTRY.into(),
             items.entity_type_tags.ids().iter().cloned().collect(),
         );
-        let mut pack_tags = HashMap::new();
+        for dir in mod_api::__private::custom_registry_directories() {
+            view.ids.insert(
+                dir.id().to_owned(),
+                dir.entry_ids().iter().map(ToString::to_string).collect(),
+            );
+        }
+        let mut pack_tags = sunrise_sim::lan::data::PackTags::new();
         let mut banner_tags = std::collections::BTreeMap::new();
         let gameplay_tags = WorldTables::PACK_TAG_REGISTRIES
             .into_iter()
@@ -531,9 +554,9 @@ impl crate::game::ServerGame<'_> {
                 .and_then(|name| gameplay_tags.get(name))
             {
                 pack_tags.insert(
-                    *directory,
+                    (*directory).to_owned(),
                     tags.into_iter()
-                        .map(|(tag, members)| (tag, members.into_iter().collect::<HashSet<_>>()))
+                        .map(|(tag, members)| (tag, members.into_iter().collect()))
                         .collect(),
                 );
             }
@@ -721,7 +744,7 @@ impl crate::game::ServerGame<'_> {
                 bind_tags(PLACED, &mut view)?;
             }
         }
-        let damage_tags: HashMap<_, HashSet<_>> = health
+        let damage_tags: HashMap<String, indexmap::IndexSet<String>> = health
             .damage
             .tags()
             .map(|tag| {
@@ -738,7 +761,35 @@ impl crate::game::ServerGame<'_> {
                 .map(|(tag, members)| (tag.clone(), !members.is_empty()))
                 .collect(),
         );
-        pack_tags.insert("damage_type", damage_tags);
+        pack_tags.insert("damage_type".to_owned(), damage_tags);
+        // Bind tags for mod-declared static custom registries into the same `pack_tags` store,
+        // keyed by canonical registry ID (`chemlib:gas`) and preserving tag order.
+        for dir in mod_api::__private::custom_registry_directories() {
+            match sunrise_world::tag_layers::load(root, dir.tag_directory(), &tag_files, |id| {
+                dir.contains_id(id)
+            }) {
+                Ok(tags) => {
+                    view.tags.insert(
+                        dir.id().to_owned(),
+                        tags.iter()
+                            .map(|(tag, members)| (tag.clone(), !members.is_empty()))
+                            .collect(),
+                    );
+                    pack_tags.insert(
+                        dir.id().to_owned(),
+                        tags.into_iter()
+                            .map(|(tag, members)| (tag, members.into_iter().collect()))
+                            .collect(),
+                    );
+                }
+                Err(e) => {
+                    log::warn!(
+                        "Sunrise: the world's {} tags are not applied: {e}",
+                        dir.id()
+                    );
+                }
+            }
+        }
         if !view.tags.contains_key("minecraft:villager_trade")
             && let Ok(tags) = sunrise_items::items::load_tags(root, "villager_trade", &tag_files)
         {
@@ -773,8 +824,6 @@ impl crate::game::ServerGame<'_> {
         // RegistryDataLoader.RELOADABLE_REGISTRIES: providers are staged and
         // published with the other reloadable data, including on /reload.
         let providers = Providers::load_with(root, &overlay);
-        let mut data_map_types = Vec::new();
-        self.native_data_map_types(&mut data_map_types);
         // Visit independently readable registries before consuming any result.
         // One rejected winner must not hide the other entries' diagnostics.
         let loot = sunrise_world::loot::LootData::load_candidate_with_damage(
@@ -923,44 +972,52 @@ impl crate::game::ServerGame<'_> {
                 .into());
             }
         }
-        let builtin = neoforge_mob_maps::load(
-            &overlay,
-            |directory| match directory {
-                "item" => Some(&items.item_tags),
-                "entity_type" => Some(items.entity_type_tags.members()),
-                _ => pack_tags.get(directory),
-            },
-            |registry, id| match registry {
-                "minecraft:item" => items.items.contains_key(id),
-                "minecraft:villager_profession" => stations.professions.resolve(id).is_some(),
-                "minecraft:worldgen/biome" => biomes.table.contains(id),
-                EntityTypeTags::REGISTRY => items
-                    .entity_type_tags
-                    .ids()
-                    .binary_search_by(|known| known.as_str().cmp(id))
-                    .is_ok(),
-                _ => items
-                    .component_registry
-                    .ids(registry)
-                    .binary_search_by(|known| known.as_str().cmp(id))
-                    .is_ok(),
-            },
-        )?;
+        let builtin =
+            neoforge_mob_maps::load(
+                &overlay,
+                |directory| match directory {
+                    "item" => Some(&items.item_tags as &dyn neoforge_mob_maps::TagMembers),
+                    "entity_type" => Some(items.entity_type_tags.members().as_ref()
+                        as &dyn neoforge_mob_maps::TagMembers),
+                    _ => pack_tags
+                        .get(directory)
+                        .map(|tags| tags as &dyn neoforge_mob_maps::TagMembers),
+                },
+                |registry, id| match registry {
+                    "minecraft:item" => items.items.contains_key(id),
+                    "minecraft:villager_profession" => stations.professions.resolve(id).is_some(),
+                    "minecraft:worldgen/biome" => biomes.table.contains(id),
+                    EntityTypeTags::REGISTRY => items
+                        .entity_type_tags
+                        .ids()
+                        .binary_search_by(|known| known.as_str().cmp(id))
+                        .is_ok(),
+                    _ => items
+                        .component_registry
+                        .ids(registry)
+                        .binary_search_by(|known| known.as_str().cmp(id))
+                        .is_ok(),
+                },
+            )?;
         // The timeline tags the raid code reads bind from this world's packs too.
         let gameplay = Arc::new(sunrise_sim::patrol::GameplayAttributes::load(
             root, &overlay,
         )?);
-        let data_maps = DataMaps::load(&data_map_types, &overlay, &registries)
-            .with_builtins(builtin)
-            .with_biome_keys(mod_api::__private::BiomeKeys::new(
-                next_biome_keys_session(),
-                biomes.table.registered_keys().iter().cloned(),
-            ));
+        let data_maps = DataMaps::load(
+            mod_api::__private::installed_data_maps(),
+            &overlay,
+            &registries,
+        )
+        .with_builtins(builtin)
+        .with_biome_keys(mod_api::__private::BiomeKeys::new(
+            next_biome_keys_session(),
+            biomes.table.registered_keys().iter().cloned(),
+        ));
         drop(registries);
         // Vanilla reads tags of these registries too: `LootTable.LIST_CODEC` (advancement
         // rewards, the loot table trigger) and `Recipe.LIST_CODEC` (the recipe triggers).
         pack_tags.insert(
-            "loot_table",
+            "loot_table".to_owned(),
             loot.registry_tags("loot_table")
                 .into_iter()
                 .flatten()
@@ -968,7 +1025,7 @@ impl crate::game::ServerGame<'_> {
                 .collect(),
         );
         pack_tags.insert(
-            "recipe",
+            "recipe".to_owned(),
             sunrise_world::tag_layers::load(root, "recipe", &overlay, |id| {
                 stations.recipe_index.contains(id)
             })?
@@ -1038,7 +1095,7 @@ impl crate::game::ServerGame<'_> {
                 stations,
                 reload_sources: reload.then_some(sources),
                 data_maps,
-                pack_tags,
+                pack_tags: Arc::new(pack_tags),
                 gameplay,
                 test_environments,
                 test_instances,

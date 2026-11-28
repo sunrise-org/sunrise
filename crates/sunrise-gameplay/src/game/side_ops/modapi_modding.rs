@@ -225,6 +225,18 @@ impl SideOps for crate::game::server_side::ServerState {
     ) -> Option<Arc<DatapackRegistrySet>> {
         game.server_level_datapack_set(level)
     }
+    fn side_custom_tag_source(
+        &self,
+    ) -> sunrise_gameplay_common::game::native_tags::CustomTagSource<'_> {
+        self.world_tables.0.as_ref().map_or(
+            sunrise_gameplay_common::game::native_tags::CustomTagSource::None,
+            |tables| {
+                sunrise_gameplay_common::game::native_tags::CustomTagSource::Server(
+                    &tables.pack_tags,
+                )
+            },
+        )
+    }
     fn side_level_handle_current(game: &Self::Game<'_>, level: LevelRef) -> bool {
         game.server_level_handle_current(level)
     }

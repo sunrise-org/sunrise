@@ -3,11 +3,7 @@ use std::sync::{Arc, atomic::AtomicUsize};
 struct Registrant(Arc<AtomicUsize>);
 #[mod_api::__subscriptions]
 impl mod_api::Hooks for Registrant {
-    fn register_load_conditions(
-        &self,
-        _: &mod_api::RegistrationContext,
-        event: &mut mod_api::RegisterLoadConditionsEvent<'_>,
-    ) {
+    fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
         struct Flag(Arc<AtomicUsize>);
         impl mod_api::LoadCondition for Flag {
             fn test(
@@ -18,13 +14,7 @@ impl mod_api::Hooks for Registrant {
                 Ok(args["value"] == true)
             }
         }
-        event
-            .conditions
-            .register(
-                mod_api::Identifier::parse("testmod:flag").unwrap(),
-                Flag(self.0.clone()),
-            )
-            .unwrap();
+        r.register_load_condition("testmod:flag", Flag(self.0.clone()));
     }
 }
 
@@ -103,6 +93,8 @@ fn startup_recipe_uses_registered_condition() {
         )]
         .into(),
         || {
+            mod_platform::__private::part_tests::install_parts_fixture(mod_api::__private::mods())
+                .unwrap();
             let loaded = load_startup(&root)
                 .expect("startup must accept a mod-registered condition in a recipe");
             assert!(

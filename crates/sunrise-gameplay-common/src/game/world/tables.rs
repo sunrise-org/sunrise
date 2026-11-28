@@ -244,11 +244,9 @@ pub trait WorldTablesExt<'__sg>: crate::game::SideGame<'__sg> {
     where
         '__sg: 's,
     {
-        loaded_data_maps(self.side_world_tables())?.value(
-            registry,
-            map,
-            &native_data_maps_common::full_id(entry),
-        )
+        self.side_data_maps()
+            .ok_or(mod_api::DataMapError::Unavailable)?
+            .value(registry, map, &native_data_maps_common::full_id(entry))
     }
 
     fn data_map_entries<'s>(
@@ -259,7 +257,9 @@ pub trait WorldTablesExt<'__sg>: crate::game::SideGame<'__sg> {
     where
         '__sg: 's,
     {
-        loaded_data_maps(self.side_world_tables())?.entries(registry, map)
+        self.side_data_maps()
+            .ok_or(mod_api::DataMapError::Unavailable)?
+            .entries(registry, map)
     }
 
     fn loaded_biome_keys(&self) -> Option<&mod_api::__private::BiomeKeys> {

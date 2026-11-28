@@ -2,7 +2,6 @@ use crate::game::{
     data_map_files::{self, folder},
     data_map_json::to_tag,
 };
-pub use mod_api::game::DataMapType;
 use serde_json::Value;
 use std::{
     borrow::Cow,
@@ -53,7 +52,7 @@ pub struct WorldRegistries<'a> {
     id_sets: RefCell<HashMap<String, HashSet<String>>>,
     tags: RefCell<HashMap<String, HashMap<String, HashSet<String>>>>,
 }
-pub type PackTags = HashMap<&'static str, HashMap<String, HashSet<String>>>;
+pub type PackTags = sunrise_sim::lan::data::PackTags;
 impl<'a> WorldRegistries<'a> {
     pub fn new(
         ids: impl IntoIterator<Item = (&'a str, &'a [String])>,
@@ -99,6 +98,16 @@ impl<'a> WorldRegistries<'a> {
             .iter()
             .any(|declaration| declaration.key == registry)
     }
+
+    /// A frozen mod-declared static custom registry with `registry`, if any.
+    fn custom_registry(
+        &self,
+        registry: &str,
+    ) -> Option<&'static std::sync::Arc<dyn mod_api::__private::RegistryDirectory>> {
+        mod_api::__private::custom_registry_directories()
+            .iter()
+            .find(|dir| dir.id() == registry)
+    }
 }
 impl MapRegistries for WorldRegistries<'_> {
     fn known(&self, registry: &str) -> bool {
@@ -107,8 +116,12 @@ impl MapRegistries for WorldRegistries<'_> {
             || self.ids.contains_key(registry)
             || TYPED.contains(&registry)
             || self.declared(registry)
+            || self.custom_registry(registry).is_some()
     }
     fn contains(&self, registry: &str, entry: &str) -> bool {
+        if let Some(dir) = self.custom_registry(registry) {
+            return dir.contains_id(entry);
+        }
         if registry == sunrise_sim::lan::data::BIOME_REGISTRY
             && let Some(keys) = self.biome_keys
         {
@@ -158,19 +171,41 @@ impl MapRegistries for WorldRegistries<'_> {
                 members(self.items.entity_type_tags.members())
             }
             _ => {
-                if let Some(tags) = self
-                    .bound_tags
-                    .and_then(|tags| tags.get(folder(registry).as_str()))
-                {
-                    return members(tags);
+                if let Some(tags) = self.bound_tags.and_then(|tags| {
+                    tags.get(registry)
+                        .or_else(|| tags.get(folder(registry).as_str()))
+                }) {
+                    return tags
+                        .get(tag)
+                        .map(|members| members.iter().cloned().collect())
+                        .unwrap_or_default();
                 }
                 let mut loaded = self.tags.borrow_mut();
                 let tags = loaded.entry(registry.to_owned()).or_insert_with(|| {
-                    sunrise_items::items::load_tags(self.root, &folder(registry), self.overlay)
+                    if let Some(dir) = self.custom_registry(registry) {
+                        sunrise_world::tag_layers::load(
+                            self.root,
+                            dir.tag_directory(),
+                            self.overlay,
+                            |id| dir.contains_id(id),
+                        )
+                        .map(|loaded| {
+                            loaded
+                                .into_iter()
+                                .map(|(tag, ids)| (tag, ids.into_iter().collect()))
+                                .collect()
+                        })
                         .unwrap_or_else(|e| {
                             log::warn!("Sunrise: the {registry} tags data maps read: {e}");
                             HashMap::new()
                         })
+                    } else {
+                        sunrise_items::items::load_tags(self.root, &folder(registry), self.overlay)
+                            .unwrap_or_else(|e| {
+                                log::warn!("Sunrise: the {registry} tags data maps read: {e}");
+                                HashMap::new()
+                            })
+                    }
                 });
                 members(tags)
             }
@@ -196,64 +231,72 @@ pub(in crate::game) fn full_id(id: &str) -> Cow<'_, str> {
     }
 }
 
-/// Merge the types' values from the server's tables' pack files, in pack order (mods' below
-/// the packs'), with ids and tags resolved against `registries`. Unknown registries and bad
-/// type ids are left out with a warning; a file that isn't a valid data map or contains an
-/// undecodable value is skipped atomically with an error.
-pub fn load_maps<V: Clone>(
-    types: &[DataMapType],
+fn decode_entry_wrapper<V>(
+    raw: &Value,
+    decode: &impl Fn(&Value) -> Result<V, String>,
+) -> Result<(bool, V), String> {
+    // A direct object can have a field named `value`; only an object with
+    // exactly the entry wrapper's fields is unwrapped. Conditions are already read.
+    if let Value::Object(object) = raw
+        && let Some(value) = object.get("value")
+        && object.keys().all(|k| k == "value" || k == "replace")
+    {
+        let entry_replace = match object.get("replace") {
+            Some(Value::Bool(b)) => *b,
+            Some(_) => return Err("entry replace must be a boolean".into()),
+            None => false,
+        };
+        return Ok((entry_replace, decode(value)?));
+    }
+    Ok((false, decode(raw)?))
+}
+
+/// Merge the registered maps' values from the server's tables' pack files, in pack order
+/// (mods' below the packs'), with ids and tags resolved against `registries`. Unknown
+/// registries are left out with a warning; a file that isn't a valid data map or contains
+/// an undecodable value or remover is skipped atomically with an error.
+pub fn load_maps<V: Clone, R>(
+    registered: &[Arc<mod_api::__private::RegisteredDataMap>],
     overlay: &sunrise_world::loot::PackOverlay<'_>,
     registries: &dyn MapRegistries,
-    decode: impl Fn(&str, &Value) -> Result<V, String>,
+    decode_value: impl Fn(&str, &Value) -> Result<V, String>,
+    decode_remover: impl Fn(&str, &Value) -> Result<R, String>,
+    merge: impl Fn(&mod_api::__private::RegisteredDataMap, &str, &V, &V) -> Result<V, String>,
+    remove_partial: impl Fn(
+        &mod_api::__private::RegisteredDataMap,
+        &str,
+        &V,
+        &R,
+    ) -> Result<Option<V>, String>,
 ) -> LoadedMaps<V> {
     let mut maps: LoadedMaps<V> = BTreeMap::new();
-    for ty in types {
-        if !registries.known(&ty.registry) {
+    for reg in registered {
+        let registry = reg.registry();
+        let map_id = reg.id_str();
+        if !registries.known(registry) {
             log::warn!(
-                "Sunrise: data map {} is for {}, a registry the game doesn't name: left out",
-                ty.id,
-                ty.registry
+                "Sunrise: data map {map_id} is for {registry}, a registry the game doesn't name: left out"
             );
             continue;
         }
-        let Some(id) = Identifier::parse_namespaced(&ty.id) else {
-            log::warn!(
-                "Sunrise: data map type {} is not a valid namespaced identifier: left out",
-                ty.id
-            );
-            continue;
-        };
-        let registered = maps.entry(ty.registry.clone()).or_default();
-        if registered.contains_key(&ty.id) {
-            log::warn!(
-                "Sunrise: data map {} registered twice: the first is kept",
-                ty.id
-            );
+        let by_map = maps.entry(registry.to_owned()).or_default();
+        if by_map.contains_key(map_id) {
+            log::warn!("Sunrise: data map {map_id} registered twice: the first is kept");
             continue;
         }
-        let (map, _) = data_map_files::load(
-            &id,
-            &ty.registry,
-            BTreeMap::new(),
+        let map = data_map_files::load_registered(
+            reg.id(),
+            registry,
+            reg.supports_tags(),
             overlay,
-            |tag| registries.tag(&ty.registry, tag),
-            |raw| {
-                // A direct object can have a field named `value`; only an object with
-                // exactly the entry wrapper's fields is unwrapped. Conditions are already read.
-                if let Value::Object(object) = raw
-                    && let Some(value) = object.get("value")
-                    && object
-                        .iter()
-                        .all(|(k, v)| k == "value" || (k == "replace" && v.is_boolean()))
-                {
-                    decode(&ty.id, value)
-                } else {
-                    decode(&ty.id, raw)
-                }
-            },
-            |entry| registries.contains(&ty.registry, entry),
+            |tag| registries.tag(registry, tag),
+            |raw| decode_entry_wrapper(raw, &|v| decode_value(map_id, v)),
+            |rem| decode_remover(map_id, rem),
+            |entry| registries.contains(registry, entry),
+            |entry, existing, incoming| merge(reg, entry, existing, incoming),
+            |entry, existing, remover| remove_partial(reg, entry, existing, remover),
         );
-        registered.insert(ty.id.clone(), map);
+        by_map.insert(map_id.to_owned(), map);
     }
     maps
 }
@@ -271,13 +314,27 @@ impl DataMaps {
 
     /// Merge the pack files and publish their winning values as NBT.
     pub fn load(
-        types: &[DataMapType],
+        registered: &[Arc<mod_api::__private::RegisteredDataMap>],
         overlay: &sunrise_world::loot::PackOverlay<'_>,
         registries: &dyn MapRegistries,
     ) -> Self {
-        let merged = load_maps(types, overlay, registries, |_, value| {
-            to_tag(value).map_err(|_| "value cannot be represented as NBT".to_owned())
-        });
+        let merged = load_maps(
+            registered,
+            overlay,
+            registries,
+            |_, value| to_tag(value).map_err(|_| "value cannot be represented as NBT".to_owned()),
+            |_, rem| to_tag(rem).map_err(|_| "remover cannot be represented as NBT".to_owned()),
+            |reg, entry, existing, incoming| {
+                let entry_id = Identifier::parse(entry)
+                    .map_err(|e| format!("invalid entry id {entry:?}: {e}"))?;
+                reg.merge(&entry_id, existing, incoming)
+            },
+            |reg, entry, existing, remover| {
+                let entry_id = Identifier::parse(entry)
+                    .map_err(|e| format!("invalid entry id {entry:?}: {e}"))?;
+                reg.remove_partial(&entry_id, existing, remover)
+            },
+        );
         let mut published = Self::default();
         for (registry, maps) in merged {
             let mut types = HashMap::with_capacity(maps.len());
@@ -287,6 +344,52 @@ impl DataMaps {
             published.maps.insert(registry, types);
         }
         published
+    }
+
+    /// Replace one registry's synced maps atomically on a remote client.
+    pub fn replace_registry(
+        &mut self,
+        registry: String,
+        maps: HashMap<String, Vec<(String, Tag)>>,
+    ) {
+        self.maps.insert(registry, maps);
+    }
+
+    /// Build the network-projected snapshot of all synced (`Optional` and `Required`) maps
+    /// for server-to-client synchronization.
+    pub fn synced_snapshot(&self) -> sunrise_sim::data_map_net::SyncedDataMapsSnapshot {
+        let registered = mod_api::__private::installed_data_maps();
+        let mut registries = BTreeMap::new();
+        for (registry, by_map) in &self.maps {
+            let mut out_maps = Vec::new();
+            for (map_id, entries) in by_map {
+                if let Some(reg) = registered
+                    .iter()
+                    .find(|r| r.registry() == registry && r.id_str() == map_id)
+                {
+                    if reg.sync() == mod_api::DataMapSync::ServerOnly {
+                        continue;
+                    }
+                    let projected: Vec<(String, Tag)> = entries
+                        .iter()
+                        .filter_map(|(entry_id, tag)| {
+                            reg.project_network_value(entry_id, tag)
+                                .map(|projected| (entry_id.clone(), projected))
+                        })
+                        .collect();
+                    out_maps.push((map_id.clone(), projected));
+                } else if sunrise_sim::data_map_net::BUILTIN_SYNCED_MAPS
+                    .contains(&(registry.as_str(), map_id.as_str()))
+                {
+                    out_maps.push((map_id.clone(), entries.clone()));
+                }
+            }
+            if !out_maps.is_empty() {
+                out_maps.sort_by(|a, b| a.0.cmp(&b.0));
+                registries.insert(registry.clone(), out_maps);
+            }
+        }
+        sunrise_sim::data_map_net::SyncedDataMapsSnapshot { registries }
     }
 
     pub fn with_builtins(mut self, builtin: Loaded) -> Self {

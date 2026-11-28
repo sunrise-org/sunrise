@@ -25,16 +25,6 @@ impl Hooks for RegistryMod {
             ),
         ]);
     }
-    fn data_map_types(
-        &self,
-        _: &mut dyn mod_api::ServerHost,
-        event: &mut mod_api::DataMapTypesEvent<'_>,
-    ) {
-        event.types.push(mod_api::game::DataMapType {
-            id: "registry_test:weights".into(),
-            registry: "registry_test:spell".into(),
-        });
-    }
     fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
         r.declare_datapack_registry(
             "spell",
@@ -45,6 +35,10 @@ impl Hooks for RegistryMod {
             )],
         )
         .unwrap();
+        r.register_data_map_by_name(mod_api::RawDataMap::new(
+            "registry_test:spell",
+            "registry_test:weights",
+        ));
     }
 }
 fn write(path: &Path, text: &str) {

@@ -1,7 +1,6 @@
-use mod_api::__private::{game::RegistrationContextNew, reload::ReloadStageError};
+use mod_api::__private::reload::ReloadStageError;
 use mod_api::{
-    ConditionError, Hooks, Identifier, LoadCondition, ModEntry, RegisterLoadConditionsEvent,
-    RegistrationContext,
+    ConditionError, Hooks, Identifier, LoadCondition, ModEntry, Registrar, RegistrationContext,
 };
 use serde_json::{Value, json};
 use std::sync::Arc;
@@ -29,18 +28,8 @@ struct Registrant {
 }
 #[mod_api::__subscriptions]
 impl Hooks for Registrant {
-    fn register_load_conditions(
-        &self,
-        _: &RegistrationContext,
-        event: &mut RegisterLoadConditionsEvent<'_>,
-    ) {
-        event
-            .conditions
-            .register(
-                Identifier::parse("testmod:flag").unwrap(),
-                Flag(self.count.clone(), self.mode.clone()),
-            )
-            .unwrap();
+    fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+        r.register_load_condition("testmod:flag", Flag(self.count.clone(), self.mode.clone()));
     }
     fn data_pack_files(
         &self,
@@ -345,15 +334,8 @@ fn load_conditions_recipe_reload_counts_and_failed_candidates_keep_old_recipes()
 struct NamedCondition(&'static str);
 #[mod_api::__subscriptions]
 impl Hooks for NamedCondition {
-    fn register_load_conditions(
-        &self,
-        _: &RegistrationContext,
-        event: &mut RegisterLoadConditionsEvent<'_>,
-    ) {
-        let _ = event.conditions.register(
-            Identifier::parse(self.0).unwrap(),
-            Flag(Arc::default(), Arc::default()),
-        );
+    fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+        r.register_load_condition(self.0, Flag(Arc::default(), Arc::default()));
     }
 }
 #[test]
@@ -365,43 +347,33 @@ fn load_conditions_registration_allows_shared_namespaces() {
         ]
         .into(),
         || {
-            let mut registrar = mod_api::LoadConditionDeclarations::new(
-                sunrise_world::conditions::is_builtin_condition,
-            );
-            mod_api::dispatch_register_load_conditions(&RegistrationContext::new(), |listen| {
-                registrar.register_listener(listen)
-            });
-            let entries = registrar.finish().unwrap();
+            mod_platform::__private::part_tests::install_parts_fixture(mod_api::__private::mods())
+                .unwrap();
+            let entries = mod_api::__private::installed_load_conditions();
             assert_eq!(entries.len(), 2);
             for (name, owner, value) in [("a:y", "a", true), ("a:x", "b", false)] {
-                let (registered_owner, handler) =
-                    entries.get(&Identifier::parse(name).unwrap()).unwrap();
-                assert_eq!(*registered_owner, owner);
-                assert_eq!(handler.test(&json!({"value": value})), Ok(value));
+                let entry = entries
+                    .iter()
+                    .find(|entry| entry.id == Identifier::parse(name).unwrap())
+                    .unwrap();
+                assert_eq!(entry.owner_mod, owner);
+                assert_eq!(entry.condition.test(&json!({"value": value})), Ok(value));
             }
         },
     );
 }
 
 #[test]
-fn load_conditions_registration_refuses_duplicate_ids_even_if_ignored() {
-    mod_platform::testing::with_mods(
-        vec![
-            ModEntry::new("a", Box::new(NamedCondition("a:x"))),
-            ModEntry::new("b", Box::new(NamedCondition("a:x"))),
-        ]
-        .into(),
-        || {
-            let mut registrar = mod_api::LoadConditionDeclarations::new(
-                sunrise_world::conditions::is_builtin_condition,
-            );
-            mod_api::dispatch_register_load_conditions(&RegistrationContext::new(), |listen| {
-                registrar.register_listener(listen)
-            });
-            let error = registrar.finish().err().unwrap().message;
-            assert!(error.contains("condition a:x"), "{error}");
-            assert!(error.contains("both a and b"), "{error}");
-        },
+fn load_conditions_registration_refuses_duplicate_ids_at_startup() {
+    let err = mod_platform::__private::part_tests::install_parts_fixture(&[
+        ModEntry::new("a", Box::new(NamedCondition("a:x"))),
+        ModEntry::new("b", Box::new(NamedCondition("a:x"))),
+    ])
+    .unwrap_err();
+    assert!(
+        err.iter()
+            .any(|msg| msg.contains("condition a:x") && msg.contains("both a and b")),
+        "{err:?}"
     );
 }
 
@@ -412,29 +384,10 @@ fn a_panicking_load_condition_registrar_leaves_neither_handlers_nor_errors() {
     struct Failing(Arc<AtomicBool>);
     #[mod_api::__subscriptions]
     impl Hooks for Failing {
-        fn register_load_conditions(
-            &self,
-            _: &RegistrationContext,
-            event: &mut RegisterLoadConditionsEvent<'_>,
-        ) {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
             let handler = || Flag(Arc::default(), Arc::default());
-            let shared = Identifier::parse("a:shared").unwrap();
-            event
-                .conditions
-                .register(shared.clone(), handler())
-                .unwrap();
-            event
-                .conditions
-                .register(Identifier::parse("a:leaked").unwrap(), handler())
-                .unwrap();
-            assert_eq!(
-                event
-                    .conditions
-                    .register(shared, handler())
-                    .unwrap_err()
-                    .message,
-                "condition a:shared registered by both a and a",
-            );
+            r.register_load_condition("a:shared", handler());
+            r.register_load_condition("a:leaked", handler());
             self.0.store(true, Ordering::Relaxed);
             panic!("load condition registrar fixture failed");
         }
@@ -448,40 +401,38 @@ fn a_panicking_load_condition_registrar_leaves_neither_handlers_nor_errors() {
         ]
         .into(),
         || {
-            let mut registrar = mod_api::LoadConditionDeclarations::new(
-                sunrise_world::conditions::is_builtin_condition,
-            );
-            sunrise_gameplay_common::game::native_hooks::native_register_load_conditions(
-                &RegistrationContext::new(),
-                &mut registrar,
-            );
+            mod_platform::__private::part_tests::install_parts_fixture(mod_api::__private::mods())
+                .unwrap();
             assert!(reached.load(Ordering::Relaxed));
-            let entries = registrar.finish().unwrap();
+            let entries = mod_api::__private::installed_load_conditions();
             assert_eq!(entries.len(), 1);
-            let (owner, handler) = &entries[&Identifier::parse("a:shared").unwrap()];
-            assert_eq!(*owner, "b");
-            assert_eq!(handler.test(&json!({"value": false})), Ok(false));
+            assert_eq!(entries[0].id, Identifier::parse("a:shared").unwrap());
+            assert_eq!(entries[0].owner_mod, "b");
+            assert_eq!(
+                entries[0].condition.test(&json!({"value": false})),
+                Ok(false)
+            );
         },
     );
 }
 
 #[test]
-fn load_conditions_refuse_a_builtin_id_at_startup_even_if_ignored() {
-    for name in ["neoforge:always", "neoforge:never", "neoforge:mod_loaded"] {
-        mod_platform::testing::with_mods(
-            vec![ModEntry::new("compat", Box::new(NamedCondition(name)))].into(),
-            || {
-                let sources = sunrise_gameplay_common::game::mods::ModsState::default();
-                let inventory = sunrise_mod_package::enabled::EnabledMods::default();
-                let error = sunrise_gameplay_common::game::load_conditions::conditions_for_mods(
-                    &sources, &inventory,
-                )
-                .unwrap_err();
-                assert_eq!(
-                    error,
-                    format!("mod compat cannot register condition {name}: that ID is built in")
-                );
-            },
+fn load_conditions_refuse_a_builtin_id_at_startup() {
+    for name in [
+        "neoforge:always",
+        "neoforge:never",
+        "neoforge:mod_loaded",
+        "fabric:all_mods_loaded",
+    ] {
+        let err = mod_platform::__private::part_tests::install_parts_fixture(&[ModEntry::new(
+            "compat",
+            Box::new(NamedCondition(name)),
+        )])
+        .unwrap_err();
+        assert!(
+            err.iter().any(|msg| msg
+                == &format!("mod compat cannot register condition {name}: that ID is built in")),
+            "{err:?}"
         );
     }
 }
@@ -497,6 +448,8 @@ fn load_conditions_admit_registered_foreign_ids_but_refuse_every_unknown_id() {
         ]
         .into(),
         || {
+            mod_platform::__private::part_tests::install_parts_fixture(mod_api::__private::mods())
+                .unwrap();
             let sources = sunrise_gameplay_common::game::mods::ModsState::default();
             let inventory = sunrise_mod_package::enabled::EnabledMods::default();
             let conditions = sunrise_gameplay_common::game::load_conditions::conditions_for_mods(
@@ -536,6 +489,8 @@ fn load_conditions_disabled_owner_does_not_execute_registered_handler() {
         )]
         .into(),
         || {
+            mod_platform::__private::part_tests::install_parts_fixture(mod_api::__private::mods())
+                .unwrap();
             let sources = sunrise_gameplay_common::game::mods::ModsState::default();
             let inventory = sunrise_mod_package::enabled::EnabledMods::default();
             let file = json!({"neoforge:conditions":[{"type":"testmod:flag","value":true}]});
@@ -574,19 +529,12 @@ fn load_condition_panic_disables_only_that_handler_across_generations() {
     struct Pair(Arc<AtomicUsize>);
     #[mod_api::__subscriptions]
     impl Hooks for Pair {
-        fn register_load_conditions(
-            &self,
-            _: &RegistrationContext,
-            event: &mut RegisterLoadConditionsEvent<'_>,
-        ) {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
             for (id, count) in [
                 ("foreign:faulty", self.0.clone()),
                 ("foreign:healthy", Arc::default()),
             ] {
-                event
-                    .conditions
-                    .register(Identifier::parse(id).unwrap(), Flag(count, Arc::default()))
-                    .unwrap();
+                r.register_load_condition(id, Flag(count, Arc::default()));
             }
         }
     }
@@ -599,6 +547,8 @@ fn load_condition_panic_disables_only_that_handler_across_generations() {
         )]
         .into(),
         || {
+            mod_platform::__private::part_tests::install_parts_fixture(mod_api::__private::mods())
+                .unwrap();
             let sources = sunrise_gameplay_common::game::mods::ModsState::default();
             let inventory = sunrise_mod_package::enabled::EnabledMods::default();
             let load = sunrise_gameplay_common::game::load_conditions::conditions_for_mods(

@@ -922,6 +922,7 @@ fn datapack_vanilla_values_agree_with_worldgen_and_invalidate_on_reload() {
                 game.dispatch_test_remote_event(sunrise_client::net::Event::Joined {
                     registries: joined_registries,
                     datapacks: bad_receiver,
+                    custom_registries: Default::default(),
                     name: "tester".into(),
                     uuid: 1,
                 })

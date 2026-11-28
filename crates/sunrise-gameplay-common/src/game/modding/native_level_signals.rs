@@ -93,7 +93,8 @@ super::native_tags::impl_tags!(
     ReadLevel<'_, 'g, G>,
     level,
     level.game.native_tag_items(),
-    level.game.loaded_biome_keys();
+    level.game.loaded_biome_keys(),
+    level.game.side_custom_tag_source();
     generics('g, G: crate::game::SideGame<'g>)
 );
 

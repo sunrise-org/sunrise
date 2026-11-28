@@ -548,6 +548,9 @@ enum CaptureAdmission {
 /// State shared with the connection threads.
 pub struct Shared {
     payload_local: Arc<crate::raw_payloads::Local>,
+    /// The `sync(true)` custom registries every login of this listener is sent, captured at start.
+    custom_registries: Arc<crate::custom_registry_net::Snapshot>,
+    pub data_maps_known: crate::data_map_net::LocalDataMaps,
     /// What the next login is sent; `PlayerList.reloadResources` swaps it.
     sync: Mutex<Arc<data::SyncData>>,
     pub events: crate::raw_payloads::ingress::Producer<NetEvent>,
@@ -889,14 +892,35 @@ impl Lan {
     }
     /// ServerConnectionListener.startTcpServerListener with a configuration.
     pub fn start_with(sync: Arc<data::SyncData>, config: NetConfig) -> io::Result<Self> {
-        Self::start_listener(sync, config, false, false)
+        Self::start_listener(
+            sync,
+            config,
+            false,
+            false,
+            crate::data_map_net::LocalDataMaps::installed(),
+        )
+    }
+    /// Start a listener with an explicit synced data-map inventory (for loopback tests).
+    #[cfg(any(test, feature = "test-publication-scope"))]
+    pub fn start_with_data_maps(
+        sync: Arc<data::SyncData>,
+        config: NetConfig,
+        data_maps_known: crate::data_map_net::LocalDataMaps,
+    ) -> io::Result<Self> {
+        Self::start_listener(sync, config, false, false, data_maps_known)
     }
     /// Start a listener whose game thread runs configuration tasks and prepares each spawn.
     pub fn start_with_spawn_preparation(
         sync: Arc<data::SyncData>,
         config: NetConfig,
     ) -> io::Result<Self> {
-        Self::start_listener(sync, config, true, true)
+        Self::start_listener(
+            sync,
+            config,
+            true,
+            true,
+            crate::data_map_net::LocalDataMaps::installed(),
+        )
     }
     #[cfg(all(test, feature = "net-trace"))]
     fn start_in_capture_dir(
@@ -904,19 +928,28 @@ impl Lan {
         config: NetConfig,
         dir: &std::path::Path,
     ) -> io::Result<Self> {
-        Self::start_listener_inner(sync, config, false, false, Some(dir))
+        Self::start_listener_inner(
+            sync,
+            config,
+            false,
+            false,
+            crate::data_map_net::LocalDataMaps::default(),
+            Some(dir),
+        )
     }
     fn start_listener(
         sync: Arc<data::SyncData>,
         config: NetConfig,
         drive_game: bool,
         prepare_spawn: bool,
+        data_maps_known: crate::data_map_net::LocalDataMaps,
     ) -> io::Result<Self> {
         Self::start_listener_inner(
             sync,
             config,
             drive_game,
             prepare_spawn,
+            data_maps_known,
             #[cfg(all(test, feature = "net-trace"))]
             None,
         )
@@ -926,6 +959,7 @@ impl Lan {
         config: NetConfig,
         drive_game: bool,
         prepare_spawn: bool,
+        data_maps_known: crate::data_map_net::LocalDataMaps,
         #[cfg(all(test, feature = "net-trace"))] capture_dir: Option<&std::path::Path>,
     ) -> io::Result<Self> {
         let (tx, events) = event_channel();
@@ -958,6 +992,8 @@ impl Lan {
         let shared = Arc::new(Shared {
             payload_local: crate::raw_payloads::Local::capture(crate::raw_payloads::Side::Server)
                 .map_err(io::Error::other)?,
+            custom_registries: crate::custom_registry_net::published(),
+            data_maps_known,
             sync: Mutex::new(sync),
             events: tx,
             handoffs: drive_game.then(|| Mutex::new(Vec::new())),
@@ -1443,6 +1479,7 @@ mod tests {
     }
     use super::conn::MEMORY_ADDRESS;
     use super::*;
+    use crate::data_map_net::LocalDataMaps;
     use std::{io::Read, time::Instant};
 
     #[test]
@@ -1452,8 +1489,14 @@ mod tests {
             announce: false,
             ..NetConfig::lan(0, "handoffs".into(), 1)
         };
-        let mut lan =
-            Lan::start_listener(Arc::new(data::SyncData::empty()), config, true, false).unwrap();
+        let mut lan = Lan::start_listener(
+            Arc::new(data::SyncData::empty()),
+            config,
+            true,
+            false,
+            LocalDataMaps::default(),
+        )
+        .unwrap();
         let intention = sunrise_protocol::packets::handshake::Intention {
             host: "entry.test".into(),
             port: 25565,
@@ -1488,10 +1531,22 @@ mod tests {
             announce: false,
             ..NetConfig::lan(0, "config-incarnation".into(), 1)
         };
-        let lan_a =
-            Lan::start_listener(Arc::new(data::SyncData::empty()), config(), true, false).unwrap();
-        let mut lan_b =
-            Lan::start_listener(Arc::new(data::SyncData::empty()), config(), true, false).unwrap();
+        let lan_a = Lan::start_listener(
+            Arc::new(data::SyncData::empty()),
+            config(),
+            true,
+            false,
+            LocalDataMaps::default(),
+        )
+        .unwrap();
+        let mut lan_b = Lan::start_listener(
+            Arc::new(data::SyncData::empty()),
+            config(),
+            true,
+            false,
+            LocalDataMaps::default(),
+        )
+        .unwrap();
         let conn_a = lan_a.shared.next_configuration_connection().unwrap();
         let conn_b = lan_b.shared.next_configuration_connection().unwrap();
         let (inc_a, local_a) = mod_api::__private::configuration_connection_parts(conn_a);

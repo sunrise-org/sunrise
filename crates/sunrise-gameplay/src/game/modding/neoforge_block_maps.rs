@@ -7,7 +7,7 @@ use serde_json::Value;
 use std::sync::Arc;
 use sunrise_core::identifier::Identifier;
 use sunrise_gameplay_common::game::native_data_maps_common::{
-    DataMapType, MapRegistries, WorldRegistries, load_maps,
+    MapRegistries, WorldRegistries, load_maps,
 };
 use sunrise_world::level::{BlockMapValue, BlockMaps};
 
@@ -25,49 +25,65 @@ fn load(
     registries: &dyn MapRegistries,
     block_id: impl Fn(&str) -> Option<u32>,
 ) -> Option<Arc<BlockMaps>> {
-    let types = MAPS.map(|id| DataMapType {
-        id: id.to_owned(),
-        registry: "minecraft:block".to_owned(),
-    });
-    let mut maps = load_maps(&types, overlay, registries, |id, value| {
-        let (field, transform): (&str, fn(String) -> BlockMapValue) = match id {
-            "neoforge:flammable" => {
-                let read_odds = |field| {
-                    value
-                        .get(field)
-                        .and_then(Value::as_i64)
-                        .and_then(|odds| i32::try_from(odds).ok())
-                        .ok_or_else(|| format!("expected an integer in {field}"))
-                };
-                return Ok(BlockMapValue::Flammable {
-                    ignite_odds: read_odds("ignite_odds")?,
-                    burn_odds: read_odds("burn_odds")?,
-                });
+    let block_registry = Identifier::parse_namespaced("minecraft:block").unwrap();
+    let types: Vec<_> = MAPS
+        .into_iter()
+        .map(|id| {
+            Arc::new(mod_api::__private::RegisteredDataMap::from_raw(
+                "neoforge",
+                block_registry.clone(),
+                Identifier::parse_namespaced(id).unwrap(),
+                mod_api::RawDataMap::new("minecraft:block", id),
+            ))
+        })
+        .collect();
+    let mut maps = load_maps(
+        &types,
+        overlay,
+        registries,
+        |id, value| {
+            let (field, transform): (&str, fn(String) -> BlockMapValue) = match id {
+                "neoforge:flammable" => {
+                    let read_odds = |field| {
+                        value
+                            .get(field)
+                            .and_then(Value::as_i64)
+                            .and_then(|odds| i32::try_from(odds).ok())
+                            .ok_or_else(|| format!("expected an integer in {field}"))
+                    };
+                    return Ok(BlockMapValue::Flammable {
+                        ignite_odds: read_odds("ignite_odds")?,
+                        burn_odds: read_odds("burn_odds")?,
+                    });
+                }
+                "neoforge:oxidizables" => ("next_oxidation_stage", BlockMapValue::Oxidizable),
+                "neoforge:waxables" => ("waxed", BlockMapValue::Waxable),
+                _ => unreachable!("only the built-in block map types are registered here"),
+            };
+            // NeoForge reads this flag for its generated block transformers, which Sunrise does
+            // not install. An invalid flag still makes the value undecodable.
+            if !matches!(
+                value.get("generate_block_transform"),
+                None | Some(Value::Bool(_))
+            ) {
+                return Err("expected a boolean in generate_block_transform".into());
             }
-            "neoforge:oxidizables" => ("next_oxidation_stage", BlockMapValue::Oxidizable),
-            "neoforge:waxables" => ("waxed", BlockMapValue::Waxable),
-            _ => unreachable!("only the built-in block map types are registered here"),
-        };
-        // NeoForge reads this flag for its generated block transformers, which Sunrise does
-        // not install. An invalid flag still makes the value undecodable.
-        if !matches!(
-            value.get("generate_block_transform"),
-            None | Some(Value::Bool(_))
-        ) {
-            return Err("expected a boolean in generate_block_transform".into());
-        }
-        let target = value
-            .get(field)
-            .and_then(Value::as_str)
-            .ok_or_else(|| format!("expected a block identifier in {field}"))?;
-        let name = Identifier::parse(target)
-            .map_err(|error| format!("{field}: {error}"))?
-            .to_string();
-        if block_id(&name).is_none() {
-            return Err(format!("{field}: unknown block {name}"));
-        }
-        Ok(transform(name))
-    });
+            let target = value
+                .get(field)
+                .and_then(Value::as_str)
+                .ok_or_else(|| format!("expected a block identifier in {field}"))?;
+            let name = Identifier::parse(target)
+                .map_err(|error| format!("{field}: {error}"))?
+                .to_string();
+            if block_id(&name).is_none() {
+                return Err(format!("{field}: unknown block {name}"));
+            }
+            Ok(transform(name))
+        },
+        |_, _| Ok(()),
+        |_, _, _, incoming| Ok(incoming.clone()),
+        |_, _, _, _| Err("data map does not support partial removers".into()),
+    );
     let blocks = maps.remove("minecraft:block")?;
     let block_maps = BlockMaps::from_values(blocks.into_values().flatten(), |name| {
         block_id(name).unwrap_or(u32::MAX)

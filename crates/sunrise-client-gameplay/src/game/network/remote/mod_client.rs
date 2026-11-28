@@ -24,6 +24,7 @@ use sunrise_core::{geometry::Vec3, profile::AccountProperty, random::RandomSourc
 use sunrise_game_data::{Result, text::Text};
 use sunrise_gameplay_common::game::collision_source::Mover;
 use sunrise_gameplay_common::game::native_hooks::base::GameHooks as _;
+use sunrise_gameplay_common::game::native_hooks::data_maps_updated::GameHooks as _;
 use sunrise_gameplay_common::game::remote::DryChanges;
 use sunrise_gameplay_common::game::remote::DryPlace;
 use sunrise_gameplay_common::game::remote::DrySound;
@@ -408,6 +409,9 @@ impl crate::game::ClientGame<'_> {
                     })?;
                 }
             }
+            C::CustomPayload(p) if p.channel == sunrise_sim::data_map_net::SYNC_CHANNEL => {
+                self.apply_synced_data_maps(&p.data)?;
+            }
             C::CustomPayload(p)
                 if p.channel == sunrise_sim::lan::commands::selector_sync::CHANNEL =>
             {
@@ -728,6 +732,27 @@ impl crate::game::ClientGame<'_> {
             C::ClearTitles(p) => self.apply_clear_titles_packet(p),
             _ => {}
         }
+        Ok(())
+    }
+    /// Apply one `sunrise:data_map_sync` play payload on a remote client
+    /// (`ClientRegistryManager.handleDataMapSync:39-53`).
+    pub(in crate::game) fn apply_synced_data_maps(&mut self, data: &[u8]) -> Result<()> {
+        let (registry, maps) = match sunrise_sim::data_map_net::decode_sync_payload(data) {
+            Ok(decoded) => decoded,
+            Err(error) => {
+                self.refuse_remote_input(format!(
+                    "Failed to handle registry data map sync: {error}"
+                ))?;
+                return Ok(());
+            }
+        };
+        if let Some(remote) = &mut self.client.remote {
+            remote
+                .client_data_maps
+                .replace_registry(registry.clone(), maps);
+            remote.client_data_maps_received = true;
+        }
+        self.native_data_maps_updated(&registry, mod_api::DataMapsUpdateCause::ClientSync);
         Ok(())
     }
     /// One vanilla active cache: `(2 * (max(2, client_view_distance) + 3) + 1)^2` columns

@@ -1,0 +1,34 @@
+ids = [
+    "handle:LoadConditions::register",
+    "hook:data_map_types",
+    "hook:register_load_conditions",
+    "method:DataMap::ty",
+    "method:Hooks::data_map_types",
+    "method:Hooks::register_load_conditions",
+    "trait:DataMap",
+    "trait:LoadConditions",
+    "type:DataMapType",
+    "type:DataMapTypesEvent",
+    "type:HookId.DataMapTypes",
+    "type:HookId.RegisterLoadConditions",
+    "type:RegisterLoadConditionsEvent",
+]
+why = """
+Fold data map registration (`RegisterDataMapTypesEvent`) and load condition registration onto
+startup `Hooks::register` (`Registrar::register_data_map`, `Registrar::register_data_map_by_name`,
+`Registrar::register_load_condition`), deleting `Hooks::data_map_types`, `DataMapType`,
+`DataMap::ty`, `Hooks::register_load_conditions`, `LoadConditions`, and
+`LoadConditionDeclarations` under the clean break. Extend `DataMap` with `DataMapSync`,
+`network_value`, `merge`, `remove_partial`, and `supports_tags`; implement `DataMapEntry` for
+custom static registries' `EntryKey<T>` via `CustomRegistryEntry`; and add configuration
+negotiation and play-phase client synchronization (`DataMapsUpdateCause::ClientSync`).
+"""
+migrate = """
+Move data map registrations from `Hooks::data_map_types` (`event.types.push(MyMap.ty())`) into
+`Hooks::register` via `r.register_data_map(MyMap)` for typed keys (including custom static
+registries implementing `CustomRegistryEntry`) or `r.register_data_map_by_name(RawDataMap::new(...))`
+for registries without a typed key. Remove any `DataMapType` imports, `DataMap::ty` calls, and
+`HookId::DataMapTypes` / `HookId::RegisterLoadConditions` match arms.
+Move custom load condition registrations from `Hooks::register_load_conditions`
+(`event.conditions.register(...)`) into `Hooks::register` via `r.register_load_condition(id, handler)`.
+"""

@@ -681,7 +681,6 @@ pub use api_values::{block_jump_factor, block_speed_factor, is_ladder};
 pub use held_items::interact_location;
 pub use hit::Hit;
 pub use launch_options::Options;
-pub use mod_api::game::DataMapType;
 pub use native_hooks::{PhantomSpawnResult, SleepProblem};
 #[allow(unused_imports)]
 pub use std::{
@@ -1343,9 +1342,14 @@ pub struct WorldTables {
     pub reload_sources: Option<Arc<sunrise_sim::crafting::ResolvedSources>>,
     /// The values of the data map types native mods registered (`native_data_map_types`).
     pub data_maps: native_data_maps_common::DataMaps,
-    /// Pack tags used by advancement predicates and built-in data maps
-    /// (`TagLoader.loadTagsForExistingRegistries`). Damage tags live in the catalog.
-    pub pack_tags: HashMap<&'static str, HashMap<String, HashSet<String>>>,
+    /// Pack tags used by advancement predicates, built-in data maps, and mod-declared static
+    /// custom registries (`TagLoader.loadTagsForExistingRegistries`). Damage tags live in the
+    /// catalog. Keyed by directory for `minecraft:` registries (`"worldgen/biome"`, ...) and
+    /// full canonical registry ID for mod-declared custom static registries (`"chemlib:gas"`).
+    /// Member order is vanilla's (`TagLoader.tryBuildTag`'s `LinkedHashSet`), kept for
+    /// `Tags::entries`, with constant-time membership.
+    /// Shared with the wire's `WorldTags`, never copied.
+    pub pack_tags: Arc<sunrise_sim::lan::data::PackTags>,
     /// The gameplay attributes of the dimension types, biomes and timelines (with the packs' timeline tags) that the raid code reads.
     pub gameplay: Arc<sunrise_sim::patrol::GameplayAttributes>,
     /// `Registries.TEST_ENVIRONMENT` and `Registries.TEST_INSTANCE`, frozen at world open.

@@ -212,19 +212,6 @@ impl ConfigKind {
         }
     }
 }
-/// A data map type a mod registers (`RegisterDataMapTypesEvent`).
-// no wire: local registration metadata, not the data map's file contents.
-#[derive(Clone, Debug, PartialEq, Eq)]
-// exhaustive: the game builds it with a literal; mods only read it
-pub struct DataMapType {
-    /// A namespaced identifier (`namespace:path`). Its files are
-    /// `data/<namespace>/data_maps/<registry folder>/<path>.json`, the
-    /// registry's own path for a `minecraft` registry, `<namespace>/<path>`
-    /// otherwise.
-    pub id: String,
-    /// The registry it is for: any the game names (`minecraft:item`, `minecraft:entity_type`...).
-    pub registry: String,
-}
 /// A mod the world was saved with that differs from the loaded mods
 /// (`ModMismatchEvent`'s `MismatchedVersionInfo`).
 // no wire: a local report from comparing saved and loaded mod versions.

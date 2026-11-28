@@ -33,18 +33,8 @@ impl mod_api::LoadCondition for Active {
 
 #[mod_api::sunrise_mod]
 impl mod_api::Hooks for ChemLib {
-    fn register_load_conditions(
-        &self,
-        _: &mod_api::RegistrationContext,
-        event: &mut mod_api::RegisterLoadConditionsEvent<'_>,
-    ) {
-        event
-            .conditions
-            .register(
-                mod_api::Identifier::parse("chemlib:active").unwrap(),
-                Active,
-            )
-            .expect("register chemlib:active");
+    fn register(&self, r: &mut dyn mod_api::Registrar, _: &mod_api::RegistrationContext) {
+        r.register_load_condition("chemlib:active", Active);
     }
 }
 "#;

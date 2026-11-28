@@ -2,8 +2,8 @@
 #[doc(hidden)]
 pub mod game;
 pub use crate::game::{
-    BlockEdit, BlockRun, Clock, ColumnSlice, ConfigKind, CubeFace, DataMapType, Falling, Heightmap,
-    Hit, MapDecoration, MapInfo, MobRender, ModMismatch, ModMismatchResolution, PhantomSpawnResult,
+    BlockEdit, BlockRun, Clock, ColumnSlice, ConfigKind, CubeFace, Falling, Heightmap, Hit,
+    MapDecoration, MapInfo, MobRender, ModMismatch, ModMismatchResolution, PhantomSpawnResult,
     PlayerRender, SleepProblem,
 };
 pub use crate::game::{ClientTickRate, NbtDataType, NbtUpgradeError, TerrainColumn};

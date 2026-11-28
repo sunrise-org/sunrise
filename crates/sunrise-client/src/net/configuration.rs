@@ -181,9 +181,19 @@ pub struct FinishConfiguration {
     pub(super) configuring: Arc<AtomicBool>,
     pub(super) play: Result<PlayPreparation, String>,
     pub(super) datapacks: crate::datapack_net::Receiver,
+    pub(super) custom_registries: crate::custom_registry_net::Receiver,
     pub(super) content_verified: bool,
     pub(super) menu_extra_revision: u8,
-    pub(super) resume: mpsc::Sender<Result<(Dynamic, crate::datapack_net::Receiver), Reason>>,
+    pub(super) resume: mpsc::Sender<
+        Result<
+            (
+                Dynamic,
+                crate::datapack_net::Receiver,
+                crate::custom_registry_net::SyncedCustomRegistries,
+            ),
+            Reason,
+        >,
+    >,
 }
 
 impl FinishConfiguration {
@@ -191,6 +201,7 @@ impl FinishConfiguration {
         size_of::<Self>()
             .saturating_add(self.play.as_ref().err().map_or(0, String::capacity))
             .saturating_add(self.datapacks.owned_heap_bytes())
+            .saturating_add(self.custom_registries.owned_heap_bytes())
     }
 
     pub fn acknowledge(self) {
@@ -200,6 +211,7 @@ impl FinishConfiguration {
             configuring,
             play,
             datapacks,
+            custom_registries,
             content_verified,
             menu_extra_revision,
             resume,
@@ -214,6 +226,8 @@ impl FinishConfiguration {
         let result = play.and_then(|play| {
             let mut registries = listener.take_registries()?;
             datapacks.finish_transfer()?;
+            custom_registries.finish_transfer()?;
+            let custom_registries = custom_registries.into_synced();
             registries.custom_components = content_verified;
             registries.menu_extra_revision = menu_extra_revision;
             let publish = || {
@@ -231,7 +245,7 @@ impl FinishConfiguration {
                     payloads.accept_empty_and_play(publish)?
                 }
             }
-            Ok((registries, datapacks))
+            Ok((registries, datapacks, custom_registries))
         });
         if result.is_err()
             && let Some(writer) = writer.lock().unwrap().as_ref()

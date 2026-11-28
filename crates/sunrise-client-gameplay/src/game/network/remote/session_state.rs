@@ -305,6 +305,12 @@ pub struct Remote {
     /// (`native_client_level_load`), to be told dropped once.
     pub(in crate::game) heard_level: Option<String>,
     pub datapacks: sunrise_sim::datapack_net::Receiver,
+    /// Server-ordered entry IDs for `sync(true)` mod-declared static custom registries.
+    pub custom_registries: sunrise_sim::custom_registry_net::SyncedCustomRegistries,
+    /// Synced data maps received from the server in play (`sunrise:data_map_sync`).
+    pub client_data_maps: sunrise_gameplay_common::game::native_data_maps_common::DataMaps,
+    /// Whether this connection has received at least one `sunrise:data_map_sync` payload.
+    pub client_data_maps_received: bool,
     /// Decoded vanilla codec values for [`Self::datapacks`], swapped on join and reload.
     pub datapack_vanilla_values:
         Option<Arc<sunrise_gameplay_common::game::native_datapack_values::DatapackVanillaValues>>,

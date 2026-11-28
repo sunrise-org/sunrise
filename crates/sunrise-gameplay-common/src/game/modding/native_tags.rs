@@ -85,6 +85,121 @@ where
     })
 }
 
+/// Source of custom static registry tags for the active side.
+#[derive(Clone, Copy)]
+pub enum CustomTagSource<'a> {
+    None,
+    Server(&'a sunrise_sim::lan::data::PackTags),
+    Client {
+        tags_loaded: bool,
+        dynamic: &'a sunrise_protocol::registry::Dynamic,
+        custom_registries: &'a sunrise_sim::custom_registry_net::SyncedCustomRegistries,
+    },
+}
+
+/// Resolved authoritative custom-registry tag for both enumeration and membership.
+pub enum CustomTag<'a> {
+    Unavailable,
+    Missing,
+    Server(&'a indexmap::IndexSet<String>),
+    Client {
+        raw_ids: &'a [i32],
+        entry_ids: &'a [Identifier],
+    },
+}
+
+impl CustomTag<'_> {
+    pub fn entries(self) -> TagMembers<Identifier> {
+        let entries: Option<Vec<_>> = match self {
+            Self::Unavailable => return TagMembers::Unavailable,
+            Self::Missing => return TagMembers::Missing,
+            Self::Server(members) => members
+                .iter()
+                .map(|id| Identifier::parse(id).ok())
+                .collect(),
+            Self::Client { raw_ids, entry_ids } => client_tag_entries(raw_ids, entry_ids)
+                .map(|id| id.cloned())
+                .collect(),
+        };
+        entries.map_or(TagMembers::Unavailable, TagMembers::Members)
+    }
+
+    pub fn contains(self, entry: &Identifier) -> Option<bool> {
+        match self {
+            Self::Unavailable => None,
+            Self::Missing => Some(false),
+            Self::Server(members) => Some(members.contains(entry.as_str())),
+            Self::Client { raw_ids, entry_ids } => {
+                let mut matched = false;
+                for id in client_tag_entries(raw_ids, entry_ids) {
+                    // A later invalid slot makes the tag unavailable even after a match.
+                    let id = id?;
+                    matched = matched || id == entry;
+                }
+                Some(matched)
+            }
+        }
+    }
+}
+
+fn client_tag_entries<'a>(
+    raw_ids: &'a [i32],
+    entry_ids: &'a [Identifier],
+) -> impl Iterator<Item = Option<&'a Identifier>> {
+    raw_ids
+        .iter()
+        .map(move |&raw_id| entry_ids.get(usize::try_from(raw_id).ok()?))
+}
+
+/// Select the authoritative custom-registry tag by canonical tag name (`namespace:path`).
+/// Shared by `Tags::entries`, `Tags::is_in_custom_tag`, and `Host::registry_entry_in_tag`.
+pub fn custom_tag_by_name<'a>(
+    source: CustomTagSource<'a>,
+    registry: &str,
+    tag_name: &str,
+) -> CustomTag<'a> {
+    match source {
+        CustomTagSource::None => CustomTag::Unavailable,
+        CustomTagSource::Client {
+            tags_loaded,
+            dynamic,
+            custom_registries,
+        } => {
+            if !tags_loaded {
+                return CustomTag::Unavailable;
+            }
+            // Require an authoritative ID mapping for this connection (synced over the wire
+            // on network connections, or seeded from local sync(true) directories on an
+            // in-process memory connection). Never fall back to process-global registries.
+            let Some(entry_ids) = custom_registries.entries(registry) else {
+                return CustomTag::Unavailable;
+            };
+            let Some(raw_ids) = dynamic.tag(registry, tag_name) else {
+                return CustomTag::Missing;
+            };
+            CustomTag::Client { raw_ids, entry_ids }
+        }
+        CustomTagSource::Server(pack_tags) => {
+            let Some(tags) = pack_tags.get(registry) else {
+                return CustomTag::Unavailable;
+            };
+            tags.get(tag_name)
+                .map_or(CustomTag::Missing, CustomTag::Server)
+        }
+    }
+}
+
+/// Select the authoritative custom-registry tag for `tag`, resolving its name on each read
+/// so keys first obtained after binding also see the current snapshot.
+pub fn custom_tag<'a>(source: CustomTagSource<'a>, registry: &str, tag: TagKey) -> CustomTag<'a> {
+    mod_api::__private::with_tag_name(tag, |name| {
+        let Some(name) = name else {
+            return CustomTag::Unavailable;
+        };
+        custom_tag_by_name(source, registry, name)
+    })
+}
+
 // A restricted host supplies the same authoritative item tables but cannot borrow Game.
 // Only that choice differs; key resolution, ordered reads and membership stay above.
 #[macro_export]
@@ -94,7 +209,8 @@ macro_rules! impl_tags {
             $ty,
             $this,
             $items,
-            None::<&mod_api::__private::BiomeKeys>;
+            None::<&mod_api::__private::BiomeKeys>,
+            $crate::game::native_tags::CustomTagSource::None;
             generics()
         );
     };
@@ -103,7 +219,18 @@ macro_rules! impl_tags {
             $ty,
             $this,
             $items,
-            $biome_keys;
+            $biome_keys,
+            $crate::game::native_tags::CustomTagSource::None;
+            generics()
+        );
+    };
+    ($ty:ty, $this:ident, $items:expr, $biome_keys:expr, $custom_tags:expr) => {
+        $crate::game::native_tags::impl_tags!(
+            $ty,
+            $this,
+            $items,
+            $biome_keys,
+            $custom_tags;
             generics()
         );
     };
@@ -112,11 +239,22 @@ macro_rules! impl_tags {
             $ty,
             $this,
             $items,
-            None::<&mod_api::__private::BiomeKeys>;
+            None::<&mod_api::__private::BiomeKeys>,
+            $crate::game::native_tags::CustomTagSource::None;
             generics($($g)*)
         );
     };
     ($ty:ty, $this:ident, $items:expr, $biome_keys:expr; generics($($g:tt)*)) => {
+        $crate::game::native_tags::impl_tags!(
+            $ty,
+            $this,
+            $items,
+            $biome_keys,
+            $crate::game::native_tags::CustomTagSource::None;
+            generics($($g)*)
+        );
+    };
+    ($ty:ty, $this:ident, $items:expr, $biome_keys:expr, $custom_tags:expr; generics($($g:tt)*)) => {
         impl<$($g)*> mod_api::Tags for $ty {
             fn key(&self, id: &mod_api::Identifier) -> Option<mod_api::TagKey> {
                 mod_api::__private::tag_key(id)
@@ -294,6 +432,25 @@ macro_rules! impl_tags {
                     },
                 )
             }
+            fn custom_tag_entries(
+                &self,
+                registry: &str,
+                tag: mod_api::TagKey,
+            ) -> mod_api::TagMembers<mod_api::Identifier> {
+                let $this = self;
+                let _ = &$this;
+                $crate::game::native_tags::custom_tag($custom_tags, registry, tag).entries()
+            }
+            fn custom_tag_contains(
+                &self,
+                registry: &str,
+                tag: mod_api::TagKey,
+                entry: &mod_api::Identifier,
+            ) -> Option<bool> {
+                let $this = self;
+                let _ = &$this;
+                $crate::game::native_tags::custom_tag($custom_tags, registry, tag).contains(entry)
+            }
         }
     };
 }
@@ -325,6 +482,180 @@ mod tests {
 
     struct TagView<'a>(Option<&'a Items>);
     impl_tags!(TagView<'_>, view, view.0);
+
+    #[test]
+    fn client_custom_tag_membership_refuses_invalid_slots_even_after_a_match() {
+        let entry_ids = ["boiler:steam", "chemlib:oxygen"].map(|id| Identifier::parse(id).unwrap());
+        let tag = |raw_ids| CustomTag::Client {
+            raw_ids,
+            entry_ids: &entry_ids,
+        };
+        assert_eq!(tag(&[0]).contains(&entry_ids[0]), Some(true));
+        assert_eq!(tag(&[0]).contains(&entry_ids[1]), Some(false));
+        assert_eq!(tag(&[]).contains(&entry_ids[0]), Some(false));
+        assert_eq!(tag(&[0, 2]).contains(&entry_ids[0]), None);
+        assert_eq!(tag(&[0, -1]).contains(&entry_ids[0]), None);
+        assert_eq!(tag(&[0, 2]).entries(), TagMembers::Unavailable);
+    }
+
+    #[test]
+    fn client_custom_tag_requires_synced_mapping_and_never_falls_back_to_local() {
+        use std::sync::Arc;
+        use sunrise_sim::custom_registry_net::{
+            LocalRegistries, Receiver, Snapshot, SnapshotRegistry, SyncedCustomRegistries,
+            validate_snapshot,
+        };
+
+        struct FakeDir {
+            id: String,
+            tag_dir: String,
+            sync: bool,
+            entries: Vec<Identifier>,
+        }
+        impl FakeDir {
+            fn arc(
+                id: &str,
+                sync: bool,
+                entries: &[&str],
+            ) -> Arc<dyn mod_api::__private::RegistryDirectory> {
+                let parsed = Identifier::parse_namespaced(id).unwrap();
+                Arc::new(Self {
+                    id: id.to_owned(),
+                    tag_dir: format!("{}/{}", parsed.namespace(), parsed.path()),
+                    sync,
+                    entries: entries
+                        .iter()
+                        .map(|e| Identifier::parse_namespaced(e).unwrap())
+                        .collect(),
+                })
+            }
+        }
+        impl mod_api::__private::RegistryDirectory for FakeDir {
+            fn id(&self) -> &str {
+                &self.id
+            }
+            fn sync(&self) -> bool {
+                self.sync
+            }
+            fn entry_ids(&self) -> &[Identifier] {
+                &self.entries
+            }
+            fn contains_id(&self, id: &str) -> bool {
+                self.entries.iter().any(|e| e.as_str() == id)
+            }
+            fn tag_directory(&self) -> &str {
+                &self.tag_dir
+            }
+            fn as_any(&self) -> &(dyn std::any::Any + Send + Sync) {
+                self
+            }
+        }
+
+        let steam = Identifier::parse("boiler:steam").unwrap();
+        let oxygen = Identifier::parse("chemlib:oxygen").unwrap();
+        let mut dynamic = sunrise_protocol::registry::Dynamic::default();
+        dynamic.tags.insert(
+            "chemlib:gas".into(),
+            [("boiler:hot".into(), vec![0])].into_iter().collect(),
+        );
+
+        // External connection with no synced custom-registry mapping must answer Unavailable / None
+        // even if `dynamic.tags` holds raw IDs for that registry.
+        let empty = SyncedCustomRegistries::default();
+        let unsynced = CustomTagSource::Client {
+            tags_loaded: true,
+            dynamic: &dynamic,
+            custom_registries: &empty,
+        };
+        assert_eq!(
+            custom_tag_by_name(unsynced, "chemlib:gas", "boiler:hot").entries(),
+            TagMembers::Unavailable
+        );
+        assert_eq!(
+            custom_tag_by_name(unsynced, "chemlib:gas", "boiler:hot").contains(&steam),
+            None
+        );
+
+        // Server-ordered synced mapping (steam=0, oxygen=1) decodes raw ID 0 to steam,
+        // reports Missing/Some(false) for absent tags, and Unavailable/None before tags load.
+        let local_dirs = vec![
+            FakeDir::arc("chemlib:gas", true, &["chemlib:oxygen", "boiler:steam"]),
+            FakeDir::arc("chemlib:local_only", false, &["chemlib:oxygen"]),
+        ];
+        let synced = validate_snapshot(
+            &Snapshot {
+                registries: vec![SnapshotRegistry {
+                    registry_id: "chemlib:gas".into(),
+                    entries: vec!["boiler:steam".into(), "chemlib:oxygen".into()],
+                }],
+            },
+            &local_dirs,
+        )
+        .unwrap();
+        let unloaded = CustomTagSource::Client {
+            tags_loaded: false,
+            dynamic: &dynamic,
+            custom_registries: &synced,
+        };
+        assert_eq!(
+            custom_tag_by_name(unloaded, "chemlib:gas", "boiler:hot").entries(),
+            TagMembers::Unavailable
+        );
+        assert_eq!(
+            custom_tag_by_name(unloaded, "chemlib:gas", "boiler:hot").contains(&steam),
+            None
+        );
+        let loaded = CustomTagSource::Client {
+            tags_loaded: true,
+            dynamic: &dynamic,
+            custom_registries: &synced,
+        };
+        assert_eq!(
+            custom_tag_by_name(loaded, "chemlib:gas", "boiler:hot").entries(),
+            TagMembers::Members(vec![steam.clone()])
+        );
+        assert_eq!(
+            custom_tag_by_name(loaded, "chemlib:gas", "boiler:hot").contains(&steam),
+            Some(true)
+        );
+        assert_eq!(
+            custom_tag_by_name(loaded, "chemlib:gas", "boiler:hot").contains(&oxygen),
+            Some(false)
+        );
+        assert_eq!(
+            custom_tag_by_name(loaded, "chemlib:gas", "boiler:absent").entries(),
+            TagMembers::Missing
+        );
+        assert_eq!(
+            custom_tag_by_name(loaded, "chemlib:gas", "boiler:absent").contains(&steam),
+            Some(false)
+        );
+
+        // In-process memory connection seeds sync(true) local order (oxygen=0, steam=1)
+        // and keeps sync(false) registries Unavailable / None.
+        let memory_synced = Receiver::new(LocalRegistries::new(local_dirs), true).into_synced();
+        let memory_source = CustomTagSource::Client {
+            tags_loaded: true,
+            dynamic: &dynamic,
+            custom_registries: &memory_synced,
+        };
+        assert_eq!(
+            custom_tag_by_name(memory_source, "chemlib:gas", "boiler:hot").entries(),
+            TagMembers::Members(vec![oxygen.clone()])
+        );
+        assert_eq!(
+            custom_tag_by_name(memory_source, "chemlib:gas", "boiler:hot").contains(&oxygen),
+            Some(true)
+        );
+        assert_eq!(
+            custom_tag_by_name(memory_source, "chemlib:local_only", "boiler:hot").entries(),
+            TagMembers::Unavailable
+        );
+        assert_eq!(
+            custom_tag_by_name(memory_source, "chemlib:local_only", "boiler:hot").contains(&oxygen),
+            None
+        );
+    }
 
     #[test]
     fn registration_resolves_the_same_tag_key_without_loaded_membership() {

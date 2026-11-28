@@ -178,6 +178,7 @@ pub enum Event {
     Joined {
         registries: Arc<Dynamic>,
         datapacks: crate::datapack_net::Receiver,
+        custom_registries: crate::custom_registry_net::SyncedCustomRegistries,
         uuid: u128,
         name: String,
     },
@@ -205,6 +206,7 @@ pub enum Event {
     Reconfigured {
         registries: Arc<Dynamic>,
         datapacks: crate::datapack_net::Receiver,
+        custom_registries: crate::custom_registry_net::SyncedCustomRegistries,
     },
     /// ClientboundResourcePackPushPacket, in configuration or in play.
     PackPush(cfg::ResourcePackPush),
@@ -313,15 +315,20 @@ impl Event {
             Self::Joined {
                 registries,
                 datapacks,
+                custom_registries,
                 name,
                 ..
             } => dynamic(registries)
                 .saturating_add(datapacks.owned_heap_bytes())
+                .saturating_add(custom_registries.owned_heap_bytes())
                 .saturating_add(name.capacity()),
             Self::Reconfigured {
                 registries,
                 datapacks,
-            } => dynamic(registries).saturating_add(datapacks.owned_heap_bytes()),
+                custom_registries,
+            } => dynamic(registries)
+                .saturating_add(datapacks.owned_heap_bytes())
+                .saturating_add(custom_registries.owned_heap_bytes()),
             Self::Packet(packet) | Self::ObservePacket(packet) => {
                 size_of::<play::Clientbound>() + packet.owned_heap_bytes()
             }
@@ -482,6 +489,25 @@ fn next_serial() -> u64 {
 }
 use std::path::PathBuf;
 
+/// Mod-declared network inventories captured for a client session: synced custom
+/// registries and synced data maps. Production callers pass [`Self::installed`];
+/// loopback tests pass their own inventories.
+#[derive(Clone, Debug, Default)]
+pub struct LocalInventory {
+    pub custom_registries: crate::custom_registry_net::LocalRegistries,
+    pub data_maps: crate::data_map_net::LocalDataMaps,
+}
+
+impl LocalInventory {
+    /// Snapshot this process's installed custom registries and synced data maps.
+    pub fn installed() -> Self {
+        Self {
+            custom_registries: crate::custom_registry_net::LocalRegistries::installed(),
+            data_maps: crate::data_map_net::LocalDataMaps::installed(),
+        }
+    }
+}
+
 impl Session {
     /// A number of its own for each connection, never 0: entity ids are per connection, so what
     /// is kept by id goes when it changes.
@@ -497,9 +523,10 @@ impl Session {
         lang: Arc<Language>,
         resources: Arc<ItemData>,
         reports: Arc<crate::chunk_io::Reports>,
+        inventory: LocalInventory,
     ) -> Self {
         Self::start(
-            address, name, auth, info, lang, None, None, resources, reports, false,
+            address, name, auth, info, lang, None, None, resources, reports, inventory, false,
         )
     }
     /// `ClientHandshakePacketListenerImpl.handleHello`: LAN entries can continue
@@ -513,9 +540,10 @@ impl Session {
         lang: Arc<Language>,
         resources: Arc<ItemData>,
         reports: Arc<crate::chunk_io::Reports>,
+        inventory: LocalInventory,
     ) -> Self {
         Self::start(
-            address, name, auth, info, lang, None, None, resources, reports, true,
+            address, name, auth, info, lang, None, None, resources, reports, inventory, true,
         )
     }
     /// `ConnectScreen.startConnecting` for a `transfer`: the cookies the
@@ -529,6 +557,7 @@ impl Session {
         cookies: Cookies,
         resources: Arc<ItemData>,
         reports: Arc<crate::chunk_io::Reports>,
+        inventory: LocalInventory,
     ) -> Self {
         Self::start(
             address,
@@ -540,6 +569,7 @@ impl Session {
             Some(cookies),
             resources,
             reports,
+            inventory,
             false,
         )
     }
@@ -555,6 +585,7 @@ impl Session {
         lang: Arc<Language>,
         resources: Arc<ItemData>,
         reports: Arc<crate::chunk_io::Reports>,
+        inventory: LocalInventory,
     ) -> Self {
         Self::start(
             "local",
@@ -566,6 +597,7 @@ impl Session {
             None,
             resources,
             reports,
+            inventory,
             false,
         )
     }
@@ -590,6 +622,7 @@ impl Session {
             payload_output: std::sync::OnceLock::new(),
         }
     }
+    #[allow(clippy::too_many_arguments)]
     fn start(
         address: &str,
         name: &str,
@@ -600,6 +633,7 @@ impl Session {
         transfer_from: Option<Cookies>,
         resources: Arc<ItemData>,
         reports: Arc<crate::chunk_io::Reports>,
+        inventory: LocalInventory,
         lan: bool,
     ) -> Self {
         let (send, events) = event_channel();
@@ -652,6 +686,7 @@ impl Session {
                         &thread_payloads,
                         &thread_pings,
                         &reports,
+                        &inventory,
                         &mut after_login,
                     )
                 });
@@ -1465,6 +1500,7 @@ fn run(
     payloads: &Arc<crate::raw_payloads::Transport>,
     pings: &PingSamples,
     reports: &Arc<crate::chunk_io::Reports>,
+    inventory: &LocalInventory,
     after_login: &mut bool,
 ) -> Result<Reason, Reason> {
     let singleplayer = local.is_some();
@@ -1638,7 +1674,7 @@ fn run(
         writer.attach_droppable(queue.clone());
     }
     *shared_writer.lock().unwrap() = Some(writer);
-    let (registries, datapacks) = configure(
+    let (registries, datapacks, custom_registries_synced) = configure(
         &mut reader,
         shared_writer,
         configuring,
@@ -1647,11 +1683,13 @@ fn run(
         cookies,
         resources,
         payloads,
+        inventory,
     )?;
     let registries = Arc::new(registries);
     send.send_wait(Event::Joined {
         registries: registries.clone(),
         datapacks,
+        custom_registries: custom_registries_synced,
         uuid: profile.uuid,
         name: profile.name,
     })
@@ -1669,6 +1707,7 @@ fn run(
         payloads,
         pings,
         reports,
+        inventory,
     )
 }
 
@@ -1978,6 +2017,7 @@ fn receive_play(
     payloads: &Arc<crate::raw_payloads::Transport>,
     pings: &PingSamples,
     reports: &Arc<crate::chunk_io::Reports>,
+    inventory: &LocalInventory,
 ) -> Result<Reason, Reason> {
     use play_bundle::{PlayBundle, PlayTurn};
     use sunrise_protocol::payload_negotiation::Phase;
@@ -2135,7 +2175,7 @@ fn receive_play(
                     .recv()
                     .map_err(|_| Reason::plain("Disconnected"))?
                     .map_err(|error| connection_lost(error, lang))?;
-                let (snapshot, datapacks) = configure(
+                let (snapshot, datapacks, custom_registries) = configure(
                     reader,
                     shared_writer,
                     configuring,
@@ -2144,12 +2184,14 @@ fn receive_play(
                     cookies,
                     resources,
                     payloads,
+                    inventory,
                 )?;
                 registries = Arc::new(snapshot);
                 io = new_listener();
                 send.send_wait(Event::Reconfigured {
                     registries: registries.clone(),
                     datapacks,
+                    custom_registries,
                 })
                 .map_err(|error| Reason::plain(error.to_string()))?;
             }
@@ -2237,7 +2279,15 @@ fn configure(
     cookies: &Cookies,
     resources: &ItemData,
     payloads: &Arc<crate::raw_payloads::Transport>,
-) -> Result<(Dynamic, crate::datapack_net::Receiver), Reason> {
+    inventory: &LocalInventory,
+) -> Result<
+    (
+        Dynamic,
+        crate::datapack_net::Receiver,
+        crate::custom_registry_net::SyncedCustomRegistries,
+    ),
+    Reason,
+> {
     use sunrise_protocol::payload_negotiation::Phase;
     let io = CommonIo::new(writer, cookies, Phase::Configuration);
     let config = Arc::new(Configuration::default());
@@ -2247,6 +2297,10 @@ fn configure(
     let mut negotiation =
         sunrise_protocol::payload_negotiation::Negotiation::new(payloads.local.manifest.clone());
     let mut datapacks = crate::datapack_net::Receiver::default();
+    let mut custom_registries = crate::custom_registry_net::Receiver::new(
+        inventory.custom_registries.clone(),
+        reader.is_memory(),
+    );
     let reply = |p: cfg::Serverbound| -> Result<(), Reason> {
         match writer.lock().unwrap().as_mut() {
             Some(w) => p
@@ -2337,6 +2391,24 @@ fn configure(
             }
             cfg::Clientbound::CustomPayload(p) if p.channel == crate::datapack_net::CHANNEL => {
                 datapacks.accept_chunk(&p.data).map_err(Reason::plain)?;
+            }
+            cfg::Clientbound::CustomPayload(p)
+                if p.channel == crate::custom_registry_net::CHANNEL =>
+            {
+                custom_registries
+                    .accept_chunk(&p.data)
+                    .map_err(Reason::plain)?;
+            }
+            cfg::Clientbound::CustomPayload(p)
+                if p.channel == crate::data_map_net::KNOWN_CHANNEL =>
+            {
+                let data =
+                    crate::data_map_net::handle_known_data_maps(&p.data, &inventory.data_maps)
+                        .map_err(Reason::plain)?;
+                reply(cfg::Serverbound::CustomPayload(cfg::CustomPayload {
+                    channel: crate::data_map_net::KNOWN_REPLY_CHANNEL.into(),
+                    data,
+                }))?;
             }
             cfg::Clientbound::CustomPayload(p) => {
                 let Some(p) = receive_application(
@@ -2474,12 +2546,13 @@ fn configure(
                     configuring: configuring.clone(),
                     play,
                     datapacks,
+                    custom_registries,
                     content_verified,
                     menu_extra_revision,
                     resume,
                 })))
                 .map_err(|error| Reason::plain(error.to_string()))?;
-                let (registries, datapacks) = match ready.recv() {
+                let (registries, datapacks, custom_registries) = match ready.recv() {
                     Ok(result) => result?,
                     Err(_) => {
                         if let Some(reason) = config.take_packet_error() {
@@ -2491,7 +2564,7 @@ fn configure(
                 if let Some(features) = features {
                     let _ = send.send_wait(Event::Features(features));
                 }
-                return Ok((registries, datapacks));
+                return Ok((registries, datapacks, custom_registries));
             }
             _ => {}
         }
@@ -2856,6 +2929,7 @@ mod tests {
                             &Cookies::default(),
                             &data,
                             &crate::raw_payloads::Transport::empty(),
+                            &LocalInventory::default(),
                         )
                     },
                     |_| {},
@@ -2928,6 +3002,7 @@ mod tests {
                                 &Cookies::default(),
                                 &data,
                                 &transport,
+                                &LocalInventory::default(),
                             )
                         },
                         |_| {},
@@ -3321,6 +3396,7 @@ mod tests {
                             &Cookies::default(),
                             &data,
                             &crate::raw_payloads::Transport::empty(),
+                            &LocalInventory::default(),
                         )
                     },
                     |_| {},
@@ -3656,6 +3732,7 @@ mod tests {
                 Arc::new(Language::new()),
                 Arc::clone(&data),
                 Arc::default(),
+                LocalInventory::default(),
             );
             let (stream, _) = listener.accept().unwrap();
             stream
@@ -3892,6 +3969,7 @@ mod tests {
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &LocalInventory::default(),
             ));
         });
         let ended = result
@@ -3955,6 +4033,7 @@ mod tests {
                         &Cookies::default(),
                         &data,
                         &crate::raw_payloads::Transport::empty(),
+                        &LocalInventory::default(),
                     )
                 },
                 |_| {},
@@ -4028,6 +4107,7 @@ mod tests {
                     &Cookies::default(),
                     &data,
                     &crate::raw_payloads::Transport::empty(),
+                    &LocalInventory::default(),
                 )
             },
             |event| {
@@ -4096,6 +4176,7 @@ mod tests {
                     &Cookies::default(),
                     &data,
                     &crate::raw_payloads::Transport::empty(),
+                    &LocalInventory::default(),
                 ),
                 |event| effects.push(event)
             )
@@ -4211,6 +4292,7 @@ mod tests {
                         &Cookies::default(),
                         &resources,
                         &crate::raw_payloads::Transport::empty(),
+                        &LocalInventory::default(),
                     )
                 });
                 // The configuration actor resolves codecs on the same thread that installed
@@ -4226,7 +4308,7 @@ mod tests {
                     panic!("expected the configuration finish task");
                 };
                 change.acknowledge();
-                let (registries, _) = worker.join().unwrap().unwrap();
+                let (registries, _, _) = worker.join().unwrap().unwrap();
                 assert_eq!(registries.consume_effect_id("effect_test:charge"), Some(0));
                 assert_eq!(
                     registries.consume_effect_id("minecraft:apply_effects"),
@@ -4382,6 +4464,7 @@ mod tests {
                     &Cookies::default(),
                     &resources,
                     &crate::raw_payloads::Transport::empty(),
+                    &LocalInventory::default(),
                 )
             },
             |_| {},
@@ -4419,6 +4502,7 @@ mod tests {
                         &Cookies::default(),
                         &data,
                         &crate::raw_payloads::Transport::empty(),
+                        &LocalInventory::default(),
                     )
                 },
                 |_| {},
@@ -4448,7 +4532,7 @@ mod tests {
         let revision = thread
             .join()
             .unwrap()
-            .map(|(registries, _)| registries.menu_extra_revision)
+            .map(|(registries, _, _)| registries.menu_extra_revision)
             .unwrap_or(0);
         drop(writer);
         std::fs::remove_dir_all(root).unwrap();
@@ -4486,6 +4570,7 @@ mod tests {
                         &Cookies::default(),
                         &data,
                         &crate::raw_payloads::Transport::empty(),
+                        &LocalInventory::default(),
                     )
                 },
                 |_| {},
@@ -4620,6 +4705,7 @@ mod tests {
                 &crate::raw_payloads::Transport::empty(),
                 &thread_pings,
                 &Arc::default(),
+                &LocalInventory::default(),
             )
         });
         let mut server = Connection::local(server);
@@ -4712,6 +4798,7 @@ mod tests {
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &LocalInventory::default(),
             );
             report_connection_end(result, &writer, &send, true);
         });
@@ -5194,6 +5281,7 @@ mod tests {
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &LocalInventory::default(),
             )
         });
         let mut server = Connection::local(server);
@@ -5333,6 +5421,7 @@ mod tests {
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &LocalInventory::default(),
             )
         });
         let tick_end = play::Serverbound::ClientTickEnd(Empty);
@@ -5489,6 +5578,7 @@ mod tests {
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &LocalInventory::default(),
             )
         });
 
@@ -5716,6 +5806,7 @@ mod tests {
                 Arc::new(lang),
                 Arc::clone(&data),
                 Arc::default(),
+                LocalInventory::default(),
             );
             let (reason, _credit) = loop {
                 let (event, credit) = session
@@ -5828,6 +5919,7 @@ mod tests {
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &LocalInventory::default(),
             )
         });
 
@@ -6062,6 +6154,7 @@ mod tests {
                 &crate::raw_payloads::Transport::empty(),
                 &Arc::default(),
                 &Arc::default(),
+                &LocalInventory::default(),
             );
             let _ = done_tx.send(result);
         });
@@ -6536,6 +6629,7 @@ mod tests {
                                     &Cookies::default(),
                                     &data,
                                     &crate::raw_payloads::Transport::empty(),
+                                    &LocalInventory::default(),
                                 )
                             },
                             |_| {},
@@ -6597,6 +6691,7 @@ mod tests {
                                 &Cookies::default(),
                                 &data,
                                 &crate::raw_payloads::Transport::empty(),
+                                &LocalInventory::default(),
                             )
                         },
                         |_| {},

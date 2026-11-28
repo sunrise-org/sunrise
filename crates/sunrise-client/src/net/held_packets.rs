@@ -180,6 +180,7 @@ impl Session {
                 &crate::raw_payloads::Transport::empty(),
                 &pings,
                 &Arc::default(),
+                &LocalInventory::default(),
             );
         }));
         (session, peer)

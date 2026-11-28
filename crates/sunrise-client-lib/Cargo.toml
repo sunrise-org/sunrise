@@ -143,7 +143,7 @@ windows-segment-heap = []
 workspace = true
 
 [dev-dependencies]
-sunrise-client-lib = { path = ".", default-features = false, features = ["test-dry-side", "test-payload-probe"] }
+sunrise-client-lib = { path = ".", default-features = false, features = ["test-dry-side", "test-payload-probe", "test-publication-scope"] }
 sunrise-threads = { path = "../sunrise-threads", features = ["test-allocation-probe", "test-game-dir"] }
 tempfile = "3"
 mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["testing"] }
@@ -244,6 +244,14 @@ path = "../sunrise-client/tests/custom_component_wire.rs"
 [[test]]
 name = "custom_bundle_wire"
 path = "../sunrise-client/tests/custom_bundle_wire.rs"
+
+[[test]]
+name = "custom_registry_join"
+path = "../sunrise-client/tests/custom_registry_join.rs"
+
+[[test]]
+name = "data_map_sync"
+path = "../sunrise-client/tests/data_map_sync.rs"
 
 [[test]]
 name = "datapack_join"
