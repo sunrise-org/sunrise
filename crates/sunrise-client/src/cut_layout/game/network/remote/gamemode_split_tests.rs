@@ -470,7 +470,6 @@ fn split_local_and_player_info_physics_matrix_26_3() {
     run_split_local_and_player_info_physics_matrix_26_3();
 }
 
-#[allow(unused_imports)]
 pub(crate) use crate::game::client_side::remote_client::abilities::gamemode_split_tests::run_split_local_and_player_info_physics_matrix_26_3;
 
 /// Real 26.3 oracle witness (`scenarios.live_player_info_transitions`):
@@ -592,7 +591,6 @@ fn resolved_player_info_retains_identity_across_remove_and_readd_26_3() {
     run_resolved_player_info_retains_identity_across_remove_and_readd_26_3();
 }
 
-#[allow(unused_imports)]
 pub(crate) use crate::game::client_side::remote_client::abilities::gamemode_split_tests::run_resolved_player_info_retains_identity_across_remove_and_readd_26_3;
 
 /// Real 26.3 oracle witness (`scenarios.respawn_keep_data_spectator_clears_y`):

@@ -25,7 +25,7 @@ from tools import lab, test_rust_parity as base
 from tools.stand_command_hurt_corpus import LOW_HEALTH_CASES, stand_low_health
 
 SEED = 1
-TEST_NAME = 'game::stand_low_health_tests::a_stand_breaks_on_low_health_only_through_damage_and_a_dead_one_goes_at_twenty'
+TEST_NAME = 'cut_layout::game::stand_low_health_tests::a_stand_breaks_on_low_health_only_through_damage_and_a_dead_one_goes_at_twenty'
 
 
 def java_version_string():

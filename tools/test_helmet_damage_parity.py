@@ -29,7 +29,7 @@ PARITY_RUST_SCOPE = [
     'crates/sunrise-client/src/cut_layout/game/entities/falling_damage',
     'crates/sunrise-gameplay/src/game/entities/falling_damage.rs',
 ]
-TEST = 'game::server_side::falling_damage::helmet_tests::falling_impacts_wear_the_helmet_before_normal_armor_and_reduction'
+TEST = 'cut_layout::game::server_side::falling_damage::helmet_tests::falling_impacts_wear_the_helmet_before_normal_armor_and_reduction'
 
 
 def main():

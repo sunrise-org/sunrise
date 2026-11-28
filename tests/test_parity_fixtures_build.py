@@ -72,15 +72,18 @@ class ParityFixturesBuildTests(unittest.TestCase):
 
 class ParityFixturesManifestTests(unittest.TestCase):
     def test_the_package_follows_the_clients_manifest(self):
-        # Its dependencies and features are sunrise-client's: a client change that misses it breaks only the daily.
+        # The optional client variant forwards sunrise-client's defaults.
         from tools.ci import parity_fixtures_manifest
         self.assertEqual(parity_fixtures_manifest.main(['--check']), 0)
 
-    def test_the_package_has_every_client_dependency_and_feature_behind_fixtures(self):
+    def test_the_thin_binary_only_enables_gameplay_crates_for_fixtures(self):
         import tomllib
         from tools.ci import parity_fixtures_manifest as manifest
         client = tomllib.loads(manifest.CLIENT.read_text(encoding='utf-8'))
         fixtures = tomllib.loads(manifest.render())
+        [binary] = fixtures['bin']
+        self.assertEqual(binary['path'], 'src/main.rs')
+        self.assertEqual(binary['required-features'], ['fixtures'])
         expected_deps = {'sunrise-client', 'sunrise-client-gameplay', 'sunrise-gameplay', 'sunrise-gameplay-common'}
         self.assertEqual(set(fixtures['dependencies']), expected_deps)
         self.assertTrue(all(entry['optional'] and not entry['default-features']

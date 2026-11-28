@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 
 #[cfg(test)]
 #[path = "entities/armor_stand_refind_tests.rs"]
@@ -309,7 +309,7 @@ pub(crate) mod test_pos_guest_tests;
 #[cfg(test)]
 #[path = "items/use_stop_tests.rs"]
 pub(crate) mod use_stop_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "entities/vehicle_removal_tests.rs"]
 pub(crate) mod vehicle_removal_tests;
 #[cfg(test)]

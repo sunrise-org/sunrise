@@ -1,6 +1,7 @@
-#![cfg(test)]
-use sunrise_level::containers::BlockEntity;
+#![cfg(any(test, feature = "parity-fixtures"))]
 #[cfg(test)]
+use sunrise_level::containers::BlockEntity;
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod tests {
     use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1;
     #[test]

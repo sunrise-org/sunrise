@@ -17,7 +17,7 @@ frozen. Four isolated lanes run together:
 
 The vanilla 26.3 wind-charge continuation witness and its `meta.json` are written into
 `.local/witness/<version>/wind_charge_continuation_tick_order/` (gitignored). Normal runs compare the dedicated servers
-and then run `game::creatures::projectile_batch_tests::continuing_wind_charge_keeps_tick_order_and_skips_relaunch_in_batched_pass`
+and then run `cut_layout::game::creatures::projectile_batch_tests::continuing_wind_charge_keeps_tick_order_and_skips_relaunch_in_batched_pass`
 via `lab.parity_fixtures()` with `SUNRISE_WIND_CONTINUATION_WITNESS` pointing at that witness. Pass `--record` (or
 `--record-wind-witness`) to record only the vanilla 26.3 witness without building Sunrise.
 """
@@ -69,7 +69,7 @@ WIND_WITNESS_NAME = 'wind_charge_continuation_tick_order'
 WIND_WITNESS_FILE = f'{WIND_WITNESS_NAME}.txt'
 WIND_WITNESS_TAGS = {*WIND_TAGS, *(boat_tag for boat_tag, _pos in BOAT_SPECS)}
 WIND_TEST = (
-    'game::creatures::projectile_batch_tests::'
+    'cut_layout::game::creatures::projectile_batch_tests::'
     'continuing_wind_charge_keeps_tick_order_and_skips_relaunch_in_batched_pass'
 )
 NUMBER = re.compile(r'(-?[0-9][0-9.E-]*)d')

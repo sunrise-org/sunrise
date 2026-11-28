@@ -1,6 +1,7 @@
 //! `BeaconRenderer.shouldRender`: a beam draws inside the effective render distance, and leaves with its column.
 use std::sync::Arc;
 use sunrise_client::{audio::Audio, settings::Settings};
+#[cfg(test)]
 use sunrise_level::{
     chunk::Chunk,
     containers::{Beacon, BlockEntity},
@@ -11,6 +12,7 @@ use {
     sunrise_gameplay_common::game::resource_load::Progress,
 };
 
+#[cfg(test)]
 fn game<'a>(
     resources: &'a mut Option<Arc<sunrise_gameplay_common::game::Resources>>,
 ) -> sunrise_client_gameplay::game::ClientGame<'a> {
@@ -82,6 +84,7 @@ pub(crate) fn game_as_client<'a>(
 }
 
 /// The vertices `beacon_geometry` writes for a camera at (0.5, 70, 0.5).
+#[cfg(test)]
 fn beam_vertices(game: &mut sunrise_client_gameplay::game::ClientGame<'_>) -> usize {
     let mut out = Vec::new();
     game.beacon_geometry(glam::DVec3::new(0.5, 70.0, 0.5), 0.0, &mut out);

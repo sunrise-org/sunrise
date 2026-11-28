@@ -87,7 +87,6 @@ fn player_pearl_keeps_acting_context_cancellation_and_mutable_damage() {
     run_player_pearl_keeps_acting_context_cancellation_and_mutable_damage();
 }
 
-#[allow(unused_imports)]
 pub(crate) use crate::game::server_side::creatures_server::mob_pearl_hook_tests::run_player_pearl_keeps_acting_context_cancellation_and_mutable_damage;
 
 #[test]

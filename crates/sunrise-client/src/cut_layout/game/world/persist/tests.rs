@@ -1,5 +1,7 @@
+#[cfg(test)]
 use std::collections::HashMap;
 
+#[cfg(test)]
 mod refused_entity_unload {
     use super::*;
     use std::sync::atomic::{AtomicBool, Ordering};
@@ -151,18 +153,24 @@ mod refused_entity_unload {
         });
     }
 }
+// Test module extracted without changing its logical path.
+#[cfg(test)]
+use super::*;
+#[cfg(test)]
 use std::collections::HashSet;
 use std::sync::Arc;
+#[cfg(test)]
 use sunrise_core::geometry::Vec3;
 use sunrise_core::nbt::Tag;
 use sunrise_core::position::BlockPos;
+#[cfg(test)]
 use sunrise_game_data::scoreboard::Scoreboard;
 use sunrise_gameplay_common::game::GameGameExt1;
 use sunrise_level::chunk::Chunk;
+#[cfg(test)]
 use sunrise_mod_runtime::attachments::ATTACHMENTS_KEY;
-// Test module extracted without changing its logical path.
-use super::*;
 
+#[cfg(test)]
 use sunrise_gameplay::game::persist::{
     EntitySnapshot, ORB_LIVE, add_passengers, drop_unleashable_leash, join_saved_team, mark_fresh,
     parent_vehicle_root, read_attachments, root_vehicle_tag, take_fresh, vehicle_tree,
@@ -174,8 +182,10 @@ use sunrise_sim::entity_nbt;
 use sunrise_sim::save::ChunkExtras;
 use sunrise_sim::save::text;
 
+#[cfg(test)]
 include!("position_load_tests.rs");
 
+#[cfg(test)]
 mod transient_entities {
     use super::*;
     use mod_api::EntityRef;
@@ -770,6 +780,7 @@ pub(crate) fn run_comparator_and_hopper_live_state_survives_chunk_reload() {
     );
 }
 
+#[cfg(test)]
 const MOUNT: [i32; 4] = [1, 2, 3, 4];
 
 #[test]
@@ -891,9 +902,11 @@ fn only_mobs_and_boats_keep_a_leash_tag() {
     assert!(has(&boat));
 }
 
+#[cfg(test)]
 fn entity(kind: &str) -> Tag {
     Tag::compound([("id", Tag::String(kind.into()))])
 }
+#[cfg(test)]
 fn passengers(tag: &Tag) -> Vec<String> {
     match tag.get("Passengers") {
         Some(Tag::List(l)) => l.iter().filter_map(entity_nbt::kind).collect(),
@@ -1475,4 +1488,5 @@ fn an_orb_saves_its_live_portal_cooldown() {
 
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;
 
+#[cfg(test)]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;

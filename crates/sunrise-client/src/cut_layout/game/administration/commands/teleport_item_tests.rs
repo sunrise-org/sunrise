@@ -1,7 +1,9 @@
 use sunrise_core::geometry::Vec3;
 use sunrise_core::position::ChunkPos;
+#[cfg(test)]
+use sunrise_gameplay::game::native_entity_refs::tests::with_game;
 use sunrise_gameplay::game::native_entity_refs::tests::{
-    prepare_entity_ticking_neighborhood, with_game, with_resident_game,
+    prepare_entity_ticking_neighborhood, with_resident_game,
 };
 
 #[test]
