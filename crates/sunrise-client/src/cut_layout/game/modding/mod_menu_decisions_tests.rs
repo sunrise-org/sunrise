@@ -791,6 +791,7 @@ fn open_native_menu(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> i32 {
         links: Vec::new(),
         asks_still_valid: false,
         opening_item: None,
+        block_openers: None,
         opener_block: None,
         removed: false,
         slot_changed_seen: None,
@@ -903,6 +904,7 @@ fn open_depot(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> i32 {
     place_depot(game, None);
     let host = game.server.lan.as_mut().unwrap();
     host.hub.open_container(
+        &game.common.world,
         12,
         "minecraft:generic_9x1",
         sunrise_core::nbt::Tag::String("test".into()),
@@ -1460,6 +1462,7 @@ fn menu_quick_move_validates_writes_and_contains_panics_on_live_resident_block_e
             // A healthy owner's block entity still runs `menu_quick_move` in place.
             let host = game.server.lan.as_mut().unwrap();
             host.hub.open_container(
+                &game.common.world,
                 12,
                 "minecraft:generic_9x1",
                 sunrise_core::nbt::Tag::String("healthy".into()),

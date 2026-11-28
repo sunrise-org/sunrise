@@ -69,6 +69,7 @@ pub(crate) mod tests {
                             .guests
                             .update(0, |g| g.ender_items[0] = Some(stack.clone()));
                         host.hub.open_container(
+                            &game.common.world,
                             1,
                             "minecraft:generic_9x3",
                             sunrise_core::nbt::Tag::String("ender".into()),
@@ -1524,6 +1525,7 @@ pub(crate) mod tests {
             let conn = game.server.lan.as_ref().unwrap().hub.guests[0].conn;
             assert_eq!(
                 game.server.lan.as_mut().unwrap().hub.open_menu_window(
+                    &game.common.world,
                     conn,
                     MOD_MENU,
                     sunrise_core::nbt::Tag::String("oversize".into()),

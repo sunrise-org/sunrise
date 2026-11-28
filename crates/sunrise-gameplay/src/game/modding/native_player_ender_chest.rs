@@ -169,7 +169,16 @@ impl crate::game::ServerGame<'_> {
             items.resize(SLOTS, None);
             let opened = host
                 .hub
-                .open_menu_window(conn, MENU, title, None, Slots::Ender, items, None)
+                .open_menu_window(
+                    &game.common.world,
+                    conn,
+                    MENU,
+                    title,
+                    None,
+                    Slots::Ender,
+                    items,
+                    None,
+                )
                 .is_some();
             if opened {
                 game.player_menu_opening(conn);

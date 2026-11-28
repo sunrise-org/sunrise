@@ -351,6 +351,8 @@ pub(in crate::game) mod tests {
             links: vec![],
             asks_still_valid: false,
             opening_item: None,
+            block_openers: sunrise_sim::lan::menu::Slots::Block(key)
+                .block_openers(&game.world, Some(key)),
             opener_block: Some("minecraft:crafter".into()),
             removed: false,
             slot_changed_seen: None,

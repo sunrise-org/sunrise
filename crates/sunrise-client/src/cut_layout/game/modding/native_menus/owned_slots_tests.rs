@@ -1769,6 +1769,7 @@ fn late_container_sync_invalidation_closes_in_its_original_level() {
             guest.position = [0.5, 64.0, 0.5];
         });
         hub.open_container(
+            &game.common.world,
             1,
             "minecraft:generic_9x3",
             sunrise_core::nbt::Tag::String("Chest".into()),
@@ -3127,6 +3128,7 @@ fn block_menu_slot_changed_costs_one_index_lookup_at_an_unviewed_block() {
         // With a listening viewer the same writes are reported, through the counted path.
         let host = game.server.lan.as_mut().unwrap();
         host.hub.open_container(
+            &game.common.world,
             12,
             BLOCK_PROC_MENU,
             sunrise_core::nbt::Tag::String("proc".into()),
@@ -3168,6 +3170,7 @@ fn block_menu_slot_changed_fires_on_external_container_writes_and_syncs_lan_view
         });
         let title = sunrise_core::nbt::Tag::String("proc".into());
         host.hub.open_container(
+            &game.common.world,
             12,
             BLOCK_PROC_MENU,
             title.clone(),
@@ -3178,6 +3181,7 @@ fn block_menu_slot_changed_fires_on_external_container_writes_and_syncs_lan_view
         );
         let w12 = host.hub.guest(12).unwrap().menu.as_ref().unwrap().window;
         host.hub.open_container(
+            &game.common.world,
             13,
             BLOCK_PROC_MENU,
             title,
@@ -3467,6 +3471,7 @@ fn block_menu_slot_changed_gives_identical_context_for_click_and_hopper_writes()
                     );
                     let host = game.server.lan.as_mut().unwrap();
                     host.hub.open_container(
+                        &game.common.world,
                         12,
                         BLOCK_CRAFT_MENU,
                         sunrise_core::nbt::Tag::String("crafter".into()),

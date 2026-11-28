@@ -234,6 +234,7 @@ fn the_answers_are_bounded_to_one_to_ninety_nine_and_the_items_limit() {
             );
             let host = game.server.lan.as_mut().unwrap();
             host.hub.open_container(
+                &game.common.world,
                 12,
                 "minecraft:generic_9x3",
                 sunrise_core::nbt::Tag::String("test".into()),
@@ -379,6 +380,7 @@ fn a_lan_hub_click_asks_the_same_questions_in_the_same_order() {
             );
             let host = game.server.lan.as_mut().unwrap();
             host.hub.open_container(
+                &game.common.world,
                 12,
                 "minecraft:generic_9x3",
                 sunrise_core::nbt::Tag::String("test".into()),
@@ -492,6 +494,7 @@ fn nested_menu_reads_use_base_slot_rules() {
                         .insert(pos, BlockEntity::Chest(vec![None; 27]));
                     let host = game.server.lan.as_mut().unwrap();
                     host.hub.open_container(
+                        &game.common.world,
                         12,
                         "minecraft:generic_9x3",
                         sunrise_core::nbt::Tag::String("test".into()),
@@ -614,6 +617,7 @@ fn open_live_rules_fixture(
 
     let host = game.server.lan.as_mut().unwrap();
     host.hub.open_container(
+        &game.common.world,
         12,
         menu_type.id,
         sunrise_core::nbt::Tag::String("box".into()),
@@ -768,6 +772,7 @@ fn live_slot_queries_read_live_siblings_limits_acting_armor_and_stale_handles() 
                 game.world.set_container_stack_limit(left, 5);
                 game.world.set_container_stack_limit(right, 11);
                 game.server.lan.as_mut().unwrap().hub.open_container(
+                    &game.common.world,
                     12,
                     "minecraft:generic_9x6",
                     sunrise_core::nbt::Tag::String("double".into()),

@@ -95,6 +95,7 @@ fn a_mod_menu_part_decides_whether_its_menu_stays_open() {
                 };
                 let host = game.server.lan.as_mut().unwrap();
                 host.hub.open_container(
+                    &game.common.world,
                     12,
                     "minecraft:generic_9x3",
                     sunrise_core::nbt::Tag::String("test".into()),
@@ -236,6 +237,8 @@ fn a_mod_menu_part_decides_whether_its_menu_stays_open() {
                 links: Vec::new(),
                 asks_still_valid: asks_still_valid(Some(shell), "test:shell"),
                 opening_item: None,
+                block_openers: sunrise_sim::lan::menu::Slots::Block(vehicle)
+                    .block_openers(&game.world, Some(vehicle)),
                 opener_block: None,
                 removed: false,
                 slot_changed_seen: None,
@@ -320,6 +323,7 @@ fn a_blockless_mod_menu_closes_when_its_part_answers_false() {
                             .unwrap()
                             .hub
                             .open_menu_window(
+                                &game.common.world,
                                 12,
                                 MENU,
                                 sunrise_core::nbt::Tag::String("test".into()),
@@ -427,6 +431,7 @@ fn acting_guest_container_validity_uses_the_loaned_block_reach() {
                 .unwrap()
                 .hub
                 .open_menu_window(
+                    &game.common.world,
                     12,
                     "minecraft:generic_9x3",
                     sunrise_core::nbt::Tag::String("test".into()),
@@ -512,6 +517,7 @@ fn acting_guest_mod_menu_validity_uses_the_live_opening_hand_and_eye() {
                     for hand in [Hand::Main, Hand::Off] {
                         let hub = &mut game.server.lan.as_mut().unwrap().hub;
                         hub.open_menu_window(
+                            &game.common.world,
                             12,
                             MENU,
                             sunrise_core::nbt::Tag::String("test".into()),

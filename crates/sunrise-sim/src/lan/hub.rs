@@ -4937,6 +4937,8 @@ pub(super) mod tests {
                     links: Vec::new(),
                     asks_still_valid: true,
                     opening_item: None,
+                    block_openers: crate::lan::menu::Slots::Block(k)
+                        .block_openers(&*ctx.world, Some(k)),
                     opener_block: None,
                     removed: false,
                     slot_changed_seen: None,
@@ -6811,6 +6813,7 @@ pub(super) mod tests {
                 links: Vec::new(),
                 opening_item: None,
                 asks_still_valid: false,
+                block_openers: crate::lan::menu::Slots::Block(pos).block_openers(&world, Some(pos)),
                 opener_block: None,
                 removed: false,
                 slot_changed_seen: None,

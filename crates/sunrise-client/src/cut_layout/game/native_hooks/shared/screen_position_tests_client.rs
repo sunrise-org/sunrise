@@ -832,6 +832,25 @@ fn stock_menu_data_sync_round_trips_above_255_and_enforces_signed_short_boundary
                 );
                 guest.placed = true;
                 guest.dimension = "minecraft:overworld".into();
+                let max_wire_index = usize::from(i16::MAX as u16);
+                let mut data = vec![0i32; 65_537];
+                data[0] = 11;
+                data[300] = 22;
+                data[max_wire_index] = 33;
+                data[max_wire_index + 1] = 44;
+                data[65_536] = 55;
+                let mut server_world = World::new(game.res.facts().air, 0);
+                server_world.block_entities.insert(
+                    pos,
+                    BlockEntity::Mod(Box::new(ModBlockEntity::new(
+                        "test:crate".into(),
+                        ModBlockEntityFields {
+                            data,
+                            ..Default::default()
+                        },
+                    ))),
+                );
+
                 guest.menu = Some(Menu {
                     window: 1,
                     kind: 2,
@@ -851,30 +870,13 @@ fn stock_menu_data_sync_round_trips_above_255_and_enforces_signed_short_boundary
                     links: Vec::new(),
                     opening_item: None,
                     asks_still_valid: false,
+                    block_openers: sunrise_sim::lan::menu::Slots::Block(pos)
+                        .block_openers(&server_world, Some(pos)),
                     opener_block: None,
                     removed: false,
                     slot_changed_seen: None,
                 });
                 hub.guests.push(guest);
-
-                let max_wire_index = usize::from(i16::MAX as u16);
-                let mut data = vec![0i32; 65_537];
-                data[0] = 11;
-                data[300] = 22;
-                data[max_wire_index] = 33;
-                data[max_wire_index + 1] = 44;
-                data[65_536] = 55;
-                let mut server_world = World::new(game.res.facts().air, 0);
-                server_world.block_entities.insert(
-                    pos,
-                    BlockEntity::Mod(Box::new(ModBlockEntity::new(
-                        "test:crate".into(),
-                        ModBlockEntityFields {
-                            data,
-                            ..Default::default()
-                        },
-                    ))),
-                );
 
                 hub.sync_containers(&server_world);
                 let packets: Vec<C> = rx

@@ -1288,6 +1288,7 @@ mod tests {
             craft: None,
             links: Vec::new(),
             asks_still_valid: false,
+            block_openers: None,
             opener_block: None,
             opening_item: None,
             removed: false,

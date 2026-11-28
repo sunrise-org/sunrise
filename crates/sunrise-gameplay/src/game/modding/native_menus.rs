@@ -203,6 +203,7 @@ impl crate::game::ServerGame<'_> {
                     items,
                     extra,
                     content.as_ref().map(|c| c.kind),
+                    None,
                 )?;
                 if let Some(content) = content {
                     lan.hub.guests.update(gi, |g| {
@@ -494,7 +495,11 @@ impl GuestMenus {
             .as_ref()
             .zip(menu)
             .is_some_and(|(opened, live)| {
-                opened.window == live.window && opened.openers.contains(&Some((pos, generation)))
+                opened.window == live.window
+                    && opened
+                        .openers
+                        .as_ref()
+                        .is_some_and(|openers| openers.contains(&Some((pos, generation))))
             })
     }
 }
@@ -552,29 +557,15 @@ impl crate::game::ServerGame<'_> {
         let Some(guest) = host.hub.guest(conn) else {
             return;
         };
-        let openers = guest.menu.as_ref().map_or([None; 2], |m| {
-            let positions = match m.slots {
-                Slots::Block(at) => [Some(at), None],
-                Slots::Double(first, second) => [Some(first), Some(second)],
-                Slots::Ender => [m.pos, None],
-                Slots::Native => [None; 2],
-            };
-            positions.map(|pos| {
-                pos.and_then(|pos| {
-                    self.common
-                        .world
-                        .block_entities
-                        .generation(&pos)
-                        .map(|generation| (pos, generation))
-                })
-            })
-        });
         let menu = HeardMenu {
             window,
             generation: guest.menu_generation,
             menu: menu.to_owned(),
             pos,
-            openers,
+            openers: guest
+                .menu
+                .as_ref()
+                .and_then(|menu| menu.block_openers.clone()),
         };
         host.menus.entry(conn).or_default().menu_heard = Some(menu.clone());
         self.player_menu_changed(conn, menu, true);
@@ -608,6 +599,9 @@ impl crate::game::ServerGame<'_> {
         let heard = mod_api::__private::listened(hook);
         let openers = menu
             .openers
+            .as_deref()
+            .copied()
+            .unwrap_or_default()
             .map(|opener| opener.filter(|&(pos, _)| self.common.mod_menu_at(pos).is_some()));
         if !heard && openers == [None; 2] {
             return;

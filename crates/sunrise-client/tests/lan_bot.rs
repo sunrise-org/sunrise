@@ -1269,6 +1269,7 @@ fn menu_extra_data_comes_right_before_its_menu() {
         }
     }
     s.hub.open_container(
+        &s.world,
         conn,
         "minecraft:generic_3x3",
         title(),
@@ -1280,6 +1281,7 @@ fn menu_extra_data_comes_right_before_its_menu() {
     let (bot, extras, _) = run(&mut s, move || until_screen(bot));
     assert!(extras.is_empty(), "a stock menu sends no extra data");
     s.hub.open_container(
+        &s.world,
         conn,
         "minecraft:generic_3x3",
         title(),
@@ -1349,6 +1351,7 @@ fn a_spectators_container_click_is_taken_back() {
         .block_entities
         .insert(key, BlockEntity::Chest(items.clone()));
     s.hub.open_container(
+        &s.world,
         conn,
         "minecraft:generic_9x3",
         sunrise_protocol::text::translatable("container.chest", &[]),
@@ -1506,6 +1509,7 @@ fn a_click_past_the_menu_is_ignored() {
         .block_entities
         .insert(key, BlockEntity::Chest(items.clone()));
     s.hub.open_container(
+        &s.world,
         conn,
         "minecraft:generic_9x3",
         sunrise_protocol::text::translatable("container.chest", &[]),

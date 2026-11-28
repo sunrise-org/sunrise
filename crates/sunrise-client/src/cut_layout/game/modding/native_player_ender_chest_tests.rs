@@ -139,8 +139,13 @@ fn a_written_slot_is_what_the_open_ender_chest_menu_shows_and_clicks() {
         let b = game.players().server_players()[1];
         let old = api_item(game, r#"{id:"minecraft:ender_pearl",count:5}"#).unwrap();
         let new = api_item(game, BOOK).unwrap();
+        game.world.block_entities.insert(
+            (1, 64, 1),
+            sunrise_level::containers::BlockEntity::Chest(Vec::new()),
+        );
         let hub = &mut game.server.lan.as_mut().unwrap().hub;
         hub.open_container(
+            &game.common.world,
             13,
             "minecraft:generic_9x3",
             sunrise_core::nbt::Tag::String("test".into()),

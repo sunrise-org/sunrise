@@ -143,6 +143,7 @@ pub mod tests {
                     );
                     let host = game.server.lan.as_mut().unwrap();
                     host.hub.open_container(
+                        &game.common.world,
                         12,
                         "minecraft:generic_9x3",
                         sunrise_core::nbt::Tag::String("test".into()),

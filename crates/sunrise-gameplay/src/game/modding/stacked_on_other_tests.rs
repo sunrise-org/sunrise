@@ -200,6 +200,7 @@ fn with_local_furnace(
             guest.carried.take()
         });
         hub.open_menu_window(
+            &game.common.world,
             12,
             "minecraft:furnace",
             sunrise_protocol::text::translatable("container.furnace", &[]),
@@ -1240,6 +1241,7 @@ fn an_outer_abort_after_an_applied_lan_click_restores_the_guest_and_the_containe
             );
             let host = game.server.lan.as_mut().unwrap();
             host.hub.open_container(
+                &game.common.world,
                 12,
                 "minecraft:generic_9x3",
                 sunrise_core::nbt::Tag::String("test".into()),
@@ -1701,6 +1703,7 @@ pub mod item_part_tests {
                 );
                 let host = game.server.lan.as_mut().unwrap();
                 host.hub.open_container(
+                    &game.common.world,
                     12,
                     "minecraft:generic_9x3",
                     sunrise_core::nbt::Tag::String("test".into()),
@@ -1935,6 +1938,7 @@ pub mod item_part_tests {
                 );
                 let host = game.server.lan.as_mut().unwrap();
                 host.hub.open_container(
+                    &game.common.world,
                     12,
                     "minecraft:generic_9x3",
                     sunrise_core::nbt::Tag::String("test".into()),
@@ -3398,6 +3402,7 @@ pub mod item_part_tests {
                 );
                 let host = game.server.lan.as_mut().unwrap();
                 host.hub.open_container(
+                    &game.common.world,
                     12,
                     "minecraft:generic_9x3",
                     sunrise_core::nbt::Tag::String("test".into()),

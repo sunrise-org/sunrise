@@ -10,5 +10,5 @@ pub struct HeardMenu {
     /// The block the menu is of.
     pub pos: Option<[i32; 3]>,
     /// Each position and its generation when the menu opened; combined menus hold both halves.
-    pub openers: [Option<(ContainerPos, u64)>; 2],
+    pub openers: Option<std::sync::Arc<sunrise_sim::lan::menu::BlockOpeners>>,
 }

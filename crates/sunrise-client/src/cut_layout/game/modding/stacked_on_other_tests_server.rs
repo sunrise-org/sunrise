@@ -36,6 +36,7 @@ fn a_lan_hub_click_is_decided_the_same_way() {
                 );
                 let host = game.server.lan.as_mut().unwrap();
                 host.hub.open_container(
+                    &game.common.world,
                     12,
                     "minecraft:generic_9x3",
                     sunrise_core::nbt::Tag::String("test".into()),

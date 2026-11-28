@@ -2872,6 +2872,7 @@ pub(crate) mod tests {
             host.hub.guests.push(guest(1));
             let title = sunrise_core::nbt::Tag::String("chest".into());
             host.hub.open_container(
+                &game.common.world,
                 1,
                 "minecraft:generic_9x3",
                 title,
@@ -2968,6 +2969,7 @@ pub(crate) mod tests {
             game.server.lan.as_mut().unwrap().hub.guests.push(player);
             let title = sunrise_core::nbt::Tag::String("chest".into());
             game.server.lan.as_mut().unwrap().hub.open_container(
+                &game.common.world,
                 1,
                 "minecraft:generic_9x3",
                 title,
@@ -3129,6 +3131,7 @@ pub(crate) mod tests {
             );
             game.server.lan.as_mut().unwrap().hub.guests.push(guest(1));
             game.server.lan.as_mut().unwrap().hub.open_container(
+                &game.common.world,
                 1,
                 "minecraft:furnace",
                 sunrise_core::nbt::Tag::String("furnace".into()),

@@ -284,10 +284,10 @@ impl crate::game::ServerGame<'_> {
             };
             // Park the opener's window-0 cursor and build the first contents from
             // their inventory, even when an open through BlockEntityRef runs in their turn.
-            let Some(menu_generation) = game.with_own_record(gi, |host, _, _| {
+            let Some(menu_generation) = game.with_own_record(gi, |host, _, world| {
                 if host
                     .hub
-                    .open_menu_window(conn, menu, title, Some(pos), slots, items, extra)
+                    .open_menu_window(world, conn, menu, title, Some(pos), slots, items, extra)
                     .is_none()
                 {
                     if let Some(container) = previous_window
@@ -313,7 +313,8 @@ impl crate::game::ServerGame<'_> {
                 Err(refused) => return refused,
             };
             // ChestMenu and ShulkerBoxMenu own startOpen, including an active ender chest.
-            game.guest_container_opener(conn, pos, true);
+            let partner = game.common.chest_other_half(pos);
+            game.guest_container_opener(conn, pos, partner, true);
             // The game-event listener can close or replace the installed menu.
             if game.server.lan.as_ref().and_then(|host| host.hub.guest(conn))
                 .is_some_and(|guest| guest.menu.is_some() && guest.menu_generation == menu_generation)
@@ -433,9 +434,17 @@ impl crate::game::ServerGame<'_> {
                 return MenuOpen::Refused;
             };
             if game
-                .with_own_record(gi, |host, _, _| {
-                    host.hub
-                        .open_menu_window(conn, menu, title, Some(pos), slots, items, None)
+                .with_own_record(gi, |host, _, world| {
+                    host.hub.open_menu_window(
+                        world,
+                        conn,
+                        menu,
+                        title,
+                        Some(pos),
+                        slots,
+                        items,
+                        None,
+                    )
                 })
                 .is_none()
             {
@@ -452,15 +461,24 @@ impl crate::game::ServerGame<'_> {
     /// `playSound` with no player), the guest included, once the last opener
     /// has left.
     pub(in crate::game) fn guest_container_closed(&mut self, conn: u32) {
-        if let Some(pos) = self
+        let openers = self
             .server
             .lan
             .as_ref()
             .and_then(|host| host.hub.guest(conn))
-            .and_then(|guest| guest.menu.as_ref()?.pos)
-        {
-            self.guest_container_opener(conn, pos, false);
-        }
+            .and_then(|guest| {
+                let menu = guest.menu.as_ref()?;
+                let mut live = menu.live_opener_positions(&self.common.world);
+                let first = live.next()?;
+                Some(match live.next() {
+                    Some(second) if menu.pos == Some(second) => (second, Some(first)),
+                    second => (first, second),
+                })
+            });
+        let Some((pos, partner)) = openers else {
+            return;
+        };
+        self.guest_container_opener(conn, pos, partner, false);
     }
 
     /// Closes whatever menu the guest has open, the way each `ContainerClose`

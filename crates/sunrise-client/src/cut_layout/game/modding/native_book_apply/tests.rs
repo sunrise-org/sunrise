@@ -85,6 +85,8 @@ fn open_mod_menu_named(
             asks_still_valid: false,
             opening_item: None,
             opener_block: None,
+            block_openers: sunrise_sim::lan::menu::Slots::Block(pos)
+                .block_openers(&game.common.world, Some(pos)),
             removed: false,
             slot_changed_seen: None,
         });

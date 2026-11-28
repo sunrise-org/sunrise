@@ -185,6 +185,7 @@ pub(crate) mod tests {
                 let start = game.world.game_time;
                 for conn in [12, 13] {
                     game.server.lan.as_mut().unwrap().hub.open_container(
+                        &game.common.world,
                         conn,
                         "minecraft:generic_3x3",
                         Tag::String("box".into()),
@@ -230,6 +231,7 @@ pub(crate) mod tests {
                 let before = notices.lock().unwrap().len();
                 for (conn, slots) in [(13, Slots::Block(pos)), (12, Slots::Native)] {
                     game.server.lan.as_mut().unwrap().hub.open_container(
+                        &game.common.world,
                         conn,
                         "minecraft:generic_3x3",
                         Tag::String("box".into()),
@@ -261,6 +263,7 @@ pub(crate) mod tests {
                 // cannot close it, count on a recheck, or appear in its viewer list.
                 let open = |game: &mut sunrise_gameplay::game::ServerGame<'_>, conn| {
                     game.server.lan.as_mut().unwrap().hub.open_container(
+                        &game.common.world,
                         conn,
                         "minecraft:generic_3x3",
                         Tag::String("box".into()),
@@ -314,6 +317,7 @@ pub(crate) mod tests {
                 game.world.block_entities.insert(other, entity);
                 let before = notices.lock().unwrap().len();
                 game.server.lan.as_mut().unwrap().hub.open_container(
+                    &game.common.world,
                     13,
                     "minecraft:generic_3x3",
                     Tag::String("box".into()),

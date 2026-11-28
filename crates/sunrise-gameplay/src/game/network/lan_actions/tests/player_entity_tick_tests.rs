@@ -76,6 +76,7 @@ fn far_chests(game: &mut crate::game::ServerGame<'_>, cancel: &Mutex<Option<u32>
             .insert(far, BlockEntity::Chest(vec![None; 27]));
         let host = game.server.lan.as_mut().unwrap();
         host.hub.open_container(
+            &game.common.world,
             conn,
             "minecraft:generic_9x3",
             sunrise_core::nbt::Tag::String("test".into()),

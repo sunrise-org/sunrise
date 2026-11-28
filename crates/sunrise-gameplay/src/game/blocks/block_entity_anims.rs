@@ -38,6 +38,16 @@ impl ServerGame<'_> {
     }
     /// `container_opener_event` for a player who is not a spectator (a guest).
     pub fn container_openers_changed(&mut self, key: (i32, i32, i32), open: bool) -> bool {
+        let partner = self.common.chest_other_half(key);
+        self.container_openers_changed_for(key, partner, open)
+    }
+
+    pub(in crate::game::server_side) fn container_openers_changed_for(
+        &mut self,
+        key: (i32, i32, i32),
+        partner: Option<(i32, i32, i32)>,
+        open: bool,
+    ) -> bool {
         // Declared containers use their own counter, even on a lid-bearing template.
         if self.common.mod_menu_at(key).is_some() {
             return false;
@@ -47,7 +57,7 @@ impl ServerGame<'_> {
         match self.server.be_anims.ticker(state) {
             Some(Ticker::Lid) => {
                 let edge = self.lid_openers_changed(key, open);
-                if let Some(other) = self.common.chest_other_half(key) {
+                if let Some(other) = partner {
                     self.lid_openers_changed(other, open);
                 }
                 edge

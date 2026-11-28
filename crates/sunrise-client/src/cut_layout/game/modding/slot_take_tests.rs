@@ -547,8 +547,16 @@ fn with_pot_parts(
             let host = game.server.lan.as_mut().unwrap();
             let title = sunrise_core::nbt::Tag::String("pot".into());
             let items = vec![None; slots];
-            host.hub
-                .open_container(12, MENU, title, POS, Slots::Block(POS), items, None);
+            host.hub.open_container(
+                &game.common.world,
+                12,
+                MENU,
+                title,
+                POS,
+                Slots::Block(POS),
+                items,
+                None,
+            );
             host.hub.guests.update(0, |guest| {
                 guest.menu.as_mut().unwrap().mod_type = Some(menu_type);
             });

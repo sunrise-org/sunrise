@@ -299,6 +299,7 @@ pub(crate) mod tests {
                 .block_entities
                 .insert(b, BlockEntity::Chest(vec![Some(stone.clone()); 3]));
             game.server.lan.as_mut().unwrap().hub.open_container(
+                &game.common.world,
                 1,
                 "minecraft:generic_9x1",
                 title.clone(),
@@ -325,6 +326,7 @@ pub(crate) mod tests {
                 .block_entities
                 .insert(vehicle, BlockEntity::Chest(vec![Some(stone.clone())]));
             game.server.lan.as_mut().unwrap().hub.open_container(
+                &game.common.world,
                 1,
                 "minecraft:generic_9x1",
                 title,
@@ -354,6 +356,7 @@ pub(crate) mod tests {
                 .insert(a, BlockEntity::Chest(vec![Some(gold.clone())]));
             let title = sunrise_core::nbt::Tag::String("dimension".into());
             game.server.lan.as_mut().unwrap().hub.open_container(
+                &game.common.world,
                 1,
                 "minecraft:generic_9x1",
                 title.clone(),
@@ -384,6 +387,7 @@ pub(crate) mod tests {
                 .guests
                 .push(nether_guest);
             game.server.lan.as_mut().unwrap().hub.open_container(
+                &game.common.world,
                 2,
                 "minecraft:generic_9x1",
                 title,

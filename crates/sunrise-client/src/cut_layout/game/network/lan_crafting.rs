@@ -539,6 +539,8 @@ mod recipe_check_tests {
                 links: Vec::new(),
                 asks_still_valid: false,
                 opening_item: None,
+                block_openers: sunrise_sim::lan::menu::Slots::Block(STATION)
+                    .block_openers(&game.world, Some(STATION)),
                 opener_block: None,
                 removed: false,
                 slot_changed_seen: None,

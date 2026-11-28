@@ -61,13 +61,11 @@ impl crate::game::ServerGame<'_> {
             return true;
         };
         g.menu.as_ref().is_none_or(|m| {
-            m.slots.valid(&self.common.world)
-                && m.still_valid_for(
-                    &host.hub.loop_context,
-                    &self.common.world,
-                    &self.live_guest_view(g),
-                )
-                && !matches!(m.slots, Slots::Block((_, y, id))
+            m.still_valid_for(
+                &host.hub.loop_context,
+                &self.common.world,
+                &self.live_guest_view(g),
+            ) && !matches!(m.slots, Slots::Block((_, y, id))
                     if y == sunrise_gameplay_common::game::minecarts::CART_KEY_Y
                         && !self.chest_vehicle_still_valid(id, g))
         })
@@ -89,6 +87,7 @@ impl crate::game::ServerGame<'_> {
         &mut self,
         conn: u32,
         pos: (i32, i32, i32),
+        partner: Option<(i32, i32, i32)>,
         open: bool,
     ) {
         let acting = self.server.lan_acting == Some(conn);
@@ -105,7 +104,7 @@ impl crate::game::ServerGame<'_> {
             };
             guest.spectator()
         };
-        if spectator || !self.container_openers_changed(pos, open) {
+        if spectator || !self.container_openers_changed_for(pos, partner, open) {
             return;
         }
         let state = self.common.world.block(pos.0, pos.1, pos.2);

@@ -16,7 +16,7 @@ use crate::{
     world::World,
 };
 use mod_api::{Hand, MenuOpeningItem};
-use std::borrow::Cow;
+use std::{borrow::Cow, sync::Arc};
 use sunrise_world::native_load_context::LoopContext;
 
 /// The equipment slots of the inventory menu's armour slots 5 to 8, in menu order.
@@ -62,6 +62,9 @@ pub trait Rules {
     }
 }
 
+/// Immutable block entity identities of the opening, shared with its teardown notice.
+pub type BlockOpeners = [Option<(crate::block_entities::Pos, u64)>; 2];
+
 /// A guest's open container menu.
 #[derive(Clone)]
 pub struct Menu {
@@ -73,6 +76,8 @@ pub struct Menu {
     pub pos: Option<(i32, i32, i32)>,
     /// Where the container's slots live.
     pub slots: Slots,
+    /// Runtime identities captured when the container opened, in backing order.
+    pub block_openers: Option<Arc<BlockOpeners>>,
     /// Slots of the container itself (without the 36 inventory slots).
     pub size: usize,
     pub state: i32,
@@ -238,7 +243,7 @@ impl Menu {
     }
 
     /// `AbstractContainerMenu.stillValid` of this menu for the guest: its
-    /// slots' own answer (`Slots::still_valid`), which the parts on its mod
+    /// slots' own answer, which the parts on its mod
     /// menu type may change (`menu_still_valid`). A mod menu with no backing
     /// block passes `None` even if its opener supplied a screen position.
     /// Vanilla menu types, vehicles and menus without an answering part are
@@ -254,8 +259,12 @@ impl Menu {
         world: &World,
         guest: &LiveGuestView<'_>,
     ) -> bool {
+        if !self.backing_valid(world) {
+            return false;
+        }
+        let mut valid = self.slots.in_reach_for(context, guest, self.pos);
         if !self.asks_still_valid {
-            return self.slots.still_valid_for(context, world, guest, self.pos);
+            return valid;
         }
         let block = match self.slots {
             Slots::Block(k) | Slots::Double(k, _) => Some(k),
@@ -263,12 +272,8 @@ impl Menu {
             Slots::Native => None,
         };
         if block.is_some_and(|(_, y, _)| y == VEHICLE_KEY_Y) {
-            return self.slots.still_valid_for(context, world, guest, self.pos);
+            return valid;
         }
-        if !self.slots.valid(world) {
-            return false;
-        }
-        let mut valid = self.slots.in_reach_for(context, guest, self.pos);
         let opening_item = self.opening_item.as_ref().map(|(hand, opening)| {
             let stack = match hand {
                 Hand::Main => guest.main_hand(),
@@ -289,6 +294,26 @@ impl Menu {
             &mut valid,
         );
         valid
+    }
+
+    /// Whether all the backing block entities are still the ones opened.
+    pub fn backing_valid(&self, world: &World) -> bool {
+        self.slots
+            .valid(world, self.pos, self.block_openers.as_deref())
+    }
+
+    /// The backing block entities whose identities still match, for opener teardown.
+    pub fn live_opener_positions<'a>(
+        &'a self,
+        world: &'a World,
+    ) -> impl Iterator<Item = (i32, i32, i32)> + 'a {
+        self.block_openers
+            .iter()
+            .flat_map(|openers| openers.iter())
+            .flatten()
+            .filter_map(|&(pos, generation)| {
+                (world.block_entities.generation(&pos) == Some(generation)).then_some(pos)
+            })
     }
 
     /// A mod menu type's linked slots and the containers behind them.
@@ -484,10 +509,38 @@ impl Slots {
         .into_iter()
         .flatten()
     }
-    /// Whether the block entities behind the slots are still there
-    /// (`Container.stillValid`).
-    pub fn valid(self, world: &World) -> bool {
-        self.halves().all(|k| world.block_entities.contains_key(&k))
+    fn block_entities(self, at: Option<(i32, i32, i32)>) -> impl Iterator<Item = (i32, i32, i32)> {
+        self.halves()
+            .chain(if self == Self::Ender { at } else { None })
+    }
+
+    pub fn block_openers(
+        self,
+        world: &World,
+        at: Option<(i32, i32, i32)>,
+    ) -> Option<Arc<BlockOpeners>> {
+        let mut positions = self.block_entities(at).peekable();
+        positions.peek()?;
+        Some(Arc::new(std::array::from_fn(|_| {
+            let pos = positions.next()?;
+            Some((pos, world.block_entities.generation(&pos)?))
+        })))
+    }
+
+    /// `Container.stillValidBlockEntity`: identity, not merely occupancy at the same position.
+    fn valid(
+        self,
+        world: &World,
+        at: Option<(i32, i32, i32)>,
+        openers: Option<&BlockOpeners>,
+    ) -> bool {
+        self.block_entities(at).enumerate().all(|(index, pos)| {
+            openers
+                .and_then(|openers| openers[index])
+                .is_some_and(|(opened_at, generation)| {
+                    opened_at == pos && world.block_entities.generation(&pos) == Some(generation)
+                })
+        })
     }
     /// How many slots the block entities behind a block menu show now, a missing one none;
     /// none for the ender chest's and a mod's chest menu, which no block holds.
@@ -501,29 +554,6 @@ impl Slots {
             ),
         }
     }
-    /// `Container.stillValid` for the guest: the block entities are there
-    /// and the guest is within reach of each (`stillValidBlockEntity`). The
-    /// ender chest's block is `at` (`PlayerEnderChestContainer.activeChest`).
-    pub fn still_valid(
-        self,
-        context: &LoopContext,
-        world: &World,
-        guest: &Guest,
-        at: Option<(i32, i32, i32)>,
-    ) -> bool {
-        self.still_valid_for(context, world, &LiveGuestView::from_guest(guest), at)
-    }
-
-    /// Check backing storage and reach with the guest's current body.
-    pub fn still_valid_for(
-        self,
-        context: &LoopContext,
-        world: &World,
-        guest: &LiveGuestView<'_>,
-        at: Option<(i32, i32, i32)>,
-    ) -> bool {
-        self.valid(world) && self.in_reach_for(context, guest, at)
-    }
     /// The reach half of `still_valid`: the guest is within its block
     /// interaction range plus 4 of each block behind the slots, as a mod's
     /// `block_interaction_range` may answer.
@@ -533,10 +563,9 @@ impl Slots {
         guest: &LiveGuestView<'_>,
         at: Option<(i32, i32, i32)>,
     ) -> bool {
-        let ender_chest = if self == Slots::Ender { at } else { None };
         // A vehicle's container is kept under a key, not a block: the game
         // checks its reach to the vehicle (`isChestVehicleStillValid`).
-        self.halves().chain(ender_chest).all(|(x, y, z)| {
+        self.block_entities(at).all(|(x, y, z)| {
             y == VEHICLE_KEY_Y || guest.within_interaction_range(context, [x, y, z], 4.0)
         })
     }
@@ -2357,6 +2386,7 @@ pub(crate) mod tests {
             links: Vec::new(),
             asks_still_valid: false,
             opening_item: None,
+            block_openers: slots.block_openers(&world, Some(k)),
             opener_block: None,
             removed: false,
             slot_changed_seen: None,
@@ -2507,6 +2537,7 @@ pub(crate) mod tests {
             links: Vec::new(),
             asks_still_valid: false,
             opening_item: None,
+            block_openers: slots.block_openers(&world, Some(k)),
             opener_block: None,
             removed: false,
             slot_changed_seen: None,
@@ -3614,6 +3645,7 @@ pub(crate) mod tests {
             links: Vec::new(),
             asks_still_valid: false,
             opening_item: None,
+            block_openers: None,
             opener_block: None,
             removed: false,
             slot_changed_seen: None,
@@ -3740,6 +3772,7 @@ pub(crate) mod tests {
                 links: Vec::new(),
                 asks_still_valid: false,
                 opening_item: None,
+                block_openers: None,
                 opener_block: None,
                 removed: false,
                 slot_changed_seen: None,
@@ -4047,6 +4080,7 @@ pub(crate) mod tests {
             blockless_data: Vec::new(),
             reported_unsent_data_len: None,
             opening_item: None,
+            block_openers: None,
             opener_block: None,
             removed: false,
             mod_type: None,
@@ -4135,6 +4169,7 @@ pub(crate) mod tests {
                 blockless_data: Vec::new(),
                 reported_unsent_data_len: None,
                 opening_item: None,
+                block_openers: None,
                 opener_block: None,
                 removed: false,
                 mod_type: None,
@@ -4228,6 +4263,7 @@ pub(crate) mod tests {
                 blockless_data: Vec::new(),
                 reported_unsent_data_len: None,
                 opening_item: None,
+                block_openers: None,
                 opener_block: None,
                 removed: false,
                 mod_type: Some(menu_type),
@@ -4418,6 +4454,7 @@ pub(crate) mod tests {
             craft: None,
             links: Vec::new(),
             asks_still_valid: false,
+            block_openers: None,
             opener_block: None,
             opening_item: None,
             removed: false,
