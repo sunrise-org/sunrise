@@ -1214,7 +1214,7 @@ impl crate::game::ServerGame<'_> {
 
     /// Stream the level in place until each chunk its tickets make block
     /// ticking is a ticking chunk (lit, with its neighbours loaded).
-    fn wait_for_ticket_chunks(&mut self, deadline: Instant) {
+    pub(in crate::game::server_side) fn wait_for_ticket_chunks(&mut self, deadline: Instant) {
         // Forced chunks are checked two chunks out (their ticket block ticks one).
         // A `PORTAL` ticket's chunks are streamed as an area of their own (the
         // network tick does it, which hasn't run yet), whose chunks out to its

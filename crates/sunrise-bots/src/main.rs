@@ -85,6 +85,7 @@ sunrise-bots: load-test bots for a Minecraft Java Edition 26.3 server (offline m
   --no-swing             attack without swinging (a kill aura hiding its swing, to test an anticheat)
   --no-loaded            never say the level is loaded (ServerboundPlayerLoadedPacket): a vanilla server
                          ignores the player's moves and actions for its first 3 seconds
+  --scene-ticks          stand and acknowledge chunks at a fixed rate under server barriers
   --no-read              stop reading from the server once spawned (a client that lets the
                          server's replies pile up)
   --join-every SECONDS   default 1
@@ -180,6 +181,7 @@ struct Options {
     flood: usize,
     /// None uses vanilla estimation; --ack-mode 64 requests a fixed rate.
     ack_rate: Option<f32>,
+    scene_ticks: bool,
     no_read: bool,
     no_loaded: bool,
     height: f64,
@@ -218,6 +220,7 @@ fn options() -> Result<Options, String> {
         crits: false,
         flood: 100,
         ack_rate: None,
+        scene_ticks: false,
         no_read: false,
         no_loaded: false,
         height: 24.0,
@@ -235,6 +238,10 @@ fn options() -> Result<Options, String> {
         if arg == "-h" || arg == "--help" {
             print!("{HELP}");
             std::process::exit(0);
+        }
+        if arg == "--scene-ticks" {
+            o.scene_ticks = true;
+            continue;
         }
         if arg == "--no-read" {
             o.no_read = true;
@@ -1017,6 +1024,7 @@ fn read(
     track: bool,
     ack_rate: Option<f32>,
     mut capture: Option<Capture>,
+    scene_ticks: bool,
 ) {
     use ids::play::clientbound as cb;
     use ids::play::serverbound as sb;
@@ -1054,7 +1062,25 @@ fn read(
                 Err(_) => Ok(()),
             },
             cb::PING => match r.i32() {
-                Ok(v) => send(raw(sb::PONG, |w| w.i32(v))),
+                Ok(v) => (|| {
+                    if scene_ticks
+                        && v < 0
+                        && v & 1 == 1
+                        && let Some([x, y, z]) = *lock(&bot.teleport)
+                    {
+                        send(
+                            play::Serverbound::MovePlayerPos(play::MovePlayerPos {
+                                x,
+                                y,
+                                z,
+                                flags: 1,
+                            })
+                            .encode(),
+                        )?;
+                        send(raw(sb::CLIENT_TICK_END, |_| {}))?;
+                    }
+                    send(raw(sb::PONG, |w| w.i32(v)))
+                })(),
                 Err(_) => Ok(()),
             },
             cb::LEVEL_CHUNK_WITH_LIGHT => {
@@ -1112,7 +1138,7 @@ fn read(
                 )
             }
             cb::PLAYER_POSITION => match play::Clientbound::decode(id, &body) {
-                Ok(play::Clientbound::PlayerPosition(p)) => {
+                Ok(play::Clientbound::PlayerPosition(p)) => (|| {
                     let mut at = lock(&bot.teleport);
                     let previous = at.unwrap_or([0.0; 3]);
                     // Relative flags: X 1, Y 2, Z 4.
@@ -1138,8 +1164,12 @@ fn read(
                             pitch: p.pitch,
                         })
                         .encode(),
-                    )
-                }
+                    )?;
+                    if scene_ticks && teleports == 1 {
+                        send(raw(sb::PLAYER_LOADED, |_| {}))?;
+                    }
+                    Ok(())
+                })(),
                 _ => Ok(()),
             },
             cb::MOVE_ENTITY_POS
@@ -1204,15 +1234,16 @@ fn run_bot(
         .map(|name| (target_uuid(name), None))
         .collect();
     bot.online.store(true, Ordering::SeqCst);
-    {
+    let read_thread = {
         let (writer, bot) = (writer.clone(), bot.clone());
         let track = behaviour == Behaviour::Fight;
         let capture = (index == 0)
             .then(|| o.capture.as_deref().and_then(Capture::create))
             .flatten();
-        let ack_rate = o.ack_rate;
-        thread::spawn(move || read(reader, writer, bot, track, ack_rate, capture));
-    }
+        let scene_ticks = o.scene_ticks;
+        let ack_rate = if scene_ticks { Some(9.0) } else { o.ack_rate };
+        thread::spawn(move || read(reader, writer, bot, track, ack_rate, capture, scene_ticks))
+    };
     use ids::play::serverbound as sb;
     // Wait for the spawn position.
     let spawn = loop {
@@ -1232,6 +1263,10 @@ fn run_bot(
     if index == 0 {
         // Where the bots gather, for a client that comes to watch them (tools/perf_bench.py --server-bots).
         println!("{}", json!({ "spawn": spawn }));
+    }
+    if o.scene_ticks {
+        let _ = read_thread.join();
+        return;
     }
     let send = |body: Vec<u8>| lock(&writer).send(&body).is_ok();
     if !o.no_loaded {
@@ -1877,6 +1912,7 @@ mod tests {
                 false,
                 ack_rate,
                 None,
+                false,
             )
         });
         for (nonce, size) in [0, 1, 5].into_iter().enumerate() {

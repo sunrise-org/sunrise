@@ -56,7 +56,7 @@ sunrise-mod-api-gen = { path = "../sunrise-mod-api-gen" }
 
 [features]
 parity-fixtures = []
-state-digest = []
+state-digest = ["sunrise-sim/state-digest"]
 rng-count = ["sunrise-core/rng-count"]
 net-trace = ["sunrise-sim/net-trace"]
 test-support = ["sunrise-gameplay-common/test-support", "sunrise-gameplay-common/test-owner-requests", "sunrise-game-data/test-language-publication", "sunrise-game-data/test-effect-registry", "sunrise-mod-runtime/test-work-count", "sunrise-threads/test-allocation-count", "sunrise-threads/test-game-dir", "mod_api/testing", "sunrise-items/test-support", "sunrise-world/test-support", "sunrise-sim/test-dry-side", "sunrise-sim/test-menu-validity", "sunrise-sim/test-mob-kind", "sunrise-sim/test-payload-probe", "sunrise-sim/test-publication-scope", "sunrise-sim/test-residency-observer", "sunrise-sim/test-still-clock", "sunrise-sim/test-support", "sunrise-level/test-support"]

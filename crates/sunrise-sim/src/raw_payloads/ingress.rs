@@ -189,7 +189,7 @@ impl<T> Consumer<T> {
     pub fn try_recv_owned(&self) -> Result<OwnedReceipt<T>, TryRecvError> {
         self.receiver.try_recv_owned()
     }
-    #[cfg(any(test, feature = "test-support"))]
+    #[cfg(any(test, feature = "test-support", feature = "state-digest"))]
     pub fn recv_timeout_owned(
         &self,
         timeout: std::time::Duration,

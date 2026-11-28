@@ -73,6 +73,10 @@ pub struct OwnedReceipt<T> {
     lease: ReceiveLease<T>,
 }
 impl<T> OwnedReceipt<T> {
+    pub fn value(&self) -> &T {
+        &self.value
+    }
+
     /// Transfer the value and credit independently without any refund/re-reserve gap.
     pub fn into_parts(self) -> (T, ReceiveLease<T>) {
         (self.value, self.lease)

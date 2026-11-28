@@ -57,6 +57,7 @@ test-mob-kind = []
 tracker-send-bench = []
 rng-trace = ["sunrise-core/rng-trace"]
 net-trace = []
+state-digest = []
 
 [lints]
 workspace = true
