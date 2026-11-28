@@ -306,6 +306,8 @@ pub mod developer_launch;
 pub mod end_common;
 #[path = "game/modding/entity_sections.rs"]
 pub mod entity_sections;
+#[path = "game/entities/entity_store.rs"]
+pub mod entity_store;
 #[path = "game/modding/entity_type_rows.rs"]
 pub mod entity_type_rows;
 #[path = "game/items/equip_answers.rs"]
@@ -1655,7 +1657,7 @@ pub struct CommonGame<'a> {
     pub native_settings: native_hooks::mod_settings::SharedSettings,
     /// The native damage hooks every level of this game lends to its hits.
     pub damage_hooks: sunrise_sim::health::DamageHooks,
-    pub dropped: sunrise_sim::join_seq::JoinList<ItemEntity>,
+    pub entities: entity_store::EntityStore,
     pub mobs: sunrise_sim::join_seq::JoinList<Mob>,
     /// `mobs` by network id, for the packets that name one (`game/mobs/mob_index.rs`).
     pub mob_index: mob_index::MobIndex,
@@ -2299,7 +2301,8 @@ impl crate::game::CommonGame<'_> {
     /// before those its hooks spawned meanwhile (`addFreshEntity` appends).
     /// They keep their join numbers; the spawned ones got theirs on joining.
     pub fn put_back_dropped(&mut self, items: sunrise_sim::join_seq::JoinList<ItemEntity>) {
-        self.dropped
+        self.entities
+            .dropped
             .restore(items, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
     }
     /// `AbstractCandleBlock.getParticleOffsets`, in sixteenths of a block:
@@ -2388,7 +2391,7 @@ impl crate::game::CommonGame<'_> {
     /// Clear all entity collections shared by server and client games.
     pub fn clear_shared_entities(&mut self) {
         self.mobs.clear();
-        self.dropped.clear();
+        self.entities.dropped.clear();
         self.orbs.clear();
         self.creatures.projectiles.clear();
         self.falling.clear();
@@ -3396,7 +3399,10 @@ impl<const NO_SLOT: bool> ConstructInit<NO_SLOT> {
             tick: wp.tick,
             native_settings: mod_sources.settings.clone(),
             damage_hooks: native_hooks::DAMAGE_HOOKS,
-            dropped: Default::default(),
+            entities: {
+                let dropped = Default::default();
+                entity_store::EntityStore { dropped }
+            },
             mobs: Default::default(),
             mob_index: Default::default(),
             creatures: Default::default(),

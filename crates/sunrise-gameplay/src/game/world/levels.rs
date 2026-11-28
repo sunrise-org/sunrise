@@ -11,7 +11,7 @@
 
 use super::entity_residency::{define_resident_access, resident_owners};
 use super::{
-    Dim, ExperienceOrb, FallingBlock, ItemEntity, Mob,
+    Dim, ExperienceOrb, FallingBlock, Mob,
     boats_common::Boat,
     creaking::CreakingLevelState,
     dragon_common,
@@ -38,6 +38,7 @@ use sunrise_gameplay_common::game::GameGameExt3;
 use sunrise_gameplay_common::game::commands_common::{OtherEntity, Target};
 use sunrise_gameplay_common::game::end_state::EndLevelState;
 use sunrise_gameplay_common::game::entity::EntityLists;
+use sunrise_gameplay_common::game::entity_store::EntityStore;
 use sunrise_gameplay_common::game::residency_tick::ResidencyTickGameExt as _;
 use sunrise_gameplay_common::game::transactions::entities::EntityRemovalGameExt as _;
 use sunrise_gameplay_common::{hoppers::HopperState, leash_knot::Knot};
@@ -123,7 +124,7 @@ macro_rules! entity_count_view {
     ($level:expr, $projectiles:expr, $general:expr, $knots:expr, $others:expr) => {
         crate::game::levels::EntityCountView {
             fixed: [
-                ("minecraft:item", $level.dropped.len()),
+                ("minecraft:item", $level.entities.dropped.len()),
                 ("minecraft:experience_orb", $level.orbs.len()),
                 ("minecraft:minecart", $level.carts.len()),
                 ("minecraft:boat", $level.boats.len()),
@@ -220,7 +221,8 @@ pub struct Parked {
     knot_state: KnotLevelState,
     knots: sunrise_sim::join_seq::JoinList<Knot>,
     projectiles: sunrise_sim::join_seq::JoinList<sunrise_sim::projectiles::Projectile, false>,
-    dropped: sunrise_sim::join_seq::JoinList<ItemEntity>,
+    // Keep item retirement between projectiles and orbs when a parked level drops.
+    entities: EntityStore,
     pub(in crate::game::server_side) orbs: sunrise_sim::join_seq::JoinList<ExperienceOrb>,
     persist: EntityMemory,
     lectern_pulses: Vec<((i32, i32, i32), i32)>,
@@ -288,7 +290,7 @@ impl Parked {
         }
         let entities = EntityLists {
             mobs: &self.mobs,
-            dropped: &self.dropped,
+            dropped: &self.entities.dropped,
             boats: &self.boats,
             carts: &self.carts,
             armor_stands: &self.armor_stands,
@@ -947,7 +949,7 @@ impl Levels {
         let l = self.parked.get(&dim)?;
         Some(
             l.mobs.iter().filter(|m| !m.removed).count()
-                + l.dropped.len()
+                + l.entities.dropped.len()
                 + l.orbs.len()
                 + l.projectiles.len()
                 + l.carts.len()
@@ -994,7 +996,7 @@ impl Levels {
     ) -> Option<[usize; 5]> {
         self.parked.get(&dim).map(|l| {
             [
-                l.dropped.len(),
+                l.entities.dropped.len(),
                 l.orbs.len(),
                 l.projectiles.len(),
                 l.carts.len(),
@@ -1054,7 +1056,10 @@ fn box_parked(
         knot_state: Default::default(),
         knots: Default::default(),
         projectiles: Default::default(),
-        dropped: Default::default(),
+        entities: {
+            let dropped = Default::default();
+            EntityStore { dropped }
+        },
         orbs: Default::default(),
         persist: Default::default(),
         lectern_pulses: Vec::new(),
@@ -1341,6 +1346,7 @@ impl crate::game::ServerGame<'_> {
         swap(&mut self.server.chunk_ticking, &mut p.chunk_ticking);
         swap(&mut self.common.level_events, &mut p.level_events);
         self.server.portals.swap_level(&mut p.portal_states);
+        swap(&mut self.common.entities, &mut p.entities);
         swap(&mut self.common.falling, &mut p.falling);
         swap(&mut self.common.paintings, &mut p.paintings);
         swap(&mut self.common.item_frames, &mut p.item_frames);
@@ -1364,7 +1370,6 @@ impl crate::game::ServerGame<'_> {
         swap(&mut self.common.resident_entities.knots, &mut p.knots);
         swap(&mut self.common.resident_entities.general, &mut p.general);
         swap(&mut self.common.creatures.projectiles, &mut p.projectiles);
-        swap(&mut self.common.dropped, &mut p.dropped);
         swap(&mut self.common.orbs, &mut p.orbs);
         swap(&mut self.common.persist, &mut p.persist);
         swap(&mut self.server.lectern_pulses, &mut p.lectern_pulses);
@@ -2818,8 +2823,11 @@ mod tests {
                     assert!(game.world.modified.contains(&(0, 0)));
                     assert!(!game.world.chunks.contains_key(&(1, 0)));
                     assert!(!game.world.modified.contains(&(1, 0)));
-                    assert_eq!(game.dropped.len(), 1);
-                    assert_eq!(game.dropped[0].stack.item.as_ref(), "minecraft:diamond");
+                    assert_eq!(game.entities.dropped.len(), 1);
+                    assert_eq!(
+                        game.entities.dropped[0].stack.item.as_ref(),
+                        "minecraft:diamond"
+                    );
                     assert_eq!(disk.load_entities(0, 0).unwrap(), [previous]);
                     let neighbor = disk.load_entities(1, 0).unwrap();
                     assert_eq!(neighbor.len(), 1);

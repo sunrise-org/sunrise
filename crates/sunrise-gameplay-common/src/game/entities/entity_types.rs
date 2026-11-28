@@ -460,7 +460,7 @@ macro_rules! entity_lists {
         $($then)::+! {
             ($($args)*)
             Mob(sunrise_sim::mobs::Mob) mobs: mobs,
-            Item(sunrise_sim::entities::ItemEntity) dropped: dropped,
+            Item(sunrise_sim::entities::ItemEntity) dropped: entities.dropped,
             Boat($crate::game::boats_common::Boat) boats: boats,
             Cart($crate::game::minecarts::Minecart) carts: carts,
             ArmorStand(sunrise_sim::entities::ArmorStand) armor_stands: armor_stands,

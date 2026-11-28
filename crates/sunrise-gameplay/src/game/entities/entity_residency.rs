@@ -44,7 +44,7 @@ macro_rules! resident_owners {
         $then! {
             ($this, $($projectiles).+)
             Mob => Mob: mobs,
-            Item => Item: dropped,
+            Item => Item: entities.dropped,
             Orb => Orb: orbs,
             Stand => Stand: armor_stands,
             Frame => Frame: item_frames,
