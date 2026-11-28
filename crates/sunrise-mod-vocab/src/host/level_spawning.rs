@@ -38,10 +38,16 @@ pub trait LevelSpawningBackend {
     /// answers `Ok(false)` whatever `light` says, and neither the predicate nor the hook is
     /// called.
     ///
-    /// The override reaches the predicate and so `default_result`; the hook's `level` handle
-    /// reads the level's real light (NeoForge's event would carry the light-lying level).
-    /// With [`LightOverride::Any`] the rule and the hook run once per light level, from 0 up,
-    /// until one passes.
+    /// [`LightOverride::Real`] uses the level's light. [`LightOverride::Level`] supplies one
+    /// value for sky and block light everywhere the predicate reads them, including the sky
+    /// light used to determine sky visibility. It changes what light checks see; it does not
+    /// skip them. Values above vanilla's `LightEngine.MAX_LEVEL` (15) are clamped to 15.
+    /// [`LightOverride::Any`] tries 0 through 15 in order, stopping at the first passing result
+    /// after the hook. The override affects the predicate and thus `default_result`; the hook's
+    /// `level` handle still reads the real level, including its light and sky visibility.
+    ///
+    /// This query does not spawn anything. [`LevelRef::spawn_entity`] does not run placement
+    /// checks; call this query first if the spawn should depend on them.
     ///
     /// Random: vanilla's predicate draws advance the caller's `RandomSource`. This call has no
     /// caller stream: the predicate and the hook draw from one copy of the level random taken
