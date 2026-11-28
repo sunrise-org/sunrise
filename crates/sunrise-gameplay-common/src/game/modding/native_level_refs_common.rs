@@ -111,6 +111,31 @@ pub trait NativeLevelRefsCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         };
         Some(sunrise_core::geometry::block_floor_height(&here, || &below))
     }
+    /// `BlockState.isSuffocating(level, pos)` of a supplied state at `pos`, through the
+    /// suffocation rules entities use: a closed-shulker rule reads the shulker box at `pos`
+    /// (`Blocks.shulkerBox`: no `ShulkerBoxBlockEntity` there counts as closed), a full-shape
+    /// rule reads the shape published or offset at `pos`. None for an unavailable level, an
+    /// unloaded or out-of-height `pos`, a state outside the registry and a collision query
+    /// error.
+    fn level_state_is_suffocating(
+        &self,
+        level: LevelRef,
+        state: BlockStateId,
+        pos: [i32; 3],
+    ) -> Option<bool> {
+        let world = self.native_level_read_world(level)?;
+        if !world.is_loaded_at(pos[0], pos[1], pos[2]) {
+            return None;
+        }
+        let mut scene = sunrise_level::collisions::SceneCollisions {
+            world,
+            binding: self.collision,
+            subject: None,
+        };
+        self.level_suffocation()
+            .is_suffocating(&mut scene, state, pos)
+            .ok()
+    }
 
     /// The world a handle names now, or None for a stale or foreign one.
     fn native_level_world<'a>(&'a self, level: LevelRef) -> Option<&'a World>
@@ -423,3 +448,5 @@ use crate::game::side_ops::modapi_modding::ModapiModdingSideGameExt as _;
 use crate::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
 use crate::game::native_hooks::light_emission::GameHooks as _;
+
+use crate::game::tables::GameItems as _;

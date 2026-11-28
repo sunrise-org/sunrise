@@ -74,6 +74,16 @@ borrow = "shared"
 kind = "shared_trait"
 owner = "::sunrise_gameplay_common::game::native_block_entity_read::NativeBlockEntityReadGameExt1<'_>"
 
+[host.client."BlockStatesBackend::block_state_correct_tool_for_drops"]
+borrow = "shared"
+kind = "shared_trait"
+owner = "::sunrise_gameplay_common::game::native_block_tables::SideBlockTables<'_>"
+
+[host.client."BlockStatesBackend::block_state_is_suffocating"]
+borrow = "shared"
+kind = "shared_trait"
+owner = "::sunrise_gameplay_common::game::native_block_tables::SideBlockTables<'_>"
+
 [host.client."BlockStatesHost::block_item"]
 borrow = "shared"
 kind = "common"
@@ -704,6 +714,11 @@ borrow = "shared"
 kind = "shared_trait"
 owner = "::sunrise_gameplay_common::game::native_bots_common::NativeBotsCommonGameExt1<'_>"
 
+[host.client."LevelCollisionBackend::level_state_is_suffocating"]
+borrow = "shared"
+kind = "shared_trait"
+owner = "::sunrise_gameplay_common::game::native_level_refs_common::NativeLevelRefsCommonGameExt1<'_>"
+
 [host.client."LevelDatapacksBackend::level_datapack_read"]
 borrow = "shared"
 kind = "shared_trait"
@@ -1248,6 +1263,16 @@ owner = "::sunrise_gameplay_common::game::native_block_entity_read::NativeBlockE
 borrow = "shared"
 kind = "shared_trait"
 owner = "::sunrise_gameplay_common::game::native_block_entity_read::NativeBlockEntityReadGameExt1<'_>"
+
+[host.server."BlockStatesBackend::block_state_correct_tool_for_drops"]
+borrow = "shared"
+kind = "shared_trait"
+owner = "::sunrise_gameplay_common::game::native_block_tables::SideBlockTables<'_>"
+
+[host.server."BlockStatesBackend::block_state_is_suffocating"]
+borrow = "shared"
+kind = "shared_trait"
+owner = "::sunrise_gameplay_common::game::native_block_tables::SideBlockTables<'_>"
 
 [host.server."BlockStatesHost::block_item"]
 borrow = "shared"
@@ -1878,6 +1903,11 @@ owner = "::sunrise_gameplay_common::game::native_entity_refs_common::NativeEntit
 borrow = "shared"
 kind = "shared_trait"
 owner = "::sunrise_gameplay_common::game::native_bots_common::NativeBotsCommonGameExt1<'_>"
+
+[host.server."LevelCollisionBackend::level_state_is_suffocating"]
+borrow = "shared"
+kind = "shared_trait"
+owner = "::sunrise_gameplay_common::game::native_level_refs_common::NativeLevelRefsCommonGameExt1<'_>"
 
 [host.server."LevelDatapacksBackend::level_datapack_read"]
 borrow = "shared"

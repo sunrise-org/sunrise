@@ -2486,6 +2486,7 @@ impl crate::game::ServerGame<'_> {
         );
         let other_entities = entity::entity_lists_of!(self.common, without_carts);
         let loot_clocks = self.common.loot_clock_ticks();
+        let items = server_world_items!(self);
         let mut level = GameLevel {
             cake_probe: false,
             cake_requested: std::cell::Cell::new(false),
@@ -2519,7 +2520,14 @@ impl crate::game::ServerGame<'_> {
             trigger_extras,
             world: &mut self.common.world,
             facts: self.common.res.facts(),
-            tables: native_block_tables::BlockTables::new(&self.common.res, &self.common.pack),
+            tables: native_block_tables::BlockTables::new(&self.common.res, &self.common.pack)
+                .with_side_tables(
+                    sunrise_gameplay_common::game::level_suffocation_of(
+                        self.server.world_tables.0.as_ref(),
+                        &self.common.res,
+                    ),
+                    items,
+                ),
             collision: self.common.collision,
             events: &mut self.common.level_events,
             dimension,
@@ -2545,7 +2553,7 @@ impl crate::game::ServerGame<'_> {
             biome_zoom: self.server.streaming.biome_zoom,
             seed: self.common.level.seed,
             behaviours: self.common.res.behaviours(),
-            items: server_world_items!(self),
+            items,
             recipes: server_world_recipes!(self),
             loot: self.server.server_loot.0.get(),
             loot_storage: self.common.score.storage.snapshot(),

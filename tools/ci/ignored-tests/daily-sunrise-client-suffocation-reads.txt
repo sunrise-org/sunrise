@@ -1,0 +1,4 @@
+# The side-table reads stage a world pack over the prepared resources.
+sunrise-client cut_layout::game::server_side::native_entity_refs::tests::a_world_pack_decides_the_hosts_table_reads_on_its_side lib daily resources
+# The level suffocation read builds a game level over the prepared block registry.
+sunrise-client cut_layout::game::server_side::native_entity_refs::tests::level_reads_whether_a_supplied_state_suffocates_at_a_position lib daily resources

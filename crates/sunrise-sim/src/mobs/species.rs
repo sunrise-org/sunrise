@@ -1407,6 +1407,20 @@ pub fn vanilla_id(s: Species) -> &'static str {
     let index = ALL.iter().position(|d| d.species == s).unwrap_or(0);
     &IDS[index]
 }
+/// The species of the vanilla entity type `id` (`minecraft:` and a [`Def::name`]), from a table
+/// built once: the first definition with that name, as a scan of [`ALL`] finds it. None for
+/// another namespace and a name no definition has.
+pub fn of_vanilla_id(id: &str) -> Option<Species> {
+    static BY_NAME: std::sync::LazyLock<std::collections::HashMap<&'static str, Species>> =
+        std::sync::LazyLock::new(|| {
+            let mut table = std::collections::HashMap::with_capacity(ALL.len());
+            for d in ALL {
+                table.entry(d.name).or_insert(d.species);
+            }
+            table
+        });
+    BY_NAME.get(id.strip_prefix("minecraft:")?).copied()
+}
 impl Def {
     /// Model layer families to load for this entity (adult, baby, variants).
     pub fn layer_prefixes(&self) -> Vec<&'static str> {

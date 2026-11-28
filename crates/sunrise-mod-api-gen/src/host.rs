@@ -1062,6 +1062,28 @@ fn split_table(package: GameplayPackage, table: &str) -> Result<String, String> 
     Ok(format!("{}::{relative}", package.common()))
 }
 
+/// The forwarder call of a host route whose callee borrows as the host signature does, and the
+/// kind the audit counts it as.
+fn routed_call<'a>(
+    route: &'a HostRoute,
+    borrow: Borrow,
+    package: GameplayPackage,
+    method: &str,
+) -> Result<(ForwarderCall<'a>, &'static str), String> {
+    if route.borrow != borrow {
+        return Err("declared callee borrows differently from the host signature".into());
+    }
+    route.call(package, method, "")?;
+    let kind = match route.kind {
+        RouteKind::Local => "local",
+        RouteKind::Common => "common_inherent",
+        RouteKind::SharedTrait => "shared_trait",
+        RouteKind::SideOperation => "side_operation",
+        RouteKind::Static => "static",
+    };
+    Ok((ForwarderCall::Routed(route), kind))
+}
+
 pub(crate) fn gameplay_forwarders(
     areas: &[Area],
     package: GameplayPackage,
@@ -1099,7 +1121,19 @@ fn gameplay_forwarder_plan<'a>(
                     ForwarderCall::Service => (call, "service"),
                     ForwarderCall::Table(table) => {
                         split_table(package, table)?;
-                        (call, "table")
+                        // A read of tables a world's data packs change, which each side's state
+                        // owns, has a side row naming the callee that reads them; the others read
+                        // the common state's view.
+                        match routing.host_route(package, &key) {
+                            Some(route) => {
+                                let borrow = match entry.sig.receiver().and_then(|r| r.mutability) {
+                                    Some(_) => Borrow::Mutable,
+                                    None => Borrow::Shared,
+                                };
+                                routed_call(route, borrow, package, &game_method(entry)?)?
+                            }
+                            None => (call, "table"),
+                        }
                     }
                     ForwarderCall::Inherent { receiver, .. } => {
                         if let ForwarderTarget::Table(table) = target {
@@ -1111,21 +1145,7 @@ fn gameplay_forwarder_plan<'a>(
                                 Some(ForwarderBorrow::Shared) => Borrow::Shared,
                                 Some(ForwarderBorrow::Mutable) => Borrow::Mutable,
                             };
-                            if route.borrow != borrow {
-                                return Err(
-                                    "declared callee borrows differently from the host signature"
-                                        .into(),
-                                );
-                            }
-                            route.call(package, &game_method(entry)?, "")?;
-                            let kind = match route.kind {
-                                RouteKind::Local => "local",
-                                RouteKind::Common => "common_inherent",
-                                RouteKind::SharedTrait => "shared_trait",
-                                RouteKind::SideOperation => "side_operation",
-                                RouteKind::Static => "static",
-                            };
-                            (ForwarderCall::Routed(route), kind)
+                            routed_call(route, borrow, package, &game_method(entry)?)?
                         } else if receiver.is_some() {
                             (call, "local_default")
                         } else {
@@ -2141,6 +2161,52 @@ mod tests {
             let generated = crate::gameplay::host_source(&root, package).unwrap();
             let generated: String = generated.chars().filter(|ch| !ch.is_whitespace()).collect();
             assert!(generated.contains("::native_level_can_survive(self,level,pos,state)"));
+        }
+    }
+
+    /// The block-state reads of tables a world's data packs change forward to the side's own
+    /// tables on both sides; the other table reads keep the common state's view.
+    #[test]
+    fn data_pack_table_reads_forward_to_the_sides_tables() {
+        let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("../..");
+        let areas = load(&root).unwrap();
+        let routing = Routing::load(&root).unwrap();
+        let side = "::native_block_tables::SideBlockTables<'_>";
+        let common = "::sunrise_gameplay_common::game::native_block_tables::BlockTables";
+        for package in [GameplayPackage::Server, GameplayPackage::Client] {
+            let callees = host_callees(&areas, package, &routing).unwrap();
+            for read in [
+                "block_state_is_suffocating",
+                "block_state_correct_tool_for_drops",
+            ] {
+                assert!(
+                    callees.iter().any(|callee| {
+                        callee.label == format!("BlockStatesBackend::{read}")
+                            && callee.method == read
+                            && callee.kind == RouteKind::SharedTrait
+                            && callee.borrow == Borrow::Shared
+                            && callee.owner.ends_with(side)
+                    }),
+                    "{package:?}: {read}"
+                );
+            }
+            let generated = crate::gameplay::host_source(&root, package).unwrap();
+            // The source is formatted: drop whitespace and the trailing commas the formatter
+            // puts before a closing `>` or `)` when it breaks a list over lines.
+            let generated: String = generated.chars().filter(|ch| !ch.is_whitespace()).collect();
+            let generated = generated.replace(",>", ">").replace(",)", ")");
+            assert!(
+                generated.contains(&format!("{side}>::block_state_is_suffocating(self,state)"))
+            );
+            assert!(generated.contains(&format!(
+                "{side}>::block_state_correct_tool_for_drops(self,"
+            )));
+            assert!(!generated.contains(&format!("{common}::block_state_is_suffocating(")));
+            assert!(!generated.contains(&format!("{common}::block_state_correct_tool_for_drops(")));
+            // A read of the game's own tables is unchanged.
+            assert!(generated.contains(&format!(
+                "{common}::block_state_is_solid(&{common}::of(&self.common),state)"
+            )));
         }
     }
 

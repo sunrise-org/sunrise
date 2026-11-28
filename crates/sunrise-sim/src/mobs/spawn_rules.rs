@@ -156,11 +156,37 @@ fn valid_spawn_surface<L: SpawnLevel>(
     bit: u16,
     fire_immune: bool,
 ) -> bool {
-    let state = l.state(x, y, z);
-    if &*l.facts().get(state).name == "minecraft:magma_block" {
+    spawn_state_valid(l.facts(), l.mob_data(), l.state(x, y, z), bit, fire_immune)
+}
+
+/// `BlockState.isValidSpawn(level, pos, type)` for `state` alone, as natural spawning reads it
+/// from the exported per-state flags: leaves admit ocelots and parrots, ice polar bears, magma
+/// only fire immune types, and a block's declared `spawn_rule` is already in the flags.
+pub fn is_valid_spawn_on(
+    s: Species,
+    facts: &BlockFacts,
+    data: &data::MobData,
+    state: BlockStateId,
+) -> bool {
+    let bit = match s {
+        Species::Ocelot | Species::Parrot => data::VALID_SPAWN_LEAVES,
+        Species::PolarBear => data::VALID_SPAWN_ICE,
+        _ => data::VALID_SPAWN,
+    };
+    spawn_state_valid(facts, data, state, bit, fire_immune(s))
+}
+
+fn spawn_state_valid(
+    facts: &BlockFacts,
+    data: &data::MobData,
+    state: BlockStateId,
+    bit: u16,
+    fire_immune: bool,
+) -> bool {
+    if &*facts.get(state).name == "minecraft:magma_block" {
         fire_immune
     } else {
-        l.mob_data().state(state).flags & bit != 0
+        data.state(state).flags & bit != 0
     }
 }
 /// `NaturalSpawner.isValidEmptySpawnBlock` for an entity type.

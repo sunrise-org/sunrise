@@ -41,6 +41,9 @@ properties calls nothing; metadata that cannot enumerate returns `Unavailable`. 
 | `propagates_skylight_down(state) -> Option<bool>` | `BlockState.propagatesSkylightDown()`: sky light passes down unchanged, the block's own answer included (glass and air yes, stone no) |
 | `is_air(state) -> Option<bool>` | `BlockState.isAir()`: air, cave air and void air, by the block's flag rather than the `#minecraft:air` tag |
 | `is_redstone_conductor(state) -> Option<bool>` | `BlockState.isRedstoneConductor` when it depends only on the block state; `None` when a position is needed |
+| `light_dampening(state) -> Option<u8>` | `BlockStateBase.getLightDampening()`: how much light the state stops, 0 to 15 (stone 15, water and leaves 1, glass and air 0) |
+| `is_suffocating(state) -> Option<bool>` | `BlockState.isSuffocating` when the block's predicate decides from the state alone (stone, mud and an unextended piston yes; glass, leaves and a moving piston no), by the level's suffocation rules (see below for which); `None` when a position is needed (shulker boxes, published or offset shapes) |
+| `is_valid_spawn(state, entity_type) -> Option<bool>` | `BlockState.isValidSpawn` as natural spawning reads it: a sturdy top face and light emission below 14 by default, a declared `spawn_rule` over it, leaves for ocelots and parrots, ice for polar bears, magma for fire immune types; `None` for an entity type with no spawn species |
 | `map_color(state) -> Option<u8>` | `BlockState.getMapColor`: the `MapColor.id` a map item colours a column by, 0 for none |
 | `map_color_rgba(packed) -> Option<[u8; 4]>` | `MapColor.getColorFromPackedId`: decode a map pixel to `[red, green, blue, alpha]`; ID 0 and undefined IDs decode to transparent RGBA; `None` means no game backend |
 | `block_class(state, class: BlockClass) -> Result<Option<bool>, LevelReadError>` | Java `instanceof` on the block's vanilla class, subclasses included: `Stair`, `Entity` (`EntityBlock`), `IronBars`, `StainedGlassPane`, `TrapDoor`, `Bonemealable` (`BonemealableBlock`), `Slab`, `Wall`, `Fence`, `Fallable`. See below |
@@ -89,6 +92,22 @@ The conductor query uses the same exported predicate as redstone, not render sol
 `None` for shulker boxes because their collision bounds depend on the live block entity. To query a
 placed block, use `LevelRef::is_redstone_conductor(host, pos)` (server side, `None` for an unloaded
 position).
+
+`is_suffocating` returns `None` where vanilla's predicate reads the level: a shulker box asks its
+`ShulkerBoxBlockEntity` whether it is closed, and a block whose collision shape a block entity
+publishes or a declared offset moves is tested with its shape at the position. Ask
+`LevelRef::state_is_suffocating(host, state, pos)` there (both sides; the arguments in
+`visit_block_shape`'s order; `None` for an unloaded position and for collision data that cannot
+answer). The state need not be the block stored at `pos`, so a camouflaged block answers with the
+state it shows: a shulker box state at a cell with no shulker box block entity suffocates, as
+vanilla's predicate says.
+
+Both reads use the same suffocation rules. On the server they are the open world's, where its data
+packs' `#minecraft:causes_suffocation` decides the default predicate, whether you ask through a host
+or inside a block callback's level. A friction part's level (the one a motion tick lends) reads the
+game's built-in rules (#6626). On the client they are the game's built-in rules,
+whatever the server's packs say, until the client receives the world's tables (#6597).
+`is_valid_spawn` needs no position: the game's spawning decides it from the state alone.
 
 Option-only queries return `None` for an unknown state or block, including an invalid local ordinal, and on a host with no game behind it (a mod's test double). Queries returning `Result<Option<_>, LevelReadError>` distinguish unknown states (`Ok(None)`) from unavailable metadata (`Err(LevelReadError::Unavailable)`). The ordinal order is defined by the complete canonical property constraints, not by the engine's numeric enumeration.
 

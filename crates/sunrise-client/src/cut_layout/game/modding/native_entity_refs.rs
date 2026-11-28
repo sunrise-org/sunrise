@@ -2961,6 +2961,247 @@ pub(crate) mod tests {
         });
     }
 
+    /// `BlockState.isSuffocating(level, pos)` of a state that need not be placed: the cell's
+    /// shulker box block entity decides a shulker box (`Blocks.shulkerBox`), absent counting as
+    /// closed, while stone and glass ignore the level.
+    #[test]
+    #[ignore = "daily"]
+    fn level_reads_whether_a_supplied_state_suffocates_at_a_position() {
+        use std::sync::Arc;
+        use sunrise_client::block_entity_anim::{Shulker, ShulkerStatus};
+        use sunrise_client::chunk::Chunk;
+        with_game(|game| {
+            game.world
+                .chunks
+                .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+            let level = game.level(game.dim.id()).unwrap();
+            let [stone, glass, shulker] = [
+                "minecraft:stone",
+                "minecraft:glass",
+                "minecraft:shulker_box",
+            ]
+            .map(|name| mod_api::prelude::BlockStatesHost::block_state_id(&*game, name).unwrap());
+            // The cell holds air: each state answers as if it stood there.
+            assert_eq!(
+                level.state_is_suffocating(game, stone, [0, 64, 0]),
+                Some(true)
+            );
+            assert_eq!(
+                level.state_is_suffocating(game, glass, [0, 64, 0]),
+                Some(false)
+            );
+            assert_eq!(
+                level.state_is_suffocating(game, shulker, [0, 64, 0]),
+                Some(true)
+            );
+            // The state alone cannot say; the position can.
+            {
+                use mod_api::HostBlockStates;
+                assert_eq!(game.block_states().is_suffocating(shulker), None);
+            }
+            let placed = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:shulker_box")
+                .unwrap();
+            game.world.set(0, 64, 0, placed).unwrap();
+            for status in [
+                ShulkerStatus::Closed,
+                ShulkerStatus::Opening,
+                ShulkerStatus::Opened,
+                ShulkerStatus::Closing,
+            ] {
+                game.world.shulkers.insert(
+                    [0, 64, 0],
+                    Shulker {
+                        status,
+                        ..Default::default()
+                    },
+                );
+                assert_eq!(
+                    level.state_is_suffocating(game, shulker, [0, 64, 0]),
+                    Some(status == ShulkerStatus::Closed),
+                    "{status:?}"
+                );
+                assert_eq!(
+                    level.state_is_suffocating(game, stone, [0, 64, 0]),
+                    Some(true),
+                    "{status:?}"
+                );
+            }
+            // One cell over there is no box: the same state suffocates there.
+            assert_eq!(
+                level.state_is_suffocating(game, shulker, [1, 64, 0]),
+                Some(true)
+            );
+            // A parked level answers from its own block entities.
+            game.world.shulkers.insert(
+                [0, 64, 0],
+                Shulker {
+                    status: ShulkerStatus::Opened,
+                    ..Default::default()
+                },
+            );
+            assert!(
+                game.enter_command_level(sunrise_gameplay_common::game::Dim::Nether)
+                    .is_some()
+            );
+            assert_eq!(
+                level.state_is_suffocating(game, shulker, [0, 64, 0]),
+                Some(false)
+            );
+            assert!(
+                game.enter_command_level(sunrise_gameplay_common::game::Dim::Overworld)
+                    .is_some()
+            );
+            game.world.shulkers.remove(&[0, 64, 0]);
+            // Unloaded and out-of-height positions are unknown, not a guess.
+            assert_eq!(level.state_is_suffocating(game, stone, [160, 64, 0]), None);
+            assert_eq!(level.state_is_suffocating(game, stone, [0, 10000, 0]), None);
+        });
+    }
+
+    /// A world's data pack that replaces `#minecraft:causes_suffocation` and
+    /// `#minecraft:mineable/pickaxe` changes the server's reads of those tables: both
+    /// suffocation reads, the state alone and at a position, and the correct-tool read follow the
+    /// world's tables, which the server's state owns, through its host and inside a block
+    /// callback's level. The side a motion tick lends a friction part keeps the game's own
+    /// tables, and so does the client's host, whose state holds no world's packs yet.
+    #[test]
+    #[ignore = "daily"]
+    fn a_world_pack_decides_the_hosts_table_reads_on_its_side() {
+        use mod_api::HostBlockStates;
+        use std::sync::Arc;
+        use sunrise_client::chunk::Chunk;
+        let pickaxe = || {
+            mod_api::ItemStack::of(mod_api::__private::item_key("minecraft:iron_pickaxe").unwrap())
+        };
+        with_client_game(|client| {
+            with_game(|game| {
+                let root = std::env::temp_dir()
+                    .join(format!("sunrise-side-tables-pack-{}", std::process::id()));
+                let _ = std::fs::remove_dir_all(&root);
+                game.options.game_dir = Some(root.join("game"));
+                game.build_registries();
+                game.world
+                    .chunks
+                    .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+                let [stone, dirt] = ["minecraft:stone", "minecraft:dirt"].map(|name| {
+                    mod_api::prelude::BlockStatesHost::block_state_id(&*game, name).unwrap()
+                });
+                // The game's own tables: stone suffocates and is a pickaxe's, dirt a shovel's.
+                let level = game.level(game.dim.id()).unwrap();
+                assert_eq!(game.block_states().is_suffocating(stone), Some(true));
+                assert_eq!(
+                    level.state_is_suffocating(game, stone, [0, 64, 0]),
+                    Some(true)
+                );
+                assert_eq!(
+                    game.block_states()
+                        .is_correct_tool_for_drops(&pickaxe(), stone),
+                    Some(true)
+                );
+                assert_eq!(
+                    game.block_states()
+                        .is_correct_tool_for_drops(&pickaxe(), dirt),
+                    Some(false)
+                );
+                // The same answers from the level views a part reads in a callback: the level
+                // a block callback gets, and the side a motion tick lends a friction part.
+                let read = |states: mod_api::BlockStates<'_>| {
+                    [
+                        states.is_suffocating(stone),
+                        states.is_suffocating(dirt),
+                        states.is_correct_tool_for_drops(&pickaxe(), stone),
+                        states.is_correct_tool_for_drops(&pickaxe(), dirt),
+                    ]
+                };
+                let views = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
+                    let level = game
+                        .with_level(|_, level, _| read(mod_api::LevelHost::block_states(&*level)));
+                    let side = game_side!(game);
+                    let side = read(sunrise_sim::motion::SideLevel::block_states(&side).unwrap());
+                    [level, side]
+                };
+                let own = [Some(true), Some(true), Some(true), Some(false)];
+                assert_eq!(views(game), [own, own]);
+                game.server.world_root = root.join("world");
+                let pack = game.server.world_root.join("datapacks/side_tables");
+                let tags = pack.join("data/minecraft/tags/block");
+                std::fs::create_dir_all(tags.join("mineable")).unwrap();
+                std::fs::write(
+                    pack.join("pack.mcmeta"),
+                    r#"{"pack":{"description":"side tables fixture"}}"#,
+                )
+                .unwrap();
+                let only_dirt = r#"{"replace":true,"values":["minecraft:dirt"]}"#;
+                std::fs::write(tags.join("causes_suffocation.json"), only_dirt).unwrap();
+                std::fs::write(tags.join("mineable/pickaxe.json"), only_dirt).unwrap();
+                std::fs::write(
+                    game.server.world_root.join("datapacks.json"),
+                    r#"{"enabled":["vanilla","file/side_tables"],"disabled":[]}"#,
+                )
+                .unwrap();
+                // Stage the pack stack's world tables into this game alone: no datapack reload,
+                // which would publish registry snapshots and the process-wide sync cache.
+                let resources = game.options.resources.clone();
+                let stack = sunrise_gameplay::game::functions::pack_stack(
+                    &game.server.world_root,
+                    &resources,
+                    &sunrise_assets::resource_source::ResourceSource::directory(resources.clone()),
+                    &Default::default(),
+                    false,
+                    &[],
+                    &[],
+                );
+                let own_items = game.common.server_items.take();
+                game.server.world_tables.0 = game
+                    .stage_world_tables(&stack, false, &resources)
+                    .unwrap()
+                    .tables;
+                assert!(game.server.world_tables.0.is_some());
+                // The world's tables: dirt is the only member of both tags.
+                let level = game.level(game.dim.id()).unwrap();
+                assert_eq!(game.block_states().is_suffocating(stone), Some(false));
+                assert_eq!(
+                    level.state_is_suffocating(game, stone, [0, 64, 0]),
+                    Some(false)
+                );
+                assert_eq!(game.block_states().is_suffocating(dirt), Some(true));
+                assert_eq!(
+                    level.state_is_suffocating(game, dirt, [0, 64, 0]),
+                    Some(true)
+                );
+                assert_eq!(
+                    game.block_states()
+                        .is_correct_tool_for_drops(&pickaxe(), stone),
+                    Some(false)
+                );
+                assert_eq!(
+                    game.block_states()
+                        .is_correct_tool_for_drops(&pickaxe(), dirt),
+                    Some(true)
+                );
+                let world = [Some(false), Some(true), Some(false), Some(true)];
+                // A block callback's level follows the pack; the side a motion tick lends a
+                // friction part keeps the game's own tables (#6626).
+                assert_eq!(views(game), [world, own]);
+                // The client's host keeps the client's own tables.
+                assert_eq!(client.block_states().is_suffocating(stone), Some(true));
+                assert_eq!(
+                    client
+                        .block_states()
+                        .is_correct_tool_for_drops(&pickaxe(), stone),
+                    Some(true)
+                );
+                game.server.world_tables.0 = None;
+                game.common.server_items = own_items;
+                let _ = std::fs::remove_dir_all(&root);
+            });
+        });
+    }
+
     #[test]
     #[ignore = "daily"]
     fn level_sturdy_uses_gameplay_support() {
