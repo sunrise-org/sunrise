@@ -368,6 +368,76 @@ pub fn check_spawn_rules<L: SpawnLevel, R: RandomSource + Clone>(
     l.placement_check(kind.id, reason, at, allowed, &mut SpawnRandom(random))
 }
 
+/// A level whose block and sky light both read `.1` (0 to 15) at every position, and whose
+/// every other answer is the level's: what Apothic Spawners' light-lying level does for a
+/// spawn rule (`LevelRef::check_spawn_rules` with `LightOverride::Level`).
+pub struct FixedLight<'a, L>(pub &'a L, pub i32);
+
+impl<L: SpawnLevel> SpawnLevel for FixedLight<'_, L> {
+    fn within_world_border(&self, x: i32, z: i32) -> bool {
+        self.0.within_world_border(x, z)
+    }
+    fn state(&self, x: i32, y: i32, z: i32) -> BlockStateId {
+        self.0.state(x, y, z)
+    }
+    fn facts(&self) -> &BlockFacts {
+        self.0.facts()
+    }
+    fn mob_data(&self) -> &data::MobData {
+        self.0.mob_data()
+    }
+    fn block_tag(&self, tag: &str, block: &str) -> bool {
+        self.0.block_tag(tag, block)
+    }
+    fn biome_tag(&self, tag: &str, x: i32, y: i32, z: i32) -> bool {
+        self.0.biome_tag(tag, x, y, z)
+    }
+    fn sky_light(&self, _: i32, _: i32, _: i32) -> i32 {
+        self.1
+    }
+    fn block_light(&self, _: i32, _: i32, _: i32) -> i32 {
+        self.1
+    }
+    fn sky_darken(&self) -> i32 {
+        self.0.sky_darken()
+    }
+    fn thundering(&self) -> bool {
+        self.0.thundering()
+    }
+    fn sea_level(&self) -> i32 {
+        self.0.sea_level()
+    }
+    fn world_surface(&self, x: i32, z: i32) -> i32 {
+        self.0.world_surface(x, z)
+    }
+    fn peaceful(&self) -> bool {
+        self.0.peaceful()
+    }
+    fn dimension_type(&self) -> &DimensionFacts {
+        self.0.dimension_type()
+    }
+    fn surface_slime_chance(&self, x: i32, y: i32, z: i32) -> f32 {
+        self.0.surface_slime_chance(x, y, z)
+    }
+    fn world_seed(&self) -> i64 {
+        self.0.world_seed()
+    }
+    fn player_near(&self, x: f64, y: f64, z: f64, distance: f64) -> bool {
+        self.0.player_near(x, y, z, distance)
+    }
+    fn placement_check(
+        &self,
+        entity: &str,
+        reason: Reason,
+        at: [i32; 3],
+        default_result: bool,
+        random: &mut dyn mod_api::RandomSource,
+    ) -> bool {
+        self.0
+            .placement_check(entity, reason, at, default_result, random)
+    }
+}
+
 struct SpawnLevelView<'a, L>(&'a L);
 
 impl<L: SpawnLevel> SpawnPlacementLevel for SpawnLevelView<'_, L> {
@@ -1295,6 +1365,28 @@ mod mod_spawn_rule_tests {
         assert!(level.check("ruby:ghoul", Reason::TrialSpawner, on_grass));
         level.sky = 9;
         assert!(level.check("ruby:ghoul", Reason::Natural, on_grass));
+    }
+
+    #[test]
+    fn a_fixed_light_replaces_what_the_light_rules_read_and_nothing_else() {
+        let level = Flat::new(&[]);
+        let zombie = mob_kind("minecraft:zombie", Species::Zombie);
+        let ask = |light: i32, at: [i32; 3]| {
+            check_spawn_rules(
+                (&zombie).into(),
+                &FixedLight(&level, light),
+                Reason::Natural,
+                &mut LegacyRandom::new(7),
+                at,
+            )
+        };
+        let on_grass = [0, 1, 0];
+        // The level's own light is 15, which the zombie refuses.
+        assert!(!level.check("minecraft:zombie", Reason::Natural, on_grass));
+        assert!(ask(0, on_grass), "light 0 everywhere is dark enough");
+        assert!(!ask(15, on_grass));
+        // The rest of the rule is the level's: air below is no ground.
+        assert!(!ask(0, [0, 5, 0]));
     }
 
     #[test]

@@ -546,6 +546,13 @@ fn level_load(&self, host: &mut dyn mod_api::ServerHost, event: &mut mod_api::Le
 
 Only natural spawning reads the policy: spawners, trial spawners, patrols, sieges, phantoms, a new chunk's creatures and custom spawners keep their own rules. A change counts from the level's next spawn pass, and mobs already there stay. The policy is not saved. It survives parking and reopening a level within the same world session, but closing the world resets it. Set it in `level_load`. Reads work on any host and answer `None` on a client or for a stale handle; the writes need a `ServerHost` and return `false` there.
 
+`LevelRef::check_spawn_rules(host, kind, pos, reason, light)` runs an entity type's spawn rules at `pos` as `SpawnPlacements.checkSpawnRules` does, then `mob_spawn_placement_check` as natural spawning asks it, so other mods' checks apply. `kind` is a full id; a type with no placement entry (a non-mob) passes its vanilla rule, and registered predicates and the hook still answer for it. `light` is a `LightOverride`: `Real` reads the level's light, `Level(n)` makes every sky and block light the rule reads `n` (more than 15 is 15), and `Any` tries 0 up to 15 until one passes, which is what Apothic Spawners' "Ignore Light" needs. The override reaches the predicate and `default_result`; the hook's `level` handle still reads the real light. With `Any` the hook runs once per light level tried. The rule and the hook draw from one copy of the level random, never written back: the level's stream does not move, two calls at an unchanged state draw the same rolls, and each `Any` try draws after the one before. It returns `Ok(false)` for an unloaded position or an unknown id, `Err(Stale)` for a stale handle, and `Err(Unavailable)` on a client, for a level not in place, inside another `check_spawn_rules` on the same thread (a listener asking again), and inside an engine pass that holds the level random (a listener that natural spawning, a spawner, a trial spawner, a vault, a raid or zombie reinforcements calls). At Peaceful difficulty a type not allowed in Peaceful (a zombie) answers `Ok(false)` before its predicate and the hook, whatever `light` says, as `SpawnPlacements.checkSpawnRules` checks `EntityType.isAllowedInPeaceful` first.
+
+```rust,ignore
+// Ignore Light: may a zombie spawn here at any light?
+let ok = level.check_spawn_rules(host, "minecraft:zombie", pos, mod_api::SpawnReason::Spawner, mod_api::LightOverride::Any);
+```
+
 ## Raid handles
 
 Use `LevelRef::raid`, `raid_at` and `raids` to obtain raid handles. They resolve their

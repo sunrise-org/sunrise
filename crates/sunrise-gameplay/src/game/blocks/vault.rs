@@ -113,6 +113,7 @@ impl ServerGame<'_> {
             &mut self.common.world.random,
             crate::rng_count::placeholder_level(LegacyRandom::new(0)),
         );
+        let lent = crate::game::server_side::native_level_spawning::LevelRandomLent::start();
         let mut sequences = std::mem::take(&mut self.server.rand_sequences);
         let loot = self.server.server_loot.0.get();
         let players = Players {
@@ -163,6 +164,7 @@ impl ServerGame<'_> {
             )
         };
         drop(players);
+        drop(lent);
         self.common.world.random = random;
         self.server.rand_sequences = sequences;
         self.common

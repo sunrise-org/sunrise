@@ -180,6 +180,7 @@ impl crate::game::ServerGame<'_> {
             &mut self.common.world.random,
             crate::rng_count::placeholder_level(LegacyRandom::new(0)),
         );
+        let lent = crate::game::server_side::native_level_spawning::LevelRandomLent::start();
         let sequences = std::cell::RefCell::new(std::mem::take(&mut self.server.rand_sequences));
         let mut events = Vec::new();
         let mut planned: Vec<Planned> = Vec::new();
@@ -250,6 +251,7 @@ impl crate::game::ServerGame<'_> {
             );
             state
         };
+        drop(lent);
         self.common.world.random = random;
         self.server.rand_sequences = sequences.into_inner();
         let (created, rides) = extras;

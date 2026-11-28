@@ -1528,6 +1528,7 @@ impl crate::game::ServerGame<'_> {
             &mut self.common.world.random,
             crate::rng_count::placeholder_level(LegacyRandom::new(0)),
         );
+        let lent = crate::game::server_side::native_level_spawning::LevelRandomLent::start();
         let mut members: Vec<Member> = Vec::new();
         let mut spawner = std::mem::take(&mut self.server.raiding.0.patrol);
         {
@@ -1545,6 +1546,7 @@ impl crate::game::ServerGame<'_> {
             }
         }
         self.server.raiding.0.patrol = spawner;
+        drop(lent);
         self.common.world.random = random;
         for m in members {
             let at = [
@@ -1597,6 +1599,7 @@ impl SiegeLevel for ServerGame<'_> {
             &mut self.common.world.random,
             crate::rng_count::placeholder_level(LegacyRandom::new(0)),
         );
+        let lent = crate::game::server_side::native_level_spawning::LevelRandomLent::start();
         let ok = spawn_rules::monster_rules(
             Species::Zombie,
             &self.mob_world_base(&[]),
@@ -1606,6 +1609,7 @@ impl SiegeLevel for ServerGame<'_> {
             y,
             z,
         );
+        drop(lent);
         self.common.world.random = random;
         ok
     }

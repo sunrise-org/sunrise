@@ -985,6 +985,24 @@ impl Default for SpawnFlags {
     }
 }
 
+/// The light a spawn-rule check reads (`LevelRef::check_spawn_rules`): the level's own, one level
+/// everywhere, or every level in turn. Vanilla has no such input: Apothic Spawners' "Ignore
+/// Light" gets it by wrapping the level so `getRawBrightness` and `getBrightness` answer
+/// another value.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, sunrise_mod_api_macros::Wire)]
+#[non_exhaustive]
+pub enum LightOverride {
+    /// The light the level has at the position.
+    #[default]
+    Real,
+    /// Sky and block light both read this level (0 to 15; more is 15), at every position the
+    /// rule reads.
+    Level(u8),
+    /// True when the rule passes at some light level from 0 to 15, tried from 0 up, each try
+    /// drawing after the one before (see `LevelRef::check_spawn_rules`).
+    Any,
+}
+
 /// Why a mob spawns (`EntitySpawnReason`).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 #[non_exhaustive]

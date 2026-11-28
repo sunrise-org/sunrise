@@ -321,7 +321,9 @@ impl SpawnerTypeFacts {
         Ok(facts)
     }
 
-    pub(super) fn placement_type(self, id: &str) -> SpawnEntityType<'_> {
+    /// The type `id` as `check_spawn_rules` reads it, non-mobs included (they have no
+    /// species).
+    pub fn placement_type(self, id: &str) -> SpawnEntityType<'_> {
         SpawnEntityType {
             id,
             species: self.species,

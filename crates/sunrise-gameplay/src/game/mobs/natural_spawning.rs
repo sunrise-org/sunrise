@@ -1308,6 +1308,46 @@ impl<'a> crate::game::ServerGame<'a> {
             .get(entity)
             .copied()
     }
+
+    /// `SpawnPlacements.checkSpawnRules` for the entity type `kind` at `at`, then the
+    /// `mob_spawn_placement_check` hook, as natural spawning asks it, once per entry of
+    /// `lights` in order until one passes: `None` reads the level's light, `Some(n)` makes
+    /// every sky and block light the rule reads `n` (`FixedLight`). The hook's `level` handle
+    /// still reads the real light. The level is built once for every try.
+    ///
+    /// A type with no placement entry (a non-mob) is checked as a spawner checks it
+    /// (`SpawnerTypeFacts::placement_type`): its vanilla rule passes, and registered
+    /// predicates and the hook still answer. None for an id that names no entity type.
+    ///
+    /// The tries draw in turn from one copy of the level random (`LevelRandom::clone`, never
+    /// written back): the level's stream does not move, so a call at an unchanged state
+    /// replays the same rolls, and each try draws after the one before it. It reads
+    /// `world.random` as it is: the caller refuses while the engine holds the live stream out
+    /// of it (`LevelRandomLent`).
+    #[inline(always)]
+    pub(in crate::game) fn check_spawn_rules_with_light(
+        &self,
+        kind: &str,
+        reason: Reason,
+        at: [i32; 3],
+        lights: &[Option<i32>],
+    ) -> Option<bool> {
+        use sunrise_sim::mobs::spawn_rules::{FixedLight, check_spawn_rules};
+        let facts = self.res.rest().spawner_types.get(kind).copied()?;
+        let level = self.natural_level();
+        let mut random: LevelRandom = self.world.random.clone();
+        Some(lights.iter().any(|&light| match light {
+            None => check_spawn_rules(facts.placement_type(kind), &level, reason, &mut random, at),
+            Some(light) => check_spawn_rules(
+                facts.placement_type(kind),
+                &FixedLight(&level, light),
+                reason,
+                &mut random,
+                at,
+            ),
+        }))
+    }
+
     pub fn natural_level(&self) -> GameLevel<'_, 'a> {
         let mut search = SearchPlayers::default();
         search.refresh(self);
@@ -1621,6 +1661,7 @@ impl<'a> crate::game::ServerGame<'a> {
             &mut self.common.world.random,
             crate::rng_count::placeholder_level(LegacyRandom::new(0)),
         );
+        let lent = crate::game::server_side::native_level_spawning::LevelRandomLent::start();
         scratch.pass.players.refresh(self);
         scratch.pass.costed.clear();
         for kind in world_biomes!(self)
@@ -1695,6 +1736,7 @@ impl<'a> crate::game::ServerGame<'a> {
         sunrise_threads::work::clear_work();
         spawn_selection::attempt_counters(true);
         laps.lap("sn_attempts");
+        drop(lent);
         self.common.world.random = random;
         self.server.spawn_counts.insert(self.common.dim, last_state);
         scratch.spawn_buffers = state.into_parts().1;
@@ -2633,6 +2675,106 @@ mod tests {
             let fail = run(Some(SpawnCheck::Fail));
             assert_eq!(fail.0, (false, none.0.1));
             assert_eq!(fail.1, (false, first));
+        });
+    }
+
+    /// `check_spawn_rules_with_light` (#6042): the rule reads the light it is given, the
+    /// level's random stays where it was, a non-mob type passes as `SpawnPlacements` passes a
+    /// type with no entry, and `mob_spawn_placement_check` still answers after it, whatever
+    /// light was asked.
+    #[test]
+    #[ignore = "daily"]
+    fn a_light_override_runs_the_rule_then_the_placement_hook() {
+        use crate::game::native_entity_refs::tests::with_game;
+        with_game(|game| {
+            game.world.chunks.insert(
+                (0, 0),
+                std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
+            );
+            let dirt = game
+                .pack
+                .assets
+                .registry
+                .default_state("minecraft:dirt")
+                .unwrap();
+            game.world.set(8, 63, 8, dirt).unwrap();
+            game.world.health_rules.difficulty = sunrise_world::food::Difficulty::Normal;
+            let before = <(u64, Option<f64>)>::from(&*game.world.random);
+            let ask = |game: &crate::game::ServerGame<'_>, light: i32| {
+                game.check_spawn_rules_with_light(
+                    "minecraft:zombie",
+                    Reason::Natural,
+                    [8, 64, 8],
+                    &[Some(light)],
+                )
+            };
+            assert_eq!(ask(game, 0), Some(true), "a zombie spawns in the dark");
+            assert_eq!(ask(game, 15), Some(false), "and not in full light");
+            assert_eq!(
+                <(u64, Option<f64>)>::from(&*game.world.random),
+                before,
+                "the level random is not moved"
+            );
+            assert_eq!(
+                game.check_spawn_rules_with_light(
+                    "minecraft:no_such_mob",
+                    Reason::Natural,
+                    [8, 64, 8],
+                    &[None]
+                ),
+                None
+            );
+            assert!(game.natural_level().mob_type("minecraft:arrow").is_none());
+            assert_eq!(
+                game.check_spawn_rules_with_light(
+                    "minecraft:arrow",
+                    Reason::Natural,
+                    [8, 64, 8],
+                    &[Some(15)]
+                ),
+                Some(true),
+                "a type with no placement entry passes"
+            );
+            assert_eq!(
+                game.check_spawn_rules_with_light(
+                    "minecraft:zombie",
+                    Reason::Natural,
+                    [8, 64, 8],
+                    &[Some(15), Some(0)]
+                ),
+                Some(true),
+                "one level built, tried at each light in turn"
+            );
+            let with = |game: &crate::game::ServerGame<'_>, answer: SpawnCheck, light: i32| {
+                mod_platform::testing::with_mods(
+                    vec![mod_api::ModEntry::new(
+                        "spawn-checks",
+                        Box::new(ChecksMod(answer)),
+                    )]
+                    .into(),
+                    || ask(game, light),
+                )
+            };
+            assert_eq!(with(game, SpawnCheck::Fail, 0), Some(false));
+            assert_eq!(with(game, SpawnCheck::Succeed, 15), Some(true));
+            assert_eq!(with(game, SpawnCheck::Default, 15), Some(false));
+            assert_eq!(
+                mod_platform::testing::with_mods(
+                    vec![mod_api::ModEntry::new(
+                        "spawn-checks",
+                        Box::new(ChecksMod(SpawnCheck::Fail)),
+                    )]
+                    .into(),
+                    || game.check_spawn_rules_with_light(
+                        "minecraft:arrow",
+                        Reason::Natural,
+                        [8, 64, 8],
+                        &[None]
+                    ),
+                ),
+                Some(false),
+                "the hook answers for a non-mob too"
+            );
         });
     }
 

@@ -65,8 +65,10 @@ impl ServerGame<'_> {
             &mut self.common.world.random,
             crate::rng_count::placeholder_level(LegacyRandom::new(0)),
         );
+        let lent = crate::game::server_side::native_level_spawning::LevelRandomLent::start();
         let spot = self.reinforcement_spot(&kind, from, &mut own, &mut rules);
         self.common.mobs[index].random = own;
+        drop(lent);
         self.common.world.random = rules;
         let Some(spot) = spot else {
             return;

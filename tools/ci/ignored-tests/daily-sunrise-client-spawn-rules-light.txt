@@ -1,0 +1,5 @@
+# LevelRef::check_spawn_rules runs a type's spawn rules with the light a mod names (#6042).
+sunrise-client cut_layout::game::server_side::native_level_spawning::tests::a_level_checks_spawn_rules_with_the_light_a_mod_names lib daily resources
+sunrise-gameplay game::server_side::natural_spawning::tests::a_light_override_runs_the_rule_then_the_placement_hook lib daily resources
+sunrise-client cut_layout::game::server_side::native_level_spawning::tests::a_spawn_rule_check_reaches_registered_rules_and_listeners_but_not_itself lib daily resources
+sunrise-client cut_layout::game::server_side::native_level_spawning::tests::a_listener_inside_an_engine_pass_is_refused_and_the_live_draws_are_unchanged lib daily resources
