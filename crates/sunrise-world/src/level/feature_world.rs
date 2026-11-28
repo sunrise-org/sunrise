@@ -190,6 +190,11 @@ impl<L: LevelAccess + ?Sized> PlacementContext for LevelFeatureWorld<'_, '_, L> 
         }
         Ok(())
     }
+    fn monster_room_mobs(
+        &self,
+    ) -> Option<std::sync::Arc<crate::worldgen::weighted::OptionalWeightedList<String>>> {
+        self.sim.b.monster_room_mobs().current()
+    }
     /// BeehiveDecorator's bees go into the nest's block entity (the tree
     /// checked the nest is there).
     fn store_beehive_occupants(

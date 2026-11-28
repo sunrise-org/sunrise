@@ -150,6 +150,9 @@ macro_rules! impl_shared_phase_contexts {
             ) -> Result<&str, mod_api::BiomeKeyError> {
                 <Self as mod_api::prelude::KeysBackend>::biome_view(self, key).map(|view| view.id())
             }
+            fn profession_key_id(&self, key: &mod_api::ProfessionKey) -> Option<&str> {
+                <Self as mod_api::prelude::KeysBackend>::profession_key_id(self, key)
+            }
             fn dimension_key_id(&self, key: mod_api::DimensionKey) -> Option<&str> {
                 <Self as mod_api::prelude::LevelDimensionBackend>::dimension_key_id(self, key)
             }

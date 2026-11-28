@@ -428,6 +428,7 @@ impl Decoration {
             level_random,
             structure_mobs: worker.structure_mobs.clone(),
             biome_keys: worker.mod_biome_keys.current(),
+            monster_room_mobs: worker.monster_room_mobs.current(),
             starts: references.clone(),
             biome_names: data.biome_names(),
             blocks: data
@@ -699,6 +700,8 @@ struct World<'a> {
     structure_mobs: Option<Arc<dyn super::generator::StructureMobs>>,
     /// The world's biome keys when the region opened, for mod features.
     biome_keys: Arc<mod_api::__private::BiomeKeys>,
+    /// The world's `neoforge:monster_room_mobs` override when the region opened.
+    monster_room_mobs: Option<Arc<super::weighted::OptionalWeightedList<String>>>,
     starts: Vec<Arc<super::structure::start::StructureStart>>,
     biome_names: &'a [Arc<str>],
     blocks: Option<&'a BlockBehavior>,
@@ -1250,6 +1253,9 @@ impl PlacementContext for World<'_> {
             return Ok(());
         }
         self.set_block_entity(position, super::cave::dungeon_spawner_nbt(entity))
+    }
+    fn monster_room_mobs(&self) -> Option<Arc<super::weighted::OptionalWeightedList<String>>> {
+        self.monster_room_mobs.clone()
     }
     #[inline]
     fn attachment_at(
@@ -2018,6 +2024,7 @@ mod tests {
             starts: Vec::new(),
             biome_names: &[],
             biome_keys,
+            monster_room_mobs: None,
             blocks: None,
             region: TerrainRegion::new(chunks, WorldGenerationContext::new(-64, 128, 0)).unwrap(),
             biomes: BiomeRegion::new(biomes, obfuscate_seed(0)).unwrap(),
@@ -2180,6 +2187,7 @@ mod tests {
             starts: Vec::new(),
             biome_names: &[],
             biome_keys,
+            monster_room_mobs: None,
             blocks: None,
             region,
             biomes: BiomeRegion::new(biomes, obfuscate_seed(0)).unwrap(),

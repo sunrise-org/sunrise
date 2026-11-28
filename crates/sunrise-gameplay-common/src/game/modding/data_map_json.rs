@@ -3,7 +3,7 @@ use mod_api::DataMapError;
 use serde_json::Value;
 use sunrise_core::nbt::Tag;
 
-pub(super) fn to_tag(value: &Value) -> Result<Tag, DataMapError> {
+pub fn to_tag(value: &Value) -> Result<Tag, DataMapError> {
     Ok(match value {
         Value::Null => return Err(DataMapError::Undecodable),
         Value::Bool(value) => Tag::Byte(i8::from(*value)),

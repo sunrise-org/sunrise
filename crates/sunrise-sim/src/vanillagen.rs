@@ -529,9 +529,13 @@ impl VanillaTerrain {
     pub fn set_spawn_conditions(&self, difficulty: u8, day_time: i64) {
         self.structure_mobs.set_conditions(difficulty, day_time);
     }
-    /// Publish this world's builtin generation to future structure finalizations.
+    /// Publish this world's builtin generation to future structure finalizations and
+    /// monster-room spawner draws.
     pub fn set_mob_maps(&self, snapshot: &Arc<crate::neoforge_mob_maps::NeoForgeMobMaps>) {
         self.structure_mobs.set_mob_maps(snapshot);
+        self.generator
+            .monster_room_mobs()
+            .publish(snapshot.monster_room_mobs());
     }
     /// Publish this world's biome keys to the mod features its chunks decorate with
     /// (`FeatureContext::biome`), from the next decoration on.

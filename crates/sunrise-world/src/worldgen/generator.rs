@@ -1909,6 +1909,8 @@ pub(super) struct WorkerState {
     pub(super) structure_mobs: Option<Arc<dyn StructureMobs>>,
     /// The generator's published biome keys, for mod features.
     pub(super) mod_biome_keys: super::mod_features::ModBiomeKeys,
+    /// The generator's published `neoforge:monster_room_mobs` override.
+    pub(super) monster_room_mobs: super::cave::MonsterRoomMobs,
     /// The world's surface rule compiled once for this worker's chunks: a
     /// `CompiledSurfaceRule` of the pipeline's random.
     surface_rule: Option<Box<dyn Any + Send>>,
@@ -2477,12 +2479,19 @@ pub struct OverworldGenerator {
     noise_clamped: Option<(NoiseSettings, NoiseSettings)>,
     /// What its workers' mod features answer `biome` with.
     mod_biome_keys: super::mod_features::ModBiomeKeys,
+    /// What its workers' monster rooms draw from when `neoforge:monster_room_mobs` is modified.
+    monster_room_mobs: super::cave::MonsterRoomMobs,
 }
 impl OverworldGenerator {
     /// The biome keys its workers' mod features answer with, which the game publishes for each
     /// data load of the world (a worker reads the current snapshot when it decorates).
     pub fn mod_biome_keys(&self) -> &super::mod_features::ModBiomeKeys {
         &self.mod_biome_keys
+    }
+    /// The `neoforge:monster_room_mobs` weighted table override for monster rooms, published per
+    /// world data load (`None` keeps vanilla's `DUNGEON_MOBS` draw).
+    pub fn monster_room_mobs(&self) -> &super::cave::MonsterRoomMobs {
+        &self.monster_room_mobs
     }
     /// Install before workers run, so every cache miss can consult the save before generation.
     pub fn set_saved_starts(&self, source: Arc<SavedStructureStarts>) {
@@ -2653,6 +2662,7 @@ impl OverworldGenerator {
             pipeline,
             noise_clamped,
             mod_biome_keys: Default::default(),
+            monster_room_mobs: Default::default(),
         })
     }
     pub fn data(&self) -> &Arc<GeneratorData> {
@@ -2724,6 +2734,7 @@ impl OverworldGenerator {
                 structures_only: false,
                 structure_mobs: None,
                 mod_biome_keys: self.mod_biome_keys.clone(),
+                monster_room_mobs: self.monster_room_mobs.clone(),
                 heights: HashMap::new(),
                 surface_rule: None,
             },
@@ -3890,6 +3901,7 @@ mod tests {
             ),
             noise_clamped: None,
             mod_biome_keys: Default::default(),
+            monster_room_mobs: Default::default(),
         };
         let contents = |chunk: &ProtoChunk| {
             let (x0, z0) = (chunk.position().x * 16, chunk.position().z * 16);
@@ -3959,6 +3971,7 @@ mod tests {
             pipeline: pipeline.clone(),
             noise_clamped: None,
             mod_biome_keys: Default::default(),
+            monster_room_mobs: Default::default(),
         };
         let barrier = std::sync::Barrier::new(6);
         let pos = ChunkPos::new(11, -11); // ancient city for this seed

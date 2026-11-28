@@ -478,11 +478,10 @@ pub trait DataMapEntry: entry::Entry {}
 mod entry {
     use super::*;
 
-    // exhaustive: the sealed lookup represents only resident, pinned or owned registry names.
+    // exhaustive: the sealed lookup represents only resident or pinned registry names.
     pub enum EntryName<'a> {
         Borrowed(&'a str),
         Pinned(RegistryName),
-        Owned(String),
     }
 
     impl EntryName<'_> {
@@ -490,7 +489,6 @@ mod entry {
             match self {
                 Self::Borrowed(id) => id,
                 Self::Pinned(id) => id.as_str(),
-                Self::Owned(id) => id,
             }
         }
     }
@@ -515,6 +513,7 @@ mod entry {
         fn enchantment_key_id(&self, key: EnchantmentKey) -> Option<RegistryName>;
         fn block_entity_type_key_id(&self, key: BlockEntityTypeKey) -> Option<&str>;
         fn biome_key_id(&self, key: &BiomeKey) -> Result<&str, crate::BiomeKeyError>;
+        fn profession_key_id(&self, key: &ProfessionKey) -> Option<&str>;
     }
 
     impl DataMapReader for &(dyn Backend + '_) {
@@ -556,6 +555,9 @@ mod entry {
         fn biome_key_id(&self, key: &BiomeKey) -> Result<&str, crate::BiomeKeyError> {
             crate::prelude::KeysBackend::biome_view(*self, key).map(|view| view.id())
         }
+        fn profession_key_id(&self, key: &ProfessionKey) -> Option<&str> {
+            crate::prelude::KeysBackend::profession_key_id(*self, key)
+        }
     }
 
     impl DataMapReader for &(dyn crate::ReloadContext + '_) {
@@ -596,6 +598,9 @@ mod entry {
         }
         fn biome_key_id(&self, key: &BiomeKey) -> Result<&str, crate::BiomeKeyError> {
             crate::ReloadContext::biome_key_id(*self, key)
+        }
+        fn profession_key_id(&self, key: &ProfessionKey) -> Option<&str> {
+            crate::ReloadContext::profession_key_id(*self, key)
         }
     }
 
@@ -730,12 +735,17 @@ impl BiomeView<'_> {
 impl DataMapEntry for ProfessionKey {}
 impl entry::Entry for ProfessionKey {
     const REGISTRY: &'static str = "minecraft:villager_profession";
-    fn id<'a>(&self, _: &'a dyn entry::DataMapReader) -> Result<EntryName<'a>, DataMapError> {
-        Ok(EntryName::Owned(self.0.to_string()))
+    fn id<'a>(&self, reader: &'a dyn entry::DataMapReader) -> Result<EntryName<'a>, DataMapError> {
+        reader
+            .profession_key_id(self)
+            .map(EntryName::Borrowed)
+            .ok_or(DataMapError::InvalidKey)
     }
 }
 impl ProfessionKey {
-    /// This profession's value in data map `map`, as for [`ItemKey::data`].
+    /// This profession's value in data map `map`, as for [`ItemKey::data`], validating the
+    /// key against the installed villager profession table. Unknown professions return
+    /// [`DataMapError::InvalidKey`].
     pub fn data<M: DataMap<Entry = ProfessionKey>>(
         &self,
         host: &dyn Host,
@@ -1005,6 +1015,269 @@ mod tests {
         assert_eq!(
             data_map_entries(&Bare, "minecraft:block", "test:hardness"),
             Err(DataMapError::Unavailable)
+        );
+    }
+
+    #[test]
+    fn builtin_typed_key_queries_and_profession_key_validation() {
+        use crate::{BiomeKeyError, GameEventKey, GameEventKeyError};
+
+        struct Builtins {
+            biomes: crate::world::biome_key::BiomeKeys,
+            entries: std::collections::BTreeMap<(&'static str, &'static str, &'static str), Tag>,
+        }
+        impl Builtins {
+            fn new() -> Self {
+                let mut entries = std::collections::BTreeMap::new();
+                entries.insert(
+                    (
+                        "minecraft:entity_type",
+                        "neoforge:acceptable_villager_distances",
+                        "minecraft:zombie",
+                    ),
+                    Tag::compound([("acceptable_villager_distance", Tag::Float(8.0f32.to_bits()))]),
+                );
+                entries.insert(
+                    (
+                        "minecraft:entity_type",
+                        "neoforge:parrot_imitations",
+                        "minecraft:zombie",
+                    ),
+                    Tag::compound([(
+                        "sound",
+                        Tag::String("minecraft:entity.parrot.imitate.zombie".into()),
+                    )]),
+                );
+                entries.insert(
+                    (
+                        "minecraft:entity_type",
+                        "neoforge:monster_room_mobs",
+                        "minecraft:zombie",
+                    ),
+                    Tag::compound([("weight", Tag::Int(200))]),
+                );
+                entries.insert(
+                    (
+                        "minecraft:worldgen/biome",
+                        "neoforge:villager_types",
+                        "minecraft:desert",
+                    ),
+                    Tag::compound([("villager_type", Tag::String("minecraft:desert".into()))]),
+                );
+                entries.insert(
+                    (
+                        "minecraft:villager_profession",
+                        "neoforge:raid_hero_gifts",
+                        "minecraft:farmer",
+                    ),
+                    Tag::compound([(
+                        "loot_table",
+                        Tag::String("minecraft:gameplay/hero_of_the_village/farmer_gift".into()),
+                    )]),
+                );
+                entries.insert(
+                    (
+                        "minecraft:game_event",
+                        "neoforge:vibration_frequencies",
+                        "minecraft:step",
+                    ),
+                    Tag::compound([("frequency", Tag::Int(1))]),
+                );
+                entries.insert(
+                    (
+                        "minecraft:item",
+                        "neoforge:villager_compostables",
+                        "minecraft:wheat_seeds",
+                    ),
+                    Tag::compound([("can_villager_compost", Tag::Byte(1))]),
+                );
+                Self {
+                    biomes: crate::world::biome_key::BiomeKeys::new(
+                        1,
+                        [BiomeKey::parse("minecraft:desert").unwrap()],
+                    ),
+                    entries,
+                }
+            }
+        }
+        impl crate::host::data_maps::DataMapsBackend for Builtins {
+            fn data_map_value(
+                &self,
+                registry: &str,
+                entry: &str,
+                map: &str,
+            ) -> Result<Option<&Tag>, DataMapError> {
+                Ok(self.entries.iter().find_map(|((r, m, e), tag)| {
+                    (*r == registry && *m == map && *e == entry).then_some(tag)
+                }))
+            }
+            fn data_map_entries(&self, _: &str, _: &str) -> Result<&[(String, Tag)], DataMapError> {
+                Ok(&[])
+            }
+        }
+        impl crate::host::keys::KeysBackend for Builtins {
+            fn item_key_id(&self, key: ItemKey) -> Option<&str> {
+                (key.0 == 0).then_some("minecraft:wheat_seeds")
+            }
+            fn entity_type_key_id(&self, key: EntityTypeKey) -> Option<RegistryName> {
+                (key.0 == 0).then_some(RegistryName::from_static("minecraft:zombie"))
+            }
+            fn game_event_key_id(
+                &self,
+                key: GameEventKey,
+            ) -> Result<RegistryName, GameEventKeyError> {
+                if key.0 == 0 {
+                    Ok(RegistryName::from_static("minecraft:step"))
+                } else {
+                    Err(GameEventKeyError::InvalidKey)
+                }
+            }
+            fn biome_view(&self, key: &BiomeKey) -> Result<BiomeView<'_>, BiomeKeyError> {
+                self.biomes.view_key(key)
+            }
+            fn biome_view_id(&self, view: BiomeView<'_>) -> Result<&str, BiomeKeyError> {
+                self.biomes.id(view)
+            }
+            fn profession_key_id(&self, key: &ProfessionKey) -> Option<&str> {
+                (key.0.to_string() == "minecraft:farmer").then_some("minecraft:farmer")
+            }
+        }
+        impl Host for Builtins {
+            fn backend(&self) -> Option<crate::BackendRef<'_>> {
+                Some(crate::BackendRef::of(self))
+            }
+        }
+        crate::impl_host_areas!(Builtins);
+        crate::impl_backend_areas!(Builtins, except(data_maps, keys));
+        impl Backend for Builtins {}
+
+        macro_rules! field_map {
+            ($name:ident, $entry:ty, $id:literal, $out:ty, $decode:expr) => {
+                struct $name;
+                impl DataMap for $name {
+                    type Entry = $entry;
+                    type Value = $out;
+                    fn id(&self) -> &str {
+                        $id
+                    }
+                    fn decode(&self, value: &Tag) -> Option<$out> {
+                        ($decode)(value)
+                    }
+                }
+            };
+        }
+        field_map!(
+            VillagerDistances,
+            EntityTypeKey,
+            "neoforge:acceptable_villager_distances",
+            f32,
+            |v: &Tag| match v.get("acceptable_villager_distance") {
+                Some(Tag::Float(bits)) => Some(f32::from_bits(*bits)),
+                _ => None,
+            }
+        );
+        field_map!(
+            ParrotImitations,
+            EntityTypeKey,
+            "neoforge:parrot_imitations",
+            String,
+            |v: &Tag| match v.get("sound") {
+                Some(Tag::String(s)) => s.to_string().ok(),
+                _ => None,
+            }
+        );
+        field_map!(
+            MonsterRoomMobsMap,
+            EntityTypeKey,
+            "neoforge:monster_room_mobs",
+            i32,
+            |v: &Tag| match v.get("weight") {
+                Some(Tag::Int(w)) => Some(*w),
+                _ => None,
+            }
+        );
+        field_map!(
+            VillagerTypes,
+            BiomeKey,
+            "neoforge:villager_types",
+            String,
+            |v: &Tag| match v.get("villager_type") {
+                Some(Tag::String(s)) => s.to_string().ok(),
+                _ => None,
+            }
+        );
+        field_map!(
+            RaidHeroGifts,
+            ProfessionKey,
+            "neoforge:raid_hero_gifts",
+            String,
+            |v: &Tag| match v.get("loot_table") {
+                Some(Tag::String(s)) => s.to_string().ok(),
+                _ => None,
+            }
+        );
+        field_map!(
+            VibrationFrequencies,
+            GameEventKey,
+            "neoforge:vibration_frequencies",
+            i32,
+            |v: &Tag| match v.get("frequency") {
+                Some(Tag::Int(n)) => Some(*n),
+                _ => None,
+            }
+        );
+        field_map!(
+            VillagerCompostables,
+            ItemKey,
+            "neoforge:villager_compostables",
+            bool,
+            |v: &Tag| match v.get("can_villager_compost") {
+                Some(Tag::Byte(b)) => Some(*b != 0),
+                _ => None,
+            }
+        );
+
+        let host = Builtins::new();
+        assert_eq!(
+            EntityTypeKey(0).data(&host, &VillagerDistances),
+            Ok(Some(8.0))
+        );
+        assert_eq!(
+            EntityTypeKey(0).data(&host, &ParrotImitations),
+            Ok(Some("minecraft:entity.parrot.imitate.zombie".into()))
+        );
+        assert_eq!(
+            EntityTypeKey(0).data(&host, &MonsterRoomMobsMap),
+            Ok(Some(200))
+        );
+        let desert = BiomeKey::parse("minecraft:desert").unwrap();
+        assert_eq!(
+            desert.data(&host, &VillagerTypes),
+            Ok(Some("minecraft:desert".into()))
+        );
+        let farmer = ProfessionKey(Identifier::parse("minecraft:farmer").unwrap());
+        assert_eq!(
+            farmer.data(&host, &RaidHeroGifts),
+            Ok(Some(
+                "minecraft:gameplay/hero_of_the_village/farmer_gift".into()
+            ))
+        );
+        let unknown_profession = ProfessionKey(Identifier::parse("test:ghost").unwrap());
+        assert_eq!(
+            unknown_profession.data(&host, &RaidHeroGifts),
+            Err(DataMapError::InvalidKey)
+        );
+        assert_eq!(
+            farmer.data(&Bare, &RaidHeroGifts),
+            Err(DataMapError::Unavailable)
+        );
+        assert_eq!(
+            GameEventKey(0).data(&host, &VibrationFrequencies),
+            Ok(Some(1))
+        );
+        assert_eq!(
+            ItemKey(0).data(&host, &VillagerCompostables),
+            Ok(Some(true))
         );
     }
 }

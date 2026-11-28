@@ -594,6 +594,11 @@ borrow = "shared"
 kind = "common"
 owner = "::sunrise_gameplay_common::game::CommonGame"
 
+[host.client."KeysBackend::profession_key_id"]
+borrow = "shared"
+kind = "shared_trait"
+owner = "::sunrise_gameplay_common::game::tables::WorldTablesExt<'_>"
+
 [host.client."KeysHost::block_key"]
 borrow = "shared"
 kind = "common"
@@ -1768,6 +1773,11 @@ owner = "::sunrise_gameplay_common::game::CommonGame"
 borrow = "shared"
 kind = "common"
 owner = "::sunrise_gameplay_common::game::CommonGame"
+
+[host.server."KeysBackend::profession_key_id"]
+borrow = "shared"
+kind = "shared_trait"
+owner = "::sunrise_gameplay_common::game::tables::WorldTablesExt<'_>"
 
 [host.server."KeysHost::block_key"]
 borrow = "shared"

@@ -129,6 +129,13 @@ pub trait PlacementContext {
     ) -> Result<(), PlacementQueryError> {
         Ok(())
     }
+    /// Custom weighted entity-type table from `neoforge:monster_room_mobs` when modified
+    /// from vanilla's starting entries (`None` preserves vanilla's `Util.getRandom(MOBS)` draw).
+    fn monster_room_mobs(
+        &self,
+    ) -> Option<std::sync::Arc<crate::worldgen::weighted::OptionalWeightedList<String>>> {
+        None
+    }
     /// Store worldgen beehive occupants (ticks in hive per bee) in the nest
     /// block entity at `position`. Worlds without block-entity storage drop them.
     fn store_beehive_occupants(

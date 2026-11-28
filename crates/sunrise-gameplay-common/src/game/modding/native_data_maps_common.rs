@@ -411,6 +411,27 @@ impl DataMaps {
         self
     }
 
+    pub fn with_transform_maps(
+        mut self,
+        values: Vec<(&'static str, &'static str, Vec<(String, Tag)>)>,
+    ) -> Self {
+        for (registry, id, entries) in values {
+            if self
+                .maps
+                .entry(registry.to_owned())
+                .or_default()
+                .insert(id.to_owned(), entries)
+                .is_some()
+            {
+                log::warn!(
+                    "Sunrise: builtin data map {} is reserved: engine definition kept",
+                    id
+                );
+            }
+        }
+        self
+    }
+
     /// The registries with a loaded type, in id order: what `data_maps_updated` names.
     pub fn registries(&self) -> Vec<String> {
         self.maps.keys().cloned().collect()

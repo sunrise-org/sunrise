@@ -295,6 +295,11 @@ pub trait WorldTablesExt<'__sg>: crate::game::SideGame<'__sg> {
         maps.biome_keys.id(view)
     }
 
+    fn profession_key_id(&self, key: &mod_api::ProfessionKey) -> Option<&str> {
+        let id = key.0.to_string();
+        self.side_professions().canonical_id(&id)
+    }
+
     fn mod_recipe_property_contains(&self, set: &str, item: mod_api::ItemKey) -> bool {
         mod_api::__private::item_key_id(item)
             .is_some_and(|name| self.loop_context.mod_recipe_property_contains(set, name))

@@ -191,6 +191,11 @@ pub trait ReloadContext:
     fn biome_key_id(&self, _key: &crate::BiomeKey) -> Result<&str, crate::BiomeKeyError> {
         Err(crate::BiomeKeyError::Unavailable)
     }
+    /// Borrow the canonical villager profession id for `key` from the installed profession
+    /// table, or `None` if the profession is not registered.
+    fn profession_key_id(&self, _key: &crate::ProfessionKey) -> Option<&str> {
+        None
+    }
     /// Borrow the canonical dimension id for `key`.
     fn dimension_key_id(&self, _key: crate::DimensionKey) -> Option<&str> {
         None
