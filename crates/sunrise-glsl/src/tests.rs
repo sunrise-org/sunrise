@@ -1568,3 +1568,153 @@ fn only_a_real_subgroup_operation_sets_uses_subgroup() {
     );
     assert!(compute_uses_subgroup(&built_in));
 }
+
+/// [`translate_compute_expanded`] translates an already-expanded compute shader without reading
+/// [`Inputs::includes`] again, expands [`Inputs::defines`] in the shader body, and preserves
+/// authored locations where known (and stage-level `0:0` diagnostics otherwise).
+#[test]
+fn translate_compute_expanded_reuses_expansion_without_rereading_includes() {
+    let reads = std::cell::Cell::new(0usize);
+    let read = |id: &str| -> Result<Option<String>, String> {
+        match id {
+            "minecraft:shaders/include/helper.glsl" => {
+                reads.set(reads.get() + 1);
+                Ok(Some("uint helper() { return uint(SCALE_VALUE); }\n".into()))
+            }
+            "minecraft:shaders/include/broken.glsl" => {
+                reads.set(reads.get() + 1);
+                Ok(Some(
+                    "uint broken() {\n    return missing_value;\n}\n".into(),
+                ))
+            }
+            _ => Ok(None),
+        }
+    };
+    let expand_inc = includes(&read);
+    let defines = ["USE_HELPER", "SCALE_VALUE 9"];
+    let source = "#version 450\n\
+        #ifdef USE_HELPER\n\
+        #include <helper.glsl>\n\
+        #endif\n\
+        const uint scaleConst = uint(SCALE_VALUE);\n\
+        layout(local_size_x = 4) in;\n\
+        layout(std430) buffer Out { uint values[]; };\n\
+        void main() { values[gl_GlobalInvocationID.x] = helper() + scaleConst; }\n";
+    let expanded = expand_includes(
+        source,
+        "t:compute.csh",
+        "minecraft:shaders/compute/",
+        &expand_inc,
+        Some(&defines),
+    )
+    .unwrap();
+    assert_eq!(reads.get(), 1);
+
+    let never_read = |id: &str| -> Result<Option<String>, String> {
+        panic!("translate_compute_expanded must not re-read include {id}");
+    };
+    let panicking_inc = includes(&never_read);
+    let inputs = Inputs {
+        blocks: &[],
+        samplers: &[],
+        extra_set: 0,
+        extra_blocks: &[],
+        extra_samplers: &[],
+        extra_texel_buffers: &[],
+        extra_storage_buffers: &[("Out", 0, false)],
+        extra_storage_images: &[],
+        push_constant_binding: None,
+        loose: &[],
+        defines: &defines,
+        includes: &panicking_inc,
+    };
+    let translated = translate_compute_expanded(expanded.clone(), &inputs, LIMITS)
+        .unwrap_or_else(|e| panic!("{e:?}"));
+    assert_eq!(translated.workgroup_size, [4, 1, 1]);
+    assert_eq!(translated.read, [0]);
+    let (_, constant) = translated
+        .module
+        .constants
+        .iter()
+        .find(|(_, c)| c.name.as_deref() == Some("scaleConst"))
+        .expect("missing scaleConst");
+    assert!(matches!(
+        translated.module.global_expressions[constant.init],
+        naga::Expression::Literal(naga::Literal::U32(9))
+    ));
+    assert_eq!(reads.get(), 1);
+
+    // Included GLSL errors still map to the included file's authored line and column.
+    let broken_source = "#version 450\n#include <broken.glsl>\nlayout(local_size_x = 1) in;\n\
+        void main() { uint x = broken(); }\n";
+    let broken_expanded = expand_includes(
+        broken_source,
+        "t:broken.csh",
+        "minecraft:shaders/compute/",
+        &expand_inc,
+        Some(&[]),
+    )
+    .unwrap();
+    assert_eq!(reads.get(), 2);
+    let no_defines = Inputs {
+        defines: &[],
+        ..inputs
+    };
+    let errors = translate_compute_expanded(broken_expanded, &no_defines, LIMITS)
+        .expect_err("undeclared identifier in included file must fail");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(
+        (
+            errors[0].file.as_str(),
+            errors[0].line,
+            errors[0].column,
+            errors[0].stage,
+        ),
+        (
+            "minecraft:shaders/include/broken.glsl",
+            2,
+            12,
+            Some(ShaderStage::Compute),
+        )
+    );
+
+    // Stage-level refusals (binding overflow and missing entry point) still report
+    // `expanded.file()` at line 0, column 0.
+    let overflow_inputs = Inputs {
+        extra_blocks: &[("Overflow", u32::MAX)],
+        ..inputs
+    };
+    let errors = translate_compute_expanded(expanded, &overflow_inputs, LIMITS)
+        .expect_err("binding index overflow must fail");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(
+        (
+            errors[0].file.as_str(),
+            errors[0].line,
+            errors[0].column,
+            errors[0].stage,
+        ),
+        ("t:compute.csh", 0, 0, Some(ShaderStage::Compute))
+    );
+
+    let no_main = expand_includes(
+        "#version 450\nlayout(local_size_x = 1) in;\n",
+        "t:no_main.csh",
+        "minecraft:shaders/compute/",
+        &expand_inc,
+        Some(&[]),
+    )
+    .unwrap();
+    let errors = translate_compute_expanded(no_main, &no_defines, LIMITS)
+        .expect_err("compute shader without main must fail");
+    assert_eq!(errors.len(), 1, "{errors:?}");
+    assert_eq!(
+        (
+            errors[0].file.as_str(),
+            errors[0].line,
+            errors[0].column,
+            errors[0].stage,
+        ),
+        ("t:no_main.csh", 0, 0, Some(ShaderStage::Compute))
+    );
+}

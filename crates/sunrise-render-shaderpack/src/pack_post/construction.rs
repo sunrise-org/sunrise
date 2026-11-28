@@ -1208,13 +1208,13 @@ const POLYGON_OFFSET: wgpu::DepthBiasState = wgpu::DepthBiasState {
 struct ResolvedModUniforms<'a> {
     bound: Vec<(usize, bool, u32)>,
     handled: HashSet<&'a str>,
-    mismatched: HashSet<&'a str>,
 }
 
-/// Resolve mod frame uniforms before the ordinary pack uploads are assigned. A mismatch
-/// keeps its shader slot at zero without refusing the program. In a pack served Sunrise's HDR
-/// extension the display uniforms (`pack_uniforms::DISPLAY`) are the display's, never a mod's:
-/// a mod uniform of such a name binds only where the pack isn't served.
+/// Resolve mod frame uniforms before the ordinary pack uploads are assigned. Both bound and
+/// type-mismatched mod uniforms are recorded in `handled` so they are excluded from
+/// `Pass::uniforms`; a mismatch keeps its shader slot at zero without refusing the program. In a
+/// pack served Sunrise's HDR extension the display uniforms (`pack_uniforms::DISPLAY`) are the
+/// display's, never a mod's: a mod uniform of such a name binds only where the pack isn't served.
 fn resolve_mod_uniforms<'a>(
     uniforms: &'a [sunrise_shaders::Uniform],
     initial_block: &mut [u8],
@@ -1224,7 +1224,6 @@ fn resolve_mod_uniforms<'a>(
 ) -> ResolvedModUniforms<'a> {
     let mut bound = Vec::new();
     let mut handled = HashSet::new();
-    let mut mismatched = HashSet::new();
     let display = |name: &str| pack.display_uniforms && pack_uniforms::DISPLAY.contains(&name);
     for u in uniforms.iter().filter(|u| !display(&u.name)) {
         match match_mod_uniform(pack.mod_uniforms, &u.name, &u.ty) {
@@ -1235,7 +1234,6 @@ fn resolve_mod_uniforms<'a>(
             }
             ModUniformMatch::TypeMismatch { expected } => {
                 handled.insert(u.name.as_str());
-                mismatched.insert(u.name.as_str());
                 // The member's range is guaranteed by `sunrise_shaders::Interface::uniforms`.
                 initial_block[u.offset as usize..(u.offset + u.size) as usize].fill(0);
                 let key = (pass_name.to_owned(), u.name.clone());
@@ -1251,11 +1249,7 @@ fn resolve_mod_uniforms<'a>(
             }
         }
     }
-    ResolvedModUniforms {
-        bound,
-        handled,
-        mismatched,
-    }
+    ResolvedModUniforms { bound, handled }
 }
 
 /// The pass of program `p`: a quad, or `geometry` drawn by the game. `None` (with a note) when
@@ -1604,7 +1598,6 @@ pub fn build_pass(
     let ResolvedModUniforms {
         bound: mod_uniforms,
         handled,
-        mismatched,
     } = resolve_mod_uniforms(
         &interface.uniforms,
         &mut interface.initial_values,
@@ -1643,7 +1636,7 @@ pub fn build_pass(
         uniforms: interface
             .uniforms
             .iter()
-            .filter(|u| !mismatched.contains(u.name.as_str()))
+            .filter(|u| !handled.contains(u.name.as_str()))
             .map(|u| (index(&u.name, &u.ty), u.ty.clone(), u.offset))
             .collect(),
         mod_uniforms,
@@ -1847,8 +1840,7 @@ pub fn build_compute(
     let interface = &mut c.interface;
     let ResolvedModUniforms {
         bound: mod_uniforms,
-        mismatched,
-        ..
+        handled,
     } = resolve_mod_uniforms(
         &interface.uniforms,
         &mut interface.initial_values,
@@ -1868,7 +1860,7 @@ pub fn build_compute(
         uniforms: interface
             .uniforms
             .iter()
-            .filter(|u| !mismatched.contains(u.name.as_str()))
+            .filter(|u| !handled.contains(u.name.as_str()))
             .map(|u| (index(&u.name, &u.ty), u.ty.clone(), u.offset))
             .collect(),
         mod_uniforms,

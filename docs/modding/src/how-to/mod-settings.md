@@ -172,6 +172,13 @@ already, comes back as the error. On the client the settings appear on your mod'
   them: settings sharing a category (a translation key) are drawn under one heading, in registration
   order, on the mod's page. Settings without a category render as today. A key the calling mod never
   registered, or an empty category, comes back as the error.
+- Show a setting only for one option of a choice with
+  `Registrar::show_setting_when_choice(key, controller, choice)`. Register the controller before the
+  dependent setting, then call the method after both registrations; this order prevents visibility
+  cycles. `choice` is the controller's zero-based option index. The hidden row is removed from the page
+  as soon as the choice changes, but its saved value is retained. A later valid call replaces the
+  condition; an invalid call keeps the previous one. Missing keys return `UnknownSetting`; self-reference,
+  a later controller, a non-choice controller, or an invalid option returns `InvalidVisibility`.
 - Update a setting on either host with `host.set_setting(key, value) -> Result<bool, SettingAccessError>`.
   The game validates it, persists it atomically, updates that side's live store and any client Options > Mods
   row, and synchronously tells its owner through `setting_changed`. The hook takes a read-only `&dyn Host` and can
@@ -181,6 +188,11 @@ already, comes back as the error. On the client the settings appear on your mod'
   after an external edit, also notifies the owner of changed values.
 - Settings writes made in a config listener’s `Reloading` or `Unloading` callback are live: the value and its notification
   stand even if the writing listener later panics. Only that listener is disabled; later listeners still run.
+
+Keys you register with `Registrar::register_key_mapping` are listed first on the same page as Key Binds rows,
+above the settings, and in Options > Controls. Both places rebind and reset one player-chosen key. A mod with its
+own config screen (below) gets that screen from Config instead of the generated page: its mappings stay in
+Options > Controls only.
 
 Keep the keys returned by your registration. There is no live raw mod-id read/write path. `ConfigContext`,
 `ReloadContext` and `ClientReloadListenerContext` allow typed reads without giving out a mutable host.

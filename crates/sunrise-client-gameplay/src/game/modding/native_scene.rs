@@ -89,6 +89,11 @@ pub(in crate::game::client_side) fn scene_camera(view: SceneView, partial: f32) 
     }
 }
 
+/// Whether `scale` (GUI pixels per block) is drawable: finite and positive.
+pub(in crate::game::client_side) fn valid_scale(scale: f32) -> bool {
+    scale.is_finite() && scale > 0.0
+}
+
 impl ClientGame<'_> {
     /// Draws `blocks`, a scene of block states at positions of its own (not
     /// the world's), into the box `rect` (x0, y0, x1, y1, GUI pixels) of a
@@ -102,7 +107,8 @@ impl ClientGame<'_> {
     /// the order drawn. `extra` adds quads in the scene's coordinates before
     /// the scene is seen and sorted (a living scene's entities and particles,
     /// `native_scene_live`); a scene of blocks alone passes none. Nothing is
-    /// drawn when a quad seen through the view isn't finite. API 422.
+    /// drawn when `view.scale` isn't finite and positive or a quad seen
+    /// through the view isn't finite. API 422.
     pub(in crate::game::client_side) fn draw_scene_quads(
         &self,
         batch: &mut HudBatch,
@@ -115,7 +121,7 @@ impl ClientGame<'_> {
         if !self.common.native_window() {
             return Err(mod_api::SceneError::Unavailable);
         }
-        if !view.scale.is_finite() || view.scale <= 0.0 {
+        if !valid_scale(view.scale) {
             return Err(mod_api::SceneError::BadView);
         }
         let (game_time, partial, animation_time) = clock.unwrap_or_else(|| {
@@ -376,5 +382,15 @@ mod tests {
         assert!((face_shade(Vec3::Z) - 0.8).abs() < 1e-6);
         assert!((face_shade(Vec3::X) - 0.6).abs() < 1e-6);
         assert_eq!(shaded(0xFF80_4020, 0.5), 0xFF40_2010);
+    }
+
+    #[test]
+    fn valid_scale_accepts_only_finite_positive_values() {
+        for ok in [f32::MIN_POSITIVE, 0.5, 20.0, f32::MAX] {
+            assert!(valid_scale(ok), "expected valid scale: {ok}");
+        }
+        for bad in [0.0, -0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+            assert!(!valid_scale(bad), "expected invalid scale: {bad}");
+        }
     }
 }

@@ -210,10 +210,10 @@ fn a_tnt_cart_detonates_only_when_a_collision_stops_a_moving_one() {
 }
 use sunrise_gameplay::game::server_side::minecarts_server::CartIndex;
 use sunrise_gameplay_common::game::minecarts::{
-    BlockStateId, CartKind, Minecart, SEAT, Species, Vec3, can_ride_cart, cart_is_destroyed,
-    cart_seat, container_keep, default_display_offset, display_offset, forget_unreadable_display,
-    offered_pickup, pickup_instead_of_push, push_along, shown_unless_air, takes_push_from_cart,
-    tnt_ignites_by_collision,
+    BlockStateId, CartKind, Minecart, Species, Vec3, can_ride_cart, cart_is_destroyed, cart_seat,
+    container_keep, default_display_offset, display_offset, forget_unreadable_display,
+    offered_pickup, pickup_instead_of_push, player_cart_seat, push_along, shown_unless_air,
+    takes_push_from_cart, tnt_ignites_by_collision,
 };
 
 /// Issue #8624: chest and hopper carts keep 0.995 of their speed when
@@ -512,7 +512,8 @@ fn a_wither_never_rides_a_cart() {
 fn a_cart_seat_matches_the_player_offset() {
     let at = Vec3::new(1.0, 10.0, 2.0);
     assert!((cart_seat(at, PASSENGER_Y).y - 10.1875).abs() < 1e-12);
-    assert!((cart_seat(at, SEAT).y - (10.0 + SEAT)).abs() < 1e-12);
+    // (31.95 + 0.1875) - 0.6 as `positionRider` adds it; 31.95 + (0.1875 - 0.6) is 31.537499999999998.
+    assert_eq!(player_cart_seat(Vec3::new(1.0, 31.95, 2.0)).y, 31.5375);
     assert_eq!(cart_seat(at, 0.0).x, 1.0);
     assert_eq!(cart_seat(at, 0.0).z, 2.0);
 }

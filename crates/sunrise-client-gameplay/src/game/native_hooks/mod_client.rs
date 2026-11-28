@@ -2097,6 +2097,12 @@ impl crate::game::ClientGame<'_> {
                 value: ui_setting_value(spec, self.live_setting(owner, spec)),
                 category: mod_api::__private::setting_category(mod_id, &spec.key)
                     .map(str::to_owned),
+                visible_when: mod_api::__private::setting_visibility(mod_id, &spec.key).map(
+                    |(choice_setting, choice_index)| sunrise_client::mod_list::SettingVisibility {
+                        choice_setting: choice_setting.to_owned(),
+                        choice_index,
+                    },
+                ),
             })
             .collect()
     }
@@ -2160,12 +2166,50 @@ impl crate::game::ClientGame<'_> {
         else {
             return;
         };
-        if let Some(setting) = page
+        let changed = if let Some(setting) = page
             .settings
             .iter_mut()
             .find(|setting| setting.key == spec.key)
         {
-            setting.value = ui_setting_value(spec, value);
+            let next = ui_setting_value(spec, value);
+            if !Self::native_setting_values_equal(&setting.value, &next) {
+                setting.value = next;
+                true
+            } else {
+                false
+            }
+        } else {
+            false
+        };
+        if changed {
+            self.client.chat_ui.options.layout_changed();
+        }
+    }
+
+    /// `NativeSettingValue`'s derived equality considers signed zero equal. The settings
+    /// store compares range values by bits, so keep the displayed model in sync with it.
+    fn native_setting_values_equal(left: &NativeSettingValue, right: &NativeSettingValue) -> bool {
+        match (left, right) {
+            (
+                NativeSettingValue::Range {
+                    min: left_min,
+                    max: left_max,
+                    step: left_step,
+                    value: left_value,
+                },
+                NativeSettingValue::Range {
+                    min: right_min,
+                    max: right_max,
+                    step: right_step,
+                    value: right_value,
+                },
+            ) => {
+                left_min.to_bits() == right_min.to_bits()
+                    && left_max.to_bits() == right_max.to_bits()
+                    && left_step.to_bits() == right_step.to_bits()
+                    && left_value.to_bits() == right_value.to_bits()
+            }
+            _ => left == right,
         }
     }
 

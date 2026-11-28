@@ -13,7 +13,9 @@ use sunrise_render_core::UniformFrameView;
 use sunrise_shaders::{BUFFERS, Group, SHADOW_COLORS};
 
 use super::construction::*;
-use super::mod_pack::{MOD_SET_BASE, ModDrawChunk, ModDrawKind, ModPassSlot, ModUniformValue};
+use super::mod_pack::{
+    MOD_SET_BASE, ModDrawChunk, ModDrawKind, ModPassSlot, ModUniformTable, ModUniformValue,
+};
 use crate::PollLive;
 use crate::pack_entities::{
     BEAM, BLOCK, BLOCK_TRANSLUCENT, DESTROY, ENTITY, PARTICLE, PARTICLE_TRANSLUCENT, TRANSLUCENT,
@@ -3023,7 +3025,8 @@ impl PackPost {
         self.shadow_comp = comp;
     }
 
-    /// Computes the cache key for the current frame.
+    /// Computes the shadow cache key for the current frame, including the shadow stages'
+    /// `pass.uniforms` and `pass.mod_uniforms` values.
     pub fn compute_shadow_cache_key(
         &self,
         view: &UniformFrameView<'_>,
@@ -3089,8 +3092,12 @@ impl PackPost {
         }
     }
 
+    /// Hashes the ordinary (`pass.uniforms`, looked up in `self.uniforms.values`) and active mod
+    /// frame (`pass.mod_uniforms`, looked up via `self.mod_uniforms.value`) uniform values of the
+    /// shadow passes (`shadow_terrain`, `shadow_water`, `shadow_comp`, and `entities.shadow`) and
+    /// their attached compute stages.
     pub fn shadow_uniforms_hash(&self) -> u64 {
-        use std::hash::{Hash, Hasher};
+        use std::hash::Hasher;
 
         let mut hasher = std::collections::hash_map::DefaultHasher::new();
         let passes = self
@@ -3106,29 +3113,108 @@ impl PackPost {
             // Their compute stages read uniforms of their own.
             .flat_map(|p| std::iter::once(p).chain(&p.compute));
         for pass in passes {
-            pass.name.hash(&mut hasher);
-            for (index, ty, offset) in &pass.uniforms {
-                index.hash(&mut hasher);
-                ty.hash(&mut hasher);
-                offset.hash(&mut hasher);
-                let Some(value) = index.and_then(|index| self.uniforms.values.get(index)) else {
-                    continue;
-                };
-                match value {
-                    pack_uniforms::Value::F(values) => {
-                        0u8.hash(&mut hasher);
-                        for value in values {
-                            value.to_bits().hash(&mut hasher);
-                        }
-                    }
-                    pack_uniforms::Value::I(values) => {
-                        1u8.hash(&mut hasher);
-                        values.hash(&mut hasher);
-                    }
+            hash_pass_uniforms(
+                &pass.name,
+                &pass.uniforms,
+                &pass.mod_uniforms,
+                &self.uniforms.values,
+                &self.mod_uniforms,
+                &mut hasher,
+            );
+        }
+        hasher.finish()
+    }
+}
+
+pub(super) fn hash_pass_uniforms(
+    name: &str,
+    uniforms: &[(Option<usize>, String, u32)],
+    mod_uniforms: &[(usize, bool, u32)],
+    frame_uniforms: &[pack_uniforms::Value],
+    mod_table: &ModUniformTable,
+    hasher: &mut impl std::hash::Hasher,
+) {
+    use std::hash::Hash;
+
+    name.hash(hasher);
+    for (index, ty, offset) in uniforms {
+        index.hash(hasher);
+        ty.hash(hasher);
+        offset.hash(hasher);
+        let Some(value) = index.and_then(|index| frame_uniforms.get(index)) else {
+            continue;
+        };
+        match value {
+            pack_uniforms::Value::F(values) => {
+                0u8.hash(hasher);
+                for value in values {
+                    value.to_bits().hash(hasher);
+                }
+            }
+            pack_uniforms::Value::I(values) => {
+                1u8.hash(hasher);
+                values.hash(hasher);
+            }
+        }
+    }
+    mod_uniforms.len().hash(hasher);
+    for &(index, previous, offset) in mod_uniforms {
+        index.hash(hasher);
+        previous.hash(hasher);
+        offset.hash(hasher);
+        let Some(value) = mod_table.value(index, previous) else {
+            continue;
+        };
+        hash_mod_uniform_value(value, hasher);
+    }
+}
+
+fn hash_mod_uniform_value(value: ModUniformValue, hasher: &mut impl std::hash::Hasher) {
+    use std::hash::Hash;
+
+    match value {
+        ModUniformValue::Float(v) => {
+            0u8.hash(hasher);
+            v.to_bits().hash(hasher);
+        }
+        ModUniformValue::Int(v) => {
+            1u8.hash(hasher);
+            v.hash(hasher);
+        }
+        ModUniformValue::Vec2(v) => {
+            2u8.hash(hasher);
+            for component in v {
+                component.to_bits().hash(hasher);
+            }
+        }
+        ModUniformValue::Vec3(v) => {
+            3u8.hash(hasher);
+            for component in v {
+                component.to_bits().hash(hasher);
+            }
+        }
+        ModUniformValue::Vec4(v) => {
+            4u8.hash(hasher);
+            for component in v {
+                component.to_bits().hash(hasher);
+            }
+        }
+        ModUniformValue::Mat3(cols) => {
+            5u8.hash(hasher);
+            for col in cols {
+                for component in col {
+                    component.to_bits().hash(hasher);
                 }
             }
         }
-        hasher.finish()
+        ModUniformValue::Mat4(cols) => {
+            6u8.hash(hasher);
+            for col in cols {
+                for component in col {
+                    component.to_bits().hash(hasher);
+                }
+            }
+        }
     }
 }
 

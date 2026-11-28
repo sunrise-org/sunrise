@@ -1256,6 +1256,7 @@ mod tests {
                 tooltip: None,
                 value: crate::mod_list::NativeSettingValue::Toggle(true),
                 category: None,
+                visible_when: None,
             }],
             ..NativePage::default()
         };

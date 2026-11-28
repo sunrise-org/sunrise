@@ -564,10 +564,11 @@ impl crate::game::ClientGame<'_> {
                 });
             }
             // A minecart: the server moves it, the rider sits in it.
-            self.common.carts.iter().find(|c| c.id == id).map(|c| {
-                c.position
-                    .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0))
-            })
+            self.common
+                .carts
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| sunrise_gameplay_common::game::minecarts::player_cart_seat(c.position))
         } else if let Some(at) =
             self.passenger_riding_position(id, None, None, &std::collections::HashMap::new())
         {

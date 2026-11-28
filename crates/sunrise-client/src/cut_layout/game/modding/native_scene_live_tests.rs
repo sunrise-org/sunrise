@@ -82,6 +82,14 @@ fn the_caps_and_mod_input_are_refused_whole_and_named() {
     assert_eq!(check(nan_rect, &ok, view()), Err(SceneError::BadView));
     let turned = SceneView::new([0.0; 3], f32::INFINITY, 0.0, 20.0);
     assert_eq!(check(RECT, &ok, turned), Err(SceneError::BadView));
+    for scale in [0.0, -0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY] {
+        let bad_scale = SceneView::new([0.5, 0.5, 0.5], 30.0, 25.0, scale);
+        assert_eq!(
+            check(RECT, &ok, bad_scale),
+            Err(SceneError::BadView),
+            "scale {scale}"
+        );
+    }
     let mut far = ok.clone();
     far.entities.push(cow([3.0e7 + 1.0, 0.0, 0.0]));
     assert_eq!(
@@ -339,6 +347,54 @@ fn a_furnaces_particles_replay_pause_step_and_start_over_from_the_last_twenty_ti
         }
         assert_eq!(game.scene_tick("", 11), Some(1000));
         assert_eq!(game.scene_particles("", 11), jumped);
+
+        // Nonpositive and nonfinite scales fail up front with `BadView` without creating or
+        // advancing kept state, without consuming the frame's animating budget, and before the
+        // scene table is borrowed.
+        let bad_scales = [0.0, -0.0, -1.0, f32::NAN, f32::INFINITY, f32::NEG_INFINITY];
+        game.client.frames += 1;
+        let kept_before = game.client.live_scenes.0.borrow().len();
+        let mut next_tick = scene.clone();
+        next_tick.clock.as_mut().unwrap().tick = 1001;
+        let fresh_scene = Scene::new(scene.blocks.clone()).with_clock(SceneClock::new(91, 0, 0.0));
+        for scale in bad_scales {
+            let bad = SceneView::new([0.5, 0.5, 0.5], 30.0, 25.0, scale);
+            assert_eq!(
+                draw(game, &fresh_scene, bad),
+                (Err(SceneError::BadView), 0),
+                "fresh scene scale {scale}"
+            );
+            assert_eq!(game.scene_tick("", 91), None, "fresh scale {scale}");
+            assert_eq!(
+                draw(game, &next_tick, bad),
+                (Err(SceneError::BadView), 0),
+                "active scene scale {scale}"
+            );
+            assert_eq!(game.scene_tick("", 11), Some(1000), "active scale {scale}");
+            assert_eq!(
+                game.scene_particles("", 11),
+                jumped,
+                "active particles scale {scale}"
+            );
+            assert_eq!(game.client.live_scenes.0.borrow().len(), kept_before);
+        }
+        // Input validation runs ahead of the mutable scene-table borrow so borrow contention
+        // cannot mask a `BadView` refusal.
+        {
+            let _held = game.client.live_scenes.0.borrow_mut();
+            let zero = SceneView::new([0.5, 0.5, 0.5], 30.0, 25.0, 0.0);
+            assert_eq!(draw(game, &next_tick, zero), (Err(SceneError::BadView), 0));
+            assert_eq!(
+                draw(game, &next_tick, view()),
+                (Err(SceneError::Unavailable), 0)
+            );
+        }
+        // None of the refused bad-scale draws spent an animating budget slot: all four slots in
+        // this frame are still available to other scenes.
+        for id in 92..96 {
+            let other = Scene::new(scene.blocks.clone()).with_clock(SceneClock::new(id, 0, 0.0));
+            assert_eq!(draw(game, &other, view()).0, Ok(()), "budget slot {id}");
+        }
     });
 }
 
@@ -388,6 +444,21 @@ fn a_fifth_animating_scene_draws_its_last_state_and_is_refused_by_name() {
             "its clock did not advance"
         );
         assert_eq!(game.scene_particles("", 4), last);
+        // A fresh over-budget scene with an invalid `Kind` still takes the blocks-only fallback
+        // draw path and returns `TooManyScenes` rather than preparing `Kind` entities.
+        let bare = draw(game, &Scene::new(blocks.clone()), view()).1;
+        assert!(bare > 0, "the furnace draws on its own");
+        let fresh_over_budget = Scene::new(blocks)
+            .with_clock(SceneClock::new(5, 31, 0.0))
+            .with_entities(vec![SceneEntity::new(
+                GuiEntity::kind("minecraft:arrow"),
+                [0.5, 1.0, 0.5],
+            )]);
+        assert_eq!(
+            draw(game, &fresh_over_budget, view()),
+            (Err(SceneError::TooManyScenes), bare)
+        );
+        assert_eq!(game.scene_tick("", 5), None, "over-budget scene not kept");
         game.client.frames += 1;
         assert_eq!(draw(game, &fifth, view()).0, Ok(()));
         assert_eq!(game.scene_tick("", 4), Some(31));
@@ -428,8 +499,86 @@ fn scene_entities_are_drawn_and_refused_as_draw_context_entity_refuses_them() {
         let gone = mod_api::EntityRef::new(mod_api::WorldEpoch::new(0), u32::MAX);
         let stale = SceneEntity::new(GuiEntity::existing(gone), [0.0; 3]);
         assert_eq!(
-            refused(vec![stale]),
+            refused(vec![stale.clone()]),
             (Err(SceneError::NoEntity { index: 0 }), 0)
+        );
+        // `Existing` validation stays ahead of `Kind` preparation and ahead of the mutable
+        // scene-table borrow.
+        let arrow = SceneEntity::new(GuiEntity::kind("minecraft:arrow"), [0.0; 3]);
+        assert_eq!(
+            refused(vec![arrow.clone(), stale.clone()]),
+            (Err(SceneError::NoEntity { index: 1 }), 0)
+        );
+        {
+            let _held = game.client.live_scenes.0.borrow_mut();
+            assert_eq!(
+                refused(vec![arrow, stale]),
+                (Err(SceneError::NoEntity { index: 1 }), 0)
+            );
+        }
+
+        // Real `GuiEntity::Existing` actor mixed with `GuiEntity::Kind` on a fresh scene is
+        // placed in its original slot, drawn alongside the `Kind` actors, refreshed on kept
+        // frames, and refused if the live entity is later removed.
+        use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
+        let (client, _server) = sunrise_protocol::connection::Pipe::pair();
+        game.connect_local(client, "SceneExistingTest").unwrap();
+        game.client.remote.as_mut().unwrap().logged_in = true;
+        let pig_id: u32 = 77_001;
+        game.spawn_entity(pig_id as i32, "minecraft:pig", [0.5, 64.0, 0.5], [0.0; 3]);
+        game.pick_section_sync_id(pig_id);
+        let pig_ref = game.entity(pig_id).expect("live client pig handle");
+        let existing_pig = SceneEntity::new(GuiEntity::existing(pig_ref), [0.5, 1.0, 0.5]);
+        let cow_only = drawn - bare;
+        let pig_only_scene = Scene::new(blocks.clone())
+            .with_clock(SceneClock::new(32, 0, 0.0).animate_blocks(false))
+            .with_entities(vec![existing_pig.clone()]);
+        let (pig_res, pig_drawn) = draw(game, &pig_only_scene, view());
+        assert_eq!(pig_res, Ok(()));
+        let pig_only = pig_drawn - bare;
+        assert!(pig_only > 0, "the existing pig's model is drawn");
+
+        let mixed_scene = Scene::new(blocks.clone())
+            .with_clock(SceneClock::new(33, 0, 0.0).animate_blocks(false))
+            .with_entities(vec![
+                cow([1.5, 0.0, 0.5]),
+                existing_pig.clone(),
+                cow([-0.5, 0.0, 0.5]),
+            ]);
+        let (mixed_res, mixed_drawn) = draw(game, &mixed_scene, view());
+        assert_eq!(mixed_res, Ok(()));
+        assert_eq!(
+            mixed_drawn,
+            bare + cow_only * 2 + pig_only,
+            "fresh scene draws both Kind cows and the reused Existing pig"
+        );
+        // Kept-frame refresh picks up live client state changes on the `Existing` slot.
+        game.common
+            .mobs
+            .iter_mut()
+            .find(|m| m.id == pig_id)
+            .unwrap()
+            .invisible = true;
+        game.client.frames += 1;
+        let mut next_mixed = mixed_scene.clone();
+        next_mixed.clock.as_mut().unwrap().tick = 1;
+        let (refreshed_res, refreshed_drawn) = draw(game, &next_mixed, view());
+        assert_eq!(refreshed_res, Ok(()));
+        assert_eq!(
+            refreshed_drawn,
+            bare + cow_only * 2,
+            "kept frame refreshes Existing actor state in place"
+        );
+        // Removing the live entity refuses the scene without drawing.
+        game.common
+            .mobs
+            .iter_mut()
+            .find(|m| m.id == pig_id)
+            .unwrap()
+            .removed = true;
+        assert_eq!(
+            draw(game, &next_mixed, view()),
+            (Err(SceneError::NoEntity { index: 1 }), 0)
         );
     });
 }

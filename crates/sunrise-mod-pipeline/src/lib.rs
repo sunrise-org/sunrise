@@ -775,7 +775,8 @@ pub const COMPUTE_BIND_GROUP: u32 = 0;
 pub const COMPUTE_FOLDER: &str = "shaders/compute";
 
 /// Translate and validate one mod compute shader (`.csh`) on a guarded 64 MiB stack thread with
-/// the same crash/memory containment bounds as [`translate`]. Refusals name the compute stage;
+/// the same crash/memory containment bounds as [`translate`]. Includes are expanded once and
+/// shared between the guard check and GLSL translation. Refusals name the compute stage;
 /// an include expansion refusal names the file and line of the failing directive.
 pub fn translate_compute(
     sources: &ComputeSources<'_>,
@@ -791,8 +792,10 @@ pub fn translate_compute(
     })
 }
 
-/// Check expanded source before translating the compute shader, keeping each refusal at its
-/// source position when known.
+/// Expand includes once, check the expanded source with [`guard::refusal`], and pass that same
+/// [`Expanded`] text to [`sunrise_glsl::translate_compute_expanded`] so validation and translation
+/// share one expansion without re-reading includes, keeping each refusal at its authored source
+/// position when known.
 fn translate_compute_inner(
     sources: &ComputeSources<'_>,
     options: &ComputeOptions<'_>,
@@ -826,14 +829,8 @@ fn translate_compute_inner(
         defines: options.defines,
         includes: &includes,
     };
-    let translated = sunrise_glsl::translate_compute(
-        sources.source,
-        sources.file,
-        sources.dir,
-        &inputs,
-        options.interface,
-    )
-    .map_err(|errors| map_glsl_errors(errors, false))?;
+    let translated = sunrise_glsl::translate_compute_expanded(expanded, &inputs, options.interface)
+        .map_err(|errors| map_glsl_errors(errors, false))?;
     if options.check_backends {
         let errors: Vec<Problem> = translate_backends(&translated.module)
             .into_iter()
@@ -1413,9 +1410,15 @@ void main() { fragColor = texture(Sampler0, texCoord0); }
     /// names that file and the line in it, not the stage file and a line of the expanded text.
     #[test]
     fn a_guard_refusal_in_an_include_is_located_in_the_include() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let reads = AtomicUsize::new(0);
         let chain = format!("float a = 1.0;\nfloat x = a{};\n", "+a".repeat(250));
         let include = |id: &str| match id {
-            "example:shaders/include/chain.glsl" => Ok(Some(chain.clone())),
+            "example:shaders/include/chain.glsl" => {
+                reads.fetch_add(1, Ordering::SeqCst);
+                Ok(Some(chain.clone()))
+            }
             other => stub_include(other),
         };
         let fsh = "#version 330\nin vec2 texCoord0;\nout vec4 fragColor;\n\
@@ -1426,6 +1429,7 @@ void main() { fragColor = texture(Sampler0, texCoord0); }
         assert_eq!(err[0].line, 2);
         assert!(err[0].message.contains("chains more than 200"), "{err:?}");
 
+        reads.store(0, Ordering::SeqCst);
         let csh = "#version 450\nlayout(local_size_x = 1) in;\n\
             #include <example:chain.glsl>\nvoid main() {}\n";
         let compute = ComputeSources {
@@ -1443,6 +1447,9 @@ void main() { fragColor = texture(Sampler0, texCoord0); }
         assert_eq!(err.len(), 1, "{err:?}");
         assert_eq!(err[0].file, "assets/example/shaders/include/chain.glsl");
         assert_eq!(err[0].line, 2);
+        assert_eq!(err[0].column, 410, "{err:?}");
+        assert_eq!(err[0].stage, Some(ShaderStage::Compute));
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
     }
 
     /// `sampleSprite`'s texel arithmetic: `uv` 0 to 1 spans the sprite's rect once, the far edge
@@ -2151,6 +2158,126 @@ void main() {{
                 .starts_with("assets/example/shaders/include/pick.glsl:2:12: compute shader: "),
             "{displayed}"
         );
+    }
+
+    /// Each active `#include` in a compute shader is read once and shared between guard validation
+    /// and GLSL translation: if a second read would return invalid GLSL, translation still succeeds
+    /// using the first expansion, with defines and backend translation enabled.
+    #[test]
+    fn compute_shader_reads_each_include_once_and_reuses_guarded_text() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let helper_reads = AtomicUsize::new(0);
+        let local_reads = AtomicUsize::new(0);
+        let skipped_reads = AtomicUsize::new(0);
+        let include = |id: &str| match id {
+            "example:shaders/include/helper.glsl" => {
+                if helper_reads.fetch_add(1, Ordering::SeqCst) == 0 {
+                    Ok(Some(
+                        "uint helper_value() { return uint(SCALE_FACTOR); }\n".to_owned(),
+                    ))
+                } else {
+                    Ok(Some("not valid glsl ???;\n".to_owned()))
+                }
+            }
+            "example:shaders/compute/local.glsl" => {
+                local_reads.fetch_add(1, Ordering::SeqCst);
+                Ok(Some("uint local_bias() { return 2u; }\n".to_owned()))
+            }
+            "example:shaders/include/skipped.glsl" => {
+                skipped_reads.fetch_add(1, Ordering::SeqCst);
+                Ok(Some("uint skipped() { return 0u; }\n".to_owned()))
+            }
+            other => stub_include(other),
+        };
+        let sources = ComputeSources {
+            file: "assets/example/shaders/compute/pass.csh",
+            dir: "example:shaders/compute/",
+            source: "#version 450\n\
+                     #ifdef USE_HELPER\n\
+                     #include <example:helper.glsl>\n\
+                     #endif\n\
+                     #ifdef UNSET_BRANCH\n\
+                     #include <example:skipped.glsl>\n\
+                     #endif\n\
+                     #include \"local.glsl\"\n\
+                     const uint scaleConst = uint(SCALE_FACTOR);\n\
+                     layout(local_size_x = 4) in;\n\
+                     layout(std430) buffer Out { uint values[]; };\n\
+                     void main() {\n\
+                         values[gl_GlobalInvocationID.x] = helper_value() + local_bias() + scaleConst;\n\
+                     }\n",
+        };
+        let bindings = [ModBinding {
+            name: "Out",
+            kind: ModBindingKind::StorageBuffer { read_only: false },
+        }];
+        let options = ComputeOptions {
+            defines: &["USE_HELPER", "SCALE_FACTOR 7"],
+            mod_bindings: &bindings,
+            check_backends: true,
+            interface: DEVICELESS_INTERFACE_LIMITS,
+        };
+        let translated = translate_compute(&sources, &options, &include)
+            .expect("translator must reuse the first expanded text checked by the guard");
+        assert_eq!(translated.workgroup_size, [4, 1, 1]);
+        assert_eq!(translated.read, [0]);
+        let (_, constant) = translated
+            .module
+            .constants
+            .iter()
+            .find(|(_, c)| c.name.as_deref() == Some("scaleConst"))
+            .expect("missing scaleConst");
+        assert!(matches!(
+            translated.module.global_expressions[constant.init],
+            naga::Expression::Literal(naga::Literal::U32(7))
+        ));
+        assert_eq!(helper_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(local_reads.load(Ordering::SeqCst), 1);
+        assert_eq!(skipped_reads.load(Ordering::SeqCst), 0);
+    }
+
+    /// A GLSL type error inside a compute shader include reads the include once and reports the
+    /// authored file, line, column, and compute stage.
+    #[test]
+    fn compute_glsl_error_in_include_reads_once_and_keeps_authored_location() {
+        use std::sync::atomic::{AtomicUsize, Ordering};
+
+        let reads = AtomicUsize::new(0);
+        let include = |id: &str| match id {
+            "example:shaders/include/bad_type.glsl" => {
+                reads.fetch_add(1, Ordering::SeqCst);
+                Ok(Some(
+                    "uint bad_type() {\n    uint x = vec2(1.0);\n    return x;\n}\n".to_owned(),
+                ))
+            }
+            other => stub_include(other),
+        };
+        let sources = ComputeSources {
+            file: "assets/example/shaders/compute/bad_type.csh",
+            dir: "example:shaders/compute/",
+            source: "#version 450\n#include <example:bad_type.glsl>\n\
+                     layout(local_size_x = 1) in;\n\
+                     void main() { uint v = bad_type(); }\n",
+        };
+        let options = ComputeOptions {
+            defines: &[],
+            mod_bindings: &[],
+            check_backends: false,
+            interface: DEVICELESS_INTERFACE_LIMITS,
+        };
+        let Err(problems) = translate_compute(&sources, &options, &include) else {
+            panic!("type mismatch in compute include must fail translation");
+        };
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(
+            problems[0].file,
+            "assets/example/shaders/include/bad_type.glsl"
+        );
+        assert_eq!(problems[0].line, 2);
+        assert_eq!(problems[0].column, 10, "{problems:?}");
+        assert_eq!(problems[0].stage, Some(ShaderStage::Compute));
+        assert_eq!(reads.load(Ordering::SeqCst), 1);
     }
 
     /// A translator error in an included file names it by its asset path, as a stage file is.

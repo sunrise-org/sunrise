@@ -1707,9 +1707,14 @@ impl Cushion {
         stack
     }
     /// `Cushion.interact`'s seat: the vehicle's PASSENGER attachment
-    /// `(0, 0.25, 0)` less the player's `(0, 0.6, 0)`.
+    /// `(0, 0.25, 0)` added to the cushion's place first, then the player's `(0, 0.6, 0)` taken
+    /// off, as `positionRider` does.
     pub fn seat(&self) -> Vec3 {
-        Vec3::new(self.position.x, self.position.y - 0.35, self.position.z)
+        Vec3::new(
+            self.position.x,
+            (self.position.y + 0.25) - 0.6,
+            self.position.z,
+        )
     }
     /// `Entity.getDismountLocationForPassenger`: on top of the cushion.
     pub fn dismount(&self) -> Vec3 {

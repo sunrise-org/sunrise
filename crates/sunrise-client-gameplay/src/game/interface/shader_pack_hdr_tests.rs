@@ -3,6 +3,7 @@
 //! in a process of its own (one event loop, its own resources and environment).
 use super::native_entity_refs::tests::with_client_game;
 use super::native_shaders::outcome;
+use super::shader_packs::{loader_frame, settle_shader_pack as settle};
 use crate::game::native_hooks::particle_count_tests::frame_scene;
 use sunrise_client::gfx::ScreenshotRequest;
 use sunrise_gameplay_common::game::test_fixtures::run_fresh_cases_with_env;
@@ -30,37 +31,6 @@ pub(super) fn pack(
         }
     }
     root.join(name)
-}
-
-/// The game's frames up to the loader, as `render_with_hooks` runs them: the frame follows the
-/// pick, then the loader runs.
-fn loader_frame(game: &mut crate::game::ClientGame<'_>) {
-    let sky = sunrise_level::environment::Sky::default();
-    let camera = glam::DVec3::new(0.5, 65.5, 0.5);
-    game.follow_frame();
-    game.shader_pack_inputs(camera, camera, 0.0, &sky);
-}
-
-/// Frames until the pick runs, installed for `wanted` (its dimension and served answer), with
-/// nothing building: a finished build counts only once a frame has taken and installed it.
-/// At most 60 s.
-pub(super) fn settle(game: &mut crate::game::ClientGame<'_>, wanted: (i32, Option<Tonemap>)) {
-    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
-    loop {
-        loader_frame(game);
-        let renderer = game.client.renderer.0.as_ref().unwrap();
-        if !renderer.shader_pack_building()
-            && renderer.shader_pack_kind() == Some("iris")
-            && renderer.shader_pack_loaded_for() == Some(wanted)
-        {
-            return;
-        }
-        assert!(
-            std::time::Instant::now() < deadline,
-            "the pack never settled"
-        );
-        std::thread::sleep(std::time::Duration::from_millis(10));
-    }
 }
 
 /// Waits for the build the loader started, without a frame (so without taking its result).

@@ -85,12 +85,11 @@ pub struct Installed {
     pub native: Option<NativePage>,
 }
 
-/// A native mod's settings page: its keys as Key Binds rows, then the settings it registered
-/// (`Registrar::register_setting`). The keys the player chooses are kept in `ModList::keys`, the
-/// settings in the mod's data folder.
+/// A native mod's settings page: its registered keys as Key Binds rows, then its settings.
+/// The keys the player chooses are kept in `ModList::keys`; settings stay in the mod's data folder.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NativePage {
-    /// The keys the mod registers on Options > Controls, under its title.
+    /// The keys the mod registers on Options > Controls and its Config page, under its title.
     pub mappings: Vec<KeyMapping>,
     /// Its settings, in registration order, with the values the page shows.
     pub settings: Vec<NativeSetting>,
@@ -110,6 +109,15 @@ pub struct NativeSetting {
     /// The translation key of the section its row belongs to, if any: settings
     /// sharing one are drawn under one heading on the mod's page.
     pub category: Option<String>,
+    /// When present, render this row only while `choice_setting` selects `choice_index`.
+    pub visible_when: Option<SettingVisibility>,
+}
+
+/// A choice on the same native mod page that controls a setting row's visibility.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub struct SettingVisibility {
+    pub choice_setting: String,
+    pub choice_index: usize,
 }
 
 /// A setting's value as its row shows and changes it.

@@ -275,8 +275,13 @@ pub fn push_along(push: Vec3, movement: Vec3) -> Vec3 {
         push
     }
 }
-/// The minecart's passenger attachment minus Player.DEFAULT_VEHICLE_ATTACHMENT.
-pub const SEAT: f64 = PASSENGER_Y - 0.6;
+/// `Entity.positionRider` for a player in a minecart: the cart's passenger attachment added to the
+/// cart's place first (`getPassengerRidingPosition`), then `Avatar.DEFAULT_VEHICLE_ATTACHMENT`
+/// taken off, in that order, so the seat rounds as vanilla's does.
+pub fn player_cart_seat(cart: Vec3) -> Vec3 {
+    let at = cart_seat(cart, PASSENGER_Y);
+    Vec3::new(at.x, at.y - 0.6, at.z)
+}
 /// The placeholder container key under which an open cart's items live.
 pub const CART_KEY_Y: i32 = sunrise_sim::lan::menu::VEHICLE_KEY_Y;
 

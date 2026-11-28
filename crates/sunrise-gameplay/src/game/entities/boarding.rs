@@ -192,6 +192,68 @@ impl ServerGame<'_> {
         self.common.riding = Some(vehicle);
         self.seat_player(vehicle);
         self.note_started_riding(vehicle);
+        self.mounted_player(vehicle);
+    }
+
+    /// `ServerPlayer.startRiding` once the acting player is on `vehicle`: the vehicle seats it
+    /// (`positionRider`), and its client hears, in this order and at once, the seat as a teleport
+    /// that keeps its look (`Relative.ROTATION`, no motion), a living vehicle's effects
+    /// (`PlayerList.sendActiveEffects`) and the vehicle's passengers.
+    pub(in crate::game) fn mounted_player(&mut self, vehicle: u32) {
+        let Some(conn) = self.server.lan_acting else {
+            return;
+        };
+        if let Some(i) = self.common.boats.iter().position(|b| b.id == vehicle) {
+            let seat = self.position_boat_player(i);
+            if let Some(p) = self.common.player.as_mut() {
+                p.position = seat;
+            }
+        } else if let Some(c) = self.common.carts.iter().find(|c| c.id == vehicle) {
+            let seat = sunrise_gameplay_common::game::minecarts::player_cart_seat(c.position);
+            if let Some(p) = self.common.player.as_mut() {
+                p.position = seat;
+            }
+        } else if let Some(c) = self.common.cushions.iter().find(|c| c.id == vehicle) {
+            let seat = c.seat();
+            if let Some(p) = self.common.player.as_mut() {
+                p.position = seat;
+            }
+        } else if self.common.mobs.iter().any(|m| m.id == vehicle) {
+            self.position_rider();
+        }
+        let Some(p) = self.common.player.as_mut() else {
+            return;
+        };
+        // `teleportSetPosition` with `Vec3.ZERO` and no relative motion.
+        p.velocity = sunrise_core::geometry::Vec3::ZERO;
+        let seat = [p.position.x, p.position.y, p.position.z];
+        let effects: Vec<_> = self
+            .common
+            .mobs
+            .iter()
+            .find(|m| m.id == vehicle)
+            .map(|m| m.extra.effects.iter().map(|e| m.active_effect(e)).collect())
+            .unwrap_or_default();
+        let passengers = self.passenger_order(vehicle);
+        let Some(host) = self.server.lan.as_mut() else {
+            return;
+        };
+        let Some(i) = host.hub.guests.connection_index(conn) else {
+            return;
+        };
+        host.hub.teleport_rider(i, seat, [false; 3], true);
+        for e in &effects {
+            host.hub.send_entity_effect(i, vehicle as i32, e, false);
+        }
+        host.hub.send_to(
+            conn,
+            &sunrise_protocol::packets::play::Clientbound::SetPassengers(
+                sunrise_protocol::packets::play::SetPassengers {
+                    vehicle: vehicle as i32,
+                    passengers: passengers.into_iter().map(|id| id as i32).collect(),
+                },
+            ),
+        );
     }
 
     /// The first seat, preserving enumeration order on a tie without sorting or allocating.
@@ -279,6 +341,7 @@ impl ServerGame<'_> {
     }
 }
 
+use sunrise_gameplay_common::game::mounts_common::MountsCommonGameExt1 as _;
 use sunrise_gameplay_common::game::passengers_common::PassengersCommonGameExt2 as _;
 
 #[cfg(test)]

@@ -6027,16 +6027,8 @@ impl crate::game::ServerGame<'_> {
         // LivingEntity.isPushable reads onClimbable live; a mob's cached one
         // is only refreshed by its own push step, so one that has not ticked
         // yet (the first tick after a load, a fresh spawn) or has moved since
-        // would be pushed out of a ladder or scaffolding. Refreshed here, from
-        // where each mob stands now, before the snapshot others push it by.
-        let climbing: Vec<bool> = {
-            let w = self.mob_world_base(&[]);
-            self.common
-                .mobs
-                .iter()
-                .map(|m| m.on_climbable(&w))
-                .collect()
-        };
+        // would be pushed out of a ladder or scaffolding. Refreshed in place
+        // from the world and block tables, without building a duplicate MobWorld.
         let inactive_equipment = if self.common.is_logical_server() {
             Some((
                 self.entity_ticking_area(),
@@ -6046,8 +6038,14 @@ impl crate::game::ServerGame<'_> {
         } else {
             None
         };
-        for (m, climbing) in self.common.mobs.iter_mut().zip(climbing) {
-            m.on_climbable = climbing;
+        let world = &self.common.world;
+        let registry = self.common.pack.assets.registry;
+        let facts = self.common.res.facts();
+        let block_tag_flags = world_items!(self).block_tag_flags.bits();
+        let loop_context = &self.common.loop_context;
+        for m in self.common.mobs.iter_mut() {
+            m.on_climbable =
+                m.on_climbable_in(world, registry, facts, block_tag_flags, loop_context);
             if let Some((ticking, items, catalog)) = &inactive_equipment
                 && !m.removed
                 && (!m.extra.equipment.is_empty() || m.extra.live.has_worn())

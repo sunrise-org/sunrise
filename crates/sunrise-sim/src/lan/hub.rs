@@ -1774,18 +1774,9 @@ impl Hub {
 
     /// ClientboundUpdateMobEffectPacket for one of the guest's effects.
     fn send_effect(&mut self, i: usize, e: &EffectInstance, blend: bool) -> Option<SentEffect> {
-        let effect = self
-            .sync
-            .id("minecraft:mob_effect", crate::brewing::namespaced(e.id))?;
+        self.send_entity_effect(i, self.guests[i].entity_id, e, blend)?;
         let flags = PlayerEffects::flags(e);
         let g = &self.guests[i];
-        g.send(&C::UpdateMobEffect(play::UpdateMobEffect {
-            id: g.entity_id,
-            effect,
-            amplifier: e.amplifier,
-            duration: e.duration,
-            flags: flags | if blend { 8 } else { 0 },
-        }));
         Some(SentEffect {
             id: e.id,
             amplifier: e.amplifier,
@@ -1793,6 +1784,29 @@ impl Hub {
             duration: e.duration,
             tick_count: g.effects.tick_count,
         })
+    }
+
+    /// `new ClientboundUpdateMobEffectPacket(entityId, effect, blend)` to guest `i`, for its own
+    /// effect or another entity's (`PlayerList.sendActiveEffects`). None for an effect the
+    /// registry sync does not name.
+    pub fn send_entity_effect(
+        &self,
+        i: usize,
+        entity_id: i32,
+        e: &EffectInstance,
+        blend: bool,
+    ) -> Option<()> {
+        let effect = self
+            .sync
+            .id("minecraft:mob_effect", crate::brewing::namespaced(e.id))?;
+        self.guests[i].send(&C::UpdateMobEffect(play::UpdateMobEffect {
+            id: entity_id,
+            effect,
+            amplifier: e.amplifier,
+            duration: e.duration,
+            flags: PlayerEffects::flags(e) | if blend { 8 } else { 0 },
+        }));
+        Some(())
     }
 
     /// PlayerList.sendActivePlayerEffects: every effect, unblended, when the

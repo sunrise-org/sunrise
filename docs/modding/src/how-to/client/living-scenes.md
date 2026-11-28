@@ -71,7 +71,7 @@ returns a `SceneError`:
 | Error | Cause |
 |---|---|
 | `Unavailable` | Not a client's drawing |
-| `BadView` | A view or box that isn't finite, or a scene too large to stay in finite GUI coordinates |
+| `BadView` | A view or box that isn't finite, a scale that isn't positive and finite, or a scene too large to stay in finite GUI coordinates |
 | `TooManyBlocks` | More than `SCENE_MAX_BLOCKS` (4096) blocks |
 | `TooManyEntities` | More than `SCENE_MAX_ENTITIES` (16) entities |
 | `TooManyParticles` | More than `SCENE_MAX_PARTICLES` (512) particles to add at once |
@@ -84,6 +84,8 @@ returns a `SceneError`:
 | `BadParticle { index }` | Particle options, a position or a velocity that isn't finite, or options that name a stack |
 | `BadClock` | A partial tick that isn't finite |
 | `NoClock` | Entities or particles without a clock |
+
+A scale that isn't positive and finite is refused before the scene is looked at: it keeps no scene, advances no clock and spends none of the frame's four animations.
 
 ## Not yet
 

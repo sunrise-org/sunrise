@@ -133,6 +133,8 @@ public final class LocatorBarClient {
     private static volatile boolean boatDamage;
     private static volatile boolean hooks;
     private static volatile boolean state;
+    /** {@code mounts on}: teleports, passenger lists and other entities' effects in full, for a mount's packets. */
+    private static volatile boolean mounts;
     private static volatile boolean sounds;
     private static volatile boolean gameEvents;
     private static volatile boolean events;
@@ -269,6 +271,7 @@ public final class LocatorBarClient {
                     case "quit" -> players.get(w[1]).close();
                     case "players" -> LocatorBarClient.players = w[1].equals("on");
                     case "chat" -> chat = w[1].equals("on");
+                    case "mounts" -> mounts = w[1].equals("on");
                     case "flat-chat" -> flatChat = w[1].equals("on");
                     case "advancements" -> advancements = w[1].equals("on");
                     case "list-syncs" -> listSyncs = w[1].equals("on");
@@ -1061,7 +1064,14 @@ if (ownPoses && p instanceof net.minecraft.network.protocol.game.ClientboundSetE
                     } else if (p instanceof ClientboundPlayerPositionPacket t) {
                         position = PositionMoveRotation.calculateAbsolute(position, t.change(), t.relatives());
                         Vec3 at = position.position();
-                        if (state) {
+                        if (state && mounts) {
+                            // The packet as sent: exact numbers, its relative flags in their declared order.
+                            PositionMoveRotation c = t.change();
+                            record("teleport " + c.position().x + " " + c.position().y + " " + c.position().z
+                                + " delta " + c.deltaMovement().x + " " + c.deltaMovement().y + " " + c.deltaMovement().z
+                                + " rot " + c.yRot() + " " + c.xRot() + " relatives " + java.util.Arrays.stream(net.minecraft.world.entity.Relative.values())
+                                    .filter(t.relatives()::contains).map(Enum::name).collect(java.util.stream.Collectors.joining(",")));
+                        } else if (state) {
                             record(String.format(java.util.Locale.ROOT, "teleport %.3f %.3f %.3f %.1f %.1f",
                                 at.x, at.y, at.z, position.yRot(), position.xRot()));
                         }
@@ -1093,7 +1103,10 @@ if (ownPoses && p instanceof net.minecraft.network.protocol.game.ClientboundSetE
                 boolean aboard = java.util.Arrays.stream(passengers.getPassengers()).anyMatch(passenger -> passenger == id);
                 if (aboard || passengers.getVehicle() == vehicle) {
                     vehicle = aboard ? passengers.getVehicle() : -1;
-                    record("passenger " + aboard);
+                    // Entity ids differ between servers: the list in order, this player as `self`.
+                    record(mounts ? "passengers " + java.util.Arrays.stream(passengers.getPassengers())
+                        .mapToObj(passenger -> passenger == id ? "self" : "other")
+                        .collect(java.util.stream.Collectors.joining(",")) : "passenger " + aboard);
                 }
             } else if (p instanceof net.minecraft.network.protocol.game.ClientboundContainerSetSlotPacket c) {
                 record("slot " + c.getContainerId() + " " + c.getSlot() + " " + item(c.getItem()));
@@ -1101,6 +1114,11 @@ if (ownPoses && p instanceof net.minecraft.network.protocol.game.ClientboundSetE
                 record("inventory " + i.slot() + " " + item(i.contents()));
             } else if (p instanceof net.minecraft.network.protocol.game.ClientboundUpdateMobEffectPacket e && e.getEntityId() == id) {
                 record("effect " + e.getEffect().getRegisteredName() + " " + e.getEffectAmplifier() + " " + e.getEffectDurationTicks());
+            } else if (p instanceof net.minecraft.network.protocol.game.ClientboundUpdateMobEffectPacket e && mounts) {
+                // Another entity's effect: a mount's, sent as the player gets on.
+                record("other-effect " + e.getEffect().getRegisteredName() + " " + e.getEffectAmplifier() + " "
+                    + e.getEffectDurationTicks() + " ambient " + e.isEffectAmbient() + " visible " + e.isEffectVisible()
+                    + " icon " + e.effectShowsIcon() + " blend " + e.shouldBlend());
             } else if (p instanceof net.minecraft.network.protocol.game.ClientboundRemoveMobEffectPacket e && e.entityId() == id) {
                 record("effect-removed " + e.effect().getRegisteredName());
             } else if (p instanceof net.minecraft.network.protocol.game.ClientboundPlayerCombatKillPacket k) {

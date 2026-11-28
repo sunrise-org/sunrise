@@ -458,6 +458,7 @@ impl crate::game::ServerGame<'_> {
                 self.common.riding = Some(vehicle_id);
                 self.seat_player(vehicle_id);
                 self.trigger_player("minecraft:started_riding");
+                self.mounted_player(vehicle_id);
             }
             Target::Mob(id) => {
                 sunrise_sim::mobs::riders::link(&mut self.common.mobs, id, vehicle_id);

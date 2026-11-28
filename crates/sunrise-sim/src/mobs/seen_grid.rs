@@ -11,6 +11,8 @@ const CELL: f64 = 4.0;
 #[derive(Default)]
 pub struct SeenGrid {
     cells: FxHashMap<(i32, i32), Vec<u32>>,
+    /// Recycled cell vectors kept across [`Self::rebuild`] calls to avoid per-tick allocations.
+    free_lists: Vec<Vec<u32>>,
     cell_of: Vec<(i32, i32)>,
     /// The widest box (along x or z) the grid has held: no box reaches
     /// further than this past its minimum corner.
@@ -34,13 +36,29 @@ impl SeenGrid {
     /// The boxes of the snapshot's entries, in order.
     pub fn new(boxes: impl Iterator<Item = Aabb>) -> Self {
         let mut grid = Self::default();
+        grid.rebuild(boxes);
+        grid
+    }
+    /// Replaces the grid's contents with `boxes` while reusing the hash map,
+    /// `cell_of` buffer, and pooled cell vectors across ticks.
+    pub fn rebuild(&mut self, boxes: impl Iterator<Item = Aabb>) {
+        for (_, mut list) in self.cells.drain() {
+            list.clear();
+            self.free_lists.push(list);
+        }
+        self.cell_of.clear();
+        self.reach = 0.0;
+        self.entries = 0;
         for (i, b) in boxes.enumerate() {
             let at = corner(b);
-            grid.reach = grid.reach.max(width(b));
-            grid.cells.entry(at).or_default().push(i as u32);
-            grid.cell_of.push(at);
+            self.reach = self.reach.max(width(b));
+            let free = &mut self.free_lists;
+            self.cells
+                .entry(at)
+                .or_insert_with(|| free.pop().unwrap_or_default())
+                .push(i as u32);
+            self.cell_of.push(at);
         }
-        grid
     }
     /// The widest box and the entries it has, for a grid of part of its entries that must meet
     /// the same entries in the same order (the server's parallel mob tick).
@@ -71,7 +89,11 @@ impl SeenGrid {
         {
             list.remove(k);
         }
-        let list = self.cells.entry(at).or_default();
+        let free = &mut self.free_lists;
+        let list = self
+            .cells
+            .entry(at)
+            .or_insert_with(|| free.pop().unwrap_or_default());
         let idx = match list.binary_search(&(i as u32)) {
             Ok(k) | Err(k) => k,
         };
@@ -410,5 +432,43 @@ mod tests {
             }
         }
         assert!(scanned > 0 && scanned < 500, "{scanned} of 500 scanned");
+    }
+
+    #[test]
+    fn rebuild_reuses_pooled_vectors_without_capacity_cap_and_matches_new() {
+        // Put 80 boxes in one column (> 64) to prove pooled vectors are retained
+        // without arbitrary capacity caps across rebuilds.
+        let crowded: Vec<Aabb> = (0..80)
+            .map(|i| boxed(0.5 + (i % 4) as f64 * 0.1, 64.0, 0.5, 0.6))
+            .collect();
+        let mut grid = SeenGrid::new(crowded.iter().copied()).answering_as((10.0, 500));
+        let original_cap = grid.cells.values().next().unwrap().capacity();
+        assert!(original_cap >= 80);
+
+        // Rebuild into a different, smaller column: the drained vector is reused (a fresh one
+        // for five boxes would be far smaller) and `answering_as` overrides are cleared to
+        // match a fresh `SeenGrid::new`.
+        let shifted: Vec<Aabb> = (0..5)
+            .map(|i| boxed(40.5 + (i % 4) as f64 * 0.1, 64.0, 40.5, 0.8))
+            .collect();
+        grid.rebuild(shifted.iter().copied());
+        let fresh = SeenGrid::new(shifted.iter().copied());
+        assert_eq!(grid.bounds(), fresh.bounds());
+        let reused_cap = grid.cells.values().next().unwrap().capacity();
+        assert_eq!(reused_cap, original_cap);
+
+        let mut got = Vec::new();
+        let mut expected = Vec::new();
+        for q in [
+            boxed(0.0, 64.0, 0.0, 2.0),
+            boxed(40.0, 64.0, 40.0, 2.0),
+            boxed(39.0, 64.0, 39.0, 4.0),
+        ] {
+            assert_eq!(
+                grid.candidates(q, &mut got),
+                fresh.candidates(q, &mut expected)
+            );
+            assert_eq!(got, expected);
+        }
     }
 }

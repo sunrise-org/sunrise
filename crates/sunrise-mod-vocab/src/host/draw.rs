@@ -159,7 +159,9 @@ pub trait DrawContext {
     /// a clock the scene owns, kept per calling mod and clock id. A scene of blocks
     /// alone keeps no state. Refused by name ([`SceneError`]): over a cap (16
     /// entities, 512 live particles, 4 animating scenes a frame), an entity
-    /// `entity` would refuse, or input that isn't drawable.
+    /// `entity` would refuse, or input that isn't drawable. A nonpositive or nonfinite scale
+    /// is `BadView` before anything else happens: it keeps no scene, advances no clock and
+    /// spends none of the frame's animation budget.
     /// API @API:scenes_in_screens@.
     fn draw_scene(
         &mut self,

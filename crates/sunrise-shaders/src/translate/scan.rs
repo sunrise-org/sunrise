@@ -152,6 +152,8 @@ const IMAGE_FORMATS: [&str; 39] = [
 ];
 
 pub(super) const STORAGE: [&str; 5] = ["uniform", "in", "out", "attribute", "varying"];
+pub(super) const MEMORY_QUALIFIERS: [&str; 5] =
+    ["readonly", "writeonly", "coherent", "volatile", "restrict"];
 pub(super) const QUALIFIERS: [&str; 11] = [
     "flat",
     "smooth",
@@ -165,6 +167,47 @@ pub(super) const QUALIFIERS: [&str; 11] = [
     "sample",
     "const",
 ];
+
+/// Steps past a declaration's leading qualifiers (`layout(...)`, storage including `buffer`,
+/// memory, interpolation, precision and `const`), stopping at the first non-qualifier token
+/// (type, block name, `{`, `;`, or end). Never enters a block body or parameter list.
+/// Returns `(storage, next)`.
+pub(super) fn declaration_prefix(words: &[&str]) -> (Option<&'static str>, usize) {
+    let mut storage = None;
+    let mut k = 0;
+    while let Some(&w) = words.get(k) {
+        if w == "layout" {
+            let mut j = k + 1;
+            if words.get(j) == Some(&"(") {
+                let mut depth = 0usize;
+                while let Some(&t) = words.get(j) {
+                    j += 1;
+                    match t {
+                        "(" => depth += 1,
+                        ")" => {
+                            depth -= 1;
+                            if depth == 0 {
+                                break;
+                            }
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            k = j;
+            continue;
+        }
+        if let Some(&s) = STORAGE.iter().find(|&&s| s == w) {
+            storage = Some(s);
+        } else if w == "buffer" {
+            storage = Some("buffer");
+        } else if !QUALIFIERS.contains(&w) && !MEMORY_QUALIFIERS.contains(&w) {
+            break;
+        }
+        k += 1;
+    }
+    (storage, k)
+}
 /// The compatibility profile's uniform state (with its `Inverse`/`Transpose` forms).
 pub(super) const UNIFORM_STATE: [&str; 5] = [
     "gl_ModelViewMatrix",

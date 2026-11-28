@@ -43,7 +43,7 @@ pub(in crate::game) fn tick_riding(
     {
         let player_from = player.position;
         game.common.previous_position = player.position;
-        player.position = Vec3::new(cart.position.x, cart.position.y + SEAT, cart.position.z);
+        player.position = player_cart_seat(cart.position);
         player.velocity = Vec3::ZERO;
         player.fall_distance = 0.0;
         player_step = Some((player_from, player.position));

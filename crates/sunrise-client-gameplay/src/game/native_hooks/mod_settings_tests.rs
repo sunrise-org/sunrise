@@ -45,6 +45,10 @@ impl Hooks for RegisteredMod {
             r.register_setting(SettingSpec::toggle("on", "test.on", false))
                 .unwrap(),
         );
+        let _ = self.choice.set(
+            r.register_setting(SettingSpec::choice("mode", "test.mode", ["a", "b", "c"], 0))
+                .unwrap(),
+        );
         let _ = self.range.set(
             r.register_setting(SettingSpec::range(
                 "scale",
@@ -56,10 +60,7 @@ impl Hooks for RegisteredMod {
             ))
             .unwrap(),
         );
-        let _ = self.choice.set(
-            r.register_setting(SettingSpec::choice("mode", "test.mode", ["a", "b", "c"], 0))
-                .unwrap(),
-        );
+        r.show_setting_when_choice("scale", "mode", 1).unwrap();
         let _ = self.color.set(
             r.register_setting(SettingSpec::color("tint", "test.tint", 0x11_2233))
                 .unwrap(),
@@ -154,16 +155,42 @@ fn single_owner_reads_writes_reloads_exact_f64_and_contains_callback_panics() {
                         tooltip: None,
                         value: NativeSettingValue::Toggle(false),
                         category: None,
+                        visible_when: None,
                     }],
                     ..Default::default()
                 }),
             }];
-            fn ui_row<'a>(game: &'a mut crate::game::ClientGame<'_>) -> &'a mut NativeSettingValue {
+            fn ui_setting_index(game: &crate::game::ClientGame<'_>, key: &str) -> usize {
+                game.client.settings.mods.installed[0]
+                    .native
+                    .as_ref()
+                    .unwrap()
+                    .settings
+                    .iter()
+                    .position(|setting| setting.key == key)
+                    .unwrap()
+            }
+            fn ui_row<'a>(
+                game: &'a crate::game::ClientGame<'_>,
+                key: &str,
+            ) -> &'a NativeSettingValue {
+                &game.client.settings.mods.installed[0]
+                    .native
+                    .as_ref()
+                    .unwrap()
+                    .settings[ui_setting_index(game, key)]
+                .value
+            }
+            fn ui_row_mut<'a>(
+                game: &'a mut crate::game::ClientGame<'_>,
+                key: &str,
+            ) -> &'a mut NativeSettingValue {
+                let index = ui_setting_index(game, key);
                 &mut game.client.settings.mods.installed[0]
                     .native
                     .as_mut()
                     .unwrap()
-                    .settings[0]
+                    .settings[index]
                     .value
             }
             // First capture establishes the persisted baseline without notifying.
@@ -175,12 +202,30 @@ fn single_owner_reads_writes_reloads_exact_f64_and_contains_callback_panics() {
             );
             game.common.loop_context = Arc::new(load.captured_loop_context(LoopSide::Client));
             game.sync_native_settings_from_loop_context();
-            assert_eq!(*ui_row(game), NativeSettingValue::Toggle(true));
+            let registered_settings = game.native_page_settings("alpha");
+            game.client.settings.mods.installed[0]
+                .native
+                .as_mut()
+                .unwrap()
+                .settings = registered_settings;
+            assert_eq!(*ui_row(game, "on"), NativeSettingValue::Toggle(true));
             assert_eq!(game.setting_bool(alpha_on), Ok(true));
             assert_eq!(game.setting_f64(alpha_scale), Ok(0.0));
             assert_eq!(game.setting_choice(alpha_mode), Ok(0));
             assert_eq!(game.setting_color(alpha_tint), Ok(0x11_2233));
             assert_eq!(game.setting_bool(beta_on), Ok(true));
+            let registered_page = game.native_page_settings("alpha");
+            let registered_scale = registered_page
+                .iter()
+                .find(|setting| setting.key == "scale")
+                .unwrap();
+            assert_eq!(
+                registered_scale.visible_when,
+                Some(sunrise_client::mod_list::SettingVisibility {
+                    choice_setting: "mode".into(),
+                    choice_index: 1,
+                })
+            );
             assert!(alpha_seen.lock().unwrap().is_empty());
 
             // Unknown key and wrong-kind reads return typed errors.
@@ -191,8 +236,9 @@ fn single_owner_reads_writes_reloads_exact_f64_and_contains_callback_panics() {
             );
 
             // Options > Mods sends its clicked row through the same persist-and-notify path.
-            ui_row(game).click();
-            game.native_setting_event(0, 0);
+            ui_row_mut(game, "on").click();
+            let on_index = ui_setting_index(game, "on");
+            game.native_setting_event(0, on_index);
             assert_eq!(game.setting_bool(alpha_on), Ok(false));
             let on_file = root.join("alpha/on");
             assert_eq!(fs::read_to_string(&on_file).unwrap(), "false");
@@ -206,9 +252,10 @@ fn single_owner_reads_writes_reloads_exact_f64_and_contains_callback_panics() {
             // also leaves the value and notification count alone.
             fs::remove_file(&on_file).unwrap();
             fs::create_dir(&on_file).unwrap();
-            ui_row(game).click();
-            game.native_setting_event(0, 0);
-            assert_eq!(*ui_row(game), NativeSettingValue::Toggle(false));
+            ui_row_mut(game, "on").click();
+            let on_index = ui_setting_index(game, "on");
+            game.native_setting_event(0, on_index);
+            assert_eq!(*ui_row(game, "on"), NativeSettingValue::Toggle(false));
             assert_eq!(game.setting_bool(alpha_on), Ok(false));
             fs::remove_dir(&on_file).unwrap();
             fs::write(&on_file, "false").unwrap();
@@ -227,6 +274,11 @@ fn single_owner_reads_writes_reloads_exact_f64_and_contains_callback_panics() {
                 game.setting_f64(alpha_scale).unwrap().to_bits(),
                 (-0.0f64).to_bits()
             );
+            assert!(matches!(
+                ui_row(game, "scale"),
+                NativeSettingValue::Range { value, .. }
+                    if value.to_bits() == (-0.0f64).to_bits()
+            ));
             assert_eq!(alpha_seen.lock().unwrap().len(), 2);
 
             // Invalid kind or out-of-range write refuses without changing live state.
@@ -267,6 +319,59 @@ fn single_owner_reads_writes_reloads_exact_f64_and_contains_callback_panics() {
                     ("mode".to_owned(), SettingValue::Choice(1)),
                 ]
             );
+
+            // A non-default dependent value survives an Options close/reopen while its
+            // controlling choice keeps the row hidden, then remains available when shown.
+            assert_eq!(
+                game.set_setting(alpha_scale, SettingValue::Range(0.5)),
+                Ok(true)
+            );
+            assert_eq!(
+                game.set_setting(alpha_mode, SettingValue::Choice(0)),
+                Ok(true)
+            );
+            let reopen = LoadContext::new_with_registered(
+                DataLoadOrigin::ClientPreload,
+                Arc::new(LoadInputs::new(BTreeMap::new(), root.clone())),
+                [],
+                registered_setting_keys(),
+            );
+            game.common.loop_context = Arc::new(reopen.captured_loop_context(LoopSide::Client));
+            game.sync_native_settings_from_loop_context();
+            assert_eq!(game.setting_choice(alpha_mode), Ok(0));
+            assert_eq!(game.setting_f64(alpha_scale), Ok(0.5));
+            let reopened_page = game.native_page_settings("alpha");
+            let reopened_mode = reopened_page
+                .iter()
+                .find(|setting| setting.key == "mode")
+                .unwrap();
+            assert!(matches!(
+                &reopened_mode.value,
+                NativeSettingValue::Choice { index: 0, .. }
+            ));
+            let reopened_scale = reopened_page
+                .iter()
+                .find(|setting| setting.key == "scale")
+                .unwrap();
+            assert_eq!(
+                reopened_scale.value,
+                NativeSettingValue::Range {
+                    min: -2.0,
+                    max: 2.0,
+                    step: 0.5,
+                    value: 0.5,
+                }
+            );
+            assert_eq!(
+                game.set_setting(alpha_mode, SettingValue::Choice(1)),
+                Ok(true)
+            );
+            let shown_scale = game
+                .native_page_settings("alpha")
+                .into_iter()
+                .find(|setting| setting.key == "scale")
+                .unwrap();
+            assert_eq!(shown_scale.value, reopened_scale.value);
 
             // A single-owner page refresh notifies the same way.
             alpha_seen.lock().unwrap().clear();
@@ -310,7 +415,7 @@ fn single_owner_reads_writes_reloads_exact_f64_and_contains_callback_panics() {
                 game.set_setting(alpha_on, SettingValue::Toggle(true)),
                 Ok(true)
             );
-            assert_eq!(*ui_row(game), NativeSettingValue::Toggle(true));
+            assert_eq!(*ui_row(game, "on"), NativeSettingValue::Toggle(true));
             assert_eq!(alpha_seen.lock().unwrap().len(), seen_before_panic);
             assert_eq!(
                 game.set_setting(beta_on, SettingValue::Toggle(false)),

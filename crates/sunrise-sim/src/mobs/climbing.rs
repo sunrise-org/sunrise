@@ -1,9 +1,12 @@
 //! `LivingEntity.onClimbable` for mobs: the block a mob stands in, and the mods' say on whether it
 //! is a ladder (`native_is_ladder`) and on whether the block under an open trapdoor makes the
 //! trapdoor one (`native_makes_open_trapdoor_above_climbable`).
+use crate::blocks::BlockFacts;
 use crate::items::BlockTagFlags;
 use crate::mobs::{Mob, MobWorld};
+use crate::world::World;
 use sunrise_core::position::BlockPos;
+use sunrise_world::registry::BlockRegistry;
 
 impl Mob {
     /// `LivingEntity.onClimbable` (`Spider.onClimbable`: the climbing flag):
@@ -14,6 +17,25 @@ impl Mob {
     /// `#minecraft:can_glide_through` block (vines) is not on it: that test
     /// comes first.
     pub fn on_climbable(&self, w: &MobWorld) -> bool {
+        self.on_climbable_in(
+            w.world,
+            w.registry,
+            w.facts,
+            w.block_tag_flags,
+            w.loop_context,
+        )
+    }
+
+    /// [`Self::on_climbable`] reading only the world and block tables so callers
+    /// can refresh `on_climbable` in place without building a full [`MobWorld`].
+    pub fn on_climbable_in(
+        &self,
+        world: &World,
+        registry: &BlockRegistry,
+        facts_table: &BlockFacts,
+        block_tag_flags: &[u16],
+        loop_context: &sunrise_world::native_load_context::LoopContext,
+    ) -> bool {
         if self.kind.flags.climber {
             return self.climbing;
         }
@@ -37,15 +59,15 @@ impl Mob {
             self.position.y.floor() as i32,
             self.position.z.floor() as i32,
         );
-        let state = w.world.block(x, y, z);
-        let facts = w.facts.get(state);
-        if self.extra.fall_flying && w.state_flag(state, BlockTagFlags::CAN_GLIDE_THROUGH) {
+        let state = world.block(x, y, z);
+        let tag_bits = block_tag_flags.get(state.0 as usize).copied().unwrap_or(0);
+        if self.extra.fall_flying && tag_bits & BlockTagFlags::CAN_GLIDE_THROUGH != 0 {
             return false;
         }
         // `IBlockExtension.isLadder`: the block's parts answer after the tag.
-        let mut ladder = w.state_flag(state, BlockTagFlags::CLIMBABLE);
+        let mut ladder = tag_bits & BlockTagFlags::CLIMBABLE != 0;
         crate::motion::native_is_ladder(
-            w.loop_context,
+            loop_context,
             self.id,
             BlockPos::new(x, y, z),
             state,
@@ -54,16 +76,27 @@ impl Mob {
         if ladder {
             return true;
         }
-        if !facts.has_class("TrapDoorBlock") || w.prop(x, y, z, "open") != Some("true") {
+        if facts_table.is_air(state) {
+            return false;
+        }
+        let facts = facts_table.get(state);
+        let prop = |id, key| {
+            registry
+                .state(id)
+                .and_then(|s| s.properties.get(key))
+                .map(String::as_str)
+        };
+        if !facts.has_class("TrapDoorBlock") || prop(state, "open") != Some("true") {
             return false;
         }
         // `IBlockExtension.makesOpenTrapdoorAboveClimbable`: the parts of the block below answer
         // after vanilla's ladder test.
-        let mut climbable = w.block_name(x, y - 1, z) == "minecraft:ladder"
-            && w.prop(x, y - 1, z, "facing") == w.prop(x, y, z, "facing");
+        let below = world.block(x, y - 1, z);
+        let mut climbable = &*facts_table.get(below).name == "minecraft:ladder"
+            && prop(below, "facing") == prop(state, "facing");
         crate::motion::ladder::native_makes_open_trapdoor_above_climbable(
-            w.loop_context,
-            w.world.block(x, y - 1, z),
+            loop_context,
+            below,
             BlockPos::new(x, y - 1, z),
             state,
             &mut climbable,

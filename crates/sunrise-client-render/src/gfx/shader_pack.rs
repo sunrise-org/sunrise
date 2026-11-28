@@ -377,6 +377,7 @@ impl Renderer {
         // A pack is not the game's code: a panic building it turns the pack off (#3525).
         let thread = std::thread::Builder::new()
             .name("Shader pack".into())
+            .stack_size(sunrise_threads::GAME_THREAD_STACK_BYTES)
             .spawn(move || {
                 #[cfg(feature = "test-support")]
                 let _running = running;
