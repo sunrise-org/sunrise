@@ -1,0 +1,2 @@
+sunrise-gameplay game::lan_actions::menu_still_valid_tests::acting_guest_container_validity_uses_the_loaned_block_reach lib daily resources
+sunrise-gameplay game::lan_actions::menu_still_valid_tests::acting_guest_mod_menu_validity_uses_the_live_opening_hand_and_eye lib daily resources

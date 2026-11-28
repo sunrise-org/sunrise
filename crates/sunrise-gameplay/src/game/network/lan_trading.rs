@@ -698,7 +698,7 @@ impl crate::game::ServerGame<'_> {
                         m.species(),
                         &m.extra.profession,
                     )
-                    && guest_within_entity_range(g, &m.bounds(), 4.0)
+                    && guest_within_entity_range(&self.live_guest_view(g), &m.bounds(), 4.0)
             })
     }
 

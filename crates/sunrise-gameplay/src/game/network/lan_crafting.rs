@@ -1964,7 +1964,9 @@ impl crate::game::ServerGame<'_> {
             .get(self.common.world.block(pos[0], pos[1], pos[2]))
             .name;
         &**name == "minecraft:crafting_table"
-            && g.within_interaction_range(&self.common.loop_context, pos, 4.0)
+            && self
+                .live_guest_view(g)
+                .within_interaction_range(&self.common.loop_context, pos, 4.0)
     }
 
     /// Guest `gi`'s open window `container` when it is a mod menu type with a

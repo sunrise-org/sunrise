@@ -1,0 +1,1 @@
+During a remote player's server turn, `menu_still_valid` receives that player's live eye position and opening-hand match. The menu's initial reach check uses the player's live body and block interaction range attribute. The hook contract is unchanged.

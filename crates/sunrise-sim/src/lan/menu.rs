@@ -5,7 +5,7 @@
 //! menu are returned for the game to drop.
 #[path = "menu/backing.rs"]
 mod backing;
-use super::guest::Guest;
+use super::guest::{Guest, LiveGuestView};
 use crate::menu::linked::{linked_stacks, shown};
 pub use crate::menu::{LinkedSlots, linked_slot_count};
 use crate::{
@@ -244,8 +244,18 @@ impl Menu {
     /// Vanilla menu types, vehicles and menus without an answering part are
     /// not asked. A menu whose backing block entities are gone closes without asking.
     pub fn still_valid(&self, context: &LoopContext, world: &World, guest: &Guest) -> bool {
+        self.still_valid_for(context, world, &LiveGuestView::from_guest(guest))
+    }
+
+    /// Check this menu with the guest's current body and hands, even when on loan.
+    pub fn still_valid_for(
+        &self,
+        context: &LoopContext,
+        world: &World,
+        guest: &LiveGuestView<'_>,
+    ) -> bool {
         if !self.asks_still_valid {
-            return self.slots.still_valid(context, world, guest, self.pos);
+            return self.slots.still_valid_for(context, world, guest, self.pos);
         }
         let block = match self.slots {
             Slots::Block(k) | Slots::Double(k, _) => Some(k),
@@ -253,16 +263,16 @@ impl Menu {
             Slots::Native => None,
         };
         if block.is_some_and(|(_, y, _)| y == VEHICLE_KEY_Y) {
-            return self.slots.still_valid(context, world, guest, self.pos);
+            return self.slots.still_valid_for(context, world, guest, self.pos);
         }
         if !self.slots.valid(world) {
             return false;
         }
-        let mut valid = self.slots.in_reach(context, guest, self.pos);
+        let mut valid = self.slots.in_reach_for(context, guest, self.pos);
         let opening_item = self.opening_item.as_ref().map(|(hand, opening)| {
             let stack = match hand {
-                Hand::Main => guest.inventory.get(guest.selected).and_then(Option::as_ref),
-                Hand::Off => guest.offhand.as_ref(),
+                Hand::Main => guest.main_hand(),
+                Hand::Off => guest.off_hand(),
             };
             let stack_matches = stack
                 .zip(opening.as_ref())
@@ -501,12 +511,28 @@ impl Slots {
         guest: &Guest,
         at: Option<(i32, i32, i32)>,
     ) -> bool {
-        self.valid(world) && self.in_reach(context, guest, at)
+        self.still_valid_for(context, world, &LiveGuestView::from_guest(guest), at)
+    }
+
+    /// Check backing storage and reach with the guest's current body.
+    pub fn still_valid_for(
+        self,
+        context: &LoopContext,
+        world: &World,
+        guest: &LiveGuestView<'_>,
+        at: Option<(i32, i32, i32)>,
+    ) -> bool {
+        self.valid(world) && self.in_reach_for(context, guest, at)
     }
     /// The reach half of `still_valid`: the guest is within its block
     /// interaction range plus 4 of each block behind the slots, as a mod's
     /// `block_interaction_range` may answer.
-    fn in_reach(self, context: &LoopContext, guest: &Guest, at: Option<(i32, i32, i32)>) -> bool {
+    fn in_reach_for(
+        self,
+        context: &LoopContext,
+        guest: &LiveGuestView<'_>,
+        at: Option<(i32, i32, i32)>,
+    ) -> bool {
         let ender_chest = if self == Slots::Ender { at } else { None };
         // A vehicle's container is kept under a key, not a block: the game
         // checks its reach to the vehicle (`isChestVehicleStillValid`).

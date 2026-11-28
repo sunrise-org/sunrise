@@ -9,6 +9,8 @@ impl crate::game::ServerGame<'_> {
             .mobs
             .iter()
             .find(|m| m.id == mob)
-            .is_some_and(|m| m.alive() && guest_within_entity_range(g, &m.bounds(), 4.0))
+            .is_some_and(|m| {
+                m.alive() && guest_within_entity_range(&self.live_guest_view(g), &m.bounds(), 4.0)
+            })
     }
 }
