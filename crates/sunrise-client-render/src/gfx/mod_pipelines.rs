@@ -987,6 +987,83 @@ struct Compiled {
     oit: Option<CompiledOit>,
 }
 
+/// Load-time state of one registered pipeline slot: either compiled eagerly against
+/// [`VariantTarget::World`], or kept source-only when its fragment output cannot target the
+/// world's 4-component float colour attachment (e.g. `out float` for `R32Float` offscreen
+/// targets, integer outputs, or depth-only shaders).
+enum PipelineSlot {
+    World(Compiled),
+    OffscreenOnly(Arc<PipelineSource>),
+}
+
+impl PipelineSlot {
+    fn world(&self) -> Option<&Compiled> {
+        match self {
+            Self::World(compiled) => Some(compiled),
+            Self::OffscreenOnly(_) => None,
+        }
+    }
+
+    fn world_mut(&mut self) -> Option<&mut Compiled> {
+        match self {
+            Self::World(compiled) => Some(compiled),
+            Self::OffscreenOnly(_) => None,
+        }
+    }
+
+    fn source(&self) -> &Arc<PipelineSource> {
+        match self {
+            Self::World(compiled) => &compiled.source,
+            Self::OffscreenOnly(source) => source,
+        }
+    }
+}
+
+/// Checks whether `built` can compile against the single 4-component float world colour
+/// attachment (`VariantTarget::World`), refusing modules that have no fragment entry point
+/// immediately.
+///
+/// Pipelines whose fragment shader outputs a non-`vec4` type at `location = 0` (such as
+/// `out float` for `R32Float` offscreen targets or integer targets) or omits `location = 0`
+/// altogether (depth-only / storage-only offscreen passes) return `Ok(false)` unless
+/// `color_targets[0]` explicitly disables it (`None`). They stay [`PipelineSlot::OffscreenOnly`]
+/// at load time and compile lazily for each [`VariantTarget::Offscreen`] pass that draws them.
+fn can_target_world_color(built: &Built) -> Result<bool, BuildError> {
+    let module = &built.program.fragment;
+    let Some(ep) = module
+        .entry_points
+        .iter()
+        .find(|e| e.stage == naga::ShaderStage::Fragment)
+    else {
+        return Err("fragment shader has no fragment entry point".into());
+    };
+    if !built.color_targets.is_empty() && built.color_targets[0].is_none() {
+        return Ok(true);
+    }
+    let is_vec4_f32 = |ty: naga::Handle<naga::Type>| {
+        matches!(
+            module.types[ty].inner,
+            naga::TypeInner::Vector {
+                size: naga::VectorSize::Quad,
+                scalar: naga::Scalar::F32,
+            }
+        )
+    };
+    let Some(res) = ep.function.result.as_ref() else {
+        return Ok(false);
+    };
+    if let Some(naga::Binding::Location { location: 0, .. }) = res.binding {
+        return Ok(is_vec4_f32(res.ty));
+    }
+    if let naga::TypeInner::Struct { ref members, .. } = module.types[res.ty].inner {
+        return Ok(members.iter().any(|m| {
+            matches!(m.binding, Some(naga::Binding::Location { location: 0, .. }))
+                && is_vec4_f32(m.ty)
+        }));
+    }
+    Ok(false)
+}
+
 /// The target part of the lazy variant key. A pack's format and write mask are distinct from
 /// the world target's reversed Z and the offscreen target's declared attachments.
 #[derive(Clone, Debug, PartialEq, Eq, Hash)]
@@ -1084,8 +1161,9 @@ pub struct ModPipelines {
     fan_indices: FanIndices,
     /// The load `pipelines` was built from; 0 before any.
     generation: u64,
-    /// Load-time world pipelines by slot, `None` for an optional/refused registration.
-    pipelines: Vec<Option<Compiled>>,
+    /// Load-time pipelines by slot: compiled world pipeline, source-only offscreen pipeline, or
+    /// `None` for an optional/refused registration.
+    pipelines: Vec<Option<PipelineSlot>>,
     /// The lazy table for all target and sampler variants of this load.
     variants: DrawVariants,
     warned_variants: HashSet<usize>,
@@ -1493,13 +1571,13 @@ fn build_set1_layout(
 
 /// A world pipeline with the submitted sampler layout.
 fn compiled_in<'a>(
-    pipelines: &'a [Option<Compiled>],
+    pipelines: &'a [Option<PipelineSlot>],
     variants: &'a DrawVariants,
     slot: usize,
     sampler_layout: &SamplerLayout,
 ) -> Option<&'a Compiled> {
     if sampler_layout.is_empty() {
-        pipelines.get(slot)?.as_ref()
+        pipelines.get(slot)?.as_ref()?.world()
     } else {
         variants
             .get(&(slot, sampler_layout.clone(), VariantTarget::World))?
@@ -1509,12 +1587,12 @@ fn compiled_in<'a>(
 }
 
 fn compiled_mut_in<'a>(
-    pipelines: &'a mut [Option<Compiled>],
+    pipelines: &'a mut [Option<PipelineSlot>],
     variants: &'a mut DrawVariants,
     key: &VariantKey,
 ) -> Option<&'a mut Compiled> {
     if key.1.is_empty() {
-        pipelines.get_mut(key.0)?.as_mut()
+        pipelines.get_mut(key.0)?.as_mut()?.world_mut()
     } else {
         variants.get_mut(key)?.as_mut().ok()
     }
@@ -2344,25 +2422,33 @@ impl ModPipelines {
         let (slot, sampler_layout, target) = key;
         let slot = *slot;
         let base_world = sampler_layout.is_empty() && matches!(target, VariantTarget::World);
-        if !base_world && let Some(compiled) = self.variants.get(key) {
-            return compiled.as_ref().map(|_| ()).map_err(|error| *error);
-        }
-        let base = self.pipelines.get(slot).and_then(Option::as_ref).ok_or(
-            PipelineDrawError::Pipeline(mod_api::RenderPipelineError::Invalid),
-        )?;
-        if base_world {
+        if base_world
+            && self
+                .pipelines
+                .get(slot)
+                .and_then(Option::as_ref)
+                .and_then(PipelineSlot::world)
+                .is_some()
+        {
             return Ok(());
         }
+        if let Some(compiled) = self.variants.get(key) {
+            return compiled.as_ref().map(|_| ()).map_err(|error| *error);
+        }
+        let entry = self.pipelines.get(slot).and_then(Option::as_ref).ok_or(
+            PipelineDrawError::Pipeline(mod_api::RenderPipelineError::Invalid),
+        )?;
+        let source = entry.source().clone();
         let shared = match target {
             VariantTarget::Pack(..) => Some(
                 compiled_in(&self.pipelines, &self.variants, slot, sampler_layout)
                     .ok_or(PipelineDrawError::VariantBuildFailed)?,
             ),
-            _ if sampler_layout.is_empty() => Some(base),
+            _ if sampler_layout.is_empty() => entry.world(),
             _ => None,
         };
-        let id = base.source.recipe.id.clone();
-        let result = self.compile(device, base.source.clone(), target, sampler_layout, shared).map_err(|cause| {
+        let id = source.recipe.id.clone();
+        let result = self.compile(device, source, target, sampler_layout, shared).map_err(|cause| {
             let error = PipelineDrawError::VariantBuildFailed;
             if self.warned_variants.insert(slot) {
                 log::warn!("Sunrise: mod pipeline {id} {error:?} ({target:?}, nearest sampler ordinals {:?}): {cause}", sampler_layout.ordinals());
@@ -2490,6 +2576,28 @@ impl ModPipelines {
         }
     }
 
+    fn validate_offscreen_only_source(
+        device: &wgpu::Device,
+        built: &Built,
+    ) -> Result<(), BuildError> {
+        if built.state.polygon == PolygonMode::Line
+            && !device
+                .features()
+                .contains(wgpu::Features::POLYGON_MODE_LINE)
+        {
+            return Err("PolygonMode::Line requires the POLYGON_MODE_LINE device feature".into());
+        }
+        let validation = device.push_error_scope(wgpu::ErrorFilter::Validation);
+        let internal = device.push_error_scope(wgpu::ErrorFilter::Internal);
+        let layout = build_set1_layout(device, built, &SamplerLayout::EMPTY);
+        let internal = pollster::block_on(internal.pop());
+        let validation = pollster::block_on(validation.pop());
+        if let Some(error) = internal.or(validation) {
+            return Err(error.to_string().into());
+        }
+        layout.map(|_| ()).map_err(BuildError::from)
+    }
+
     /// Builds the pipelines of `set` unless they are built already. A required pipeline the GPU
     /// refuses is the error, by id, and leaves this renderer and `set` as they were; an optional
     /// one is logged once, draws nothing and resolves invalid.
@@ -2502,6 +2610,10 @@ impl ModPipelines {
     ) -> Result<(), String> {
         self.build_with(set, |this, built| {
             let source = this.pipeline_source(device, built, textures)?;
+            if !can_target_world_color(built)? {
+                Self::validate_offscreen_only_source(device, built)?;
+                return Ok(PipelineSlot::OffscreenOnly(source));
+            }
             this.compile(
                 device,
                 source,
@@ -2509,6 +2621,7 @@ impl ModPipelines {
                 &SamplerLayout::EMPTY,
                 None,
             )
+            .map(PipelineSlot::World)
             .map_err(BuildError::from)
         })?;
         self.compute.build(device, set.compute());
@@ -2518,7 +2631,7 @@ impl ModPipelines {
     fn build_with(
         &mut self,
         set: &Pipelines,
-        compile: impl Fn(&Self, &Arc<Built>) -> Result<Compiled, BuildError>,
+        compile: impl Fn(&Self, &Arc<Built>) -> Result<PipelineSlot, BuildError>,
     ) -> Result<(), String> {
         if set.generation() == self.generation {
             return Ok(());
@@ -2574,7 +2687,7 @@ impl ModPipelines {
         self.pipelines
             .iter()
             .map(|slot| {
-                let c = slot.as_ref()?;
+                let c = slot.as_ref()?.world()?;
                 Some(sunrise_render_shaderpack::pack_post::ModPipelineLayouts {
                     buffers: c
                         .source
@@ -2609,11 +2722,17 @@ impl ModPipelines {
         let Some(samples) = samples else {
             return;
         };
-        for compiled in self.pipelines.iter_mut().flatten().chain(
-            self.variants
-                .values_mut()
-                .filter_map(|entry| entry.as_mut().ok()),
-        ) {
+        for compiled in self
+            .pipelines
+            .iter_mut()
+            .flatten()
+            .filter_map(PipelineSlot::world_mut)
+            .chain(
+                self.variants
+                    .values_mut()
+                    .filter_map(|entry| entry.as_mut().ok()),
+            )
+        {
             let Some(oit) = compiled.oit.as_mut() else {
                 continue;
             };
@@ -2876,7 +2995,12 @@ impl ModPipelines {
             if quads.end as usize * 4 > batch.vertices.len() {
                 continue;
             }
-            let Some(Some(compiled)) = self.pipelines.get_mut(run.slot as usize) else {
+            let Some(compiled) = self
+                .pipelines
+                .get_mut(run.slot as usize)
+                .and_then(Option::as_mut)
+                .and_then(PipelineSlot::world_mut)
+            else {
                 continue;
             };
             let variant = match batch.modifiers {
@@ -2911,7 +3035,12 @@ impl ModPipelines {
             if quads.end as usize * 4 > batch.oit_vertices.len() || run.stage >= 3 {
                 continue;
             }
-            let Some(Some(compiled)) = self.pipelines.get_mut(run.slot as usize) else {
+            let Some(compiled) = self
+                .pipelines
+                .get_mut(run.slot as usize)
+                .and_then(Option::as_mut)
+                .and_then(PipelineSlot::world_mut)
+            else {
                 continue;
             };
             if compiled.oit.is_none() {
@@ -3212,12 +3341,12 @@ impl ModPipelines {
     pub fn offscreen_needed_quads(&self, draws: &[PipelineDraw]) -> u32 {
         let mut max_quads = 0u32;
         for cmd in draws {
-            let Some(Some(compiled)) = self.pipelines.get(cmd.slot as usize) else {
+            let Some(Some(entry)) = self.pipelines.get(cmd.slot as usize) else {
                 continue;
             };
             if let DrawRange::Vertices(ref range) = cmd.draw.range
                 && matches!(
-                    compiled.source.recipe.state.topology,
+                    entry.source().recipe.state.topology,
                     PrimitiveTopology::Quads | PrimitiveTopology::Lines
                 )
             {
@@ -3988,7 +4117,7 @@ impl ModPipelines {
 
     /// Slot's frame-uniform group for a shader pack's target.
     fn pack_globals(&self, slot: usize) -> Option<wgpu::BindGroup> {
-        let compiled = self.pipelines.get(slot)?.as_ref()?;
+        let compiled = self.pipelines.get(slot)?.as_ref()?.world()?;
         Some(
             compiled
                 .source
@@ -5321,7 +5450,12 @@ impl ModPipelines {
     ) {
         let mut index_bound = false;
         for run in runs {
-            let Some(Some(compiled)) = self.pipelines.get(run.slot) else {
+            let Some(compiled) = self
+                .pipelines
+                .get(run.slot)
+                .and_then(Option::as_ref)
+                .and_then(PipelineSlot::world)
+            else {
                 continue;
             };
             let Some(oit) = &compiled.oit else {
@@ -5375,7 +5509,11 @@ impl ModPipelines {
                     .variants
                     .get(&(run.slot, SamplerLayout::EMPTY, target.clone()))
                     .and_then(|entry| entry.as_ref().ok()),
-                None => self.pipelines.get(run.slot).and_then(Option::as_ref),
+                None => self
+                    .pipelines
+                    .get(run.slot)
+                    .and_then(Option::as_ref)
+                    .and_then(PipelineSlot::world),
             };
             let Some(compiled) = compiled else { continue };
             if compiled.source.recipe.state.depth_stencil.is_none() {
@@ -6257,7 +6395,7 @@ void main() {
             primitives.pipelines.pipelines[0]
                 .as_ref()
                 .unwrap()
-                .source
+                .source()
                 .sprite
                 .is_some()
         );
@@ -6265,7 +6403,7 @@ void main() {
             !primitives.pipelines.pipelines[3]
                 .as_ref()
                 .unwrap()
-                .source
+                .source()
                 .sprite
                 .is_some()
         );
@@ -6873,14 +7011,20 @@ void main() {
                 ..Default::default()
             });
             // Draw Triangles
-            let tri_c = mod_pipelines.pipelines[0].as_ref().unwrap();
+            let tri_c = mod_pipelines.pipelines[0]
+                .as_ref()
+                .and_then(PipelineSlot::world)
+                .unwrap();
             pass.set_pipeline(&tri_c.pipeline);
             pass.set_bind_group(0, &tri_c.source.group, &[]);
             pass.set_vertex_buffer(0, tri_buf.slice(..));
             pass.draw(0..3, 0..1);
 
             // Draw DebugLines
-            let line_c = mod_pipelines.pipelines[1].as_ref().unwrap();
+            let line_c = mod_pipelines.pipelines[1]
+                .as_ref()
+                .and_then(PipelineSlot::world)
+                .unwrap();
             pass.set_pipeline(&line_c.pipeline);
             pass.set_bind_group(0, &line_c.source.group, &[]);
             pass.set_vertex_buffer(0, line_buf.slice(..));
@@ -10419,6 +10563,66 @@ void main() {
             expected_linear_rgba,
             "world HDR target must match explicit GPU linear_fragment_finish decode bit-exactly"
         );
+    }
+
+    #[test]
+    fn can_target_world_color_classifies_fragment_outputs() {
+        let vec4_id = Identifier::parse("test:world_vec4").unwrap();
+        let r32f_id = Identifier::parse("test:offscreen_r32f").unwrap();
+        let depth_id = Identifier::parse("test:offscreen_depth_only").unwrap();
+        let masked_id = Identifier::parse("test:world_color_masked").unwrap();
+
+        let vec4_fsh =
+            "#version 330\nout vec4 fragColor;\nvoid main() { fragColor = vec4(1.0); }\n";
+        let r32f_fsh = "#version 330\nout float fragDepth;\nvoid main() { fragDepth = 0.5; }\n";
+        let depth_fsh = "#version 330\nvoid main() {}\n";
+
+        let make = |id: Identifier| {
+            RenderPipeline::new(
+                id.clone(),
+                id,
+                PipelineBlend::Opaque,
+                mod_api::WorldDepth::ThroughWalls,
+            )
+        };
+        let mut masked = make(masked_id);
+        masked.color_targets = vec![None];
+        let set = Pipelines::build(
+            &[make(vec4_id), make(r32f_id), make(depth_id), masked],
+            1,
+            |file| {
+                if file.ends_with(".vsh") {
+                    Ok(Some(VSH.to_owned()))
+                } else if file.contains("world_vec4") && file.ends_with(".fsh") {
+                    Ok(Some(vec4_fsh.to_owned()))
+                } else if file.contains("offscreen_r32f") && file.ends_with(".fsh") {
+                    Ok(Some(r32f_fsh.to_owned()))
+                } else if (file.contains("offscreen_depth_only")
+                    || file.contains("world_color_masked"))
+                    && file.ends_with(".fsh")
+                {
+                    Ok(Some(depth_fsh.to_owned()))
+                } else {
+                    Ok(stub_asset(file))
+                }
+            },
+        )
+        .expect("all four test pipelines must translate");
+
+        let built = |slot: usize| set.built()[slot].as_deref().unwrap();
+        assert_eq!(can_target_world_color(built(0)).ok(), Some(true));
+        assert_eq!(can_target_world_color(built(1)).ok(), Some(false));
+        assert_eq!(can_target_world_color(built(2)).ok(), Some(false));
+        assert_eq!(can_target_world_color(built(3)).ok(), Some(true));
+
+        // A broken/empty fragment module is refused immediately rather than deferred.
+        let mut broken = built(0).clone();
+        broken.program = std::sync::Arc::new(crate::core_shader::validated(
+            broken.program.vertex.clone(),
+            naga::Module::default(),
+            Vec::new(),
+        ));
+        assert!(can_target_world_color(&broken).is_err());
     }
 
     #[test]
