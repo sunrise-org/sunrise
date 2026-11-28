@@ -81,22 +81,21 @@ pub struct Installed {
     /// Loaded with `--dev-mod`: always on.
     pub dev: bool,
     /// A native mod (`game/native_hooks.rs`): built into the game, on until
-    /// the player turns it off, and its settings page.
+    /// the player turns it off, and its Config page.
     pub native: Option<NativePage>,
 }
 
-/// A native mod's generated Config page: its registered key mappings, then the settings it
-/// registered (`Registrar::register_setting`). The mappings also appear in Options > Controls.
-/// Player-chosen keys are kept in `ModList::keys`; setting values live in the mod's data folder.
+/// A native mod's generated Config page in Options > Mods: its registered key mappings, then
+/// its registered settings. Config and Options > Controls share the bindings in `ModList::keys`;
+/// setting values live in the mod's data folder.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct NativePage {
-    /// The keys the mod registers on Options > Controls and, unless it has its own Config screen,
-    /// on its generated Config page.
+    /// Registered key mappings, shown in both the generated Config page and Options > Controls.
     pub mappings: Vec<KeyMapping>,
     /// Its settings, in registration order, with the values the page shows.
     pub settings: Vec<NativeSetting>,
-    /// The mod registered its own config screen (`Registrar::register_config_screen`): Config
-    /// opens that screen instead of this generated page. Its mappings remain in Options > Controls.
+    /// The mod registered its own config screen (`Registrar::register_config_screen`). While the
+    /// mod is enabled, Config uses that screen instead; Controls still lists its mappings.
     pub own_screen: bool,
 }
 
@@ -189,7 +188,7 @@ impl NativeSettingValue {
     }
 }
 
-/// A key a native mod registers on Options > Controls, under the mod's title.
+/// A registered key mapping shown under the mod's title in Controls and on its generated Config page.
 #[derive(Clone, Debug, Default, PartialEq)]
 pub struct KeyMapping {
     /// Its id within the mod (`zoom`); its saved binding is `key.<mod id>.<id>`.

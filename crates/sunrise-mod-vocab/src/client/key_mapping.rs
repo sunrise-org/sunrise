@@ -1,4 +1,4 @@
-//! Vanilla mapping handles and the keys a native mod registers on Options > Controls.
+//! Vanilla mapping handles and native mod key registrations.
 
 use crate::{ClientModifiers, ModKeyMappingRef, VanillaKeyMappingRef};
 use std::num::NonZeroU64;
@@ -59,8 +59,11 @@ mod context_tests {
     }
 }
 
-/// A key a mod registers through `Registrar::register_key_mapping`: it is listed under the mod's name on
-/// Options > Controls, and the player's binding and reset are kept by mod id in `sunrise-mods.txt`.
+/// A key a mod registers through `Registrar::register_key_mapping`. Players can edit it under the
+/// mod's name in Options > Controls or on its generated Config page in Options > Mods. Both edit
+/// the same binding in `sunrise-mods.txt`, keyed by mod id and mapping id. An enabled mod's own
+/// screen (`Registrar::register_config_screen`) takes precedence over the generated Config page,
+/// without removing the key from Controls.
 /// Its default is `key` with `modifiers` held; shift, control and alt are bound, super is not.
 #[derive(Clone, Debug, PartialEq)]
 #[non_exhaustive]
@@ -68,7 +71,7 @@ mod context_tests {
 pub struct KeyRegistration {
     /// The key's id, unique within its mod (`zoom`).
     pub id: String,
-    /// The translation key for the label Controls shows.
+    /// The translation key for the label in Controls and generated Config.
     pub label: String,
     /// The default key (`key.keyboard.z`).
     pub key: String,
@@ -98,7 +101,7 @@ impl KeyRegistration {
         }
     }
 
-    /// Sets the label translation key Controls shows.
+    /// Sets the label translation key used in Controls and generated Config.
     pub fn label(mut self, label: &str) -> Self {
         self.label = label.to_owned();
         self

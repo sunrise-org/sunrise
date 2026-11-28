@@ -95,8 +95,13 @@ than a mapping name.
 
 ## Registered key mappings
 
-Declare each Controls binding once with `Registrar::register_key_mapping` in `Hooks::register`. In
-`client_setup`, resolve it with `host.mod_key_mapping(owner, id)` and retain the `ModKeyMappingRef`
+Declare each mapping once with `Registrar::register_key_mapping` in `Hooks::register`. Players can
+rebind or reset it in **Options > Controls**, or select the mod in **Options > Mods** and open
+its generated **Config** page. Both edit the same binding in `sunrise-mods.txt`. An enabled mod's
+[custom config screen](../mod-settings.md#your-own-config-screen) takes precedence over the
+generated page, but the mappings remain in Controls.
+
+In `client_setup`, resolve it with `host.mod_key_mapping(owner, id)` and retain the `ModKeyMappingRef`
 for later callbacks. `mapping.binding(host)` returns the current key name and modifiers as
 `(&str, ClientModifiers)`. The name is borrowed from the host; finish using it before a mutable
 host operation such as `set_binding`, or before returning from the callback. To display the binding,
@@ -111,8 +116,8 @@ a screen or overlay drops held state and pending clicks via `KeyMapping.releaseA
 `consume_click` does not add an extra screen-open suppression or clear unrelated clicks. Control-socket
 input counts like window input, and a key fires `input_key` once per press, repeat and release.
 
-A mod can change any registered mapping's binding as the player does in Controls. Call
-`mapping.set_binding(host, key, modifiers)` with a key or mouse button name (`key.keyboard.x`,
+A mod can change any registered mapping's binding, just as the player can in Controls or generated
+Config. Call `mapping.set_binding(host, key, modifiers)` with a key or mouse button name (`key.keyboard.x`,
 `key.mouse.left`, `key.keyboard.unknown` for none) and shift (1), control (2) or alt (4).
 `mapping.reset_binding(host)` restores the declared default key and modifiers. Changes take effect
 from the next input and are saved to `sunrise-mods.txt`. Any mod with a resolved handle can read,

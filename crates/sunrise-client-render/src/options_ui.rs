@@ -6114,57 +6114,15 @@ mod tests {
     }
 
     #[test]
-    fn native_mod_key_presentation_marks_conflicts_and_capture_consistently() {
-        use crate::mod_list::{Installed, KeyConflictContext, KeyMapping, NativePage};
-        let mut settings = Settings::default();
-        settings.mods.installed.push(Installed {
-            id: "sample".into(),
-            title: "Sample".into(),
-            description: String::new(),
-            problem: None,
-            dev: false,
-            native: Some(NativePage {
-                mappings: vec![KeyMapping {
-                    id: "zoom".into(),
-                    label: "key.zoom".into(),
-                    key: "key.keyboard.x".into(),
-                    context: KeyConflictContext::Universal,
-                    ..Default::default()
-                }],
-                ..Default::default()
-            }),
-        });
-        let mapping = settings.mods.installed[0].native.as_ref().unwrap().mappings[0].clone();
-        let (_, _, _, conflict) = mod_key_presentation(&settings, "sample", &mapping, false);
-        assert!(
-            !conflict.plain().starts_with("[ "),
-            "default pairs do not conflict"
-        );
-        settings
-            .mods
-            .set_binding("sample", "zoom", "key.keyboard.w", 0);
-        let (_, _, _, conflict) = mod_key_presentation(&settings, "sample", &mapping, false);
-        assert!(conflict.plain().starts_with("[ "));
-        let (_, _, _, capturing) = mod_key_presentation(&settings, "sample", &mapping, true);
-        assert!(capturing.plain().starts_with("> "));
-
-        settings
-            .mods
-            .set_binding("sample", "zoom", "key.keyboard.f24", 0);
-        let (_, _, _, clear) = mod_key_presentation(&settings, "sample", &mapping, false);
-        assert!(!clear.plain().starts_with("[ "));
-    }
-
-    #[test]
-    fn native_mod_config_keybind_can_rebind_reset_and_unbind_with_conflict_tooltip() {
-        use crate::mod_list::{Installed, KeyConflictContext, KeyMapping, NativePage};
-        use winit::keyboard::KeyCode;
+    fn native_mod_config_captures_keys_and_shows_named_conflicts() {
+        use crate::mod_list::{Installed, KeyMapping, NativePage, SHIFT};
+        use winit::{event::MouseButton, keyboard::KeyCode};
 
         let atlas = atlas();
         let mut settings = Settings::default();
-        for (id, context) in [
-            ("sample", KeyConflictContext::Universal),
-            ("other", KeyConflictContext::Universal),
+        for (id, label, key, modifiers) in [
+            ("sample", "key.sample.zoom", "key.keyboard.z", 0),
+            ("other", "key.other.inspect", "key.mouse.right", SHIFT),
         ] {
             settings.mods.installed.push(Installed {
                 id: id.into(),
@@ -6175,164 +6133,133 @@ mod tests {
                 native: Some(NativePage {
                     mappings: vec![KeyMapping {
                         id: "zoom".into(),
-                        label: "key.zoom".into(),
-                        key: if id == "sample" {
-                            "key.keyboard.z".into()
-                        } else {
-                            "key.keyboard.x".into()
-                        },
-                        context,
+                        label: label.into(),
+                        key: key.into(),
+                        modifiers,
                         ..Default::default()
                     }],
                     ..Default::default()
                 }),
             });
         }
-        let mut ui = OptionsUi::default();
-        ui.show(Page::NativeMod(0));
-        let (widgets, ..) = ui.layout(&settings, 480.0, 270.0);
-        let bind = widgets
-            .iter()
-            .find(|widget| {
-                matches!(
-                    widget.kind,
-                    WKind::Button {
-                        act: Act::ModKey(0, 0),
-                        ..
-                    }
-                )
-            })
-            .unwrap();
-        assert!(
-            tooltip_text(&settings, bind).is_none(),
-            "default key has no conflict"
+        let language = lang::Language::of(
+            "en_us",
+            [
+                ("options.generic_value", "%s: %s"),
+                ("controls.keybinds.duplicateKeybinds", "Conflicts with %s"),
+                ("key.sample.zoom", "Zoom"),
+                ("key.other.inspect", "Inspect"),
+                ("key.forward", "Forward"),
+                ("key.keyboard.left.shift", "Left Shift"),
+                ("key.mouse.right", "Right Button"),
+            ]
+            .map(|(key, value)| (key.into(), value.into())),
         );
+        lang::scoped(language, || {
+            let mut ui = OptionsUi::default();
+            ui.show(Page::NativeMod(0));
+            let bind_widget = |ui: &mut OptionsUi, settings: &Settings| {
+                let layout = ui.built_layout(settings, 480.0, 270.0);
+                layout
+                    .parts()
+                    .0
+                    .iter()
+                    .find(|widget| {
+                        matches!(
+                            widget.kind,
+                            WKind::Button {
+                                act: Act::ModKey(0, 0),
+                                ..
+                            }
+                        )
+                    })
+                    .unwrap()
+                    .clone()
+            };
+            let click_bind = |ui: &mut OptionsUi, settings: &mut Settings, widget: &Widget| {
+                assert_eq!(
+                    ui.click(
+                        settings,
+                        &atlas,
+                        widget.x + widget.w / 2.0,
+                        widget.y + widget.h / 2.0,
+                        (480.0, 270.0),
+                        [960, 540],
+                        false,
+                        false,
+                    ),
+                    [Event::ButtonClick]
+                );
+            };
+            let assert_label = |widget: &Widget, expected: &str, yellow: &str| {
+                let WKind::Button { label, .. } = &widget.kind else {
+                    panic!("expected a Config bind button");
+                };
+                assert_eq!(label.plain(), expected);
+                let highlighted: String = label
+                    .spans
+                    .iter()
+                    .filter(|span| span.style.color == Some(text::YELLOW))
+                    .map(|span| span.text.as_str())
+                    .collect();
+                assert_eq!(highlighted, yellow);
+            };
+            let bind = bind_widget(&mut ui, &settings);
+            assert_label(&bind, "Zoom: Z", "");
+            assert!(tooltip_text(&settings, &bind).is_none());
 
-        // The vanilla forward key conflicts with the universal native mapping.
-        settings
-            .mods
-            .set_binding("sample", "zoom", "key.keyboard.w", 0);
-        let (widgets, ..) = ui.layout(&settings, 480.0, 270.0);
-        let bind = widgets
-            .iter()
-            .find(|widget| {
-                matches!(
-                    widget.kind,
-                    WKind::Button {
-                        act: Act::ModKey(0, 0),
-                        ..
-                    }
-                )
-            })
-            .unwrap();
-        assert!(tooltip_text(&settings, bind).is_some());
+            click_bind(&mut ui, &mut settings, &bind);
+            let waiting = bind_widget(&mut ui, &settings);
+            assert_label(&waiting, "Zoom: > Z <", ">  <");
+            assert_eq!(
+                ui.key(&mut settings, &atlas, KeyCode::KeyW, None),
+                [Event::Changed]
+            );
+            let bind = bind_widget(&mut ui, &settings);
+            assert_label(&bind, "Zoom: [ W ]", "[  ]");
+            assert_eq!(
+                tooltip_text(&settings, &bind).unwrap().plain(),
+                "Conflicts with Forward"
+            );
 
-        // A second mod's binding also appears as a conflict tooltip.
-        settings
-            .mods
-            .set_binding("sample", "zoom", "key.keyboard.f24", 0);
-        settings
-            .mods
-            .set_binding("other", "zoom", "key.keyboard.f24", 0);
-        let (widgets, ..) = ui.layout(&settings, 480.0, 270.0);
-        let bind = widgets
-            .iter()
-            .find(|widget| {
-                matches!(
-                    widget.kind,
-                    WKind::Button {
-                        act: Act::ModKey(0, 0),
-                        ..
-                    }
-                )
-            })
-            .unwrap();
-        assert!(tooltip_text(&settings, bind).is_some());
+            click_bind(&mut ui, &mut settings, &bind);
+            ui.modifiers = SHIFT;
+            assert!(
+                ui.key(&mut settings, &atlas, KeyCode::ShiftLeft, None)
+                    .is_empty()
+            );
+            assert_eq!(
+                ui.bind_mouse(&mut settings, MouseButton::Right),
+                [Event::Changed]
+            );
+            ui.modifiers = 0;
+            assert_eq!(
+                settings
+                    .mods
+                    .binding("sample", "zoom", ("key.keyboard.z", 0)),
+                ("key.mouse.right".into(), SHIFT)
+            );
+            let bind = bind_widget(&mut ui, &settings);
+            assert_label(&bind, "Zoom: [ Left Shift + Right Button ]", "[  ]");
+            assert_eq!(
+                tooltip_text(&settings, &bind).unwrap().plain(),
+                "Conflicts with Inspect"
+            );
 
-        let x = bind.x + bind.w / 2.0;
-        let y = bind.y + bind.h / 2.0;
-        ui.click(
-            &mut settings,
-            &atlas,
-            x,
-            y,
-            (480.0, 270.0),
-            [960, 540],
-            false,
-            false,
-        );
-        ui.key(&mut settings, &atlas, KeyCode::KeyQ, None);
-        assert_eq!(
-            settings
-                .mods
-                .binding("sample", "zoom", ("key.keyboard.z", 0))
-                .0,
-            "key.keyboard.q"
-        );
-
-        // Reset restores the registered default from its own hit target.
-        let (widgets, ..) = ui.layout(&settings, 480.0, 270.0);
-        let reset = widgets
-            .iter()
-            .find(|widget| {
-                matches!(
-                    widget.kind,
-                    WKind::Button {
-                        act: Act::ResetModKey(0, 0),
-                        ..
-                    }
-                )
-            })
-            .unwrap();
-        ui.click(
-            &mut settings,
-            &atlas,
-            reset.x + reset.w / 2.0,
-            reset.y + reset.h / 2.0,
-            (480.0, 270.0),
-            [960, 540],
-            false,
-            false,
-        );
-        assert_eq!(
-            settings
-                .mods
-                .binding("sample", "zoom", ("key.keyboard.z", 0))
-                .0,
-            "key.keyboard.z"
-        );
-
-        let (widgets, ..) = ui.layout(&settings, 480.0, 270.0);
-        let bind = widgets
-            .iter()
-            .find(|widget| {
-                matches!(
-                    widget.kind,
-                    WKind::Button {
-                        act: Act::ModKey(0, 0),
-                        ..
-                    }
-                )
-            })
-            .unwrap();
-        ui.click(
-            &mut settings,
-            &atlas,
-            bind.x + bind.w / 2.0,
-            bind.y + bind.h / 2.0,
-            (480.0, 270.0),
-            [960, 540],
-            false,
-            false,
-        );
-        ui.key(&mut settings, &atlas, KeyCode::Escape, None);
-        assert_eq!(
-            settings
-                .mods
-                .binding("sample", "zoom", ("key.keyboard.z", 0))
-                .0,
-            "key.keyboard.unknown"
-        );
+            click_bind(&mut ui, &mut settings, &bind);
+            assert_eq!(
+                ui.key(&mut settings, &atlas, KeyCode::Escape, None),
+                [Event::Changed]
+            );
+            assert_eq!(
+                settings
+                    .mods
+                    .binding("sample", "zoom", ("key.keyboard.z", 0)),
+                ("key.keyboard.unknown".into(), 0)
+            );
+            let bind = bind_widget(&mut ui, &settings);
+            assert!(tooltip_text(&settings, &bind).is_none());
+        });
     }
 
     #[test]

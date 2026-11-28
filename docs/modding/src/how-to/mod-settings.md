@@ -162,8 +162,9 @@ The game never scans `sunrise-mod-data/` as settings or config.
 Register each setting from `Hooks::register` with `Registrar::register_setting(SettingSpec::…)` to receive an
 owner-bound `SettingKey`: a key (`a-z`, `0-9`, `_`, `-` and `.`, not starting with `.`), translation keys for its
 label and tooltip, and its kind with the default. A setting the spec check refuses, or a key you registered
-already, comes back as the error. On the client the settings appear on your mod's page in
-**Options > Mods**, opened from its **Config** button.
+already, comes back as the error. In **Options > Mods**, your mod's **Config** button opens its
+generated page unless an enabled custom screen takes precedence. The generated page shows
+[registered key mappings](client/input.md#registered-key-mappings) first, then registered settings.
 
 - Read a setting with `host.setting(key)` or the typed `setting_bool`, `setting_choice`, `setting_f64`
   and `setting_color` on any `Host`; each reads the live value on the side it runs. These calls take
@@ -198,9 +199,11 @@ subfolders or unsafe entries still warn during snapshots. Keep bulk files under 
 
 ### Your own config screen
 
-To show your own screen instead of the settings page, register a config screen factory from `Hooks::register`
-with `Registrar::register_config_screen(Arc::new(|host: &dyn ClientHost| true))`, as NeoForge mods register an
-`IConfigScreenFactory`. **Config** then shows for your mod even with no settings. Pressing it calls the factory:
+To show your own screen instead of the generated Config page, register a config screen factory from
+`Hooks::register` with `Registrar::register_config_screen(Arc::new(|host: &dyn ClientHost| true))`, as NeoForge
+mods register an `IConfigScreenFactory`. When your mod is enabled, **Config** shows even if it has no settings
+or key mappings. The custom screen takes precedence, and your mappings remain editable in **Options > Controls**.
+Pressing **Config** calls the factory:
 prepare what your screen shows and return `true`, and the game opens your mod's own screen (as
 [`mod_screen_open`](client/screens.md#opening-a-mod-screen-and-synchronous-transitions) does, so `screen_opening`
 can still cancel or replace it) over the Mods screen. Closing it, with Escape or `mod_screen_close`, returns to

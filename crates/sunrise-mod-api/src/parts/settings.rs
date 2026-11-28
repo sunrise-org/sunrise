@@ -88,6 +88,9 @@ pub mod tests {
             .register_setting(SettingSpec::choice("mode", "mode", ["spyglass", "key"], 0))
             .unwrap();
         registrar
+            .register_setting(SettingSpec::toggle("on", "on", true))
+            .unwrap();
+        registrar
             .register_setting(SettingSpec::range("key_zoom", "key", 2.0, 20.0, 1.0, 4.0))
             .unwrap();
         assert_eq!(
@@ -119,10 +122,10 @@ pub mod tests {
             Err(SettingError::UnknownSetting("missing".into()))
         );
         assert_eq!(
-            registrar.show_setting_when_choice("key_zoom", "mode", 2),
+            registrar.show_setting_when_choice("key_zoom", "on", 0),
             Err(SettingError::InvalidVisibility {
                 setting: "key_zoom".into(),
-                controller: "mode".into(),
+                controller: "on".into(),
             })
         );
         assert_eq!(
@@ -155,6 +158,14 @@ pub mod tests {
             })
         );
         assert!(forward.parts.setting_visibility.is_empty());
+        assert_eq!(
+            registrar.show_setting_when_choice("key_zoom", "mode", 0),
+            Ok(())
+        );
+        assert_eq!(
+            registrar.parts.setting_visibility,
+            [("first", "key_zoom".to_owned(), "mode".to_owned(), 0)]
+        );
         registrar.mod_id = "second";
         assert_eq!(
             registrar.show_setting_when_choice("key_zoom", "mode", 1),
