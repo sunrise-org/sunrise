@@ -44,6 +44,8 @@ pub(in crate::game) mod events;
 mod management;
 use sunrise_gameplay::dedicated::predicate_graph;
 pub mod report;
+#[cfg(feature = "state-digest")]
+mod scene_ticks;
 mod status;
 mod transfer;
 
@@ -1333,7 +1335,20 @@ impl crate::game::ServerGame<'_> {
         let mut last_tick_end = Instant::now();
         // `/stop`, or a stop signal (the shutdown hook's `halt`): either way the players and levels are
         // saved below, after the wait `[transfer]` may make (transfer.rs).
+        #[cfg(feature = "state-digest")]
+        let mut scene = scene_ticks::SceneTicks::from_env();
+        #[cfg(feature = "state-digest")]
+        if scene.is_some() {
+            log("INFO", "Scene tick gate ready");
+        }
         while !self.stop_now(&state) {
+            #[cfg(feature = "state-digest")]
+            if let Some(scene) = &mut scene {
+                if !scene.before_tick(self, &mut state)? {
+                    break;
+                }
+                next = Instant::now();
+            }
             // `BlockableEventLoop.relayDelayCrash`: a worker's panic is reported on this thread.
             sunrise_level::crash::relay_worker_panic();
             self.server.server_tick_deadline = Some(next + self.common.clock.tick_duration());
@@ -1344,8 +1359,20 @@ impl crate::game::ServerGame<'_> {
             // The console's lines and the control socket run in the tick too
             // (`handleConsoleInputs`): a panic there is the same crash.
             let prelude = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
-                while let Ok(line) = state.console.try_recv() {
-                    self.console_line(&mut state, &line);
+                let console_on_tick = {
+                    #[cfg(feature = "state-digest")]
+                    {
+                        scene.is_none()
+                    }
+                    #[cfg(not(feature = "state-digest"))]
+                    {
+                        true
+                    }
+                };
+                if console_on_tick {
+                    while let Ok(line) = state.console.try_recv() {
+                        self.console_line(&mut state, &line);
+                    }
                 }
                 self.poll_server_control(&mut state);
             }));
@@ -1462,6 +1489,11 @@ impl crate::game::ServerGame<'_> {
             state.ticked(Instant::now());
             // MinecraftServer.runServer: a server more than a second's ticks
             // behind skips them and says so, at most every 15 seconds.
+            #[cfg(feature = "state-digest")]
+            if let Some(scene) = &mut scene {
+                scene.fence(self, true)?;
+                continue;
+            }
             let wait_start = Instant::now();
             let (behind, idle) = self.wait_for_next_server_tick(&mut next, paused);
             // `MinecraftServer.finishMeasuringTaskExecutionTime` ends the wait phase

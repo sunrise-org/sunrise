@@ -47,6 +47,8 @@ pub mod player_shown;
 pub mod playerdata;
 pub mod recipes;
 mod registry_names;
+#[cfg(feature = "state-digest")]
+mod scene_ticks;
 pub mod scoreboard;
 mod sound_order;
 pub mod tracking;
@@ -873,6 +875,8 @@ pub struct Lan {
     pub shared: Arc<Shared>,
     pub configuration_tasks: configuration_tasks::Tasks,
     events: crate::raw_payloads::ingress::Consumer<NetEvent>,
+    #[cfg(feature = "state-digest")]
+    scene: Option<scene_ticks::Staged>,
     configuration_requests: Option<Receiver<configuration_tasks::ConfigurationRequest>>,
     login_profiles: Option<Receiver<login_profile::LoginProfileRequest>>,
     pub port: u16,
@@ -998,6 +1002,8 @@ impl Lan {
             shared,
             configuration_tasks: configuration_tasks::Tasks::new(lan_incarnation),
             events,
+            #[cfg(feature = "state-digest")]
+            scene: scene_ticks::enabled().then(scene_ticks::Staged::default),
             configuration_requests: request_rx,
             login_profiles: profile_rx,
             port: 0,
@@ -1023,6 +1029,17 @@ impl Lan {
     pub fn configuration_requests(
         &self,
     ) -> impl Iterator<Item = configuration_tasks::ConfigurationRequest> + '_ {
+        #[cfg(feature = "state-digest")]
+        let (staged, requests) = match &self.scene {
+            Some(scene) => (scene.config.take(), None),
+            None => (Vec::new(), self.configuration_requests.as_ref()),
+        };
+        #[cfg(feature = "state-digest")]
+        return staged
+            .into_iter()
+            .chain(requests.into_iter().flat_map(Receiver::try_iter));
+
+        #[cfg(not(feature = "state-digest"))]
         self.configuration_requests
             .iter()
             .flat_map(Receiver::try_iter)
@@ -1118,6 +1135,10 @@ impl Lan {
     }
     /// Everything the connection threads reported since the last call.
     pub fn poll(&self) -> Vec<crate::raw_payloads::ingress::OwnedReceipt<NetEvent>> {
+        #[cfg(feature = "state-digest")]
+        if let Some(staged) = &self.scene {
+            return staged.events.take();
+        }
         self.events.take_turn()
     }
     pub fn stop(&mut self) {
