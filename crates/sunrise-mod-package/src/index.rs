@@ -51,10 +51,32 @@ pub struct Index {
     pub collections: Vec<Collection>,
     #[serde(default)]
     pub revoked: Vec<Revoked>,
+    /// The projects that list no version, and the collections that name one.
+    #[serde(default, skip_serializing_if = "Pages::is_empty")]
+    pub pages: Pages,
     /// What [`Index::parse`] left out because it breaks a rule, with the reasons: the rest of
     /// the index still loads. Never written.
     #[serde(skip)]
     pub left_out: Vec<LeftOut>,
+}
+
+/// Pages with nothing to install. They are kept apart from [`Index::projects`] and
+/// [`Index::collections`], whose every row has a version or a Nightly source, so a reader from
+/// before this field loads the same index.
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
+pub struct Pages {
+    /// Projects with no version and no Nightly source.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub projects: Vec<Project>,
+    /// Collections with a member among [`Pages::projects`].
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub collections: Vec<Collection>,
+}
+
+impl Pages {
+    fn is_empty(&self) -> bool {
+        self.projects.is_empty() && self.collections.is_empty()
+    }
 }
 
 /// The stable Sunrise release a package was made for.
@@ -631,7 +653,55 @@ impl Index {
                 return Err(error);
             }
         }
+        for at in 0..self.pages.projects.len() {
+            self.page_problem(at).map_or(Ok(()), Err)?;
+        }
+        for at in 0..self.pages.collections.len() {
+            self.page_collection_problem(at).map_or(Ok(()), Err)?;
+        }
         Ok(())
+    }
+
+    /// Why the page at `at` of [`Pages::projects`] breaks a rule: a page has a project's own
+    /// fields, an id no other row has, and nothing to install.
+    fn page_problem(&self, at: usize) -> Option<String> {
+        let pages = &self.pages.projects;
+        let p = &pages[at];
+        if self.project(&p.id).is_some() || pages[..at].iter().any(|q| q.id == p.id) {
+            return Some(format!("{}: listed twice", p.id));
+        }
+        if !p.versions.is_empty() || p.nightly.is_some() {
+            return Some(format!("{}: a page lists no version and no source", p.id));
+        }
+        check_project(p).err()
+    }
+
+    /// Why the collection at `at` of [`Pages::collections`] breaks a rule: a collection's own
+    /// rules, with members taken from the projects and the pages.
+    fn page_collection_problem(&self, at: usize) -> Option<String> {
+        let collections = &self.pages.collections;
+        let collection = &collections[at];
+        let taken = |id: &str| {
+            self.collections.iter().any(|c| c.id == id)
+                || collections[..at].iter().any(|c| c.id == id)
+        };
+        if taken(&collection.id) {
+            return Some(format!(
+                "collection {}: listed twice; pick distinct ids",
+                collection.id
+            ));
+        }
+        let project = |id: &str| {
+            self.project(id)
+                .filter(|p| !p.versions.is_empty())
+                .or_else(|| self.pages.projects.iter().find(|p| p.id == id))
+        };
+        collection
+            .check(project(&collection.id).is_some(), |id| {
+                project(id).map(|p| &p.kind)
+            })
+            .into_iter()
+            .next()
     }
 
     /// What a reader keeps of an index that fails [`Index::check`]: each project, version and
@@ -747,6 +817,24 @@ impl Index {
                 true
             }
         });
+        // Pages after the projects and collections they are checked against; a collection
+        // after the pages it may name.
+        for at in (0..self.pages.projects.len()).rev() {
+            if let Some(reason) = self.page_problem(at) {
+                let page = self.pages.projects.remove(at);
+                left_out.push(LeftOut::project(&page, reason));
+            }
+        }
+        for at in (0..self.pages.collections.len()).rev() {
+            if let Some(reason) = self.page_collection_problem(at) {
+                let collection = self.pages.collections.remove(at);
+                left_out.push(LeftOut {
+                    id: collection.id,
+                    version: None,
+                    reason,
+                });
+            }
+        }
         self.revoked.retain(|r| match check_revoked(r) {
             Ok(()) => true,
             Err(reason) => {

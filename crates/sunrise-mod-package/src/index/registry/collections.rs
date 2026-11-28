@@ -47,10 +47,14 @@ impl Checkout {
     /// Validate collection metadata even when `registry review` has no package files yet.
     pub fn check_collections(&self, src: &Sources<'_>) -> Vec<String> {
         let (collections, mut errors) = self.collection_pages(src);
+        // A project with versions, or with a page alone; not one with only a Nightly source.
         let listed: BTreeMap<_, _> = self
-            .listed()
-            .filter(|(entry, cache)| has_versions(entry, *cache))
-            .map(|(entry, _)| (entry.id.as_str(), &entry.kind))
+            .entries
+            .iter()
+            .filter(|entry| {
+                entry.nightly.is_none() || has_versions(entry, self.caches.get(&entry.id))
+            })
+            .map(|entry| (entry.id.as_str(), &entry.kind))
             .collect();
         for collection in collections {
             errors.extend(collection.check(false, |id| listed.get(id).copied()));

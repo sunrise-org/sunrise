@@ -737,9 +737,6 @@ fn project_with_cache(
         .iter()
         .filter_map(|s| image(src, id, s, &format!("screenshots/{id}/"), &mut errors))
         .collect();
-    if no_versions && entry.nightly.is_none() {
-        errors.push(format!("{id}: has no version"));
-    }
     let mut versions = Vec::new();
     for v in &entry.versions {
         match checked_version(entry, v, src, revoked) {
@@ -1082,9 +1079,9 @@ pub fn build(src: &Sources) -> Result<Index, Vec<String>> {
     let checkout = load(src.registry)?;
     let mut errors = Vec::new();
     let empty = Cache::default();
-    for (entry, cache) in checkout.listed() {
-        let cache = cache.unwrap_or(&empty);
-        if !has_versions(entry, Some(cache)) {
+    for entry in &checkout.entries {
+        let cache = checkout.caches.get(&entry.id).unwrap_or(&empty);
+        if entry.nightly.is_some() && !has_versions(entry, Some(cache)) {
             continue;
         }
         // A listed project's page is complete (registry v2's rollout, step 4).
@@ -1118,11 +1115,12 @@ pub fn build(src: &Sources) -> Result<Index, Vec<String>> {
 /// Review can still report the impact of a takedown on a candidate that fails [`Index::check`].
 pub fn candidate(checkout: &Checkout, src: &Sources) -> Result<Index, Vec<String>> {
     let mut projects = Vec::new();
+    let mut pages = super::Pages::default();
     let (collections, mut errors) = checkout.collection_pages(src);
-    errors.extend(checkout.check_unlisted());
     let empty = Cache::default();
-    for (entry, cache) in checkout.listed() {
-        match project_with_cache(entry, cache.unwrap_or(&empty), src, &checkout.revoked) {
+    for entry in &checkout.entries {
+        let cache = checkout.caches.get(&entry.id).unwrap_or(&empty);
+        match project_with_cache(entry, cache, src, &checkout.revoked) {
             Ok(mut p) => {
                 // A takedown of the whole project covers its unreviewed source as well as its
                 // files; one that names a hash covers that file alone.
@@ -1132,6 +1130,9 @@ pub fn candidate(checkout: &Checkout, src: &Sources) -> Result<Index, Vec<String
                 }
                 if p.nightly.is_some() || !p.versions.is_empty() {
                     projects.push(p);
+                } else if !checkout.revoked.iter().any(taken_down) {
+                    // Nothing to install: its page alone, apart from the projects.
+                    pages.projects.push(p);
                 }
             }
             Err(e) => errors.extend(e),
@@ -1141,6 +1142,13 @@ pub fn candidate(checkout: &Checkout, src: &Sources) -> Result<Index, Vec<String
         return Err(errors);
     }
     projects.sort_by(|a, b| a.id.cmp(&b.id));
+    pages.projects.sort_by(|a, b| a.id.cmp(&b.id));
+    let names_a_page = |collection: &super::Collection| {
+        let page = |id: &String| pages.projects.iter().any(|p| p.id == *id);
+        collection.members.iter().any(|member| page(&member.id))
+    };
+    let (page_collections, collections) = collections.into_iter().partition(names_a_page);
+    pages.collections = page_collections;
     let mut index = Index {
         schema: SCHEMA,
         generated: src.generated.clone(),
@@ -1150,6 +1158,7 @@ pub fn candidate(checkout: &Checkout, src: &Sources) -> Result<Index, Vec<String
         unjudged: Vec::new(),
         collections,
         revoked: checkout.revoked.clone(),
+        pages,
         left_out: Vec::new(),
     };
     index.prune_native_binaries();
