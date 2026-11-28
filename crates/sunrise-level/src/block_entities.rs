@@ -187,6 +187,9 @@ pub struct BlockEntities {
     /// The signs a player's editor is on (`SignBlockEntity.playerWhoMayEdit`
     /// set), so the level's tick checks those alone instead of every sign.
     sign_editors: FxHashSet<Pos>,
+    /// The sculk block entities that may not be idle (vibrations or catalyst
+    /// cursors in flight), so `tick_sculk_blocks` skips idle sculk blocks.
+    active_sculk: FxHashSet<Pos>,
     asleep: FxHashSet<Pos>,
     /// The sleeping positions that are hoppers, a subset of `asleep`: the item and
     /// vehicle scans look at these alone, never at another kind's sleep.
@@ -799,6 +802,38 @@ impl BlockEntities {
             self.sign_editors.remove(&pos);
         }
     }
+    /// Keeps `pos` listed in `active_sculk` whenever `entity` is a non-idle sculk
+    /// block entity.
+    fn note_sculk(&mut self, pos: Pos, entity: &BlockEntity) {
+        if matches!(entity, BlockEntity::Sculk(sculk) if !sculk.idle()) {
+            self.active_sculk.insert(pos);
+        } else {
+            self.active_sculk.remove(&pos);
+        }
+    }
+    /// Whether no sculk block entity is currently marked active.
+    pub fn active_sculk_empty(&self) -> bool {
+        self.active_sculk.is_empty()
+    }
+    /// The positions of sculk block entities that may not be idle, in no order.
+    pub fn active_sculk(&self) -> impl Iterator<Item = &Pos> {
+        self.active_sculk.iter()
+    }
+    /// Recomputes whether `pos` belongs in `active_sculk` from its current state.
+    pub fn refresh_sculk_active(&mut self, pos: Pos) {
+        if matches!(self.map.get(&pos), Some(BlockEntity::Sculk(sculk)) if !sculk.idle()) {
+            self.active_sculk.insert(pos);
+        } else {
+            self.active_sculk.remove(&pos);
+        }
+    }
+    fn mark_all_sculk_active(&mut self) {
+        for (&pos, entity) in &self.map {
+            if matches!(entity, BlockEntity::Sculk(_)) {
+                self.active_sculk.insert(pos);
+            }
+        }
+    }
     /// `LevelChunk.getBlockEntity`: the block entity at `pos`, if any.
     pub fn get(&self, pos: &Pos) -> Option<&BlockEntity> {
         self.map.get(pos)
@@ -812,19 +847,26 @@ impl BlockEntities {
         pos: &Pos,
         accepts: impl FnOnce(&BlockEntity) -> bool,
     ) -> Option<&mut BlockEntity> {
-        if !accepts(self.map.get(pos)?) {
+        let entity = self.map.get(pos)?;
+        if !accepts(entity) {
             return None;
         }
+        let is_sculk = matches!(entity, BlockEntity::Sculk(_));
         self.wake_at(pos);
         self.wake_below(pos);
+        if is_sculk {
+            self.active_sculk.insert(*pos);
+        }
         self.map.get_mut(pos)
     }
     pub fn iter_mut(&mut self) -> impl Iterator<Item = (&Pos, &mut BlockEntity)> {
         self.clear_asleep();
+        self.mark_all_sculk_active();
         self.map.iter_mut()
     }
     pub fn values_mut(&mut self) -> impl Iterator<Item = &mut BlockEntity> {
         self.clear_asleep();
+        self.mark_all_sculk_active();
         self.map.values_mut()
     }
     /// Lends the resident instance and the indexes needed for a journal before-image.
@@ -933,6 +975,7 @@ impl BlockEntities {
         self.replace_taken(pos);
         let new_box = shows_box(&entity);
         self.note_sign_editor(pos, &entity);
+        self.note_sculk(pos, &entity);
         self.wake_at(&pos);
         self.wake_below(&pos);
         let old = self.map.insert(pos, entity);
@@ -987,6 +1030,9 @@ impl BlockEntities {
         if absent && shows_box(entity) {
             self.boxes.insert(pos);
         }
+        if matches!(entity, BlockEntity::Sculk(_)) {
+            self.active_sculk.insert(pos);
+        }
         entity
     }
     /// `LevelChunk.removeBlockEntity`: the block entity and its slot.
@@ -1001,6 +1047,7 @@ impl BlockEntities {
         unlist(&mut self.columns, *pos);
         self.boxes.remove(pos);
         self.sign_editors.remove(pos);
+        self.active_sculk.remove(pos);
         removed
     }
     /// The block entity at `pos`, out of the map for a while: its slot stays
@@ -1008,6 +1055,7 @@ impl BlockEntities {
     pub fn take(&mut self, pos: &Pos) -> Option<(BlockEntityLease, BlockEntity)> {
         self.wake_at(pos);
         let entity = self.map.remove(pos)?;
+        self.active_sculk.remove(pos);
         let token = next_token();
         let kind = match &entity {
             BlockEntity::Mod(entity) => TakenType::Mod(entity.kind()),
@@ -1085,6 +1133,7 @@ impl BlockEntities {
         }
         self.note_box(pos, Some(&entity));
         self.note_sign_editor(pos, &entity);
+        self.note_sculk(pos, &entity);
         if self.map.insert(pos, entity).is_none()
             && !self.live.contains_key(&pos)
             && !self.pending.contains_key(&pos)
@@ -1164,13 +1213,19 @@ impl BlockEntities {
     pub fn retain(&mut self, mut keep: impl FnMut(&Pos, &mut BlockEntity) -> bool) {
         self.clear_asleep();
         let mut gone = Vec::new();
+        let mut active_sculk = Vec::new();
         self.map.retain(|p, e| {
             let kept = keep(p, e);
             if !kept {
                 gone.push(*p);
+            } else if matches!(e, BlockEntity::Sculk(s) if !s.idle()) {
+                active_sculk.push(*p);
             }
             kept
         });
+        for pos in active_sculk {
+            self.active_sculk.insert(pos);
+        }
         for pos in gone {
             self.unloaded(pos);
         }
@@ -1193,6 +1248,7 @@ impl BlockEntities {
         unlist(&mut self.columns, pos);
         self.boxes.remove(&pos);
         self.sign_editors.remove(&pos);
+        self.active_sculk.remove(&pos);
     }
     pub fn clear(&mut self) {
         self.contents_watches = ContentsWatches::default();
@@ -1206,6 +1262,7 @@ impl BlockEntities {
         self.columns.clear();
         self.boxes.clear();
         self.sign_editors.clear();
+        self.active_sculk.clear();
         self.clear_asleep();
         self.tickers = Arc::default();
         self.live.clear();
@@ -1244,6 +1301,7 @@ impl BlockEntities {
             let new_is_mod = matches!(e, BlockEntity::Mod(_));
             self.note_box(p, Some(&e));
             self.note_sign_editor(p, &e);
+            self.note_sculk(p, &e);
             let old = self.map.insert(p, e);
             list(&mut self.columns, p);
             if old.is_some() {
@@ -1878,6 +1936,71 @@ mod tests {
         b.insert(r, test_block());
         b.clear();
         assert!(b.boxes.is_empty());
+    }
+
+    #[test]
+    fn active_sculk_tracks_non_idle_sculk_across_mutations_and_unloads() {
+        use crate::chunk::block_entity::{Info, SculkEntity, SculkKind};
+
+        let idle_sensor = || BlockEntity::Sculk(Box::new(SculkEntity::new(SculkKind::Sensor)));
+        let active_sensor = || {
+            let mut s = SculkEntity::new(SculkKind::Sensor);
+            s.vibration.schedule(
+                Info {
+                    event: "minecraft:step",
+                    distance: 1.0,
+                    pos: [0.5, 64.5, 0.5],
+                    source: None,
+                    owner: None,
+                    source_uuid: None,
+                    owner_uuid: None,
+                },
+                10,
+            );
+            BlockEntity::Sculk(Box::new(s))
+        };
+        let active = |b: &BlockEntities| {
+            let mut v: Vec<Pos> = b.active_sculk().copied().collect();
+            v.sort_unstable();
+            v
+        };
+
+        let mut b = level();
+        let (p, q, r) = ((1, 64, 1), (2, 64, 2), (20, 64, 20));
+        b.insert(p, idle_sensor());
+        assert!(b.active_sculk_empty());
+        b.insert(q, active_sensor());
+        assert_eq!(active(&b), [q]);
+
+        // Mutable borrow conservatively marks a sculk block active; refresh clears if still idle.
+        assert!(b.get_mut(&p).is_some());
+        assert_eq!(active(&b), [p, q]);
+        b.refresh_sculk_active(p);
+        assert_eq!(active(&b), [q]);
+
+        // Take removes from active while out; put restores active status from entity state.
+        let (lease, taken) = b.take(&q).unwrap();
+        assert!(b.active_sculk_empty());
+        assert!(b.put(lease, taken));
+        assert_eq!(active(&b), [q]);
+
+        // Chunk load notes non-idle sculk entities; column unload clears them.
+        b.load_chunk(vec![(r, active_sensor())]);
+        assert_eq!(active(&b), [q, r]);
+        b.unload_column((r.0 >> 4, r.2 >> 4));
+        assert_eq!(active(&b), [q]);
+
+        // Replace with idle or another block entity clears active.
+        b.insert(q, idle_sensor());
+        assert!(b.active_sculk_empty());
+        b.insert(q, active_sensor());
+        b.remove(&q);
+        assert!(b.active_sculk_empty());
+
+        // Clear empties active_sculk.
+        b.insert(p, active_sensor());
+        b.clear();
+        assert!(b.active_sculk_empty());
     }
 }
 

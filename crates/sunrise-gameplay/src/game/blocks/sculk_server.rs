@@ -3,7 +3,6 @@
 //! ticker, redstone output, resonance, shrieks, warden summoning, and catalysts.
 use super::Result;
 use mod_api::PositionSource;
-use std::collections::HashSet;
 use sunrise_core::{
     geometry::{Aabb, Direction, Vec3},
     position::BlockPos,
@@ -54,7 +53,37 @@ pub(in crate::game) struct PlayerEvents {
 pub struct SculkLevelState {
     /// The sculk block entities in the order they were added.
     pub(in crate::game) index: Index,
-    pub known: HashSet<(i32, i32)>,
+    pub known: FxHashSet<(i32, i32)>,
+}
+
+type MobSculkSnapshot = (
+    u32,
+    [f64; 3],
+    bool,
+    bool,
+    Species,
+    Option<i64>,
+    Option<u32>,
+    u32,
+    bool,
+);
+
+/// Reusable scratch buffers for sculk per-tick scans and chunk index syncs.
+#[derive(Default)]
+pub(in crate::game) struct SculkScratch {
+    mob_snapshot: Vec<MobSculkSnapshot>,
+    mob_by_id: FxHashMap<u32, usize>,
+    mob_listeners: Vec<(usize, u32)>,
+    alive_ids: FxHashSet<u32>,
+    falling_present: FxHashSet<u32>,
+    item_redstone_hits: Vec<[i32; 3]>,
+    standing: Vec<(Who, [f64; 3])>,
+    ticking_chunks: FxHashMap<(i32, i32), bool>,
+    due_sculk: Vec<(u64, (i32, i32, i32), bool)>,
+    idle_sculk: Vec<(i32, i32, i32)>,
+    sync_loaded: FxHashSet<(i32, i32)>,
+    sync_arrived: Vec<(i32, i32)>,
+    sync_gone: FxHashSet<(i32, i32)>,
 }
 
 #[derive(Default)]
@@ -68,7 +97,7 @@ pub struct SculkState {
     /// The active player's movement-emission state (mobs keep their own).
     pub(in crate::game) steps: Option<Steps>,
     /// Items that have fallen since last touching the ground or water.
-    pub(in crate::game) falling_items: HashSet<u32>,
+    pub(in crate::game) falling_items: FxHashSet<u32>,
     /// The vehicle each rider had last tick and where it stood.
     pub(in crate::game) mounts: FxHashMap<Who, (u32, [f64; 3])>,
     pub damaged: FxHashMap<u32, i64>,
@@ -83,6 +112,7 @@ pub struct SculkState {
     /// read from: see `listener_slots`.
     pub(in crate::game) listeners: Vec<u32>,
     pub(in crate::game) listeners_of: Option<ListStamp>,
+    pub(in crate::game) scratch: SculkScratch,
 }
 
 /// How far from a warden's or an allay's feet an event may be heard: their
@@ -128,7 +158,8 @@ impl SculkState {
 #[derive(Default)]
 pub struct Index {
     pub(in crate::game) order: Vec<(i32, i32, i32)>,
-    pub(in crate::game) set: HashSet<(i32, i32, i32)>,
+    /// Position -> insertion rank (`next` at insert time) for O(1) membership and ordering.
+    pub(in crate::game) set: FxHashMap<(i32, i32, i32), u64>,
     /// The positions by 32-block cell, each with its rank: ranks only grow,
     /// so sorting by them gives `order`'s order. Every mob's step posts a
     /// game event, and the listeners near it are read from at most eight
@@ -141,17 +172,19 @@ pub(in crate::game::server_side) fn index_cell(key: (i32, i32, i32)) -> (i32, i3
 }
 impl Index {
     pub(in crate::game::server_side) fn insert(&mut self, key: (i32, i32, i32)) {
-        if self.set.insert(key) {
+        if let std::collections::hash_map::Entry::Vacant(slot) = self.set.entry(key) {
+            let rank = self.next;
+            self.next += 1;
+            slot.insert(rank);
             self.order.push(key);
             self.cells
                 .entry(index_cell(key))
                 .or_default()
-                .push((self.next, key));
-            self.next += 1;
+                .push((rank, key));
         }
     }
     pub(in crate::game::server_side) fn remove(&mut self, key: &(i32, i32, i32)) {
-        if self.set.remove(key) {
+        if self.set.remove(key).is_some() {
             self.order.retain(|k| k != key);
             let cell = index_cell(*key);
             if let Some(list) = self.cells.get_mut(&cell) {
@@ -165,6 +198,9 @@ impl Index {
     /// The positions whose `dist_sqr` to `at` is at most `radius` squared,
     /// in `order`'s order: what filtering `iter` gives.
     pub(in crate::game) fn within(&self, at: [i32; 3], radius: i32) -> Vec<(i32, i32, i32)> {
+        if self.cells.is_empty() {
+            return Vec::new();
+        }
         let limit = i64::from(radius * radius);
         let span = |v: i32| {
             let cell = |w: i64| (w >> 5).clamp(i64::from(i32::MIN), i64::from(i32::MAX)) as i32;
@@ -183,8 +219,14 @@ impl Index {
         found.sort_unstable_by_key(|(rank, _)| *rank);
         found.into_iter().map(|(_, k)| k).collect()
     }
+    pub(in crate::game::server_side) fn is_empty(&self) -> bool {
+        self.order.is_empty()
+    }
     pub(in crate::game::server_side) fn contains(&self, key: &(i32, i32, i32)) -> bool {
-        self.set.contains(key)
+        self.set.contains_key(key)
+    }
+    pub(in crate::game::server_side) fn rank_of(&self, key: &(i32, i32, i32)) -> Option<u64> {
+        self.set.get(key).copied()
     }
     pub(in crate::game) fn iter(&self) -> impl Iterator<Item = &(i32, i32, i32)> {
         self.order.iter()
@@ -194,7 +236,7 @@ impl Index {
         mut keep: impl FnMut(&(i32, i32, i32)) -> bool,
     ) {
         self.order.retain(|k| keep(k));
-        self.set.retain(|k| keep(k));
+        self.set.retain(|k, _| keep(k));
         self.cells.retain(|_, list| {
             list.retain(|(_, k)| keep(k));
             !list.is_empty()
@@ -496,72 +538,82 @@ impl crate::game::ServerGame<'_> {
         self.tick_player_sculk_events();
         self.tick_mob_sculk_events();
         if !self.server.sculk.falling_items.is_empty() {
-            let present: std::collections::HashSet<u32> =
-                self.common.dropped.iter().map(|item| item.id).collect();
+            let mut present = std::mem::take(&mut self.server.sculk.scratch.falling_present);
+            present.clear();
+            present.extend(self.common.dropped.iter().map(|item| item.id));
             self.server
                 .sculk
                 .falling_items
                 .retain(|id| present.contains(id));
+            present.clear();
+            self.server.sculk.scratch.falling_present = present;
         }
         // Dropped items are entities too: Entity.applyEffectsFromBlocks, from
         // ItemEntity.tick, so only for the items in entity-ticking chunks.
-        let ticking = self.entity_ticking_area();
-        let items: Vec<[f64; 3]> = self
-            .common
-            .dropped
-            .iter()
-            .filter(|i| {
-                i.ground.on_ground
-                    && ticking(i.position.x.floor() as i32, i.position.z.floor() as i32)
-            })
-            .map(|i| [i.position.x, i.position.y, i.position.z])
-            .collect();
-        for at in items {
-            self.step_on_redstone_ore(at, false);
+        if !self.common.dropped.is_empty() {
+            self.sculk_prepare();
+            let ticking = self.entity_ticking_area();
+            let mut hits = std::mem::take(&mut self.server.sculk.scratch.item_redstone_hits);
+            hits.clear();
+            let redstone_ore = &self.server.sculk.tables.redstone_ore;
+            let world = &self.common.world;
+            let mut cached: Option<((i32, i32), Option<&sunrise_level::chunk::Chunk>)> = None;
+            for item in self.common.dropped.iter() {
+                if !item.ground.on_ground {
+                    continue;
+                }
+                let bx = item.position.x.floor() as i32;
+                let bz = item.position.z.floor() as i32;
+                if !ticking(bx, bz) {
+                    continue;
+                }
+                let by = (item.position.y - 0.2).floor() as i32;
+                let chunk_key = (bx >> 4, bz >> 4);
+                let chunk = match cached {
+                    Some((k, c)) if k == chunk_key => c,
+                    _ => {
+                        let c = world.chunk_at(chunk_key.0, chunk_key.1);
+                        cached = Some((chunk_key, c));
+                        c
+                    }
+                };
+                let state = world.block_with_chunk(bx, by, bz, chunk);
+                if redstone_ore.get(state.0 as usize).copied().unwrap_or(false) {
+                    hits.push([bx, by, bz]);
+                }
+            }
+            for pos in hits.drain(..) {
+                let _ = self.attack_block(pos);
+            }
+            self.server.sculk.scratch.item_redstone_hits = hits;
         }
     }
     pub fn tick_mob_sculk_events(&mut self) {
-        let snapshot: Vec<(
-            u32,
-            [f64; 3],
-            bool,
-            bool,
-            Species,
-            Option<i64>,
-            Option<u32>,
-            u32,
-            bool,
-        )> = self
-            .common
-            .mobs
-            .iter()
-            .filter(|m| m.alive())
-            .map(|m| {
-                (
-                    m.id,
-                    [m.position.x, m.position.y, m.position.z],
-                    m.ground.on_ground,
-                    m.fluids.in_water,
-                    m.species(),
-                    m.last_damage.map(|(_, t)| t),
-                    m.extra.mount,
-                    m.age,
-                    m.species() == Species::Bat && sunrise_sim::mobs::bat::resting(m),
-                )
-            })
-            .collect();
-        let mut by_id = FxHashMap::default();
+        let mut snapshot = std::mem::take(&mut self.server.sculk.scratch.mob_snapshot);
+        snapshot.clear();
+        snapshot.extend(self.common.mobs.iter().filter(|m| m.alive()).map(|m| {
+            (
+                m.id,
+                [m.position.x, m.position.y, m.position.z],
+                m.ground.on_ground,
+                m.fluids.in_water,
+                m.species(),
+                m.last_damage.map(|(_, t)| t),
+                m.extra.mount,
+                m.age,
+                m.species() == Species::Bat && sunrise_sim::mobs::bat::resting(m),
+            )
+        }));
+        let mut by_id = std::mem::take(&mut self.server.sculk.scratch.mob_by_id);
+        by_id.clear();
+        let mut listeners = std::mem::take(&mut self.server.sculk.scratch.mob_listeners);
+        listeners.clear();
         for (i, m) in self.common.mobs.iter().enumerate() {
             by_id.entry(m.id).or_insert(i);
+            if matches!(m.species(), Species::Warden | Species::Allay) {
+                listeners.push((i, m.id));
+            }
         }
-        let listeners = self
-            .common
-            .mobs
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| matches!(m.species(), Species::Warden | Species::Allay))
-            .map(|(i, m)| (i, m.id))
-            .collect();
         self.server.sculk.mob_slots = Some(MobSlots {
             by_id,
             listeners,
@@ -575,7 +627,7 @@ impl crate::game::ServerGame<'_> {
         // mobs tick). Damage and mounting are raised by `hurt` and
         // `startRiding`, ticking or not.
         let ticking = self.entity_ticking_area();
-        for (id, at, on_ground, in_water, species, damaged, vehicle, age, resting) in snapshot {
+        for &(id, at, on_ground, in_water, species, damaged, vehicle, age, resting) in &snapshot {
             let ticked = self.common.creatures.ticked.contains(&id)
                 || ticking(at[0].floor() as i32, at[2].floor() as i32);
             if on_ground && ticked {
@@ -634,13 +686,32 @@ impl crate::game::ServerGame<'_> {
                 self.post_entity_event("minecraft:entity_damage", Who::Mob(id));
             }
         }
-        self.server.sculk.mob_slots = None;
-        let alive: FxHashSet<u32> = self.common.mobs.iter().map(|m| m.id).collect();
-        self.server.sculk.damaged.retain(|id, _| alive.contains(id));
-        self.server.sculk.mounts.retain(|who, _| match who {
-            Who::Player => true,
-            Who::Mob(id) => alive.contains(id),
-        });
+        snapshot.clear();
+        self.server.sculk.scratch.mob_snapshot = snapshot;
+        if let Some(mut slots) = self.server.sculk.mob_slots.take() {
+            slots.by_id.clear();
+            slots.listeners.clear();
+            self.server.sculk.scratch.mob_by_id = slots.by_id;
+            self.server.sculk.scratch.mob_listeners = slots.listeners;
+        }
+        let has_mob_mounts = self
+            .server
+            .sculk
+            .mounts
+            .keys()
+            .any(|who| matches!(who, Who::Mob(_)));
+        if !self.server.sculk.damaged.is_empty() || has_mob_mounts {
+            let mut alive = std::mem::take(&mut self.server.sculk.scratch.alive_ids);
+            alive.clear();
+            alive.extend(self.common.mobs.iter().map(|m| m.id));
+            self.server.sculk.damaged.retain(|id, _| alive.contains(id));
+            self.server.sculk.mounts.retain(|who, _| match who {
+                Who::Player => true,
+                Who::Mob(id) => alive.contains(id),
+            });
+            alive.clear();
+            self.server.sculk.scratch.alive_ids = alive;
+        }
     }
     /// Entity.move emits on the authoritative server too, for each ServerPlayer.
     pub(in crate::game) fn tick_player_sculk_events(&mut self) {
@@ -682,48 +753,68 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn tick_sculk_blocks(&mut self) -> Result<()> {
         self.sculk_prepare();
         self.sculk_sync_index();
+        if self.common.world.block_entities.active_sculk_empty()
+            || self.server.sculk.level.index.is_empty()
+        {
+            return Ok(());
+        }
         // `ServerLevel.shouldTickBlocksAt` in a block-ticking chunk, from
         // every player's tickets (`update_chunk_tickets`), once the chunk is
         // lit: asked once per chunk, as the sensors share few chunks. Nothing
         // a sculk tick does loads, unloads or lights a chunk or moves a ticket.
-        let levels = self.server.chunk_ticking.tickets.levels();
-        let chunks = &self.common.world.chunks;
-        let pending = &self.common.world.entities_pending;
-        let mut ticking = FxHashMap::<(i32, i32), bool>::default();
-        let mut ticks = |cx: i32, cz: i32| {
-            *ticking.entry((cx, cz)).or_insert_with(|| {
-                levels.block_ticking(cx, cz) && chunks.get(&(cx, cz)).is_some_and(|c| c.lit)
-            })
-        };
-        // The ticking ones in the index's order, with whether the chunks
-        // around them tick too. Most sensors and catalysts wait for a
-        // vibration or a death: their tick would change nothing, so they
-        // are passed over here (a vibration scheduled during these ticks is
-        // chosen on the next tick at the earliest, as in vanilla).
-        let entities = &self.common.world.block_entities;
-        let due: Vec<((i32, i32, i32), bool)> = self
-            .server
-            .sculk
-            .level
-            .index
-            .iter()
-            .filter_map(|&key| {
+        let mut ticking = std::mem::take(&mut self.server.sculk.scratch.ticking_chunks);
+        ticking.clear();
+        let mut due = std::mem::take(&mut self.server.sculk.scratch.due_sculk);
+        due.clear();
+        let mut idle = std::mem::take(&mut self.server.sculk.scratch.idle_sculk);
+        idle.clear();
+        {
+            let levels = self.server.chunk_ticking.tickets.levels();
+            let chunks = &self.common.world.chunks;
+            let pending = &self.common.world.entities_pending;
+            let mut ticks = |cx: i32, cz: i32| {
+                *ticking.entry((cx, cz)).or_insert_with(|| {
+                    levels.block_ticking(cx, cz) && chunks.get(&(cx, cz)).is_some_and(|c| c.lit)
+                })
+            };
+            // Visit only sculk block entities tracked as active and sort by their
+            // insertion rank so the tick order matches `index.iter()` exactly.
+            let entities = &self.common.world.block_entities;
+            let index = &self.server.sculk.level.index;
+            for &key in entities.active_sculk() {
+                let Some(rank) = index.rank_of(&key) else {
+                    continue;
+                };
+                if matches!(entities.get(&key), Some(BlockEntity::Sculk(e)) if e.idle()) {
+                    idle.push(key);
+                    continue;
+                }
                 let (cx, cz) = (key.0 >> 4, key.2 >> 4);
                 // `LevelChunk.isTicking`: its own chunk's entities loaded too.
-                if !ticks(cx, cz)
-                    || pending.contains(&(cx, cz))
-                    || matches!(entities.get(&key), Some(BlockEntity::Sculk(e)) if e.idle())
-                {
-                    return None;
+                if !ticks(cx, cz) || pending.contains(&(cx, cz)) {
+                    continue;
                 }
                 let adjacent = (-1..=1).all(|dx| (-1..=1).all(|dz| ticks(cx + dx, cz + dz)));
-                Some((key, adjacent))
-            })
-            .collect();
-        for (key, adjacent) in due {
-            self.tick_sculk_block(key, adjacent)?;
+                due.push((rank, key, adjacent));
+            }
         }
-        Ok(())
+        for key in idle.drain(..) {
+            self.common.world.block_entities.refresh_sculk_active(key);
+        }
+        due.sort_unstable_by_key(|&(rank, _, _)| rank);
+        let mut res = Ok(());
+        for (_, key, adjacent) in due.drain(..) {
+            if let Err(err) = self.tick_sculk_block(key, adjacent) {
+                res = Err(err);
+                break;
+            }
+            self.common.world.block_entities.refresh_sculk_active(key);
+        }
+        ticking.clear();
+        self.server.sculk.scratch.ticking_chunks = ticking;
+        self.server.sculk.scratch.due_sculk = due;
+        self.server.sculk.scratch.idle_sculk = idle;
+        res
     }
     /// `SpawnUtil.trySpawnMob(WARDEN, TRIGGERED, level, pos, 20, 5, 6,
     /// ON_TOP_OF_COLLIDER, false)`: every candidate spot creates a warden
@@ -1028,24 +1119,28 @@ impl crate::game::ServerGame<'_> {
             && self.server.sculk.known_revision != Some(revision)
         {
             self.server.sculk.known_revision = Some(revision);
-            let loaded: HashSet<(i32, i32)> = self.common.world.chunks.keys().copied().collect();
-            let arrived: Vec<(i32, i32)> = loaded
-                .difference(&self.server.sculk.level.known)
-                .copied()
-                .collect();
-            for key in arrived {
+            let mut loaded = std::mem::take(&mut self.server.sculk.scratch.sync_loaded);
+            loaded.clear();
+            let mut arrived = std::mem::take(&mut self.server.sculk.scratch.sync_arrived);
+            arrived.clear();
+            for &key in self.common.world.chunks.keys() {
+                loaded.insert(key);
+                if !self.server.sculk.level.known.contains(&key) {
+                    arrived.push(key);
+                }
+            }
+            for key in arrived.drain(..) {
                 self.sculk_scan_chunk(key);
             }
             // The blocks of every chunk that left, in one pass: a player
             // leaving unloads thousands of chunks at once.
-            let gone: HashSet<(i32, i32)> = self
-                .server
-                .sculk
-                .level
-                .known
-                .difference(&loaded)
-                .copied()
-                .collect();
+            let mut gone = std::mem::take(&mut self.server.sculk.scratch.sync_gone);
+            gone.clear();
+            for &key in &self.server.sculk.level.known {
+                if !loaded.contains(&key) {
+                    gone.insert(key);
+                }
+            }
             if !gone.is_empty() {
                 self.server
                     .sculk
@@ -1053,7 +1148,12 @@ impl crate::game::ServerGame<'_> {
                     .index
                     .retain(|p| !gone.contains(&(p.0 >> 4, p.2 >> 4)));
             }
-            self.server.sculk.level.known = loaded;
+            let mut old_known = std::mem::replace(&mut self.server.sculk.level.known, loaded);
+            old_known.clear();
+            gone.clear();
+            self.server.sculk.scratch.sync_loaded = old_known;
+            self.server.sculk.scratch.sync_arrived = arrived;
+            self.server.sculk.scratch.sync_gone = gone;
         }
         self.sculk_sync_writes();
     }
@@ -1149,6 +1249,15 @@ impl crate::game::ServerGame<'_> {
                     .insert(pos, BlockEntity::Sculk(Box::new(e)));
             }
             self.server.sculk.level.index.insert(pos);
+        }
+    }
+    pub(in crate::game::server_side) fn sculk_entity_ref(
+        &self,
+        key: (i32, i32, i32),
+    ) -> Option<&SculkEntity> {
+        match self.common.world.block_entities.get(&key) {
+            Some(BlockEntity::Sculk(e)) => Some(e),
+            _ => None,
         }
     }
     pub(in crate::game::server_side) fn sculk_entity(
@@ -1389,7 +1498,7 @@ impl crate::game::ServerGame<'_> {
         pos: [f64; 3],
         ctx: &Context,
     ) {
-        let Some(entity) = self.sculk_entity(key) else {
+        let Some(entity) = self.sculk_entity_ref(key) else {
             self.server.sculk.level.index.remove(&key);
             return;
         };
@@ -1650,7 +1759,7 @@ impl crate::game::ServerGame<'_> {
         key: (i32, i32, i32),
         info: Info,
     ) -> Result<()> {
-        let Some(entity) = self.sculk_entity(key) else {
+        let Some(entity) = self.sculk_entity_ref(key) else {
             return Ok(());
         };
         let (kind, radius) = (entity.kind, entity.listener_radius());
@@ -1745,27 +1854,50 @@ impl crate::game::ServerGame<'_> {
     /// `SculkSensorBlock.stepOn` and `SculkShriekerBlock.stepOn`: standing on
     /// them is heard (or seen) every tick.
     pub(in crate::game::server_side) fn sculk_step_on(&mut self) {
+        if self.server.sculk.level.index.is_empty() {
+            return;
+        }
         self.sculk_step_on_player();
-        let mut standing: Vec<(Who, [f64; 3])> = Vec::new();
+        let mut standing = std::mem::take(&mut self.server.sculk.scratch.standing);
+        standing.clear();
         for m in &self.common.mobs {
             if m.alive() && m.ground.on_ground {
-                standing.push((Who::Mob(m.id), [m.position.x, m.position.y, m.position.z]));
+                let key = (
+                    m.position.x.floor() as i32,
+                    (m.position.y - 0.2).floor() as i32,
+                    m.position.z.floor() as i32,
+                );
+                if self.server.sculk.level.index.contains(&key) {
+                    standing.push((Who::Mob(m.id), [m.position.x, m.position.y, m.position.z]));
+                }
             }
         }
-        self.sculk_stand_on(standing);
+        self.sculk_stand_on(&standing);
+        standing.clear();
+        self.server.sculk.scratch.standing = standing;
     }
     /// `stepOn` for the player in place: the host, or a guest swapped in
     /// (`guest_server_tick`), as a server has no player of its own.
     pub(in crate::game) fn sculk_step_on_player(&mut self) {
+        if self.server.sculk.level.index.is_empty() {
+            return;
+        }
         if let Some(p) = self.common.player.as_ref()
             && p.ground.on_ground
         {
             let at = [p.position.x, p.position.y, p.position.z];
-            self.sculk_stand_on(vec![(Who::Player, at)]);
+            let key = (
+                at[0].floor() as i32,
+                (at[1] - 0.2).floor() as i32,
+                at[2].floor() as i32,
+            );
+            if self.server.sculk.level.index.contains(&key) {
+                self.sculk_stand_on(&[(Who::Player, at)]);
+            }
         }
     }
-    pub(in crate::game::server_side) fn sculk_stand_on(&mut self, standing: Vec<(Who, [f64; 3])>) {
-        for (who, at) in standing {
+    pub(in crate::game::server_side) fn sculk_stand_on(&mut self, standing: &[(Who, [f64; 3])]) {
+        for &(who, at) in standing {
             // getOnPosLegacy: 0.2 below the feet.
             let key = (
                 at[0].floor() as i32,
@@ -1911,7 +2043,7 @@ impl crate::game::ServerGame<'_> {
     /// A `shrieker_respond` block event.
     pub(in crate::game) fn shrieker_block_event(&mut self, pos: BlockPos, state: BlockStateId) {
         let key = (pos.x, pos.y, pos.z);
-        let warning = self.sculk_entity(key).map_or(0, |e| e.warning_level);
+        let warning = self.sculk_entity_ref(key).map_or(0, |e| e.warning_level);
         self.shrieker_respond(key, state, warning);
     }
     pub(in crate::game::server_side) fn warden_reply_sound(
@@ -2841,10 +2973,33 @@ pub mod item_use_event_fixture {
 mod swap_level_tests {
     use super::*;
 
-    fn sorted_coords(set: &HashSet<(i32, i32)>) -> Vec<(i32, i32)> {
+    fn sorted_coords(set: &FxHashSet<(i32, i32)>) -> Vec<(i32, i32)> {
         let mut out: Vec<_> = set.iter().copied().collect();
         out.sort_unstable();
         out
+    }
+
+    #[test]
+    fn index_rank_of_matches_insertion_order_across_removals_and_reinsertions() {
+        let mut index = Index::default();
+        assert!(index.is_empty());
+        assert_eq!(index.rank_of(&(1, 64, 1)), None);
+        index.insert((1, 64, 1));
+        index.insert((2, 64, 2));
+        index.insert((3, 64, 3));
+        assert!(!index.is_empty());
+        let r1 = index.rank_of(&(1, 64, 1)).unwrap();
+        let r2 = index.rank_of(&(2, 64, 2)).unwrap();
+        let r3 = index.rank_of(&(3, 64, 3)).unwrap();
+        assert!(r1 < r2 && r2 < r3);
+        index.remove(&(2, 64, 2));
+        assert_eq!(index.rank_of(&(2, 64, 2)), None);
+        index.insert((2, 64, 2));
+        let r2_new = index.rank_of(&(2, 64, 2)).unwrap();
+        assert!(r3 < r2_new);
+        let mut keys = [(2, 64, 2), (3, 64, 3), (1, 64, 1)];
+        keys.sort_unstable_by_key(|k| index.rank_of(k).unwrap());
+        assert_eq!(keys, [(1, 64, 1), (3, 64, 3), (2, 64, 2)]);
     }
 
     #[test]
@@ -2902,6 +3057,7 @@ mod swap_level_tests {
             tracker_loaded: true,
             listeners: vec![3, 5],
             listeners_of: Some(stamp),
+            scratch: SculkScratch::default(),
         };
         let mut parked = SculkLevelState {
             index: index_b,
