@@ -29,19 +29,22 @@ pub(in crate::game) struct Win {
 }
 impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn open_win_screen(&mut self, poem: bool, finish: Finish) {
-        let screen = WinScreen::new(
-            poem,
-            &self.common.pack.source,
-            &self.common.options.player_name(),
-            &self.client.gui.atlas.font,
-        );
-        self.client.win = Some(Win {
-            screen,
-            finish,
-            frame: Instant::now(),
+        self.transition_screen(Screen::Win, false, |game, accepted| {
+            if accepted == Some(Screen::Win) {
+                let screen = WinScreen::new(
+                    poem,
+                    &game.common.pack.source,
+                    &game.common.options.player_name(),
+                    &game.client.gui.atlas.font,
+                );
+                game.client.win = Some(Win {
+                    screen,
+                    finish,
+                    frame: Instant::now(),
+                });
+                game.clear_device_keys();
+            }
         });
-        self.clear_device_keys();
-        self.set_screen(Screen::Win);
     }
     /// Stop the scroll `scroll` pixels in (`sunrise-ctl credits ... SCROLL`).
     pub(in crate::game::client_side) fn hold_win_screen(&mut self, scroll: f32) {
@@ -124,23 +127,23 @@ impl crate::game::ClientGame<'_> {
     }
     /// `WinScreen.respawn` (`onFinished`) and `removed`: the credits music stops.
     pub(in crate::game::client_side) fn close_win_screen(&mut self) -> Result<()> {
-        let Some(win) = self.client.win.take() else {
+        let Some(finish) = self.client.win.as_ref().map(|win| win.finish) else {
             return Ok(());
         };
-        let credits = mod_api::client::music::Music::credits();
-        self.client
-            .music
-            .stop_playing_music(&credits, None, &mut self.client.audio.0);
-        match win.finish {
-            Finish::Options => self.set_screen(Screen::Options),
-            Finish::Closed if self.client.title.0.is_some() => self.set_screen(Screen::Playing),
-            Finish::RemoteRespawn | Finish::Closed => {
-                if win.finish == Finish::RemoteRespawn {
-                    self.remote_respawn();
-                }
-                self.set_screen(Screen::Playing);
+        let next = match finish {
+            Finish::Options => Screen::Options,
+            Finish::RemoteRespawn | Finish::Closed => Screen::Playing,
+        };
+        self.set_screen_with(next, |game| {
+            game.client.win = None;
+            let credits = mod_api::client::music::Music::credits();
+            game.client
+                .music
+                .stop_playing_music(&credits, None, &mut game.client.audio.0);
+            if finish == Finish::RemoteRespawn {
+                game.remote_respawn();
             }
-        }
+        });
         Ok(())
     }
 }

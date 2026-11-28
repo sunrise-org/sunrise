@@ -221,13 +221,17 @@ impl crate::game::ClientGame<'_> {
         }
     }
     pub fn close_advancements(&mut self) {
-        // AdvancementsScreen.removed: the server hears the screen closed.
-        self.send(sunrise_protocol::packets::play::Serverbound::SeenAdvancements(closed_screen()));
-        if self.client.adv_ui.0.from_pause {
-            self.set_screen(Screen::Paused);
+        let next = if self.client.adv_ui.0.from_pause {
+            Screen::Paused
         } else {
-            self.set_screen(Screen::Playing);
-        }
+            Screen::Playing
+        };
+        self.set_screen_with(next, |game| {
+            // AdvancementsScreen.removed: the server hears the screen closed.
+            game.send(
+                sunrise_protocol::packets::play::Serverbound::SeenAdvancements(closed_screen()),
+            );
+        });
     }
     /// `ClientAdvancements.setSelectedTab` with `tellServer` enabled.
     pub fn select_advancement_tab(&mut self, tab: usize) {

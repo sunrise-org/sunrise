@@ -19,20 +19,25 @@ impl crate::game::ClientGame<'_> {
     }
 
     pub(in crate::game::client_side) fn open_gamemode_switcher(&mut self) {
-        self.client.gamemode_switcher = Some(GameModeSwitcher::new(
-            self.common.mode,
-            self.common.previous_mode,
-        ));
-        self.set_screen(Screen::GameModeSwitcher);
-        self.clear_device_keys();
-        self.set_mapping_held("key.attack", false);
-        self.set_mapping_held("key.use", false);
-        self.set_client_mining(None);
+        self.transition_screen(Screen::GameModeSwitcher, false, |game, accepted| {
+            if accepted == Some(Screen::GameModeSwitcher) {
+                game.client.gamemode_switcher = Some(GameModeSwitcher::new(
+                    game.common.mode,
+                    game.common.previous_mode,
+                ));
+                game.clear_device_keys();
+                game.set_mapping_held("key.attack", false);
+                game.set_mapping_held("key.use", false);
+                game.set_client_mining(None);
+            }
+        });
     }
 
     pub(in crate::game::client_side) fn close_gamemode_switcher(&mut self, apply: bool) {
-        let selected = self.client.gamemode_switcher.take().map(|s| s.selected);
-        self.set_screen(Screen::Playing);
+        let mut selected = None;
+        self.set_screen_with(Screen::Playing, |game| {
+            selected = game.client.gamemode_switcher.take().map(|s| s.selected);
+        });
         if apply
             && self.common.player.is_some()
             && self.gamemaster()

@@ -144,8 +144,7 @@ impl crate::game::ClientGame<'_> {
     }
     /// `Screen.onClose`: back to the title when no level is open, otherwise the game.
     pub(in crate::game::client_side) fn close_debug_options(&mut self) {
-        self.client.debug_options = None;
-        self.set_screen(Screen::Playing);
+        self.set_screen_with(Screen::Playing, |game| game.client.debug_options = None);
     }
     /// The header's title row and warning (`init`'s vertical layout,
     /// centred in the header): the title's x, the row's top, the warning's

@@ -152,8 +152,9 @@ impl crate::game::ClientGame<'_> {
         self.set_screen(Screen::CommandBlock);
     }
     pub(in crate::game::client_side) fn close_command_block(&mut self) {
-        self.client.command_block_screen.0 = None;
-        self.set_screen(Screen::Playing);
+        self.set_screen_with(Screen::Playing, |game| {
+            game.client.command_block_screen.0 = None
+        });
     }
     pub(in crate::game::client_side) fn draw_command_block(&mut self, batch: &mut HudBatch) {
         let Some(s) = self.client.command_block_screen.0.as_ref() else {

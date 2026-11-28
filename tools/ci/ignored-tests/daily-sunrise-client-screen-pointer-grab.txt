@@ -1,0 +1,3 @@
+# Vetoed openings preserve the gameplay grab; accepted Escape releases it.
+sunrise-client cut_layout::game::client_side::play_keys::pause_close_tests::cancelling_inventory_opening_preserves_the_gameplay_pointer_grab lib daily resources
+sunrise-client cut_layout::game::client_side::play_keys::pause_close_tests::escape_releases_the_pointer_only_if_the_pause_menu_opens lib daily resources
