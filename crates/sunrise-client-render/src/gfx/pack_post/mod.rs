@@ -336,6 +336,9 @@ mod indirect_dispatch_tests;
 mod forced_flip_tests;
 
 #[cfg(test)]
+mod frame_start_swap_tests;
+
+#[cfg(test)]
 mod flip_only_tests;
 
 #[cfg(test)]

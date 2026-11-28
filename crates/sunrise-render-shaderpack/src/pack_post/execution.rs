@@ -578,8 +578,10 @@ impl PackPost {
         // Every frame starts on A. A buffer that isn't cleared and ended the last frame on B has B
         // copied back to A, and B keeps what was last written into it: a model that fits Iris 1.11.7's
         // values in probe packs of our own (#9009), not a documented Iris rule. colortex0's A is
-        // overwritten by the world below.
-        for b in (1..BUFFERS).filter(|&b| self.main & 1 << b != 0 && self.clears[b].is_none()) {
+        // overwritten by the world below. A buffer of `swaps` stays on B instead: its other side
+        // is replaced whole before anything reads it, so the frame draws as with the copy.
+        let copied = self.main & !self.swaps;
+        for b in (1..BUFFERS).filter(|&b| copied & 1 << b != 0 && self.clears[b].is_none()) {
             if let Some([a, b_side]) = &targets.color[b] {
                 encoder.copy_texture_to_texture(
                     b_side.texture().as_image_copy(),
@@ -588,7 +590,7 @@ impl PackPost {
                 );
             }
         }
-        self.main = 0;
+        self.main &= self.swaps;
         let main = |m: u16, i: usize| usize::from(m & 1 << i != 0);
         let view = |m: u16, i: usize, alt: bool| {
             targets.color[i]
@@ -936,7 +938,7 @@ impl PackPost {
                     let [x, y, w, h] = viewport(out, scale);
                     rp.set_viewport(x, y, w, h, 0.0, 1.0);
                 }
-                rp.draw(0..6, 0..1);
+                rp.draw(0..super::coverage::QUAD_VERTICES, 0..1);
             }
             self.main ^= pass.flip;
             self.mips_valid &= !pass.written;
@@ -2690,7 +2692,7 @@ impl PackPost {
                 if self.copied & 1 << i != 0 {
                     attachment |= wgpu::TextureUsages::COPY_SRC;
                 }
-                // A buffer that isn't cleared starts each frame with B copied back to A.
+                // A buffer that isn't cleared may start a frame with B copied back to A.
                 if i != 0 && self.clears[i].is_none() {
                     attachment |= wgpu::TextureUsages::COPY_SRC | wgpu::TextureUsages::COPY_DST;
                 }

@@ -419,6 +419,10 @@ pub struct Pass {
     pub shadow_reads: u16,
     /// Buffers written.
     pub written: u16,
+    /// Buffers of `written` whose every pixel the draw provably replaces: no blend, all
+    /// channels (the three of a three-channel buffer), a vertex stage covering the screen and no
+    /// discard (`coverage`). The frame-start swap reads it (`PackPost::swaps`).
+    pub rewrites: u16,
     /// Buffers whose mip chain is regenerated right before it (6.1.7).
     pub mipmaps: u16,
     /// Reads the per-draw block (`DrawUniforms`).
