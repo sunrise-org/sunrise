@@ -59,6 +59,7 @@ fn pack() -> Post {
             attributes: vec![],
             after: String::new(),
             alpha_test: None,
+            prelude: None,
         }),
         ..Default::default()
     };

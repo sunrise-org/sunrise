@@ -36,12 +36,18 @@ mod image_parameters;
 mod integer_bounds;
 mod interface_blocks;
 mod ordering;
+mod prelude;
 mod reachability;
 mod rewrite;
 mod scan;
 mod varyings;
 
 pub use geometry::{GeometryInputs, translate_geometry};
+pub use prelude::{
+    FRAGMENT_DISCARD_FN, MOD_SET_BASE, PackPrelude, PreludeBinding, PreludeError,
+    PreludeImageAccess, PreludeLayout, PreludeResourceKind, PreludeStages, PreludeVertexInput,
+    VERTEX_INIT_FN, validate_pack_prelude,
+};
 
 use scan::Stage;
 #[cfg(test)]
@@ -223,6 +229,13 @@ pub struct GbuffersInputs {
     /// (`sunriseWaterPatch*`, camera-relative boxes) is discarded, so no water casts its light
     /// into a hull. Not with a geometry stage.
     pub water_patches: bool,
+    /// Optional mod-supplied GLSL preludes (`PackBinding::{vertex_prelude, fragment_prelude}`).
+    /// When `vertex` is `Some`, the pipeline's real vertex inputs are solely those declared in the
+    /// vertex prelude (possibly none), every pack-declared attribute stays a private global, and
+    /// `sunrise_pack_vertex_init()` runs before the pack's `main`. When `fragment` defines
+    /// `bool sunrise_pack_fragment_discard()`, non-shadow passes call it before the pack's
+    /// fragment `main` and apply `discard` last (after output copies and alpha test).
+    pub prelude: Option<PackPrelude>,
 }
 
 /// Terrain's two parts drawn in one pass (`GbuffersInputs::parts`).
@@ -325,26 +338,11 @@ const GBUFFERS_MATRICES: &str = "    hz_ModelViewMatrix = gbufferModelView;\n   
      mat4 hz_light = mat4(vec4(1.0 / 256.0, 0.0, 0.0, 0.0), vec4(0.0, 1.0 / 256.0, 0.0, 0.0), vec4(0.0, 0.0, 1.0, 0.0), vec4(1.0 / 32.0, 1.0 / 32.0, 0.0, 1.0));\n    \
      hz_TextureMatrix = mat4[8](mat4(1.0), hz_light, hz_light, mat4(1.0), mat4(1.0), mat4(1.0), mat4(1.0), mat4(1.0));\n";
 
-/// The type of a game input a vertex stage may read without declaring it: terrain's
-/// `mc_chunkFade`, and the core-profile vertex attributes (`vaPosition`...) that a
-/// `#version 130` line program reads as it would in a core-profile one (Complementary
-/// Reimagined r5.9.3's `gbuffers_line`).
-fn implicit_input_type(name: &str) -> Option<&'static str> {
-    Some(match name {
-        "mc_chunkFade" => "float",
-        "vaPosition" | "vaNormal" => "vec3",
-        "vaColor" => "vec4",
-        "vaUV0" => "vec2",
-        "vaUV1" | "vaUV2" => "ivec2",
-        _ => return None,
-    })
-}
-
 /// The game inputs `vertex` reads without declaring them, as (name, value, type): each of
-/// `given` (`GbuffersInputs::attributes`) with an `implicit_input_type` that the stage names and
-/// doesn't declare (`scanned`, the stage's scan): an attribute (`in`, `attribute`), a uniform,
-/// a constant, a variable, a struct, a block, its instance or, without one, its member of that
-/// name keeps its own.
+/// `given` (`GbuffersInputs::attributes`) with an [`crate::reserved::implicit_input_type`] that
+/// the stage names and doesn't declare (`scanned`, the stage's scan): an attribute (`in`,
+/// `attribute`), a uniform, a constant, a variable, a struct, a block, its instance or, without
+/// one, its member of that name keeps its own.
 fn implicit_inputs<'a>(
     given: &'a [(String, String)],
     vertex: &Preprocessed,
@@ -353,7 +351,11 @@ fn implicit_inputs<'a>(
     given
         .iter()
         .filter_map(|(name, value)| {
-            Some((name.as_str(), value.as_str(), implicit_input_type(name)?))
+            Some((
+                name.as_str(),
+                value.as_str(),
+                crate::reserved::implicit_input_type(name)?,
+            ))
         })
         .filter(|(name, _, _)| {
             uses_name(vertex.code(), name)
@@ -498,6 +500,52 @@ fn translate(
             samplers.insert(name.clone(), ty.clone());
         }
     }
+
+    // Parse and merge any mod-supplied stage preludes before binding uniforms/samplers/varyings.
+    let parsed_v_prelude = match gbuffers
+        .and_then(|g| g.prelude.as_ref())
+        .and_then(|p| p.vertex.as_deref())
+    {
+        Some(src) => match prelude::ParsedStagePrelude::parse(src, ShaderStage::Vertex) {
+            Ok(parsed) => Some(parsed),
+            Err(err) => {
+                errors.push(Error::new(vertex.file(), 0, err.to_string()));
+                None
+            }
+        },
+        None => None,
+    };
+    let parsed_f_prelude = match gbuffers
+        .and_then(|g| g.prelude.as_ref())
+        .and_then(|p| p.fragment.as_deref())
+    {
+        Some(src) => match prelude::ParsedStagePrelude::parse(src, ShaderStage::Fragment) {
+            Ok(parsed) => Some(parsed),
+            Err(err) => {
+                errors.push(Error::new(fragment.file(), 0, err.to_string()));
+                None
+            }
+        },
+        None => None,
+    };
+    let merged_v_prelude = parsed_v_prelude
+        .as_ref()
+        .map(|p| p.merge_into_stage(&mut v, &mut uniforms, &mut samplers, &mut errors));
+    let merged_f_prelude = parsed_f_prelude
+        .as_ref()
+        .map(|p| p.merge_into_stage(&mut f, &mut uniforms, &mut samplers, &mut errors));
+    if merged_f_prelude.as_ref().is_some_and(|m| m.uses_frag_coord) {
+        f.frag_coord = true;
+    }
+    let has_vertex_prelude = merged_v_prelude.is_some();
+    if has_vertex_prelude {
+        // Hoist pack-declared vertex `in`/`attribute` statements into the header so prelude
+        // helpers and `sunrise_pack_vertex_init()` see them regardless of file order, while
+        // keeping line numbers in the rewritten pack body unchanged.
+        for range in &v.attribute_ranges {
+            v.removed.push(range.clone());
+        }
+    }
     if gbuffers.is_some() {
         // The references use the geometry transform state instead of a second frame slot.
         for name in ["projectionMatrix", "modelViewMatrix"] {
@@ -586,10 +634,31 @@ fn translate(
     // Inputs the game gives that the vertex stage reads without declaring them (terrain's
     // fade, a line program's `vaPosition`...): injected only when the renderer provides the
     // value; a declared attribute and an authored global of that name keep their own.
+    let prelude_va_attrs: Vec<(String, String)> = if let Some(vp) = &merged_v_prelude {
+        let lm = if vp.lightmap_from_texcoord2 {
+            "ivec2(hz_MultiTexCoord2.xy)"
+        } else {
+            "ivec2(hz_MultiTexCoord1.xy)"
+        };
+        vec![
+            ("vaPosition".to_owned(), "hz_Vertex.xyz".to_owned()),
+            ("vaColor".to_owned(), "hz_Color".to_owned()),
+            ("vaUV0".to_owned(), "hz_MultiTexCoord0.xy".to_owned()),
+            ("vaUV1".to_owned(), "ivec2(0, 10)".to_owned()),
+            ("vaUV2".to_owned(), lm.to_owned()),
+            ("vaNormal".to_owned(), "hz_Normal".to_owned()),
+        ]
+    } else {
+        Vec::new()
+    };
     let implicit = implicit_inputs(
-        gbuffers
-            .map(|g| g.attributes.as_slice())
-            .unwrap_or_default(),
+        if has_vertex_prelude {
+            prelude_va_attrs.as_slice()
+        } else {
+            gbuffers
+                .map(|g| g.attributes.as_slice())
+                .unwrap_or_default()
+        },
         vertex,
         &v,
     );
@@ -642,7 +711,9 @@ fn translate(
             }
         }
         if let (Some(inputs), ShaderStage::Vertex) = (gbuffers, stage.kind) {
-            h.push_str(&inputs.declarations);
+            if !has_vertex_prelude {
+                h.push_str(&inputs.declarations);
+            }
             // False in a stage that writes an image or a buffer, translated again for it.
             writeln!(h, "\nuint hz_vertex_index;\n{RUNS_AGAIN}").unwrap();
             for (name, _, ty) in &implicit {
@@ -650,6 +721,23 @@ fn translate(
             }
         }
         h.push_str(&stage.prelude());
+        if stage.kind == ShaderStage::Vertex
+            && let Some(vp) = &merged_v_prelude
+        {
+            // Hoist pack-declared vertex attributes as private globals before prelude helpers.
+            let mut emitted = std::collections::BTreeSet::new();
+            for (name, _, ty) in &v.attributes {
+                if !vp.shadowed_pack_attributes.contains(name) && emitted.insert(name.as_str()) {
+                    writeln!(h, "{ty} {name};").unwrap();
+                }
+            }
+            h.push_str(&vp.header_decls);
+        }
+        if stage.kind == ShaderStage::Fragment
+            && let Some(fp) = &merged_f_prelude
+        {
+            h.push_str(&fp.header_decls);
+        }
         h
     };
     let flip = if target == Target::Buffers { "-" } else { "" };
@@ -659,31 +747,89 @@ fn translate(
     // clip space. Ours runs it once, for `hz_vertex_index` in a gbuffers program; the game's
     // `after` may run it again (`GbuffersInputs::after`).
     let mut vertex_main = String::from("\nvoid hz_vertex() {\n");
-    match gbuffers {
-        None => vertex_main.push_str(
-            "    vec2 hz_p = hz_quad[gl_VertexIndex];\n    hz_Vertex = vec4(hz_p, 0.0, 1.0);\n    \
-             hz_MultiTexCoord0 = hz_Vertex;\n    hz_Color = vec4(1.0);\n    hz_Normal = vec3(0.0, 0.0, 1.0);\n",
-        ),
-        Some(inputs) => vertex_main.push_str(&inputs.body.replace("gl_VertexIndex", "hz_vertex_index")),
-    }
-    for (name, given, ty) in &implicit {
-        writeln!(vertex_main, "    {name} = {ty}({given});").unwrap();
-    }
-    if let Some((solid, _)) = parts {
-        writeln!(vertex_main, "    hz_cutout = ({solid}) ? 0u : 1u;").unwrap();
-        vertex_main.push_str(part_ref.as_deref().unwrap_or_default());
-    }
-    for (name, value, ty) in &v.attributes {
-        let value = match gbuffers {
-            // Our quad's values for a composite.
-            None => value.clone(),
-            // The game's, or zero for anything it doesn't provide.
-            Some(inputs) => match inputs.attributes.iter().find(|a| &a.0 == name) {
-                Some((_, given)) => format!("{ty}({given})"),
-                None => format!("{ty}(0)"),
-            },
+    if let Some(vp) = &merged_v_prelude {
+        // Default standard compatibility inputs, zero pack attributes, then call the mod's init
+        // function and propagate core-profile `va*` attributes from whatever init wrote.
+        vertex_main.push_str(
+            "    hz_Vertex = vec4(0.0, 0.0, 0.0, 1.0);\n    \
+             hz_Color = vec4(1.0);\n    \
+             hz_MultiTexCoord0 = vec4(0.0, 0.0, 0.0, 1.0);\n    \
+             hz_MultiTexCoord1 = vec4(240.0, 240.0, 0.0, 1.0);\n    \
+             hz_MultiTexCoord2 = hz_MultiTexCoord1;\n    \
+             hz_Normal = vec3(0.0, 1.0, 0.0);\n",
+        );
+        for (name, _, ty) in &v.attributes {
+            if !vp.shadowed_pack_attributes.contains(name) {
+                writeln!(vertex_main, "    {name} = {ty}(0);").unwrap();
+            }
+        }
+        writeln!(vertex_main, "    {}();", prelude::VERTEX_INIT_FN).unwrap();
+        let lm_expr = if vp.lightmap_from_texcoord2 {
+            "hz_MultiTexCoord2.xy"
+        } else {
+            "hz_MultiTexCoord1.xy"
         };
-        writeln!(vertex_main, "    {name} = {value};").unwrap();
+        for (name, _, ty) in &v.attributes {
+            if vp.shadowed_pack_attributes.contains(name) {
+                continue;
+            }
+            let va_value = match name.as_str() {
+                "vaPosition" => Some(if ty == "vec4" {
+                    "hz_Vertex".to_owned()
+                } else {
+                    format!("{ty}(hz_Vertex.xyz)")
+                }),
+                "vaColor" => Some(if ty == "vec3" {
+                    "hz_Color.rgb".to_owned()
+                } else {
+                    format!("{ty}(hz_Color)")
+                }),
+                "vaUV0" => Some(if ty == "vec4" {
+                    "hz_MultiTexCoord0".to_owned()
+                } else {
+                    format!("{ty}(hz_MultiTexCoord0.xy)")
+                }),
+                "vaUV1" => Some(format!("{ty}(ivec2(0, 10))")),
+                "vaUV2" => Some(format!("{ty}({lm_expr})")),
+                "vaNormal" => Some(format!("{ty}(hz_Normal)")),
+                _ => None,
+            };
+            if let Some(val) = va_value {
+                writeln!(vertex_main, "    {name} = {val};").unwrap();
+            }
+        }
+        for (name, given, ty) in &implicit {
+            writeln!(vertex_main, "    {name} = {ty}({given});").unwrap();
+        }
+    } else {
+        match gbuffers {
+            None => vertex_main.push_str(
+                "    vec2 hz_p = hz_quad[gl_VertexIndex];\n    hz_Vertex = vec4(hz_p, 0.0, 1.0);\n    \
+                 hz_MultiTexCoord0 = hz_Vertex;\n    hz_Color = vec4(1.0);\n    hz_Normal = vec3(0.0, 0.0, 1.0);\n",
+            ),
+            Some(inputs) => {
+                vertex_main.push_str(&inputs.body.replace("gl_VertexIndex", "hz_vertex_index"))
+            }
+        }
+        for (name, given, ty) in &implicit {
+            writeln!(vertex_main, "    {name} = {ty}({given});").unwrap();
+        }
+        if let Some((solid, _)) = parts {
+            writeln!(vertex_main, "    hz_cutout = ({solid}) ? 0u : 1u;").unwrap();
+            vertex_main.push_str(part_ref.as_deref().unwrap_or_default());
+        }
+        for (name, value, ty) in &v.attributes {
+            let value = match gbuffers {
+                // Our quad's values for a composite.
+                None => value.clone(),
+                // The game's, or zero for anything it doesn't provide.
+                Some(inputs) => match inputs.attributes.iter().find(|a| &a.0 == name) {
+                    Some((_, given)) => format!("{ty}({given})"),
+                    None => format!("{ty}(0)"),
+                },
+            };
+            writeln!(vertex_main, "    {name} = {value};").unwrap();
+        }
     }
     vertex_main.push_str(fog);
     if run_again {
@@ -788,6 +934,18 @@ fn translate(
         )
         .unwrap();
     }
+    let run_fragment_discard = !shadow
+        && merged_f_prelude
+            .as_ref()
+            .is_some_and(|fp| fp.fragment_discard_fn.is_some());
+    if run_fragment_discard {
+        writeln!(
+            fragment_main,
+            "    bool hz_prelude_discard = {}();",
+            prelude::FRAGMENT_DISCARD_FN
+        )
+        .unwrap();
+    }
     fragment_main.push_str("    hz_main();\n");
     for copy in &f.out_copies {
         writeln!(fragment_main, "    {copy}").unwrap();
@@ -813,18 +971,49 @@ fn translate(
             None => fragment_main.push_str(&alpha_test(g.alpha_test)),
         }
     }
+    if run_fragment_discard {
+        fragment_main.push_str("    if (hz_prelude_discard) { discard; }\n");
+    }
     fragment_main.push_str("}\n");
 
     let (v_header, f_header) = (header(&v), header(&f));
-    let v_code = format!("{}{vertex_main}", v.rewrite(&samplers, &uniforms));
-    let f_code = format!("{}{fragment_main}", f.rewrite(&samplers, &uniforms));
+    let mut v_all_samplers = samplers.clone();
+    if let Some(vp) = &merged_v_prelude {
+        v_all_samplers.extend(vp.extra_samplers.iter().cloned());
+    }
+    let mut f_all_samplers = samplers.clone();
+    if let Some(fp) = &merged_f_prelude {
+        f_all_samplers.extend(fp.extra_samplers.iter().cloned());
+    }
+    let v_init_suffix = merged_v_prelude
+        .as_ref()
+        .and_then(|vp| vp.vertex_init_fn.as_deref())
+        .map(|f| format!("\n{f}\n"))
+        .unwrap_or_default();
+    let f_discard_suffix = merged_f_prelude
+        .as_ref()
+        .and_then(|fp| fp.fragment_discard_fn.as_deref())
+        .map(|f| format!("\n{f}\n"))
+        .unwrap_or_default();
+    let v_code = format!(
+        "{}{v_init_suffix}{vertex_main}",
+        v.rewrite(&v_all_samplers, &uniforms)
+    );
+    let f_code = format!(
+        "{}{f_discard_suffix}{fragment_main}",
+        f.rewrite(&f_all_samplers, &uniforms)
+    );
     if !errors.is_empty() {
         return Err(errors);
     }
     let mut vertex_module = compile(&v, &v_header, &v_code, limits);
     // A stage that writes an image or a buffer runs once per vertex: run again by the game's
     // `after`, it would write twice. One that only reads them is run again like any other.
-    if run_again && vertex_module.as_ref().is_ok_and(writes_storage) {
+    if run_again
+        && vertex_module
+            .as_ref()
+            .is_ok_and(sunrise_glsl::module_writes_storage)
+    {
         let once = v_header.replacen(RUNS_AGAIN, RUNS_ONCE, 1);
         vertex_module = compile(&v, &once, &v_code, limits);
     }
@@ -833,6 +1022,31 @@ fn translate(
         (Ok(v), Ok(f)) => (v, f),
         (a, b) => return Err(a.err().into_iter().chain(b.err()).flatten().collect()),
     };
+    // A pack fragment shader that writes storage or forces `early_fragment_tests` cannot safely
+    // combine with a post-`main` prelude discard; leave that mod pipeline unbound without
+    // rejecting the pack.
+    if run_fragment_discard {
+        if sunrise_glsl::module_writes_storage(&fragment) {
+            return Err(vec![Error::new(
+                f.pp.file(),
+                0,
+                format!(
+                    "fragment prelude defines `{}` but the pack fragment shader writes storage images or buffers; leaving mod pipeline unbound",
+                    prelude::FRAGMENT_DISCARD_FN
+                ),
+            )]);
+        }
+        if sunrise_glsl::module_uses_early_depth_test(&fragment) {
+            return Err(vec![Error::new(
+                f.pp.file(),
+                0,
+                format!(
+                    "fragment prelude defines `{}` but the pack fragment shader declares `early_fragment_tests`; leaving mod pipeline unbound",
+                    prelude::FRAGMENT_DISCARD_FN
+                ),
+            )]);
+        }
+    }
     let (initial_values, notes) = defaults::merge([(&v, &vertex), (&f, &fragment)])?;
     let (uniform_size, members) = block_layout(&fragment);
     let uniforms = members
@@ -896,43 +1110,6 @@ fn alpha_test(test: Option<AlphaTest>) -> String {
 const RUNS_AGAIN: &str = "const bool hz_vertex_reruns = true;";
 const RUNS_ONCE: &str = "const bool hz_vertex_reruns = false;";
 
-/// Whether `module` writes an image or a buffer anywhere: an image store or atomic, an atomic,
-/// or a store into a global of the storage address space (through any member or index).
-fn writes_storage(module: &naga::Module) -> bool {
-    use naga::{Expression as E, Statement as S};
-    fn storage(module: &naga::Module, f: &naga::Function, mut e: naga::Handle<E>) -> bool {
-        loop {
-            match f.expressions[e] {
-                E::Access { base, .. } | E::AccessIndex { base, .. } => e = base,
-                E::GlobalVariable(g) => {
-                    return matches!(
-                        module.global_variables[g].space,
-                        naga::AddressSpace::Storage { .. }
-                    );
-                }
-                _ => return false,
-            }
-        }
-    }
-    fn block(module: &naga::Module, f: &naga::Function, b: &naga::Block) -> bool {
-        b.iter().any(|s| match s {
-            S::ImageStore { .. } | S::ImageAtomic { .. } | S::Atomic { .. } => true,
-            S::Store { pointer, .. } => storage(module, f, *pointer),
-            S::CooperativeStore { target, .. } => storage(module, f, *target),
-            S::Block(b) => block(module, f, b),
-            S::If { accept, reject, .. } => block(module, f, accept) || block(module, f, reject),
-            S::Switch { cases, .. } => cases.iter().any(|c| block(module, f, &c.body)),
-            S::Loop {
-                body, continuing, ..
-            } => block(module, f, body) || block(module, f, continuing),
-            _ => false,
-        })
-    }
-    (module.functions.iter().map(|(_, f)| f))
-        .chain(module.entry_points.iter().map(|e| &e.function))
-        .any(|f| block(module, f, &f.body))
-}
-
 /// Images an atomic function uses (naga gave them atomic access) are bound for atomics.
 fn mark_atomic(module: &naga::Module, images: &mut [Image]) {
     for (_, g) in module.global_variables.iter() {
@@ -944,6 +1121,7 @@ fn mark_atomic(module: &naga::Module, images: &mut [Image]) {
             continue;
         };
         if let Some(b) = &g.binding
+            && b.group == 0
             && access.contains(naga::StorageAccess::ATOMIC)
             && let Some(i) = images.iter_mut().find(|i| i.binding == b.binding)
         {

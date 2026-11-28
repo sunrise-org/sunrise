@@ -222,6 +222,7 @@ fn translate(fsh: &str) -> Result<crate::Translated, Vec<crate::Error>> {
         finish: "",
         vertex_id: "int(gl_VertexIndex)",
         fragment_finish: None,
+        fragment_rewrite: crate::FragmentRewrite::NONE,
         interface: crate::tests::LIMITS,
     };
     crate::tests::translate_core(vsh, fsh, &[], &|_| None, &glue)

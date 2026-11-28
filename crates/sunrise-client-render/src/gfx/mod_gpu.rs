@@ -35,6 +35,17 @@ pub(crate) struct ModFrameState {
     pub(crate) pack_iris: bool,
 }
 
+/// High-water marks of the mod GPU handle ID sequences, captured without retaining GPU handles so
+/// a replacement renderer continues them across device-loss recovery.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ModGpuIds {
+    meshes: u64,
+    uniforms: u64,
+    storage: u64,
+    readbacks: u64,
+    render_targets: u64,
+}
+
 /// A frame-graph problem logged once per reload, keyed by its kind so a cycle can never
 /// suppress an undeclared-read warning that shares its labels.
 #[derive(PartialEq, Eq, Hash)]
@@ -67,6 +78,7 @@ pub struct ModGpuResources {
     /// Distinct [`FrameGraphWarning`]s already logged once since last reload.
     pub(super) warned_frame_graph: Arc<Mutex<HashSet<FrameGraphWarning>>>,
     render_capabilities: RenderCapabilities,
+    read_only_depth_stencil: bool,
     max_buffer_size: u64,
     /// Retained GPU vertex/index buffers backing [`mod_api::MeshRef`].
     pub(crate) meshes: Arc<Mutex<ModMeshes>>,
@@ -103,6 +115,10 @@ impl ModGpuResources {
             .alloc_view_id();
         Self {
             render_capabilities: probe_render_capabilities(&adapter, &device),
+            read_only_depth_stencil: adapter
+                .get_downlevel_capabilities()
+                .flags
+                .contains(wgpu::DownlevelFlags::READ_ONLY_DEPTH_STENCIL),
             max_buffer_size: device.limits().max_buffer_size,
             adapter,
             device,
@@ -119,16 +135,47 @@ impl ModGpuResources {
         }
     }
 
+    /// Snapshot the current handle ID high-water marks without retaining GPU handles.
+    pub fn id_state(&self) -> ModGpuIds {
+        ModGpuIds {
+            meshes: self
+                .meshes
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .next_generation,
+            uniforms: self
+                .uniforms
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .next_generation,
+            storage: self
+                .storage
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .next_generation,
+            readbacks: self
+                .readbacks
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .next_id,
+            render_targets: self
+                .render_targets
+                .lock()
+                .unwrap_or_else(|e| e.into_inner())
+                .next_generation,
+        }
+    }
+
     /// Before publishing a replacement renderer, continue the old handle ID sequences in
     /// any fresh stores. The retired allocations and pending work stay on the old device.
-    pub fn continue_ids_from(&self, previous: &Self) {
-        carry_counter(&self.meshes, &previous.meshes, |s| &mut s.next_generation);
-        carry_counter(&self.uniforms, &previous.uniforms, |s| {
+    pub fn continue_ids_from(&self, previous: ModGpuIds) {
+        raise_counter(&self.meshes, previous.meshes, |s| &mut s.next_generation);
+        raise_counter(&self.uniforms, previous.uniforms, |s| {
             &mut s.next_generation
         });
-        carry_counter(&self.storage, &previous.storage, |s| &mut s.next_generation);
-        carry_counter(&self.readbacks, &previous.readbacks, |s| &mut s.next_id);
-        carry_counter(&self.render_targets, &previous.render_targets, |s| {
+        raise_counter(&self.storage, previous.storage, |s| &mut s.next_generation);
+        raise_counter(&self.readbacks, previous.readbacks, |s| &mut s.next_id);
+        raise_counter(&self.render_targets, previous.render_targets, |s| {
             &mut s.next_generation
         });
     }
@@ -151,7 +198,8 @@ impl ModGpuResources {
 
     /// The active world depth view for `TextureSource::WorldDepth`, with the view ID that keys its
     /// bind groups: a new one each time the renderer swaps its world depth
-    /// (`Renderer::swap_world_depth`).
+    /// (`Renderer::swap_world_depth`) or switches between the window depth and `WorldPost`'s
+    /// scaled depth target (`ModGpuResources::publish_world_depth`).
     pub fn mod_world_depth_texture_view(&self) -> (u64, wgpu::TextureView) {
         self.world_depth
             .lock()
@@ -168,6 +216,15 @@ impl ModGpuResources {
             .unwrap_or_else(|e| e.into_inner())
             .alloc_view_id();
         *self.world_depth.lock().unwrap_or_else(|e| e.into_inner()) = (id, view);
+    }
+
+    /// Publishes `view` as the active world depth under a fresh binding ID when it differs from
+    /// the view currently published, leaving steady-state frames on the same view ID.
+    pub(super) fn publish_world_depth(&self, view: &wgpu::TextureView) {
+        if self.world_depth.lock().unwrap_or_else(|e| e.into_inner()).1 == *view {
+            return;
+        }
+        self.replace_world_depth(view.clone());
     }
 
     /// A mod's dynamic texture by its handle, with the revision that keys its bind group.
@@ -213,6 +270,12 @@ impl ModGpuResources {
         self.render_capabilities.multi_draw_indirect_count
     }
 
+    /// Whether the adapter supports attaching a depth-stencil texture read-only (`depth_ops: None`)
+    /// while simultaneously sampling it in a render pass (`DownlevelFlags::READ_ONLY_DEPTH_STENCIL`).
+    pub fn read_only_depth_stencil(&self) -> bool {
+        self.read_only_depth_stencil
+    }
+
     /// The largest inline uniform and texel-buffer payloads a mod's set-1 draw may bind: the
     /// device's `max_uniform_buffer_binding_size` and `max_storage_buffer_binding_size`, each
     /// capped by `max_buffer_size`.
@@ -229,17 +292,10 @@ impl ModGpuResources {
     }
 }
 
-fn carry_counter<T>(
-    new: &Arc<Mutex<T>>,
-    old: &Arc<Mutex<T>>,
-    counter: impl Fn(&mut T) -> &mut u64,
-) {
-    if !Arc::ptr_eq(new, old) {
-        // The old facade was still callable until publication. Read its final high-water mark
-        // now, and release its lock before taking the new table's lock.
-        let last = *counter(&mut old.lock().unwrap_or_else(|e| e.into_inner()));
-        *counter(&mut new.lock().unwrap_or_else(|e| e.into_inner())) = last;
-    }
+fn raise_counter<T>(store: &Arc<Mutex<T>>, last: u64, counter: impl Fn(&mut T) -> &mut u64) {
+    let mut guard = store.lock().unwrap_or_else(|e| e.into_inner());
+    let slot = counter(&mut guard);
+    *slot = (*slot).max(last);
 }
 
 /// Renderer methods that forward to its [`ModGpuResources`].

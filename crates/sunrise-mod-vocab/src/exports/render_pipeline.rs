@@ -1,4 +1,3 @@
-pub use client::render_pipeline::PackProgramMode;
 pub use client::render_pipeline::Sampler;
 pub use client::render_pipeline::{
     BUILTIN_RENDER_TYPE_IDS, BindEntry, BindGroupLayout, BindGroupLayoutBuilder,
@@ -8,11 +7,11 @@ pub use client::render_pipeline::{
 pub use client::render_pipeline::{
     ColorTargetState, ColorWrite, DepthCompare, DepthState, DrawBindings, DrawRange, IndexFormat,
     LayeringTransform, MAX_COLOR_TARGETS, MAX_PUSH_CONSTANT_SIZE, MAX_VERTEX_BINDINGS,
-    MAX_VERTEX_ELEMENTS,
+    MAX_VERTEX_ELEMENTS, StencilOperation, StencilPerFaceTest, StencilTest,
 };
 pub use client::render_pipeline::{
     MeshBackendRef, MeshBufferInit, MeshContext, MeshDescriptor, MeshDraw, MeshError,
-    MeshIndexInit, MeshRef, OutlineProperty, PackBinding, PackDepthTarget, PackGlslInput,
+    MeshIndexInit, MeshRef, OutlineProperty, PackBinding, PackDepthTarget,
 };
 pub use client::render_pipeline::{
     OffscreenPass, RenderTargetBackendRef, RenderTargetContext, RenderTargetDepth,

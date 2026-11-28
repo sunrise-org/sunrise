@@ -361,7 +361,14 @@ Fill the levels from the CPU with `update_dynamic_texture_region(id, mip_level, 
 
 When an Iris/OptiFine shader pack is active and owns terrain rendering, a mod pipeline without a
 pack override draws its own GLSL program into the pack's world targets before the pack's
-composite chain runs, so composite and `final` passes shade it alongside the world.
+composite chain runs, so composite and `final` passes shade it alongside the world. Author those
+shaders in Sunrise's one world convention (screen rows, reversed-Z `[1..0]`, CCW front faces,
+unmodified `ProjMat`): when drawing into a pack's standard-Z, GL-rows targets, the engine adapts
+clip position (`gl_Position`), winding (`FrontFace::Cw`, keeping `gl_FrontFacing` unchanged),
+`gl_FragDepth` (only when the shader writes it, leaving early depth tests intact when it does
+not), `gl_FragCoord`, and `dFdy`/`dFdyFine`/`dFdyCoarse` automatically. Pack-linked preludes
+running inside a pack's own shaders are not rewritten and keep the pack's standard-Z, GL-rows
+conventions (see below).
 
 To let an active Iris/OptiFine shader pack shade a pipeline's geometry with its own program, declare
 its `PipelineGeometryClass` on registration via `.geometry_class(...)`:
@@ -409,24 +416,102 @@ from `host.shader_pack_state().map(|state| state.generation)` each frame; see
 [Shadow pass, clouds and pack changes](#shadow-pass-clouds-and-pack-changes). Item and entity ids
 (`item.properties`, `entity.properties`) are not part of it.
 
-### Your own vertex stage, and the main depth
+### Shader-pack preludes (far terrain and custom geometry)
 
-`PackBinding::program_mode(PackProgramMode::ModVertexPackFragment)` keeps your own vertex shader,
-with its `VertexFormat` and its set-1 bindings, and links it to the fragment stage of the pack's
-program for one of the pipeline's stems, so your geometry is shaded into the pack's `colortex*`
-buffers by the pack's own code. The stages link by GLSL varying name, as Iris links them: the
-pack's translator picks each varying's location, so name your vertex outputs after the pack's
-varyings (a struct member or `out` variable named `uv` feeds the pack's `varying vec2 uv`) and the
-engine renumbers them to the pack's locations; the order you declare them in does not matter. It
-works only when the pack ships such a program and every varying its fragment stage reads is
-written by your vertex shader under the same name, type and interpolation. It is also refused when
-the pack's program has a geometry stage, which needs the pack's own vertex stage. When any of this
-fails, or the device cannot hold your bind groups after the pack's (the adapter's own
-`max_bind_groups`), the pipeline is unbound: `pipeline_pack_bound` reports `false` and your own
-shaders draw. Your bind groups go after the pack's, which are left as the pack declared them; a
-vertex shader that uses push constants is left unbound.
+When a shader pack ships dedicated programs for your pipeline's stems (such as `dh_terrain`,
+`dh_water` or `dh_shadow` for far terrain) and those programs expect custom attributes, helper
+functions, or mod-owned GPU resources, attach optional GLSL preludes with
+`PackBinding::vertex_prelude` and `PackBinding::fragment_prelude`. The pack's own vertex and
+fragment stages both run unchanged — preserving shadow distortion, waving geometry, and pack
+outputs — while your prelude supplies what the pack expects:
 
-For example, to write world depth from `AfterTranslucentGbuffers`, use `.depth_write(true)` and
+- **`vertex_prelude`** may declare optional vertex inputs (`layout(location = N) in ...`,
+  matching your pipeline's `VertexFormat` by location — or none at all when pulling vertices
+  from a storage buffer via `gl_VertexIndex` / `gl_InstanceIndex`), globals, varyings `out`,
+  loose pack uniforms (`frame_uniforms`), constants, helper functions, and mod bind-group
+  resources (`layout(set = 0, binding = N)` for the pipeline's frame uniforms and
+  `layout(set = 1, binding = N)` for your `BindGroupLayout`, which the engine relocates above the
+  pack's own sets). It must define one `void sunrise_pack_vertex_init()`, called first in the
+  pack's vertex `main` to populate the standard compatibility inputs (`gl_Vertex`, `gl_Color`,
+  `gl_MultiTexCoord0..2`, `gl_Normal`) and any pack-declared attributes (`mc_Entity`,
+  `at_tangent`, etc.); anything left unset keeps the engine's defaults. In prelude mode every
+  attribute the pack declares becomes a private global rather than a vertex input.
+- **`fragment_prelude`** may declare varyings `in`, mod bind-group resources (`set = 0` /
+  `set = 1`), loose pack uniforms/samplers, constants, and helper functions. It must not define
+  `sunrise_pack_vertex_init`. It may optionally define `bool sunrise_pack_fragment_discard()`:
+  in non-shadow passes the translated pack fragment `main` calls it before the pack's `main` and
+  keeps the answer, runs the pack's `main`, output copies and alpha test unchanged, and applies
+  `discard` last when the answer was `true`. Because the answer is computed before the pack's
+  `main`, any `gl_FragDepth` written by the pack does not feed it. Inside a pack program,
+  `gl_FragCoord` is standard-Z (`[0, 1]`, near = `0`, far = `1`) and GL rows (`y = 0.5` at the
+  bottom), so a prelude reading a reversed-Z, top-down depth texture does its own `1.0 - z` and
+  row flip. The engine never calls `sunrise_pack_fragment_discard()` in `PackPassSlot::Shadow`.
+  If the prelude defines it and the pack fragment writes storage or declares
+  `early_fragment_tests`, the mod pipeline is left unbound (logged once) while the pack stays
+  loaded.
+- **Registration & collision rules:** Preludes are parsed and validated on their own at startup;
+  invalid GLSL, reserved pack/engine/implicit names, bad sets or bindings, and stage-visibility
+  mismatches refuse registration with a typed error. When binding a pack program, an identical
+  variable, input, uniform, or varying declaration from both pack and prelude is deduplicated
+  (the pack's stands); a different type, a function-name collision, a translation failure, or a
+  geometry-stage program leaves the pipeline unbound (logged once, with no fallback stem) so your
+  own fallback shader draws.
+
+Far-terrain example (vertex-pulled storage buffer + auxiliary depth plane + custom material ID):
+
+```rust,ignore
+let aux_depth = PackDepthTarget::new(Identifier::parse("distant_sunrises:depth")?)
+    .depth_sampler("dhDepthTex0")
+    .opaque_depth_sampler("dhDepthTex1");
+
+event.register(
+    RenderPipeline::new(
+        Identifier::parse("distant_sunrises:far_terrain")?,
+        Identifier::parse("distant_sunrises:core/far_terrain")?,
+        PipelineBlend::Opaque,
+        WorldDepth::Tested,
+    )
+    .depth_write(true)
+    .cull(true)
+    .geometry_class(PipelineGeometryClass::Terrain)
+    .bind_group_layout(far_terrain_layout)
+    .pack_binding(
+        PackBinding::new()
+            .program("dh_terrain")
+            .slot(PackPassSlot::AfterOpaqueGbuffers)
+            .define("DISTANT_HORIZONS")
+            .depth_target(aux_depth)
+            .frame_uniform(
+                PackUniformDecl::new("dhProjection", PackUniformType::Mat4)
+                    .with_previous("dhPreviousProjection"),
+            )
+            .frame_uniform(PackUniformDecl::new("dhProjectionInverse", PackUniformType::Mat4))
+            .frame_uniform(PackUniformDecl::new("dhNearPlane", PackUniformType::Float))
+            .frame_uniform(PackUniformDecl::new("dhFarPlane", PackUniformType::Float))
+            .frame_uniform(PackUniformDecl::new("modelOffset", PackUniformType::Vec3))
+            .vertex_prelude(
+                "layout(set = 1, binding = 0, std430) readonly buffer FarVerts { vec4 pos[]; };\n\
+                 layout(set = 1, binding = 1, std430) readonly buffer FarMeta { uvec4 meta[]; };\n\
+                 int dhMaterialId;\n\
+                 void sunrise_pack_vertex_init() {\n\
+                     vec4 p = pos[gl_VertexIndex];\n\
+                     uvec4 m = meta[gl_VertexIndex];\n\
+                     gl_Vertex = vec4(p.xyz, 1.0);\n\
+                     gl_Color = vec4(unpackUnorm4x8(m.x));\n\
+                     gl_MultiTexCoord1 = vec4(float(m.y & 255u), float(m.y >> 8u), 0.0, 1.0);\n\
+                     gl_Normal = vec3(0.0, 1.0, 0.0);\n\
+                     dhMaterialId = int(m.z);\n\
+                 }\n",
+            )
+            .fragment_prelude(
+                "layout(set = 1, binding = 2) uniform sampler2D dhNoise;\n\
+                 float dh_sampleNoise(vec2 uv) { return texture(dhNoise, uv).r; }\n",
+            ),
+    ),
+);
+```
+
+For writing world depth directly from `AfterTranslucentGbuffers`, use `.depth_write(true)` and
 `PackBinding::depth_target(PackDepthTarget::Main)`. See `PackDepthTarget` in the
 [mod API rustdoc](../../reference/api.md) for attachment selection and write rules.
 
@@ -446,8 +531,10 @@ and read unchanged by that frame's render callbacks:
   frame's values. Use them to cull shadow-casting geometry you submit to `PackPassSlot::Shadow`
   against the shadow volume (Iris's `ShadowRenderer` `MODELVIEW` and `PROJECTION`).
 - `generation`: changes every time a pack is loaded, switched or turned off, and at no other time.
-  Compare it each frame and re-read whatever you derived from the pack when it differs. It covers a
-  pack switch that fires no resource reload.
+  It continues across renderer rebuilds (resource reloads, frame-shape rebuilds and graphics device
+  recovery) rather than resetting, and wraps around after `u32::MAX`. Compare it each frame and
+  re-read whatever you derived from the pack when it differs. It covers a pack switch that fires no
+  resource reload.
 
 `host.render_assets().pipeline_pack_bound(pipeline)` says whether the active pack compiled a program
 for the pipeline's `PackBinding`. It is `false` with no pack, for a stale or invalid handle, and when
@@ -477,11 +564,20 @@ event.register(
   solid geometry with `depth_write(true)`).
 - `PolygonMode::Line` requires the device's wireframe feature (`POLYGON_MODE_LINE`); if the GPU
   lacks it, the pipeline (or modifier variant) is refused.
-- Depth is a `DepthState` (`compare`, `write`, `depth_bias_constant`, `depth_bias_slope_scale`) in
-  `PipelineState::depth_stencil`. `.depth(WorldDepth)` is the coarse form (`Tested` is
-  `DepthCompare::GreaterEqual` over Sunrise's reversed depth, `ThroughWalls` is `Always`);
-  `.depth_compare`, `.depth_bias(constant, slope_scale)` and `.depth_stencil(Option<DepthState>)`
-  set it exactly. `.depth_stencil(None)` declares a depthless pipeline.
+- Depth is a `DepthState` (`compare`, `write`, `depth_bias_constant`, `depth_bias_slope_scale`,
+  `stencil_test`) in `PipelineState::depth_stencil`. `.depth(WorldDepth)` is the coarse form
+  (`Tested` is `DepthCompare::GreaterEqual` over Sunrise's reversed depth, `ThroughWalls` is
+  `Always`); `.depth_compare`, `.depth_bias(constant, slope_scale)` and
+  `.depth_stencil(Option<DepthState>)` set it exactly. `.depth_stencil(None)` declares a depthless
+  pipeline.
+- Stencil testing lives on `DepthState::stencil_test` (`Option<StencilTest>`, `None` = off), using
+  NeoForge's `StencilTest`, `StencilPerFaceTest`, and `StencilOperation` types (`StencilTest::both`
+  applies one face rule to front and back; masks default to `u32::MAX`, reference to `0`). On
+  offscreen targets with a stencil plane (`RenderTargetDepth::Depth24PlusStencil8`), the renderer
+  applies the stencil state and binds `StencilTest::reference_value` automatically. On targets
+  without a stencil plane (such as `Depth32Float` or the main world pass), stencil state has no
+  effect and is not refused. A `PipelineModifier` can replace or clear it with
+  `.stencil_test(Some(test))` or `.stencil_test(None)`.
 - `PipelineBlend::Custom(BlendFunction)` takes separate colour and alpha equations (factors and
   `BlendOp`), with vanilla's presets as `BlendFunction` constants. `ConstantColor`,
   `ConstantAlpha` and their one-minus forms are refused when the pipeline is registered, because
@@ -667,10 +763,18 @@ same `register_render_pipelines` hook as a draw pipeline.
    created with `indirect: true`.
 
 A workgroup size, workgroup storage or binding count over the device's limits makes the pipeline
-resolve `Invalid`. A shader that needs subgroup operations resolves `UnsupportedFeature` when
-`RenderCapabilities::subgroup` is false, and a dispatch over
-`max_compute_workgroups_per_dimension` returns `TooManyWorkgroups`. To sample the live world depth
-from a compute node, declare `.reads(FrameTarget::MainDepth)` and bind `TextureSource::WorldDepth`.
+resolve `Invalid`. A compute shader that needs subgroup operations resolves `UnsupportedFeature`
+when `RenderCapabilities::subgroup` is false, and a dispatch over
+`max_compute_workgroups_per_dimension` returns `TooManyWorkgroups`. Likewise, a `RenderPipeline`
+whose fragment shader declares `layout(early_fragment_tests) in;` resolves
+`RenderPipelineError::UnsupportedFeature` when `RenderCapabilities::shader_early_depth_test` is
+false (Metal, DirectX 12, and Adreno Vulkan), and a fragment shader that writes storage buffers or
+storage images resolves `RenderPipelineError::UnsupportedFeature` when
+`RenderCapabilities::fragment_writable_storage` is false (Vulkan without `fragmentStoresAndAtomics`
+or OpenGL below 4.3). `cargo sunrise-mod check` skips Metal and DirectX 12 backend checks for
+`early_fragment_tests` shaders and prints a note naming `shader_early_depth_test`. To sample the
+live world depth from a compute node, declare `.reads(FrameTarget::MainDepth)` and bind
+`TextureSource::WorldDepth`.
 The same sampler rules apply as for standalone draws. Free retained storage buffers and render
 targets with `release`.
 

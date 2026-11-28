@@ -142,6 +142,7 @@ pub fn inputs() -> sunrise_shaders::GbuffersInputs {
         paged_maps: true,
         water_mask: false,
         water_patches: false,
+        prelude: None,
     }
 }
 
@@ -209,6 +210,7 @@ pub fn cloud_inputs() -> sunrise_shaders::GbuffersInputs {
         paged_maps: false,
         water_mask: false,
         water_patches: false,
+        prelude: None,
     }
 }
 

@@ -145,7 +145,7 @@ pub fn share_samplers(module: &mut naga::Module, slot: &HashMap<u32, u32>) {
         let Some(b) = g.binding.as_mut() else {
             continue;
         };
-        if !matches!(module.types[g.ty].inner, naga::TypeInner::Sampler { .. }) {
+        if b.group != 0 || !matches!(module.types[g.ty].inner, naga::TypeInner::Sampler { .. }) {
             continue;
         }
         let Some(&to) = slot.get(&b.binding) else {

@@ -237,6 +237,19 @@ pub(super) fn packed_lookup(source: &str, name: &str, n: usize) -> Vec<u32> {
 /// Qualcomm's PCI vendor id, which wgpu reports for Adreno GPUs.
 const ADRENO: u32 = 0x5143;
 
+/// Whether `adapter` and `device` support forced hardware early depth tests
+/// (`layout(early_fragment_tests) in;` / `@early_depth_test(force)`) reliably with fragment
+/// storage writes: Vulkan or OpenGL with `SHADER_EARLY_DEPTH_TEST`, excluding Adreno GPUs whose
+/// Vulkan driver mis-executes storage writes under forced early-Z.
+pub(super) fn early_depth_test_supported(adapter: &wgpu::Adapter, device: &wgpu::Device) -> bool {
+    let info = adapter.get_info();
+    matches!(info.backend, wgpu::Backend::Vulkan | wgpu::Backend::Gl)
+        && info.vendor != ADRENO
+        && device
+            .features()
+            .contains(wgpu::Features::SHADER_EARLY_DEPTH_TEST)
+}
+
 impl Cull {
     /// The device feature culling needs, where the adapter has it.
     pub fn features(adapter: &wgpu::Adapter) -> wgpu::Features {
@@ -249,22 +262,19 @@ impl Cull {
     /// storage.
     pub fn supported(adapter: &wgpu::Adapter, device: &wgpu::Device) -> Option<DepthTest> {
         let info = adapter.get_info();
-        let depth_test = match info.backend {
-            // Adreno's Vulkan driver (the AYANEO Pocket DS's Adreno 740, build 0676.41) now and
-            // then leaves sections out with the early test, the world flashing black or
-            // see-through as a block breaks; the test in the shader, as on Metal, holds.
-            wgpu::Backend::Vulkan if info.vendor == ADRENO => DepthTest::InShader,
-            wgpu::Backend::Vulkan | wgpu::Backend::Gl
-                if device
-                    .features()
-                    .contains(wgpu::Features::SHADER_EARLY_DEPTH_TEST) =>
-            {
-                DepthTest::Early
+        let depth_test = if early_depth_test_supported(adapter, device) {
+            DepthTest::Early
+        } else {
+            match info.backend {
+                // Adreno's Vulkan driver (the AYANEO Pocket DS's Adreno 740, build 0676.41) now and
+                // then leaves sections out with the early test, the world flashing black or
+                // see-through as a block breaks; the test in the shader, as on Metal, holds.
+                wgpu::Backend::Vulkan if info.vendor == ADRENO => DepthTest::InShader,
+                // DirectX 12 has no forced early depth test in wgpu either: the test runs in the
+                // shader there too.
+                wgpu::Backend::Metal | wgpu::Backend::Dx12 => DepthTest::InShader,
+                _ => return None,
             }
-            // DirectX 12 has no forced early depth test in wgpu either: the test runs in the
-            // shader there too.
-            wgpu::Backend::Metal | wgpu::Backend::Dx12 => DepthTest::InShader,
-            _ => return None,
         };
         (device
             .features()

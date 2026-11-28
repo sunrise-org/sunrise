@@ -107,10 +107,12 @@ pub(super) fn assign(
     }
 }
 
-/// Whether `stage`'s code names `name` outside the declarations moved into the header.
+/// Whether `stage`'s code (or its prelude) names `name` outside the declarations moved into the
+/// header.
 fn reads(stage: &Stage, name: &str) -> bool {
-    (stage.tokens.iter().enumerate())
-        .any(|(i, t)| *t == name && !stage.removed.iter().any(|r| r.contains(&i)))
+    stage.prelude_reads.contains(name)
+        || (stage.tokens.iter().enumerate())
+            .any(|(i, t)| *t == name && !stage.removed.iter().any(|r| r.contains(&i)))
 }
 
 /// `decl` without its interpolation qualifiers: a plain global's declaration.

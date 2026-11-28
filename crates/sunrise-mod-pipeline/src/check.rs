@@ -1,6 +1,8 @@
 //! Backend translation checks and located diagnostics for mod render pipeline GLSL programs.
 use naga::ShaderStage;
-use naga::valid::{Capabilities, ModuleInfo, ValidationFlags, Validator};
+use naga::valid::{
+    Capabilities, ModuleInfo, ShaderStages, SubgroupOperationSet, ValidationFlags, Validator,
+};
 use std::fmt;
 
 /// What is wrong, and where: a file by its asset path (`assets/<namespace>/<path>`, an `#include`d
@@ -43,7 +45,11 @@ pub fn problem(file: &str, stage: Option<ShaderStage>, message: impl Into<String
 /// DirectX 12 (HLSL), catching backend panics so a mod shader never takes down the game or
 /// `cargo sunrise-mod check`. Returns each refusal as `<backend> refuses it: <reason>`.
 pub fn translate_backends(module: &naga::Module) -> Vec<String> {
-    let info = match Validator::new(ValidationFlags::all(), Capabilities::all()).validate(module) {
+    let info = match Validator::new(ValidationFlags::all(), Capabilities::all())
+        .subgroup_operations(SubgroupOperationSet::all())
+        .subgroup_stages(ShaderStages::all())
+        .validate(module)
+    {
         Ok(info) => info,
         Err(err) => return vec![format!("validation failed: {err}")],
     };
@@ -58,37 +64,51 @@ fn translate_validated(module: &naga::Module, info: &ModuleInfo) -> Vec<String> 
             naga::back::spv::write_vec(
                 module,
                 info,
-                &naga::back::spv::Options::default(),
+                &naga::back::spv::Options {
+                    lang_version: (1, 3),
+                    ..Default::default()
+                },
                 Some(&naga::back::spv::PipelineOptions {
                     shader_stage: e.stage,
                     entry_point: e.name.clone(),
                 }),
             )
         });
-        let msl = refusal(|| {
-            naga::back::msl::write_string(
-                module,
-                info,
-                &naga::back::msl::Options {
-                    lang_version: (2, 2),
-                    ..Default::default()
-                },
-                &naga::back::msl::PipelineOptions {
-                    entry_point: Some((e.stage, e.name.clone())),
-                    ..Default::default()
-                },
-            )
-        });
-        let hlsl = refusal(|| {
-            naga::back::hlsl::Writer::new(
-                &mut String::new(),
-                &naga::back::hlsl::Options::default(),
-                &naga::back::hlsl::PipelineOptions {
-                    entry_point: Some((e.stage, e.name.clone())),
-                },
-            )
-            .write(module, info, None)
-        });
+        // Forced hardware early depth tests (`layout(early_fragment_tests) in;`) are gated at
+        // runtime by `RenderCapabilities::shader_early_depth_test` (Vulkan/OpenGL, non-Adreno), so
+        // skip Metal (MSL) and DirectX 12 (HLSL) backend checks when the entry point uses them.
+        let (msl, hlsl) = if e.early_depth_test.is_some() {
+            (None, None)
+        } else {
+            let msl = refusal(|| {
+                naga::back::msl::write_string(
+                    module,
+                    info,
+                    &naga::back::msl::Options {
+                        lang_version: (2, 4),
+                        ..Default::default()
+                    },
+                    &naga::back::msl::PipelineOptions {
+                        entry_point: Some((e.stage, e.name.clone())),
+                        ..Default::default()
+                    },
+                )
+            });
+            let hlsl = refusal(|| {
+                naga::back::hlsl::Writer::new(
+                    &mut String::new(),
+                    &naga::back::hlsl::Options {
+                        shader_model: naga::back::hlsl::ShaderModel::V6_0,
+                        ..Default::default()
+                    },
+                    &naga::back::hlsl::PipelineOptions {
+                        entry_point: Some((e.stage, e.name.clone())),
+                    },
+                )
+                .write(module, info, None)
+            });
+            (msl, hlsl)
+        };
         for (backend, err) in [
             ("Vulkan (SPIR-V)", spv),
             ("Metal", msl),

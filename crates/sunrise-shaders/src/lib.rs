@@ -28,6 +28,7 @@ mod pack;
 mod post;
 mod preprocess;
 mod properties;
+mod reserved;
 mod screens;
 mod textures;
 mod translate;
@@ -60,14 +61,21 @@ pub use post::{
 };
 pub use preprocess::{Diagnostic, Origin, Preprocessed, preprocess};
 pub use properties::{Entry, Note, Properties, Tonemap};
+pub use reserved::{
+    GBUFFERS_CENTER_DEPTH, GBUFFERS_FOG_MODE, GBUFFERS_FOG_SHAPE, PACK_UNIFORM_NAMES,
+    implicit_input_type, is_valid_glsl_identifier, reserved_pack_identifier,
+    reserved_prelude_identifier,
+};
 pub use screens::{Item as ScreenItem, Screens};
 pub use textures::{
     CustomTexture, Dim as TextureDim, EVERY_STAGE, PngError, Texels, Texture, TextureSource,
     decode_png, load_textures, resolve_resources,
 };
 pub use translate::{
-    AlphaTest, ComputeProgram, DRAW_UNIFORMS, Error, GbuffersInputs, GeometryInputs, Image,
-    Interface, Parts, Program, Sampler, Target, Uniform, WATER_MASK, WATER_PATCHES,
-    translate_composite, translate_compute, translate_gbuffers, translate_geometry,
-    translate_shadow,
+    AlphaTest, ComputeProgram, DRAW_UNIFORMS, Error, FRAGMENT_DISCARD_FN, GbuffersInputs,
+    GeometryInputs, Image, Interface, MOD_SET_BASE, PackPrelude, Parts, PreludeBinding,
+    PreludeError, PreludeImageAccess, PreludeLayout, PreludeResourceKind, PreludeStages,
+    PreludeVertexInput, Program, Sampler, Target, Uniform, VERTEX_INIT_FN, WATER_MASK,
+    WATER_PATCHES, translate_composite, translate_compute, translate_gbuffers, translate_geometry,
+    translate_shadow, validate_pack_prelude,
 };

@@ -62,15 +62,10 @@ impl Renderer {
             };
             let mod_runtime = crate::mod_pipelines::pack_runtime_specs();
             let mod_vertex_buffers = [Some(mod_pipelines::PipelineVertex::buffer_layout())];
-            let mod_set1_layouts: Vec<Option<&wgpu::BindGroupLayout>> = self
+            let mod_layouts = self
                 .world_primitives
                 .as_ref()
-                .map(|wp| wp.pipelines.set1_bind_group_layouts())
-                .unwrap_or_default();
-            let mod_vertex_stages = self
-                .world_primitives
-                .as_ref()
-                .map(|wp| wp.pipelines.pack_vertex_stages())
+                .map(|wp| wp.pipelines.pack_mod_layouts())
                 .unwrap_or_default();
             pack_post::PackPost::new_with_mods(
                 (&self.device, &self.queue, &self.adapter),
@@ -78,8 +73,8 @@ impl Renderer {
                 self.output.frame.format,
                 world,
                 mod_runtime
-                    .as_runtime_with_layouts(&mod_vertex_buffers, &mod_set1_layouts)
-                    .with_vertex_stages(&mod_vertex_stages),
+                    .as_runtime(&mod_vertex_buffers)
+                    .with_mod_layouts(&mod_layouts),
                 &std::sync::atomic::AtomicBool::new(false),
             )
         });
@@ -150,6 +145,17 @@ impl Renderer {
     /// Counts a shader pack loaded, switched or turned off (`ShaderPackState::generation`).
     fn pack_changed(&mut self) {
         self.pack_generation = self.pack_generation.wrapping_add(1);
+    }
+    /// The last `ShaderPackState::generation` this renderer counted, to hand to the renderer
+    /// that replaces it ([`Self::continue_pack_generation`]).
+    pub fn pack_generation(&self) -> u32 {
+        self.pack_generation
+    }
+    /// Before this renderer is published in place of one whose last generation was `previous`,
+    /// continue that count, keeping the pack changes this one already counted. The count wraps
+    /// around after `u32::MAX`, as every pack change counts it.
+    pub fn continue_pack_generation(&mut self, previous: u32) {
+        self.pack_generation = previous.wrapping_add(self.pack_generation);
     }
     /// The running pack as a mod reads it this frame, or `None` while the panorama shows or no
     /// pack runs. `frame` gives the camera, so the shadow matrices are this frame's.
@@ -255,21 +261,10 @@ impl Renderer {
         }
         let clouds = self.cloud_bindings.clone();
         let mod_runtime = crate::mod_pipelines::pack_runtime_specs();
-        let mod_set1_owned: Vec<Option<wgpu::BindGroupLayout>> = self
+        let mod_layouts = self
             .world_primitives
             .as_ref()
-            .map(|wp| {
-                wp.pipelines
-                    .set1_bind_group_layouts()
-                    .into_iter()
-                    .map(|l| l.cloned())
-                    .collect()
-            })
-            .unwrap_or_default();
-        let mod_vertex_stages = self
-            .world_primitives
-            .as_ref()
-            .map(|wp| wp.pipelines.pack_vertex_stages())
+            .map(|wp| wp.pipelines.pack_mod_layouts())
             .unwrap_or_default();
         let cancel = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
         let cancelled = cancel.clone();
@@ -277,8 +272,6 @@ impl Renderer {
             let buffers = pack_terrain_buffers();
             let buffers = &buffers[..terrain_buffer_count(draws)];
             let mod_vertex_buffers = [Some(mod_pipelines::PipelineVertex::buffer_layout())];
-            let mod_set1_refs: Vec<Option<&wgpu::BindGroupLayout>> =
-                mod_set1_owned.iter().map(Option::as_ref).collect();
             let world = pack_post::World {
                 atlas,
                 sprite_rects: &sprite_rects,
@@ -308,8 +301,8 @@ impl Renderer {
                 format,
                 world,
                 mod_runtime
-                    .as_runtime_with_layouts(&mod_vertex_buffers, &mod_set1_refs)
-                    .with_vertex_stages(&mod_vertex_stages),
+                    .as_runtime(&mod_vertex_buffers)
+                    .with_mod_layouts(&mod_layouts),
                 &cancelled,
             );
             // The ids come back with it, for `install_shader_pack`.

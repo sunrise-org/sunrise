@@ -667,38 +667,15 @@ pub enum PackPassSlot {
     AfterWeather,
 }
 
-/// Which stages of a pipeline's pass in a shader pack come from the pack
-/// ([`PackBinding::program_mode`]).
-#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
-#[non_exhaustive]
-// no wire: local client shader-pack program mode.
-pub enum PackProgramMode {
-    /// The pack's matched program (`.vsh` and `.fsh`) replaces both of the mod's stages; its
-    /// vertex stage reads the pipeline's vertices.
-    #[default]
-    PackVertexAndFragment,
-    /// The mod's own vertex stage, with its [`VertexFormat`] and its bind group, is linked to the
-    /// fragment stage of the pack's matched program, which writes the pack's draw buffers.
-    ///
-    /// The stages link by GLSL varying name: each varying the pack's fragment stage reads must be
-    /// written by the mod's vertex stage under the same name (a struct member or `out` variable),
-    /// type and interpolation, and the engine renumbers the mod's outputs to the locations the
-    /// pack's translation gave them. Works only when the pack ships a program for one of the
-    /// pipeline's stems without a geometry stage (that needs the pack's own vertex stage). When
-    /// a varying is missing, unnamed or mistyped, the pack has no such program, or the device
-    /// cannot hold the mod's bind groups after the pack's (its own `max_bind_groups`), the pipeline is unbound
-    /// ([`crate::RenderAssets::pipeline_pack_bound`] is `false`) and the mod's own shaders draw. The
-    /// mod's bind groups go after the pack's, which stay as the pack declared them.
-    ModVertexPackFragment,
-}
-
 /// Optional Iris/OptiFine shader-pack extras attached to a [`RenderPipeline`]
 /// ([`RenderPipeline::pack_binding`]). All identifiers are supplied by the mod; the engine
 /// hardcodes none.
 ///
 /// Startup refuses invalid GLSL identifiers, multi-line or comment-bearing define values,
-/// collisions with reserved built-in pack samplers or uniforms, and cross-mod collisions on
-/// pack samplers, uniforms, defines, or depth-target IDs (naming both mods).
+/// invalid preludes (syntax, reserved/injected/implicit names, missing `sunrise_pack_vertex_init`,
+/// invalid sets or bindings, stage visibility violations), collisions with reserved built-in pack
+/// samplers or uniforms, and cross-mod collisions on pack samplers, uniforms, defines, or
+/// depth-target IDs (naming both mods).
 #[derive(Clone, Debug, Default, PartialEq, Eq)]
 #[non_exhaustive]
 // no wire: local client render-pipeline shader-pack binding descriptor.
@@ -718,15 +695,43 @@ pub struct PackBinding {
     /// Per-frame pack uniforms supplied by the mod under pack-side GLSL names. See
     /// [`PackUniformDecl`] for type mismatches.
     pub frame_uniforms: Vec<PackUniformDecl>,
-    /// Mapping from the pipeline's vertex or per-draw inputs to pack-side GLSL names.
-    pub glsl_bindings: Vec<PackGlslInput>,
-    /// Which stages of the matched pack program run; [`PackProgramMode::PackVertexAndFragment`]
-    /// by default.
-    pub program_mode: PackProgramMode,
+    /// Optional GLSL prelude prepended into the matched pack program's vertex stage.
+    ///
+    /// Declares optional vertex inputs (`layout(location = N) in ...`, matching this pipeline's
+    /// `VertexFormat` by location — or none at all), mod bind-group resources
+    /// (`layout(set = 0, binding = N)` / `layout(set = 1, binding = N)`), globals, varyings
+    /// `out`, loose pack uniforms/samplers, constants, and helper functions. Must define one
+    /// `void sunrise_pack_vertex_init()`, which the engine calls first in the pack's vertex
+    /// `main` to populate the standard compatibility inputs (`gl_Vertex`, `gl_Color`,
+    /// `gl_MultiTexCoord0..2`, `gl_Normal`) and any pack-declared attributes; anything left unset
+    /// keeps the engine's defaults. Every attribute the pack declares becomes a private global
+    /// rather than a vertex input.
+    pub vertex_prelude: Option<String>,
+    /// Optional GLSL prelude prepended into the matched pack program's fragment stage.
+    ///
+    /// Declares optional varyings `in`, mod bind-group resources
+    /// (`layout(set = 0, binding = N)` / `layout(set = 1, binding = N)`), loose pack
+    /// uniforms/samplers, constants, and helper functions. Must not define
+    /// `sunrise_pack_vertex_init`.
+    ///
+    /// May optionally define one `bool sunrise_pack_fragment_discard()`. In non-shadow passes, the
+    /// translated pack fragment `main` calls it before the pack's `main` and keeps the boolean
+    /// answer; the pack's `main` then runs whole and unchanged, followed by output copies and the
+    /// alpha test; last, if the answer was `true`, the fragment is discarded. Because the function
+    /// runs before the pack's `main`, any `gl_FragDepth` written by the pack does not feed it.
+    /// Inside a pack program, `gl_FragCoord` uses standard-Z (`[0, 1]`, near = `0`, far = `1`) and
+    /// GL rows (`y = 0.5` at the bottom), so a prelude comparing against a reversed-Z, top-down
+    /// texture performs its own `1.0 - gl_FragCoord.z` and row flip. The engine never calls
+    /// `sunrise_pack_fragment_discard()` in [`PackPassSlot::Shadow`]. If the prelude defines it
+    /// and the matched pack fragment shader writes storage images/buffers or declares
+    /// `early_fragment_tests`, this mod pipeline is left unbound (logged once) without rejecting
+    /// the pack.
+    pub fragment_prelude: Option<String>,
 }
 
 impl PackBinding {
-    /// An empty shader-pack binding with no extra programs, defines, depth target, or uniforms.
+    /// An empty shader-pack binding with no extra programs, defines, depth target, uniforms, or
+    /// preludes.
     pub fn new() -> Self {
         Self::default()
     }
@@ -771,15 +776,17 @@ impl PackBinding {
         self
     }
 
-    /// Choose which stages of the matched pack program run (see [`PackProgramMode`]).
-    pub fn program_mode(mut self, mode: PackProgramMode) -> Self {
-        self.program_mode = mode;
+    /// Attach a GLSL prelude to the matched pack program's vertex stage
+    /// (see [`PackBinding::vertex_prelude`]).
+    pub fn vertex_prelude(mut self, glsl: impl Into<String>) -> Self {
+        self.vertex_prelude = Some(glsl.into());
         self
     }
 
-    /// Declare one mapping from a pipeline input to a pack-side GLSL input or uniform name.
-    pub fn glsl_binding(mut self, input: PackGlslInput) -> Self {
-        self.glsl_bindings.push(input);
+    /// Attach a GLSL prelude to the matched pack program's fragment stage
+    /// (see [`PackBinding::fragment_prelude`]).
+    pub fn fragment_prelude(mut self, glsl: impl Into<String>) -> Self {
+        self.fragment_prelude = Some(glsl.into());
         self
     }
 
@@ -889,20 +896,6 @@ impl PackBinding {
                 previous_uniforms.insert(prev.as_str());
             }
         }
-        for input in &self.glsl_bindings {
-            if !is_valid_glsl_identifier(&input.source) {
-                return Err(format!(
-                    "invalid pack GLSL binding source {:?}: expected a valid GLSL identifier",
-                    input.source
-                ));
-            }
-            if !is_valid_glsl_identifier(&input.glsl_name) {
-                return Err(format!(
-                    "invalid pack GLSL binding target {:?}: expected a valid GLSL identifier",
-                    input.glsl_name
-                ));
-            }
-        }
         Ok(())
     }
 }
@@ -920,10 +913,6 @@ impl PackBinding {
 /// against the pack's main depth (`depthtex0`), and only [`PackPassSlot::AfterOpaqueGbuffers`]
 /// can write it. Choose [`Self::Main`] to allow writes to main depth in other non-shadow slots,
 /// or [`Self::Aux`] to declare a separate depth plane.
-///
-/// When targeting main depth, a mod's own vertex stage can emit depth in the world's projection
-/// directly, so a mod projecting its own geometry needs no separate depth copy. The fragment
-/// stage is the pack's, so `gl_FragDepth` is not the mod's to write.
 #[derive(Clone, Debug, PartialEq, Eq)]
 #[non_exhaustive]
 // no wire: local client shader-pack depth target descriptor.
@@ -1022,7 +1011,7 @@ impl PackUniformDecl {
     }
 }
 
-/// GLSL value type for a [`PackUniformDecl`] or [`PackGlslInput`].
+/// GLSL value type for a [`PackUniformDecl`].
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
 #[non_exhaustive]
 // no wire: local client shader-pack uniform GLSL type selector.
@@ -1079,7 +1068,9 @@ pub struct ShaderPackState {
     /// Changes every time a shader pack is loaded, switched or turned off, including a reload of
     /// the same pack and a dimension change that loads the pack again, and at no other time.
     /// Compare it each frame and re-read what you derived from the pack when it differs: that
-    /// covers a pack switch with no resource reload.
+    /// covers a pack switch with no resource reload. The count continues when the game rebuilds
+    /// its renderer (a resource reload, recovery from a lost graphics device), and wraps around
+    /// after `u32::MAX`.
     pub generation: u32,
 }
 
@@ -1165,35 +1156,6 @@ impl PackUniformValue {
             Self::Vec4(_) => PackUniformType::Vec4,
             Self::Mat3(_) => PackUniformType::Mat3,
             Self::Mat4(_) => PackUniformType::Mat4,
-        }
-    }
-}
-
-/// Mapping from a pipeline vertex attribute or per-draw value to a pack-side GLSL input name.
-#[derive(Clone, Debug, PartialEq, Eq)]
-#[non_exhaustive]
-// no wire: local client shader-pack GLSL input binding descriptor.
-pub struct PackGlslInput {
-    /// Pipeline-side attribute or per-draw input name.
-    pub source: String,
-    /// Target GLSL identifier seen by the shader pack program (e.g. `gl_Vertex` or a named
-    /// attribute or uniform).
-    pub glsl_name: String,
-    /// GLSL value type of the bound input.
-    pub ty: PackUniformType,
-}
-
-impl PackGlslInput {
-    /// Map pipeline input `source` to pack-side GLSL name `glsl_name` of type `ty`.
-    pub fn new(
-        source: impl Into<String>,
-        glsl_name: impl Into<String>,
-        ty: PackUniformType,
-    ) -> Self {
-        Self {
-            source: source.into(),
-            glsl_name: glsl_name.into(),
-            ty,
         }
     }
 }
@@ -2802,6 +2764,20 @@ pub struct RenderCapabilities {
     /// adapter lacks `MULTI_DRAW_INDIRECT_COUNT`, and on DirectX 12, whose count draws leave an
     /// indexed command's `base_vertex` out of the vertex fetch.
     pub multi_draw_indirect_count: bool,
+    /// Whether the adapter supports forced hardware early depth tests
+    /// (`layout(early_fragment_tests) in;`, `SHADER_EARLY_DEPTH_TEST`) reliably with fragment
+    /// storage writes. True on Vulkan and OpenGL when the device enables
+    /// `SHADER_EARLY_DEPTH_TEST` (excluding Qualcomm Adreno Vulkan drivers, whose early-Z
+    /// storage-write path mis-executes); false on Metal, DirectX 12, and Adreno. A
+    /// [`RenderPipeline`] whose fragment shader declares `layout(early_fragment_tests) in;` is
+    /// refused with [`RenderPipelineError::UnsupportedFeature`] when this is false.
+    pub shader_early_depth_test: bool,
+    /// Whether fragment shaders may write storage buffers or storage images
+    /// (`DownlevelFlags::FRAGMENT_WRITABLE_STORAGE`). False on shipped backends without it
+    /// (Vulkan without `fragmentStoresAndAtomics`, OpenGL below 4.3). A [`RenderPipeline`] whose
+    /// fragment stage writes storage is refused with [`RenderPipelineError::UnsupportedFeature`]
+    /// when this is false.
+    pub fragment_writable_storage: bool,
     /// The device's own size limits, the numbers the buffer, binding, dispatch and render target
     /// refusals are checked against.
     pub limits: RenderLimits,
@@ -3372,7 +3348,147 @@ const fn canonical_f32_bits(value: f32) -> u32 {
     if value == 0.0 { 0 } else { value.to_bits() }
 }
 
-/// Depth test, depth write, and depth bias state
+/// Stencil buffer update operation (`net.neoforged.neoforge.client.stencil.StencilOperation`).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+// no wire: local client render-pipeline stencil operation.
+pub enum StencilOperation {
+    /// Keep the current stencil value.
+    #[default]
+    Keep,
+    /// Set the stencil value to `0`.
+    Zero,
+    /// Replace the stencil value with [`StencilTest::reference_value`].
+    Replace,
+    /// Increment the stencil value, clamping at the maximum representable value.
+    Incr,
+    /// Decrement the stencil value, clamping at `0`.
+    Decr,
+    /// Bitwise invert the current stencil value.
+    Invert,
+    /// Increment the stencil value, wrapping to `0` on overflow.
+    IncrWrap,
+    /// Decrement the stencil value, wrapping to the maximum value on underflow.
+    DecrWrap,
+}
+
+/// Per-face stencil test and update operations
+/// (`net.neoforged.neoforge.client.stencil.StencilPerFaceTest`).
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+// no wire: local client render-pipeline per-face stencil test.
+pub struct StencilPerFaceTest {
+    /// Operation when the stencil test fails (`StencilPerFaceTest.fail`).
+    pub fail: StencilOperation,
+    /// Operation when the stencil test passes and the depth test fails
+    /// (`StencilPerFaceTest.depthFail`).
+    pub depth_fail: StencilOperation,
+    /// Operation when both stencil and depth tests pass (`StencilPerFaceTest.pass`).
+    pub pass: StencilOperation,
+    /// Comparison function between [`StencilTest::reference_value`] (masked by
+    /// [`StencilTest::read_mask`]) and the stencil buffer value (also masked). Never flipped for
+    /// standard-Z targets.
+    pub compare: DepthCompare,
+}
+
+impl StencilPerFaceTest {
+    /// Construct a per-face stencil test.
+    pub const fn new(
+        fail: StencilOperation,
+        depth_fail: StencilOperation,
+        pass: StencilOperation,
+        compare: DepthCompare,
+    ) -> Self {
+        Self {
+            fail,
+            depth_fail,
+            pass,
+            compare,
+        }
+    }
+}
+
+impl Default for StencilPerFaceTest {
+    fn default() -> Self {
+        Self::new(
+            StencilOperation::Keep,
+            StencilOperation::Keep,
+            StencilOperation::Keep,
+            DepthCompare::Always,
+        )
+    }
+}
+
+/// Stencil test and write state (`net.neoforged.neoforge.client.stencil.StencilTest`).
+///
+/// Attached to [`DepthState::stencil_test`]. `None` turns stencil testing off; `Some(test)`
+/// applies `test` when rendering into a target whose depth attachment has a stencil plane (such as
+/// [`RenderTargetDepth::Depth24PlusStencil8`]). On targets without a stencil plane (such as
+/// [`RenderTargetDepth::Depth32Float`] or the main world pass), stencil state has no effect and is
+/// not refused.
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
+#[non_exhaustive]
+// no wire: local client render-pipeline stencil test state.
+pub struct StencilTest {
+    /// Stencil test applied to front-facing primitives (`StencilTest.front`).
+    pub front: StencilPerFaceTest,
+    /// Stencil test applied to back-facing primitives (`StencilTest.back`).
+    pub back: StencilPerFaceTest,
+    /// Bitmask applied to both [`Self::reference_value`] and the stored stencil value before
+    /// comparison (`StencilTest.readMask`). Defaults to `u32::MAX` (all bits, matching NeoForge's
+    /// `-1`).
+    pub read_mask: u32,
+    /// Bitmask controlling which stencil bits may be written (`StencilTest.writeMask`). Defaults
+    /// to `u32::MAX` (all bits, matching NeoForge's `-1`).
+    pub write_mask: u32,
+    /// Reference value compared against and written by [`StencilOperation::Replace`]
+    /// (`StencilTest.referenceValue`). Defaults to `0`.
+    pub reference_value: u32,
+}
+
+impl StencilTest {
+    /// Construct a stencil test with independent front and back face rules.
+    pub const fn new(
+        front: StencilPerFaceTest,
+        back: StencilPerFaceTest,
+        read_mask: u32,
+        write_mask: u32,
+        reference_value: u32,
+    ) -> Self {
+        Self {
+            front,
+            back,
+            read_mask,
+            write_mask,
+            reference_value,
+        }
+    }
+
+    /// Construct a stencil test applying the same rule to front and back faces
+    /// (`StencilTest(StencilPerFaceTest, int, int, int)`).
+    pub const fn both(
+        face: StencilPerFaceTest,
+        read_mask: u32,
+        write_mask: u32,
+        reference_value: u32,
+    ) -> Self {
+        Self {
+            front: face,
+            back: face,
+            read_mask,
+            write_mask,
+            reference_value,
+        }
+    }
+}
+
+impl Default for StencilTest {
+    fn default() -> Self {
+        Self::both(StencilPerFaceTest::default(), u32::MAX, u32::MAX, 0)
+    }
+}
+
+/// Depth test, depth write, depth bias, and optional stencil test state
 /// (`com.mojang.renderpearl.api.pipeline.DepthStencilState`).
 #[derive(Clone, Copy, Debug)]
 #[non_exhaustive]
@@ -3389,24 +3505,30 @@ pub struct DepthState {
     /// `DepthStencilState.depthBiasScaleFactor`). Must be finite (refused at registration
     /// otherwise). Default: `0.0`.
     pub depth_bias_slope_scale: f32,
+    /// Optional stencil test and write state (`DepthStencilState.stencilTest`). `None` turns
+    /// stencil testing off. On targets without a stencil plane, stencil state has no effect.
+    pub stencil_test: Option<StencilTest>,
 }
 
 impl DepthState {
-    /// Vanilla's `DepthStencilState.DEFAULT`: `GreaterEqual`, depth write enabled, zero bias.
+    /// Vanilla's `DepthStencilState.DEFAULT`: `GreaterEqual`, depth write enabled, zero bias,
+    /// stencil off.
     pub const DEFAULT: Self = Self {
         compare: DepthCompare::GreaterEqual,
         write: true,
         depth_bias_constant: 0,
         depth_bias_slope_scale: 0.0,
+        stencil_test: None,
     };
 
-    /// Construct a depth state with zero depth bias.
+    /// Construct a depth state with zero depth bias and stencil off.
     pub const fn new(compare: DepthCompare, write: bool) -> Self {
         Self {
             compare,
             write,
             depth_bias_constant: 0,
             depth_bias_slope_scale: 0.0,
+            stencil_test: None,
         }
     }
 
@@ -3414,6 +3536,12 @@ impl DepthState {
     pub const fn depth_bias(mut self, constant: i32, slope_scale: f32) -> Self {
         self.depth_bias_constant = constant;
         self.depth_bias_slope_scale = slope_scale;
+        self
+    }
+
+    /// Set or clear the stencil test (`DepthStencilState.stencilTest`). `None` turns stencil off.
+    pub const fn stencil_test(mut self, stencil_test: Option<StencilTest>) -> Self {
+        self.stencil_test = stencil_test;
         self
     }
 }
@@ -3425,6 +3553,7 @@ impl PartialEq for DepthState {
             && self.depth_bias_constant == other.depth_bias_constant
             && canonical_f32_bits(self.depth_bias_slope_scale)
                 == canonical_f32_bits(other.depth_bias_slope_scale)
+            && self.stencil_test == other.stencil_test
     }
 }
 
@@ -3436,6 +3565,7 @@ impl std::hash::Hash for DepthState {
         self.write.hash(state);
         self.depth_bias_constant.hash(state);
         canonical_f32_bits(self.depth_bias_slope_scale).hash(state);
+        self.stencil_test.hash(state);
     }
 }
 
@@ -3928,9 +4058,13 @@ pub struct PipelineModifier {
     /// Override [`DepthState::write`] on depth-attached pipelines. Ignored for OIT variants
     /// where depth is read-only.
     pub depth_write: Option<bool>,
-    /// Override `(depth_bias_constant, depth_bias_slope_scale)` on depth-attached pipelines.
-    /// Non-finite slope scale is refused at registration.
+    /// Override [`DepthState::depth_bias_constant`] and [`DepthState::depth_bias_slope_scale`] on
+    /// depth-attached pipelines. Non-finite slope scale is refused at registration.
     pub depth_bias: Option<(i32, f32)>,
+    /// Override [`DepthState::stencil_test`] on depth-attached pipelines. `None` leaves the
+    /// pipeline's stencil state unchanged; `Some(None)` turns stencil testing off; `Some(Some(t))`
+    /// replaces it with `t`.
+    pub stencil_test: Option<Option<StencilTest>>,
     /// Override [`PipelineState::cull`].
     pub cull: Option<bool>,
     /// Override [`PipelineState::color_write`].
@@ -3956,6 +4090,7 @@ impl PartialEq for PipelineModifier {
             && self.depth_compare == other.depth_compare
             && self.depth_write == other.depth_write
             && bias_eq
+            && self.stencil_test == other.stencil_test
             && self.cull == other.cull
             && self.color_write == other.color_write
             && self.polygon == other.polygon
@@ -3975,6 +4110,7 @@ impl PipelineModifier {
             depth_compare: None,
             depth_write: None,
             depth_bias: None,
+            stencil_test: None,
             cull: None,
             color_write: None,
             polygon: None,
@@ -4016,6 +4152,12 @@ impl PipelineModifier {
     /// Non-finite `slope_scale` is refused at registration.
     pub fn depth_bias(mut self, constant: i32, slope_scale: f32) -> Self {
         self.depth_bias = Some((constant, slope_scale));
+        self
+    }
+
+    /// Override [`DepthState::stencil_test`] (`None` turns stencil testing off).
+    pub fn stencil_test(mut self, stencil_test: Option<StencilTest>) -> Self {
+        self.stencil_test = Some(stencil_test);
         self
     }
 
@@ -4079,6 +4221,9 @@ impl PipelineModifier {
                 ds.depth_bias_constant = constant;
                 ds.depth_bias_slope_scale = slope_scale;
             }
+            if let Some(stencil_test) = self.stencil_test {
+                ds.stencil_test = stencil_test;
+            }
             state.depth_stencil = Some(ds);
         }
         if let Some(cull) = self.cull {
@@ -4102,6 +4247,7 @@ impl PipelineModifier {
             && self.depth_compare.is_none()
             && self.depth_write.is_none()
             && self.depth_bias.is_none()
+            && self.stencil_test.is_none()
             && self.cull.is_none()
             && self.color_write.is_none()
             && self.polygon.is_none()
@@ -4150,6 +4296,12 @@ pub enum RenderPipelineError {
     /// The pipeline is registered, but the current resources give it no usable shader. The log
     /// names the pipeline and the reason.
     Invalid,
+    /// The pipeline's shader uses a GPU feature this adapter does not support (such as
+    /// `layout(early_fragment_tests) in;` when [`RenderCapabilities::shader_early_depth_test`] is
+    /// false, or fragment storage writes when [`RenderCapabilities::fragment_writable_storage`] is
+    /// false). Check [`crate::prelude::ClientRenderClientHost::render_capabilities`] and fall back
+    /// to an alternate pipeline.
+    UnsupportedFeature,
     /// A successful resource reload superseded the handle's generation.
     Stale,
 }
@@ -4256,6 +4408,9 @@ pub enum PipelineDrawError {
     ///
     /// A draw that samples the transient attachment it renders into also returns this error,
     /// before the undeclared-read refusal documented on [`Self::InvalidBinding`] applies.
+    ///
+    /// An in-world raster draw that samples [`TextureSource::WorldDepth`] on an adapter without
+    /// read-only depth-stencil attachment support also returns this error.
     TargetReadWriteHazard,
 }
 
@@ -4800,11 +4955,8 @@ mod tests {
                 PackUniformDecl::new("modProjection", PackUniformType::Mat4)
                     .with_previous("modPreviousProjection"),
             )
-            .glsl_binding(PackGlslInput::new(
-                "position",
-                "gl_Vertex",
-                PackUniformType::Vec4,
-            ));
+            .vertex_prelude("void sunrise_pack_vertex_init() {}")
+            .fragment_prelude("vec4 customHelper() { return vec4(1.0); }");
         assert_eq!(valid.validate_syntax(), Ok(()));
 
         for bad_define in [
@@ -4927,17 +5079,23 @@ mod tests {
     }
 
     #[test]
-    fn program_mode_and_depth_target_builders() {
-        assert_eq!(
-            PackBinding::new().program_mode,
-            PackProgramMode::PackVertexAndFragment
-        );
-        let own = PackBinding::new()
-            .program_mode(PackProgramMode::ModVertexPackFragment)
+    fn prelude_and_depth_target_builders() {
+        assert_eq!(PackBinding::new().vertex_prelude, None);
+        assert_eq!(PackBinding::new().fragment_prelude, None);
+        let with_prelude = PackBinding::new()
+            .vertex_prelude("void sunrise_pack_vertex_init() {}")
+            .fragment_prelude("float helper() { return 1.0; }")
             .depth_target(PackDepthTarget::Main);
-        assert_eq!(own.program_mode, PackProgramMode::ModVertexPackFragment);
-        assert_eq!(own.depth_target, Some(PackDepthTarget::Main));
-        assert_eq!(own.validate_syntax(), Ok(()));
+        assert_eq!(
+            with_prelude.vertex_prelude.as_deref(),
+            Some("void sunrise_pack_vertex_init() {}")
+        );
+        assert_eq!(
+            with_prelude.fragment_prelude.as_deref(),
+            Some("float helper() { return 1.0; }")
+        );
+        assert_eq!(with_prelude.depth_target, Some(PackDepthTarget::Main));
+        assert_eq!(with_prelude.validate_syntax(), Ok(()));
         // The main depth has no samplers of its own: the builders leave it as it is.
         assert_eq!(
             PackDepthTarget::Main.depth_sampler("modDepth"),
@@ -5019,6 +5177,7 @@ mod tests {
                     write: true,
                     depth_bias_constant: 10,
                     depth_bias_slope_scale: 1.5,
+                    stencil_test: None,
                 }),
                 cull: true,
                 color_write: ColorWrite::COLOR,
@@ -5048,6 +5207,7 @@ mod tests {
                 write: false,
                 depth_bias_constant: 4,
                 depth_bias_slope_scale: 0.5,
+                stencil_test: None,
             })
         );
         assert_eq!(modified.polygon, PolygonMode::Fill);
@@ -5069,6 +5229,84 @@ mod tests {
         event.register(xray);
         assert_eq!(modifiers.len(), 1);
         assert_eq!(modifiers[0].owner(), "mod_b");
+    }
+
+    #[test]
+    fn stencil_test_defaults_depth_state_and_modifier_clear_contract() {
+        use std::collections::hash_map::DefaultHasher;
+        use std::hash::{Hash, Hasher};
+
+        let def = StencilTest::default();
+        assert_eq!(def.read_mask, u32::MAX);
+        assert_eq!(def.write_mask, u32::MAX);
+        assert_eq!(def.reference_value, 0);
+        assert_eq!(def.front, StencilPerFaceTest::default());
+        assert_eq!(def.back, StencilPerFaceTest::default());
+        assert_eq!(def.front.fail, StencilOperation::Keep);
+        assert_eq!(def.front.depth_fail, StencilOperation::Keep);
+        assert_eq!(def.front.pass, StencilOperation::Keep);
+        assert_eq!(def.front.compare, DepthCompare::Always);
+
+        let face = StencilPerFaceTest::new(
+            StencilOperation::Keep,
+            StencilOperation::Keep,
+            StencilOperation::Replace,
+            DepthCompare::Equal,
+        );
+        let test = StencilTest::both(face, 0xFF, 0x0F, 1);
+        assert_eq!(test.front, face);
+        assert_eq!(test.back, face);
+        assert_eq!(test.read_mask, 0xFF);
+        assert_eq!(test.write_mask, 0x0F);
+        assert_eq!(test.reference_value, 1);
+
+        assert_eq!(DepthState::DEFAULT.stencil_test, None);
+        let with_stencil =
+            DepthState::new(DepthCompare::GreaterEqual, true).stencil_test(Some(test));
+        assert_eq!(with_stencil.stencil_test, Some(test));
+        assert_ne!(with_stencil, DepthState::DEFAULT);
+
+        let hash_of = |ds: DepthState| {
+            let mut h = DefaultHasher::new();
+            ds.hash(&mut h);
+            h.finish()
+        };
+        assert_ne!(hash_of(with_stencil), hash_of(DepthState::DEFAULT));
+
+        let base = pipeline("example:stenciled")
+            .depth_stencil(Some(with_stencil))
+            .state;
+        let leave_alone = PipelineModifier::new(Identifier::parse("example:leave").unwrap());
+        assert!(leave_alone.is_noop());
+        assert_eq!(
+            leave_alone.apply(base).depth_stencil.unwrap().stencil_test,
+            Some(test)
+        );
+
+        let clear = PipelineModifier::new(Identifier::parse("example:clear_stencil").unwrap())
+            .stencil_test(None);
+        assert_eq!(clear.stencil_test, Some(None));
+        assert!(!clear.is_noop());
+        assert_eq!(clear.apply(base).depth_stencil.unwrap().stencil_test, None);
+
+        let alt = StencilTest::both(
+            StencilPerFaceTest::new(
+                StencilOperation::Zero,
+                StencilOperation::Incr,
+                StencilOperation::IncrWrap,
+                DepthCompare::NotEqual,
+            ),
+            u32::MAX,
+            u32::MAX,
+            2,
+        );
+        let replace = PipelineModifier::new(Identifier::parse("example:replace_stencil").unwrap())
+            .stencil_test(Some(alt));
+        assert_eq!(replace.stencil_test, Some(Some(alt)));
+        assert_eq!(
+            replace.apply(base).depth_stencil.unwrap().stencil_test,
+            Some(alt)
+        );
     }
 
     #[test]

@@ -383,12 +383,15 @@ pub mod built {
         crate::MeshRef::from_parts(generation, slot).expect("published mesh generation")
     }
     /// The renderer's [`crate::RenderCapabilities`].
+    #[allow(clippy::too_many_arguments)]
     pub fn render_capabilities(
         float32_filterable: bool,
         read_write_storage: Vec<crate::RenderTargetFormat>,
         subgroup: bool,
         indirect_first_instance: bool,
         multi_draw_indirect_count: bool,
+        shader_early_depth_test: bool,
+        fragment_writable_storage: bool,
         limits: crate::RenderLimits,
     ) -> crate::RenderCapabilities {
         crate::RenderCapabilities {
@@ -397,6 +400,8 @@ pub mod built {
             subgroup,
             indirect_first_instance,
             multi_draw_indirect_count,
+            shader_early_depth_test,
+            fragment_writable_storage,
             limits,
         }
     }

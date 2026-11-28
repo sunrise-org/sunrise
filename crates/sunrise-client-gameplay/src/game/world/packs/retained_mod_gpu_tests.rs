@@ -14,7 +14,7 @@ use mod_api::{
 use mod_platform::{content::crash::enter_native_mod, testing::with_mods};
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
-use sunrise_client::{gfx::Opened, graphics::GraphicsApi};
+use sunrise_client::graphics::GraphicsApi;
 use sunrise_gameplay_common::game::{Screen, test_fixtures::run_fresh_cases_with_env};
 
 const OWNER: &str = "retained_gpu_probe";
@@ -178,7 +178,7 @@ fn retained_mod_gpu_handles_follow_the_device_lifetime() {
         let renderer = game.new_renderer(window.clone()).unwrap();
         assert_eq!(renderer.info.backend, wgpu::Backend::Vulkan);
         game.set_renderer(renderer);
-        game.client.window.0 = Some(window.clone());
+        game.client.window.0 = Some(window);
         let device = game.client.renderer.0.as_ref().unwrap().device.clone();
         let _owner = enter_native_mod(ModCall {
             id: OWNER,
@@ -241,29 +241,16 @@ fn retained_mod_gpu_handles_follow_the_device_lifetime() {
             }
             assert_eq!(read_ticket(game, bytes), [FIRST, QUEUED].concat());
         } else {
-            // The same offscreen window and Game actually receive a different wgpu device.
-            // Recovery drops the old renderer before opening the new device, but the Game's
-            // old facade remains reachable up to the common publication seam.
-            game.client.renderer.0.as_mut().unwrap().wait_submissions();
-            drop(game.client.renderer.0.take());
-            let opened = pollster::block_on(Opened::for_window(
-                &window,
-                true,
-                game.client.settings.sunrise.api,
-                game.client.client_pack.render.texture_layers,
-            ))
-            .unwrap();
-            let replacement = game
-                .renderer_for(
-                    window,
-                    &game.common.pack,
-                    &game.client.client_pack,
-                    &game.client.gui,
-                    Some(opened),
-                )
-                .unwrap();
-            assert_eq!(replacement.info.backend, wgpu::Backend::Vulkan);
-            game.adopt_renderer(replacement);
+            // The same offscreen window and Game actually receive a different wgpu device
+            // through the production device-loss recovery path (`recover_device`).
+            let renderer = game.client.renderer.0.as_mut().unwrap();
+            renderer.wait_submissions();
+            renderer.test_mark_device_lost();
+            game.recover_device().unwrap();
+            assert_eq!(
+                game.client.renderer.0.as_ref().unwrap().info.backend,
+                wgpu::Backend::Vulkan
+            );
             assert!(
                 !same_device(&device, &game.client.renderer.0.as_ref().unwrap().device),
                 "renderer adoption kept the old device"

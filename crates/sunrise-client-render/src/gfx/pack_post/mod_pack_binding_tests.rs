@@ -59,21 +59,21 @@ fn load_with_mods(
     requests: Vec<sunrise_shaders::ModPackProgramRequest>,
     runtime: &OwnedModPackRuntime,
 ) -> (PackPost, wgpu::TextureView, wgpu::TextureView) {
-    load_with_mod_stages(gpu, files, requests, runtime, &[])
+    load_with_mod_layouts(gpu, files, requests, runtime, &[])
 }
 
-fn load_with_mod_stages(
+fn load_with_mod_layouts(
     gpu: &Gpu,
     files: Vec<(String, String)>,
     requests: Vec<sunrise_shaders::ModPackProgramRequest>,
     runtime: &OwnedModPackRuntime,
-    stages: &[Option<ModVertexStage>],
+    layouts: &[Option<ModPipelineLayouts>],
 ) -> (PackPost, wgpu::TextureView, wgpu::TextureView) {
     let inputs = sunrise_shaders::GameInputs {
         mod_programs: requests,
         ..Default::default()
     };
-    load_pack_with_mods(gpu, files, inputs, runtime, stages)
+    load_pack_with_mods(gpu, files, inputs, runtime, layouts)
 }
 
 fn load_pack_with_mods(
@@ -81,7 +81,7 @@ fn load_pack_with_mods(
     files: Vec<(String, String)>,
     inputs: sunrise_shaders::GameInputs,
     runtime: &OwnedModPackRuntime,
-    stages: &[Option<ModVertexStage>],
+    layouts: &[Option<ModPipelineLayouts>],
 ) -> (PackPost, wgpu::TextureView, wgpu::TextureView) {
     use std::io::{Cursor, Write};
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
@@ -123,7 +123,7 @@ fn load_pack_with_mods(
         post,
         T::Rgba8Unorm,
         world,
-        runtime.as_runtime(&mod_buffers).with_vertex_stages(stages),
+        runtime.as_runtime(&mod_buffers).with_mod_layouts(layouts),
         &std::sync::atomic::AtomicBool::new(false),
     )
     .expect("pack with mod bindings refused");
@@ -511,7 +511,6 @@ fn mod_pack_program_draws_aux_depth_and_tracks_previous_uniform() {
             depth_compare: wgpu::CompareFunction::LessEqual,
             depth_bias: Default::default(),
             cull: false,
-            program_mode: Default::default(),
         }],
     };
     let (mut post, color, depth) = load_with_mods(&gpu, files, requests, &runtime);
@@ -779,7 +778,6 @@ fn mod_pack_falls_back_to_gbuffers_terrain_when_custom_program_absent() {
             depth_compare: wgpu::CompareFunction::LessEqual,
             depth_bias: Default::default(),
             cull: false,
-            program_mode: Default::default(),
         }],
     };
     let (mut post, color, depth) = load_with_mods(&gpu, files, requests, &runtime);
@@ -844,7 +842,6 @@ fn mod_pack_aux_depth_is_lazy_when_pack_never_samples_it() {
             depth_compare: wgpu::CompareFunction::LessEqual,
             depth_bias: Default::default(),
             cull: false,
-            program_mode: Default::default(),
         }],
     };
     let (mut post, color, depth) = load_with_mods(&gpu, files, requests, &runtime);
@@ -923,7 +920,6 @@ fn mod_pack_type_mismatch_uniform_and_unbound_pipeline_never_panic() {
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 depth_bias: Default::default(),
                 cull: false,
-                program_mode: Default::default(),
             },
             ModPipelinePackSpec {
                 slot: 1,
@@ -933,7 +929,6 @@ fn mod_pack_type_mismatch_uniform_and_unbound_pipeline_never_panic() {
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 depth_bias: Default::default(),
                 cull: false,
-                program_mode: Default::default(),
             },
         ],
     };
@@ -1079,7 +1074,6 @@ fn mod_shadow_pass_geometry_is_drawn_and_invalidates_the_shadow_cache() {
                 depth_compare: wgpu::CompareFunction::LessEqual,
                 depth_bias: Default::default(),
                 cull: false,
-                program_mode: Default::default(),
             }],
         };
         let (mut post, color, depth) = load_with_mods(&gpu, files, requests, &runtime);
@@ -1120,102 +1114,36 @@ fn mod_shadow_pass_geometry_is_drawn_and_invalidates_the_shadow_cache() {
     }
 }
 
-/// A pack whose `mod_terrain` fragment stage reads `uv` (and `extra` when `extra` is set), with a
-/// `final` that shows `colortex0`.
-fn own_stage_pack(extra: bool) -> Vec<(String, String)> {
-    let (decl, read) = if extra {
-        (
-            "varying vec2 uv;\nvarying vec3 extra;\n",
-            "vec4(uv, extra.x, 1.0)",
-        )
-    } else {
-        ("varying vec2 uv;\n", "vec4(uv, 0.0, 1.0)")
-    };
-    let write = if extra {
-        "uv = vec2(0.0); extra = vec3(0.0);"
-    } else {
-        "uv = vec2(0.0);"
-    };
-    vec![
-        (
-            "mod_terrain.vsh".to_owned(),
-            format!(
-                "#version 120\n{decl}void main(){{gl_Position=vec4(gl_Vertex.xyz,1.0);{write}}}"
-            ),
-        ),
-        (
-            "mod_terrain.fsh".to_owned(),
-            format!(
-                "#version 120\n/* DRAWBUFFERS:0 */\n{decl}void main(){{gl_FragData[0]={read};}}"
-            ),
-        ),
-        ("final.vsh".to_owned(), VERTEX.to_owned()),
-        (
-            "final.fsh".to_owned(),
-            "#version 120\nuniform sampler2D colortex0;varying vec2 uv;\
-             void main(){gl_FragColor=texture2D(colortex0,uv);}"
-                .to_owned(),
-        ),
-    ]
-}
-
-/// The mod's vertex stage `wgsl`, over the engine's mod vertex format, with `set1_layout` as its
-/// own set 1 and an empty frame-uniform group.
-fn vertex_stage_from(
+fn prelude_mod_layouts(
     device: &wgpu::Device,
-    wgsl: &str,
+    with_quad_vertices: bool,
     set1_layout: Option<wgpu::BindGroupLayout>,
-) -> ModVertexStage {
-    let layout = PipelineVertex::buffer_layout();
-    ModVertexStage {
-        module: naga::front::wgsl::parse_str(wgsl).expect("own vertex stage parses"),
-        buffers: vec![ModVertexBuffer {
+) -> ModPipelineLayouts {
+    let buffers = if with_quad_vertices {
+        let layout = PipelineVertex::buffer_layout();
+        vec![ModVertexBuffer {
             binding: 0,
             stride: layout.array_stride,
             step_mode: layout.step_mode,
             attributes: layout.attributes.to_vec(),
-        }],
+        }]
+    } else {
+        Vec::new()
+    };
+    ModPipelineLayouts {
+        buffers,
         globals_layout: device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Mod pack test globals"),
+            label: Some("Mod pack prelude test globals"),
             entries: &[],
         }),
         set1_layout,
     }
 }
 
-/// The mod's own vertex stage: writing the constant varying `uv = (0.5, 0.25)` at location 0 and
-/// nothing else.
-fn own_vertex_stage(device: &wgpu::Device) -> ModVertexStage {
-    vertex_stage_from(
-        device,
-        "struct Out {
-            @builtin(position) position: vec4<f32>,
-            @location(0) uv: vec2<f32>,
-        };
-        @vertex fn main(@location(0) p: vec3<f32>) -> Out {
-            var o: Out;
-            o.position = vec4<f32>(p.xy, p.z + 0.75, 1.0);
-            o.uv = vec2<f32>(0.5, 0.25);
-            return o;
-        }",
-        None,
-    )
-}
-
-fn own_stage_runtime() -> (
-    Vec<sunrise_shaders::ModPackProgramRequest>,
-    OwnedModPackRuntime,
-) {
-    let requests = vec![sunrise_shaders::ModPackProgramRequest {
-        slot: 0,
-        programs: vec!["mod_terrain".into()],
-        group: sunrise_shaders::Group::Gbuffers,
-        inputs: mod_gbuffers_inputs(),
-        default_blend: None,
-    }];
-    let runtime = OwnedModPackRuntime {
+fn prelude_runtime(uniforms: Vec<ModUniformDecl>) -> OwnedModPackRuntime {
+    OwnedModPackRuntime {
         depth_targets: Vec::new(),
-        uniforms: Vec::new(),
+        uniforms,
         pipelines: vec![ModPipelinePackSpec {
             slot: 0,
             pass_slot: ModPassSlot::AfterOpaqueGbuffers,
@@ -1224,145 +1152,726 @@ fn own_stage_runtime() -> (
             depth_compare: wgpu::CompareFunction::LessEqual,
             depth_bias: Default::default(),
             cull: false,
-            program_mode: ModProgramMode::ModVertexPackFragment,
         }],
-    };
-    (requests, runtime)
+    }
 }
 
+/// A far-terrain `dh_terrain` program that declares `dhMaterialId`, `mc_Entity`, and `at_tangent`
+/// (with `at_tangent` left unset as a private global) and calls a `fragment_prelude` helper
+/// sampling a mod set-1 texture translates, binds, and renders expected colors.
 #[test]
 #[ignore = "daily"]
-fn mod_vertex_pack_fragment_draws_the_mods_vertices_through_the_packs_fragment_stage() {
+fn mod_pack_prelude_far_terrain_reads_attributes_helpers_and_mod_set1_texture() {
     let _gpu_guard = crate::gfx::test_gpu::lock();
     let Some(gpu) = Gpu::new() else {
         return;
     };
-    let (requests, runtime) = own_stage_runtime();
-    let stages = [Some(own_vertex_stage(&gpu.device))];
-    let (mut post, color, depth) =
-        load_with_mod_stages(&gpu, own_stage_pack(false), requests, &runtime, &stages);
-    assert!(
-        post.is_mod_pipeline_bound(0),
-        "own vertex stage not linked: {:?}",
-        post.notes
-    );
-    let (vbuf, ibuf) = mod_quad_buffers(&gpu.device, -0.5);
-    let globals = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Mod pack test globals"),
-        layout: &stages[0].as_ref().unwrap().globals_layout,
-        entries: &[],
+    let set1_layout = gpu
+        .device
+        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Mod pack prelude atlas layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+    let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Mod pack prelude atlas"),
+        size: wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: T::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
     });
-    let mut chunk = ModDrawChunk::quads(0, vbuf, ibuf, 0..1);
-    chunk.mod_globals = Some(globals);
-    post.set_mod_draws(vec![chunk]);
-    // The pack's fragment stage wrote the mod's varying `(0.5, 0.25)` into colortex0.
-    let px = run_frame_and_sample_center(&gpu, &mut post, &color, &depth);
-    assert!((px[0] as i16 - 128).abs() <= 2, "red {px:?}");
-    assert!((px[1] as i16 - 64).abs() <= 2, "green {px:?}");
-}
-
-#[test]
-#[ignore = "daily"]
-fn mod_vertex_pack_fragment_with_a_varying_the_mod_does_not_write_is_unbound() {
-    let _gpu_guard = crate::gfx::test_gpu::lock();
-    let Some(gpu) = Gpu::new() else {
-        return;
-    };
-    let (requests, runtime) = own_stage_runtime();
-    let stages = [Some(own_vertex_stage(&gpu.device))];
-    let (post, _color, _depth) =
-        load_with_mod_stages(&gpu, own_stage_pack(true), requests, &runtime, &stages);
-    assert!(
-        !post.is_mod_pipeline_bound(0),
-        "a pack reading a varying the mod's vertex stage lacks must leave the slot unbound"
+    gpu.queue.write_texture(
+        tex.as_image_copy(),
+        &[204u8, 153, 51, 255],
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(4),
+            rows_per_image: Some(1),
+        },
+        wgpu::Extent3d {
+            width: 1,
+            height: 1,
+            depth_or_array_layers: 1,
+        },
     );
-    assert!(
-        post.notes
-            .iter()
-            .any(|n| n.contains("mod's own vertex stage")),
-        "no reason given: {:?}",
-        post.notes
-    );
-}
-
-/// Draws one full-screen quad through slot 0 with the stage's empty frame-uniform group and, when
-/// given, its set-1 bind group.
-fn draw_own_quad(
-    gpu: &Gpu,
-    post: &mut PackPost,
-    stage: &ModVertexStage,
-    set1: Option<wgpu::BindGroup>,
-) {
-    let (vbuf, ibuf) = mod_quad_buffers(&gpu.device, -0.5);
-    let mut chunk = ModDrawChunk::quads(0, vbuf, ibuf, 0..1);
-    chunk.mod_globals = Some(gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Mod pack test globals"),
-        layout: &stage.globals_layout,
-        entries: &[],
-    }));
-    chunk.mod_bind_group = set1.map(|bg| (bg, Vec::new()));
-    post.set_mod_draws(vec![chunk]);
-}
-
-/// The pack declares `varying vec2 b; varying vec2 a;`, so its translator puts `b` at location 0
-/// and `a` at location 1; the mod's vertex stage declares `a` at 0 and `b` at 1, the other way
-/// round. Linked by name, the pack still reads `a = (0.5, 0.25)` and `b = (0.75, 0.125)`.
-#[test]
-#[ignore = "daily"]
-fn mod_vertex_pack_fragment_links_varyings_by_name_not_location() {
-    let _gpu_guard = crate::gfx::test_gpu::lock();
-    let Some(gpu) = Gpu::new() else {
-        return;
-    };
-    let decl = "varying vec2 b;\nvarying vec2 a;\n";
-    let mut files = own_stage_pack(false);
-    files[0].1 = format!(
-        "#version 120\n{decl}void main(){{gl_Position=vec4(gl_Vertex.xyz,1.0);a=vec2(0.0);b=vec2(0.0);}}"
-    );
-    files[1].1 = format!(
-        "#version 120\n/* DRAWBUFFERS:0 */\n{decl}void main(){{gl_FragData[0]=vec4(a,b.x,1.0);}}"
-    );
-    let (requests, runtime) = own_stage_runtime();
-    let stages = [Some(vertex_stage_from(
+    let view = tex.create_view(&Default::default());
+    let sampler = gpu
+        .device
+        .create_sampler(&wgpu::SamplerDescriptor::default());
+    let set1 = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Mod pack prelude atlas group"),
+        layout: &set1_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    });
+    let files = vec![
+        (
+            "dh_terrain.vsh".to_owned(),
+            "#version 150\n\
+             in int dhMaterialId;\n\
+             in vec4 mc_Entity;\n\
+             in vec4 at_tangent;\n\
+             out vec2 vUv;\n\
+             flat out int vMat;\n\
+             out vec2 vAttrs;\n\
+             void main() {\n\
+                 gl_Position = vec4(gl_Vertex.xyz, 1.0);\n\
+                 vUv = gl_MultiTexCoord0.xy;\n\
+                 vMat = dhMaterialId;\n\
+                 vAttrs = vec2(mc_Entity.x, at_tangent.x);\n\
+             }\n"
+            .to_owned(),
+        ),
+        (
+            "dh_terrain.fsh".to_owned(),
+            "#version 150\n\
+             /* DRAWBUFFERS:0 */\n\
+             in vec2 vUv;\n\
+             flat in int vMat;\n\
+             in vec2 vAttrs;\n\
+             void main() {\n\
+                 vec4 atlas = dh_sampleAtlas(vUv);\n\
+                 // Expect vMat == 2, mc_Entity.x == 1.0, at_tangent.x == 0.0.\n\
+                 float ok = (vMat == 2 && vAttrs.x > 0.5 && vAttrs.y == 0.0) ? 1.0 : 0.0;\n\
+                 gl_FragData[0] = vec4(atlas.rgb * ok, 1.0);\n\
+             }\n"
+            .to_owned(),
+        ),
+        ("final.vsh".to_owned(), VERTEX.to_owned()),
+        (
+            "final.fsh".to_owned(),
+            "#version 120\nuniform sampler2D colortex0;varying vec2 uv;\
+             void main(){gl_FragColor=texture2D(colortex0,uv);}"
+                .to_owned(),
+        ),
+    ];
+    let requests = vec![sunrise_shaders::ModPackProgramRequest {
+        slot: 0,
+        programs: vec!["dh_terrain".into(), "gbuffers_terrain".into()],
+        group: sunrise_shaders::Group::Gbuffers,
+        inputs: sunrise_shaders::GbuffersInputs {
+            prelude: Some(sunrise_shaders::PackPrelude {
+                vertex: Some(
+                    "layout(location = 0) in vec3 inPos;\n\
+                     layout(location = 1) in vec2 inUv;\n\
+                     int dhMaterialId;\n\
+                     vec4 mc_Entity;\n\
+                     void sunrise_pack_vertex_init() {\n\
+                         gl_Vertex = vec4(inPos, 1.0);\n\
+                         gl_MultiTexCoord0 = vec4(inUv, 0.0, 1.0);\n\
+                         dhMaterialId = 2;\n\
+                         mc_Entity = vec4(1.0, 0.0, 0.0, 0.0);\n\
+                     }\n"
+                    .to_owned(),
+                ),
+                fragment: Some(
+                    "layout(set = 1, binding = 0) uniform sampler2D dhAtlas;\n\
+                     vec4 dh_sampleAtlas(vec2 uv) { return texture(dhAtlas, uv); }\n"
+                        .to_owned(),
+                ),
+            }),
+            ..Default::default()
+        },
+        default_blend: None,
+    }];
+    let runtime = prelude_runtime(Vec::new());
+    let layouts = [Some(prelude_mod_layouts(
         &gpu.device,
-        "struct Out {
-            @builtin(position) position: vec4<f32>,
-            @location(0) a: vec2<f32>,
-            @location(1) b: vec2<f32>,
-        };
-        @vertex fn main(@location(0) p: vec3<f32>) -> Out {
-            var o: Out;
-            o.position = vec4<f32>(p.xy, p.z + 0.75, 1.0);
-            o.a = vec2<f32>(0.5, 0.25);
-            o.b = vec2<f32>(0.75, 0.125);
-            return o;
-        }",
-        None,
+        true,
+        Some(set1_layout),
     ))];
-    let (mut post, color, depth) = load_with_mod_stages(&gpu, files, requests, &runtime, &stages);
+    let (mut post, color, depth) = load_with_mod_layouts(&gpu, files, requests, &runtime, &layouts);
     assert!(
         post.is_mod_pipeline_bound(0),
-        "varyings not linked by name: {:?}",
+        "dh_terrain prelude not bound: {:?}",
         post.notes
     );
-    draw_own_quad(&gpu, &mut post, stages[0].as_ref().unwrap(), None);
+    let (vbuf, ibuf) = mod_quad_buffers(&gpu.device, -0.5);
+    let mut chunk = ModDrawChunk::quads(0, vbuf, ibuf, 0..1);
+    chunk.mod_bind_group = Some((set1, Vec::new()));
+    post.set_mod_draws(vec![chunk]);
     let px = run_frame_and_sample_center(&gpu, &mut post, &color, &depth);
-    assert!((px[0] as i16 - 128).abs() <= 2, "a.x {px:?}");
-    assert!((px[1] as i16 - 64).abs() <= 2, "a.y {px:?}");
-    assert!((px[2] as i16 - 191).abs() <= 2, "b.x {px:?}");
+    assert_eq!(
+        px,
+        [204, 153, 51, 255],
+        "unexpected dh_terrain output {px:?}"
+    );
 }
 
-/// A pack program with a geometry stage takes its vertices through the pack's own vertex stage,
-/// which the mod's can't replace: the slot stays unbound, with a note and no wgpu validation
-/// error.
+/// A `vertex_prelude` with zero vertex inputs pulls its vertices from a mod set-1 storage buffer
+/// via `gl_VertexIndex` and draws with no vertex buffers bound.
 #[test]
 #[ignore = "daily"]
-fn mod_vertex_pack_fragment_against_a_geometry_stage_program_is_unbound_with_a_note() {
+fn mod_pack_prelude_vertex_pull_storage_buffer_with_no_vertex_inputs() {
+    let _gpu_guard = crate::gfx::test_gpu::lock();
+    let Some(gpu) = Gpu::new() else {
+        return;
+    };
+    let set1_layout = gpu
+        .device
+        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Mod pack prelude storage layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Storage { read_only: true },
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+    let verts: [[f32; 4]; 3] = [
+        [-1.0, -1.0, -0.5, 1.0],
+        [-1.0, 3.0, -0.5, 1.0],
+        [3.0, -1.0, -0.5, 1.0],
+    ];
+    let storage_buf = gpu
+        .device
+        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+            label: Some("Mod pack prelude vertices storage"),
+            contents: bytemuck::cast_slice(&verts),
+            usage: wgpu::BufferUsages::STORAGE,
+        });
+    let set1 = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Mod pack prelude storage group"),
+        layout: &set1_layout,
+        entries: &[wgpu::BindGroupEntry {
+            binding: 0,
+            resource: storage_buf.as_entire_binding(),
+        }],
+    });
+    let files = vec![
+        (
+            "dh_terrain.vsh".to_owned(),
+            "#version 150\n\
+             out vec4 vCol;\n\
+             void main() {\n\
+                 gl_Position = gl_Vertex;\n\
+                 vCol = gl_Color;\n\
+             }\n"
+            .to_owned(),
+        ),
+        (
+            "dh_terrain.fsh".to_owned(),
+            "#version 150\n\
+             /* DRAWBUFFERS:0 */\n\
+             in vec4 vCol;\n\
+             void main() { gl_FragData[0] = vCol; }\n"
+                .to_owned(),
+        ),
+        ("final.vsh".to_owned(), VERTEX.to_owned()),
+        (
+            "final.fsh".to_owned(),
+            "#version 120\nuniform sampler2D colortex0;varying vec2 uv;\
+             void main(){gl_FragColor=texture2D(colortex0,uv);}"
+                .to_owned(),
+        ),
+    ];
+    let requests = vec![sunrise_shaders::ModPackProgramRequest {
+        slot: 0,
+        programs: vec!["dh_terrain".into()],
+        group: sunrise_shaders::Group::Gbuffers,
+        inputs: sunrise_shaders::GbuffersInputs {
+            prelude: Some(sunrise_shaders::PackPrelude {
+                vertex: Some(
+                    "layout(set = 1, binding = 0, std430) readonly buffer FarVerts { vec4 pos[]; };\n\
+                     void sunrise_pack_vertex_init() {\n\
+                         gl_Vertex = pos[gl_VertexIndex];\n\
+                         gl_Color = vec4(0.4, 0.8, 0.2, 1.0);\n\
+                     }\n"
+                        .to_owned(),
+                ),
+                fragment: None,
+            }),
+            ..Default::default()
+        },
+        default_blend: None,
+    }];
+    let runtime = prelude_runtime(Vec::new());
+    let layouts = [Some(prelude_mod_layouts(
+        &gpu.device,
+        false,
+        Some(set1_layout),
+    ))];
+    let (mut post, color, depth) = load_with_mod_layouts(&gpu, files, requests, &runtime, &layouts);
+    assert!(
+        post.is_mod_pipeline_bound(0),
+        "vertex-pull prelude not bound: {:?}",
+        post.notes
+    );
+    post.set_mod_draws(vec![ModDrawChunk {
+        slot: 0,
+        vertex_buffers: Vec::new(),
+        kind: ModDrawKind::Vertices { vertices: 0..3 },
+        instances: 0..1,
+        mod_bind_group: Some((set1, Vec::new())),
+        mod_globals: None,
+    }]);
+    let px = run_frame_and_sample_center(&gpu, &mut post, &color, &depth);
+    assert_eq!(px, [102, 204, 51, 255], "vertex-pull pixel {px:?}");
+}
+
+/// Identical variable and uniform declarations in both the pack and the prelude are deduplicated
+/// cleanly (the pack's declaration stands), binding and shading with the mod's frame uniform.
+#[test]
+#[ignore = "daily"]
+fn mod_pack_prelude_deduplicates_matching_declarations_with_pack() {
     let _gpu_guard = crate::gfx::test_gpu::lock();
     let Some(gpu) = Gpu::new() else {
         return;
     };
     let files = vec![
+        (
+            "dh_terrain.vsh".to_owned(),
+            "#version 150\n\
+             in int dhMaterialId;\n\
+             uniform vec3 modelOffset;\n\
+             out vec4 vOut;\n\
+             void main() {\n\
+                 gl_Position = vec4(gl_Vertex.xyz, 1.0);\n\
+                 vOut = vec4(modelOffset.xy, dhMaterialId == 1 ? 0.8 : 0.0, 1.0);\n\
+             }\n"
+            .to_owned(),
+        ),
+        (
+            "dh_terrain.fsh".to_owned(),
+            "#version 150\n\
+             /* DRAWBUFFERS:0 */\n\
+             in vec4 vOut;\n\
+             void main() { gl_FragData[0] = vOut; }\n"
+                .to_owned(),
+        ),
+        ("final.vsh".to_owned(), VERTEX.to_owned()),
+        (
+            "final.fsh".to_owned(),
+            "#version 120\nuniform sampler2D colortex0;varying vec2 uv;\
+             void main(){gl_FragColor=texture2D(colortex0,uv);}"
+                .to_owned(),
+        ),
+    ];
+    let requests = vec![sunrise_shaders::ModPackProgramRequest {
+        slot: 0,
+        programs: vec!["dh_terrain".into()],
+        group: sunrise_shaders::Group::Gbuffers,
+        inputs: sunrise_shaders::GbuffersInputs {
+            prelude: Some(sunrise_shaders::PackPrelude {
+                vertex: Some(
+                    "layout(location = 0) in vec3 inPos;\n\
+                     uniform vec3 modelOffset;\n\
+                     int dhMaterialId;\n\
+                     void sunrise_pack_vertex_init() {\n\
+                         gl_Vertex = vec4(inPos, 1.0);\n\
+                         dhMaterialId = 1;\n\
+                     }\n"
+                    .to_owned(),
+                ),
+                fragment: None,
+            }),
+            ..Default::default()
+        },
+        default_blend: None,
+    }];
+    let runtime = prelude_runtime(vec![ModUniformDecl {
+        name: "modelOffset".to_owned(),
+        ty: ModUniformType::Vec3,
+        previous_name: None,
+    }]);
+    let layouts = [Some(prelude_mod_layouts(&gpu.device, true, None))];
+    let (mut post, color, depth) = load_with_mod_layouts(&gpu, files, requests, &runtime, &layouts);
+    assert!(
+        post.is_mod_pipeline_bound(0),
+        "deduplicated prelude not bound: {:?}",
+        post.notes
+    );
+    let (vbuf, ibuf) = mod_quad_buffers(&gpu.device, -0.5);
+    post.set_mod_draws(vec![ModDrawChunk::quads(0, vbuf, ibuf, 0..1)]);
+    assert!(post.set_mod_uniform("modelOffset", ModUniformValue::Vec3([0.2, 0.4, 0.0])));
+    let px = run_frame_and_sample_center(&gpu, &mut post, &color, &depth);
+    assert_eq!(px, [51, 102, 204, 255], "dedup pixel {px:?}");
+}
+
+/// When the matched pack program fails translation (such as a function-name collision with the
+/// prelude), the slot stays unbound with a logged note and does not fall back to `gbuffers_terrain`.
+#[test]
+#[ignore = "daily"]
+fn mod_pack_prelude_collision_or_failure_leaves_slot_unbound_without_fallback() {
+    let _gpu_guard = crate::gfx::test_gpu::lock();
+    let Some(gpu) = Gpu::new() else {
+        return;
+    };
+    let files = vec![
+        (
+            "dh_terrain.vsh".to_owned(),
+            "#version 150\nvoid main(){gl_Position=vec4(gl_Vertex.xyz,1.0);}\n".to_owned(),
+        ),
+        (
+            "dh_terrain.fsh".to_owned(),
+            "#version 150\n\
+             /* DRAWBUFFERS:0 */\n\
+             vec4 dh_shade() { return vec4(1.0); }\n\
+             void main(){gl_FragData[0]=dh_shade();}\n"
+                .to_owned(),
+        ),
+        (
+            "gbuffers_terrain.vsh".to_owned(),
+            "#version 150\nvoid main(){gl_Position=vec4(gl_Vertex.xyz,1.0);}\n".to_owned(),
+        ),
+        (
+            "gbuffers_terrain.fsh".to_owned(),
+            "#version 150\n/* DRAWBUFFERS:0 */\nvoid main(){gl_FragData[0]=vec4(1.0,0.0,0.0,1.0);}\n"
+                .to_owned(),
+        ),
+        ("final.vsh".to_owned(), VERTEX.to_owned()),
+        (
+            "final.fsh".to_owned(),
+            "#version 120\nuniform sampler2D colortex0;varying vec2 uv;\
+             void main(){gl_FragColor=texture2D(colortex0,uv);}"
+                .to_owned(),
+        ),
+    ];
+    let requests = vec![sunrise_shaders::ModPackProgramRequest {
+        slot: 0,
+        programs: vec!["dh_terrain".into(), "gbuffers_terrain".into()],
+        group: sunrise_shaders::Group::Gbuffers,
+        inputs: sunrise_shaders::GbuffersInputs {
+            prelude: Some(sunrise_shaders::PackPrelude {
+                vertex: Some(
+                    "layout(location = 0) in vec3 inPos;\n\
+                     void sunrise_pack_vertex_init() { gl_Vertex = vec4(inPos, 1.0); }\n"
+                        .to_owned(),
+                ),
+                fragment: Some("vec4 dh_shade() { return vec4(0.5); }\n".to_owned()),
+            }),
+            ..Default::default()
+        },
+        default_blend: None,
+    }];
+    let runtime = prelude_runtime(Vec::new());
+    let layouts = [Some(prelude_mod_layouts(&gpu.device, true, None))];
+    let (post, _color, _depth) = load_with_mod_layouts(&gpu, files, requests, &runtime, &layouts);
+    assert!(
+        !post.is_mod_pipeline_bound(0),
+        "a prelude function collision must leave slot 0 unbound without falling back to gbuffers_terrain"
+    );
+    assert!(
+        post.notes.iter().any(|n| n.contains("dh_shade")),
+        "expected collision note naming dh_shade: {:?}",
+        post.notes
+    );
+}
+
+/// A pack program reading `gl_FragCoord` (including from a `fragment_prelude` helper) observes
+/// standard-Z (`[0, 1]`, near = 0, far = 1) and OpenGL rows (`y = 0.5` at the bottom, increasing
+/// upward). Verified at two screen positions (near top-left and near bottom-right) and two known
+/// GL clip-space depths (`z_gl = -0.5` -> `0.25`, `z_gl = +0.5` -> `0.75`).
+#[test]
+#[ignore = "daily"]
+fn mod_pack_prelude_frag_coord_is_standard_z_and_gl_rows() {
+    let _gpu_guard = crate::gfx::test_gpu::lock();
+    let gpu = Gpu::new().expect("graphics adapter required for pack gl_FragCoord convention test");
+    let files = vec![
+        (
+            "dh_terrain.vsh".to_owned(),
+            "#version 150\n\
+             out float vGlY;\n\
+             void main() {\n\
+                 gl_Position = vec4(gl_Vertex.xyz, 1.0);\n\
+                 vGlY = gl_Vertex.y;\n\
+             }\n"
+            .to_owned(),
+        ),
+        (
+            "dh_terrain.fsh".to_owned(),
+            "#version 150\n\
+             /* DRAWBUFFERS:0 */\n\
+             in float vGlY;\n\
+             void main() {\n\
+                 vec4 fc = prelude_frag_coord();\n\
+                 bool glRowOrder = (vGlY > 0.0) == (fc.y > 8.0);\n\
+                 gl_FragData[0] = vec4(\n\
+                     float(int(fc.x)) / 255.0,\n\
+                     float(int(fc.y)) / 255.0,\n\
+                     fc.z,\n\
+                     glRowOrder ? 1.0 : 0.0\n\
+                 );\n\
+             }\n"
+            .to_owned(),
+        ),
+        ("final.vsh".to_owned(), VERTEX.to_owned()),
+        (
+            "final.fsh".to_owned(),
+            "#version 120\n\
+             uniform sampler2D colortex0;\n\
+             varying vec2 uv;\n\
+             /*\nconst int colortex0Format = RGBA8;\n*/\n\
+             void main() { gl_FragColor = texture2D(colortex0, uv); }\n"
+                .to_owned(),
+        ),
+    ];
+    let requests = vec![sunrise_shaders::ModPackProgramRequest {
+        slot: 0,
+        programs: vec!["dh_terrain".into()],
+        group: sunrise_shaders::Group::Gbuffers,
+        inputs: sunrise_shaders::GbuffersInputs {
+            prelude: Some(sunrise_shaders::PackPrelude {
+                vertex: Some(
+                    "layout(location = 0) in vec3 inPos;\n\
+                     void sunrise_pack_vertex_init() { gl_Vertex = vec4(inPos, 1.0); }\n"
+                        .to_owned(),
+                ),
+                fragment: Some("vec4 prelude_frag_coord() { return gl_FragCoord; }\n".to_owned()),
+            }),
+            ..Default::default()
+        },
+        default_blend: None,
+    }];
+    let runtime = prelude_runtime(Vec::new());
+    let layouts = [Some(prelude_mod_layouts(&gpu.device, true, None))];
+    let (mut post, color, depth) = load_with_mod_layouts(&gpu, files, requests, &runtime, &layouts);
+    assert!(
+        post.is_mod_pipeline_bound(0),
+        "dh_terrain gl_FragCoord test not bound: {:?}",
+        post.notes
+    );
+
+    // `SIZE` is 16x16. Screen pixel `[2, 1]` (near top) sits at GL row `16 - 1 - 1 = 14`; screen
+    // pixel `[13, 14]` (near bottom) sits at GL row `16 - 1 - 14 = 1`.
+    // GL clip z = -0.5 -> standard-Z 0.25 (`round(0.25 * 255) = 64`).
+    // GL clip z = +0.5 -> standard-Z 0.75 (`round(0.75 * 255) = 191`).
+    for (z_gl, expected_z_byte) in [(-0.5f32, 64u8), (0.5f32, 191u8)] {
+        gpu.clear(&color, &depth, 0.0);
+        let (vbuf, ibuf) = mod_quad_buffers(&gpu.device, z_gl);
+        post.set_mod_draws(vec![ModDrawChunk::quads(0, vbuf, ibuf, 0..1)]);
+        let samples = run_frame_and_sample_at(
+            &gpu,
+            &mut post,
+            &color,
+            &depth,
+            false,
+            &[[2, 1], [13, 14]],
+            (
+                WorldBoundaries::default(),
+                |_: &mut wgpu::CommandEncoder, _: WorldBoundary<'_>| false,
+            ),
+        );
+        assert_eq!(
+            samples,
+            vec![[2, 14, expected_z_byte, 255], [13, 1, expected_z_byte, 255]],
+            "z_gl = {z_gl}: expected standard-Z ({expected_z_byte}) and GL rows"
+        );
+    }
+}
+
+/// `bool sunrise_pack_fragment_discard()` samples a mod set-1 coverage-depth texture using the
+/// documented `1.0 - gl_FragCoord.z` and GL-row flip to discard the occluded top half of a quad
+/// while keeping the bottom half; in `PackPassSlot::Shadow` the function is never called even
+/// when it returns `true`.
+#[test]
+#[ignore = "daily"]
+fn mod_pack_prelude_fragment_discard_samples_mod_depth_and_skips_shadow() {
+    let _gpu_guard = crate::gfx::test_gpu::lock();
+    let gpu = Gpu::new().expect("graphics adapter required for prelude fragment discard test");
+
+    // 1) Non-shadow pass: bind a 16x16 top-down reversed-Z coverage texture in set 1.
+    // Top half (wgpu rows 0..8) holds 224/255 (~0.878 > quad revZ 0.75) -> discarded.
+    // Bottom half (wgpu rows 8..16) holds 64/255 (~0.251 < quad revZ 0.75) -> kept.
+    let set1_layout = gpu
+        .device
+        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Mod pack fragment discard coverage layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Texture {
+                        sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                        view_dimension: wgpu::TextureViewDimension::D2,
+                        multisampled: false,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                    count: None,
+                },
+            ],
+        });
+    let tex = gpu.device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("Mod pack fragment discard coverage depth"),
+        size: wgpu::Extent3d {
+            width: SIZE[0],
+            height: SIZE[1],
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: T::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    let mut coverage_bytes = Vec::with_capacity((SIZE[0] * SIZE[1] * 4) as usize);
+    for y in 0..SIZE[1] {
+        let cov = if y < SIZE[1] / 2 { 224u8 } else { 64u8 };
+        for _ in 0..SIZE[0] {
+            coverage_bytes.extend_from_slice(&[cov, 0, 0, 255]);
+        }
+    }
+    gpu.queue.write_texture(
+        tex.as_image_copy(),
+        &coverage_bytes,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(SIZE[0] * 4),
+            rows_per_image: Some(SIZE[1]),
+        },
+        wgpu::Extent3d {
+            width: SIZE[0],
+            height: SIZE[1],
+            depth_or_array_layers: 1,
+        },
+    );
+    let view = tex.create_view(&Default::default());
+    let sampler = gpu
+        .device
+        .create_sampler(&wgpu::SamplerDescriptor::default());
+    let set1 = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("Mod pack fragment discard coverage group"),
+        layout: &set1_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+    });
+
+    let files = vec![
+        (
+            "dh_terrain.vsh".to_owned(),
+            "#version 150\nvoid main() { gl_Position = vec4(gl_Vertex.xyz, 1.0); }\n".to_owned(),
+        ),
+        (
+            "dh_terrain.fsh".to_owned(),
+            "#version 150\n/* DRAWBUFFERS:0 */\nvoid main() { gl_FragData[0] = vec4(0.0, 1.0, 0.0, 1.0); }\n"
+                .to_owned(),
+        ),
+        ("final.vsh".to_owned(), VERTEX.to_owned()),
+        (
+            "final.fsh".to_owned(),
+            "#version 120\n\
+             uniform sampler2D colortex0;\n\
+             varying vec2 uv;\n\
+             /*\nconst int colortex0Format = RGBA8;\n*/\n\
+             void main() { gl_FragColor = texture2D(colortex0, uv); }\n"
+                .to_owned(),
+        ),
+    ];
+    let requests = vec![sunrise_shaders::ModPackProgramRequest {
+        slot: 0,
+        programs: vec!["dh_terrain".into()],
+        group: sunrise_shaders::Group::Gbuffers,
+        inputs: sunrise_shaders::GbuffersInputs {
+            prelude: Some(sunrise_shaders::PackPrelude {
+                vertex: Some(
+                    "layout(location = 0) in vec3 inPos;\n\
+                     void sunrise_pack_vertex_init() { gl_Vertex = vec4(inPos, 1.0); }\n"
+                        .to_owned(),
+                ),
+                fragment: Some(
+                    "layout(set = 1, binding = 0) uniform sampler2D coverageDepth;\n\
+                     bool sunrise_pack_fragment_discard() {\n\
+                         ivec2 sz = textureSize(coverageDepth, 0);\n\
+                         ivec2 px = ivec2(int(gl_FragCoord.x), sz.y - 1 - int(gl_FragCoord.y));\n\
+                         float cov = texelFetch(coverageDepth, px, 0).r;\n\
+                         float revZ = 1.0 - gl_FragCoord.z;\n\
+                         return revZ < cov;\n\
+                     }\n"
+                    .to_owned(),
+                ),
+            }),
+            ..Default::default()
+        },
+        default_blend: None,
+    }];
+    let runtime = prelude_runtime(Vec::new());
+    let layouts = [Some(prelude_mod_layouts(
+        &gpu.device,
+        true,
+        Some(set1_layout),
+    ))];
+    let (mut post, color, depth) = load_with_mod_layouts(&gpu, files, requests, &runtime, &layouts);
+    assert!(
+        post.is_mod_pipeline_bound(0),
+        "dh_terrain fragment discard not bound: {:?}",
+        post.notes
+    );
+    // GL clip z = -0.5 -> standard-Z 0.25 -> reversed-Z 0.75.
+    let (vbuf, ibuf) = mod_quad_buffers(&gpu.device, -0.5);
+    let mut chunk = ModDrawChunk::quads(0, vbuf, ibuf, 0..1);
+    chunk.mod_bind_group = Some((set1, Vec::new()));
+    post.set_mod_draws(vec![chunk]);
+    let samples = run_frame_and_sample_at(
+        &gpu,
+        &mut post,
+        &color,
+        &depth,
+        false,
+        &[[4, 2], [4, 13]],
+        (
+            WorldBoundaries::default(),
+            |_: &mut wgpu::CommandEncoder, _: WorldBoundary<'_>| false,
+        ),
+    );
+    // Top half `[4, 2]` is discarded (keeps `Gpu::clear`'s 0.0625 -> 16/255); bottom half `[4, 13]`
+    // stays green.
+    assert_eq!(
+        samples,
+        vec![[16, 16, 16, 255], [0, 255, 0, 255]],
+        "top half must be discarded and bottom half kept: {samples:?}"
+    );
+
+    // 2) Shadow pass: `sunrise_pack_fragment_discard()` returning `true` is never called.
+    let shadow_files = vec![
         (
             "shadow.vsh".to_owned(),
             "#version 120\nvoid main(){gl_Position=vec4(2.0,2.0,2.0,1.0);}".to_owned(),
@@ -1373,20 +1882,11 @@ fn mod_vertex_pack_fragment_against_a_geometry_stage_program_is_unbound_with_a_n
         ),
         (
             "mod_shadow.vsh".to_owned(),
-            "#version 330\nout vec2 vUv;\nvoid main(){gl_Position=ftransform();vUv=vec2(0.0);}\n"
-                .to_owned(),
-        ),
-        (
-            "mod_shadow.gsh".to_owned(),
-            "#version 330\nlayout(triangles) in;\nlayout(triangle_strip, max_vertices = 3) out;\n\
-             in vec2 vUv[];\nout vec2 gUv;\nvoid main() {\n    for (int i = 0; i < 3; i++) {\n        \
-             gl_Position = gl_in[i].gl_Position;\n        gUv = vUv[i];\n        EmitVertex();\n    }\n    \
-             EndPrimitive();\n}\n"
-                .to_owned(),
+            "#version 150\nvoid main(){gl_Position=vec4(gl_Vertex.xyz,1.0);}\n".to_owned(),
         ),
         (
             "mod_shadow.fsh".to_owned(),
-            "#version 330\nin vec2 gUv;\nlayout(location = 0) out vec4 c;\nvoid main(){c=vec4(gUv,0.0,1.0);}\n"
+            "#version 150\n/* DRAWBUFFERS:0 */\nvoid main(){gl_FragData[0]=vec4(0.0,0.0,1.0,1.0);}\n"
                 .to_owned(),
         ),
         ("final.vsh".to_owned(), VERTEX.to_owned()),
@@ -1397,14 +1897,26 @@ fn mod_vertex_pack_fragment_against_a_geometry_stage_program_is_unbound_with_a_n
                 .to_owned(),
         ),
     ];
-    let requests = vec![sunrise_shaders::ModPackProgramRequest {
+    let shadow_requests = vec![sunrise_shaders::ModPackProgramRequest {
         slot: 0,
-        programs: vec!["mod_shadow".into()],
+        programs: vec!["mod_shadow".into(), "shadow".into()],
         group: sunrise_shaders::Group::Shadow,
-        inputs: mod_gbuffers_inputs(),
+        inputs: sunrise_shaders::GbuffersInputs {
+            prelude: Some(sunrise_shaders::PackPrelude {
+                vertex: Some(
+                    "layout(location = 0) in vec3 inPos;\n\
+                     void sunrise_pack_vertex_init() { gl_Vertex = vec4(inPos, 1.0); }\n"
+                        .to_owned(),
+                ),
+                fragment: Some(
+                    "bool sunrise_pack_fragment_discard() { return true; }\n".to_owned(),
+                ),
+            }),
+            ..Default::default()
+        },
         default_blend: None,
     }];
-    let runtime = OwnedModPackRuntime {
+    let shadow_runtime = OwnedModPackRuntime {
         depth_targets: Vec::new(),
         uniforms: Vec::new(),
         pipelines: vec![ModPipelinePackSpec {
@@ -1415,91 +1927,30 @@ fn mod_vertex_pack_fragment_against_a_geometry_stage_program_is_unbound_with_a_n
             depth_compare: wgpu::CompareFunction::LessEqual,
             depth_bias: Default::default(),
             cull: false,
-            program_mode: ModProgramMode::ModVertexPackFragment,
         }],
     };
-    let stages = [Some(own_vertex_stage(&gpu.device))];
-    let (post, _color, _depth) = load_with_mod_stages(&gpu, files, requests, &runtime, &stages);
-    assert!(
-        !post.is_mod_pipeline_bound(0),
-        "a geometry-stage program must leave the slot unbound"
+    let shadow_layouts = [Some(prelude_mod_layouts(&gpu.device, true, None))];
+    let (mut shadow_post, shadow_color, shadow_depth) = load_with_mod_layouts(
+        &gpu,
+        shadow_files,
+        shadow_requests,
+        &shadow_runtime,
+        &shadow_layouts,
     );
     assert!(
-        post.notes.iter().any(|n| n.contains("geometry stage")),
-        "no reason given: {:?}",
-        post.notes
+        shadow_post.is_mod_pipeline_bound(0),
+        "mod_shadow prelude not bound: {:?}",
+        shadow_post.notes
     );
-}
-
-/// The mod's vertex stage reads its own set 1, a uniform buffer: the engine relocates it to
-/// `MOD_SET_BASE + 1`, after the pack's sets, and the draw's bind group supplies it there. The
-/// buffer's `(0.5, 0.25)` reaches the pack's fragment stage as `uv`.
-#[test]
-#[ignore = "daily"]
-fn mod_vertex_pack_fragment_reads_its_own_set_one_uniform_after_the_packs_sets() {
-    let _gpu_guard = crate::gfx::test_gpu::lock();
-    let Some(gpu) = Gpu::new() else {
-        return;
-    };
-    let layout = gpu
-        .device
-        .create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: Some("Mod pack test set 1"),
-            entries: &[wgpu::BindGroupLayoutEntry {
-                binding: 0,
-                visibility: wgpu::ShaderStages::VERTEX,
-                ty: wgpu::BindingType::Buffer {
-                    ty: wgpu::BufferBindingType::Uniform,
-                    has_dynamic_offset: false,
-                    min_binding_size: None,
-                },
-                count: None,
-            }],
-        });
-    let stage = vertex_stage_from(
-        &gpu.device,
-        "struct Out {
-            @builtin(position) position: vec4<f32>,
-            @location(0) uv: vec2<f32>,
-        };
-        struct Own { value: vec4<f32> };
-        @group(1) @binding(0) var<uniform> own: Own;
-        @vertex fn main(@location(0) p: vec3<f32>) -> Out {
-            var o: Out;
-            o.position = vec4<f32>(p.xy, p.z + 0.75, 1.0);
-            o.uv = own.value.xy;
-            return o;
-        }",
-        Some(layout.clone()),
+    let (svbuf, sibuf) = mod_quad_buffers(&gpu.device, -0.5);
+    shadow_post.set_mod_draws(vec![ModDrawChunk::quads(0, svbuf, sibuf, 0..1)]);
+    let shadow_px =
+        run_frame_and_sample_center(&gpu, &mut shadow_post, &shadow_color, &shadow_depth);
+    assert_eq!(
+        shadow_px,
+        [0, 0, 255, 255],
+        "shadow pass must ignore sunrise_pack_fragment_discard: {shadow_px:?}"
     );
-    let buffer = gpu
-        .device
-        .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-            label: Some("Mod pack test set 1 uniform"),
-            contents: bytemuck::cast_slice(&[0.5f32, 0.25, 0.0, 0.0]),
-            usage: wgpu::BufferUsages::UNIFORM,
-        });
-    let set1 = gpu.device.create_bind_group(&wgpu::BindGroupDescriptor {
-        label: Some("Mod pack test set 1"),
-        layout: &layout,
-        entries: &[wgpu::BindGroupEntry {
-            binding: 0,
-            resource: buffer.as_entire_binding(),
-        }],
-    });
-    let (requests, runtime) = own_stage_runtime();
-    let stages = [Some(stage)];
-    let (mut post, color, depth) =
-        load_with_mod_stages(&gpu, own_stage_pack(false), requests, &runtime, &stages);
-    assert!(
-        post.is_mod_pipeline_bound(0),
-        "set 1 not relocated: {:?}",
-        post.notes
-    );
-    draw_own_quad(&gpu, &mut post, stages[0].as_ref().unwrap(), Some(set1));
-    let px = run_frame_and_sample_center(&gpu, &mut post, &color, &depth);
-    assert!((px[0] as i16 - 128).abs() <= 2, "red {px:?}");
-    assert!((px[1] as i16 - 64).abs() <= 2, "green {px:?}");
 }
 
 /// A pack-linked `ModDrawKind::Indirect` draws two indexed commands, the left and the right half
@@ -1588,7 +2039,6 @@ fn mod_pack_indirect_draw_with_a_count_buffer_draws_only_the_counted_commands() 
             depth_compare: wgpu::CompareFunction::LessEqual,
             depth_bias: Default::default(),
             cull: false,
-            program_mode: Default::default(),
         }],
     };
     // The final image at the middle of each half, drawn with `count_buffer`.

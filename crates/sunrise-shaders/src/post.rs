@@ -801,13 +801,32 @@ pub struct ModPackProgramRequest {
     pub inputs: GbuffersInputs,
 }
 
+impl ModPackProgramRequest {
+    /// Candidate program stems to try for this request. Requests with a non-empty GLSL prelude try
+    /// only the first existing, enabled stem (no fallback on translation failure); ordinary
+    /// requests walk the full chain.
+    fn candidate_stems(&self, has: impl Fn(&str) -> bool) -> Vec<&str> {
+        if self.inputs.prelude.as_ref().is_some_and(|p| !p.is_empty()) {
+            self.programs
+                .iter()
+                .map(String::as_str)
+                .find(|name| has(name))
+                .into_iter()
+                .collect()
+        } else {
+            self.programs.iter().map(String::as_str).collect()
+        }
+    }
+}
+
 /// Resolution result for one [`ModPackProgramRequest`].
 #[derive(Clone)]
 pub struct ModPackProgram {
     /// Mod pipeline slot index from [`ModPackProgramRequest::slot`].
     pub slot: usize,
     /// First program in the request's chain that existed and translated cleanly, or `None` when
-    /// none matched or all failed to translate.
+    /// none matched or translation failed. Requests with a non-empty [`GbuffersInputs::prelude`]
+    /// try only the first existing, enabled stem and leave this `None` if it fails to translate.
     pub program: Option<PostProgram>,
 }
 
@@ -1037,6 +1056,18 @@ pub fn load_post(
     // Whether the pack has a program for each part, loaded or not.
     let [has_solid, has_cutout] =
         [&TERRAIN_SOLID, &TERRAIN_CUTOUT].map(|chain| chain.iter().any(|n| loader.has(n)));
+    // Resolve candidate stems up front before `gbuffers` borrows `loader` mutably.
+    let mod_candidates: Vec<Vec<&str>> = inputs
+        .mod_programs
+        .iter()
+        .map(|req| {
+            if req.group.shadow() {
+                Vec::new()
+            } else {
+                req.candidate_stems(|name| loader.has(name))
+            }
+        })
+        .collect();
     let mut gbuffers = |names: &[&str], group, inputs: &GbuffersInputs| {
         names.iter().find_map(|name| {
             // `alphaTest.<program>` replaces the geometry's default test (OQ-23).
@@ -1181,16 +1212,12 @@ pub fn load_post(
     let mod_programs: Vec<ModPackProgram> = inputs
         .mod_programs
         .iter()
-        .map(|req| {
-            let program = if req.group.shadow() {
-                None
-            } else {
-                let names: Vec<&str> = req.programs.iter().map(String::as_str).collect();
-                gbuffers(&names, req.group, &req.inputs).map(|mut p| {
-                    p.blend = blend(properties, &p.name).unwrap_or(req.default_blend);
-                    p
-                })
-            };
+        .zip(mod_candidates)
+        .map(|(req, names)| {
+            let program = gbuffers(&names, req.group, &req.inputs).map(|mut p| {
+                p.blend = blend(properties, &p.name).unwrap_or(req.default_blend);
+                p
+            });
             ModPackProgram {
                 slot: req.slot,
                 program,
@@ -1530,7 +1557,8 @@ fn load_shadow(
         if !req.group.shadow() {
             continue;
         }
-        let resolved = req.programs.iter().find_map(|name| {
+        let candidates = req.candidate_stems(|name| loader.has(name));
+        let resolved = candidates.into_iter().find_map(|name| {
             let test = match properties.get(&format!("alphaTest.{name}")) {
                 Some(v) => crate::AlphaTest::parse(v.trim()).flatten(),
                 None => req.inputs.alpha_test,
@@ -1538,7 +1566,7 @@ fn load_shadow(
             let mut mod_inputs = req.inputs.clone();
             mod_inputs.alpha_test = test;
             loader
-                .load(name.clone(), Group::Shadow, |v, f| {
+                .load(name.to_owned(), Group::Shadow, |v, f| {
                     translate_shadow(v, f, &mod_inputs, limits)
                 })
                 .map(|mut p| {
@@ -4217,6 +4245,66 @@ blend.composite1.colortex3 = ONE ONE ONE ONE
         assert!(
             post.notes.iter().any(|n| n.contains("broken_custom")),
             "broken program should be noted without panicking: {:?}",
+            post.notes
+        );
+    }
+
+    #[test]
+    fn mod_program_request_with_prelude_does_not_fall_back_after_translation_failure() {
+        let mod_vsh = "#version 150\n\
+            void main() {\n\
+                gl_Position = gl_ModelViewProjectionMatrix * gl_Vertex;\n\
+            }\n";
+        let broken_fsh = "#version 150\nvoid main() { gl_FragData[0] = undeclared_symbol; }\n";
+        let pack = Pack::from_zip_bytes(
+            "mod-pack-prelude-no-fallback",
+            crate::pack::tests::zip(&[
+                ("shaders/broken_custom.vsh", mod_vsh),
+                ("shaders/broken_custom.fsh", broken_fsh),
+                ("shaders/gbuffers_terrain.vsh", mod_vsh),
+                (
+                    "shaders/gbuffers_terrain.fsh",
+                    "#version 150\nvoid main() { gl_FragData[0] = vec4(0.5, 0.5, 0.5, 1.0); }\n",
+                ),
+            ]),
+        )
+        .unwrap();
+        let inputs = GameInputs {
+            mod_programs: vec![ModPackProgramRequest {
+                slot: 0,
+                programs: vec!["broken_custom".into(), "gbuffers_terrain".into()],
+                group: Group::Gbuffers,
+                default_blend: None,
+                inputs: GbuffersInputs {
+                    prelude: Some(crate::PackPrelude {
+                        vertex: Some(
+                            "layout(location = 0) in vec3 inPos;\n\
+                             void sunrise_pack_vertex_init() { gl_Vertex = vec4(inPos, 1.0); }\n"
+                                .into(),
+                        ),
+                        fragment: None,
+                    }),
+                    ..GbuffersInputs::default()
+                },
+            }],
+            ..GameInputs::default()
+        };
+        let post = load_post(
+            &pack,
+            "",
+            &Properties::default(),
+            &Macros::standard(),
+            &inputs,
+        );
+        assert_eq!(post.mod_programs.len(), 1);
+        assert!(
+            post.mod_programs[0].program.is_none(),
+            "prelude request must stay unbound after first existing stem fails: {:?}",
+            post.mod_programs[0].program.as_ref().map(|p| &p.name)
+        );
+        assert!(
+            post.notes.iter().any(|n| n.contains("broken_custom")),
+            "failed prelude stem should be noted: {:?}",
             post.notes
         );
     }

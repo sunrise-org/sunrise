@@ -47,6 +47,7 @@ pub(in crate::gfx) struct PostPassArgs<'a> {
     pub(in crate::gfx) serial: u64,
     pub(in crate::gfx) cpu: [usize; 3],
     pub(in crate::gfx) lifts_world: bool,
+    pub(in crate::gfx) export_opaque_depth: bool,
     pub(in crate::gfx) frame_graph: Option<mod_frame_graph::FrameGraphRunner>,
 }
 
@@ -108,6 +109,7 @@ impl Renderer {
             serial,
             cpu,
             lifts_world,
+            export_opaque_depth,
             mut frame_graph,
         } = args;
 
@@ -134,24 +136,22 @@ impl Renderer {
             let pack_translucent_blocks = hooks.is_some() && pack_draws_terrain && pack_blendable;
             let pack_weather = hooks.is_some() && pack_draws_weather && pack_blendable;
             let pack_custom_geometry = after_pack_custom_geometry && pack_blendable;
+            let size = self.world_post.size().unwrap_or([1, 1]);
             if pack_features
                 || pack_opaque_blocks
                 || pack_translucent_blocks
                 || pack_weather
                 || pack_custom_geometry
             {
-                self.world_primitives
-                    .as_mut()
-                    .expect("world primitives")
-                    .prepare_pack_pass(
-                        &self.device,
-                        format,
-                        post.rgb & 1 != 0,
-                        self.output.frame.linear_light,
-                    );
+                let wp = self.world_primitives.as_mut().expect("world primitives");
+                wp.prepare_pack_pass(
+                    &self.device,
+                    format,
+                    post.rgb & 1 != 0,
+                    self.output.frame.linear_light,
+                );
+                wp.set_pack_target_size(&self.queue, size);
             }
-
-            let size = self.world_post.size().unwrap_or([1, 1]);
             let weather = match &self.hud.atlas_texture {
                 Some(atlas) if pack_draws_weather => self
                     .pack_weather
@@ -316,6 +316,7 @@ impl Renderer {
                     translucent_blocks: pack_translucent_blocks,
                     weather: pack_weather,
                     custom_geometry: pack_custom_geometry,
+                    export_opaque_depth: pack_draws_terrain && export_opaque_depth,
                 },
                 |encoder, boundary| {
                     use pack_post::WorldBoundary;

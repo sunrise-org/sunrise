@@ -1,0 +1,7 @@
+ids = [
+    "type:RenderCapabilities.shader_early_depth_test",
+    "type:RenderCapabilities.fragment_writable_storage",
+    "type:RenderPipelineError.UnsupportedFeature",
+]
+why = "Expose RenderCapabilities::shader_early_depth_test (Vulkan/OpenGL non-Adreno forced hardware early-Z, sharing cull.rs's rule) and RenderCapabilities::fragment_writable_storage (false on Vulkan without fragmentStoresAndAtomics or OpenGL below 4.3), and refuse unsupported render pipelines with RenderPipelineError::UnsupportedFeature shaped like ComputePipelineError::UnsupportedFeature."
+migrate = "Additive fields on #[non_exhaustive] RenderCapabilities and additive variant on #[non_exhaustive] RenderPipelineError. Check host.render_capabilities().shader_early_depth_test and fragment_writable_storage before resolving an optional early-depth-test or fragment-storage render pipeline and fall back when resolution returns Err(RenderPipelineError::UnsupportedFeature)."

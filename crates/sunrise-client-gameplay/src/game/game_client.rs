@@ -3805,6 +3805,10 @@ impl crate::game::ClientGame<'_> {
         }
         let (screenshot, screenshot_result) = (old.screenshot.take(), old.screenshot_result.take());
         let display = old.display_reading();
+        // `set_renderer` finds no renderer or mod GPU facade to continue from: the new one takes
+        // both counts here.
+        let pack_generation = old.pack_generation();
+        let mod_gpu_ids = old.mod_gpu().id_state();
         self.client.mod_gpu = None;
         drop(old);
         let device = pollster::block_on(sunrise_client::gfx::Opened::for_window(
@@ -3850,6 +3854,8 @@ impl crate::game::ClientGame<'_> {
         )?;
         clouds?;
         (renderer.screenshot, renderer.screenshot_result) = (screenshot, screenshot_result);
+        renderer.continue_pack_generation(pack_generation);
+        renderer.mod_gpu().continue_ids_from(mod_gpu_ids);
         self.adopt_renderer(Box::new(renderer));
         log::info!("Sunrise: graphics device recovered; rebuilding world meshes");
         Ok(())

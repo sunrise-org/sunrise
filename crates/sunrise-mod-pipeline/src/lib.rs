@@ -24,7 +24,9 @@ use crate::check::{Problem, problem, translate_backends};
 use naga::ShaderStage;
 use naga::front::glsl::InterfaceLimits;
 use std::sync::LazyLock;
-use sunrise_glsl::{Expanded, Glue, Includes, Inputs, ResourceKind, Stages, Translated};
+use sunrise_glsl::{
+    Expanded, FragmentRewrite, Glue, Includes, Inputs, ResourceKind, Stages, Translated,
+};
 
 /// The folder under `assets/<namespace>/` holding core shader programs (`.vsh` and `.fsh`).
 pub const CORE_FOLDER: &str = "shaders/core";
@@ -159,14 +161,84 @@ pub fn linear_fragment_finish(out_name: &str) -> String {
     )
 }
 
-/// Returns the GLSL output variable name bound to fragment `location = 0` in `module`, if any.
+/// Post-`main()` vertex finish for targets using standard-Z `[0..1]` depth and bottom-up (OpenGL)
+/// row order: negates clip `y` and maps Sunrise's reversed-Z `[1..0]` clip `z` to `w - z` so
+/// `ndc_y' = -ndc_y` and `ndc_z' = 1 - ndc_z`.
+pub const STANDARD_Z_GL_ROWS_VERTEX_FINISH: &str = "gl_Position = vec4(gl_Position.x, -gl_Position.y, gl_Position.w - gl_Position.z, gl_Position.w);";
+
+/// Post-`main()` fragment finish for standard-Z `[0..1]` targets, appended only when the fragment
+/// module writes `gl_FragDepth` (`sunrise_glsl::FragmentConventions::writes_frag_depth`).
+pub const STANDARD_Z_FRAG_DEPTH_FINISH: &str = "gl_FragDepth = 1.0 - gl_FragDepth;";
+
+/// Synthetic `Globals` uniform block at `(set = 0, binding = 0)` matching vanilla's 48-byte
+/// `Globals` std140 layout (`ScreenSize` at byte offset 32), used when a fragment shader reads
+/// `gl_FragCoord` without declaring `Globals` itself.
+const SYNTHETIC_TARGET_GLOBALS_PRELUDE: &str = "\
+layout(std140, set = 0, binding = 0) uniform hz_TargetGlobals {\n\
+    vec4 hz_target_pad0;\n\
+    vec4 hz_target_pad1;\n\
+    vec2 hz_target_size;\n\
+    vec2 hz_target_pad2;\n\
+};\n\
+vec4 hz_FragCoord;";
+
+/// If `module` already binds a std140 uniform block at `(set = 0, binding = 0)` (`Globals`),
+/// returns the GLSL expression reading its `vec2` member at byte offset 32 (`ScreenSize.y`), or
+/// `Err` if binding 0 has an incompatible layout. Returns `None` when binding 0 is unbound.
+fn fragment_globals_height_expr(module: &naga::Module) -> Option<Result<String, String>> {
+    let (_, global) = module.global_variables.iter().find(|(_, g)| {
+        g.space == naga::AddressSpace::Uniform
+            && g.binding
+                .as_ref()
+                .is_some_and(|b| b.group == 0 && b.binding == 0)
+    })?;
+    let naga::TypeInner::Struct { ref members, .. } = module.types[global.ty].inner else {
+        return Some(Err("Globals uniform at binding 0 is not a struct".into()));
+    };
+    let Some(member) = members.iter().find(|m| {
+        m.offset == 32
+            && matches!(
+                module.types[m.ty].inner,
+                naga::TypeInner::Vector {
+                    size: naga::VectorSize::Bi,
+                    scalar: naga::Scalar::F32,
+                }
+            )
+    }) else {
+        return Some(Err(
+            "Globals uniform at binding 0 has no vec2 ScreenSize member at offset 32".into(),
+        ));
+    };
+    let field = member.name.as_deref()?;
+    let expr = match global.name.as_deref() {
+        Some(inst) if !inst.is_empty() => format!("{inst}.{field}.y"),
+        _ => format!("{field}.y"),
+    };
+    Some(Ok(expr))
+}
+
+/// Returns the GLSL output variable name bound to fragment `location = 0` in `module`, if any
+/// and if its type is `vec4` (`f32` quad vector). Non-`vec4` outputs (such as `out float` for
+/// `R32Float` offscreen targets or integer targets) cannot receive [`linear_fragment_finish`].
 fn fragment_loc0_output_name(module: &naga::Module) -> Option<&str> {
+    let is_vec4 = |ty: naga::Handle<naga::Type>| {
+        matches!(
+            module.types[ty].inner,
+            naga::TypeInner::Vector {
+                size: naga::VectorSize::Quad,
+                scalar: naga::Scalar::F32,
+            }
+        )
+    };
     let ep = module
         .entry_points
         .iter()
         .find(|e| e.stage == naga::ShaderStage::Fragment)?;
     let res = ep.function.result.as_ref()?;
     if let Some(naga::Binding::Location { location: 0, .. }) = res.binding {
+        if !is_vec4(res.ty) {
+            return None;
+        }
         // Trace the entry point's returned expression back to the GLSL output GlobalVariable.
         let ret_expr = ep.function.body.iter().rev().find_map(|stmt| match stmt {
             naga::Statement::Return { value: Some(expr) } => Some(*expr),
@@ -184,7 +256,11 @@ fn fragment_loc0_output_name(module: &naga::Module) -> Option<&str> {
     if let naga::TypeInner::Struct { ref members, .. } = module.types[res.ty].inner {
         for m in members {
             if let Some(naga::Binding::Location { location: 0, .. }) = m.binding {
-                return m.name.as_deref();
+                return if is_vec4(m.ty) {
+                    m.name.as_deref()
+                } else {
+                    None
+                };
             }
         }
     }
@@ -431,6 +507,7 @@ pub fn pipeline_glue<'a>(interface: InterfaceLimits, fragment_finish: Option<&'a
         finish: "",
         vertex_id: "int(gl_VertexIndex)",
         fragment_finish,
+        fragment_rewrite: FragmentRewrite::NONE,
         interface,
     }
 }
@@ -490,14 +567,21 @@ impl<'a> Setup<'a> {
         }
     }
 
-    fn glue<'b>(&'b self, options: &Options<'b>, fragment_finish: Option<&'b str>) -> Glue<'b> {
+    fn glue<'b>(
+        &'b self,
+        options: &Options<'b>,
+        finish: &'b str,
+        fragment_finish: Option<&'b str>,
+        fragment_rewrite: FragmentRewrite<'b>,
+    ) -> Glue<'b> {
         Glue {
             inputs: options.vertex_inputs,
             prelude: &self.prelude,
             setup: &self.setup,
-            finish: "",
+            finish,
             vertex_id: "int(gl_VertexIndex)",
             fragment_finish,
+            fragment_rewrite,
             interface: options.interface,
         }
     }
@@ -944,7 +1028,7 @@ fn translate_inner(
     let setup = Setup::new(options);
     let set1 = &setup.set1;
     let inputs = setup.inputs(options, defines, &includes);
-    let glue = setup.glue(options, None);
+    let glue = setup.glue(options, "", None, FragmentRewrite::NONE);
 
     let provided = |name: &str| extra_samplers.contains(&name);
     let to_problems = |errs| map_glsl_errors(errs, !options.textured);
@@ -968,7 +1052,7 @@ fn translate_inner(
         && let Some(out_name) = fragment_loc0_output_name(&translated.fragment)
     {
         let finish = linear_fragment_finish(out_name);
-        let linear_glue = setup.glue(options, Some(&finish));
+        let linear_glue = setup.glue(options, "", Some(&finish), FragmentRewrite::NONE);
         translated = sunrise_glsl::translate(&stages, &inputs, &linear_glue, &provided)
             .map_err(to_problems)?;
     }
@@ -1029,17 +1113,109 @@ pub fn translate_linear_fragment(
             vertex_file: "",
             fragment_file: "",
         };
-        let glue = setup.glue(options, None);
+        let glue = setup.glue(options, "", None, FragmentRewrite::NONE);
         let base = sunrise_glsl::translate(&stages, &inputs, &glue, &provided)
             .map_err(|errs| sunrise_glsl::describe(&errs))?;
         let Some(out_name) = fragment_loc0_output_name(&base.fragment) else {
             return Ok(base.fragment);
         };
         let finish = linear_fragment_finish(out_name);
-        let linear_glue = setup.glue(options, Some(&finish));
+        let linear_glue = setup.glue(options, "", Some(&finish), FragmentRewrite::NONE);
         sunrise_glsl::translate(&stages, &inputs, &linear_glue, &provided)
             .map_err(|errs| sunrise_glsl::describe(&errs))
             .map(|t| t.fragment)
+    })
+    .unwrap_or_else(Err)
+}
+
+/// Re-translate an already-expanded program for a target using standard-Z `[0..1]` depth and
+/// bottom-up (OpenGL) row order:
+/// - vertex stage appends [`STANDARD_Z_GL_ROWS_VERTEX_FINISH`] after `hz_main()`;
+/// - fragment stage adapts only what `base_fragment` actually uses (detected via
+///   [`sunrise_glsl::fragment_conventions`]):
+///   - `writes_frag_depth`: appends [`STANDARD_Z_FRAG_DEPTH_FINISH`] after `hz_main()`;
+///   - `reads_frag_coord`: substitutes `gl_FragCoord` with `hz_FragCoord` initialized to
+///     `vec4(gl_FragCoord.x, target_h - gl_FragCoord.y, 1.0 - gl_FragCoord.z, gl_FragCoord.w)`
+///     using `Globals.ScreenSize.y` at `(set = 0, binding = 0)`;
+///   - `uses_dfdy`: negates `dFdy`/`dFdyFine`/`dFdyCoarse` calls.
+///
+/// Returns `(vertex, Option<fragment>)`: `None` for the fragment stage when the shader uses none
+/// of `gl_FragDepth`, `gl_FragCoord`, or `dFdy*`, so the caller reuses the base gamma fragment
+/// shader directly without forcing a depth write or disabling early depth testing.
+pub fn translate_standard_z_gl_rows(
+    vertex_expanded: &str,
+    fragment_expanded: &str,
+    base_fragment: &naga::Module,
+    options: &Options<'_>,
+) -> Result<(naga::Module, Option<naga::Module>), String> {
+    guard::guarded(|| {
+        let conventions = sunrise_glsl::fragment_conventions(base_fragment);
+        let (frag_prelude, frag_setup) = if conventions.reads_frag_coord {
+            match fragment_globals_height_expr(base_fragment) {
+                Some(Ok(height)) => (
+                    "vec4 hz_FragCoord;",
+                    format!(
+                        "hz_FragCoord = vec4(gl_FragCoord.x, {height} - gl_FragCoord.y, 1.0 - gl_FragCoord.z, gl_FragCoord.w);"
+                    ),
+                ),
+                Some(Err(err)) => return Err(err),
+                None => (
+                    SYNTHETIC_TARGET_GLOBALS_PRELUDE,
+                    "hz_FragCoord = vec4(gl_FragCoord.x, hz_target_size.y - gl_FragCoord.y, 1.0 - gl_FragCoord.z, gl_FragCoord.w);".to_owned(),
+                ),
+            }
+        } else {
+            ("", String::new())
+        };
+        let fragment_finish = conventions
+            .writes_frag_depth
+            .then_some(STANDARD_Z_FRAG_DEPTH_FINISH);
+        let fragment_rewrite = FragmentRewrite {
+            prelude: frag_prelude,
+            setup: &frag_setup,
+            frag_coord: conventions.reads_frag_coord.then_some("hz_FragCoord"),
+            negate_dfdy: conventions.uses_dfdy,
+        };
+        let needs_fragment = conventions.writes_frag_depth
+            || conventions.reads_frag_coord
+            || conventions.uses_dfdy;
+
+        let defines = effective_defines(options.defines);
+        let noop = |_: &str| Ok(None);
+        let read = |id: &str| read_include(id, options.textured, &noop);
+        let includes = program_includes(&read);
+        let setup = Setup::new(options);
+        let inputs = setup.inputs(options, &defines, &includes);
+        let provided = |_: &str| false;
+        let stages = Stages {
+            vertex_dir: "",
+            fragment_dir: "",
+            vertex: vertex_expanded,
+            fragment: fragment_expanded,
+            vertex_file: "",
+            fragment_file: "",
+        };
+        let glue = setup.glue(
+            options,
+            STANDARD_Z_GL_ROWS_VERTEX_FINISH,
+            fragment_finish,
+            fragment_rewrite,
+        );
+        let translated = sunrise_glsl::translate(&stages, &inputs, &glue, &provided)
+            .map_err(|errs| sunrise_glsl::describe(&errs))?;
+        if options.check_backends {
+            let mut backend_errors = translate_backends(&translated.vertex);
+            if needs_fragment {
+                backend_errors.extend(translate_backends(&translated.fragment));
+            }
+            if !backend_errors.is_empty() {
+                return Err(backend_errors.join("; "));
+            }
+        }
+        Ok((
+            translated.vertex,
+            needs_fragment.then_some(translated.fragment),
+        ))
     })
     .unwrap_or_else(Err)
 }
@@ -1248,6 +1424,51 @@ void main() {
                 .iter()
                 .any(|(_, f)| f.name.as_deref() == Some("hz_main")),
             "linear_light must wrap main as hz_main using customOut, not scratchGlobal"
+        );
+    }
+
+    #[test]
+    fn linear_light_fragment_finish_skips_non_vec4_outputs() {
+        let scalar_fsh = "\
+#version 330
+in vec2 texCoord0;
+in vec4 vertexColor;
+out float fragDepthCopy;
+void main() {
+    fragDepthCopy = 0.5;
+}
+";
+        let built = translate(
+            &sources(VSH, scalar_fsh),
+            &Options {
+                linear_light: true,
+                check_backends: true,
+                ..Default::default()
+            },
+            &stub_include,
+        )
+        .expect("out float shader must translate on linear_light frames");
+        assert!(
+            !built
+                .translated
+                .fragment
+                .functions
+                .iter()
+                .any(|(_, f)| f.name.as_deref() == Some("hz_main")),
+            "linear_light must not wrap a scalar float location-0 output"
+        );
+        let lazy = translate_linear_fragment(
+            &built.vertex_expanded,
+            &built.fragment_expanded,
+            &Options::default(),
+        )
+        .expect("lazy linear re-translation must leave out float untouched");
+        assert!(
+            !lazy
+                .functions
+                .iter()
+                .any(|(_, f)| f.name.as_deref() == Some("hz_main")),
+            "lazy linear_light must not wrap a scalar float location-0 output"
         );
     }
 
@@ -2204,5 +2425,288 @@ void main() {{
         );
         assert!(other.contains("MySampler0 is not"), "{other}");
         assert!(!other.contains(hint), "{other}");
+    }
+
+    /// A compute shader using subgroup built-ins, arithmetic, shuffle, quad swap, ballot and a
+    /// subgroup barrier translates and passes all three backend checks (SPIR-V 1.3, MSL 2.4,
+    /// HLSL SM 6.0).
+    #[test]
+    fn subgroup_compute_shader_passes_all_backend_checks() {
+        let source = "\
+#version 450
+#extension GL_KHR_shader_subgroup_basic : enable
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+#extension GL_KHR_shader_subgroup_ballot : enable
+#extension GL_KHR_shader_subgroup_shuffle : enable
+#extension GL_KHR_shader_subgroup_quad : enable
+layout(local_size_x = 64) in;
+layout(std430) buffer Out { uint values[]; };
+void main() {
+    uint lane = gl_SubgroupInvocationID;
+    uint reduced = subgroupMax(lane);
+    uint xored = subgroupShuffleXor(reduced, 1u);
+    uint swapped = subgroupQuadSwapHorizontal(xored);
+    uvec4 mask = subgroupBallot(swapped > 0u);
+    subgroupBarrier();
+    values[gl_GlobalInvocationID.x] = swapped + mask.x + gl_SubgroupSize;
+}
+";
+        let compute = ComputeSources {
+            file: "assets/example/shaders/compute/reduce.csh",
+            dir: "example:shaders/compute/",
+            source,
+        };
+        let options = ComputeOptions {
+            defines: &[],
+            mod_bindings: &[ModBinding {
+                name: "Out",
+                kind: ModBindingKind::StorageBuffer { read_only: false },
+            }],
+            check_backends: true,
+            interface: DEVICELESS_INTERFACE_LIMITS,
+        };
+        let translated = translate_compute(&compute, &options, &stub_include)
+            .unwrap_or_else(|problems| panic!("expected subgroup compute to pass: {problems:?}"));
+        assert!(translated.uses_subgroup);
+        assert!(translate_backends(&translated.module).is_empty());
+
+        // A real shader error inside a subgroup compute shader is still refused at its location.
+        let broken = "\
+#version 450
+#extension GL_KHR_shader_subgroup_arithmetic : enable
+layout(local_size_x = 64) in;
+layout(std430) buffer Out { uint values[]; };
+void main() {
+    values[gl_GlobalInvocationID.x] = subgroupMax(undeclared_var);
+}
+";
+        let bad = ComputeSources {
+            source: broken,
+            ..compute
+        };
+        let problems = translate_compute(&bad, &options, &stub_include)
+            .expect_err("broken subgroup compute shader must be refused");
+        assert_eq!(problems.len(), 1, "{problems:?}");
+        assert_eq!(problems[0].stage, Some(ShaderStage::Compute));
+        assert_eq!(problems[0].line, 6);
+    }
+
+    #[test]
+    fn early_depth_test_passes_backend_check_and_survives_linear_light_finish() {
+        let storage_only_fsh = "\
+#version 330
+layout(early_fragment_tests) in;
+layout(std430) buffer Vis { uint visible[]; };
+void main() {
+    visible[0] = 1u;
+}
+";
+        let color_and_storage_fsh = "\
+#version 330
+layout(early_fragment_tests) in;
+layout(std430) buffer Vis { uint visible[]; };
+out vec4 fragColor;
+void main() {
+    visible[0] = 1u;
+    fragColor = vec4(0.5, 0.25, 0.125, 1.0);
+}
+";
+        let mod_bindings = [ModBinding {
+            name: "Vis",
+            kind: ModBindingKind::StorageBuffer { read_only: false },
+        }];
+        let options = Options {
+            mod_bindings: &mod_bindings,
+            linear_light: true,
+            check_backends: true,
+            ..Default::default()
+        };
+
+        let storage_only = translate(&sources(VSH, storage_only_fsh), &options, &stub_include)
+            .unwrap_or_else(|problems| panic!("early-Z storage-only shader failed: {problems:?}"));
+        assert!(storage_only.translated.uses_early_depth_test());
+        assert!(storage_only.translated.uses_fragment_writable_storage());
+
+        let with_color = translate(
+            &sources(VSH, color_and_storage_fsh),
+            &options,
+            &stub_include,
+        )
+        .unwrap_or_else(|problems| panic!("early-Z color shader failed: {problems:?}"));
+        assert!(with_color.translated.uses_early_depth_test());
+        assert!(with_color.translated.uses_fragment_writable_storage());
+        assert!(
+            with_color
+                .translated
+                .fragment
+                .functions
+                .iter()
+                .any(|(_, f)| f.name.as_deref() == Some("hz_main")),
+            "linear_light must wrap vec4 fragment output in hz_main"
+        );
+
+        let lazy_linear = translate_linear_fragment(
+            &with_color.vertex_expanded,
+            &with_color.fragment_expanded,
+            &options,
+        )
+        .expect("lazy linear re-translation must preserve early_depth_test");
+        assert!(
+            sunrise_glsl::module_uses_early_depth_test(&lazy_linear),
+            "linear_fragment_finish rewrite must preserve layout(early_fragment_tests) in"
+        );
+        assert!(
+            sunrise_glsl::module_writes_storage(&lazy_linear),
+            "linear_fragment_finish rewrite must preserve storage write detection"
+        );
+    }
+
+    #[test]
+    fn standard_z_gl_rows_adapts_only_used_fragment_conventions_and_validates_backends() {
+        let options = Options {
+            check_backends: true,
+            ..Default::default()
+        };
+
+        // 1. Plain shader (no gl_FragDepth, gl_FragCoord, or dFdy): fragment is None (reused).
+        let plain = translate(&sources(VSH, FSH), &options, &stub_include).unwrap();
+        let (_vs, fs) = translate_standard_z_gl_rows(
+            &plain.vertex_expanded,
+            &plain.fragment_expanded,
+            &plain.translated.fragment,
+            &options,
+        )
+        .expect("plain shader standard-Z adaptation must pass all backends");
+        assert!(
+            fs.is_none(),
+            "plain shader with no FragDepth/FragCoord/dFdy must not rewrite fragment stage"
+        );
+
+        // 2. Shader reading gl_FragCoord + dFdy* WITHOUT Globals and WITHOUT gl_FragDepth.
+        let screen_vsh = "\
+#version 330
+in vec3 Position;
+out vec3 worldPos;
+void main() {
+    worldPos = Position;
+    gl_Position = vec4(Position, 1.0);
+}
+";
+        let screen_fsh_no_globals = "\
+#version 330
+in vec3 worldPos;
+out vec4 fragColor;
+void main() {
+    vec3 n = normalize(cross(dFdx(worldPos), dFdy(worldPos)));
+    vec3 nf = dFdyFine(worldPos) + dFdyCoarse(worldPos);
+    fragColor = vec4(gl_FragCoord.xy * 0.01 + n.xy + nf.xy, gl_FragCoord.z, 1.0);
+}
+";
+        let pos_only = [("Position", "vec3")];
+        let screen_opts = Options {
+            vertex_inputs: &pos_only,
+            check_backends: true,
+            ..Default::default()
+        };
+        let built_no_globals = translate(
+            &sources(screen_vsh, screen_fsh_no_globals),
+            &screen_opts,
+            &stub_include,
+        )
+        .unwrap();
+        let (_vs, fs_no_globals) = translate_standard_z_gl_rows(
+            &built_no_globals.vertex_expanded,
+            &built_no_globals.fragment_expanded,
+            &built_no_globals.translated.fragment,
+            &screen_opts,
+        )
+        .expect("FragCoord + dFdy* without Globals must pass all backends");
+        let fs_no_globals = fs_no_globals.expect("FragCoord + dFdy* requires adapted fragment");
+        let conv = sunrise_glsl::fragment_conventions(&fs_no_globals);
+        assert!(
+            !conv.writes_frag_depth,
+            "shader that does not write gl_FragDepth must not receive depth-write finish"
+        );
+        assert!(conv.reads_frag_coord);
+        assert!(conv.uses_dfdy);
+
+        // 3. Same shader WITH #include <minecraft:globals.glsl> reuses binding 0 without collision.
+        let screen_fsh_with_globals = format!(
+            "#version 330\n#include <minecraft:globals.glsl>\n{}",
+            screen_fsh_no_globals
+                .strip_prefix("#version 330\n")
+                .unwrap()
+        );
+        let built_with_globals = translate(
+            &sources(screen_vsh, &screen_fsh_with_globals),
+            &screen_opts,
+            &stub_include,
+        )
+        .unwrap();
+        let (_vs, fs_with_globals) = translate_standard_z_gl_rows(
+            &built_with_globals.vertex_expanded,
+            &built_with_globals.fragment_expanded,
+            &built_with_globals.translated.fragment,
+            &screen_opts,
+        )
+        .expect("FragCoord + dFdy* with Globals must reuse binding 0 cleanly across all backends");
+        let fs_with_globals = fs_with_globals.expect("adapted fragment expected");
+        assert!(!sunrise_glsl::fragment_conventions(&fs_with_globals).writes_frag_depth);
+
+        // 4. Shader with layout(early_fragment_tests) in + gl_FragCoord keeps early-Z and no FragDepth.
+        let early_fsh = "\
+#version 330
+layout(early_fragment_tests) in;
+layout(std430) buffer Vis { uint vis[]; };
+void main() {
+    if (gl_FragCoord.y < 8.0) vis[0] = 1u;
+}
+";
+        let mod_bindings = [ModBinding {
+            name: "Vis",
+            kind: ModBindingKind::StorageBuffer { read_only: false },
+        }];
+        let early_opts = Options {
+            vertex_inputs: &pos_only,
+            mod_bindings: &mod_bindings,
+            check_backends: true,
+            ..Default::default()
+        };
+        let built_early =
+            translate(&sources(screen_vsh, early_fsh), &early_opts, &stub_include).unwrap();
+        let (_vs, fs_early) = translate_standard_z_gl_rows(
+            &built_early.vertex_expanded,
+            &built_early.fragment_expanded,
+            &built_early.translated.fragment,
+            &early_opts,
+        )
+        .expect("early_fragment_tests + FragCoord must translate cleanly");
+        let fs_early = fs_early.expect("adapted fragment expected");
+        assert!(sunrise_glsl::module_uses_early_depth_test(&fs_early));
+        assert!(!sunrise_glsl::fragment_conventions(&fs_early).writes_frag_depth);
+
+        // 5. Fullscreen composite writing gl_FragDepth with early return & discard.
+        let depth_fsh = "\
+#version 330
+out vec4 fragColor;
+void main() {
+    if (gl_FragCoord.x < 1.0) discard;
+    if (gl_FragCoord.y < 8.0) { fragColor = vec4(1.0, 0.0, 0.0, 1.0); gl_FragDepth = 0.75; return; }
+    fragColor = vec4(0.0, 0.0, 1.0, 1.0);
+    gl_FragDepth = 0.25;
+}
+";
+        let built_depth =
+            translate(&sources(screen_vsh, depth_fsh), &screen_opts, &stub_include).unwrap();
+        let (_vs, fs_depth) = translate_standard_z_gl_rows(
+            &built_depth.vertex_expanded,
+            &built_depth.fragment_expanded,
+            &built_depth.translated.fragment,
+            &screen_opts,
+        )
+        .expect("FragDepth + FragCoord composite must pass all backends");
+        let fs_depth = fs_depth.expect("adapted fragment expected");
+        assert!(sunrise_glsl::fragment_conventions(&fs_depth).writes_frag_depth);
+        assert!(sunrise_glsl::fragment_conventions(&fs_depth).reads_frag_coord);
     }
 }

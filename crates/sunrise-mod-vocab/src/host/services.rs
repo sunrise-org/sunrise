@@ -563,11 +563,12 @@ pub trait RenderAssets {
     /// included), when the active pack is not a `shaders/` pack, when the pack gives `state` no
     /// id, and when `state` is not in the live block-state index.
     ///
-    /// The answer changes when the active pack is loaded, switched or turned off, and no signal
-    /// of such a change exists yet: nothing tells a mod when a pack reloads, and
-    /// `shader_pack_active()` stays `true` across a switch from one pack to another. A mod that
-    /// needs the current id asks again when it needs it; keep no cache that nothing invalidates.
-    /// Item and entity ids are not part of this read.
+    /// The answer changes when the active pack is loaded, switched or turned off.
+    /// `shader_pack_active()` alone stays `true` across a switch from one pack to another;
+    /// compare [`ShaderPackState::generation`] from
+    /// [`crate::ClientOptionsClientHost::shader_pack_state`] (as an optional generation) each
+    /// frame and re-read cached ids when it changes. Item and entity ids are not part of this
+    /// read.
     fn shader_pack_block_id(&self, state: BlockState) -> Option<i32> {
         let _ = state;
         unimplemented!("RenderAssets::shader_pack_block_id")

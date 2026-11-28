@@ -1,0 +1,2 @@
+sunrise-client-gameplay game::client_side::native_custom_geometry::tests::frame_graph_compute_reads_identical_world_depth_with_and_without_terrain_pack lib daily child-process
+sunrise-client-gameplay game::client_side::native_custom_geometry::tests::frame_graph_compute_reads_scaled_world_depth lib daily child-process

@@ -120,7 +120,7 @@ pub use entity_batch::{NAME_TAG_OVERLAY, NAME_TAG_SOLID_OVERLAY};
 use external::{shadow_box, shadow_runs};
 pub use frustum::{Cull, JoinedFrusta, ShadowCull};
 use frustum::{block_entities_within_reach, frustum, shadow_casters, taa_frustum};
-pub use mod_gpu::ModGpuResources;
+pub use mod_gpu::{ModGpuIds, ModGpuResources};
 pub use section_fade::{CHUNK_VISIBILITY_THRESHOLD, chunk_visibility, fade_millis};
 use section_fade::{FadeInputs, compiled_and_visible, section_instance, section_visibility};
 #[doc(hidden)]
@@ -911,6 +911,13 @@ impl Renderer {
     /// alone cannot restore resources belonging to a lost device.
     pub fn device_lost(&self) -> bool {
         self.device_lost.load(std::sync::atomic::Ordering::Relaxed)
+    }
+    /// Marks the device lost, as its loss callback does, so a test drives the game's recovery.
+    #[cfg(feature = "test-support")]
+    #[doc(hidden)]
+    pub fn test_mark_device_lost(&self) {
+        self.device_lost
+            .store(true, std::sync::atomic::Ordering::Relaxed);
     }
 }
 /// Encodes the copy of `texture`'s `size` pixels into a mappable buffer.

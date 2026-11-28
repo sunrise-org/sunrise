@@ -1,0 +1,10 @@
+ids = [
+    "type:PackBinding.vertex_prelude",
+    "type:PackBinding.fragment_prelude",
+    "type:PackProgramMode",
+    "type:PackBinding.program_mode",
+    "type:PackGlslInput",
+    "type:PackBinding.glsl_bindings",
+]
+why = "Adds optional per-stage GLSL preludes (PackBinding::{vertex_prelude, fragment_prelude}) so mods supply pack-expected attributes, helpers, and mod bind-group resources (set 0 and set 1, relocated above the pack's sets) while keeping the pack's own vertex and fragment stages intact (#6477, #6654). Removes PackGlslInput, PackBinding::glsl_bindings, PackProgramMode, and PackBinding::program_mode in one clean break."
+migrate = "Replace PackBinding::glsl_binding(...) and PackBinding::program_mode(PackProgramMode::ModVertexPackFragment) with PackBinding::vertex_prelude(...) (defining void sunrise_pack_vertex_init()) and optional PackBinding::fragment_prelude(...), using PackDepthTarget::Aux where a separate depth plane is needed."

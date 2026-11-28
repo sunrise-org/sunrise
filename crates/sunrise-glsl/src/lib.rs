@@ -101,7 +101,36 @@ pub struct Includes<'a> {
     pub once: &'a [&'a str],
 }
 
-/// What the caller's pipeline gives the program's vertex shader, and what it runs after the
+/// Optional rewrites applied to the fragment stage's GLSL before parsing, leaving the glue's own
+/// `prelude`, `setup`, and `fragment_finish` untouched so wrappers can read the real built-ins.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FragmentRewrite<'a> {
+    /// Declarations placed before the fragment shader's own code (after `#version 450 core`).
+    pub prelude: &'a str,
+    /// Statements run in the wrapper `main()` before `hz_main()`.
+    pub setup: &'a str,
+    /// Identifier substituted for whole-word `gl_FragCoord` in the shader's own code.
+    pub frag_coord: Option<&'a str>,
+    /// Negate every `dFdy(...)`, `dFdyFine(...)`, and `dFdyCoarse(...)` call in the shader's own
+    /// code as `(-dFdy(...))` etc. (for vertically flipped targets).
+    pub negate_dfdy: bool,
+}
+
+impl FragmentRewrite<'_> {
+    /// No fragment prelude, setup, or built-in substitutions.
+    pub const NONE: Self = Self {
+        prelude: "",
+        setup: "",
+        frag_coord: None,
+        negate_dfdy: false,
+    };
+
+    fn needs_wrapper(self) -> bool {
+        !self.setup.is_empty()
+    }
+}
+
+/// What the caller's pipeline gives the program's vertex shader, and what it runs around the
 /// fragment shader's.
 pub struct Glue<'a> {
     /// The inputs the program's vertex shader may declare: name and GLSL type.
@@ -119,6 +148,9 @@ pub struct Glue<'a> {
     /// before them. None leaves the fragment shader as the program wrote it. Only [`translate`] runs it: a caller of [`compile_stage`]
     /// writes its own `main`.
     pub fragment_finish: Option<&'a str>,
+    /// Optional fragment prelude, pre-`hz_main()` setup, and built-in rewrites (`gl_FragCoord`,
+    /// `dFdy*`). Use [`FragmentRewrite::NONE`] when none are needed.
+    pub fragment_rewrite: FragmentRewrite<'a>,
     /// The stage interface limits the stages are translated with (a device's, or the lowest
     /// any device has when checking without one).
     pub interface: InterfaceLimits,
@@ -252,6 +284,22 @@ impl Translated {
             other_base,
             sources: None,
         }
+    }
+
+    /// Whether the fragment entry point declares `layout(early_fragment_tests) in;`.
+    pub fn uses_early_depth_test(&self) -> bool {
+        module_uses_early_depth_test(&self.fragment)
+    }
+
+    /// Whether the fragment stage writes any storage buffer or storage image.
+    pub fn uses_fragment_writable_storage(&self) -> bool {
+        module_writes_storage(&self.fragment)
+    }
+
+    /// Screen-space and depth features the fragment stage uses (`gl_FragDepth`, `gl_FragCoord`,
+    /// `dFdy`/`dFdyFine`/`dFdyCoarse`).
+    pub fn fragment_conventions(&self) -> FragmentConventions {
+        fragment_conventions(&self.fragment)
     }
 
     /// Where a stage declares the resource at `binding` of set 0, a stage reading it first
@@ -902,6 +950,7 @@ pub fn translate_compute(
         finish: "",
         vertex_id: "0",
         fragment_finish: None,
+        fragment_rewrite: FragmentRewrite::NONE,
         interface,
     };
     let mut names = Names::new(
@@ -945,9 +994,8 @@ pub fn translate_compute(
     })
 }
 
-/// Whether `module` has a subgroup operation (each of the ballot, gather and collective
-/// statements yields a result expression, which is what is looked for, so no statement walk is
-/// needed) or an entry point that reads a subgroup built-in.
+/// Whether `module` has a subgroup operation (ballot, gather, collective), a subgroup barrier,
+/// or an entry point / helper reading a subgroup built-in.
 fn module_uses_subgroup(module: &naga::Module) -> bool {
     let operation = |expression: &naga::Expression| {
         matches!(
@@ -975,7 +1023,150 @@ fn module_uses_subgroup(module: &naga::Module) -> bool {
         .any(|function| {
             function.expressions.iter().any(|(_, e)| operation(e))
                 || function.arguments.iter().any(built_in)
+                || block_uses_subgroup_barrier(&function.body)
         })
+}
+
+/// Whether any statement inside `body` is a subgroup control or memory barrier.
+fn block_uses_subgroup_barrier(body: &naga::Block) -> bool {
+    let mut blocks = vec![body];
+    while let Some(block) = blocks.pop() {
+        for statement in block.iter() {
+            match statement {
+                naga::Statement::ControlBarrier(flags) | naga::Statement::MemoryBarrier(flags)
+                    if flags.contains(naga::Barrier::SUB_GROUP) =>
+                {
+                    return true;
+                }
+                naga::Statement::Block(inner) => blocks.push(inner),
+                naga::Statement::If { accept, reject, .. } => {
+                    blocks.push(accept);
+                    blocks.push(reject);
+                }
+                naga::Statement::Loop {
+                    body, continuing, ..
+                } => {
+                    blocks.push(body);
+                    blocks.push(continuing);
+                }
+                naga::Statement::Switch { cases, .. } => {
+                    blocks.extend(cases.iter().map(|case| &case.body));
+                }
+                _ => {}
+            }
+        }
+    }
+    false
+}
+
+/// Screen-space and depth features a fragment [`naga::Module`] uses, detected from its validated
+/// IR so target-convention adapters rewrite only what the shader actually uses.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct FragmentConventions {
+    /// Entry point writes `gl_FragDepth` (`BuiltIn::FragDepth`).
+    pub writes_frag_depth: bool,
+    /// Entry point reads `gl_FragCoord` (`BuiltIn::Position`).
+    pub reads_frag_coord: bool,
+    /// Any function or entry point evaluates `dFdy`, `dFdyFine`, or `dFdyCoarse`
+    /// (`Expression::Derivative { axis: DerivativeAxis::Y, .. }`).
+    pub uses_dfdy: bool,
+}
+
+/// Detect fragment screen-space and depth features from a validated [`naga::Module`].
+pub fn fragment_conventions(module: &naga::Module) -> FragmentConventions {
+    let has_builtin = |binding: Option<&naga::Binding>,
+                       ty: naga::Handle<naga::Type>,
+                       pred: &dyn Fn(&naga::BuiltIn) -> bool|
+     -> bool {
+        if let Some(naga::Binding::BuiltIn(b)) = binding {
+            return pred(b);
+        }
+        if let naga::TypeInner::Struct { ref members, .. } = module.types[ty].inner {
+            return members
+                .iter()
+                .any(|m| matches!(&m.binding, Some(naga::Binding::BuiltIn(b)) if pred(b)));
+        }
+        false
+    };
+    let mut out = FragmentConventions::default();
+    if let Some(ep) = module
+        .entry_points
+        .iter()
+        .find(|e| e.stage == naga::ShaderStage::Fragment)
+    {
+        if let Some(res) = &ep.function.result {
+            out.writes_frag_depth = has_builtin(res.binding.as_ref(), res.ty, &|b| {
+                matches!(b, naga::BuiltIn::FragDepth)
+            });
+        }
+        out.reads_frag_coord = ep.function.arguments.iter().any(|arg| {
+            has_builtin(arg.binding.as_ref(), arg.ty, &|b| {
+                matches!(b, naga::BuiltIn::Position { .. })
+            })
+        });
+    }
+    out.uses_dfdy = module
+        .functions
+        .iter()
+        .map(|(_, f)| f)
+        .chain(module.entry_points.iter().map(|e| &e.function))
+        .any(|f| {
+            f.expressions.iter().any(|(_, e)| {
+                matches!(
+                    e,
+                    naga::Expression::Derivative {
+                        axis: naga::DerivativeAxis::Y,
+                        ..
+                    }
+                )
+            })
+        });
+    out
+}
+
+/// Whether any entry point of `module` declares `layout(early_fragment_tests) in;`.
+pub fn module_uses_early_depth_test(module: &naga::Module) -> bool {
+    module
+        .entry_points
+        .iter()
+        .any(|ep| ep.early_depth_test.is_some())
+}
+
+/// Whether `module` writes an image or a buffer anywhere: an image store or atomic, an atomic,
+/// or a store into a global of the storage address space (through any member or index).
+pub fn module_writes_storage(module: &naga::Module) -> bool {
+    use naga::{Expression as E, Statement as S};
+    fn storage(module: &naga::Module, f: &naga::Function, mut e: naga::Handle<E>) -> bool {
+        loop {
+            match f.expressions[e] {
+                E::Access { base, .. } | E::AccessIndex { base, .. } => e = base,
+                E::GlobalVariable(g) => {
+                    return matches!(
+                        module.global_variables[g].space,
+                        naga::AddressSpace::Storage { .. }
+                    );
+                }
+                _ => return false,
+            }
+        }
+    }
+    fn block(module: &naga::Module, f: &naga::Function, b: &naga::Block) -> bool {
+        b.iter().any(|s| match s {
+            S::ImageStore { .. } | S::ImageAtomic { .. } | S::Atomic { .. } => true,
+            S::Store { pointer, .. } => storage(module, f, *pointer),
+            S::CooperativeStore { target, .. } => storage(module, f, *target),
+            S::Block(b) => block(module, f, b),
+            S::If { accept, reject, .. } => block(module, f, accept) || block(module, f, reject),
+            S::Switch { cases, .. } => cases.iter().any(|c| block(module, f, &c.body)),
+            S::Loop {
+                body, continuing, ..
+            } => block(module, f, body) || block(module, f, continuing),
+            _ => false,
+        })
+    }
+    (module.functions.iter().map(|(_, f)| f))
+        .chain(module.entry_points.iter().map(|e| &e.function))
+        .any(|f| block(module, f, &f.body))
 }
 
 /// A bound on a program's includes, which are pasted every time.
@@ -1919,6 +2110,9 @@ fn rewrite(
         for (name, ty) in glue.inputs {
             out.push(&format!("{ty} {name};\n"), None);
         }
+    } else if stage == ShaderStage::Fragment && !glue.fragment_rewrite.prelude.is_empty() {
+        out.push(glue.fragment_rewrite.prelude, None);
+        out.push("\n", None);
     }
     // Where the program's own code starts: the glue above it is left as it is.
     let pack_start = out.text().len();
@@ -2210,13 +2404,39 @@ fn rewrite(
             }
         }
     }
-    if let (false, Some(finish)) = (vertex, glue.fragment_finish) {
-        let code = &out.text()[pack_start..];
-        let edits = main_at(code)
-            .map(|at| (at + pack_start..at + pack_start + 4, "hz_main".to_owned()))
-            .collect();
-        out.edit(edits);
-        out.push(&format!("void main() {{\nhz_main();\n{finish}\n}}\n"), None);
+    if stage == ShaderStage::Fragment {
+        let rw = glue.fragment_rewrite;
+        let wrap = rw.needs_wrapper() || glue.fragment_finish.is_some();
+        if wrap || rw.frag_coord.is_some() || rw.negate_dfdy {
+            let code = &out.text()[pack_start..];
+            let mut edits: Vec<(std::ops::Range<usize>, String)> = Vec::new();
+            if wrap {
+                edits.extend(
+                    main_at(code)
+                        .map(|at| (at + pack_start..at + pack_start + 4, "hz_main".to_owned())),
+                );
+            }
+            if let Some(replacement) = rw.frag_coord {
+                edits.extend(ident_at(code, "gl_FragCoord").map(|r| {
+                    (
+                        r.start + pack_start..r.end + pack_start,
+                        replacement.to_owned(),
+                    )
+                }));
+            }
+            if rw.negate_dfdy {
+                edits.extend(negate_dfdy_edits(code, pack_start));
+            }
+            edits.sort_by_key(|(r, _)| (r.start, r.end));
+            out.edit(edits);
+            if wrap {
+                let finish = glue.fragment_finish.unwrap_or("");
+                out.push(
+                    &format!("void main() {{\n{}\nhz_main();\n{}\n}}\n", rw.setup, finish),
+                    None,
+                );
+            }
+        }
     }
     if vertex {
         // The program's `gl_VertexID` and `gl_VertexIndex` both read the glue's expression (a
@@ -2258,6 +2478,46 @@ fn ident_at<'a>(text: &'a str, from: &'a str) -> impl Iterator<Item = std::ops::
         })
 }
 
+/// Zero-length edits wrapping every `dFdy(...)`, `dFdyFine(...)`, and `dFdyCoarse(...)` call in
+/// `code` as `(-dFdy(...))`, `(-dFdyFine(...))`, and `(-dFdyCoarse(...))`.
+fn negate_dfdy_edits(code: &str, base: usize) -> Vec<(std::ops::Range<usize>, String)> {
+    let mut edits = Vec::new();
+    let bytes = code.as_bytes();
+    for name in ["dFdy", "dFdyFine", "dFdyCoarse"] {
+        for r in ident_at(code, name) {
+            if code[..r.start].trim_end().ends_with('.') {
+                continue;
+            }
+            let rest = &code[r.end..];
+            let ws = rest.len() - rest.trim_start().len();
+            let open = r.end + ws;
+            if bytes.get(open) != Some(&b'(') {
+                continue;
+            }
+            let mut depth = 0u32;
+            let mut close = None;
+            for (offset, &b) in bytes[open..].iter().enumerate() {
+                match b {
+                    b'(' => depth += 1,
+                    b')' => {
+                        depth -= 1;
+                        if depth == 0 {
+                            close = Some(open + offset);
+                            break;
+                        }
+                    }
+                    _ => {}
+                }
+            }
+            if let Some(close) = close {
+                edits.push((base + r.start..base + r.start, "(-".to_owned()));
+                edits.push((base + close + 1..base + close + 1, ")".to_owned()));
+            }
+        }
+    }
+    edits
+}
+
 /// Where the `main` of each `void main(` is, which becomes `hz_main`.
 fn main_at(text: &str) -> impl Iterator<Item = usize> + '_ {
     ident_at(text, "main")
@@ -2284,6 +2544,8 @@ fn compile(
         code.errors_in(stage, &e, |kind, line| format!("({}): {kind}", line.trim()))
     })?;
     let info = Validator::new(ValidationFlags::all(), Capabilities::all())
+        .subgroup_operations(naga::valid::SubgroupOperationSet::all())
+        .subgroup_stages(naga::valid::ShaderStages::all())
         .validate(&module)
         .map_err(|e| {
             // The innermost span naga gives (an expression inside the function the error names).

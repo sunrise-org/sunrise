@@ -467,6 +467,12 @@ impl WorldPrimitives {
         self.pipelines.ensure_pack_pipelines(device, format, rgb);
     }
 
+    /// Record the active standard-Z / GL-rows target's pixel dimensions for `Globals.ScreenSize`
+    /// patching when resolution scaling makes `colortex0` differ from the window size.
+    pub(super) fn set_pack_target_size(&mut self, queue: &wgpu::Queue, size: [u32; 2]) {
+        self.pipelines.set_pack_target_size(queue, size);
+    }
+
     fn standard_pipelines(
         device: &wgpu::Device,
         layout: &wgpu::BindGroupLayout,
@@ -930,6 +936,81 @@ impl WorldPrimitives {
         self.pipelines.prepare_oit_groups(device, samples);
     }
 
+    /// Whether any prepared standard-pass draw samples `TextureSource::WorldDepth` and therefore
+    /// needs the world render passes before it to store depth.
+    pub(super) fn reads_world_depth(&self) -> bool {
+        self.pipelines.reads_world_depth()
+    }
+
+    /// Whether any prepared standard-pass draw in `draws` samples `TextureSource::WorldDepth`.
+    pub(super) fn prepared_reads_world_depth(&self, draws: &[DrawRanges]) -> bool {
+        draws.iter().any(|d| {
+            !d.pipeline_draws.is_empty()
+                && self
+                    .pipelines
+                    .prepared_draws_read_world_depth(std::slice::from_ref(&d.pipeline_draws))
+        })
+    }
+
+    /// Draw the primitives, runs, and leading non-`WorldDepth` draws of `draws` into the
+    /// already-open writable `pass`, returning how many prepared draws were issued before the
+    /// first `WorldDepth`-sampling draw.
+    pub(super) fn draw_prepared_prefix(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        draws: &[DrawRanges],
+    ) -> usize {
+        self.draw_prepared_primitives(pass, &self.pipelines_standard, false, draws);
+        let has_pipeline_runs = draws.iter().any(|d| !d.pipeline_runs.is_empty());
+        if has_pipeline_runs {
+            let ranges = draws
+                .iter()
+                .filter(|d| !d.pipeline_runs.is_empty())
+                .map(|d| d.pipeline_runs.clone());
+            self.pipelines
+                .draw_prepared_runs(pass, &self.indices, ranges, PreparedPass::World);
+        }
+        let ranges: Vec<std::ops::Range<u32>> = draws
+            .iter()
+            .filter(|d| !d.pipeline_draws.is_empty())
+            .map(|d| d.pipeline_draws.clone())
+            .collect();
+        if ranges.is_empty() {
+            0
+        } else {
+            self.pipelines
+                .draw_prepared_draws_prefix(pass, &self.indices, &ranges)
+        }
+    }
+
+    /// Draw the remaining prepared draws of `draws` (after `skip` issued by
+    /// [`Self::draw_prepared_prefix`]) in exact submission order across read-only and writable
+    /// depth passes on `(view, depth)`.
+    pub(super) fn draw_prepared_split(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        draws: &[DrawRanges],
+        skip: usize,
+    ) {
+        let ranges: Vec<std::ops::Range<u32>> = draws
+            .iter()
+            .filter(|d| !d.pipeline_draws.is_empty())
+            .map(|d| d.pipeline_draws.clone())
+            .collect();
+        if !ranges.is_empty() {
+            self.pipelines.draw_prepared_draws_split(
+                encoder,
+                view,
+                depth,
+                &self.indices,
+                &ranges,
+                skip,
+            );
+        }
+    }
+
     /// Encode a prepared command. No buffer allocation or upload is possible from this path.
     pub(super) fn draw_prepared(
         &self,
@@ -967,35 +1048,40 @@ impl WorldPrimitives {
         {
             return false;
         }
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Prepared classic pack world stage"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: color,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
+        self.pipelines.patch_pack_screen_size(encoder);
+        let drew = {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Prepared classic pack world stage"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            ..Default::default()
-        });
-        self.draw_prepared_ranges(
-            &mut pass,
-            PreparedPass::Pack {
-                pipelines,
-                bound_slots,
-            },
-            draws,
-        )
+                ..Default::default()
+            });
+            self.draw_prepared_ranges(
+                &mut pass,
+                PreparedPass::Pack {
+                    pipelines,
+                    bound_slots,
+                },
+                draws,
+            )
+        };
+        self.pipelines.restore_pack_screen_size(encoder);
+        drew
     }
 
     /// Per-frame shader-pack uniform values uploaded from the latest [`Batch`].
@@ -1064,50 +1150,59 @@ impl WorldPrimitives {
         if !has_primitives && !has_pipelines {
             return false;
         }
-        let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            label: Some("Classic pack custom geometry"),
-            color_attachments: &[Some(wgpu::RenderPassColorAttachment {
-                view: color,
-                depth_slice: None,
-                resolve_target: None,
-                ops: wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
-                },
-            })],
-            depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
-                view: depth,
-                depth_ops: Some(wgpu::Operations {
-                    load: wgpu::LoadOp::Load,
-                    store: wgpu::StoreOp::Store,
+        self.pipelines.patch_pack_screen_size(encoder);
+        {
+            let mut pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: Some("Classic pack custom geometry"),
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: color,
+                    depth_slice: None,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: Some(wgpu::RenderPassDepthStencilAttachment {
+                    view: depth,
+                    depth_ops: Some(wgpu::Operations {
+                        load: wgpu::LoadOp::Load,
+                        store: wgpu::StoreOp::Store,
+                    }),
+                    stencil_ops: None,
                 }),
-                stencil_ops: None,
-            }),
-            ..Default::default()
-        });
-        if has_primitives {
-            pass.set_bind_group(0, group, &[]);
-            for (through, (quad_range, line_range)) in
-                [(quads, lines), (quads_through, lines_through)]
-                    .into_iter()
-                    .enumerate()
-            {
-                Self::draw_pages(
+                ..Default::default()
+            });
+            if has_primitives {
+                pass.set_bind_group(0, group, &[]);
+                for (through, (quad_range, line_range)) in
+                    [(quads, lines), (quads_through, lines_through)]
+                        .into_iter()
+                        .enumerate()
+                {
+                    Self::draw_pages(
+                        &mut pass,
+                        &self.indices,
+                        (
+                            &pipelines.quad_pipelines[through],
+                            &pipelines.line_pipelines[through],
+                        ),
+                        (&self.quads, 0, quad_range),
+                        (&self.lines, 0, line_range),
+                    );
+                }
+            }
+            if has_pipelines {
+                self.pipelines.draw_pack(
                     &mut pass,
                     &self.indices,
-                    (
-                        &pipelines.quad_pipelines[through],
-                        &pipelines.line_pipelines[through],
-                    ),
-                    (&self.quads, 0, quad_range),
-                    (&self.lines, 0, line_range),
+                    first,
+                    last,
+                    &self.bound_mod_slots,
                 );
             }
         }
-        if has_pipelines {
-            self.pipelines
-                .draw_pack(&mut pass, &self.indices, first, last, &self.bound_mod_slots);
-        }
+        self.pipelines.restore_pack_screen_size(encoder);
         true
     }
 
@@ -1237,6 +1332,91 @@ impl WorldPrimitives {
             }
         }
         self.pipelines.draw_oit(pass, stage, &self.indices);
+    }
+
+    /// Whether any prepared standard-pass draw in stages `next..=stage` samples
+    /// `TextureSource::WorldDepth`.
+    pub(super) fn stage_reads_world_depth(&self, next: usize, stage: usize) -> bool {
+        let (first, last) = (next, stage.min(STAGES - 1));
+        first <= last
+            && self
+                .pipelines
+                .stage_reads_world_depth(first, last, &self.bound_mod_slots)
+    }
+
+    /// Draw the primitives, runs, and leading non-`WorldDepth` draws of stages `*next..=stage`
+    /// into the already-open writable `pass`, returning `(first, last, issued)` for
+    /// [`Self::draw_through_split`].
+    pub(super) fn draw_through_prefix(
+        &self,
+        pass: &mut wgpu::RenderPass<'_>,
+        next: &mut usize,
+        stage: usize,
+    ) -> Option<(usize, usize, usize)> {
+        let (first, last) = (*next, stage.min(STAGES - 1));
+        if first > last {
+            return None;
+        }
+        *next = last + 1;
+        let Some(AtlasGroup { group, .. }) = &self.group else {
+            return None;
+        };
+        let [quads, quads_through, lines, lines_through] =
+            spans(self.counts, &self.stage_ends, first, last);
+        if !(quads.is_empty()
+            && quads_through.is_empty()
+            && lines.is_empty()
+            && lines_through.is_empty())
+        {
+            pass.set_bind_group(0, group, &[]);
+        }
+        for (through, (quad_range, line_range)) in [(quads, lines), (quads_through, lines_through)]
+            .into_iter()
+            .enumerate()
+        {
+            Self::draw_pages(
+                pass,
+                &self.indices,
+                (
+                    &self.pipelines_standard.quad_pipelines[through],
+                    &self.pipelines_standard.line_pipelines[through],
+                ),
+                (&self.quads, 0, quad_range),
+                (&self.lines, 0, line_range),
+            );
+        }
+        let issued = self.pipelines.draw_excluding_prefix(
+            pass,
+            &self.indices,
+            first,
+            last,
+            &self.bound_mod_slots,
+        );
+        Some((first, last, issued))
+    }
+
+    /// Draw the remaining draws of stages `first..=last` (after `skip` issued by
+    /// [`Self::draw_through_prefix`]) in exact submission order across read-only and writable
+    /// depth passes on `(view, depth)`.
+    pub(super) fn draw_through_split(
+        &self,
+        encoder: &mut wgpu::CommandEncoder,
+        view: &wgpu::TextureView,
+        depth: &wgpu::TextureView,
+        first: usize,
+        last: usize,
+        skip: usize,
+    ) {
+        self.pipelines.draw_excluding_split(
+            encoder,
+            view,
+            depth,
+            &self.indices,
+            first,
+            last,
+            &self.bound_mod_slots,
+            skip,
+        );
     }
 
     /// Draws the stages from `*next` to `stage` that [`Self::prepare`] uploaded into a pass
