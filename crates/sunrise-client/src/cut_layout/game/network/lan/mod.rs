@@ -1,13 +1,18 @@
-#![cfg(test)]
-use sunrise_gameplay_common::game::lan_common::LanSettings;
-use sunrise_protocol::packets::play;
-use sunrise_protocol::packets::play::Clientbound as C;
-use sunrise_sim::lan::NetConfig;
-use sunrise_sim::lan::hub::HubConfig;
+#![cfg(any(test, feature = "parity-fixtures"))]
 #[cfg(test)]
+use sunrise_gameplay_common::game::lan_common::LanSettings;
+#[cfg(test)]
+use sunrise_protocol::packets::play;
+#[cfg(test)]
+use sunrise_protocol::packets::play::Clientbound as C;
+#[cfg(test)]
+use sunrise_sim::lan::NetConfig;
+#[cfg(test)]
+use sunrise_sim::lan::hub::HubConfig;
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod player_packet_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod world_spawn_sync_tests {
 
     use sunrise_gameplay_common::game::server_side::lan::world_spawn_sync_tests::spawns;

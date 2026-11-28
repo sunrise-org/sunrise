@@ -1315,7 +1315,7 @@ pub(crate) mod guest_close_listener_tests {
 #[path = "tests/boat_holder_movement_tests_server.rs"]
 pub(crate) mod boat_holder_movement_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "tests/crack_feedback_tests_server.rs"]
 pub(crate) mod crack_feedback_tests;
 

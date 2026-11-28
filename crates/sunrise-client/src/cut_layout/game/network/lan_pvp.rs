@@ -1,8 +1,5 @@
-#![cfg(test)]
-use sunrise_core::geometry::Aabb;
-use sunrise_core::geometry::Vec3;
-use sunrise_sim::mobs::Who;
-#[cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod arrow_hit_sound_tests {
     use std::fmt::Write as _;
     use std::path::PathBuf;
@@ -253,15 +250,17 @@ pub(crate) mod arrow_hit_sound_tests {
 
 #[cfg(test)]
 mod tests {
-    use super::*;
     use sunrise_command::args::GameMode;
+    use sunrise_core::geometry::{Aabb, Vec3};
     use sunrise_game_data::gamerules::Value;
     use sunrise_gameplay::game::native_entity_refs::tests::{
         bind_local_player, fixture_resident_column, run_fresh_cases, run_with_game_stack,
     };
     use sunrise_gameplay::game::native_guest_turn_tests::with_guests;
     use sunrise_gameplay::game::server_side::lan_pvp::{Strike, Sweep, Victim};
+    use sunrise_gameplay_common::game::native_server::NativeServerGameExt1 as _;
     use sunrise_items::items::ItemStack;
+    use sunrise_sim::mobs::Who;
     use sunrise_sim::{
         mobs::Mob,
         motion::PlayerMotion,
@@ -541,4 +540,3 @@ mod tests {
         });
     }
 }
-use sunrise_gameplay_common::game::native_server::NativeServerGameExt1 as _;

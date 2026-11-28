@@ -21,5 +21,4 @@ fn a_bolt_summoned_with_nbt_strikes_and_goes() {
     run_a_bolt_summoned_with_nbt_strikes_and_goes();
 }
 
-#[allow(unused_imports)]
 pub(crate) use crate::game::server_side::commands_server::summon_bolt_tests::run_a_bolt_summoned_with_nbt_strikes_and_goes;

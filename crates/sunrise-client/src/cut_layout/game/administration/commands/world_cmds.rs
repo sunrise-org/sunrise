@@ -1,13 +1,13 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 #[cfg(test)]
 #[path = "attribute_missing_tests.rs"]
 pub(crate) mod attribute_missing_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "registered_damage_tests.rs"]
 pub(crate) mod registered_damage_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod datapack_damage_tests {
 
     use sunrise_gameplay::game::server_side::commands::world_cmds::datapack_damage_tests::with_pack;

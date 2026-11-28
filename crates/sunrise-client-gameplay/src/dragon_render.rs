@@ -77,8 +77,8 @@ pub fn dissolve_mask(quads: &mut [Vertex], skin: [f32; 4], mask: [f32; 4]) {
     }
 }
 
-#[cfg(test)]
-mod tests {
+#[cfg(any(test, feature = "parity-fixtures"))]
+pub(crate) mod tests {
     use super::*;
 
     pub fn run_dragon_render_parity_fixture() {

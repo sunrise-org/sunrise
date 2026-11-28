@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 #[cfg(test)]
 mod tests {
     #[cfg(feature = "client")]
@@ -2697,7 +2697,7 @@ mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod environment_read_tests {
     #[cfg(feature = "client")]
     use mod_api::{BiomeSearch, LevelRef, WorldEpoch};

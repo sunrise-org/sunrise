@@ -1795,8 +1795,9 @@ use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1 as _;
 
 use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1 as _;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(in crate::game) mod tests {
+    #[cfg(test)]
     use super::{Hook, cast_direction, entity_hit_margin, first_entity_hit, pull_item, rebound};
 
     /// `fishing_medium`'s surface: a bobber is in the medium below `floor(surface) + 1`, and a
@@ -2033,8 +2034,12 @@ pub(in crate::game) mod tests {
         }
     }
 
-    use sunrise_core::geometry::{Aabb, Vec3};
+    #[cfg(test)]
+    use sunrise_core::geometry::Aabb;
+    use sunrise_core::geometry::Vec3;
+    #[cfg(test)]
     use sunrise_items::items::ItemStack;
+    #[cfg(test)]
     use sunrise_sim::entities::ItemEntity;
 
     #[test]

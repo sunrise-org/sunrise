@@ -1,10 +1,12 @@
-#![cfg(test)]
-#[cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod render_tooltip_texture_tests {
+    #[cfg(test)]
     #[cfg(feature = "client")]
     use mod_api::ModEntry;
     #[cfg(feature = "client")]
     use mod_api::{ClientHost, Hooks, Identifier, RenderTooltipTextureEvent};
+    #[cfg(test)]
     #[cfg(feature = "client")]
     use mod_platform::testing::with_mods;
     #[cfg(feature = "client")]

@@ -7,6 +7,8 @@ rust-version.workspace = true
 description = "Vanilla's logical side: the gameplay the server jar holds, common code included"
 
 [dependencies]
+mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["engine-test-platform"], optional = true }
+tempfile = { version = "3", optional = true }
 chrono = { version = "0.4.42", default-features = false, features = ["clock", "std"] }
 glam = "0.30"
 indexmap = "2"
@@ -53,10 +55,11 @@ sunrise-world = { path = "../sunrise-world", features = ["test-support"] }
 workspace = true
 
 [build-dependencies]
+sunrise-game-discovery = { path = "../sunrise-game-discovery" }
 sunrise-mod-api-gen = { path = "../sunrise-mod-api-gen" }
 
 [features]
-parity-fixtures = []
+parity-fixtures = ["test-support", "dep:mod_platform", "dep:tempfile", "sunrise-core/test-support"]
 state-digest = []
 rng-count = ["sunrise-core/rng-count"]
 net-trace = ["sunrise-sim/net-trace"]
