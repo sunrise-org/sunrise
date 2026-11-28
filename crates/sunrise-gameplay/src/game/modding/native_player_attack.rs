@@ -109,7 +109,7 @@ impl ServerGame<'_> {
         if target.id() == me.id() {
             return Err(AttackRefused::Unsupported);
         }
-        let id = i32::try_from(target.id()).map_err(|_| AttackRefused::Stale)?;
+        let id = sunrise_gameplay_common::game::entity_ids::wire_entity_id(target.id());
         // As a fake player's `perform_action`, beside a level tick listener's transaction.
         let struck = self.beside_listener_journal(|game| {
             let _acting = Acting::start_unswung(&game.server.fake_action.0);

@@ -15,7 +15,8 @@ impl crate::game::ServerGame<'_> {
         if anvil_update_dispatch_running() {
             return None;
         }
-        let entity = i32::try_from(player.entity().id()).ok()?;
+        let entity =
+            sunrise_gameplay_common::game::entity_ids::wire_entity_id(player.entity().id());
         let mut answer = None;
         self.native_as_player_handle(player, |game| {
             answer = run_player_anvil_update(game, player, entity, pos, inputs);

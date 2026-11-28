@@ -532,7 +532,7 @@ impl crate::game::ServerGame<'_> {
     ) -> Result<ActionOutcome, ActionRefused> {
         let acting = Acting::start(&self.server.fake_action.0);
         let failed = std::mem::replace(&mut self.server.use_failed, false);
-        let consumed = (|| match action {
+        let consumed = match action {
             PlayerAction::UseOn { hand, pos, hit } => {
                 let hit = super::Hit {
                     pos,
@@ -548,15 +548,15 @@ impl crate::game::ServerGame<'_> {
                 target,
                 location,
             } => {
-                let id = i32::try_from(target.id()).map_err(|_| ActionRefused::InvalidTarget)?;
+                let id = sunrise_gameplay_common::game::entity_ids::wire_entity_id(target.id());
                 self.guest_interact(conn, gi, id, hand, location)
             }
             PlayerAction::Attack { target } => {
-                let id = i32::try_from(target.id()).map_err(|_| ActionRefused::InvalidTarget)?;
+                let id = sunrise_gameplay_common::game::entity_ids::wire_entity_id(target.id());
                 self.guest_attack(conn, gi, id)
             }
             PlayerAction::BreakBlock { pos } => self.guest_break_block(conn, gi, pos),
-        })();
+        };
         // FAIL ends the click, but is not a consuming InteractionResult.
         let consumed = consumed.map(|used| used && !self.server.use_failed);
         self.server.use_failed = failed;
@@ -1022,9 +1022,7 @@ impl crate::game::ServerGame<'_> {
                 continue;
             };
             for watch in run.watches {
-                let Ok(id) = u32::try_from(watch.entity_id) else {
-                    continue;
-                };
+                let id = sunrise_gameplay_common::game::entity_ids::entity_id_bits(watch.entity_id);
                 let player = mod_api::__private::game::player_ref(
                     mod_api::EntityRef::new(epoch, id),
                     watch.uuid,
@@ -1779,7 +1777,7 @@ impl crate::game::ServerGame<'_> {
                 let player = mod_api::__private::game::player_ref(
                     mod_api::EntityRef::new(
                         self.common.native_lifecycle.epoch()?,
-                        u32::try_from(guest.entity_id).ok()?,
+                        sunrise_gameplay_common::game::entity_ids::entity_id_bits(guest.entity_id),
                     ),
                     guest.uuid,
                 );

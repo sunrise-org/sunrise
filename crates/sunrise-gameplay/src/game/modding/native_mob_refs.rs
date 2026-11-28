@@ -313,7 +313,9 @@ impl crate::game::ServerGame<'_> {
             Who::Player => {
                 let host = self.server.lan.as_ref()?;
                 let conn = host.mob_players.get(&id)?;
-                u32::try_from(host.hub.guest(*conn)?.entity_id).ok()?
+                sunrise_gameplay_common::game::entity_ids::entity_id_bits(
+                    host.hub.guest(*conn)?.entity_id,
+                )
             }
         };
         let entity = self.entity(target_id)?;

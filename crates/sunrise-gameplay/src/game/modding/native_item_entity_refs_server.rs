@@ -201,7 +201,9 @@ impl crate::game::ServerGame<'_> {
         if self.target_level(target) != self.common.dim {
             return None;
         }
-        let id = u32::try_from(self.network_entity_id(target)?).ok()?;
+        let id = sunrise_gameplay_common::game::entity_ids::entity_id_bits(
+            self.network_entity_id(target)?,
+        );
         self.entity(id)
     }
 }
