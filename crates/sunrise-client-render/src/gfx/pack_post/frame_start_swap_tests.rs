@@ -25,6 +25,11 @@ fn adding(add: u32, extra: &str) -> String {
 
 /// A pack of `programs` (name, vertex, fragment) and `properties`, its `final` showing colortex2.
 fn pack(programs: &[(&str, &str, String)], properties: &str) -> Post {
+    pack_showing(programs, properties, 2)
+}
+
+/// [`pack`], its `final` showing colortex`shown`.
+fn pack_showing(programs: &[(&str, &str, String)], properties: &str, shown: u32) -> Post {
     let mut zip = zip::ZipWriter::new(Cursor::new(Vec::new()));
     let mut add = |name: &str, source: &str| {
         zip.start_file(
@@ -41,8 +46,10 @@ fn pack(programs: &[(&str, &str, String)], properties: &str) -> Post {
     add("final.vsh", VERTEX);
     add(
         "final.fsh",
-        "#version 130\nuniform sampler2D colortex2;\n\
-         void main() { gl_FragColor = texelFetch(colortex2, ivec2(gl_FragCoord.xy), 0); }\n",
+        &format!(
+            "#version 130\nuniform sampler2D colortex{shown};\n\
+             void main() {{ gl_FragColor = texelFetch(colortex{shown}, ivec2(gl_FragCoord.xy), 0); }}\n"
+        ),
     );
     add("shaders.properties", properties);
     let pack = sunrise_shaders::Pack::from_zip_bytes(
@@ -222,4 +229,49 @@ fn a_three_channel_buffer_swaps_unless_an_image_binds_it() {
     ));
     assert_ne!(bound.storage & COLORTEX2, 0, "{:?}", bound.notes);
     assert_eq!(bound.swaps & COLORTEX2, 0, "{:?}", bound.notes);
+}
+
+/// colortex2's chain is made before `composite1`, which flips colortex2 without writing it: the
+/// chain stays current for `composite2`, which samples its last level from the side flipped to.
+/// Which texture that is decides the levels it reads, so colortex2 keeps the copy.
+#[test]
+#[ignore = "daily"]
+fn a_mipped_buffer_flipped_without_a_write_keeps_the_copy() {
+    let _gpu = crate::gfx::test_gpu::lock();
+    let Some(gpu) = Fixture::new() else { return };
+    let mipped = || {
+        pack_showing(
+            &[
+                ("composite", VERTEX, adding(8, "")),
+                (
+                    "composite1",
+                    VERTEX,
+                    "#version 130\nconst bool colortex2MipmapEnabled = true;\n\
+                     /* RENDERTARGETS: 3 */\nvoid main() { gl_FragData[0] = vec4(1.0); }\n"
+                        .into(),
+                ),
+                (
+                    "composite2",
+                    VERTEX,
+                    "#version 130\nuniform sampler2D colortex2;\n/* RENDERTARGETS: 4 */\n\
+                     void main() { gl_FragData[0] = textureLod(colortex2, vec2(0.5), 4.0); }\n"
+                        .into(),
+                ),
+                ("composite3", VERTEX, adding(16, "")),
+            ],
+            "flip.composite1.colortex2=true\n",
+            4,
+        )
+    };
+    let mut post = gpu.build(mipped());
+    assert_eq!(post.mipped & COLORTEX2, COLORTEX2, "{:?}", post.notes);
+    assert_eq!(post.swaps & COLORTEX2, 0);
+    // With the copy, the chain read is A's, which no frame regenerates: its levels stay zero.
+    assert_eq!(frames(&gpu, &mut post, 4), vec![row(0, 0); 4]);
+    // The fixture shows the hazard: forced to stay on B, the chain read is the one made the
+    // frame before, of colortex2 after its first write then.
+    let mut forced = gpu.build(mipped());
+    forced.swaps |= COLORTEX2;
+    let expected: Vec<Vec<u8>> = [0, 8, 24, 40].map(|v| row(v, v)).into();
+    assert_eq!(frames(&gpu, &mut forced, 4), expected);
 }

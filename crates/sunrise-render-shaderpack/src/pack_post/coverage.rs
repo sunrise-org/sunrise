@@ -11,7 +11,9 @@
 //!
 //! Anything unknown in the positions leaves the pass unproven, which keeps the frame-start copy.
 
+use std::cell::Cell;
 use std::collections::{BTreeMap, BTreeSet, HashMap};
+use std::rc::Rc;
 
 use naga::{
     AddressSpace, ArraySize, BinaryOperator, Binding, Block, BuiltIn, Expression, Function,
@@ -27,6 +29,15 @@ pub const QUAD_VERTICES: u32 = 6;
 /// `hz_TextureMatrix` (an array of matrices of vectors), inside one struct. A deeper value is
 /// unknown, which only keeps the copy; it also bounds the interpreter's recursion on values.
 const MAX_DEPTH: u32 = 4;
+
+/// How far outside the screen (-1..1) a quad's vertex may lie, in clip space. The containment
+/// below is exact, but a GPU clips and sets up triangles in f32: at 2^24, neighbouring f32
+/// values are a whole unit apart, so one rounding there can move an edge across the screen's
+/// corner pixels. Within ±4 they are 2^-21 apart (under 5e-7), while a pixel centre lies half a
+/// pixel inside the screen's edge, 1/W in clip space for a buffer W pixels wide: 1.5e-5 even
+/// for W = 65536, some 30 of those steps. ±4 holds the usual full-screen triangle, whose
+/// corners are at -1 and 3.
+const CLIP_LIMIT: f32 = 4.0;
 
 /// Whether every pixel a pass's fragment stage runs for is written: no `discard` anywhere in the
 /// module and no sample mask output.
@@ -98,7 +109,11 @@ pub fn covers_screen(vertex: &Module) -> bool {
     };
     let mut corners = Vec::with_capacity(positions.len());
     for p in positions {
-        if p[3] != 1.0 || !(0.0..=p[3]).contains(&p[2]) {
+        if p[3] != 1.0
+            || !(0.0..=p[3]).contains(&p[2])
+            || p[0].abs() > CLIP_LIMIT
+            || p[1].abs() > CLIP_LIMIT
+        {
             return false;
         }
         corners.push([p[0], p[1]]);
@@ -305,14 +320,14 @@ enum Val {
     U(u32),
     B(bool),
     /// A vector's components or a struct's members.
-    List(Vec<Val>),
+    List(Rc<Vec<Val>>),
     /// A matrix's columns, each a `List`.
-    Mat(Vec<Val>),
+    Mat(Rc<Vec<Val>>),
     /// An array of `len`: the elements set, and what every other one holds.
     Array {
         len: u32,
-        set: BTreeMap<u32, Val>,
-        rest: Box<Val>,
+        set: Rc<BTreeMap<u32, Val>>,
+        rest: Rc<Val>,
     },
     Ptr(Root, Vec<u32>),
     /// A pointer into a variable at an index not known.
@@ -321,24 +336,37 @@ enum Val {
 
 const UNKNOWN: Val = Val::Unknown;
 
+fn list(items: Vec<Val>) -> Val {
+    Val::List(Rc::new(items))
+}
+
+fn mat(columns: Vec<Val>) -> Val {
+    Val::Mat(Rc::new(columns))
+}
+
 impl Val {
     fn element(&self, i: u32) -> Val {
+        self.element_ref(i).clone()
+    }
+
+    fn element_ref(&self, i: u32) -> &Val {
         match self {
-            Val::List(items) | Val::Mat(items) => {
-                items.get(i as usize).cloned().unwrap_or(Val::Unknown)
-            }
-            Val::Array { len, set, rest } if i < *len => {
-                set.get(&i).cloned().unwrap_or_else(|| (**rest).clone())
-            }
-            _ => Val::Unknown,
+            Val::List(items) | Val::Mat(items) => items.get(i as usize).unwrap_or(&UNKNOWN),
+            Val::Array { len, set, rest } if i < *len => set.get(&i).unwrap_or(rest),
+            _ => &UNKNOWN,
         }
     }
 
+    /// The value at `path`, walked without recursion and ended at the first unknown part.
     fn at(&self, path: &[u32]) -> Val {
-        match path.split_first() {
-            None => self.clone(),
-            Some((&i, rest)) => self.element(i).at(rest),
+        let mut v = self;
+        for &i in path {
+            if *v == Val::Unknown {
+                break;
+            }
+            v = v.element_ref(i);
         }
+        v.clone()
     }
 
     fn index(&self) -> Option<u32> {
@@ -371,6 +399,38 @@ struct Context<'m> {
     depths: Vec<u32>,
     /// By function: the globals it or its callees may store to; `None` when not known.
     stores: Vec<Option<BTreeSet<Handle<GlobalVariable>>>>,
+    /// The module's size: its expressions, statements, globals and types. Every budget is
+    /// this, so the work stays linear in what the pack wrote.
+    size: u64,
+    /// What is left of this vertex's work: statements run, expressions evaluated, copies.
+    budget: Cell<u64>,
+}
+
+/// Every expression, statement, global and type of `module`.
+fn module_size(module: &Module) -> u64 {
+    let functions = (module.functions.iter().map(|(_, f)| f))
+        .chain(module.entry_points.iter().map(|e| &e.function));
+    let mut n =
+        module.global_expressions.len() + module.global_variables.len() + module.types.len();
+    for f in functions {
+        n += f.expressions.len() + f.local_variables.len();
+        let mut blocks = vec![&f.body];
+        while let Some(block) = blocks.pop() {
+            n += block.len();
+            for statement in block {
+                match statement {
+                    Statement::Block(b) => blocks.push(b),
+                    Statement::If { accept, reject, .. } => blocks.extend([accept, reject]),
+                    Statement::Switch { cases, .. } => blocks.extend(cases.iter().map(|c| &c.body)),
+                    Statement::Loop {
+                        body, continuing, ..
+                    } => blocks.extend([body, continuing]),
+                    _ => {}
+                }
+            }
+        }
+    }
+    u64::try_from(n).unwrap_or(u64::MAX)
 }
 
 struct Frame<'m> {
@@ -417,6 +477,8 @@ impl<'m> Context<'m> {
             globals: Vec::with_capacity(module.global_expressions.len()),
             depths,
             stores: Vec::with_capacity(module.functions.len()),
+            size: module_size(module),
+            budget: Cell::new(0),
         };
         for (h, e) in module.global_expressions.iter() {
             let globals = &context.globals;
@@ -428,27 +490,37 @@ impl<'m> Context<'m> {
             };
             context.globals.push(v);
         }
+        // The sets together hold at most the module's size: past it, a function's is unknown
+        // and a call that doesn't run makes every global unknown.
+        let mut left = context.size;
         for (h, f) in module.functions.iter() {
-            let stores = context.stores_of(h, f);
+            let stores = context.stores_of(h, f, &mut left);
             context.stores.push(stores);
         }
         context
     }
 
-    /// The globals `function` and its callees may store to.
+    /// The globals `function` and its callees may store to, each entry taken from `left`
+    /// before it is added.
     fn stores_of(
         &self,
         id: Handle<Function>,
         function: &Function,
+        left: &mut u64,
     ) -> Option<BTreeSet<Handle<GlobalVariable>>> {
         let mut set = BTreeSet::new();
+        let take = |left: &mut u64| {
+            *left = left.checked_sub(1)?;
+            Some(())
+        };
         let mut blocks = vec![&function.body];
         while let Some(block) = blocks.pop() {
             for statement in block {
                 match statement {
                     Statement::Store { pointer, .. } | Statement::Atomic { pointer, .. } => {
-                        match base_variable(function, *pointer)? {
+                        match base_variable(function, *pointer, &mut || take(left))? {
                             Expression::GlobalVariable(g) => {
+                                take(left)?;
                                 set.insert(*g);
                             }
                             // The caller makes what a pointer argument points to unknown.
@@ -460,7 +532,10 @@ impl<'m> Context<'m> {
                         if f.index() >= id.index() {
                             return None;
                         }
-                        set.extend(self.stores.get(f.index())?.as_ref()?);
+                        for &g in self.stores.get(f.index())?.as_ref()? {
+                            take(left)?;
+                            set.insert(g);
+                        }
                     }
                     Statement::Block(b) => blocks.push(b),
                     Statement::If { accept, reject, .. } => blocks.extend([accept, reject]),
@@ -497,7 +572,7 @@ impl<'m> Context<'m> {
                 _ => Val::Unknown,
             },
             TypeInner::Vector { size, scalar } => {
-                Val::List(vec![
+                list(vec![
                     self.zero_of(&TypeInner::Scalar(*scalar));
                     *size as usize
                 ])
@@ -506,7 +581,7 @@ impl<'m> Context<'m> {
                 columns,
                 rows,
                 scalar,
-            } => Val::Mat(vec![
+            } => mat(vec![
                 self.zero_of(&TypeInner::Vector {
                     size: *rows,
                     scalar: *scalar
@@ -519,11 +594,11 @@ impl<'m> Context<'m> {
                 ..
             } => Val::Array {
                 len: n.get(),
-                set: BTreeMap::new(),
-                rest: Box::new(self.zero(*base)),
+                set: Rc::default(),
+                rest: Rc::new(self.zero(*base)),
             },
             TypeInner::Struct { members, .. } => {
-                Val::List(members.iter().map(|m| self.zero(m.ty)).collect())
+                list(members.iter().map(|m| self.zero(m.ty)).collect())
             }
             _ => Val::Unknown,
         }
@@ -551,33 +626,51 @@ impl<'m> Context<'m> {
         };
         if *v == Val::Unknown {
             *v = match inner {
-                TypeInner::Vector { size, .. } => Val::List(vec![Val::Unknown; *size as usize]),
-                TypeInner::Matrix { columns, .. } => {
-                    Val::Mat(vec![Val::Unknown; *columns as usize])
-                }
+                TypeInner::Vector { size, .. } => list(vec![Val::Unknown; *size as usize]),
+                TypeInner::Matrix { columns, .. } => mat(vec![Val::Unknown; *columns as usize]),
                 TypeInner::Array {
                     size: ArraySize::Constant(n),
                     ..
                 } => Val::Array {
                     len: n.get(),
-                    set: BTreeMap::new(),
-                    rest: Box::new(Val::Unknown),
+                    set: Rc::default(),
+                    rest: Rc::new(Val::Unknown),
                 },
-                TypeInner::Struct { members, .. } => Val::List(vec![Val::Unknown; members.len()]),
+                TypeInner::Struct { members, .. } => list(vec![Val::Unknown; members.len()]),
                 _ => return false,
             };
         }
         match v {
-            Val::List(items) | Val::Mat(items) => match items.get_mut(i as usize) {
-                Some(item) => self.store(item, &child, rest, x),
-                None => false,
-            },
+            Val::List(items) | Val::Mat(items) => {
+                if i as usize >= items.len() || !self.copy(Rc::strong_count(items), items.len()) {
+                    return false;
+                }
+                let item = &mut Rc::make_mut(items)[i as usize];
+                self.store(item, &child, rest, x)
+            }
             Val::Array { len, set, rest: r } if i < *len => {
-                let item = set.entry(i).or_insert_with(|| (**r).clone());
+                if !self.copy(Rc::strong_count(set), set.len()) {
+                    return false;
+                }
+                let item = Rc::make_mut(set).entry(i).or_insert_with(|| (**r).clone());
                 self.store(item, &child, rest, x)
             }
             _ => false,
         }
+    }
+
+    /// Charges a container of `len` items before it is copied for a write (`strong` holders
+    /// share it); `false` past the budget.
+    fn copy(&self, strong: usize, len: usize) -> bool {
+        strong == 1 || self.charge(len).is_some()
+    }
+
+    /// Takes `n` units of work from this vertex's budget, before the work.
+    fn charge(&self, n: usize) -> Option<()> {
+        let n = u64::try_from(n).ok()?;
+        let left = self.budget.get().checked_sub(n)?;
+        self.budget.set(left);
+        Some(())
     }
 
     fn root_type(&self, root: Root) -> Option<Handle<Type>> {
@@ -633,7 +726,7 @@ impl<'m> Context<'m> {
                             }
                         }
                         if items.len() == *size as usize {
-                            Val::List(items)
+                            list(items)
                         } else {
                             Val::Unknown
                         }
@@ -643,7 +736,7 @@ impl<'m> Context<'m> {
                         if cols.len() == *columns as usize
                             && cols.iter().all(|c| matches!(c, Val::List(_)))
                         {
-                            Val::Mat(cols)
+                            mat(cols)
                         } else {
                             Val::Unknown
                         }
@@ -653,27 +746,29 @@ impl<'m> Context<'m> {
                         ..
                     } if n.get() as usize == components.len() => Val::Array {
                         len: n.get(),
-                        set: parts
-                            .cloned()
-                            .enumerate()
-                            .map(|(i, v)| (i as u32, v))
-                            .collect(),
-                        rest: Box::new(Val::Unknown),
+                        set: Rc::new(
+                            parts
+                                .cloned()
+                                .enumerate()
+                                .map(|(i, v)| (i as u32, v))
+                                .collect(),
+                        ),
+                        rest: Rc::new(Val::Unknown),
                     },
-                    TypeInner::Struct { .. } => Val::List(parts.cloned().collect()),
+                    TypeInner::Struct { .. } => list(parts.cloned().collect()),
                     _ => Val::Unknown,
                 }
             }
             Expression::Splat { size, value } => match get(*value) {
                 Val::Unknown => Val::Unknown,
-                v => Val::List(vec![v.clone(); *size as usize]),
+                v => list(vec![v.clone(); *size as usize]),
             },
             Expression::Swizzle {
                 size,
                 vector,
                 pattern,
             } => match get(*vector) {
-                Val::List(items) => Val::List(
+                Val::List(items) => list(
                     pattern[..*size as usize]
                         .iter()
                         .map(|&c| items.get(c as usize).cloned().unwrap_or(Val::Unknown))
@@ -731,6 +826,7 @@ impl<'m> Context<'m> {
     /// The position the vertex stage gives vertex `index`, when known exactly.
     fn position(&self, entry: &'m Function, index: u32) -> Option<[f32; 4]> {
         let module = self.module;
+        self.budget.set(self.size);
         let mut state: HashMap<Root, Val> = HashMap::new();
         let mut ran = vec![false; module.functions.len()];
         let args = entry
@@ -769,9 +865,11 @@ impl<'m> Context<'m> {
                 frame.blocks.pop();
                 continue;
             };
+            self.charge(1)?;
             match statement {
                 Statement::Emit(range) => {
                     for h in range.clone() {
+                        self.charge(1)?;
                         let v = self.compute(frame, &state, h);
                         frame.vals[h.index()] = Some(v);
                     }
@@ -822,10 +920,15 @@ impl<'m> Context<'m> {
                     match frame.val(*pointer).clone() {
                         Val::Ptr(root, path) => {
                             let ty = self.root_type(root)?;
-                            let mut whole = self.read(&state, root);
+                            // In place: the variable's value is shared with nothing, so a
+                            // store copies nothing.
+                            let initial = self.read(&state, root);
+                            let whole = state.entry(root).or_insert(initial);
                             let ok = self.depth(ty) <= MAX_DEPTH
-                                && self.store(&mut whole, &module.types[ty].inner, &path, v);
-                            state.insert(root, if ok { whole } else { Val::Unknown });
+                                && self.store(whole, &module.types[ty].inner, &path, v);
+                            if !ok {
+                                *whole = Val::Unknown;
+                            }
                         }
                         Val::Somewhere(root) => {
                             state.insert(root, Val::Unknown);
@@ -841,7 +944,7 @@ impl<'m> Context<'m> {
                     let args: Vec<Val> = arguments.iter().map(|&a| frame.val(a).clone()).collect();
                     if std::mem::replace(&mut ran[function.index()], true) {
                         // Run once per vertex: a later call makes what it may store unknown.
-                        self.havoc_call(*function, &args, &mut state);
+                        self.havoc_call(*function, &args, &mut state)?;
                         if let Some(r) = result {
                             frame.vals[r.index()] = Some(Val::Unknown);
                         }
@@ -994,14 +1097,14 @@ impl<'m> Context<'m> {
             },
             Expression::Access { base, index } => match frame.val(*base) {
                 Val::Ptr(root, path) => match frame.val(*index).index() {
-                    Some(i) => Val::Ptr(*root, [&path[..], &[i]].concat()),
+                    Some(i) => pointer(*root, path, i),
                     None => Val::Somewhere(*root),
                 },
                 Val::Somewhere(root) => Val::Somewhere(*root),
                 _ => self.pure(e, &|x| frame.val(x)),
             },
             Expression::AccessIndex { base, index } => match frame.val(*base) {
-                Val::Ptr(root, path) => Val::Ptr(*root, [&path[..], &[*index]].concat()),
+                Val::Ptr(root, path) => pointer(*root, path, *index),
                 Val::Somewhere(root) => Val::Somewhere(*root),
                 _ => self.pure(e, &|x| frame.val(x)),
             },
@@ -1022,6 +1125,7 @@ impl<'m> Context<'m> {
         let mut stack = blocks;
         while let Some(block) = stack.pop() {
             for statement in block {
+                self.charge(1)?;
                 match statement {
                     Statement::Return { .. } => returns = true,
                     Statement::Kill => return None,
@@ -1041,7 +1145,7 @@ impl<'m> Context<'m> {
                                 None => Val::Unknown,
                             })
                             .collect();
-                        self.havoc_call(*function, &args, state);
+                        self.havoc_call(*function, &args, state)?;
                     }
                     Statement::Block(b) => stack.push(b.iter().as_slice()),
                     Statement::If { accept, reject, .. } => {
@@ -1065,14 +1169,21 @@ impl<'m> Context<'m> {
 
     /// A call that doesn't run: the globals it may store to and what its pointer arguments
     /// point to become unknown.
-    fn havoc_call(&self, function: Handle<Function>, args: &[Val], state: &mut HashMap<Root, Val>) {
+    fn havoc_call(
+        &self,
+        function: Handle<Function>,
+        args: &[Val],
+        state: &mut HashMap<Root, Val>,
+    ) -> Option<()> {
         match self.stores.get(function.index()).and_then(Option::as_ref) {
             Some(globals) => {
+                self.charge(globals.len())?;
                 for &g in globals {
                     state.insert(Root::Global(g), Val::Unknown);
                 }
             }
             None => {
+                self.charge(self.module.global_variables.len())?;
                 for (g, _) in self.module.global_variables.iter() {
                     state.insert(Root::Global(g), Val::Unknown);
                 }
@@ -1083,11 +1194,12 @@ impl<'m> Context<'m> {
                 state.insert(*root, Val::Unknown);
             }
         }
+        Some(())
     }
 
     /// The variable a pointer expression starts from.
     fn root_of(&self, frame: &Frame<'m>, pointer: Handle<Expression>) -> Option<Root> {
-        match base_variable(frame.function, pointer)? {
+        match base_variable(frame.function, pointer, &mut || self.charge(1))? {
             Expression::GlobalVariable(g) => Some(Root::Global(*g)),
             Expression::LocalVariable(l) => Some(Root::Local(frame.id, *l)),
             Expression::FunctionArgument(i) => match frame.args.get(*i as usize)? {
@@ -1150,9 +1262,15 @@ fn x_before(h: Handle<Expression>, e: &Expression) -> bool {
 }
 
 /// The expression at the start of a pointer's chain of accesses: a variable or an argument.
-fn base_variable(function: &Function, mut pointer: Handle<Expression>) -> Option<&Expression> {
+/// Each step is taken from `steps` first.
+fn base_variable<'f>(
+    function: &'f Function,
+    mut pointer: Handle<Expression>,
+    steps: &mut dyn FnMut() -> Option<()>,
+) -> Option<&'f Expression> {
     // Each base is an earlier expression: the walk ends.
     loop {
+        steps()?;
         let e = function.expressions.try_get(pointer).ok()?;
         match e {
             Expression::Access { base, .. } | Expression::AccessIndex { base, .. }
@@ -1166,6 +1284,15 @@ fn base_variable(function: &Function, mut pointer: Handle<Expression>) -> Option
     }
 }
 
+/// A pointer one access further than `path`. Past [`MAX_DEPTH`] no value is followed, so the
+/// pointer is to somewhere in `root`, and the path stays short.
+fn pointer(root: Root, path: &[u32], index: u32) -> Val {
+    if path.len() >= MAX_DEPTH as usize {
+        return Val::Somewhere(root);
+    }
+    Val::Ptr(root, [path, &[index]].concat())
+}
+
 fn element(base: &Val, index: Option<u32>) -> Val {
     match index {
         Some(i) => base.element(i),
@@ -1176,8 +1303,8 @@ fn element(base: &Val, index: Option<u32>) -> Val {
 /// `f` on a scalar, or on each component of a vector or matrix.
 fn map(v: &Val, f: &dyn Fn(&Val) -> Val) -> Val {
     match v {
-        Val::List(items) => Val::List(items.iter().map(|x| map(x, f)).collect()),
-        Val::Mat(cols) => Val::Mat(cols.iter().map(|x| map(x, f)).collect()),
+        Val::List(items) => list(items.iter().map(|x| map(x, f)).collect()),
+        Val::Mat(cols) => mat(cols.iter().map(|x| map(x, f)).collect()),
         Val::Unknown => Val::Unknown,
         scalar => f(scalar),
     }
@@ -1188,16 +1315,16 @@ fn zip(a: &Val, b: &Val, f: &dyn Fn(&Val, &Val) -> Val) -> Val {
     match (a, b) {
         (Val::Unknown, _) | (_, Val::Unknown) => Val::Unknown,
         (Val::List(x), Val::List(y)) if x.len() == y.len() => {
-            Val::List(x.iter().zip(y).map(|(p, q)| zip(p, q, f)).collect())
+            list(x.iter().zip(y.iter()).map(|(p, q)| zip(p, q, f)).collect())
         }
         (Val::Mat(x), Val::Mat(y)) if x.len() == y.len() => {
-            Val::Mat(x.iter().zip(y).map(|(p, q)| zip(p, q, f)).collect())
+            mat(x.iter().zip(y.iter()).map(|(p, q)| zip(p, q, f)).collect())
         }
         (Val::List(_) | Val::Mat(_), Val::List(_) | Val::Mat(_)) => Val::Unknown,
-        (Val::List(x), s) => Val::List(x.iter().map(|p| zip(p, s, f)).collect()),
-        (Val::Mat(x), s) => Val::Mat(x.iter().map(|p| zip(p, s, f)).collect()),
-        (s, Val::List(y)) => Val::List(y.iter().map(|q| zip(s, q, f)).collect()),
-        (s, Val::Mat(y)) => Val::Mat(y.iter().map(|q| zip(s, q, f)).collect()),
+        (Val::List(x), s) => list(x.iter().map(|p| zip(p, s, f)).collect()),
+        (Val::Mat(x), s) => mat(x.iter().map(|p| zip(p, s, f)).collect()),
+        (s, Val::List(y)) => list(y.iter().map(|q| zip(s, q, f)).collect()),
+        (s, Val::Mat(y)) => mat(y.iter().map(|q| zip(s, q, f)).collect()),
         (p, q) => f(p, q),
     }
 }
@@ -1226,9 +1353,7 @@ fn columns(v: &Val) -> Option<Vec<Vec<f32>>> {
 }
 
 fn floats(v: Option<Vec<f32>>) -> Val {
-    v.map_or(Val::Unknown, |v| {
-        Val::List(v.into_iter().map(Val::F).collect())
-    })
+    v.map_or(Val::Unknown, |v| list(v.into_iter().map(Val::F).collect()))
 }
 
 fn binary(op: BinaryOperator, a: &Val, b: &Val) -> Val {
@@ -1275,7 +1400,7 @@ fn binary(op: BinaryOperator, a: &Val, b: &Val) -> Val {
                         Some(floats(Some(column?)))
                     })
                     .collect();
-                return product.map_or(Val::Unknown, Val::Mat);
+                return product.map_or(Val::Unknown, mat);
             }
             _ => {}
         }
@@ -1358,16 +1483,28 @@ fn select(condition: &Val, accept: &Val, reject: &Val) -> Val {
         Val::B(true) => accept.clone(),
         Val::B(false) => reject.clone(),
         Val::List(c) => match (accept, reject) {
-            (Val::List(a), Val::List(r)) if a.len() == c.len() && r.len() == c.len() => Val::List(
+            (Val::List(a), Val::List(r)) if a.len() == c.len() && r.len() == c.len() => list(
                 c.iter()
-                    .zip(a.iter().zip(r))
+                    .zip(a.iter().zip(r.iter()))
                     .map(|(c, (a, r))| select(c, a, r))
                     .collect(),
             ),
             _ => Val::Unknown,
         },
-        _ if accept == reject => accept.clone(),
+        // Equal scalars or vectors; anything larger isn't compared.
+        _ if small(accept) && accept == reject => accept.clone(),
         _ => Val::Unknown,
+    }
+}
+
+/// A scalar, or a vector of scalars.
+fn small(v: &Val) -> bool {
+    match v {
+        Val::F(_) | Val::I(_) | Val::U(_) | Val::B(_) => true,
+        Val::List(items) => {
+            (items.iter()).all(|x| matches!(x, Val::F(_) | Val::I(_) | Val::U(_) | Val::B(_)))
+        }
+        _ => false,
     }
 }
 

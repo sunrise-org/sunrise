@@ -231,3 +231,117 @@ fn a_deep_chain_of_calls_runs_without_recursion() {
     ));
     assert!(covers_screen(&program(&vsh, FRAGMENT).vertex));
 }
+
+/// A triangle far off screen holds the square exactly, but its f32 clipping isn't: vertices
+/// past ±4 aren't proven. One at ±3 (the usual full-screen triangle) is.
+#[test]
+fn a_quad_far_off_the_screen_is_not_proven() {
+    let far = "vec2 p = gl_VertexID == 0 ? vec2(-16777216.0, -16777242.0)\n\
+               : gl_VertexID == 1 ? vec2(16777216.0, 16777248.0)\n\
+               : gl_VertexID == 2 ? vec2(16777216.0, -16777216.0) : vec2(0.0);\n\
+               gl_Position = vec4(p, 0.0, 1.0);";
+    let xy: Vec<[f32; 2]> = positions(far)
+        .unwrap()
+        .iter()
+        .map(|p| [p[0], p[1]])
+        .collect();
+    assert_eq!(
+        xy[..3],
+        [
+            [-16777216.0, 16777242.0],
+            [16777216.0, -16777248.0],
+            [16777216.0, 16777216.0]
+        ]
+    );
+    assert!(!covers(far));
+    let triangle = "vec2 p = gl_VertexID == 1 ? vec2(3.0, -1.0) : gl_VertexID == 2 ? vec2(-1.0, 3.0)\n\
+                    : vec2(-1.0, -1.0);\ngl_Position = vec4(p, 0.0, 1.0);";
+    assert!(covers(triangle));
+}
+
+/// Stores into one big array copy nothing: each takes the same time, so 20000 of them take
+/// little.
+#[test]
+fn many_stores_into_one_array_run_in_linear_time() {
+    let n = 20_000;
+    let mut body = format!("float a[{n}];\n");
+    for i in 0..n {
+        body.push_str(&format!("a[{i}] = 1.0;\n"));
+    }
+    body.push_str("gl_Position = ftransform();");
+    let vertex = program(
+        &format!("#version 120\nvoid main() {{\n{body}\n}}\n"),
+        FRAGMENT,
+    )
+    .vertex;
+    let start = std::time::Instant::now();
+    assert!(covers_screen(&vertex));
+    let took = start.elapsed();
+    assert!(took < std::time::Duration::from_secs(1), "{took:?}");
+}
+
+/// A chain of functions each storing a global of its own: the sets of globals each may store
+/// to hold at most the module's size together, and the stage runs in time.
+#[test]
+fn store_sets_hold_at_most_the_modules_size() {
+    let chain = 1200;
+    let mut vsh = String::from("#version 120\nfloat g0;\nvoid f0() { g0 = 1.0; }\n");
+    for i in 1..chain {
+        vsh.push_str(&format!(
+            "float g{i};\nvoid f{i}() {{ g{i} = 1.0; f{}(); }}\n",
+            i - 1
+        ));
+    }
+    let last = chain - 1;
+    vsh.push_str(&format!(
+        "void main() {{ f{last}(); f{last}(); gl_Position = ftransform(); }}\n"
+    ));
+    let vertex = program(&vsh, FRAGMENT).vertex;
+    let start = std::time::Instant::now();
+    let context = Context::new(&vertex);
+    let held: u64 = (context.stores.iter().flatten())
+        .map(|set| set.len() as u64)
+        .sum();
+    assert!(held <= context.size, "{held} > {}", context.size);
+    // The second call doesn't run; the position is written after it.
+    assert!(covers_screen(&vertex));
+    let took = start.elapsed();
+    assert!(took < std::time::Duration::from_secs(2), "{took:?}");
+}
+
+/// An access chain far deeper than any value followed is unknown: the pointer stops at
+/// [`MAX_DEPTH`] accesses, so loads and stores give up on it.
+#[test]
+fn a_deep_access_chain_is_unknown() {
+    let depth = 200;
+    let mut vsh = String::from("#version 120\nstruct S0 { vec4 p; };\n");
+    for i in 1..depth {
+        vsh.push_str(&format!("struct S{i} {{ S{} s; }};\n", i - 1));
+    }
+    let chain = ".s".repeat(depth - 1);
+    vsh.push_str(&format!(
+        "S{} v;\nvoid main() {{ v{chain}.p = ftransform(); gl_Position = v{chain}.p; }}\n",
+        depth - 1
+    ));
+    assert!(!covers_screen(&program(&vsh, FRAGMENT).vertex));
+    // The same position through a struct as deep as values are followed is known.
+    let shallow = "#version 120\nstruct A { vec4 p; };\nstruct B { A a; };\nB v;\n\
+                   void main() { v.a.p = ftransform(); gl_Position = v.a.p; }\n";
+    assert!(covers_screen(&program(shallow, FRAGMENT).vertex));
+}
+
+/// A path walk takes no stack per access: a million accesses into an unknown value.
+#[test]
+fn a_long_path_walks_without_recursion() {
+    let path = vec![0u32; 1_000_000];
+    assert_eq!(Val::Unknown.at(&path), Val::Unknown);
+    let vsh = "#version 120\nvoid main() { gl_Position = ftransform(); }\n";
+    let module = program(vsh, FRAGMENT).vertex;
+    let (global, _) = module.global_variables.iter().next().unwrap();
+    let start = Val::Ptr(Root::Global(global), Vec::new());
+    let pointer = (0..1_000_000).fold(start, |p, _| match p {
+        Val::Ptr(root, path) => super::pointer(root, &path, 0),
+        other => other,
+    });
+    assert!(matches!(pointer, Val::Somewhere(_)));
+}

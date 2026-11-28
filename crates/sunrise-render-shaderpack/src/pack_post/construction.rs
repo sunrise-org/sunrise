@@ -3484,11 +3484,16 @@ impl PackPost {
         let kept_on_a = (0..BUFFERS)
             .filter(|&b| clears[b].is_some())
             .fold(1u16, |m, b| m | 1 << b);
+        // A flip without a write keeps a buffer's mip chain current (`mips_valid`) across it:
+        // a later program then samples the chain of the side flipped to, whose levels depend on
+        // which texture that side is, so a mipped buffer flipped that way keeps the copy.
+        let flipped_unwritten = passes.iter().fold(0u16, |m, p| m | (p.flip & !p.written));
         let candidates = doubled
             & used
             & !kept_on_a
             & !(mask(&post.deferred_pre) | mask(&post.composite_pre))
-            & !(rgb & storage);
+            & !(rgb & storage)
+            & !(mipped & flipped_unwritten);
         let touches = (passes.iter())
             .filter(|p| p.group != Group::Final && !matches!(p.pipeline, Pipeline::Compute { .. }))
             .map(|p| {
