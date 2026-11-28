@@ -235,21 +235,19 @@ fn location_check_reads_the_offset_block_entitys_full_data() {
 /// A `LootData` whose `minecraft:weather_check` table is `table`, read through the
 /// same loader a world's tables go through (no pack stack).
 fn weather_loot_data(table: &str) -> sunrise_world::loot::LootData {
-    let root = std::env::temp_dir().join(format!("loot-weather-{}", std::process::id()));
-    let _ = std::fs::remove_dir_all(&root);
+    let scratch = tempfile::tempdir().unwrap();
+    let root = scratch.path();
     let dir = root.join("data/minecraft/loot_table");
     std::fs::create_dir_all(&dir).unwrap();
     std::fs::write(dir.join("weather_check.json"), table).unwrap();
     std::fs::write(root.join("items.json"), "{}").unwrap();
-    let defaults = sunrise_world::item_defaults::read(&root).unwrap();
-    let data = sunrise_world::loot::LootData::load_table_data(
-        &root,
+    let defaults = sunrise_world::item_defaults::read(root).unwrap();
+    sunrise_world::loot::LootData::load_table_data(
+        root,
         &sunrise_world::loot::PackOverlay::NONE,
         &defaults,
     )
-    .unwrap();
-    let _ = std::fs::remove_dir_all(&root);
-    data
+    .unwrap()
 }
 
 /// `WeatherCheck` reads the level a roll is in, which `loot_place_at` fills from
@@ -291,17 +289,27 @@ fn weather_check_at_exact_f32_threshold_picks_the_vanilla_drop() {
 #[test]
 #[ignore = "daily"]
 fn weather_check_through_loot_place_at_picks_the_vanilla_drop() {
+    use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game};
+
+    // Game setup touches process-wide save metadata; leave the test runner's state alone.
+    if run_fresh_cases(
+        "game::server_side::spill::loot_context_tests::weather_check_through_loot_place_at_picks_the_vanilla_drop",
+        "SUNRISE_WEATHER_LOOT_CONTEXT_CHILD",
+        &["weather_check"],
+    ) {
+        return;
+    }
+
     const TABLE: &str = r#"{"pools":[
         {"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:diamond"}],
          "condition":{"type":"minecraft:weather_check","raining":true}},
         {"rolls":1,"entries":[{"type":"minecraft:item","name":"minecraft:gold_ingot"}],
          "condition":{"type":"minecraft:weather_check","raining":false}}
     ]}"#;
-    // The platform's init array only installs under `deps/`; a test binary elsewhere in the
-    // target tree (and `--exact` runs) needs it explicitly, as `install` is idempotent.
+    // The loot data loads before `with_game`, which also installs the test platform.
     mod_platform::__private::test_platform::install();
     let loot = weather_loot_data(TABLE);
-    crate::game::native_entity_refs::tests::with_game(|game| {
+    with_game(|game| {
         game.world.weather.rain_level = (0.2_f32, 0.2_f32);
         let place = game.common.loot_place_at([2.5, 100.5, 2.5], None);
         assert_eq!(place.level.as_ref().map(|level| level.raining), Some(true));
