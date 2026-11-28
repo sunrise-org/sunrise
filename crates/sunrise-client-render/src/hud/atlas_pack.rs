@@ -122,6 +122,15 @@ impl HudAtlas {
                 }
             }
         }
+        // The overlays the world fluids' camera looks name, under their texture ids
+        // (`IClientFluidTypeExtensions.getRenderOverlayTexture`), wherever they are.
+        if full {
+            for path in crate::fluid_models::camera_overlay_textures() {
+                if root.contains(&path) && !files.contains(&path) {
+                    files.push(path);
+                }
+            }
+        }
         files.retain(|p| !menu_pictures::menu_picture_only(p));
         // OptiFine random entity variants, under the names their scan gives them (those
         // outside `textures/` are `<ns>:optifine/random/...`).

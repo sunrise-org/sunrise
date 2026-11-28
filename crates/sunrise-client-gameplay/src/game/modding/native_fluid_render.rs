@@ -195,6 +195,7 @@ mod tests {
             world: None,
             bucket_item: None,
             measures: Default::default(),
+            camera: Default::default(),
         }
     }
 

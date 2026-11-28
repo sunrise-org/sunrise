@@ -704,6 +704,7 @@ mod tests {
                             world: Some(Default::default()),
                             bucket_item: None,
                             measures: Default::default(),
+                            camera: Default::default(),
                         },
                     ]);
                     super::register_fluid_models(ExecutionRole::Client);

@@ -40,5 +40,5 @@ Worlds are vanilla's format, so any tool that reads a 26.3 world reads a Sunrise
 - Benchmark report version 1. The telemetry batch and consent formats are gone: nothing is sent.
 - Content mods can declare mob effects in `data/<id>/sunrise/mob_effect/<name>.json` (`category`, `color`).
 - A content mod's mob effect can declare `attribute_modifiers` (`attribute`, `id`, `amount`, `operation`), applied as vanilla's `MobEffect.addAttributeModifier`.
-- Content mods can declare how a fluid looks on the client in `data/<id>/sunrise/fluid/<name>.json` (`sprite`, an atlas sprite id, and `tint`, `0xAARRGGBB`, both optional), as NeoForge's `IClientFluidTypeExtensions`; the fluid needs no block.
+- Content mods can declare how a fluid looks on the client in `data/<id>/sunrise/fluid/<name>.json` (`sprite`, an atlas sprite id, and `tint`, `0xAARRGGBB`, both optional), as NeoForge's `IClientFluidTypeExtensions`; the fluid needs no block. Its optional `camera` object gives a world fluid's submerged overlay texture (`overlay`), fog colour (`fog_color`) and fog distances (`fog_start`, `fog_end`).
 - Server data packs can order overlapping recipes with `recipe_priorities.json`; layers merge with `replace` and file load conditions.

@@ -123,6 +123,7 @@ fn a_tank_only_fluid_with_a_bucket_plays_its_fill_sound_at_the_commit() {
                         world: None,
                         bucket_item: Some("minecraft:honey_bottle".into()),
                         measures: Default::default(),
+                        camera: Default::default(),
                     });
                 sunrise_sim::mod_content::set_fluid_looks(&[
                     sunrise_sim::mod_content::ContentMod {

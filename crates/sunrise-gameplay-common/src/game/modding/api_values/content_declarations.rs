@@ -846,6 +846,7 @@ impl TryIntoEngine<()> for (String, mod_api::WorldFluid) {
                 .clone()
                 .or_else(|| fluid.bucket.then(|| format!("{id}_bucket"))),
             measures: Default::default(),
+            camera: Default::default(),
         })
     }
 }

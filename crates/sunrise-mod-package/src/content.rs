@@ -775,6 +775,65 @@ struct FluidFile {
     density: Option<i32>,
     viscosity: Option<i32>,
     light_level: Option<u8>,
+    #[serde(default)]
+    camera: FluidCamera,
+}
+
+/// What a camera inside a mod's fluid sees, as NeoForge's `IClientFluidTypeExtensions` answers
+/// it (`data/<id>/sunrise/fluid/`'s `camera`): each field unset keeps vanilla's look for a fluid
+/// that is neither water nor lava, no overlay and the atmospheric fog. Asked on the client only,
+/// and only for the fluid the camera or the eye is in; water and lava keep their own looks.
+#[derive(Clone, Debug, Default, Deserialize, PartialEq)]
+#[serde(default, deny_unknown_fields)]
+pub struct FluidCamera {
+    /// `getRenderOverlayTexture`: the texture drawn over the view while the first-person eye
+    /// is in the fluid, as `textures/misc/underwater.png` is for water, and drawn as it is
+    /// (`ScreenEffectRenderer.renderFluid`). A texture id `namespace:path`, the file
+    /// `assets/<namespace>/textures/<path>.png`.
+    pub overlay: Option<String>,
+    /// `modifyFogColor`: the fog colour, `0xRRGGBB`, while the camera is in the fluid; the
+    /// computed fog's alpha stays.
+    pub fog_color: Option<u32>,
+    /// `modifyFogRender`: the fog's environmental start, in blocks, while the camera is in the
+    /// fluid; set with `fog_end`.
+    pub fog_start: Option<f32>,
+    /// `modifyFogRender`: the fog's environmental end, in blocks, beyond `fog_start`.
+    pub fog_end: Option<f32>,
+}
+// `FluidCamera::check` refuses a distance that is not finite, so every accepted value equals
+// itself.
+impl Eq for FluidCamera {}
+impl FluidCamera {
+    /// Whether it changes anything: a look without one costs the frame nothing.
+    pub fn is_set(&self) -> bool {
+        self.overlay.is_some() || self.fog_color.is_some() || self.fog().is_some()
+    }
+    /// The fog distances, when both are set.
+    pub fn fog(&self) -> Option<(f32, f32)> {
+        self.fog_start.zip(self.fog_end)
+    }
+    /// Refuses an overlay that is not a texture id, a colour above `0xFFFFFF`, and fog
+    /// distances set alone, not finite, or ending at or before they start (the fog
+    /// `render_fog` would refuse).
+    pub fn check(&self) -> Result<(), String> {
+        if self.overlay.as_deref().is_some_and(|id| !namespaced_id(id)) {
+            return Err("camera: overlay is a texture id (namespace:path)".into());
+        }
+        if self.fog_color.is_some_and(|rgb| rgb > 0xFF_FFFF) {
+            return Err("camera: fog_color is RGB, 0 to 16777215 (0xFFFFFF)".into());
+        }
+        match (self.fog_start, self.fog_end) {
+            (None, None) => {}
+            (Some(start), Some(end)) if start.is_finite() && end.is_finite() && end > start => {}
+            (Some(_), Some(_)) => {
+                return Err(
+                    "camera: fog_start and fog_end are finite, the end beyond the start".into(),
+                );
+            }
+            _ => return Err("camera: fog_start and fog_end are set together".into()),
+        }
+        Ok(())
+    }
 }
 
 /// A fluid's `FluidType` numbers, which mods read for one another's fluids: NeoForge's
@@ -854,8 +913,9 @@ impl WorldFluid {
 }
 
 /// How a fluid the mod names looks on the client (`data/<id>/sunrise/fluid/`), as
-/// NeoForge's `IClientFluidTypeExtensions`: `getStillTexture` and `getTintColor`, and its
-/// [`FluidMeasures`]. The fluid needs no block, so it can be a fluid only a tank holds.
+/// NeoForge's `IClientFluidTypeExtensions`: `getStillTexture` and `getTintColor`, what a
+/// camera inside it sees ([`FluidCamera`]), and its [`FluidMeasures`]. The fluid needs no
+/// block, so it can be a fluid only a tank holds.
 #[derive(Clone, Debug, PartialEq, Eq)]
 pub struct FluidLook {
     /// `<mod id>:<path>`.
@@ -871,6 +931,8 @@ pub struct FluidLook {
     pub bucket_item: Option<String>,
     /// Its temperature, density, viscosity and light level.
     pub measures: FluidMeasures,
+    /// Its overlay and fog for a camera inside it.
+    pub camera: FluidCamera,
 }
 impl FluidLook {
     /// The registry name of its liquid block: the world fluid's `block`, else the fluid's own
@@ -903,8 +965,8 @@ impl FluidLook {
         })
     }
     /// Refuses names and numbers the game cannot register: an id that is not
-    /// `namespace:path`, a flowing form or generated bucket outside the fluid's namespace, and a
-    /// light level above 15.
+    /// `namespace:path`, a flowing form or generated bucket outside the fluid's namespace, a
+    /// light level above 15, and a camera look [`FluidCamera::check`] refuses.
     pub fn check(&self) -> Result<(), String> {
         let namespace = self.id.split_once(':').map(|(namespace, _)| namespace);
         let own = |id: &str| namespaced_id(id) && id.split_once(':').map(|(n, _)| n) == namespace;
@@ -944,7 +1006,7 @@ impl FluidLook {
         if self.measures.light_level > 15 {
             return Err("light_level is 0 to 15".into());
         }
-        Ok(())
+        self.camera.check()
     }
     /// The block a world fluid is in the world: water's behaviour and states under its
     /// [`Self::block_id`].
@@ -2028,6 +2090,7 @@ impl Content {
                     viscosity: file.viscosity.unwrap_or(defaults.viscosity),
                     light_level: file.light_level.unwrap_or(defaults.light_level),
                 },
+                camera: file.camera,
             };
             look.check().map_err(|e| format!("{name}: {e}"))?;
             if self.fluids.iter().any(|known| {
@@ -5028,6 +5091,7 @@ capabilities = ["registries"]
                     world: None,
                     bucket_item: None,
                     measures: FluidMeasures::default(),
+                    camera: FluidCamera::default(),
                 },
                 FluidLook {
                     id: "ruby:steam".into(),
@@ -5036,6 +5100,7 @@ capabilities = ["registries"]
                     world: None,
                     bucket_item: None,
                     measures: FluidMeasures::default(),
+                    camera: FluidCamera::default(),
                 },
             ]
         );
@@ -5048,6 +5113,49 @@ capabilities = ["registries"]
             let bad: &[(&str, &[u8])] = &[("data/ruby/sunrise/fluid/x.json", sprite)];
             let e = smod("fluid", MANIFEST_TEXT, bad).unwrap_err();
             assert!(e.contains("sprite"), "{e}");
+        }
+    }
+
+    /// #5433: `IClientFluidTypeExtensions`' camera answers as data: the overlay texture, the fog
+    /// colour and the fog distances; a fluid without them changes no frame, and bad values are
+    /// refused by name.
+    #[test]
+    fn fluids_declare_what_a_camera_inside_them_sees() {
+        let files: &[(&str, &[u8])] = &[
+            (
+                "data/ruby/sunrise/fluid/molten.json",
+                br#"{"world":{},"camera":{"overlay":"ruby:fluid/molten/camera","fog_color":16733440,"fog_start":0.25,"fog_end":2.0}}"#,
+            ),
+            ("data/ruby/sunrise/fluid/plain.json", br#"{"world":{}}"#),
+        ];
+        let content = smod("fluid-camera", MANIFEST_TEXT, files).unwrap();
+        let camera = |id: &str| {
+            content
+                .fluids
+                .iter()
+                .find(|f| f.id == id)
+                .unwrap()
+                .camera
+                .clone()
+        };
+        let molten = camera("ruby:molten");
+        assert_eq!(molten.overlay.as_deref(), Some("ruby:fluid/molten/camera"));
+        assert_eq!(molten.fog_color, Some(0xFF_5500));
+        assert_eq!(molten.fog(), Some((0.25, 2.0)));
+        assert!(molten.is_set());
+        assert_eq!(camera("ruby:plain"), FluidCamera::default());
+        assert!(!camera("ruby:plain").is_set());
+        for body in [
+            &br#"{"camera":{"overlay":"camera"}}"#[..],
+            br#"{"camera":{"fog_color":16777216}}"#,
+            br#"{"camera":{"fog_start":1.0}}"#,
+            br#"{"camera":{"fog_end":1.0}}"#,
+            br#"{"camera":{"fog_start":2.0,"fog_end":2.0}}"#,
+            br#"{"camera":{"tint":1}}"#,
+        ] {
+            let bad: &[(&str, &[u8])] = &[("data/ruby/sunrise/fluid/oil.json", body)];
+            let e = smod("bad-fluid-camera", MANIFEST_TEXT, bad).unwrap_err();
+            assert!(e.contains("camera") || e.contains("tint"), "{e}");
         }
     }
 

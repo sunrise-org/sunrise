@@ -140,6 +140,12 @@ Content {
                 viscosity: 1000,
                 light_level: 0,
             },
+            camera: FluidCamera {
+                overlay: None,
+                fog_color: None,
+                fog_start: None,
+                fog_end: None,
+            },
         },
         FluidLook {
             id: "fluid_minimal:tank_only",
@@ -152,6 +158,12 @@ Content {
                 density: 1000,
                 viscosity: 1000,
                 light_level: 0,
+            },
+            camera: FluidCamera {
+                overlay: None,
+                fog_color: None,
+                fog_start: None,
+                fog_end: None,
             },
         },
     ],

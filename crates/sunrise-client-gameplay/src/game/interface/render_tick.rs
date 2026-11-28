@@ -295,6 +295,7 @@ impl crate::game::ClientGame<'_> {
             sunrise_client::fog::clear_distance_fog(&mut fog, &input);
         }
         if self.client.title.0.is_none() {
+            self.fluid_camera_fog(at, &mut fog);
             fog.color = self.native_fog_color_now(
                 self.common.clock.fraction() as f32,
                 at,
@@ -304,6 +305,51 @@ impl crate::game::ClientGame<'_> {
             fog = self.native_fog_now(self.common.clock.fraction() as f32, at, fog_type, fog);
         }
         fog
+    }
+    /// `IClientFluidTypeExtensions.modifyFogColor` and `modifyFogRender` of the mod fluid the
+    /// camera at `camera` is in, as NeoForge's `ClientHooks` asks them before
+    /// `ViewportEvent.ComputeFogColor` and `RenderFog`: its look's fog colour, the alpha kept, and
+    /// environmental distances. After Sunrise's fog option, which clears only the air's fog.
+    #[inline(always)]
+    fn fluid_camera_fog(&self, camera: [f64; 3], fog: &mut FogData) {
+        if !sunrise_client::fluid_models::any_camera_look() {
+            return;
+        }
+        let facts = self.common.res.facts();
+        let Some(state) = sunrise_client::fog::mod_fluid_at(&self.common.world, facts, camera)
+        else {
+            return;
+        };
+        sunrise_client::fluid_models::with_camera_look(&facts.get(state).name, |look| {
+            if let Some(rgb) = look.fog_color {
+                let [_, r, g, b] = rgb.to_be_bytes();
+                let [r, g, b] = [r, g, b].map(|c| f32::from(c) / 255.0);
+                fog.color = [r, g, b, fog.color[3]];
+            }
+            if let Some((start, end)) = look.fog() {
+                (fog.environmental_start, fog.environmental_end) = (start, end);
+            }
+        });
+    }
+    /// The GUI atlas name of the overlay texture of the mod fluid the first-person eye is in
+    /// (`Entity.getEyeInFluidType`, read `0.11111111` below the eye as `updateFluidOnEyes`
+    /// reads it), which `ScreenEffectRenderer` draws as it draws water's. Never for a spectator.
+    #[inline(always)]
+    fn eye_fluid_overlay(&self, p: &PlayerMotion, eye: [f64; 3]) -> Option<String> {
+        if !sunrise_client::fluid_models::any_camera_look()
+            || p.spectator
+            || !self.client.camera_type.is_first_person()
+            || self.own_player_is_spectator()
+        {
+            return None;
+        }
+        let facts = self.common.res.facts();
+        let at = [eye[0], eye[1] - f64::from(0.111_111_11_f32), eye[2]];
+        let state = sunrise_client::fog::mod_fluid_at(&self.common.world, facts, at)?;
+        sunrise_client::fluid_models::with_camera_look(&facts.get(state).name, |look| {
+            let id = look.overlay.as_deref()?;
+            Some(id.strip_prefix("minecraft:").unwrap_or(id).to_owned())
+        })?
     }
     fn native_fog_color_now(
         &self,
@@ -416,8 +462,13 @@ impl crate::game::ClientGame<'_> {
         let block_overlay = effects
             .block
             .and_then(|state| Self::block_particle_sprite(&self.client.client_pack, state));
-        let water = effects
-            .water
+        // The eye in a mod fluid draws its look's overlay in water's place.
+        let fluid_overlay = if effects.water {
+            None
+        } else {
+            self.eye_fluid_overlay(p, eye)
+        };
+        let water = (effects.water || fluid_overlay.is_some())
             .then(|| (self.eye_brightness(eye), self.common.yaw, self.common.pitch));
         // Hud.extractCameraOverlays; the spyglass scope (and its easing) is
         // drawn on the HUD by draw_spyglass.
@@ -472,6 +523,7 @@ impl crate::game::ClientGame<'_> {
             partial,
             block_overlay,
             water,
+            overlay_texture: fluid_overlay.as_deref(),
             on_fire: effects.on_fire && !effects.fire_suppressed,
             gui_overlays: &gui_overlays,
             custom: [&custom[0], &custom[1], &custom[2]],
