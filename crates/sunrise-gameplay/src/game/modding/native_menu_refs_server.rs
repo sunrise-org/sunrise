@@ -85,12 +85,14 @@ impl crate::game::ServerGame<'_> {
         } else {
             let play = host.play.get(&guest.conn);
             let menus = host.menus.get(&guest.conn);
+            // A table's or station's click lifts its menu out while mods decide it: the
+            // player still has that menu open, not the inventory menu, so it still refuses.
             if menu.fields().window != 0
                 || menus.is_some_and(|m| {
                     m.closing
-                        || m.crafting.table.is_some()
-                        || m.station.is_some()
-                        || m.merchant.is_some()
+                        || m.crafting.table.is_open()
+                        || m.station.is_open()
+                        || m.merchant.is_open()
                 })
                 || play.is_some_and(|p| p.lectern.is_some() || p.mount_window.is_some())
             {

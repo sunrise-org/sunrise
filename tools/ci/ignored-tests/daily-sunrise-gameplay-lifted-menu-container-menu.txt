@@ -1,0 +1,4 @@
+# Daily rows: a crafting table's or workstation's click hook still sees that menu open (container_menu refuses it), not the inventory menu.
+# PACKAGE TEST TARGET daily REASON; exact logical libtest identities, sorted.
+sunrise-gameplay game::stacked_on_other_tests::families::a_crafting_table_click_hook_sees_the_table_not_the_inventory_menu lib daily resources
+sunrise-gameplay game::stacked_on_other_tests::families::a_workstation_click_hook_sees_the_station_not_the_inventory_menu lib daily resources

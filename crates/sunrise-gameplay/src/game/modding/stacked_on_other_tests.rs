@@ -32,6 +32,9 @@ pub struct Script {
     pub take_clicked: Option<u32>,
     pub dirt_rule: Option<(bool, u32)>,
     pub write_scoreboard: bool,
+    /// Read the acting player's `container_menu` and the clicked slot's `slot_backing`
+    /// into `MENU_SEEN`.
+    pub probe_menu: bool,
 }
 
 thread_local! {
@@ -41,6 +44,10 @@ thread_local! {
     pub static PLAYER: std::cell::Cell<u128> = const { std::cell::Cell::new(0) };
     /// How often the menu type's `menu_slot_rules` part was asked.
     pub static ASKS: std::cell::Cell<usize> = const { std::cell::Cell::new(0) };
+    /// What `probe_menu` saw each time: whether `container_menu` answered a menu, and that
+    /// menu's backing of the event's slot.
+    pub static MENU_SEEN: RefCell<Vec<(bool, Option<mod_api::MenuSlotBacking>)>> =
+        const { RefCell::new(Vec::new()) };
 }
 
 pub(in crate::game) struct Rules;
@@ -59,6 +66,7 @@ impl mod_api::MenuPart for Rules {
 
 pub fn script(script: Script) {
     SEEN.with(|seen| seen.borrow_mut().clear());
+    MENU_SEEN.with(|seen| seen.borrow_mut().clear());
     SCRIPT.with(|s| *s.borrow_mut() = script);
 }
 pub fn dispatches() -> usize {
@@ -107,6 +115,16 @@ impl Hooks for Listener {
         );
         SEEN.with(|seen| seen.borrow_mut().push(counts));
         let s = SCRIPT.with(|s| s.borrow().clone());
+        if s.probe_menu
+            && let HostSide::Server(host) = &mut host
+        {
+            let host = &**host;
+            let menu = host
+                .player(PLAYER.get())
+                .and_then(|player| player.container_menu(host));
+            let backing = menu.and_then(|menu| menu.slot_backing(host, event.click.slot));
+            MENU_SEEN.with(|seen| seen.borrow_mut().push((menu.is_some(), backing)));
+        }
         if let (Some(slot), HostSide::Server(host)) = (s.write_dirt, &mut host) {
             let place = ItemPlace::PlayerSlot {
                 player: PLAYER.get(),
@@ -660,6 +678,88 @@ pub(in crate::game) mod families {
             |game| game.lan_guest_packet(12, packet(window.get(), 1)),
             None,
         );
+    }
+
+    /// The table's click lends its menu out while mods decide it, but the player still has the
+    /// crafting table open: `container_menu` refuses it, as it does outside the click, rather
+    /// than answering the inventory menu, whose slot 10 is the main inventory's second slot
+    /// where the crafting menu's slot 10 is its first.
+    #[test]
+    #[ignore = "daily"]
+    fn a_crafting_table_click_hook_sees_the_table_not_the_inventory_menu() {
+        with_mod(|| {
+            with_guests(|game| {
+                game.world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
+                );
+                PLAYER.set(12);
+                block(game, "minecraft:crafting_table", (1, 64, 1));
+                game.lan_open_crafting(12, [1, 64, 1]);
+                let host = game.server.lan.as_mut().unwrap();
+                let window = host.menus[&12].crafting.table.as_ref().unwrap().0;
+                host.hub.guests.update(0, |guest| {
+                    guest.carried = Some(ItemStack::new("minecraft:stone", 3))
+                });
+                script(Script {
+                    probe_menu: true,
+                    ..Script::default()
+                });
+                // CraftingMenu slot 10: the first main-inventory slot.
+                game.lan_guest_packet(12, packet(window, 10));
+                assert_eq!(dispatches(), 1, "the hook fires on the table's click");
+                assert_eq!(
+                    MENU_SEEN.with(|seen| seen.borrow().clone()),
+                    vec![(false, None)],
+                    "a crafting table is refused mid-click as it is outside one"
+                );
+                // The click went on to the table's slot 10, and the table is back.
+                let guest = &game.server.lan.as_ref().unwrap().hub.guests[0];
+                assert_eq!(guest.carried, None);
+                assert_eq!(
+                    guest.inventory[9],
+                    Some(ItemStack::new("minecraft:stone", 3))
+                );
+                let host = game.server.lan.as_ref().unwrap();
+                assert!(host.menus[&12].crafting.table.is_some());
+            });
+        });
+    }
+
+    /// A workstation's click lends its menu out the same way: still refused mid-click.
+    #[test]
+    #[ignore = "daily"]
+    fn a_workstation_click_hook_sees_the_station_not_the_inventory_menu() {
+        use sunrise_gameplay_common::game::stations_common::{Kind, Station};
+        with_mod(|| {
+            with_guests(|game| {
+                game.world.chunks.insert(
+                    (0, 0),
+                    std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
+                );
+                PLAYER.set(12);
+                block(game, "minecraft:stonecutter", (1, 64, 1));
+                assert!(game.lan_open_station(12, &Station::new(Kind::Stonecutter, [1, 64, 1])));
+                let host = game.server.lan.as_mut().unwrap();
+                let window = host.menus[&12].station.as_ref().unwrap().window;
+                host.hub.guests.update(0, |guest| {
+                    guest.carried = Some(ItemStack::new("minecraft:stone", 3))
+                });
+                script(Script {
+                    probe_menu: true,
+                    ..Script::default()
+                });
+                game.lan_guest_packet(12, packet(window, 0));
+                assert_eq!(dispatches(), 1, "the hook fires on the station's click");
+                assert_eq!(
+                    MENU_SEEN.with(|seen| seen.borrow().clone()),
+                    vec![(false, None)],
+                    "a workstation is refused mid-click as it is outside one"
+                );
+                let host = game.server.lan.as_ref().unwrap();
+                assert!(host.menus[&12].station.is_some());
+            });
+        });
     }
 
     #[test]

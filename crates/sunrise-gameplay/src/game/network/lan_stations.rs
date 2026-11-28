@@ -184,8 +184,9 @@ impl ServerGame<'_> {
                 let owner = p.station.id();
                 Some((
                     owner,
+                    // Lifted, not taken: mods deciding the click still see the station open.
                     p.station
-                        .take_if(|s| window.is_none_or(|w| s.window == w))?,
+                        .lift_if(|s| window.is_none_or(|w| s.window == w))?,
                 ))
             })
         else {
