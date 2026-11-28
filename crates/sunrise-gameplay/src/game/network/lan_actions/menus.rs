@@ -216,6 +216,13 @@ impl crate::game::ServerGame<'_> {
         if cancel {
             return MenuOpen::Refused;
         }
+        // A physical ender chest must have its live block entity: a positionless
+        // ender menu is the only one that may bypass the identity check
+        // (`PlayerEnderChestContainer.activeChest`). Refused before the open
+        // window is replaced, so the guest keeps it.
+        if slots == Slots::Ender && generation.is_none() {
+            return MenuOpen::Stale;
+        }
         // ServerPlayer.openMenu closes the menu that was open.
         let previous_window = self.server.lan.as_ref().and_then(|host| {
             super::super::native_menus::open_menu_of(host, conn).map(|(window, ..)| window)
@@ -277,12 +284,6 @@ impl crate::game::ServerGame<'_> {
                     host.hub
                         .send_to(conn, &C::ContainerClose(play::ContainerClose { container }));
                 }
-                return Err(MenuOpen::Stale);
-            }
-            // A physical ender chest must have its live block entity: a
-            // positionless ender menu is the only one that may bypass the
-            // identity check (`PlayerEnderChestContainer.activeChest`).
-            if slots == Slots::Ender && generation.is_none() {
                 return Err(MenuOpen::Stale);
             }
             let Some(gi) = game.guest_index(conn) else {
