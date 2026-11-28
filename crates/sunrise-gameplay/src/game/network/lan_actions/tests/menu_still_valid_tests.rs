@@ -219,6 +219,7 @@ fn a_mod_menu_part_decides_whether_its_menu_stays_open() {
                 .insert(vehicle, BlockEntity::Chest(vec![None; 27]));
             let menu = Menu {
                 window: 1,
+                active_chest: None,
                 kind: 2,
                 pos: Some(vehicle),
                 slots: Slots::Block(vehicle),
@@ -407,6 +408,128 @@ fn a_blockless_mod_menu_closes_when_its_part_answers_false() {
                     );
                 });
             },
+        );
+    });
+}
+
+/// Opening a physical ender chest through the server, then replacing its block
+/// entity while the guest stays in reach: the menu closes, a stale click moves
+/// nothing, and the replacement gets no close effects (`activeChest` identity).
+#[test]
+#[ignore = "daily"]
+fn an_ender_chest_replaced_in_place_retires_its_menu_without_close_effects() {
+    use sunrise_protocol::{
+        buf::Reader,
+        packets::play::{ContainerClick, Serverbound},
+    };
+    use sunrise_sim::lan::{Out, PlayerSender};
+
+    mod_platform::__private::test_platform::install();
+    super::super::native_guest_turn_tests::with_guests(|game| {
+        game.options.dedicated = Some(Vec::new());
+        game.world
+            .chunks
+            .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
+        let guest_pos = game.server.lan.as_ref().unwrap().hub.guests[0].position;
+        let pos = (
+            guest_pos[0] as i32,
+            guest_pos[1] as i32,
+            guest_pos[2] as i32 + 3,
+        );
+        let chest = game
+            .pack
+            .assets
+            .registry
+            .default_state("minecraft:ender_chest")
+            .unwrap();
+        game.world.set(pos.0, pos.1, pos.2, chest).unwrap();
+        game.world
+            .block_entities
+            .insert(pos, BlockEntity::Chest(vec![None; 27]));
+        let (tx, rx) = std::sync::mpsc::channel();
+        game.server.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+            g.sender = PlayerSender::new(tx, Arc::default());
+            g.ender_items[0] = Some(sunrise_sim::items::ItemStack::new(
+                "minecraft:diamond",
+                1,
+            ));
+        });
+
+        assert_eq!(
+            game.lan_open_container(12, pos),
+            sunrise_gameplay_common::game::lan_actions::MenuOpen::Opened
+        );
+        let old = {
+            let g = &game.server.lan.as_ref().unwrap().hub.guests[0];
+            let menu = g.menu.as_ref().expect("the ender chest menu opened");
+            assert_eq!(menu.slots, Slots::Ender);
+            assert!(menu.active_chest.is_some());
+            menu.window
+        };
+        // Drain the opening effects.
+        let drain = |rx: &std::sync::mpsc::Receiver<Out>| {
+            rx.try_iter().for_each(|_| {});
+        };
+        drain(&rx);
+
+        // Replace the block entity at the same position while the guest stays in reach.
+        game.world.block_entities.remove(&pos);
+        game.world
+            .block_entities
+            .insert(pos, BlockEntity::Chest(vec![None; 27]));
+        game.lan_containers_tick();
+        assert!(
+            game.server.lan.as_ref().unwrap().hub.guests[0]
+                .menu
+                .is_none(),
+            "the replaced ender chest closes the menu"
+        );
+
+        // A stale click on the old window moves nothing.
+        game.lan_guest_packet(
+            12,
+            Serverbound::ContainerClick(ContainerClick {
+                container: old,
+                state: 0,
+                slot: 0,
+                button: 0,
+                input: 0,
+                changed: Vec::new(),
+                carried: None,
+            }),
+        );
+        let g = &game.server.lan.as_ref().unwrap().hub.guests[0];
+        assert_eq!(
+            g.ender_items[0].as_ref().map(|s| s.item.as_ref()),
+            Some("minecraft:diamond")
+        );
+        assert!(g.carried.is_none(), "the stale click carries nothing");
+
+        // The replacement heard no close sound or block event.
+        let packets: Vec<_> = rx
+            .try_iter()
+            .flat_map(|out| match out {
+                Out::Packet(body) => vec![body],
+                Out::Packets(bodies) => bodies,
+                _ => Vec::new(),
+            })
+            .filter_map(|body| {
+                let mut reader = Reader::new(&body);
+                let id = reader.varint().ok()?;
+                sunrise_protocol::packets::play::Clientbound::decode(id, reader.rest()).ok()
+            })
+            .collect();
+        use sunrise_protocol::packets::play::Clientbound as C;
+        assert!(
+            !packets.iter().any(|p| matches!(
+                p,
+                C::BlockEvent(e) if e.pos == [pos.0, pos.1, pos.2]
+            )),
+            "the replacement gets no lid/opener event"
+        );
+        assert!(
+            !packets.iter().any(|p| matches!(p, C::Sound(_))),
+            "the replacement gets no close sound"
         );
     });
 }

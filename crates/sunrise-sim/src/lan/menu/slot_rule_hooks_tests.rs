@@ -344,6 +344,7 @@ fn installed_slot_rules_change_mod_menu_placement() {
         let guest = guest();
         let menu = Menu {
             window: 1,
+            active_chest: None,
             kind: 2,
             pos: Some(k),
             slots: Slots::Block(k),
@@ -413,6 +414,7 @@ fn installed_slot_rules_change_mod_menu_placement() {
         let guest = guest();
         let menu = Menu {
             window: 1,
+            active_chest: None,
             kind: 2,
             pos: Some(far),
             slots: Slots::Native,

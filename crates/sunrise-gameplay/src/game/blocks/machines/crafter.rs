@@ -335,6 +335,7 @@ pub(in crate::game) mod tests {
             );
         player.menu = Some(sunrise_sim::lan::menu::Menu {
             window: 1,
+            active_chest: None,
             kind: 0,
             registry_id: "minecraft:crafter_3x3".into(),
             pos: Some(key),

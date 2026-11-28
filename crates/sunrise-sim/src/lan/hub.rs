@@ -4940,6 +4940,7 @@ pub(super) mod tests {
             hub.guests.update(0, |g| {
                 g.menu = Some(super::super::menu::Menu {
                     window: 1,
+                    active_chest: None,
                     kind: 2,
                     pos: Some(k),
                     slots: super::super::menu::Slots::Block(k),
@@ -6813,6 +6814,7 @@ pub(super) mod tests {
         hub.guests.update(0, |g| {
             g.menu = Some(super::super::menu::Menu {
                 window: 1,
+                active_chest: None,
                 kind: 2,
                 pos: Some(pos),
                 slots: super::super::menu::Slots::Block(pos),
