@@ -1347,8 +1347,29 @@ impl Guest {
     /// `Player.isWithinBlockInteractionRange(pos, buffer)` for the guest:
     /// its block interaction range is 4.5, 5 in creative.
     pub fn within_block_range(&self, pos: [i32; 3], buffer: f64) -> bool {
-        let range = if self.creative() { 5.0 } else { 4.5 };
-        within_block_range(self.eye(), range + buffer, pos)
+        use sunrise_world::attribute_map::ValueKind;
+        // The live attribute and the body pose's eyes, as `may_reach_block` reads
+        // them: a mid-tick edit or stance change reaches open menus too (#6828).
+        let eye = self.motion.as_ref().map_or_else(
+            || self.eye(),
+            |m| {
+                [
+                    self.position[0],
+                    self.position[1] + f64::from(m.dimensions.eye_height),
+                    self.position[2],
+                ]
+            },
+        );
+        let otherwise = if self.creative() { 5.0 } else { 4.5 };
+        let range = self
+            .motion
+            .as_ref()
+            .and_then(|m| {
+                let key = m.attributes.key("minecraft:block_interaction_range")?;
+                m.attributes.value(Some(key), ValueKind::Computed).ok()
+            })
+            .unwrap_or(otherwise);
+        within_block_range(eye, range + buffer, pos)
     }
     /// [`Self::within_block_range`], then a mod's `block_interaction_range`: what a menu's
     /// `stillValid` asks (`buffer` 4).
@@ -1502,7 +1523,10 @@ pub fn within_block_range(eye: [f64; 3], range: f64, pos: [i32; 3]) -> bool {
     (0..3)
         .map(|k| {
             let lo = f64::from(pos[k]);
-            (lo - eye[k]).max(eye[k] - lo - 1.0).max(0.0).powi(2)
+            // Subtract the actual max face (`lo + 1`, exact for block coordinates).
+            // `eye - lo - 1` can round up across a power of two, turning a distance
+            // just under the boundary into exactly the range and rejecting the pick.
+            (lo - eye[k]).max(eye[k] - (lo + 1.0)).max(0.0).powi(2)
         })
         .sum::<f64>()
         < range * range
