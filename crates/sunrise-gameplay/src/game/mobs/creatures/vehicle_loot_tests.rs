@@ -1,8 +1,12 @@
 //! `EntityPredicate`'s `vehicle` in a death's loot: a mob riding a boat or a minecart,
 //! not only a mob, with the vehicle's type and fire state (`#5239`).
+//! Each fixture loads prepared resources in its own process to isolate save metadata.
 use super::*;
+use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game};
 use sunrise_gameplay_common::game::boats_common::Boat;
 use sunrise_world::loot::{EntityLootParams, LootData, PackOverlay};
+
+const VEHICLE_LOOT_CHILD: &str = "SUNRISE_TEST_VEHICLE_LOOT_CHILD";
 
 /// The table the death path rolls: one pool per vehicle fact, so the drop names which
 /// predicate held.
@@ -35,6 +39,13 @@ fn death_drops(game: &mut ServerGame<'_>, victim: &Mob) -> Vec<String> {
 #[test]
 #[ignore = "daily"]
 fn a_boat_mount_reaches_the_death_loot_vehicle_predicate() {
+    if run_fresh_cases(
+        "game::server_side::creatures_server::vehicle_loot_tests::a_boat_mount_reaches_the_death_loot_vehicle_predicate",
+        VEHICLE_LOOT_CHILD,
+        &["death_drops"],
+    ) {
+        return;
+    }
     // The platform's init array only installs under `deps/`; a test binary elsewhere in
     // the target tree (and `--exact` runs) needs it explicitly, as `install` is idempotent.
     mod_platform::__private::test_platform::install();
@@ -54,7 +65,7 @@ fn a_boat_mount_reaches_the_death_loot_vehicle_predicate() {
     let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
     let loot = LootData::load(root.path(), &PackOverlay::new(&files), &defaults).unwrap();
 
-    crate::game::native_entity_refs::tests::with_game(|game| {
+    with_game(|game| {
         let zombie = game
             .res
             .mob_types()
@@ -110,6 +121,13 @@ fn a_boat_mount_reaches_the_death_loot_vehicle_predicate() {
 #[test]
 #[ignore = "daily"]
 fn the_target_projection_is_the_entity_the_roll_reads() {
+    if run_fresh_cases(
+        "game::server_side::creatures_server::vehicle_loot_tests::the_target_projection_is_the_entity_the_roll_reads",
+        VEHICLE_LOOT_CHILD,
+        &["target_projection"],
+    ) {
+        return;
+    }
     // The platform's init array only installs under `deps/`; a test binary elsewhere in
     // the target tree (and `--exact` runs) needs it explicitly, as `install` is idempotent.
     mod_platform::__private::test_platform::install();
@@ -122,7 +140,7 @@ fn the_target_projection_is_the_entity_the_roll_reads() {
     let defaults = sunrise_world::item_defaults::read(root.path()).unwrap();
     let loot = LootData::load(root.path(), &PackOverlay::new(&files), &defaults).unwrap();
 
-    crate::game::native_entity_refs::tests::with_game(|game| {
+    with_game(|game| {
         let zombie = game
             .res
             .mob_types()
