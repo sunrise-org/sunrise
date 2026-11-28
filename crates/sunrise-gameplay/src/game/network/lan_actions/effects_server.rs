@@ -15,7 +15,7 @@ impl crate::game::ServerGame<'_> {
             .lan
             .as_ref()
             .and_then(|host| host.hub.guest(conn))
-            .and_then(|g| u32::try_from(g.entity_id).ok())
+            .map(|g| sunrise_gameplay_common::game::entity_ids::entity_id_bits(g.entity_id))
         else {
             return;
         };

@@ -141,7 +141,7 @@ impl crate::game::ServerGame<'_> {
         if !self.native_entity_here(entity) {
             return None;
         }
-        let entity_id = i32::try_from(entity.id()).ok()?;
+        let entity_id = sunrise_gameplay_common::game::entity_ids::wire_entity_id(entity.id());
         Some((entity_id, at))
     }
     /// `Level.broadcastEntityEvent(entity, id)`: sends entity event `id` (the
@@ -194,3 +194,134 @@ use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2 as _;
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt5 as _;
+
+#[cfg(test)]
+mod issue_6335_tests {
+    use std::sync::{
+        Arc, Mutex,
+        atomic::{AtomicUsize, Ordering},
+        mpsc,
+    };
+
+    use mod_api::{Flow, HostSide, ModEntry, Mods};
+    use sunrise_gameplay_common::game::entity_ids::{entity_id_bits, wire_entity_id};
+    use sunrise_protocol::packets::play::Clientbound as C;
+    use sunrise_sim::lan::{Out, PlayerSender};
+
+    struct RecordSound {
+        seen: Arc<Mutex<Vec<u32>>>,
+        calls: Arc<AtomicUsize>,
+    }
+
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for RecordSound {
+        fn play_level_sound_at_entity(
+            &self,
+            _: HostSide<'_>,
+            e: &mut mod_api::PlayLevelSoundAtEntityEvent,
+        ) -> Flow {
+            self.calls.fetch_add(1, Ordering::SeqCst);
+            self.seen.lock().unwrap().push(e.entity.id());
+            Flow::Continue
+        }
+    }
+
+    fn decode_packets(rx: &mpsc::Receiver<Out>) -> Vec<C> {
+        rx.try_iter()
+            .flat_map(|out| match out {
+                Out::Packet(body) => vec![body],
+                Out::Packets(bodies) => bodies,
+                _ => Vec::new(),
+            })
+            .filter_map(|body| {
+                let mut reader = sunrise_protocol::buf::Reader::new(&body);
+                let id = reader.varint().unwrap();
+                C::decode(id, reader.rest()).ok()
+            })
+            .collect()
+    }
+
+    /// A live entity whose stored id has the high bit set keeps those bits
+    /// through a queued bound sound (flush) and both entity-event broadcasts.
+    #[test]
+    #[ignore = "daily"]
+    fn issue_6335_a_live_high_bit_entity_keeps_its_sound_and_event_bits() {
+        const NAME: &str = "game::server_side::native_entity_sounds::issue_6335_tests::issue_6335_a_live_high_bit_entity_keeps_its_sound_and_event_bits";
+        sunrise_gameplay_common::game::in_own_process(NAME, || {
+            mod_platform::__private::test_platform::install();
+            let seen = Arc::new(Mutex::new(Vec::new()));
+            let calls = Arc::new(AtomicUsize::new(0));
+            let mods: Mods = vec![ModEntry::new(
+                "record-sound",
+                Box::new(RecordSound {
+                    seen: Arc::clone(&seen),
+                    calls: Arc::clone(&calls),
+                }),
+            )]
+            .into();
+            mod_platform::testing::with_mods(mods, || {
+                crate::game::native_guest_turn_tests::with_guests(|game| {
+                    game.options.dedicated = Some(Vec::new());
+                    let (tx, rx) = mpsc::channel();
+                    game.server.lan.as_mut().unwrap().hub.guests.update(0, |g| {
+                        g.sender = PlayerSender::new(tx, Arc::default());
+                    });
+                    game.world
+                        .chunks
+                        .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
+                    game.server.next_entity = 0x8000_0001 - 1;
+                    let id = game
+                        .spawn_mob(
+                            "minecraft:zombie",
+                            [3.5, 64.0, 5.5],
+                            true,
+                            sunrise_gameplay_common::game::creatures::SpawnSite::Raw,
+                        )
+                        .unwrap();
+                    assert_eq!(id, 0x8000_0001, "the mob's stored id has the high bit");
+                    let entity =
+                        mod_api::EntityRef::new(game.common.native_lifecycle.epoch().unwrap(), id);
+                    let wire = wire_entity_id(id);
+
+                    // The queued bound sound keeps the bits and the flush delivers a
+                    // SoundEntity packet for the same id.
+                    assert!(game.entity_play_bound_sound(
+                        entity,
+                        "minecraft:entity.player.burp",
+                        mod_api::SoundSource::Players,
+                        1.0,
+                        1.0,
+                    ));
+                    assert_eq!(
+                        game.server
+                            .pending_native_sounds
+                            .last()
+                            .and_then(|s| s.entity),
+                        Some(wire)
+                    );
+                    game.flush_native_sounds();
+                    assert!(game.server.pending_native_sounds.is_empty());
+                    let packets = decode_packets(&rx);
+                    assert!(
+                        packets
+                            .iter()
+                            .any(|p| matches!(p, C::SoundEntity(s) if s.id == wire)),
+                        "a SoundEntity packet carries the high-bit id"
+                    );
+                    assert!(
+                        !packets.iter().any(|p| matches!(p, C::Sound(_))),
+                        "only the entity hook hears the bound sound"
+                    );
+                    assert_eq!(calls.load(Ordering::SeqCst), 1);
+                    assert_eq!(seen.lock().unwrap().as_slice(), [id]);
+
+                    // Both entity-event paths accept the live entity and keep the bits.
+                    assert!(game.entity_broadcast_event(entity, 2));
+                    assert!(game.broadcast_entity_event_immediate(entity, 2));
+                    assert_eq!(game.server.lan_entity_events, vec![(wire, 2), (wire, 2)]);
+                    assert_eq!(entity_id_bits(wire), id);
+                });
+            });
+        });
+    }
+}

@@ -136,10 +136,10 @@ impl crate::game::ServerGame<'_> {
         let Some(target) = self.native_entity_target(entity) else {
             return false;
         };
-        let (Some(level), Some(at), Ok(id)) = (
+        let (Some(level), Some(at), id) = (
             self.entity_level(entity),
             self.target_position(target),
-            i32::try_from(entity.id()),
+            sunrise_gameplay_common::game::entity_ids::wire_entity_id(entity.id()),
         ) else {
             return false;
         };

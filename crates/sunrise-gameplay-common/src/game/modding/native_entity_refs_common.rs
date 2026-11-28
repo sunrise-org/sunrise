@@ -102,7 +102,7 @@ pub trait NativeEntityRefsCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
     /// `Entity.getPickResult` of the entity, on the side that holds it.
     fn entity_pick_result(&self, entity: EntityRef) -> Option<ItemStack> {
         self.native_entity_read_target(entity)?;
-        self.pick_result_of(i32::try_from(entity.id()).ok()?)
+        self.pick_result_of(crate::game::entity_ids::wire_entity_id(entity.id()))
     }
 
     /// `IEntityExtension.getParts` in `EnderDragon.getSubEntities` order.

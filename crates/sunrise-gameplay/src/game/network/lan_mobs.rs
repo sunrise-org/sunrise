@@ -51,7 +51,7 @@ impl ServerGame<'_> {
             return None;
         }
         let uuid = sunrise_sim::lan::playerdata::uuid_ints(guest.uuid);
-        let id = u32::try_from(guest.entity_id).ok()?;
+        let id = sunrise_gameplay_common::game::entity_ids::entity_id_bits(guest.entity_id);
         Some((uuid, id))
     }
 

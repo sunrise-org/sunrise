@@ -764,7 +764,9 @@ impl mobs::part_goals::GoalHost for ServerGame<'_> {
                     None => {
                         let host = self.server.lan.as_ref()?;
                         let conn = host.mob_players.get(&mob.id)?;
-                        u32::try_from(host.hub.guest(*conn)?.entity_id).ok()?
+                        sunrise_gameplay_common::game::entity_ids::entity_id_bits(
+                            host.hub.guest(*conn)?.entity_id,
+                        )
                     }
                 };
                 let entity = self.entity(id)?;

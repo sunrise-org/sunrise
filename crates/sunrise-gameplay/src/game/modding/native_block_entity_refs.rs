@@ -862,9 +862,9 @@ impl ServerGame<'_> {
                         menus.menu_holds(g.menu.as_ref(), key, fields.generation)
                     })
             })
-            .filter_map(|(_, g)| {
-                let id = u32::try_from(g.entity_id).ok()?;
-                Some(player_ref(mod_api::EntityRef::new(epoch, id), g.uuid))
+            .map(|(_, g)| {
+                let id = sunrise_gameplay_common::game::entity_ids::entity_id_bits(g.entity_id);
+                player_ref(mod_api::EntityRef::new(epoch, id), g.uuid)
             })
             .collect();
         if self.level_in_place(level)
