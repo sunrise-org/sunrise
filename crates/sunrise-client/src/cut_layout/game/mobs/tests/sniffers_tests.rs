@@ -12,7 +12,7 @@ use sunrise_sim::mobs::{Mob, sniffer};
 fn game(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
     sculk_game(|game| {
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 100.0, 8.5)));
-        game.mobs.clear();
+        game.entities.mobs.clear();
         test(game);
     });
 }
@@ -30,7 +30,7 @@ fn digging_sniffer<'g>(
     let mut m = Mob::new(42, kind, Vec3::new(8.5, 100.0, 8.5), 0.0);
     sniffer::set_state(&mut m, sniffer::DIGGING);
     let head = sniffer::head_block(&m);
-    game.mobs.push(m);
+    game.entities.mobs.push(m);
     (42, head)
 }
 
@@ -51,7 +51,7 @@ fn digging_posts_entity_action_every_ten_ticks_outside_the_dust_window() {
         // 0 is the first dig tick, 20 is before the window, 40 inside it and 130
         // after it; 25 is not a tenth tick.
         for age in [0_u32, 20, 40, 130, 25] {
-            let m = &mut game.mobs[0];
+            let m = &mut game.entities.mobs[0];
             m.age = age;
             m.anim.states[3].start(0.0);
             TEST_POSTED_EVENTS.with(|events| *events.borrow_mut() = Some(Vec::new()));
@@ -95,11 +95,11 @@ fn a_silent_sniffer_still_plays_the_local_searching_and_hit_sounds() {
             }
         }
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(8.5, 100.0, 8.5)));
-        game.mobs.clear();
+        game.entities.mobs.clear();
         let _ = digging_sniffer(game);
-        game.mobs[0].silent = true;
-        game.mobs[0].age = 20;
-        sniffer::set_state(&mut game.mobs[0], sniffer::SEARCHING);
+        game.entities.mobs[0].silent = true;
+        game.entities.mobs[0].age = 20;
+        sniffer::set_state(&mut game.entities.mobs[0], sniffer::SEARCHING);
         game.client.audio.0.heard.clear();
         game.tick_sniffer_client();
         assert_eq!(
@@ -110,9 +110,9 @@ fn a_silent_sniffer_still_plays_the_local_searching_and_hit_sounds() {
                 .get("minecraft:entity.sniffer.searching"),
             Some(&1)
         );
-        sniffer::set_state(&mut game.mobs[0], sniffer::DIGGING);
-        game.mobs[0].age = 40;
-        game.mobs[0].anim.states[3].start(0.0);
+        sniffer::set_state(&mut game.entities.mobs[0], sniffer::DIGGING);
+        game.entities.mobs[0].age = 40;
+        game.entities.mobs[0].anim.states[3].start(0.0);
         game.client.audio.0.heard.clear();
         game.tick_sniffer_client();
         assert_eq!(
@@ -135,7 +135,7 @@ fn the_egg_push_comes_from_the_items_own_random() {
         let parent = Mob::new(43, kind, Vec3::new(8.5, 100.0, 8.5), 0.0);
         let mut level = game.world.random.clone();
         game.lay_sniffer_egg(&parent);
-        let egg = game.dropped.last().unwrap();
+        let egg = game.entities.dropped.last().unwrap();
         assert_eq!(&*egg.stack.item, "minecraft:sniffer_egg");
         assert_eq!(egg.pickup_delay, 10);
         // `new ItemEntity(level, x, y, z, stack)` draws its motion from the item's

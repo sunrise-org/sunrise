@@ -195,34 +195,34 @@ impl crate::game::CommonGame<'_> {
         use serde_json::json;
         let at = |p: sunrise_core::geometry::Vec3| [p.x, p.y, p.z];
         let mut out = Vec::new();
-        for f in &self.fangs.list {
+        for f in &self.entities.fangs.list {
             out.push(
                 json!({"id": f.id, "kind": "minecraft:evoker_fangs", "position": f.pos,
                 "yaw": f.yaw, "started": f.started, "life": f.life}),
             );
         }
-        for t in &self.tnts {
+        for t in &self.entities.tnts {
             out.push(json!({"id": t.id, "kind": "minecraft:tnt", "position": at(t.position), "fuse": t.fuse}));
         }
-        for f in &self.falling {
+        for f in &self.entities.falling {
             out.push(json!({"id": f.id, "kind": "minecraft:falling_block", "position": at(f.position), "velocity": at(f.velocity), "state": f.state.0}));
         }
-        for b in &self.boats {
+        for b in &self.entities.boats {
             out.push(json!({"id": b.id, "kind": "minecraft:boat", "position": at(b.position), "velocity": at(b.velocity)}));
         }
-        for c in &self.carts {
+        for c in &self.entities.carts {
             out.push(json!({"id": c.id, "kind": "minecraft:minecart", "position": at(c.position), "velocity": at(c.velocity)}));
         }
-        for c in &self.crystals {
+        for c in &self.entities.crystals {
             out.push(json!({"id": c.id, "kind": "minecraft:end_crystal", "position": at(c.position), "show_bottom": c.show_bottom}));
         }
-        for t in &self.tridents {
+        for t in &self.entities.tridents {
             out.push(json!({"id": t.id, "kind": "minecraft:trident", "position": at(t.position), "velocity": at(t.velocity), "on_fire": t.fire_ticks > 0}));
         }
-        for r in &self.rockets {
+        for r in &self.entities.rockets {
             out.push(json!({"id": r.id, "kind": "minecraft:firework_rocket", "position": at(r.position), "velocity": at(r.velocity)}));
         }
-        for p in &self.creatures.projectiles {
+        for p in &self.entities.projectiles {
             out.push(json!({"id": p.id, "kind": format!("{:?}", p.kind).split([' ', '{']).next().unwrap_or(""), "position": at(p.position), "velocity": at(p.velocity),
                 "player_owned": p.owner == Some(sunrise_sim::mobs::Who::Player),
                 "on_fire": p.arrow.as_ref().is_some_and(|a| a.on_fire())}));

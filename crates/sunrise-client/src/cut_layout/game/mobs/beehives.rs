@@ -38,12 +38,12 @@ pub(crate) mod honey_overflow_tests {
             game.selected = 0;
             let bottles = ItemStack::new("minecraft:glass_bottle", 2);
             game.inventory[0] = Some(bottles.clone());
-            game.dropped.clear();
+            game.entities.dropped.clear();
 
             assert!(game.use_beehive([8, 64, 10], Some(&bottles)).unwrap());
             let eye = game.eye_position().unwrap();
             let honey: Vec<_> = game
-                .dropped
+                .entities.dropped
                 .iter()
                 .filter(|e| &*e.stack.item == "minecraft:honey_bottle")
                 .collect();
@@ -110,10 +110,10 @@ pub(crate) mod stay_tests {
             };
             game.world.day_time = 13_000;
             game.tick_beehive(key);
-            assert_eq!((inside(game), game.mobs.len()), (3, 0), "night");
+            assert_eq!((inside(game), game.entities.mobs.len()), (3, 0), "night");
             game.world.day_time = 1_000;
             game.tick_beehive(key);
-            assert_eq!((inside(game), game.mobs.len()), (0, 3), "day");
+            assert_eq!((inside(game), game.entities.mobs.len()), (0, 3), "day");
         });
     }
 }
@@ -176,7 +176,7 @@ pub(crate) mod changed_tests {
             panic!("no hive");
         };
         assert!(h.bees.is_empty(), "the ready bee was let out");
-        assert_eq!(game.mobs.len(), 1, "the bee reached the level");
+        assert_eq!(game.entities.mobs.len(), 1, "the bee reached the level");
         assert!(
             game.world.modified.contains(&(0, 0)),
             "a released bee left the chunk unmarked"
@@ -193,7 +193,7 @@ pub(crate) mod changed_tests {
         let key = (8, 64, 8);
         hive_at(&mut game, key, Beehive::default());
         let kind = game.res.mob_types().get("minecraft:bee").unwrap().clone();
-        game.mobs
+        game.entities.mobs
             .push(Mob::new(42, kind, Vec3::new(8.0, 64.0, 8.0), 0.0));
         game.world.modified.clear();
 

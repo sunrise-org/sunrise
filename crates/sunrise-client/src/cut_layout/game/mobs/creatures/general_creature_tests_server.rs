@@ -19,7 +19,7 @@ fn conversion_transfers_tags_and_team() {
             .unwrap()
             .clone();
         let from = Mob::new(100, kind, Vec3::ZERO, 0.0);
-        game.mobs.push(from.clone());
+        game.entities.mobs.push(from.clone());
         game.server.next_entity = 100;
         game.set_entity_tags(Target::Mob(100), &["tracked".into()]);
         let old = uuid_text(game.uuid_for(100));
@@ -193,8 +193,8 @@ fn wolf_owner_rejoining_receives_the_kill_statistic() {
             let mut wolf = Mob::new(100, wolf_type, Vec3::ZERO, 0.0);
             wolf.extra.tame = true;
             wolf.extra.owner = Some(sunrise_sim::lan::playerdata::uuid_ints(12));
-            game.mobs.push(wolf);
-            game.mobs.push(Mob::new(101, pig_type, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(wolf);
+            game.entities.mobs.push(Mob::new(101, pig_type, Vec3::ZERO, 0.0));
             {
                 let value = false;
                 game.server
@@ -219,7 +219,7 @@ fn wolf_owner_rejoining_receives_the_kill_statistic() {
                     .update(0, |guest| guest.placed = value);
             }
             assert_eq!(game.resolve_player_credit(credit), Some(Some(12)));
-            let victim = game.mobs[1].clone();
+            let victim = game.entities.mobs[1].clone();
             game.mob_die(&victim);
             let stats = &game
                 .server
@@ -269,7 +269,7 @@ fn wolf_owner_rejoining_receives_the_kill_statistic() {
             game.mob_die(&third);
             let host = game.server.lan.as_ref().unwrap();
             assert_eq!(host.play[&12].stats.get("custom", "minecraft:mob_kills"), 3);
-            game.mobs[0].extra.owner = None;
+            game.entities.mobs[0].extra.owner = None;
             game.resolve_player_responsible(101, Damage::mob(100, [0.0; 3]));
             assert!(!game.server.last_hurt_by_player.contains_key(&101));
         });

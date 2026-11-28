@@ -169,10 +169,10 @@ fn the_last_tag_leaves_no_key_and_a_spawner_keeps_its_tags() {
             .cloned()
             .expect("the spawner's saved entity");
         assert_eq!(saved.get("Tags"), Some(&tag_list(&["audit"])));
-        let before = game.ominous_spawners.len();
+        let before = game.entities.ominous_spawners.len();
         game.load_ominous_item_spawner(saved);
-        assert_eq!(game.ominous_spawners.len(), before + 1);
-        let reloaded = game.ominous_spawners.last().unwrap().id;
+        assert_eq!(game.entities.ominous_spawners.len(), before + 1);
+        let reloaded = game.entities.ominous_spawners.last().unwrap().id;
         assert_eq!(game.tags_of(Target::Spawner(reloaded)), ["audit"]);
     });
 }

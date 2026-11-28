@@ -27,14 +27,14 @@ fn loaded_air_is_discarded_on_first_actual_game_tick() {
             )));
         }
         assert_eq!(
-            game.falling.len(),
+            game.entities.falling.len(),
             2,
             "both actual command loads must be admitted"
         );
         let keys = [(0, 0)].into_iter().collect();
-        let ids: Vec<_> = game.falling.iter().map(|f| f.id).collect();
+        let ids: Vec<_> = game.entities.falling.iter().map(|f| f.id).collect();
         for (i, state) in ["minecraft:air", "minecraft:sand"].into_iter().enumerate() {
-            let f = &game.falling[i];
+            let f = &game.entities.falling[i];
             assert_eq!(&*game.res.facts().get(f.state).name, state);
             assert_eq!(f.age, 0);
             assert!(f.no_gravity);
@@ -53,7 +53,7 @@ fn loaded_air_is_discarded_on_first_actual_game_tick() {
         game.tick().unwrap();
         assert_eq!(game.world.game_time, clock + 1);
         let sand = game
-            .falling
+            .entities.falling
             .iter()
             .find(|f| f.id == ids[1])
             .expect("nonair control survives");
@@ -63,7 +63,7 @@ fn loaded_air_is_discarded_on_first_actual_game_tick() {
         assert_eq!(sand.position, Vec3::new(8.5, 204.0, 4.5));
         assert_eq!(sand.velocity, Vec3::ZERO);
         assert!(
-            !game.falling.iter().any(|f| f.id == ids[0]),
+            !game.entities.falling.iter().any(|f| f.id == ids[0]),
             "admitted air must disappear on its first tick"
         );
     });

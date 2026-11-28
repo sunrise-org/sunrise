@@ -44,7 +44,7 @@ fn minecart_loops_gate_both_gains_on_live_interpolated_rails() {
                 let position = |x| Vec3::new(x, 64.100005, 1.5);
                 let mut cart = Minecart::new(42, CartKind::Rideable, position(0.5));
                 cart.velocity = Vec3::new(0.4, 0.0, 0.0);
-                game.carts.push(cart);
+                game.entities.carts.push(cart);
                 game.riding = Some(42);
                 let ctx = |game: &mut sunrise_client_gameplay::game::ClientGame<'_>| {
                     let (vehicle, carts) = game.start_cart_sounds();
@@ -82,10 +82,10 @@ fn minecart_loops_gate_both_gains_on_live_interpolated_rails() {
                 }
 
                 game.client.remote.as_mut().unwrap().features = Arc::from([]);
-                game.carts.clear();
+                game.entities.carts.clear();
                 let mut old_cart = Minecart::new(43, CartKind::Rideable, position(2.5));
                 old_cart.velocity = Vec3::new(0.4, 0.0, 0.0);
-                game.carts.push(old_cart);
+                game.entities.carts.push(old_cart);
                 game.riding = Some(43);
                 let inputs = ctx(game);
                 let old_cart = &inputs.carts[0];
@@ -144,7 +144,7 @@ fn guardian_and_elder_events_admit_two_independent_loops_each() {
                         0.0,
                     );
                     mob.silent = silent;
-                    game.mobs.push(mob);
+                    game.entities.mobs.push(mob);
                     for _ in 0..2 {
                         game.handle_packet(Clientbound::EntityEvent(EntityEvent { id, event: 21 }))
                             .unwrap();

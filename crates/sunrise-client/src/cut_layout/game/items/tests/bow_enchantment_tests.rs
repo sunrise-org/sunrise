@@ -31,9 +31,9 @@ fn a_piercing_bow_shoots_arrows_that_pierce_their_level() {
     bow.enchant("minecraft:piercing", 4);
     *game.held_mut() = Some(bow);
     let bow = game.held().unwrap().clone();
-    let before = game.creatures.projectiles.len();
+    let before = game.entities.projectiles.len();
     game.release_bow(&bow, 20);
-    let pierce: Vec<u8> = game.creatures.projectiles[before..]
+    let pierce: Vec<u8> = game.entities.projectiles[before..]
         .iter()
         .filter_map(|p| p.arrow.as_ref().map(|a| a.pierce))
         .collect();
@@ -63,9 +63,9 @@ fn a_multishot_bow_fires_three_arrows_ten_degrees_apart() {
     let bow = game.held().unwrap().clone();
     // Looking somewhere other than the axes: the fan is centred on the view.
     game.yaw = 37.0;
-    let before = game.creatures.projectiles.len();
+    let before = game.entities.projectiles.len();
     game.release_bow(&bow, 20);
-    let arrows = &game.creatures.projectiles[before..];
+    let arrows = &game.entities.projectiles[before..];
     let headings: Vec<f32> = arrows.iter().map(heading).collect();
     assert_eq!(headings.len(), 3, "{headings:?}");
     // One of the four arrows is used, and only the first is the player's.

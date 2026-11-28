@@ -24,7 +24,7 @@ impl crate::game::ServerGame<'_> {
                 g.name.clone(),
             )
         };
-        if unable || self.common.creatures.projectiles.is_empty() {
+        if unable || self.common.entities.projectiles.is_empty() {
             return;
         }
         let w = f64::from(dims.width) / 2.0;
@@ -33,7 +33,7 @@ impl crate::game::ServerGame<'_> {
             Vec3::new(at[0] + w, at[1] + f64::from(dims.height), at[2] + w),
         )
         .inflate(Vec3::new(1.0, 0.5, 1.0));
-        let mut projectiles = self.common.creatures.projectiles.lift();
+        let mut projectiles = self.common.entities.projectiles.lift();
         #[cfg(any(test, feature = "test-support"))]
         crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
         let mut picked = Vec::new();
@@ -65,7 +65,7 @@ impl crate::game::ServerGame<'_> {
             }
             !taken
         });
-        self.common.creatures.projectiles.restore(
+        self.common.entities.projectiles.restore(
             projectiles,
             sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
         );
@@ -125,7 +125,7 @@ impl crate::game::ServerGame<'_> {
         );
         let touching: Vec<usize> = self
             .common
-            .orbs
+            .entities.orbs
             .iter()
             .enumerate()
             .filter(|(_, o)| {
@@ -163,8 +163,8 @@ impl crate::game::ServerGame<'_> {
         index: usize,
     ) -> bool {
         // A merged orb gives its value once per count and goes at zero.
-        let join = self.common.orbs[index].join;
-        let orb_id = self.common.orbs[index].id;
+        let join = self.common.entities.orbs[index].join;
+        let orb_id = self.common.entities.orbs[index].id;
         // Swapping the guest in costs: only when a mod hears the pickup.
         let listened = (self.server.serving.is_some() || self.common.options.dedicated.is_some())
             && mod_api::__private::listened(mod_api::HookId::PickupXp);
@@ -191,11 +191,11 @@ impl crate::game::ServerGame<'_> {
         if !live(self) {
             return false;
         }
-        let Some(index) = self.common.orbs.locate(join) else {
+        let Some(index) = self.common.entities.orbs.locate(join) else {
             return false;
         };
         let (orb_value, orb_pos) = {
-            let orb = &self.common.orbs[index];
+            let orb = &self.common.entities.orbs[index];
             (orb.value, orb.position)
         };
         // ExperienceOrb.playerTouch: delay, take, repair/award positive value,
@@ -227,11 +227,11 @@ impl crate::game::ServerGame<'_> {
         if !live(self) {
             return false;
         }
-        if let Some(index) = self.common.orbs.locate(join) {
-            if self.common.orbs[index].count <= 1 {
+        if let Some(index) = self.common.entities.orbs.locate(join) {
+            if self.common.entities.orbs[index].count <= 1 {
                 self.remove_orb(index);
             } else {
-                self.common.orbs[index].count -= 1;
+                self.common.entities.orbs[index].count -= 1;
             }
         }
         true
@@ -252,14 +252,14 @@ impl crate::game::ServerGame<'_> {
                 sunrise_sim::lan::playerdata::uuid_ints(g.uuid),
             )
         };
-        if mode == SPECTATOR || self.common.dropped.is_empty() {
+        if mode == SPECTATOR || self.common.entities.dropped.is_empty() {
             return;
         }
         // The test below takes items whose position is less than 1.5 from
         // the player's on x and z: their boxes reach these columns.
         if let Some(columns) = self.server.pickup_columns.as_mut()
             && !columns.may_reach_area(
-                &self.common.dropped,
+                &self.common.entities.dropped,
                 (
                     (position[0] - 1.5).floor() as i32,
                     (position[0] + 1.5).floor() as i32,
@@ -275,7 +275,7 @@ impl crate::game::ServerGame<'_> {
         let listens = mod_api::__private::listened(mod_api::HookId::ItemPickedUp);
         let near: Vec<_> = self
             .common
-            .dropped
+            .entities.dropped
             .iter()
             .filter(|d| {
                 (listens

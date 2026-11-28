@@ -83,7 +83,7 @@ pub(in crate::game) fn walk_stop(assert_trajectory: bool) {
     for _ in 0..2 {
         g.tick_boats();
     }
-    let id = g.boats[0].id;
+    let id = g.entities.boats[0].id;
     group(
         &mut g,
         vec![S::Interact(play::Interact {
@@ -94,8 +94,8 @@ pub(in crate::game) fn walk_stop(assert_trajectory: bool) {
         })],
         1,
     );
-    assert!(g.boats[0].leash.is_some());
-    assert_eq!(g.boats[0].leash_player, Some([0, 0, 0, 1]));
+    assert!(g.entities.boats[0].leash.is_some());
+    assert_eq!(g.entities.boats[0].leash_player, Some([0, 0, 0, 1]));
     g.tick_boats();
     let mut x = 0.5;
     for tick in 1..=30 {
@@ -131,10 +131,10 @@ pub(in crate::game) fn walk_stop(assert_trajectory: bool) {
         );
         g.tick_boats();
     }
-    assert!(g.boats[0].leash.is_some());
+    assert!(g.entities.boats[0].leash.is_some());
     assert!(g.server.lan.as_ref().unwrap().play[&1].using.is_none());
     if assert_trajectory {
-        let p = g.boats[0].position;
+        let p = g.entities.boats[0].position;
         let rounded = [p.x, p.y, p.z].map(|v| format!("{v:.4}").parse::<f64>().unwrap());
         assert_eq!(
             rounded,
@@ -158,7 +158,7 @@ fn boat_tick_uses_stopped_players_known_movement() {
 fn walking_then_still_tick_end_preserves_the_accepted_displacement() {
     let mut resources = None;
     let (mut g, _rx) = scene(&mut resources);
-    let id = g.boats[0].id;
+    let id = g.entities.boats[0].id;
     group(
         &mut g,
         vec![S::Interact(play::Interact {

@@ -83,7 +83,7 @@ impl crate::game::ServerGame<'_> {
         if !mod_api::__private::listened(mod_api::HookId::LivingGetProjectile) {
             return;
         }
-        let Some(shooter) = self.common.mobs.iter().find(|m| m.id == mob) else {
+        let Some(shooter) = self.common.entities.mobs.iter().find(|m| m.id == mob) else {
             return;
         };
         let kind = shooter.kind.id.clone();
@@ -140,7 +140,7 @@ impl crate::game::ServerGame<'_> {
         mob: u32,
         weapon: &ItemStack,
     ) -> bool {
-        let Some(shooter) = self.common.mobs.iter().find(|m| m.id == mob) else {
+        let Some(shooter) = self.common.entities.mobs.iter().find(|m| m.id == mob) else {
             return false;
         };
         let kind = shooter.kind.id.clone();
@@ -153,7 +153,7 @@ impl crate::game::ServerGame<'_> {
         // A crossbow takes arrows and firework rockets only.
         let projectile = projectile
             .filter(|ammo| is_arrow(world_items!(self), ammo) || &*ammo.item == FIREWORK_ROCKET);
-        let Some(shooter) = self.common.mobs.iter_mut().find(|m| m.id == mob) else {
+        let Some(shooter) = self.common.entities.mobs.iter_mut().find(|m| m.id == mob) else {
             return false;
         };
         let Some(mut crossbow) = shooter.extra.main_hand_stack().cloned() else {

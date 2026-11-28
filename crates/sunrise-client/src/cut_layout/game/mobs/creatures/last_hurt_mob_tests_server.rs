@@ -62,10 +62,10 @@ fn last_hurt_mob_follows_the_attacking_entity() {
 
         match std::env::var(CASE).unwrap().as_str() {
             "arrow" => {
-                game.mobs[0].invulnerable_flag = true;
-                let health = game.mobs[0].health;
+                game.entities.mobs[0].invulnerable_flag = true;
+                let health = game.entities.mobs[0].health;
                 shoot(game, Who::Player, arrow());
-                assert_eq!(game.mobs[0].health, health, "the pig refused damage");
+                assert_eq!(game.entities.mobs[0].health, health, "the pig refused damage");
                 assert_eq!(player.last_hurt_mob(game), Some((pig, PLAYER_AGE)));
                 game.player.as_mut().unwrap().health.tick_count += 200;
                 game.tick_mob_effects();
@@ -74,14 +74,14 @@ fn last_hurt_mob_follows_the_attacking_entity() {
                     Some((pig, PLAYER_AGE)),
                     "no expiry"
                 );
-                game.mobs[0].health = 0.0;
+                game.entities.mobs[0].health = 0.0;
                 assert_eq!(
                     player.last_hurt_mob(game),
                     None,
                     "dead targets read as absent immediately"
                 );
                 game.tick_mob_effects();
-                game.mobs[0].health = health;
+                game.entities.mobs[0].health = health;
                 assert_eq!(
                     player.last_hurt_mob(game),
                     None,
@@ -92,12 +92,12 @@ fn last_hurt_mob_follows_the_attacking_entity() {
             }
             "wind_charge" => {
                 add_mob(game, MOB, "minecraft:breeze", 2.0);
-                game.mobs[1].age = MOB_AGE;
-                game.mobs[0].invulnerable_flag = true;
-                let health = game.mobs[0].health;
+                game.entities.mobs[1].age = MOB_AGE;
+                game.entities.mobs[0].invulnerable_flag = true;
+                let health = game.entities.mobs[0].health;
                 shoot(game, Who::Mob(MOB), ProjectileKind::BreezeWindCharge);
                 let breeze = living(game, MOB);
-                assert_eq!(game.mobs[0].health, health, "the pig refused damage");
+                assert_eq!(game.entities.mobs[0].health, health, "the pig refused damage");
                 assert_eq!(breeze.entity().tick_count(game), Some(MOB_AGE as i32));
                 assert_eq!(breeze.last_hurt_mob(game), Some((pig, MOB_AGE as i32)));
                 assert_eq!(
@@ -105,14 +105,14 @@ fn last_hurt_mob_follows_the_attacking_entity() {
                     None,
                     "the shooter was the breeze"
                 );
-                game.mobs[0].health = 0.0;
+                game.entities.mobs[0].health = 0.0;
                 assert_eq!(breeze.last_hurt_mob(game), None);
                 game.tick_creature_entities().unwrap();
-                let breeze = game.mobs.iter().find(|m| m.id == MOB).unwrap();
+                let breeze = game.entities.mobs.iter().find(|m| m.id == MOB).unwrap();
                 assert_eq!(breeze.last_hurt_mob, None, "the mob's base tick cleared it");
             }
             "melee" => {
-                game.mobs[0].invulnerable_flag = true;
+                game.entities.mobs[0].invulnerable_flag = true;
                 game.server.attack_ticks = 20;
                 game.attack_mob(0);
                 assert_eq!(
@@ -120,13 +120,13 @@ fn last_hurt_mob_follows_the_attacking_entity() {
                     None,
                     "a refused hit cannot set it"
                 );
-                game.mobs[0].invulnerable_flag = false;
+                game.entities.mobs[0].invulnerable_flag = false;
                 game.server.attack_ticks = 20;
                 game.attack_mob(0);
                 assert_eq!(player.last_hurt_mob(game), Some((pig, PLAYER_AGE)));
 
                 add_mob(game, MOB, "minecraft:zombie", 3.0);
-                game.mobs[1].age = MOB_AGE;
+                game.entities.mobs[1].age = MOB_AGE;
                 let zombie = living(game, MOB);
                 let swing = MobEvent::AttackMob {
                     target: PIG,
@@ -134,17 +134,17 @@ fn last_hurt_mob_follows_the_attacking_entity() {
                     source: Damage::mob(MOB, [3.0, 80.0, 0.5]),
                     remember_target: true,
                 };
-                game.mobs[0].invulnerable_flag = true;
+                game.entities.mobs[0].invulnerable_flag = true;
                 game.handle_mob_events(vec![swing.clone()]).unwrap();
                 assert_eq!(zombie.last_hurt_mob(game), None);
-                game.mobs[0].invulnerable_flag = false;
-                game.mobs[0].invulnerable = 0;
+                game.entities.mobs[0].invulnerable_flag = false;
+                game.entities.mobs[0].invulnerable = 0;
                 game.handle_mob_events(vec![swing]).unwrap();
                 assert_eq!(zombie.last_hurt_mob(game), Some((pig, MOB_AGE as i32)));
             }
             "spear_order" => {
                 add_mob(game, MOB, "minecraft:zombie", 3.0);
-                game.mobs[1].age = MOB_AGE;
+                game.entities.mobs[1].age = MOB_AGE;
                 let zombie = living(game, MOB);
                 let stab = |target, contact, attempted_damage, otherwise_affected| {
                     vec![MobEvent::StabMemory {
@@ -192,13 +192,13 @@ fn last_hurt_mob_follows_the_attacking_entity() {
             "wolf" => {
                 add_mob(game, WOLF, "minecraft:wolf", 1.5);
                 let owner = game.acting_uuid();
-                let wolf = &mut game.mobs[1];
+                let wolf = &mut game.entities.mobs[1];
                 sunrise_sim::mobs::tame::set_tame(wolf, true);
                 wolf.extra.owner = Some(owner);
                 wolf.no_ai = false;
                 game.tick_creature_entities().unwrap();
                 assert!(
-                    game.mobs
+                    game.entities.mobs
                         .iter()
                         .find(|m| m.id == WOLF)
                         .unwrap()
@@ -210,7 +210,7 @@ fn last_hurt_mob_follows_the_attacking_entity() {
                 for _ in 0..2 {
                     game.tick_creature_entities().unwrap();
                 }
-                let wolf = game.mobs.iter().find(|m| m.id == WOLF).unwrap();
+                let wolf = game.entities.mobs.iter().find(|m| m.id == WOLF).unwrap();
                 assert_eq!(wolf.ai.target, Some(Who::Mob(PIG)));
             }
             case => panic!("unexpected fixture case {case}"),

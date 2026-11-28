@@ -225,7 +225,7 @@ pub(crate) mod tests {
                 let kind = remote.player_type.as_ref().unwrap().clone();
                 for id in [66, 67] {
                     remote.level_players.insert(id, id as u128);
-                    game.common.mobs.push(sunrise_sim::mobs::Mob::new(
+                    game.common.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                         id as u32,
                         kind.clone(),
                         sunrise_core::geometry::Vec3::ZERO,

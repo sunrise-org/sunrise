@@ -39,7 +39,7 @@ impl crate::game::ClientGame<'_> {
 
         let mut output = Vec::new();
         for case in cases {
-            self.common.boats.clear();
+            self.common.entities.boats.clear();
             let mut b = Boat::new(3, "oak".into(), Vec3::new(0.0, 100.0, 0.0), 0.0);
             let [x, y, z] = case.velocity;
             b.velocity = Vec3::new(x, y, z);
@@ -55,7 +55,7 @@ impl crate::game::ClientGame<'_> {
                     self.press_device_key(key, Source::Agent);
                 }
             }
-            self.common.boats.push(b);
+            self.common.entities.boats.push(b);
             let mut steps = Vec::new();
             for first in case.first {
                 self.remote_set_passengers(3, if first { vec![1, 2] } else { vec![2, 1] });
@@ -79,7 +79,7 @@ impl crate::game::ClientGame<'_> {
                 if case.event != 0 {
                     self.remote_boat_event(3, case.event);
                 }
-                let boat = &self.common.boats[0];
+                let boat = &self.common.entities.boats[0];
                 steps.push(json!({
                     "controlled": self.client.remote.as_ref().unwrap().first_passenger,
                     "accepts_server_moves": accepts_server_moves,

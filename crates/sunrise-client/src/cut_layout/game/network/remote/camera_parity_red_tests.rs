@@ -629,20 +629,20 @@ pub(in crate::game) fn run_spectated_rider_mount_attributes_26_3() {
 
             // Pin exact unquantized yaw/pitch to match the oracle's (45.0, 22.5).
             let pos = Vec3::new(at[0], at[1], at[2]);
-            if let Some(m) = game.mobs.iter_mut().find(|m| m.id == rider_id as u32) {
+            if let Some(m) = game.entities.mobs.iter_mut().find(|m| m.id == rider_id as u32) {
                 (m.position, m.previous) = (pos, pos);
                 (m.yaw, m.previous_yaw, m.head_yaw, m.previous_head_yaw) = (45.0, 45.0, 45.0, 45.0);
                 (m.head_pitch, m.previous_head_pitch) = (22.5, 22.5);
             }
             if let Some(a) = game
-                .armor_stands
+                .entities.armor_stands
                 .iter_mut()
                 .find(|a| a.id == rider_id as u32)
             {
                 (a.position, a.previous) = (pos, pos);
                 (a.yaw, a.previous_yaw, a.pitch) = (45.0, 45.0, 22.5);
             }
-            game.boats.for_each_mut(|b| {
+            game.entities.boats.for_each_mut(|b| {
                 if b.id == rider_id as u32 {
                     (b.position, b.previous, b.yaw, b.previous_yaw, b.pitch) =
                         (pos, pos, 45.0, 45.0, 22.5);

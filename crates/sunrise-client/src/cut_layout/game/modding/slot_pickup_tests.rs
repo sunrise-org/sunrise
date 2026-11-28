@@ -1207,7 +1207,7 @@ fn a_refused_throw_drops_nothing() {
         let held = [(SHOWN, stone(5))];
         // One item, and the whole stack (the control variant repeats while it takes).
         for button in [0, 1] {
-            let dropped = game.dropped.len();
+            let dropped = game.entities.dropped.len();
             let (before, after, sent) = refused(
                 game,
                 rx,
@@ -1216,7 +1216,7 @@ fn a_refused_throw_drops_nothing() {
             );
             assert_eq!(after, before, "{button}");
             assert!(sent.contains(&(SHOWN as i16, 5)), "{sent:?}");
-            assert_eq!(game.dropped.len(), dropped, "nothing was thrown");
+            assert_eq!(game.entities.dropped.len(), dropped, "nothing was thrown");
         }
     });
 }

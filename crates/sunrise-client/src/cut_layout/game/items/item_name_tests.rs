@@ -248,7 +248,7 @@ fn a_part_names_its_stacks_everywhere_the_game_names_them() {
             );
             assert!(summoned.contains(KEY), "{summoned}");
             assert_eq!(
-                pair.call(|game| game.dropped[0].stack.custom_name())
+                pair.call(|game| game.entities.dropped[0].stack.custom_name())
                     .as_deref(),
                 Some("Diary")
             );
@@ -256,14 +256,14 @@ fn a_part_names_its_stacks_everywhere_the_game_names_them() {
                 pair,
                 r#"summon minecraft:item 6.5 200 4.5 {Item:{id:"minecraft:paper",count:1}}"#,
             );
-            assert_eq!(pair.call(|game| game.dropped.len()), 2);
+            assert_eq!(pair.call(|game| game.entities.dropped.len()), 2);
             let killed = run(pair, &format!(r#"kill @e[type=item,name="{KEY}"]"#));
             assert!(killed.contains(KEY), "{killed}");
-            assert_eq!(pair.call(|game| game.dropped.len()), 1);
-            assert_eq!(pair.call(|game| game.dropped[0].stack.count), 1);
+            assert_eq!(pair.call(|game| game.entities.dropped.len()), 1);
+            assert_eq!(pair.call(|game| game.entities.dropped[0].stack.count), 1);
             let killed = run(pair, r#"kill @e[type=item,name="Paper"]"#);
             assert!(killed.contains("Paper"), "{killed}");
-            assert!(pair.call(|game| game.dropped.is_empty()));
+            assert!(pair.call(|game| game.entities.dropped.is_empty()));
 
             // An entity's own custom name takes precedence over the item name.
             let summoned = run(
@@ -273,7 +273,7 @@ fn a_part_names_its_stacks_everywhere_the_game_names_them() {
             assert!(summoned.contains("Loose Notes"), "{summoned}");
             let killed = run(pair, r#"kill @e[type=item,name="Loose Notes"]"#);
             assert!(killed.contains("Loose Notes"), "{killed}");
-            assert!(pair.call(|game| game.dropped.is_empty()));
+            assert!(pair.call(|game| game.entities.dropped.is_empty()));
 
             // EnchantCommand on a mob: its main-hand stack's getHoverName().getString(), the
             // Part's name for the stack of two it holds.
@@ -283,7 +283,7 @@ fn a_part_names_its_stacks_everywhere_the_game_names_them() {
                 move |game| {
                     with_command_player(game, |game| {
                         let zombie = game
-                            .mobs
+                            .entities.mobs
                             .iter_mut()
                             .find(|m| m.kind.id == "minecraft:zombie")
                             .expect("the summoned zombie");

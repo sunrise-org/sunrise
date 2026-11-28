@@ -27,7 +27,7 @@ pub(crate) mod tests {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(21, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(21, kind, Vec3::ZERO, 0.0));
             game.riding = Some(21);
             let mut stick = ItemStack::new("minecraft:carrot_on_a_stick", 1);
             let max = game.items().get(&stick.item).unwrap().max_damage;
@@ -150,7 +150,7 @@ pub(crate) mod tests {
                 .with(|events| events.borrow_mut().take().unwrap_or_default());
             sunrise_gameplay_common::game::side_ops::events::TEST_POSTED_EVENTS
                 .with(|events| *events.borrow_mut() = None);
-            assert!(game.mobs[0].extra.chested, "{kind} wears the chest");
+            assert!(game.entities.mobs[0].extra.chested, "{kind} wears the chest");
             assert_eq!(sounds.len(), 1, "{kind}: {sounds:?}");
             assert_eq!(sounds[0].0, sound, "{kind} chest sound");
             assert_eq!(sounds[0].2, 1.0, "{kind} chest sound volume");
@@ -182,8 +182,8 @@ pub(crate) mod tests {
         // A silent baby horse fed wheat: the particle's draws, the growth, the
         // event, and no eating sound (so no pitch draws).
         mount(&mut game, "minecraft:horse", 1, [1.5, 64.0, -2.5], 7);
-        game.mobs[0].extra.age = -24000;
-        game.mobs[0].silent = true;
+        game.entities.mobs[0].extra.age = -24000;
+        game.entities.mobs[0].silent = true;
         let level_random = game.world.random.clone().next_long();
         let (used, shown) = feed(&mut game, "minecraft:wheat");
         assert!(used, "wheat is horse food");
@@ -192,9 +192,9 @@ pub(crate) mod tests {
         let at = [1.5, 64.0, -2.5];
         assert!(shown.sounds.is_empty(), "Silent: {shown:?}");
         assert_eq!(shown.events, vec![("minecraft:eat", at, Some(Who::Mob(1)))]);
-        assert_eq!(game.mobs[0].extra.age, -23600, "wheat ages a horse by 20 s");
+        assert_eq!(game.entities.mobs[0].extra.age, -23600, "wheat ages a horse by 20 s");
         assert_eq!(
-            game.mobs[0].random.clone().next_double(),
+            game.entities.mobs[0].random.clone().next_double(),
             r.next_double(),
             "three doubles for the particle, none for a silent pitch"
         );
@@ -207,8 +207,8 @@ pub(crate) mod tests {
         // A hurt adult draws no particle and eats at its feet, its pitch from
         // its own random, after healing.
         mount(&mut game, "minecraft:horse", 2, [0.5, 64.0, 0.5], 11);
-        game.mobs[0].health = game.mobs[0].attrs.max_health - 5.0;
-        let max = game.mobs[0].attrs.max_health;
+        game.entities.mobs[0].health = game.entities.mobs[0].attrs.max_health - 5.0;
+        let max = game.entities.mobs[0].attrs.max_health;
         let (used, shown) = feed(&mut game, "minecraft:wheat");
         assert!(used);
         let mut r = sunrise_core::random::LegacyRandom::new(11);
@@ -219,22 +219,22 @@ pub(crate) mod tests {
             vec![("minecraft:entity.horse.eat".to_string(), at, 1.0, pitch)],
             "{shown:?}"
         );
-        assert_eq!(game.mobs[0].health, max - 3.0, "wheat heals 2");
+        assert_eq!(game.entities.mobs[0].health, max - 3.0, "wheat heals 2");
         assert_eq!(shown.events, vec![("minecraft:eat", at, Some(Who::Mob(2)))]);
 
         // An age-locked baby that is tamed and whole eats nothing at all.
         mount(&mut game, "minecraft:horse", 3, [0.5, 64.0, 2.5], 13);
-        game.mobs[0].extra.age = -24000;
-        game.mobs[0].extra.age_locked = true;
+        game.entities.mobs[0].extra.age = -24000;
+        game.entities.mobs[0].extra.age_locked = true;
         let (used, shown) = feed(&mut game, "minecraft:wheat");
         assert!(!used, "a locked baby leaves the wheat alone: {shown:?}");
         assert!(
             shown.sounds.is_empty() && shown.events.is_empty(),
             "{shown:?}"
         );
-        assert_eq!(game.mobs[0].extra.age, -24000);
+        assert_eq!(game.entities.mobs[0].extra.age, -24000);
         assert_eq!(
-            game.mobs[0].random.clone().next_double(),
+            game.entities.mobs[0].random.clone().next_double(),
             sunrise_core::random::LegacyRandom::new(13).next_double(),
             "nothing drawn"
         );
@@ -242,7 +242,7 @@ pub(crate) mod tests {
         // A baby camel fed cactus: `Camel.handleEating` draws the same particle,
         // then eats and posts EAT, the three doubles before the two floats.
         mount(&mut game, "minecraft:camel", 4, [0.5, 64.0, 4.5], 21);
-        game.mobs[0].extra.age = -24000;
+        game.entities.mobs[0].extra.age = -24000;
         let (used, shown) = feed(&mut game, "minecraft:cactus");
         assert!(used, "cactus is camel food");
         let mut r = sunrise_core::random::LegacyRandom::new(21);
@@ -255,7 +255,7 @@ pub(crate) mod tests {
             "{shown:?}"
         );
         assert_eq!(shown.events, vec![("minecraft:eat", at, Some(Who::Mob(4)))]);
-        assert_eq!(game.mobs[0].extra.age, -23800, "camel cactus ages 10 s");
+        assert_eq!(game.entities.mobs[0].extra.age, -23800, "camel cactus ages 10 s");
     }
     /// `LivingEntity.onEquipItem`: a saddle or horse armour plays its equip sound
     /// at pitch `1.0F`, at the mount's feet, seeded with the mount's own random's
@@ -287,7 +287,7 @@ pub(crate) mod tests {
         let mut r = sunrise_core::random::LegacyRandom::new(7);
         r.next_long();
         assert_eq!(
-            game.mobs[0].random.clone().next_double(),
+            game.entities.mobs[0].random.clone().next_double(),
             r.next_double(),
             "one nextLong for the equip sound's seed, and nothing else"
         );
@@ -309,7 +309,7 @@ pub(crate) mod tests {
         r.next_long();
         r.next_long();
         assert_eq!(
-            game.mobs[0].random.clone().next_double(),
+            game.entities.mobs[0].random.clone().next_double(),
             r.next_double(),
             "a nextLong for each equip sound"
         );
@@ -343,7 +343,7 @@ pub(crate) mod tests {
         // event still goes out.
         let feet = [0.5, 64.0, 2.5];
         mount(&mut game, "minecraft:horse", 3, feet, 13);
-        game.mobs[0].silent = true;
+        game.entities.mobs[0].silent = true;
         let (used, shown) = equip(&mut game, "minecraft:saddle");
         assert!(used, "a silent horse still takes the saddle");
         assert!(shown.sounds.is_empty(), "{shown:?}");
@@ -352,7 +352,7 @@ pub(crate) mod tests {
             vec![("minecraft:equip", feet, Some(Who::Mob(3)))]
         );
         assert_eq!(
-            game.mobs[0].random.clone().next_double(),
+            game.entities.mobs[0].random.clone().next_double(),
             sunrise_core::random::LegacyRandom::new(13).next_double(),
             "a silent mount's equip draws nothing"
         );
@@ -368,9 +368,9 @@ pub(crate) mod tests {
             return;
         };
         mount(&mut game, "minecraft:camel_husk", 7, [1.5, 64.0, -2.5], 7);
-        assert!(!game.mobs[0].persistent);
+        assert!(!game.entities.mobs[0].persistent);
         assert!(
-            !sunrise_sim::mobs::ai::requires_custom_persistence(&game.mobs[0]),
+            !sunrise_sim::mobs::ai::requires_custom_persistence(&game.entities.mobs[0]),
             "nothing else keeps it: the click must"
         );
         game.inventory[0] = Some(ItemStack::new("minecraft:saddle", 1));
@@ -379,8 +379,8 @@ pub(crate) mod tests {
             location: [0.0; 3],
         });
         assert!(game.interact_mob(target).unwrap(), "the saddle is used");
-        assert!(game.mobs[0].extra.saddled(), "the saddle went on");
-        assert!(game.mobs[0].persistent, "a clicked camel husk stays");
+        assert!(game.entities.mobs[0].extra.saddled(), "the saddle went on");
+        assert!(game.entities.mobs[0].persistent, "a clicked camel husk stays");
     }
 }
 
@@ -431,7 +431,7 @@ pub(crate) mod off_level_tests {
                         let mut mob = Mob::new(id, kind, Vec3::ZERO, 0.0);
                         mob.extra.mount = mount;
                         mob.fluids.eye_in_water = true;
-                        game.mobs.push(mob);
+                        game.entities.mobs.push(mob);
                     }
                     let mut items = game.items().clone();
                     items.set_entity_type_tags(EntityTypeTags::from_ordered(
@@ -461,7 +461,7 @@ pub(crate) mod off_level_tests {
                 let mut m = sunrise_sim::mobs::Mob::new(id, pig.clone(), Vec3::ZERO, 0.0);
                 m.extra.mount = mount;
                 m.fluids.eye_in_water = true;
-                game.mobs.push(m);
+                game.entities.mobs.push(m);
             }
             let ghost = sunrise_sim::mobs::Mob::new(72, pig, Vec3::ZERO, 0.0);
             game.persist.off_level.insert(

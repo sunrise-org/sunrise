@@ -305,7 +305,7 @@ fn interact(game: &mut sunrise_gameplay::game::ServerGame<'_>, rows: &mut Map<St
     for (conn, shift) in [(3, true), (4, false)] {
         let _out = join(game, conn, true);
         assert!(game.as_console(|g| g.run_command("summon oak_boat 1.5 100 0.5")));
-        let boat = game.boats.last().unwrap().id;
+        let boat = game.entities.boats.last().unwrap().id;
         packet_tick(
             game,
             conn,
@@ -348,7 +348,7 @@ fn spectate(
         ),
     );
     assert!(game.as_console(|g| g.run_command("summon oak_boat 2.5 100 3.5")));
-    let boat = game.boats.last().unwrap().id;
+    let boat = game.entities.boats.last().unwrap().id;
     for active in [false, true] {
         let i = game.guest_index(VIEWER).unwrap();
         if active {
@@ -723,7 +723,7 @@ fn crystal_round_trip(
         r#"{id:"minecraft:end_crystal",UUID:[I;0,0,0,130],Pos:[18.5d,100d,0.5d],Rotation:[-132.25f,31.5f],Invulnerable:1b,beam_target:[I;0,128,0],Fire:120s,data:{marker:42}}"#,
     ).unwrap().0;
     game.spawn_loaded_entity(key, tag, None);
-    let crystal = game.crystals.last_mut().unwrap();
+    let crystal = game.entities.crystals.last_mut().unwrap();
     let id = crystal.id;
     let rotation = [-132.25_f32, 31.5].map(|angle| angle.to_bits() as i32);
     witness(
@@ -732,14 +732,14 @@ fn crystal_round_trip(
         json!([
             game.target_rotation(sunrise_gameplay::game::commands::Target::Crystal(id))
                 .map(|angle| angle.to_bits() as i32),
-            game.crystals.last().unwrap().invulnerable,
-            game.crystals.last().unwrap().beam,
-            game.crystals.last().unwrap().fire,
+            game.entities.crystals.last().unwrap().invulnerable,
+            game.entities.crystals.last().unwrap().beam,
+            game.entities.crystals.last().unwrap().fire,
         ]),
         json!([rotation, true, [0, 128, 0], 120]),
     );
     let moved_pos = Vec3::new(20.5, 102.0, 2.5);
-    let crystal = game.crystals.last_mut().unwrap();
+    let crystal = game.entities.crystals.last_mut().unwrap();
     crystal.position = moved_pos;
     crystal.invulnerable = false;
     crystal.beam = None;
@@ -748,7 +748,7 @@ fn crystal_round_trip(
         .entity_chunks(&HashSet::from([key]), true)
         .pop()
         .unwrap();
-    assert!(game.crystals.iter().all(|c| c.id != id));
+    assert!(game.entities.crystals.iter().all(|c| c.id != id));
     let tag = tags
         .into_iter()
         .find(|tag| sunrise_sim::entity_nbt::kind(tag).as_deref() == Some("minecraft:end_crystal"))
@@ -764,7 +764,7 @@ fn crystal_round_trip(
     let binary = nbt::write_network(&tag, nbt::Limits::default()).unwrap();
     let (saved, _) = nbt::read_network(&binary, nbt::Limits::default()).unwrap();
     game.spawn_loaded_entity(key, saved, None);
-    let c = game.crystals.last().unwrap();
+    let c = game.entities.crystals.last().unwrap();
     assert_eq!(c.position, moved_pos);
     assert_eq!(
         game.crystal_nbt(c)

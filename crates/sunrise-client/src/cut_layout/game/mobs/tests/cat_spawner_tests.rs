@@ -44,11 +44,11 @@ fn a_cat_spawner_cat_faces_south_without_a_level_draw() {
         level.next_float();
         let coat = level.next_int_bound(coats.len() as i32).unwrap() as usize;
         let sound = level.next_int_bound(sound_count).unwrap() as usize;
-        let before = game.mobs.len();
+        let before = game.entities.mobs.len();
         sunrise_gameplay::cat_spawner::spawn_cat(&mut game, [4, 100, 8], false);
-        assert_eq!(game.mobs.len(), before + 1, "one cat");
+        assert_eq!(game.entities.mobs.len(), before + 1, "one cat");
         let variants = game.world_variants();
-        let cat = game.mobs.last().expect("cat");
+        let cat = game.entities.mobs.last().expect("cat");
         assert_eq!(cat.species(), Species::Cat);
         assert_eq!(
             cat.cat_variant(&variants.cat)

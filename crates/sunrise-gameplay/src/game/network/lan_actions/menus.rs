@@ -334,9 +334,9 @@ impl crate::game::ServerGame<'_> {
         pos: (i32, i32, i32),
     ) -> MenuOpen {
         let entity_type =
-            if let Some(cart) = self.common.carts.iter().find(|c| c.id as i32 == pos.2) {
+            if let Some(cart) = self.common.entities.carts.iter().find(|c| c.id as i32 == pos.2) {
                 cart.kind.id().to_owned()
-            } else if let Some(boat) = self.common.boats.iter().find(|b| b.id as i32 == pos.2) {
+            } else if let Some(boat) = self.common.entities.boats.iter().find(|b| b.id as i32 == pos.2) {
                 if !boat.chest {
                     return MenuOpen::NoProvider;
                 }
@@ -365,12 +365,12 @@ impl crate::game::ServerGame<'_> {
         // nobody is looking at.
         let boat = self
             .common
-            .boats
+            .entities.boats
             .iter()
             .position(|b| b.id as i32 == pos.2 && b.chest);
         let spectator_pending = boat.is_some_and(|i| {
             host.hub.guest(conn).is_some_and(|g| g.spectator())
-                && self.boat_loot_pending(self.common.boats[i].id)
+                && self.boat_loot_pending(self.common.entities.boats[i].id)
         });
         let denied = if spectator_pending {
             // ServerPlayer.openMenu: the refused spectator's action bar, red.
@@ -410,12 +410,12 @@ impl crate::game::ServerGame<'_> {
             return denied;
         }
         if let Some(i) = boat
-            && self.boat_loot_pending(self.common.boats[i].id)
+            && self.boat_loot_pending(self.common.entities.boats[i].id)
         {
-            let id = self.common.boats[i].id;
+            let id = self.common.entities.boats[i].id;
             self.unpack_boat_loot(i, true);
             // Advancement rewards can remove the boat while generating its loot.
-            if !self.common.boats.iter().any(|boat| boat.id == id) {
+            if !self.common.entities.boats.iter().any(|boat| boat.id == id) {
                 return MenuOpen::Stale;
             }
         }
@@ -698,9 +698,9 @@ impl crate::game::ServerGame<'_> {
         if !other_viewers {
             self.common.world.block_entities.remove(&key);
         }
-        let at = if let Some(b) = self.common.boats.iter().find(|b| b.id as i32 == key.2) {
+        let at = if let Some(b) = self.common.entities.boats.iter().find(|b| b.id as i32 == key.2) {
             Some([b.position.x, b.position.y, b.position.z])
-        } else if let Some(c) = self.common.carts.iter().find(|c| c.id as i32 == key.2) {
+        } else if let Some(c) = self.common.entities.carts.iter().find(|c| c.id as i32 == key.2) {
             (c.kind == sunrise_gameplay_common::game::minecarts::CartKind::Chest).then_some([
                 c.position.x,
                 c.position.y,

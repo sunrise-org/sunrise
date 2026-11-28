@@ -332,11 +332,11 @@ impl crate::game::ServerGame<'_> {
         owner: Option<Who>,
         guest: Option<u32>,
     ) {
-        if i >= self.common.carts.len() {
+        if i >= self.common.entities.carts.len() {
             return;
         }
-        if burning && self.common.carts[i].kind == CartKind::Tnt {
-            let mut c = self.common.carts[i].clone();
+        if burning && self.common.entities.carts[i].kind == CartKind::Tnt {
+            let mut c = self.common.entities.carts[i].clone();
             if self.explode_cart(&mut c, arrow_velocity.length_squared()) {
                 return;
             }
@@ -428,13 +428,13 @@ impl crate::game::ServerGame<'_> {
         if hits.is_empty() {
             return;
         }
-        let Some(i) = cart_at(&self.common.carts, c.id, slot) else {
+        let Some(i) = cart_at(&self.common.entities.carts, c.id, slot) else {
             return;
         };
         // The stored cart is the one a plate counts: it takes the moved cart
         // for the walk and hands back what the walk left.
         self.common
-            .carts
+            .entities.carts
             .update(i, |stored| std::mem::swap(stored, c));
         self.with_level(|b, level, ticks| {
             for p in hits {
@@ -442,7 +442,7 @@ impl crate::game::ServerGame<'_> {
             }
         });
         self.common
-            .carts
+            .entities.carts
             .update(i, |stored| std::mem::swap(stored, c));
         let _ = self.server_process_level_events();
     }
@@ -453,14 +453,14 @@ impl crate::game::ServerGame<'_> {
     /// so the fire `lavaIgnite` lights never burns it.
     pub(in crate::game::server_side) fn cart_lava_tick(&mut self, id: u32, slot: usize) {
         for _ in 0..2 {
-            let Some(i) = cart_at(&self.common.carts, id, slot) else {
+            let Some(i) = cart_at(&self.common.entities.carts, id, slot) else {
                 return;
             };
-            if !self.in_lava(self.common.carts[i].bounds()) {
+            if !self.in_lava(self.common.entities.carts[i].bounds()) {
                 return;
             }
-            let p = self.common.carts[i].position;
-            let kind = self.common.carts[i].kind.id();
+            let p = self.common.entities.carts[i].position;
+            let kind = self.common.entities.carts[i].kind.id();
             let vanilla = self.saved_refuses_damage(id, "minecraft:lava", false);
             if !self.refuses_lava_hurt(id, kind, vanilla) {
                 self.hurt_cart(i, 4.0, false, true, CartHit::default());
@@ -550,7 +550,7 @@ impl crate::game::ServerGame<'_> {
     pub fn interact_cart(&mut self, target: Option<InteractTarget>) -> bool {
         let Some((i, d)) = (match target {
             Some(t) => sunrise_gameplay_common::game::item_actions::named_entity(
-                &self.common.carts,
+                &self.common.entities.carts,
                 t.id,
                 |c| c.id,
             )
@@ -565,9 +565,9 @@ impl crate::game::ServerGame<'_> {
         }
         let sneaking = self.server_acting_sneak();
         let held = self.common.held().cloned();
-        match self.common.carts[i].kind {
+        match self.common.entities.carts[i].kind {
             CartKind::Rideable => {
-                let id = self.common.carts[i].id;
+                let id = self.common.entities.carts[i].id;
                 if sneaking || self.common.riding.is_some() || self.has_seated_passengers(id) {
                     return false;
                 }
@@ -584,7 +584,7 @@ impl crate::game::ServerGame<'_> {
                     .as_ref()
                     .is_some_and(|s| matches!(&*s.item, "minecraft:coal" | "minecraft:charcoal"));
                 // Java int arithmetic: a mod can set any fuel.
-                let fueled = self.common.carts.update(i, |c| {
+                let fueled = self.common.entities.carts.update(i, |c| {
                     if !fuel {
                         return false;
                     }
@@ -1061,7 +1061,7 @@ impl crate::game::ServerGame<'_> {
     /// (`store_cart_items`/`close_cart_container`).
     pub fn open_cart_container(&mut self, i: usize) {
         self.unpack_cart_loot(i);
-        let c = self.common.carts[i].clone();
+        let c = self.common.entities.carts[i].clone();
         let key = (i32::MAX - 15, CART_KEY_Y, c.id as i32);
         // `startOpen` shares one container, it does not reset it: a stand-in
         // another player's menu is still editing over stays as it is.
@@ -1089,25 +1089,25 @@ impl crate::game::ServerGame<'_> {
     /// `i`'s box (0.2 wider on each side): an eligible mob boards a moving
     /// rideable cart (`startRiding`); others get `Entity.push`.
     pub fn pickup_from_cart(&mut self, i: usize, index: &mut CartIndex) {
-        let v = self.common.carts[i].velocity;
-        if self.common.carts[i].kind != CartKind::Rideable || v.x * v.x + v.z * v.z < 0.01 {
+        let v = self.common.entities.carts[i].velocity;
+        if self.common.entities.carts[i].kind != CartKind::Rideable || v.x * v.x + v.z * v.z < 0.01 {
             return;
         }
         let reach = f64::from(0.2f32);
-        let id = self.common.carts[i].id;
-        let pos = self.common.carts[i].position;
-        let hitbox = self.common.carts[i]
+        let id = self.common.entities.carts[i].id;
+        let pos = self.common.entities.carts[i].position;
+        let hitbox = self.common.entities.carts[i]
             .bounds()
             .inflate(Vec3::new(reach, 0.0, reach));
         let mut near = std::mem::take(&mut index.near);
         let mut occupied = self.has_seated_passengers(id);
-        if !index.mobs_near(&self.common.mobs, hitbox, &mut near) {
+        if !index.mobs_near(&self.common.entities.mobs, hitbox, &mut near) {
             near.clear();
-            near.extend(0..self.common.mobs.len() as u32);
+            near.extend(0..self.common.entities.mobs.len() as u32);
         }
         // The box first: it turns away nearly every mob of the level.
         near.retain(|&j| {
-            let m = &self.common.mobs[j as usize];
+            let m = &self.common.entities.mobs[j as usize];
             !m.removed && m.extra.mount != Some(id) && hitbox.intersects(m.bounds())
         });
         let candidates: Vec<u32> = if near.is_empty() {
@@ -1115,7 +1115,7 @@ impl crate::game::ServerGame<'_> {
         } else {
             let (teams, own) = (self.mob_teams(), self.team_with_owner(id, || None));
             near.iter()
-                .map(|&j| &self.common.mobs[j as usize])
+                .map(|&j| &self.common.entities.mobs[j as usize])
                 .filter(|m| {
                     offered_pickup(m.pushable(), m.species(), m.alive())
                         && pushable_by(own, teams.of(Who::Mob(m.id)), true)
@@ -1127,18 +1127,18 @@ impl crate::game::ServerGame<'_> {
         for mob in candidates {
             // By id: a mod's mount hook may have removed mobs since the list
             // was made, which moves the others' indices.
-            let Some(j) = self.common.mobs.iter().position(|m| m.id == mob) else {
+            let Some(j) = self.common.entities.mobs.iter().position(|m| m.id == mob) else {
                 continue;
             };
-            let species = self.common.mobs[j].species();
-            let player = &*self.common.mobs[j].kind.id == "minecraft:player";
-            let cooldown = self.common.mobs[j].extra.boarding_cooldown;
-            let passenger = self.common.mobs[j].extra.mount.is_some();
+            let species = self.common.entities.mobs[j].species();
+            let player = &*self.common.entities.mobs[j].kind.id == "minecraft:player";
+            let cooldown = self.common.entities.mobs[j].extra.boarding_cooldown;
+            let passenger = self.common.entities.mobs[j].extra.mount.is_some();
             if pickup_instead_of_push(species, passenger, occupied) && !player {
                 // Entity.startRiding: a mod may cancel it (EntityMountEvent).
                 if can_ride_cart(species, cooldown)
                     && self.native_mob_may_ride(mob, id, true)
-                    && let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == mob)
+                    && let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == mob)
                 {
                     sunrise_sim::mobs::shulker::on_start_riding(m);
                     m.extra.mount = Some(id);
@@ -1156,17 +1156,17 @@ impl crate::game::ServerGame<'_> {
             if !takes_push_from_cart(species) {
                 continue;
             }
-            let other = self.common.mobs[j].position;
+            let other = self.common.entities.mobs[j].position;
             let Some(v) = sunrise_gameplay_common::game::boats_common::push_impulse(pos, other)
             else {
                 continue;
             };
             if !occupied {
                 self.common
-                    .carts
+                    .entities.carts
                     .update(i, |c| c.velocity = c.velocity.subtract(v));
             }
-            let m = &mut self.common.mobs[j];
+            let m = &mut self.common.entities.mobs[j];
             if m.pushable() {
                 m.velocity = m.velocity.add_vector(v);
                 m.needs_sync = true;
@@ -1197,11 +1197,11 @@ impl crate::game::ServerGame<'_> {
             .world
             .modified
             .insert((hit.pos[0] >> 4, hit.pos[2] >> 4));
-        self.common.carts.push(cart);
+        self.common.entities.carts.push(cart);
         let id = self.server.next_entity;
         self.apply_item_stack_config(super::commands::Target::Cart(id), kind.id(), stack, true);
         if self.server.serving.is_some() || self.common.options.dedicated.is_some() {
-            let cart = self.common.carts.last().unwrap();
+            let cart = self.common.entities.carts.last().unwrap();
             self.native_vehicle_create(
                 cart.kind.id(),
                 [cart.position.x, cart.position.y, cart.position.z],
@@ -1234,7 +1234,7 @@ impl crate::game::ServerGame<'_> {
     /// `needsSync`, which `ServerEntity` sends to the other players only),
     /// so no player feels it.
     pub(in crate::game::server_side) fn push_carts(&mut self) {
-        if self.common.carts.is_empty() {
+        if self.common.entities.carts.is_empty() {
             return;
         }
         // (feet, box)
@@ -1253,16 +1253,16 @@ impl crate::game::ServerGame<'_> {
             }
         }
         let cells = sunrise_sim::mobs::seen_grid::SeenGrid::new(
-            self.common.carts.iter().map(Minecart::bounds),
+            self.common.entities.carts.iter().map(Minecart::bounds),
         );
         let mut near = Vec::new();
         for (feet, bb) in pushers {
             if !cells.candidates(bb, &mut near) {
-                near.extend(0..self.common.carts.len() as u32);
+                near.extend(0..self.common.entities.carts.len() as u32);
             }
             for &k in &near {
                 let k = k as usize;
-                self.common.carts.update(k, |c| {
+                self.common.entities.carts.update(k, |c| {
                     if !bb.intersects(c.bounds()) {
                         return;
                     }
@@ -1291,11 +1291,11 @@ impl crate::game::ServerGame<'_> {
         // Every mob, each asked which carts it is near: a mob far from all of them is turned
         // away by a bitmap of the carts' coarse cells, without a lookup or a grid of the mobs.
         let reach = self.vehicle_mob_reach();
-        let coarse = reach.map(|_| CartCells::of(self.common.carts.iter().map(Minecart::bounds)));
+        let coarse = reach.map(|_| CartCells::of(self.common.entities.carts.iter().map(Minecart::bounds)));
         // (mob index, feet, box)
-        let pushers: Vec<(usize, Vec3, Aabb)> = (0..self.common.mobs.len() as u32)
+        let pushers: Vec<(usize, Vec3, Aabb)> = (0..self.common.entities.mobs.len() as u32)
             .into_iter()
-            .map(|j| (j as usize, &self.common.mobs[j as usize]))
+            .map(|j| (j as usize, &self.common.entities.mobs[j as usize]))
             .filter(|(_, m)| {
                 // The test that turns most mobs away comes first: it reads only the position.
                 reach.is_none_or(|r| {
@@ -1313,13 +1313,13 @@ impl crate::game::ServerGame<'_> {
         drop(teams);
         for (j, feet, bb) in pushers {
             if !cells.candidates(bb, &mut near) {
-                near.extend(0..self.common.carts.len() as u32);
+                near.extend(0..self.common.entities.carts.len() as u32);
             }
             for &k in &near {
                 let k = k as usize;
-                self.common.carts.update(k, |c| {
+                self.common.entities.carts.update(k, |c| {
                     // hasPassenger(mob): a mob in this cart never pushes it.
-                    if self.common.mobs[j].extra.mount == Some(c.id) || !bb.intersects(c.bounds()) {
+                    if self.common.entities.mobs[j].extra.mount == Some(c.id) || !bb.intersects(c.bounds()) {
                         return;
                     }
                     let Some((xa, za)) = cart_push_from(feet, c.position) else {
@@ -1327,7 +1327,7 @@ impl crate::game::ServerGame<'_> {
                     };
                     c.velocity.x -= xa;
                     c.velocity.z -= za;
-                    let m = &mut self.common.mobs[j];
+                    let m = &mut self.common.entities.mobs[j];
                     if m.pushable() && m.rider.is_none() && m.extra.rider.is_none() {
                         m.velocity.x += xa / 4.0;
                         m.velocity.z += za / 4.0;
@@ -1343,22 +1343,22 @@ impl crate::game::ServerGame<'_> {
     /// and before the next one does, is what splits stacked carts apart.
     pub fn push_from_cart(&mut self, i: usize, index: &mut CartIndex) {
         let reach = f64::from(0.2f32);
-        let hitbox = self.common.carts[i]
+        let hitbox = self.common.entities.carts[i]
             .bounds()
             .inflate(Vec3::new(reach, 0.0, reach));
         let mut near = std::mem::take(&mut index.near);
-        if !index.carts_near(&self.common.carts, i, hitbox, &mut near) {
+        if !index.carts_near(&self.common.entities.carts, i, hitbox, &mut near) {
             near.clear();
-            near.extend(0..self.common.carts.len() as u32);
+            near.extend(0..self.common.entities.carts.len() as u32);
         }
-        let allowed = self.cart_push_allowed(&self.common.carts, i, &near);
+        let allowed = self.cart_push_allowed(&self.common.entities.carts, i, &near);
         for (k, &j) in near.iter().enumerate() {
             let j = j as usize;
-            if !allowed[k] || j == i || !hitbox.intersects(self.common.carts[j].bounds()) {
+            if !allowed[k] || j == i || !hitbox.intersects(self.common.entities.carts[j].bounds()) {
                 continue;
             }
             // AbstractMinecart.push(entity): `this` is cart j, `entity` cart i.
-            let (this, other) = (&self.common.carts[j], &self.common.carts[i]);
+            let (this, other) = (&self.common.entities.carts[j], &self.common.entities.carts[i]);
             let (mut xa, mut za) = (
                 other.position.x - this.position.x,
                 other.position.z - this.position.z,
@@ -1407,8 +1407,8 @@ impl crate::game::ServerGame<'_> {
                     Vec3::new(mo.x * 0.2 + (xdd + xa), mo.y, mo.z * 0.2 + (zdd + za)),
                 )
             };
-            self.common.carts.update(j, |c| c.velocity = nt);
-            self.common.carts.update(i, |c| c.velocity = no);
+            self.common.entities.carts.update(j, |c| c.velocity = nt);
+            self.common.entities.carts.update(i, |c| c.velocity = no);
         }
         index.near = near;
         self.pickup_from_cart(i, index);
@@ -1425,7 +1425,7 @@ impl crate::game::ServerGame<'_> {
         slot: usize,
         index: &mut CartIndex,
     ) {
-        let Some(i) = cart_at(&self.common.carts, c.id, slot) else {
+        let Some(i) = cart_at(&self.common.entities.carts, c.id, slot) else {
             return;
         };
         let loot = c.loot.take();
@@ -1433,8 +1433,8 @@ impl crate::game::ServerGame<'_> {
             return;
         }
         self.push_from_cart(i, index);
-        if let Some(i) = self.common.carts.iter().position(|x| x.id == c.id) {
-            *c = self.common.carts[i].clone();
+        if let Some(i) = self.common.entities.carts.iter().position(|x| x.id == c.id) {
+            *c = self.common.entities.carts[i].clone();
         }
         c.loot = loot;
     }
@@ -1601,12 +1601,12 @@ impl crate::game::ServerGame<'_> {
                 if c.spawner.as_ref().is_some_and(|s| s.spawn_delay <= 0)
                     && (mod_api::__private::listened(mod_api::HookId::MobSpawnPositionCheck)
                         || mod_api::__private::listened(mod_api::HookId::FinalizeSpawn))
-                    && let Some(i) = cart_at(&self.carts, c.id, slot)
+                    && let Some(i) = cart_at(&self.entities.carts, c.id, slot)
                 {
                     // push_from_ticked_cart stored the moved cart. Bring its stored
                     // fluid state up to date for the shared spawner hooks; mutable
                     // hooks cannot touch it until the tick finishes.
-                    self.carts.update(i, |stored| {
+                    self.entities.carts.update(i, |stored| {
                         stored.velocity = c.velocity;
                         stored.in_water = c.in_water;
                         stored.fall_distance = c.fall_distance;
@@ -1630,7 +1630,7 @@ impl crate::game::ServerGame<'_> {
     pub fn tick_cart_riding(&mut self, keys: Keys) -> bool {
         let Some(i) = self
             .common
-            .carts
+            .entities.carts
             .iter()
             .position(|c| Some(c.id) == self.common.riding)
         else {
@@ -1646,7 +1646,7 @@ impl crate::game::ServerGame<'_> {
         let input = sunrise_core::geometry::Vec3::new(left, 0.0, forward);
         let v = sunrise_world::living_air::input_vector(input, 1.0, self.common.yaw);
         let intent = [v.x, v.z];
-        let id = self.common.carts[i].id;
+        let id = self.common.entities.carts[i].id;
         let result =
             self.with_entity_held_out(id, |game| section_steps::tick_riding(game, id, i, intent));
         // A contact hurt lands on the stored row, not the ticked copy; a
@@ -1667,7 +1667,7 @@ impl crate::game::ServerGame<'_> {
         // cart instead of leaving it at the seat.
         if alive
             && self.common.riding.is_none()
-            && let Some(i) = self.common.carts.iter().position(|cart| cart.id == id)
+            && let Some(i) = self.common.entities.carts.iter().position(|cart| cart.id == id)
         {
             self.dismount_cart(i);
         }
@@ -1687,22 +1687,22 @@ impl crate::game::ServerGame<'_> {
         // A server player's minecart moves with its rider (lan_vehicles.rs).
         let ridden = self.guest_vehicles();
         // By id: an exploding cart can destroy or prime others mid-loop.
-        let ids: Vec<u32> = self.common.carts.iter().map(|c| c.id).collect();
+        let ids: Vec<u32> = self.common.entities.carts.iter().map(|c| c.id).collect();
         let mut index = CartIndex::default();
         let mut hint = 0;
         for &id in &ids {
-            let Some(i) = cart_at(&self.common.carts, id, hint) else {
+            let Some(i) = cart_at(&self.common.entities.carts, id, hint) else {
                 continue;
             };
             hint = i + 1;
-            let p = self.common.carts[i].position;
+            let p = self.common.entities.carts[i].position;
             if Some(id) == self.common.riding
                 || ridden.contains(&id)
                 || !ticking(p.x.floor() as i32, p.z.floor() as i32)
             {
                 continue;
             }
-            let kind = self.common.carts[i].kind.id();
+            let kind = self.common.entities.carts[i].kind.id();
             sunrise_threads::work::set_entity(sunrise_threads::work::entity_id(kind));
             if !self.native_tick_pre_one(&mut round, id, kind) {
                 continue;
@@ -1722,7 +1722,7 @@ impl crate::game::ServerGame<'_> {
             }
             section_steps::tell(self, id, section_step);
             // A hook may have removed the cart during its tick: the cart's tick stops here.
-            if cart_at(&self.common.carts, id, i).is_none() {
+            if cart_at(&self.common.entities.carts, id, i).is_none() {
                 continue;
             }
             if due {
@@ -1739,9 +1739,9 @@ impl crate::game::ServerGame<'_> {
             if round.canceled(id) {
                 continue;
             }
-            if let Some(i) = cart_at(&self.common.carts, id, hint) {
+            if let Some(i) = cart_at(&self.common.entities.carts, id, hint) {
                 hint = i + 1;
-                let p = self.common.carts[i].position;
+                let p = self.common.entities.carts[i].position;
                 if ticking(p.x.floor() as i32, p.z.floor() as i32) {
                     self.cart_lava_tick(id, i);
                 }
@@ -1751,7 +1751,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn unpack_cart_loot(&mut self, i: usize) {
         self.unpack_loot(
             sunrise_gameplay_common::game::container_loot_level::LootTarget::Cart(
-                self.common.carts[i].id,
+                self.common.entities.carts[i].id,
             ),
             self.native_acting_player(),
         );

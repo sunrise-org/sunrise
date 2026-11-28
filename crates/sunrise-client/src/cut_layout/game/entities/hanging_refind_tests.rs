@@ -16,12 +16,12 @@ fn a_frame_the_listener_removed_does_not_break() {
         |game, gate| {
             assert!(game.run_command("summon minecraft:item_frame 8 100 8 {Facing:3b}"));
             assert!(game.run_command("summon minecraft:item_frame 12 100 8 {Facing:3b}"));
-            let dropped = game.dropped.len();
+            let dropped = game.entities.dropped.len();
             gate.arm();
             assert!(!game.break_frame_by(1, None), "the frame was gone");
             assert!(gate.fired());
-            assert!(game.item_frames.is_empty());
-            assert_eq!(game.dropped.len(), dropped, "nothing dropped");
+            assert!(game.entities.item_frames.is_empty());
+            assert_eq!(game.entities.dropped.len(), dropped, "nothing dropped");
         },
     );
 }
@@ -45,7 +45,7 @@ fn a_painting_the_listener_removed_is_not_removed_again() {
                 "the painting was gone"
             );
             assert!(gate.fired());
-            assert!(game.paintings.is_empty());
+            assert!(game.entities.paintings.is_empty());
         },
     );
 }
@@ -62,13 +62,13 @@ fn a_frame_the_listener_filled_does_not_break_by_a_kill() {
         },
         |game, gate| {
             assert!(game.run_command("summon minecraft:item_frame 8 100 8 {Facing:3b}"));
-            let dropped = game.dropped.len();
+            let dropped = game.entities.dropped.len();
             gate.arm();
             assert!(!game.break_frame_by(0, None), "the frame was filled");
             assert!(gate.fired());
-            assert_eq!(game.item_frames.len(), 1, "the frame stays");
-            assert!(game.item_frames[0].item.is_some());
-            assert_eq!(game.dropped.len(), dropped, "nothing dropped");
+            assert_eq!(game.entities.item_frames.len(), 1, "the frame stays");
+            assert!(game.entities.item_frames[0].item.is_some());
+            assert_eq!(game.entities.dropped.len(), dropped, "nothing dropped");
         },
     );
 }
@@ -87,14 +87,14 @@ fn a_frame_the_listener_filled_survives_the_loss_of_its_support() {
             );
             // No wall behind it: the survival check fails when its interval is up.
             assert!(game.run_command("summon minecraft:item_frame 8 100 8 {Facing:3b}"));
-            game.item_frames[0].check_interval = 99;
-            let dropped = game.dropped.len();
+            game.entities.item_frames[0].check_interval = 99;
+            let dropped = game.entities.dropped.len();
             gate.arm();
             game.tick_item_frames();
             assert!(gate.fired());
-            assert_eq!(game.item_frames.len(), 1, "the frame stays");
-            assert!(game.item_frames[0].item.is_some());
-            assert_eq!(game.dropped.len(), dropped, "nothing dropped");
+            assert_eq!(game.entities.item_frames.len(), 1, "the frame stays");
+            assert!(game.entities.item_frames[0].item.is_some());
+            assert_eq!(game.entities.dropped.len(), dropped, "nothing dropped");
         },
     );
 }

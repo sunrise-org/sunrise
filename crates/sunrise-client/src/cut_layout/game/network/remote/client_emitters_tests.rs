@@ -101,14 +101,14 @@ fn hit_emitters_follow_vehicles_and_finish_at_the_removed_body() {
                 animate(game, cart, 2);
                 assert_bursts(game, &mut random, &[boat_body(4.0), cart_body(24.0)]);
 
-                game.boats.update(0, |body| body.position.x = 8.0);
-                game.carts.update(0, |body| body.position.x = 28.0);
+                game.entities.boats.update(0, |body| body.position.x = 8.0);
+                game.entities.carts.update(0, |body| body.position.x = 28.0);
                 game.tick_particle_engine();
                 assert_bursts(game, &mut random, &[boat_body(8.0), cart_body(28.0)]);
 
                 // Move the boat after the last emitter tick. Keep that final body,
                 // not its previous sample and not the replacement with its id.
-                game.boats.update(0, |body| body.position.x = 12.0);
+                game.entities.boats.update(0, |body| body.position.x = 12.0);
                 deliver(
                     game,
                     C::RemoveEntities(play::RemoveEntities { ids: vec![boat] }),

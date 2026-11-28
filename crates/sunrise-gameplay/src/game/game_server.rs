@@ -972,8 +972,8 @@ impl crate::game::ServerGame<'_> {
             return None;
         }
         let id = self.take_entity_id();
-        let slot = entity::EntityHandle::Falling(self.common.falling.len());
-        self.common.falling.push(FallingBlock {
+        let slot = entity::EntityHandle::Falling(self.common.entities.falling.len());
+        self.common.entities.falling.push(FallingBlock {
             size_answer: None,
             attachment_lifetime: Default::default(),
             rotation: [0.0, 0.0],
@@ -1798,7 +1798,7 @@ impl crate::game::ServerGame<'_> {
         // Creative players skip the monster check (`!this.isCreative()`).
         if problem.is_none()
             && !self.common.creative
-            && self.common.mobs.iter().any(|m| {
+            && self.common.entities.mobs.iter().any(|m| {
                 // `Monster.class` entities that `isPreventingPlayerRest`: a
                 // zombified piglin only while it is angry.
                 sunrise_sim::mobs::ai::is_monster(m.species())
@@ -2363,7 +2363,7 @@ impl crate::game::ServerGame<'_> {
             });
             let cart_boxes = self
                 .common
-                .carts
+                .entities.carts
                 .iter()
                 .map(|c| {
                     let p = c.position;
@@ -2375,12 +2375,11 @@ impl crate::game::ServerGame<'_> {
                 .collect();
             let arrow_boxes = self
                 .common
-                .creatures
-                .projectiles
+                .entities.projectiles
                 .iter()
                 .filter(|p| p.arrow.is_some())
                 .map(|p| p.position)
-                .chain(self.common.tridents.iter().map(|t| t.position))
+                .chain(self.common.entities.tridents.iter().map(|t| t.position))
                 .map(|at| {
                     let b = sunrise_sim::entities::arrows::arrow_bounds(at);
                     (b.min_position().components(), b.max_position().components())
@@ -2416,7 +2415,7 @@ impl crate::game::ServerGame<'_> {
             // EntityType.LIGHTNING_BOLT: 0 x 0.
             let trigger_extras: Vec<Aabb> = self
                 .common
-                .bolts
+                .entities.bolts
                 .iter()
                 .map(|b| {
                     let at = Vec3::new(b.at[0], b.at[1], b.at[2]);
@@ -2508,11 +2507,11 @@ impl crate::game::ServerGame<'_> {
                 .iter()
                 .any(|feature| feature == "minecraft:redstone_experiments"),
             cart_boxes,
-            item_frames: &self.common.item_frames,
-            carts: &mut self.common.carts,
+            item_frames: &self.common.entities.item_frames,
+            carts: &mut self.common.entities.carts,
             arrow_boxes,
             other_entities,
-            crystals: &self.common.crystals,
+            crystals: &self.common.entities.crystals,
             trigger_hooks,
             trigger_extras,
             world: &mut self.common.world,

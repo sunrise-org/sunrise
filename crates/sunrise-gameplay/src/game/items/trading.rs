@@ -185,24 +185,24 @@ impl ServerGame<'_> {
     }
     /// `AbstractVillager.getOffers`: generated on first use.
     pub fn ensure_offers(&mut self, index: usize) {
-        let species = self.common.mobs[index].species();
+        let species = self.common.entities.mobs[index].species();
         if species == Species::Villager
             && self
                 .stations()
                 .professions
-                .state_index(&self.common.mobs[index].extra.profession)
+                .state_index(&self.common.entities.mobs[index].extra.profession)
                 .is_none()
         {
             return;
         }
-        let unset = self.common.mobs[index]
+        let unset = self.common.entities.mobs[index]
             .extra
             .trade
             .as_ref()
             .is_none_or(|t| t.unset);
         if unset {
-            self.journal_merchant_mob(self.common.mobs[index].id);
-            let m = &self.common.mobs[index];
+            self.journal_merchant_mob(self.common.entities.mobs[index].id);
+            let m = &self.common.entities.mobs[index];
             let variant = format!(
                 "minecraft:{}",
                 VILLAGER_TYPES[m.extra.variant as usize % VILLAGER_TYPES.len()]
@@ -228,7 +228,7 @@ impl ServerGame<'_> {
                     Vec::new()
                 }
             };
-            let trade = self.common.mobs[index].extra.trade.get_or_insert_default();
+            let trade = self.common.entities.mobs[index].extra.trade.get_or_insert_default();
             trade.offers = offers;
             trade.unset = false;
         }
@@ -236,7 +236,7 @@ impl ServerGame<'_> {
     /// `Villager.mobInteract` / `WanderingTrader.mobInteract`: shake the
     /// head without offers, else open the trading screen.
     pub fn interact_trader(&mut self, index: usize, item: &str) -> sunrise_game_data::Result<bool> {
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         let species = m.species();
         if !matches!(species, Species::Villager | Species::WanderingTrader)
             || !m.alive()
@@ -254,7 +254,7 @@ impl ServerGame<'_> {
                 return Ok(false);
             }
             let mut events = Vec::new();
-            villager::set_unhappy(&mut self.common.mobs[index], &mut events);
+            villager::set_unhappy(&mut self.common.entities.mobs[index], &mut events);
             self.handle_mob_events(events)?;
             return Ok(true);
         }
@@ -267,17 +267,17 @@ impl ServerGame<'_> {
         self.award_custom_stat("talked_to_villager", 1);
         if unresolved {
             let mut events = Vec::new();
-            villager::set_unhappy(&mut self.common.mobs[index], &mut events);
+            villager::set_unhappy(&mut self.common.entities.mobs[index], &mut events);
             self.handle_mob_events(events)?;
             return Ok(true);
         }
         self.ensure_offers(index);
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         let trade = m.extra.trade.as_deref().cloned().unwrap_or_default();
         if trade.offers.is_empty() {
             if species == Species::Villager {
                 let mut events = Vec::new();
-                villager::set_unhappy(&mut self.common.mobs[index], &mut events);
+                villager::set_unhappy(&mut self.common.entities.mobs[index], &mut events);
                 self.handle_mob_events(events)?;
             }
             return Ok(true);
@@ -331,7 +331,7 @@ impl ServerGame<'_> {
         // setTradingPlayer: a wandering trader stands still while trading, a
         // villager's brain follows and looks at the player
         // (LookAndFollowTradingPlayerSink).
-        self.common.mobs[index].extra.flag2 = true;
+        self.common.entities.mobs[index].extra.flag2 = true;
         self.open_merchant_state_server(MerchantState {
             session: Box::new(session),
             scroll: 0,
@@ -351,7 +351,7 @@ impl ServerGame<'_> {
         }
         let Some(id) = state.mob else { return };
         let professions = self.stations().professions.clone();
-        let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return;
         };
         m.extra.flag2 = false;
@@ -433,7 +433,7 @@ impl ServerGame<'_> {
             .and_then(|s| s.merchant.as_ref())
             .and_then(|m| m.mob);
         if mob
-            .and_then(|id| self.common.mobs.iter().find(|m| m.id == id))
+            .and_then(|id| self.common.entities.mobs.iter().find(|m| m.id == id))
             .is_some_and(|m| {
                 m.species() == Species::Villager
                     && self
@@ -480,7 +480,7 @@ impl ServerGame<'_> {
             self.journal_merchant_mob(id);
         }
         let mut silent = false;
-        if let Some(m) = mob.and_then(|id| self.common.mobs.iter_mut().find(|m| m.id == id)) {
+        if let Some(m) = mob.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id)) {
             session.give_mob_clock(m);
             silent = m.silent;
             if villager {
@@ -574,7 +574,7 @@ impl ServerGame<'_> {
             if let (Some(id), Some(_)) = (mob, self.server.lan_acting)
                 && let Some(kind) = self
                     .common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .find(|m| m.id == id)
                     .map(sunrise_gameplay_common::game::native_hooks::mob_kind)
@@ -596,7 +596,7 @@ impl ServerGame<'_> {
             self.villager_trade_pending(id);
             if let Some(villager) = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| self.mob_entity(m))

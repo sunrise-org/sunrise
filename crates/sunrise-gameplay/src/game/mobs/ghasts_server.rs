@@ -5,7 +5,7 @@ use sunrise_sim::mobs::happy_ghast;
 impl ServerGame<'_> {
     /// `HappyGhast.mobInteract`. Returns whether the click was used.
     pub fn interact_happy_ghast(&mut self, index: usize, item: &str) -> bool {
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         if !m.alive() || Some(m.id) == self.common.riding {
             return false;
         }
@@ -24,11 +24,11 @@ impl ServerGame<'_> {
                     stack.count = 1;
                     stack
                 });
-            self.common.mobs[index].extra.set_body_stack(held);
+            self.common.entities.mobs[index].extra.set_body_stack(held);
             self.server_play_sound("minecraft:entity.happy_ghast.equip", at, 1.0, 1.0);
             self.consume_held();
-            let id = self.common.mobs[index].id;
-            let pos = self.common.mobs[index].position;
+            let id = self.common.entities.mobs[index].id;
+            let pos = self.common.entities.mobs[index].position;
             self.mob_equip_event(id, [pos.x, pos.y, pos.z], true);
             return true;
         }
@@ -36,35 +36,35 @@ impl ServerGame<'_> {
         if self.held_shears(ability::SHEARS_REMOVE_ARMOR)
             && harnessed
             && !sneaking
-            && let Some(harness) = self.common.mobs[index].take_body_equipment()
+            && let Some(harness) = self.common.entities.mobs[index].take_body_equipment()
         {
             self.server_play_sound("minecraft:entity.happy_ghast.unequip", at, 1.0, 1.0);
             self.spawn_item(harness, at, [0.0, 0.2, 0.0], 10);
             self.damage_held_tool();
-            let id = self.common.mobs[index].id;
-            let pos = self.common.mobs[index].position;
+            let id = self.common.entities.mobs[index].id;
+            let pos = self.common.entities.mobs[index].position;
             self.mob_equip_event(id, [pos.x, pos.y, pos.z], false);
             return true;
         }
         if harnessed && !sneaking {
             // doPlayerRide: `player.startRiding(this)`, which keeps the
             // rider's view (`ServerPlayer.startRiding`'s `Relative.ROTATION`).
-            let id = self.common.mobs[index].id;
+            let id = self.common.entities.mobs[index].id;
             // `startRiding` without `force` asks `canAddPassenger`: a fifth rider is refused.
             let aboard = self.seated_passengers(id).len();
-            if !sunrise_sim::mobs::riders::can_add_passenger(&self.common.mobs[index], aboard)
+            if !sunrise_sim::mobs::riders::can_add_passenger(&self.common.entities.mobs[index], aboard)
                 || !self.native_may_board(id)
             {
                 return true;
             }
             self.break_leash(id, true, false);
-            let was_empty = self.common.mobs[index].rider.is_none();
+            let was_empty = self.common.entities.mobs[index].rider.is_none();
             // addPassenger: the rider is not standing on top, so no still
             // timeout.
-            self.common.mobs[index].extra.counter = 0;
+            self.common.entities.mobs[index].extra.counter = 0;
             self.common.mount.reset_jump();
             if was_empty {
-                let down = happy_ghast::goggles(true, &self.common.mobs[index]);
+                let down = happy_ghast::goggles(true, &self.common.entities.mobs[index]);
                 let _ = self.handle_mob_events(vec![down]);
             }
             self.start_riding(id);

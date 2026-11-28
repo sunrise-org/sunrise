@@ -42,7 +42,7 @@ fn summoned_drowned_hold_shells_as_guaranteed_drops() {
         assert!(game.run_command(&format!("summon drowned {x} 100 {z}")));
     }
     let drowned: Vec<u32> = game
-        .mobs
+        .entities.mobs
         .iter()
         .filter(|m| m.species() == sunrise_sim::mobs::Species::Drowned)
         .map(|m| m.id)
@@ -50,7 +50,7 @@ fn summoned_drowned_hold_shells_as_guaranteed_drops() {
     assert_eq!(drowned.len(), 400);
     let (mut live, mut saved, mut guaranteed, mut offhands) = (0, 0, 0, Vec::new());
     for id in drowned {
-        let m = game.mobs.iter().find(|m| m.id == id).unwrap();
+        let m = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
         offhands.push(m.extra.off_hand_id().map(str::to_owned));
         if m.extra.off_hand_id() == Some("minecraft:nautilus_shell") {
             live += 1;
@@ -93,7 +93,7 @@ fn only_an_empty_offhand_drowned_draws_for_the_shell() {
     }
     let difficulty = game.local_difficulty([0.5, 100.0, 0.5]);
     let base = |game: &sunrise_gameplay::game::ServerGame<'_>, kind: &str| {
-        let m = game.mobs.iter().find(|m| &*m.kind.id == kind).unwrap();
+        let m = game.entities.mobs.iter().find(|m| &*m.kind.id == kind).unwrap();
         assert_eq!(
             m.extra.off_hand_id(),
             None,

@@ -176,8 +176,8 @@ fn frame(
     let at = sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5);
     let mut mob = Mob::new(id, kind, at, 30.0);
     (mob.body_yaw, mob.previous_body_yaw) = (30.0, 30.0);
-    game.mobs.clear();
-    game.mobs.push(mob);
+    game.entities.mobs.clear();
+    game.entities.mobs.push(mob);
     game.prepare_entity_culling();
     let mut out = Vec::new();
     game.mob_geometry(CAMERA, 1.0, &mut out);

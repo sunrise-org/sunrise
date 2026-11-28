@@ -95,12 +95,12 @@ pub trait PickEntityCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             .resident_dragon_part(id)
             .map_or(id, |(dragon, _)| dragon.id);
         let mob_kind = self
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == id)
             .map(|m| m.kind.id.as_str())
             .or_else(|| {
-                self.dragon
+                self.entities.dragon
                     .as_ref()
                     .is_some_and(|d| d.id == id && (d.id != 0 || self.side_has_remote()))
                     .then_some("minecraft:ender_dragon")
@@ -109,24 +109,24 @@ pub trait PickEntityCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             // Mob.getPickResult: SpawnEggItem.byId.
             let egg = format!("{kind}_spawn_egg");
             return self.items().get(&egg).map(|_| ItemStack::new(&egg, 1));
-        } else if let Some(b) = self.boats.iter().find(|b| b.id == id) {
+        } else if let Some(b) = self.entities.boats.iter().find(|b| b.id == id) {
             b.entity_type()
-        } else if let Some(c) = self.carts.iter().find(|c| c.id == id) {
+        } else if let Some(c) = self.entities.carts.iter().find(|c| c.id == id) {
             c.kind.item().to_owned()
-        } else if self.armor_stands.iter().any(|a| a.id == id) {
+        } else if self.entities.armor_stands.iter().any(|a| a.id == id) {
             "minecraft:armor_stand".to_owned()
-        } else if let Some(c) = self.cushions.iter().find(|c| c.id == id) {
+        } else if let Some(c) = self.entities.cushions.iter().find(|c| c.id == id) {
             c.item()
-        } else if let Some(f) = self.item_frames.iter().find(|f| f.id == id) {
+        } else if let Some(f) = self.entities.item_frames.iter().find(|f| f.id == id) {
             // ItemFrame.getPickResult: what it frames, else the frame itself.
             return Some(
                 f.item
                     .clone()
                     .unwrap_or_else(|| ItemStack::new(f.kind(), 1)),
             );
-        } else if self.paintings.iter().any(|p| p.id == id) {
+        } else if self.entities.paintings.iter().any(|p| p.id == id) {
             "minecraft:painting".to_owned()
-        } else if self.crystals.iter().any(|c| c.id == id) {
+        } else if self.entities.crystals.iter().any(|c| c.id == id) {
             "minecraft:end_crystal".to_owned()
         } else if self.side_pick_knot_fence(id).is_some() {
             // LeashFenceKnotEntity.getPickResult.
@@ -148,7 +148,7 @@ pub trait PickEntityCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             .or_else(|| {
                 let uid = id as u32;
                 let bounds = self
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .find(|m| m.id == uid)
                     .map(|m| m.bounds())

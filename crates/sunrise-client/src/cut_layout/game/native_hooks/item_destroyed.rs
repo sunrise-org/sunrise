@@ -100,7 +100,7 @@ mod item_destroyed_tests {
                 game.world.set(x, 63, z, stone).unwrap();
             }
         }
-        game.dropped.clear();
+        game.entities.dropped.clear();
     }
 
     fn tick_until_seen(
@@ -143,14 +143,14 @@ mod item_destroyed_tests {
                     [0.0; 3],
                     0,
                 );
-                let id = game.dropped.last().unwrap().id;
+                let id = game.entities.dropped.last().unwrap().id;
                 assert!(game.as_console(|g| {
                     g.run_command("damage @e[type=item,limit=1] 10 minecraft:generic")
                 }));
-                assert!(game.dropped.iter().all(|e| e.id != id));
-                assert_eq!(game.dropped.len(), 1);
-                assert_eq!(&*game.dropped[0].stack.item, "minecraft:emerald");
-                assert_eq!(game.dropped[0].stack.count, 3);
+                assert!(game.entities.dropped.iter().all(|e| e.id != id));
+                assert_eq!(game.entities.dropped.len(), 1);
+                assert_eq!(&*game.entities.dropped[0].stack.item, "minecraft:emerald");
+                assert_eq!(game.entities.dropped[0].stack.count, 3);
                 {
                     let log = seen.lock().unwrap();
                     assert_eq!(log.len(), 1);
@@ -160,14 +160,14 @@ mod item_destroyed_tests {
 
                 // 2. Real explosion entry point (`server_explode`).
                 seen.lock().unwrap().clear();
-                game.dropped.clear();
+                game.entities.dropped.clear();
                 game.spawn_item(
                     ItemStack::new("minecraft:stick", 1),
                     [5.5, 64.0, 5.5],
                     [0.0; 3],
                     0,
                 );
-                let id = game.dropped.last().unwrap().id;
+                let id = game.entities.dropped.last().unwrap().id;
                 game.server_explode(
                     [5.5, 64.0, 5.5],
                     2.0,
@@ -175,10 +175,10 @@ mod item_destroyed_tests {
                     false,
                 )
                 .unwrap();
-                assert!(game.dropped.iter().all(|e| e.id != id));
-                assert_eq!(game.dropped.len(), 1);
-                assert_eq!(&*game.dropped[0].stack.item, "minecraft:emerald");
-                assert_eq!(game.dropped[0].stack.count, 3);
+                assert!(game.entities.dropped.iter().all(|e| e.id != id));
+                assert_eq!(game.entities.dropped.len(), 1);
+                assert_eq!(&*game.entities.dropped[0].stack.item, "minecraft:emerald");
+                assert_eq!(game.entities.dropped[0].stack.count, 3);
                 {
                     let log = seen.lock().unwrap();
                     assert_eq!(log.len(), 1);
@@ -227,14 +227,14 @@ mod item_destroyed_tests {
                 assert_eq!(seen.lock().unwrap().len(), 1);
                 assert_eq!(seen.lock().unwrap()[0].0, "minecraft:cactus");
                 assert!(
-                    game.dropped
+                    game.entities.dropped
                         .iter()
                         .any(|e| &*e.stack.item == "minecraft:emerald" && e.stack.count == 3)
                 );
 
                 // 2. Fire block (`minecraft:in_fire`) through normal `tick_world(true)`.
                 seen.lock().unwrap().clear();
-                game.dropped.clear();
+                game.entities.dropped.clear();
                 let netherrack = block_state(game, "minecraft:netherrack");
                 let fire = block_state(game, "minecraft:fire");
                 game.world.set(8, 63, 6, netherrack).unwrap();
@@ -249,35 +249,35 @@ mod item_destroyed_tests {
                 assert_eq!(seen.lock().unwrap().len(), 1);
                 assert_eq!(seen.lock().unwrap()[0].0, "minecraft:in_fire");
                 assert!(
-                    game.dropped
+                    game.entities.dropped
                         .iter()
                         .any(|e| &*e.stack.item == "minecraft:emerald" && e.stack.count == 3)
                 );
 
                 // 3. Burning item (`minecraft:on_fire`) through normal `tick_world(true)`.
                 seen.lock().unwrap().clear();
-                game.dropped.clear();
+                game.entities.dropped.clear();
                 game.spawn_item(
                     ItemStack::new("minecraft:stick", 1),
                     [3.5, 64.0, 3.5],
                     [0.0; 3],
                     100,
                 );
-                let burning = game.dropped.last_mut().unwrap();
+                let burning = game.entities.dropped.last_mut().unwrap();
                 burning.health = 1;
                 burning.fire_ticks = 20;
                 tick_until_seen(game, &seen, 5);
                 assert_eq!(seen.lock().unwrap().len(), 1);
                 assert_eq!(seen.lock().unwrap()[0].0, "minecraft:on_fire");
                 assert!(
-                    game.dropped
+                    game.entities.dropped
                         .iter()
                         .any(|e| &*e.stack.item == "minecraft:emerald" && e.stack.count == 3)
                 );
 
                 // 4. Lava (`minecraft:lava`) through normal `tick_world(true)`.
                 seen.lock().unwrap().clear();
-                game.dropped.clear();
+                game.entities.dropped.clear();
                 let stone = block_state(game, "minecraft:stone");
                 let lava = block_state(game, "minecraft:lava");
                 for y in 64..=66 {
@@ -296,7 +296,7 @@ mod item_destroyed_tests {
                 assert_eq!(seen.lock().unwrap().len(), 1);
                 assert_eq!(seen.lock().unwrap()[0].0, "minecraft:lava");
                 assert!(
-                    game.dropped
+                    game.entities.dropped
                         .iter()
                         .any(|e| &*e.stack.item == "minecraft:emerald" && e.stack.count == 3)
                 );
@@ -368,14 +368,14 @@ mod item_destroyed_tests {
                     [0.0; 3],
                     100,
                 );
-                let id = game.dropped.last().unwrap().id;
+                let id = game.entities.dropped.last().unwrap().id;
                 game.tick_world(true).unwrap();
 
                 assert_eq!(*hurt_results.lock().unwrap(), vec![Some(true)]);
-                assert!(game.dropped.iter().all(|e| e.id != id));
-                assert_eq!(game.dropped.len(), 1);
-                assert_eq!(&*game.dropped[0].stack.item, "minecraft:emerald");
-                assert_eq!(game.dropped[0].stack.count, 3);
+                assert!(game.entities.dropped.iter().all(|e| e.id != id));
+                assert_eq!(game.entities.dropped.len(), 1);
+                assert_eq!(&*game.entities.dropped[0].stack.item, "minecraft:emerald");
+                assert_eq!(game.entities.dropped[0].stack.count, 3);
                 let log = seen.lock().unwrap();
                 assert_eq!(log.len(), 1);
                 assert_eq!(log[0].0, "minecraft:magic");
@@ -412,7 +412,7 @@ mod item_destroyed_tests {
                     0,
                 );
                 assert!(game.as_console(|g| g.run_command("kill @e[type=item]")));
-                assert!(game.dropped.is_empty(), "/kill must remove without drops");
+                assert!(game.entities.dropped.is_empty(), "/kill must remove without drops");
                 assert!(seen.lock().unwrap().is_empty(), "/kill must not fire hook");
 
                 // 2. Void removal (`y < min_y - 64`) discards without firing `onDestroyed`.
@@ -424,7 +424,7 @@ mod item_destroyed_tests {
                     0,
                 );
                 game.tick_world(true).unwrap();
-                assert!(game.dropped.is_empty(), "void must remove without drops");
+                assert!(game.entities.dropped.is_empty(), "void must remove without drops");
                 assert!(seen.lock().unwrap().is_empty(), "void must not fire hook");
 
                 // 3. Lifetime despawn (`age >= 6000`) discards without firing `onDestroyed`.
@@ -434,9 +434,9 @@ mod item_destroyed_tests {
                     [0.0; 3],
                     100,
                 );
-                game.dropped.last_mut().unwrap().age = 5999;
+                game.entities.dropped.last_mut().unwrap().age = 5999;
                 game.tick_world(true).unwrap();
-                assert!(game.dropped.is_empty(), "despawn must remove without drops");
+                assert!(game.entities.dropped.is_empty(), "despawn must remove without drops");
                 assert!(
                     seen.lock().unwrap().is_empty(),
                     "despawn must not fire hook"
@@ -523,13 +523,13 @@ mod item_destroyed_tests {
                     g.run_command("damage @e[type=item,limit=1] 10 minecraft:on_fire")
                 }));
                 assert_eq!(*observed.lock().unwrap(), vec![(1, 1, 1)]);
-                assert_eq!(game.dropped.len(), 1);
-                assert_eq!(&*game.dropped[0].stack.item, "minecraft:iron_ingot");
-                assert_eq!(game.dropped[0].stack.count, 4);
+                assert_eq!(game.entities.dropped.len(), 1);
+                assert_eq!(&*game.entities.dropped[0].stack.item, "minecraft:iron_ingot");
+                assert_eq!(game.entities.dropped[0].stack.count, 4);
 
                 // 2. Explosion path (`server_explode`): same original-stack visibility.
                 observed.lock().unwrap().clear();
-                game.dropped.clear();
+                game.entities.dropped.clear();
                 let bundle = make_bundle(game);
                 game.spawn_item(bundle, [4.5, 64.0, 4.5], [0.0; 3], 0);
                 game.server_explode(
@@ -540,13 +540,13 @@ mod item_destroyed_tests {
                 )
                 .unwrap();
                 assert_eq!(*observed.lock().unwrap(), vec![(1, 1, 1)]);
-                assert_eq!(game.dropped.len(), 1);
-                assert_eq!(&*game.dropped[0].stack.item, "minecraft:iron_ingot");
-                assert_eq!(game.dropped[0].stack.count, 4);
+                assert_eq!(game.entities.dropped.len(), 1);
+                assert_eq!(&*game.entities.dropped[0].stack.item, "minecraft:iron_ingot");
+                assert_eq!(game.entities.dropped[0].stack.count, 4);
 
                 // 3. Normal `tick_world(true)` lava destruction path: same original-stack visibility.
                 observed.lock().unwrap().clear();
-                game.dropped.clear();
+                game.entities.dropped.clear();
                 let stone = game
                     .pack
                     .assets
@@ -575,7 +575,7 @@ mod item_destroyed_tests {
                 }
                 assert_eq!(*observed.lock().unwrap(), vec![(1, 1, 1)]);
                 assert!(
-                    game.dropped
+                    game.entities.dropped
                         .iter()
                         .any(|e| &*e.stack.item == "minecraft:iron_ingot" && e.stack.count == 4)
                 );
@@ -610,18 +610,18 @@ mod item_destroyed_tests {
                 contents.store(game.items(), &mut bundle);
 
                 game.spawn_item(bundle, [3.5, 64.0, 3.5], [0.0; 3], 0);
-                let id = game.dropped.last().unwrap().id;
+                let id = game.entities.dropped.last().unwrap().id;
                 assert!(game.as_console(|g| {
                     g.run_command("damage @e[type=item,limit=1] 10 minecraft:on_fire")
                 }));
 
                 // Destroyed item is still removed; scoreboard write and panicking drops rolled back;
                 // vanilla bundle contents still spilled cleanly.
-                assert!(game.dropped.iter().all(|e| e.id != id));
+                assert!(game.entities.dropped.iter().all(|e| e.id != id));
                 assert!(game.score.board.objective("destroyed_write").is_none());
-                assert_eq!(game.dropped.len(), 1);
-                assert_eq!(&*game.dropped[0].stack.item, "minecraft:iron_ingot");
-                assert_eq!(game.dropped[0].stack.count, 4);
+                assert_eq!(game.entities.dropped.len(), 1);
+                assert_eq!(&*game.entities.dropped[0].stack.item, "minecraft:iron_ingot");
+                assert_eq!(game.entities.dropped[0].stack.count, 4);
                 assert_eq!(seen.lock().unwrap().len(), 1);
             });
         });

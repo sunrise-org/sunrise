@@ -269,12 +269,12 @@ fn placement_read_leaves_queued_spill_untouched() {
                 motion,
                 delay,
             });
-        let dropped = game.dropped.len();
+        let dropped = game.entities.dropped.len();
         assert!(matches!(
             level.state_for_placement(game, block, &context),
             Ok(Some(_))
         ));
-        assert_eq!(game.dropped.len(), dropped);
+        assert_eq!(game.entities.dropped.len(), dropped);
         let [queued] = game.server.spill.0.spawns.as_slice() else {
             panic!("the spill must still contain the original item");
         };

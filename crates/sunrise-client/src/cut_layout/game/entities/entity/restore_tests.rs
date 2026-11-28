@@ -33,17 +33,17 @@ macro_rules! restore_cases {
 }
 
 restore_cases! {
-    restores_mob_spawns: "minecraft:pig", "{}", mobs;
-    restores_item_spawns: "minecraft:item", "{Item:{id:\"minecraft:stone\",count:1}}", dropped;
-    restores_boat_spawns: "minecraft:oak_boat", "{}", boats;
-    restores_cart_spawns: "minecraft:minecart", "{}", carts;
-    restores_stand_spawns: "minecraft:armor_stand", "{}", armor_stands;
-    restores_tnt_spawns: "minecraft:tnt", "{fuse:80s}", tnts;
-    restores_falling_spawns: "minecraft:falling_block", "{BlockState:{Name:\"minecraft:sand\"},Time:1}", falling;
-    restores_orb_spawns: "minecraft:experience_orb", "{Value:3s}", orbs;
-    restores_projectile_spawns: "minecraft:arrow", "{}", creatures.projectiles;
-    restores_rocket_spawns: "minecraft:firework_rocket", "{LifeTime:20}", rockets;
-    restores_trident_spawns: "minecraft:trident", "{}", tridents;
+    restores_mob_spawns: "minecraft:pig", "{}", entities.mobs;
+    restores_item_spawns: "minecraft:item", "{Item:{id:\"minecraft:stone\",count:1}}", entities.dropped;
+    restores_boat_spawns: "minecraft:oak_boat", "{}", entities.boats;
+    restores_cart_spawns: "minecraft:minecart", "{}", entities.carts;
+    restores_stand_spawns: "minecraft:armor_stand", "{}", entities.armor_stands;
+    restores_tnt_spawns: "minecraft:tnt", "{fuse:80s}", entities.tnts;
+    restores_falling_spawns: "minecraft:falling_block", "{BlockState:{Name:\"minecraft:sand\"},Time:1}", entities.falling;
+    restores_orb_spawns: "minecraft:experience_orb", "{Value:3s}", entities.orbs;
+    restores_projectile_spawns: "minecraft:arrow", "{}", entities.projectiles;
+    restores_rocket_spawns: "minecraft:firework_rocket", "{LifeTime:20}", entities.rockets;
+    restores_trident_spawns: "minecraft:trident", "{}", entities.tridents;
 }
 
 static VALUE: AttachmentType<i32> = AttachmentType {
@@ -64,12 +64,12 @@ fn restoring_keeps_both_owners_bound_and_old_batches_immutable() {
         let mut values = Attachments::default();
         game.summon_with_nbt("minecraft:oak_boat", [0.5, 70.0, 0.5], "{}")
             .unwrap();
-        let original = game.boats[0].id;
+        let original = game.entities.boats[0].id;
         let holder = game.entity(original).unwrap();
         VALUE
             .set(&mut values, Holder::Entity(original), 10)
             .unwrap();
-        let registration = game.boats.update(0, |boat| {
+        let registration = game.entities.boats.update(0, |boat| {
             boat.attachment_lifetime().bind(&mut values, &index, holder);
             boat.attachment_lifetime().registration().unwrap()
         });
@@ -78,26 +78,26 @@ fn restoring_keeps_both_owners_bound_and_old_batches_immutable() {
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
         game.summon_with_nbt("minecraft:oak_boat", [4.5, 70.0, 0.5], "{}")
             .unwrap();
-        let spawned = game.boats[0].id;
+        let spawned = game.entities.boats[0].id;
         let holder = game.entity(spawned).unwrap();
         let mut spawned_values = Attachments::default();
         VALUE
             .set(&mut spawned_values, Holder::Entity(spawned), 20)
             .unwrap();
-        let spawn_registration = game.boats.update(0, |boat| {
+        let spawn_registration = game.entities.boats.update(0, |boat| {
             boat.attachment_lifetime()
                 .bind(&mut spawned_values, &index, holder);
             boat.attachment_lifetime().registration().unwrap()
         });
         game.restore_entities(taken);
         assert_eq!(
-            game.boats.iter().map(|b| b.id).collect::<Vec<_>>(),
+            game.entities.boats.iter().map(|b| b.id).collect::<Vec<_>>(),
             [original, spawned]
         );
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 2);
         for (i, expected) in [(0, registration), (1, spawn_registration)] {
             let actual = game
-                .boats
+                .entities.boats
                 .update(i, |boat| boat.attachment_lifetime().registration().unwrap());
             assert!(expected.same_registration(&actual));
         }
@@ -111,7 +111,7 @@ fn restoring_keeps_both_owners_bound_and_old_batches_immutable() {
             .unwrap();
         let after = index.lock().unwrap().snapshot(&key);
         assert_eq!(after.len(), 2);
-        drop(game.boats.remove(0));
+        drop(game.entities.boats.remove(0));
         let surviving = index.lock().unwrap().snapshot(&key);
         assert_eq!(surviving.len(), 1);
         assert_eq!(surviving[0].holder, holder);

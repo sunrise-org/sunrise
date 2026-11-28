@@ -257,7 +257,7 @@ fn inventory(game: &sunrise_gameplay::game::ServerGame<'_>, index: usize) -> u32
 }
 
 fn total_orb_xp(game: &sunrise_gameplay::game::ServerGame<'_>) -> u32 {
-    game.orbs
+    game.entities.orbs
         .iter()
         .map(|orb| orb.value as u32 * orb.count)
         .sum()
@@ -558,7 +558,7 @@ fn a_cancelled_take_keeps_the_click_and_listener_writes() {
             );
             assert_eq!(slot(game, 0), Some(original));
             assert_eq!(inventory(game, 20), 2);
-            assert!(game.orbs.is_empty());
+            assert!(game.entities.orbs.is_empty());
             assert_eq!(game.server.lan_events.len(), events);
             assert!(PLACE_OBSERVED.with(|seen| seen.borrow().is_empty()));
             assert!(game.transactions.is_empty());
@@ -584,7 +584,7 @@ fn non_positive_take_xp_awards_no_orbs_and_fires_sound() {
                     game.server.lan.as_ref().unwrap().hub.guests[0].carried,
                     Some(ItemStack::new("minecraft:dirt", 1))
                 );
-                assert!(game.orbs.is_empty());
+                assert!(game.entities.orbs.is_empty());
                 assert_eq!(game.server.lan_events.len(), events + 1);
                 assert_eq!(slot(game, 0), Some(ItemStack::new("minecraft:dirt", 1)));
                 assert_eq!(slot(game, 1), None);
@@ -612,7 +612,7 @@ fn an_outer_abort_undoes_an_accepted_grindstone_take() {
             let matching_id = 40 + expected_random.next_int_bound(40).unwrap() as u32;
             game.server.next_entity = matching_id - 1;
             game.add_orb([1.5, 64.5, 1.5], 3);
-            let orb = &mut game.orbs[0];
+            let orb = &mut game.entities.orbs[0];
             orb.position = Vec3::new(1.5, 64.5, 1.5);
             orb.age = 42;
             let join = orb.join;
@@ -632,7 +632,7 @@ fn an_outer_abort_undoes_an_accepted_grindstone_take() {
                         game.server.lan.as_ref().unwrap().hub.guests[0].carried,
                         Some(ItemStack::new("minecraft:dirt", 1))
                     );
-                    assert_eq!(game.orbs[game.orbs.locate(join).unwrap()].count, 2);
+                    assert_eq!(game.entities.orbs[game.entities.orbs.locate(join).unwrap()].count, 2);
                     assert!(
                         rx.try_recv().is_err(),
                         "published station content before commit"
@@ -651,8 +651,8 @@ fn an_outer_abort_undoes_an_accepted_grindstone_take() {
                         game.server.lan.as_ref().unwrap().hub.guests[0].carried,
                         None
                     );
-                    assert_eq!(game.orbs.len(), 1);
-                    let orb = &game.orbs[game.orbs.locate(join).unwrap()];
+                    assert_eq!(game.entities.orbs.len(), 1);
+                    let orb = &game.entities.orbs[game.entities.orbs.locate(join).unwrap()];
                     assert_eq!((orb.count, orb.age), (1, 42));
                     assert_ne!(
                         (*game.world.random).clone().next_int(),
@@ -996,7 +996,7 @@ fn grindstone_on_take_rebuilds_the_result_before_shift_click_or_throw_all_repeat
                     assert_eq!(inventory(game, 8), 2);
                 } else {
                     assert_eq!(
-                        game.dropped
+                        game.entities.dropped
                             .iter()
                             .map(|drop| drop.stack.count)
                             .sum::<u32>(),

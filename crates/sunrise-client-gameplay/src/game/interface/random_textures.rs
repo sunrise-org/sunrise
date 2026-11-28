@@ -18,17 +18,17 @@ impl ClientGame<'_> {
         if textures.is_empty() {
             return;
         }
-        for i in 0..self.common.mobs.len() {
-            let m = &mut self.common.mobs[i];
+        for i in 0..self.common.entities.mobs.len() {
+            let m = &mut self.common.entities.mobs[i];
             let id = m.id;
             if !m.random_textures.due_generation(textures.generation(), id) {
                 continue;
             }
-            let m = &self.common.mobs[i];
+            let m = &self.common.entities.mobs[i];
             let seed = seed(m, self.common.persist.uuids.get(&id).copied());
             let seen = (!m.random_textures.has_seen()).then(|| self.seen_at(m.position));
             let names = sunrise_client::mobs::render::drawn_textures(m, self);
-            choose(&mut self.common.mobs[i], &textures, names, seen, seed);
+            choose(&mut self.common.entities.mobs[i], &textures, names, seen, seed);
         }
     }
 

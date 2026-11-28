@@ -134,34 +134,34 @@ pub fn assert_mob_spawn_survives(
             0.0,
         );
         mob.no_ai = true;
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
     }
     balance.drain_balanced();
-    let mut expected: Vec<_> = game.mobs.iter().map(|mob| (mob.id, mob.join)).collect();
+    let mut expected: Vec<_> = game.entities.mobs.iter().map(|mob| (mob.id, mob.join)).collect();
     with_spawn(spawn, || action(game));
     assert!(
         balance.drain_balanced() > 0,
         "actual caller did not emit its lift"
     );
     let index = game
-        .mobs
+        .entities.mobs
         .iter()
         .position(|m| m.id == SPAWNED)
         .expect("nested spawn was dropped");
-    assert_eq!(game.mobs[index].age, 0, "spawn ticked in the current pass");
-    let join = game.mobs[index].join;
+    assert_eq!(game.entities.mobs[index].age, 0, "spawn ticked in the current pass");
+    let join = game.entities.mobs[index].join;
     expected.push((SPAWNED, join));
     assert_eq!(
-        game.mobs
+        game.entities.mobs
             .iter()
             .map(|mob| (mob.id, mob.join))
             .collect::<Vec<_>>(),
         expected,
         "caller changed survivor identity or spawn admission order"
     );
-    let mut original = game.mobs.lift();
+    let mut original = game.entities.mobs.lift();
     let spawned = original.extract(join).unwrap();
-    game.mobs.push(spawned);
+    game.entities.mobs.push(spawned);
     if !game.world.chunks.contains_key(&(0, 0)) {
         game.world.chunks.insert(
             (0, 0),
@@ -169,11 +169,11 @@ pub fn assert_mob_spawn_survives(
         );
     }
     game.tick_creature_entities().unwrap();
-    assert_eq!(game.mobs[0].id, SPAWNED);
-    assert_eq!(game.mobs[0].join, join);
-    assert_eq!(game.mobs[0].age, 1, "spawn missed the next entity pass");
-    game.mobs.clear();
-    game.mobs.restore(
+    assert_eq!(game.entities.mobs[0].id, SPAWNED);
+    assert_eq!(game.entities.mobs[0].join, join);
+    assert_eq!(game.entities.mobs[0].age, 1, "spawn missed the next entity pass");
+    game.entities.mobs.clear();
+    game.entities.mobs.restore(
         original,
         sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
     );
@@ -193,19 +193,17 @@ pub fn assert_projectile_spawn_survives(
             None,
         );
         p.id = ID;
-        game.creatures.projectiles.push(p);
+        game.entities.projectiles.push(p);
     }
     let mut expected: Vec<_> = game
-        .creatures
-        .projectiles
+        .entities.projectiles
         .iter()
         .filter(|p| p.id != 72)
         .map(|p| (p.id, p.join))
         .collect();
     with_spawn(spawn, || action(game));
     let p = game
-        .creatures
-        .projectiles
+        .entities.projectiles
         .iter()
         .find(|p| p.id == ID)
         .expect("pickup dropped a nested projectile");
@@ -213,22 +211,20 @@ pub fn assert_projectile_spawn_survives(
     let join = p.join;
     expected.push((ID, join));
     assert_eq!(
-        game.creatures
-            .projectiles
+        game.entities.projectiles
             .iter()
             .map(|p| (p.id, p.join))
             .collect::<Vec<_>>(),
         expected
     );
-    let mut original = game.creatures.projectiles.lift();
-    game.creatures
-        .projectiles
+    let mut original = game.entities.projectiles.lift();
+    game.entities.projectiles
         .push(original.extract(join).unwrap());
     game.tick_projectiles().unwrap();
-    assert_eq!(game.creatures.projectiles[0].age, 1);
-    assert_eq!(game.creatures.projectiles[0].join, join);
-    game.creatures.projectiles.clear();
-    game.creatures.projectiles.restore(
+    assert_eq!(game.entities.projectiles[0].age, 1);
+    assert_eq!(game.entities.projectiles[0].join, join);
+    game.entities.projectiles.clear();
+    game.entities.projectiles.restore(
         original,
         sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
     );

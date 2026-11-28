@@ -83,21 +83,21 @@ mod tests {
         }
         game.remote_set_passengers(40, vec![42]);
         game.remote_set_passengers(41, vec![43]);
-        assert_eq!(game.armor_stands[0].vehicle, Some(40));
-        assert_eq!(game.mobs[0].extra.mount, Some(41));
+        assert_eq!(game.entities.armor_stands[0].vehicle, Some(40));
+        assert_eq!(game.entities.mobs[0].extra.mount, Some(41));
         game.handle_packet(C::RemoveEntities(play::RemoveEntities {
             ids: vec![44, 40, 46],
         }))
         .unwrap();
         let r = game.client.remote.as_ref().unwrap();
         assert_eq!(r.entities[&42].vehicle, None);
-        assert_eq!(game.armor_stands[0].vehicle, None);
+        assert_eq!(game.entities.armor_stands[0].vehicle, None);
         assert_eq!(r.entities[&43].vehicle, Some(41));
-        assert_eq!(game.mobs[0].extra.mount, Some(41));
-        assert!(game.mobs[0].extra.passenger);
+        assert_eq!(game.entities.mobs[0].extra.mount, Some(41));
+        assert!(game.entities.mobs[0].extra.passenger);
         assert_eq!(r.passenger_vehicle(42), None);
         assert_eq!(r.passenger_vehicle(43), Some(41));
-        assert_eq!(game.falling.iter().map(|e| e.id).collect::<Vec<_>>(), [45]);
+        assert_eq!(game.entities.falling.iter().map(|e| e.id).collect::<Vec<_>>(), [45]);
     }
 
     #[test]
@@ -177,8 +177,8 @@ mod tests {
                 data: 0,
             }))
             .unwrap();
-            assert_eq!(game.falling.iter().filter(|f| f.id == id as u32).count(), 1);
-            let block = game.falling.iter().find(|f| f.id == id as u32).unwrap();
+            assert_eq!(game.entities.falling.iter().filter(|f| f.id == id as u32).count(), 1);
+            let block = game.entities.falling.iter().find(|f| f.id == id as u32).unwrap();
             assert_eq!(
                 [block.position.x, block.position.y, block.position.z],
                 position
@@ -186,7 +186,7 @@ mod tests {
             assert_eq!(block.velocity.y, -0.1);
         }
         let blocks: Vec<_> = game
-            .falling
+            .entities.falling
             .iter()
             .map(|f| (f.id, [f.position.x, f.position.y, f.position.z]))
             .collect();
@@ -281,7 +281,7 @@ mod tests {
             }
         }
         for id in [49, 50] {
-            game.dropped.push(sunrise_sim::entities::ItemEntity::new(
+            game.entities.dropped.push(sunrise_sim::entities::ItemEntity::new(
                 id,
                 sunrise_items::items::ItemStack::new("minecraft:sand", 1),
                 sunrise_core::geometry::Vec3::new(0.0, 64.0, 0.0),
@@ -293,10 +293,10 @@ mod tests {
             ids: vec![40, 42, 43, 45, 47, 49],
         }))
         .unwrap();
-        assert_eq!(game.falling.iter().map(|e| e.id).collect::<Vec<_>>(), [41]);
-        assert_eq!(game.tnts.iter().map(|e| e.id).collect::<Vec<_>>(), [44]);
-        assert_eq!(game.orbs.iter().map(|e| e.id).collect::<Vec<_>>(), [46]);
-        assert_eq!(game.mobs.iter().map(|e| e.id).collect::<Vec<_>>(), [48]);
-        assert_eq!(game.dropped.iter().map(|e| e.id).collect::<Vec<_>>(), [50]);
+        assert_eq!(game.entities.falling.iter().map(|e| e.id).collect::<Vec<_>>(), [41]);
+        assert_eq!(game.entities.tnts.iter().map(|e| e.id).collect::<Vec<_>>(), [44]);
+        assert_eq!(game.entities.orbs.iter().map(|e| e.id).collect::<Vec<_>>(), [46]);
+        assert_eq!(game.entities.mobs.iter().map(|e| e.id).collect::<Vec<_>>(), [48]);
+        assert_eq!(game.entities.dropped.iter().map(|e| e.id).collect::<Vec<_>>(), [50]);
     }
 }

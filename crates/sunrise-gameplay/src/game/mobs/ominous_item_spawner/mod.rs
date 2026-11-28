@@ -38,7 +38,7 @@ impl ServerGame<'_> {
     /// `OminousItemSpawner.create` added at `position`.
     pub fn add_ominous_item_spawner(&mut self, item: ItemStack, position: [f64; 3], delay: i32) {
         self.server.next_entity += 1;
-        self.common.ominous_spawners.push(OminousItemSpawner {
+        self.common.entities.ominous_spawners.push(OminousItemSpawner {
             attachment_lifetime: Default::default(),
             join: Default::default(),
             id: self.server.next_entity,
@@ -84,7 +84,7 @@ impl ServerGame<'_> {
         let uuid = self.uuid_for(id);
         let fire_ticks = sunrise_sim::entity_nbt::fire_ticks_from_nbt(&tag);
         let has_visual_fire = sunrise_sim::entity_nbt::flag(&tag, "HasVisualFire");
-        self.common.ominous_spawners.push(OminousItemSpawner {
+        self.common.entities.ominous_spawners.push(OminousItemSpawner {
             attachment_lifetime: Default::default(),
             join: Default::default(),
             id,
@@ -106,7 +106,7 @@ impl ServerGame<'_> {
         // ServerLevel.tick: only entities in entity-ticking chunks that joined before the pass tick.
         let ticking = self.entity_ticking_area();
         let through = self.server.ticked_entities_through;
-        let mut spawners = self.common.ominous_spawners.lift();
+        let mut spawners = self.common.entities.ominous_spawners.lift();
         #[cfg(any(test, feature = "test-support"))]
         crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
         spawners.retain_mut(|s| {
@@ -138,7 +138,7 @@ impl ServerGame<'_> {
             }
             true
         });
-        self.common.ominous_spawners.restore(
+        self.common.entities.ominous_spawners.restore(
             spawners,
             sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
         );

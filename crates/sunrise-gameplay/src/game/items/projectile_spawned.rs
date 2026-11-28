@@ -233,8 +233,7 @@ impl crate::game::ServerGame<'_> {
 
     pub(in crate::game::server_side) fn spawned_projectile(&self, id: u32) -> Option<&Projectile> {
         self.common
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .find(|p| p.id == id)
     }
@@ -258,8 +257,7 @@ impl crate::game::ServerGame<'_> {
         }
         let Some(index) = self
             .common
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .position(|p| p.id == id)
         else {
@@ -267,8 +265,7 @@ impl crate::game::ServerGame<'_> {
         };
         let sound = self
             .common
-            .creatures
-            .projectiles
+            .entities.projectiles
             .update(index, |p| match kind {
                 SpawnedEffect::Ignite => {
                     p.ignite_for_seconds(level_value(&effect["duration"], level));

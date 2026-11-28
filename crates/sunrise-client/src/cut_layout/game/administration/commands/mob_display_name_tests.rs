@@ -64,7 +64,7 @@ fn a_summoned_mobs_name_shows_the_entity_on_hover() {
     let mut resources = None;
     let mut game = game(&mut resources);
     assert!(game.run_command("summon minecraft:pig 4.5 64 4.5 {NoAI:1b}"));
-    let id = game.mobs.last().unwrap().id;
+    let id = game.entities.mobs.last().unwrap().id;
     let uuid = sunrise_sim::save::uuid_text(game.persist.uuid_of(id).expect("a UUID"));
     let name = game.target_name(Target::Mob(id)).component();
     assert_eq!(name["translate"], "entity.minecraft.pig");

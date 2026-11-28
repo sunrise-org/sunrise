@@ -100,7 +100,7 @@ impl crate::game::ServerGame<'_> {
             blast = blast.with_damage_direct(
                 id,
                 self.blast_target_kind(id, target),
-                Self::target_direct_entity(Some(target), &self.common.creatures.projectiles),
+                Self::target_direct_entity(Some(target), &self.common.entities.projectiles),
             );
         }
         let done = self.server_explode_from(center, radius, interaction, fire, blast);
@@ -116,14 +116,13 @@ impl crate::game::ServerGame<'_> {
             Target::Tnt(_) => Some("minecraft:tnt"),
             Target::Cart(_) => self
                 .common
-                .carts
+                .entities.carts
                 .iter()
                 .any(|c| c.id == id && c.kind == CartKind::Tnt)
                 .then_some("minecraft:tnt_minecart"),
             Target::Projectile(_) => self
                 .common
-                .creatures
-                .projectiles
+                .entities.projectiles
                 .iter()
                 .find(|p| p.id == id)
                 .map(|p| p.entity_type()),
@@ -276,21 +275,20 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Projectile(_) => self
                 .common
-                .creatures
-                .projectiles
+                .entities.projectiles
                 .iter()
                 .find(|p| p.id == id)
                 .and_then(|p| Some((p.owner?, p.guest))),
             Target::Rocket(_) => self
                 .common
-                .rockets
+                .entities.rockets
                 .iter()
                 .find(|r| r.id == id)
                 .and_then(|r| Some((r.owner?, r.guest))),
             // A thrown trident's owner is a player: a guest, or the player in place.
             Target::Trident(_) => self
                 .common
-                .tridents
+                .entities.tridents
                 .iter()
                 .find(|t| t.id == id)
                 .and_then(|t| {
@@ -327,7 +325,7 @@ impl crate::game::ServerGame<'_> {
     ) {
         match target {
             Target::Projectile(_)
-                if self.common.creatures.projectiles.iter().any(|p| {
+                if self.common.entities.projectiles.iter().any(|p| {
                     p.id == id && matches!(p.kind, ProjectileKind::WitherSkull { dangerous: true })
                 }) =>
             {
@@ -338,7 +336,7 @@ impl crate::game::ServerGame<'_> {
             Target::Cart(_)
                 if self
                     .common
-                    .carts
+                    .entities.carts
                     .iter()
                     .any(|c| c.id == id && c.kind == CartKind::Tnt && c.fuse >= 0) =>
             {
@@ -348,14 +346,13 @@ impl crate::game::ServerGame<'_> {
             _ => {}
         }
         let calculator = match target {
-            Target::Tnt(_) if self.common.tnts.iter().any(|t| t.id == id && t.used_portal) => {
+            Target::Tnt(_) if self.common.entities.tnts.iter().any(|t| t.id == id && t.used_portal) => {
                 SourceCalculator::PortalProof
             }
             Target::Projectile(_) => {
                 let charge = self
                     .common
-                    .creatures
-                    .projectiles
+                    .entities.projectiles
                     .iter()
                     .find(|p| p.id == id);
                 let knockback = match charge.map(|p| &p.kind) {

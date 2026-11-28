@@ -140,7 +140,7 @@ fn spectator_entity_use_sends_both_hands_without_feeding_or_swinging() {
                     .chunks
                     .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
                 add_entity(game, 101, "minecraft:horse", [0.5, 66.1, 2.5]);
-                game.mobs[0].extra.age = -24000;
+                game.entities.mobs[0].extra.age = -24000;
                 let wheat = Some(ItemStack::new("minecraft:wheat", 3));
                 game.common.inventory[game.common.selected] = wheat.clone();
                 game.offhand = wheat.clone();

@@ -85,7 +85,7 @@ fn a_shield_faces_the_dragons_origin_not_the_wing_push() {
             1,
         );
         dragon.id = 900;
-        g.dragon.replace(dragon);
+        g.entities.dragon.replace(dragon);
         assert!(
             g.player_blocking(Some([0.0, 0.0, 4.0]), "minecraft:mob_attack", false)
                 .is_some()

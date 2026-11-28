@@ -16,9 +16,9 @@ const PIG: u32 = 913;
 fn with_scene(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
-        game.armor_stands
+        game.entities.armor_stands
             .push(ArmorStand::new(STAND, Vec3::new(0.5, 64.0, 0.5), 0.0));
-        game.item_frames.push(ItemFrame {
+        game.entities.item_frames.push(ItemFrame {
             attachment_lifetime: Default::default(),
             join: Default::default(),
             id: FRAME,
@@ -35,7 +35,7 @@ fn with_scene(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
             check_interval: 0,
             ticks: 0,
         });
-        game.paintings.push(Painting {
+        game.entities.paintings.push(Painting {
             attachment_lifetime: Default::default(),
             join: Default::default(),
             id: PAINTING,
@@ -97,30 +97,30 @@ fn move_by_stops_at_a_wall_and_refuses_what_has_no_physics() {
             game.entity_move_by(stand, [0.0, 0.0, 1.0], MoveCause::SelfMovement),
             Some([0.0, 0.0, 1.0])
         );
-        assert_eq!(game.armor_stands[0].position.z, 1.5);
-        game.armor_stands[0].velocity = Vec3::new(0.3, 0.0, 0.1);
+        assert_eq!(game.entities.armor_stands[0].position.z, 1.5);
+        game.entities.armor_stands[0].velocity = Vec3::new(0.3, 0.0, 0.1);
         // Towards the wall at x = 2: the stand's half width (0.25) stops it at x = 1.75.
         let moved = game
             .entity_move_by(stand, [3.0, 0.0, 0.0], MoveCause::SelfMovement)
             .unwrap();
         assert!((moved[0] - 1.25).abs() < 1.0e-6 && moved[1] == 0.0 && moved[2] == 0.0);
-        assert!((game.armor_stands[0].position.x - 1.75).abs() < 1.0e-6);
+        assert!((game.entities.armor_stands[0].position.x - 1.75).abs() < 1.0e-6);
         assert_eq!(
-            game.armor_stands[0].velocity,
+            game.entities.armor_stands[0].velocity,
             Vec3::new(0.3, 0.0, 0.1),
             "a blocked move keeps the velocity"
         );
         // A marker stand has no physics: the whole delta, through the wall.
-        game.armor_stands[0].marker = true;
+        game.entities.armor_stands[0].marker = true;
         let moved = game
             .entity_move_by(stand, [1.0, 0.0, 0.0], MoveCause::SelfMovement)
             .unwrap();
         assert_eq!(moved, [1.0, 0.0, 0.0]);
-        game.armor_stands[0].marker = false;
+        game.entities.armor_stands[0].marker = false;
         // A piston's cause applies its per-tick limit, 0.51 a block on an axis: a second move in
         // the same tick (a mob keeps its own budget) goes nowhere.
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-        game.mobs.push(sunrise_sim::mobs::Mob::new(
+        game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
             PIG,
             kind,
             Vec3::new(8.5, 80.0, 8.5),

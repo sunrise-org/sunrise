@@ -79,7 +79,7 @@ impl ClientGame<'_> {
             // for effects, not an authoritative pre-break stack for the hook.
             return;
         }
-        let Some(m) = self.common.mobs.iter().find(|m| m.id == id as u32) else {
+        let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id as u32) else {
             return;
         };
         let Some(stack) = m.item_by_slot(slot) else {

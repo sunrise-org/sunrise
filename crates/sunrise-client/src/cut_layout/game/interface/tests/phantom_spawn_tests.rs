@@ -105,7 +105,7 @@ fn attempt(
     let lights = light_chunk(&region, tables, true);
     apply_lighting(&mut chunk, lights);
     game.world.chunks.insert((0, 0), Arc::new(chunk));
-    game.mobs.clear();
+    game.entities.mobs.clear();
     let mut spawned = Vec::new();
     // `random.nextInt(timeSinceRest) >= 72000` almost always passes at
     // `i32::MAX`; 64 attempts leave no room for the draw to decide the test.
@@ -113,7 +113,7 @@ fn attempt(
         game.stats.set_phantom_tick(0);
         game.spawn_phantoms();
         spawned = game
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| m.species() == sunrise_sim::mobs::Species::Phantom)
             .map(|m| m.position)

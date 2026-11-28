@@ -166,22 +166,21 @@ impl<'r> crate::game::ServerGame<'r> {
                 .and_then(|g| g.vehicle)
                 .or_else(|| {
                     self.common
-                        .mobs
+                        .entities.mobs
                         .iter()
                         .find(|m| m.id == id)
                         .and_then(|m| m.extra.mount)
                 })
                 .or_else(|| {
                     self.common
-                        .armor_stands
+                        .entities.armor_stands
                         .iter()
                         .find(|a| a.id == id)
                         .and_then(|a| a.vehicle)
                 })
                 .or_else(|| {
                     self.common
-                        .resident_entities
-                        .general
+                        .entities.general
                         .row(id)
                         .and_then(|r| r.mount)
                 })
@@ -238,7 +237,7 @@ impl<'r> crate::game::ServerGame<'r> {
             Who::Mob(id) => {
                 if let Some(m) = self
                     .common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .find(|m| m.id == id && m.alive() && !m.removed)
                 {
@@ -255,7 +254,7 @@ impl<'r> crate::game::ServerGame<'r> {
                 {
                     return Some(guest_bounds(g));
                 }
-                if let Some(c) = self.common.crystals.iter().find(|c| c.id == id) {
+                if let Some(c) = self.common.entities.crystals.iter().find(|c| c.id == id) {
                     return Some(c.bounds());
                 }
                 if id >= sunrise_gameplay_common::game::dragon_common::SPECIAL {
@@ -266,13 +265,13 @@ impl<'r> crate::game::ServerGame<'r> {
                         .dragon_part_boxes()
                         .and_then(|boxes| boxes.get(part).copied());
                 }
-                if let Some(a) = self.common.armor_stands.iter().find(|a| a.id == id) {
+                if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
                     return Some(a.bounds());
                 }
-                if let Some(b) = self.common.boats.iter().find(|b| b.id == id) {
+                if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id) {
                     return Some(b.bounds());
                 }
-                if let Some(c) = self.common.carts.iter().find(|c| c.id == id) {
+                if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == id) {
                     return Some(c.bounds());
                 }
                 None
@@ -291,8 +290,7 @@ impl<'r> crate::game::ServerGame<'r> {
     ) {
         let Some(j) = self
             .common
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .position(|q| q.id == target_id && redirectable(q))
         else {
@@ -302,7 +300,7 @@ impl<'r> crate::game::ServerGame<'r> {
             Some(v) => (v.length_squared() > 0.0).then(|| v.normalize()),
             None => self.owner_look(hitter_owner, hitter_guest),
         };
-        self.common.creatures.projectiles.update(j, |target| {
+        self.common.entities.projectiles.update(j, |target| {
             target.deflect(
                 sunrise_sim::projectiles::Turn::Direction(dir),
                 [1.0; 3],
@@ -356,28 +354,28 @@ impl<'r> crate::game::ServerGame<'r> {
                 if self.common.is_crystal_id(id) {
                     return Some("minecraft:end_crystal".to_owned());
                 }
-                if let Some(m) = self.common.mobs.iter().find(|m| m.id == id) {
+                if let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) {
                     return Some(m.kind.id.clone());
                 }
                 if self.lan_guest_conn_by_id(id).is_some() {
                     return Some("minecraft:player".to_owned());
                 }
-                if self.common.armor_stands.iter().any(|a| a.id == id) {
+                if self.common.entities.armor_stands.iter().any(|a| a.id == id) {
                     return Some("minecraft:armor_stand".to_owned());
                 }
-                if let Some(b) = self.common.boats.iter().find(|b| b.id == id) {
+                if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id) {
                     return Some(b.entity_type());
                 }
-                if let Some(c) = self.common.carts.iter().find(|c| c.id == id) {
+                if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == id) {
                     return Some(c.kind.id().to_owned());
                 }
-                if let Some(f) = self.common.item_frames.iter().find(|f| f.id == id) {
+                if let Some(f) = self.common.entities.item_frames.iter().find(|f| f.id == id) {
                     return Some(f.kind().to_owned());
                 }
-                if self.common.paintings.iter().any(|p| p.id == id) {
+                if self.common.entities.paintings.iter().any(|p| p.id == id) {
                     return Some("minecraft:painting".to_owned());
                 }
-                if self.common.cushions.iter().any(|c| c.id == id) {
+                if self.common.entities.cushions.iter().any(|c| c.id == id) {
                     return Some("minecraft:cushion".to_owned());
                 }
                 if self.natural_knot(id).is_some()
@@ -390,22 +388,21 @@ impl<'r> crate::game::ServerGame<'r> {
                 {
                     return Some("minecraft:leash_knot".to_owned());
                 }
-                if self.common.falling.iter().any(|f| f.id == id) {
+                if self.common.entities.falling.iter().any(|f| f.id == id) {
                     return Some("minecraft:falling_block".to_owned());
                 }
-                if self.common.tnts.iter().any(|t| t.id == id) {
+                if self.common.entities.tnts.iter().any(|t| t.id == id) {
                     return Some("minecraft:tnt".to_owned());
                 }
                 if let Some(p) = self
                     .common
-                    .creatures
-                    .projectiles
+                    .entities.projectiles
                     .iter()
                     .find(|p| p.id == id)
                 {
                     return Some(p.entity_type().to_owned());
                 }
-                if self.common.dropped.iter().any(|i| i.id == id) {
+                if self.common.entities.dropped.iter().any(|i| i.id == id) {
                     return Some("minecraft:item".to_owned());
                 }
                 None
@@ -444,41 +441,41 @@ impl<'r> crate::game::ServerGame<'r> {
     #[cfg(any(test, feature = "test-support"))]
     pub fn pickable_object_targets(&self) -> Vec<(Who, Aabb)> {
         let mut out = Vec::new();
-        for b in self.common.boats.iter() {
+        for b in self.common.entities.boats.iter() {
             if b.can_be_hit_by_projectile() {
                 out.push((Who::Mob(b.id), b.bounds()));
             }
         }
-        for c in self.common.carts.iter() {
+        for c in self.common.entities.carts.iter() {
             if c.can_be_hit_by_projectile() {
                 out.push((Who::Mob(c.id), c.bounds()));
             }
         }
-        for a in self.common.armor_stands.iter() {
+        for a in self.common.entities.armor_stands.iter() {
             if a.can_be_hit_by_projectile() {
                 out.push((Who::Mob(a.id), a.bounds()));
             }
         }
-        for t in self.common.tnts.iter() {
+        for t in self.common.entities.tnts.iter() {
             if t.can_be_hit_by_projectile() {
                 out.push((Who::Mob(t.id), t.bounds()));
             }
         }
-        for f in self.common.falling.iter() {
+        for f in self.common.entities.falling.iter() {
             if f.can_be_hit_by_projectile() {
                 out.push((Who::Mob(f.id), f.bounds()));
             }
         }
-        for f in self.common.item_frames.iter() {
+        for f in self.common.entities.item_frames.iter() {
             out.push((Who::Mob(f.id), extents(f.bounds())));
         }
-        for p in self.common.paintings.iter() {
+        for p in self.common.entities.paintings.iter() {
             out.push((Who::Mob(p.id), extents(p.bounds())));
         }
-        for c in self.common.cushions.iter() {
+        for c in self.common.entities.cushions.iter() {
             out.push((Who::Mob(c.id), extents(c.bounds())));
         }
-        for k in self.common.resident_entities.knots.iter() {
+        for k in self.common.entities.knots.iter() {
             let pos = sunrise_sim::mobs::leash::knot_state(k.fence).position;
             out.push((Who::Mob(k.id), knot_bounds(pos)));
         }
@@ -504,13 +501,13 @@ impl<'r> crate::game::ServerGame<'r> {
             && matches!(causing_target, Some(Target::Mob(_)));
 
         // ArmorStand.hurtServer (igniteForSeconds clears freeze; refusal restores fire_ticks only).
-        if let Some(i) = self.common.armor_stands.iter().position(|a| a.id == id) {
-            let prev_fire = self.common.armor_stands[i].fire_ticks;
+        if let Some(i) = self.common.entities.armor_stands.iter().position(|a| a.id == id) {
+            let prev_fire = self.common.entities.armor_stands[i].fire_ticks;
             if let Some(secs) = info.ignite_seconds
-                && !self.common.armor_stands[i].mod_fire_immune
+                && !self.common.entities.armor_stands[i].mod_fire_immune
             {
                 let ticks = (secs * 20.0) as i32;
-                let a = &mut self.common.armor_stands[i];
+                let a = &mut self.common.entities.armor_stands[i];
                 a.fire_ticks = a.fire_ticks.max(ticks);
                 if let Some(sunrise_core::nbt::Tag::Compound(map)) =
                     self.common.persist.raw.get_mut(&id)
@@ -527,7 +524,7 @@ impl<'r> crate::game::ServerGame<'r> {
             );
             if !hurt
                 && info.ignite_seconds.is_some()
-                && let Some(a) = self.common.armor_stands.iter_mut().find(|a| a.id == id)
+                && let Some(a) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id)
             {
                 a.fire_ticks = prev_fire;
             }
@@ -539,8 +536,8 @@ impl<'r> crate::game::ServerGame<'r> {
         }
 
         // ItemFrame / GlowItemFrame (`ItemFrame.hurtServer`).
-        if let Some(i) = self.common.item_frames.iter().position(|f| f.id == id) {
-            let kind = self.common.item_frames[i].kind();
+        if let Some(i) = self.common.entities.item_frames.iter().position(|f| f.id == id) {
+            let kind = self.common.entities.item_frames[i].kind();
             if self.object_refuses_projectile(info, id, kind, causing_id, creative) {
                 return NonMobHit::Refused;
             }
@@ -559,7 +556,7 @@ impl<'r> crate::game::ServerGame<'r> {
         }
 
         // Painting (`BlockAttachedEntity.hurtServer`).
-        if self.common.paintings.iter().any(|p| p.id == id) {
+        if self.common.entities.paintings.iter().any(|p| p.id == id) {
             if mob_blocked
                 || self.object_refuses_projectile(
                     info,
@@ -571,7 +568,7 @@ impl<'r> crate::game::ServerGame<'r> {
             {
                 return NonMobHit::Refused;
             }
-            let Some(i) = self.common.paintings.iter().position(|p| p.id == id) else {
+            let Some(i) = self.common.entities.paintings.iter().position(|p| p.id == id) else {
                 return NonMobHit::Refused;
             };
             let broken = self.break_painting_by(i, by_player, causing_target);
@@ -585,7 +582,7 @@ impl<'r> crate::game::ServerGame<'r> {
         // Cushion (`Cushion.hurtServer`: checks `mayBuild` and `mayInteract` spawn protection).
         if let Some(pos) = self
             .common
-            .cushions
+            .entities.cushions
             .iter()
             .find(|c| c.id == id)
             .map(|c| BlockPos::new(c.pos[0], c.pos[1], c.pos[2]))
@@ -616,7 +613,7 @@ impl<'r> crate::game::ServerGame<'r> {
             {
                 return NonMobHit::Refused;
             }
-            let Some(i) = self.common.cushions.iter().position(|c| c.id == id) else {
+            let Some(i) = self.common.entities.cushions.iter().position(|c| c.id == id) else {
                 return NonMobHit::Refused;
             };
             let broken = self.break_cushion_by(i, causing_target);
@@ -658,13 +655,12 @@ impl<'r> crate::game::ServerGame<'r> {
         // Pickable projectiles (`ShulkerBullet.hurtServer` destroys; `#redirectable_projectile` refuses).
         if let Some(i) = self
             .common
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .position(|p| p.id == id)
         {
             if matches!(
-                self.creatures.projectiles[i].kind,
+                self.entities.projectiles[i].kind,
                 ProjectileKind::ShulkerBullet { .. }
             ) {
                 if self.object_refuses_projectile(
@@ -678,8 +674,7 @@ impl<'r> crate::game::ServerGame<'r> {
                 }
                 let Some(i) = self
                     .common
-                    .creatures
-                    .projectiles
+                    .entities.projectiles
                     .iter()
                     .position(|p| p.id == id)
                 else {
@@ -688,28 +683,28 @@ impl<'r> crate::game::ServerGame<'r> {
                 let _ = self.destroy_shulker_bullet(i);
                 return NonMobHit::Hurt;
             }
-            if redirectable(&self.common.creatures.projectiles[i]) {
+            if redirectable(&self.common.entities.projectiles[i]) {
                 return NonMobHit::Refused;
             }
         }
 
         // FallingBlockEntity (`Entity.hurtServer`: always returns false).
-        if self.common.falling.iter().any(|f| f.id == id) {
+        if self.common.entities.falling.iter().any(|f| f.id == id) {
             return NonMobHit::Refused;
         }
 
         // PrimedTnt (`Entity.hurtServer`: always returns false).
-        if self.common.tnts.iter().any(|t| t.id == id) {
+        if self.common.entities.tnts.iter().any(|t| t.id == id) {
             return NonMobHit::Refused;
         }
 
         // Boat (`VehicleEntity.hurtServer`).
-        if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
-            let kind = self.common.boats[i].entity_type();
+        if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
+            let kind = self.common.entities.boats[i].entity_type();
             if self.object_refuses_projectile(info, id, &kind, causing_id, creative) {
                 return NonMobHit::Refused;
             }
-            let Some(i) = self.common.boats.iter().position(|b| b.id == id) else {
+            let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) else {
                 return NonMobHit::Refused;
             };
             self.hurt_boat(i, info.amount, creative);
@@ -717,12 +712,12 @@ impl<'r> crate::game::ServerGame<'r> {
         }
 
         // Minecart (`VehicleEntity.hurtServer`).
-        if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
-            let kind = self.common.carts[i].kind.id();
+        if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
+            let kind = self.common.entities.carts[i].kind.id();
             if self.object_refuses_projectile(info, id, kind, causing_id, creative) {
                 return NonMobHit::Refused;
             }
-            let Some(i) = self.common.carts.iter().position(|c| c.id == id) else {
+            let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) else {
                 return NonMobHit::Refused;
             };
             if info.is_arrow && info.damage_type == "minecraft:arrow" {
@@ -797,7 +792,7 @@ impl<'r> crate::game::ServerGame<'r> {
                 _ => self.common.player.as_ref().map(|_| Who::Player),
             },
             Who::Mob(id) => {
-                if self.common.mobs.iter().any(|m| m.id == id && !m.removed)
+                if self.common.entities.mobs.iter().any(|m| m.id == id && !m.removed)
                     || self.lan_guest_conn_by_id(id).is_some()
                 {
                     Some(Who::Mob(id))
@@ -825,7 +820,7 @@ impl<'r> crate::game::ServerGame<'r> {
                     .copied()
                     .unwrap_or(default_no_physics)
         };
-        for m in self.common.mobs.iter() {
+        for m in self.common.entities.mobs.iter() {
             if m.can_be_hit_by_projectile() && (!query.skip_no_physics || !m.no_physics(None)) {
                 visit(TargetCandidate {
                     who: Who::Mob(m.id),
@@ -879,7 +874,7 @@ impl<'r> crate::game::ServerGame<'r> {
             }
         }
         if !query.skip_crystals {
-            for c in self.common.crystals.iter() {
+            for c in self.common.entities.crystals.iter() {
                 if allows(c.id, false) {
                     visit(TargetCandidate {
                         who: Who::Mob(c.id),
@@ -890,7 +885,7 @@ impl<'r> crate::game::ServerGame<'r> {
                 }
             }
         }
-        for b in self.common.boats.iter() {
+        for b in self.common.entities.boats.iter() {
             if b.can_be_hit_by_projectile()
                 && (!query.skip_no_physics
                     || !b.no_physics(self.common.persist.no_physics.get(&b.id).copied()))
@@ -903,7 +898,7 @@ impl<'r> crate::game::ServerGame<'r> {
                 });
             }
         }
-        for c in self.common.carts.iter() {
+        for c in self.common.entities.carts.iter() {
             if c.can_be_hit_by_projectile()
                 && (!query.skip_no_physics
                     || !c.no_physics(self.common.persist.no_physics.get(&c.id).copied()))
@@ -916,7 +911,7 @@ impl<'r> crate::game::ServerGame<'r> {
                 });
             }
         }
-        for a in self.common.armor_stands.iter() {
+        for a in self.common.entities.armor_stands.iter() {
             if a.can_be_hit_by_projectile()
                 && (!query.skip_no_physics
                     || !a.no_physics(self.common.persist.no_physics.get(&a.id).copied()))
@@ -929,7 +924,7 @@ impl<'r> crate::game::ServerGame<'r> {
                 });
             }
         }
-        for t in self.common.tnts.iter() {
+        for t in self.common.entities.tnts.iter() {
             if t.can_be_hit_by_projectile()
                 && (!query.skip_no_physics
                     || !t.no_physics(self.common.persist.no_physics.get(&t.id).copied()))
@@ -942,7 +937,7 @@ impl<'r> crate::game::ServerGame<'r> {
                 });
             }
         }
-        for f in self.common.falling.iter() {
+        for f in self.common.entities.falling.iter() {
             if f.can_be_hit_by_projectile()
                 && (!query.skip_no_physics
                     || !f.no_physics(self.common.persist.no_physics.get(&f.id).copied()))
@@ -956,7 +951,7 @@ impl<'r> crate::game::ServerGame<'r> {
             }
         }
         // HangingEntity.recalculateBoundingBox sets Entity.position() to the box center.
-        for f in self.common.item_frames.iter() {
+        for f in self.common.entities.item_frames.iter() {
             if allows(f.id, false) {
                 let bounds = extents(f.bounds());
                 let pos = bounds.center();
@@ -968,7 +963,7 @@ impl<'r> crate::game::ServerGame<'r> {
                 });
             }
         }
-        for p in self.common.paintings.iter() {
+        for p in self.common.entities.paintings.iter() {
             if allows(p.id, false) {
                 let bounds = extents(p.bounds());
                 let pos = bounds.center();
@@ -980,7 +975,7 @@ impl<'r> crate::game::ServerGame<'r> {
                 });
             }
         }
-        for c in self.common.cushions.iter() {
+        for c in self.common.entities.cushions.iter() {
             if allows(c.id, false) {
                 visit(TargetCandidate {
                     who: Who::Mob(c.id),
@@ -990,7 +985,7 @@ impl<'r> crate::game::ServerGame<'r> {
                 });
             }
         }
-        for k in self.common.resident_entities.knots.iter() {
+        for k in self.common.entities.knots.iter() {
             if allows(k.id, false) {
                 let pos = sunrise_sim::mobs::leash::knot_state(k.fence).position;
                 visit(TargetCandidate {
@@ -1012,7 +1007,7 @@ impl<'r> crate::game::ServerGame<'r> {
             }
         }
         // Pickable projectiles (`#redirectable_projectile` + `ShulkerBullet`).
-        for q in self.common.creatures.projectiles.iter() {
+        for q in self.common.entities.projectiles.iter() {
             if query.skip_self_id == Some(q.id) || !is_pickable_projectile(q) {
                 continue;
             }
@@ -1043,7 +1038,7 @@ impl<'r> crate::game::ServerGame<'r> {
             }
         }
         if query.include_items {
-            for item in self.common.dropped.iter() {
+            for item in self.common.entities.dropped.iter() {
                 if item.health > 0 && allows(item.id, false) {
                     visit(TargetCandidate {
                         who: Who::Mob(item.id),

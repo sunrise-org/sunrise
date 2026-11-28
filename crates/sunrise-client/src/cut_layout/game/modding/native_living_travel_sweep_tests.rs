@@ -65,7 +65,7 @@ fn one_travel_fires_once_and_its_move_beside_and_noai_fires_nobody() {
                 "{Motion:[0.5d,0.0d,0.0d]}",
             )
             .unwrap_or_else(|e| panic!("summon zombie: {e:?}"));
-            let zombie = game.mobs.iter().next().expect("normal zombie spawned").id;
+            let zombie = game.entities.mobs.iter().next().expect("normal zombie spawned").id;
             game.summon_with_nbt(
                 "minecraft:zombie",
                 [6.5, 40.5, 5.5],
@@ -122,10 +122,10 @@ fn a_replaced_travel_velocity_steer_its_tick() {
                 "{Motion:[0.5d,0.0d,0.0d]}",
             )
             .unwrap_or_else(|e| panic!("summon zombie: {e:?}"));
-            let before: Vec<f64> = game.mobs.iter().map(|m| m.position.x).collect();
+            let before: Vec<f64> = game.entities.mobs.iter().map(|m| m.position.x).collect();
             let _ = game.tick_creatures();
             let _ = game.tick_creatures();
-            let after: Vec<f64> = game.mobs.iter().map(|m| m.position.x).collect();
+            let after: Vec<f64> = game.entities.mobs.iter().map(|m| m.position.x).collect();
             assert!(
                 after[0] < before[0],
                 "the westward replacement steered the tick, not the eastbound motion"
@@ -191,9 +191,9 @@ fn a_move_veto_still_holds_a_travel_that_ran() {
                 "{Motion:[0.5d,0.0d,0.0d]}",
             )
             .unwrap_or_else(|e| panic!("summon zombie: {e:?}"));
-            let x_before: Vec<f64> = game.mobs.iter().map(|m| m.position.x).collect();
+            let x_before: Vec<f64> = game.entities.mobs.iter().map(|m| m.position.x).collect();
             let _ = game.tick_creatures();
-            let x_after: Vec<f64> = game.mobs.iter().map(|m| m.position.x).collect();
+            let x_after: Vec<f64> = game.entities.mobs.iter().map(|m| m.position.x).collect();
             assert_eq!(*travels.lock().unwrap(), 1, "the travel ran");
             assert_eq!(*vetoes.lock().unwrap(), 1, "its move was vetoed");
             assert_eq!(

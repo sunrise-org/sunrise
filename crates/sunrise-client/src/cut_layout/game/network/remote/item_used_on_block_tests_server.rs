@@ -110,7 +110,7 @@ fn tnt_reads_the_hand_the_block_phase_listener_left() {
             };
             use_block(game);
             assert!(game.held().is_none(), "the listener took the fire charge");
-            assert!(game.tnts.is_empty(), "nothing primed");
+            assert!(game.entities.tnts.is_empty(), "nothing primed");
             assert_eq!(game.world.block(0, 64, 0), tnt);
         });
     });

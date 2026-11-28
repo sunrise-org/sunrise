@@ -82,8 +82,7 @@ pub(crate) fn launch(
     let own = if owner { ",Owner:[I;116,0,0,99]" } else { "" };
     assert!(game.run_command(&format!("summon {kind} {x}.5 202.5 {z}.5 {{UUID:[I;116,0,0,{n}],NoGravity:1b,Motion:[0d,-2d,0d]{own}}}")));
     let p = game
-        .creatures
-        .projectiles
+        .entities.projectiles
         .iter()
         .find(|p| game.persist.uuid_of(p.id) == Some([116, 0, 0, n]))
         .unwrap();
@@ -98,16 +97,16 @@ pub(crate) fn launch(
     p.id
 }
 pub(crate) fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) {
-    assert_eq!(game.dropped.len(), 1, "actual unfiltered item collection");
-    assert_eq!(&*game.dropped[0].stack.item, item);
-    assert_eq!(game.dropped[0].stack.count, 1);
+    assert_eq!(game.entities.dropped.len(), 1, "actual unfiltered item collection");
+    assert_eq!(&*game.entities.dropped[0].stack.item, item);
+    assert_eq!(game.entities.dropped[0].stack.count, 1);
 }
 #[test]
 #[ignore = "daily"]
 fn a_registered_arrow_collision_keeps_the_actual_projectile_for_chorus_loot() {
     with_game(|game| {
         source(game, 4, 4, "chorus_flower");
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         let id = launch(game, "arrow", 1, 4, 4, false);
         game.tick_projectiles().unwrap();
         assert!(
@@ -115,8 +114,7 @@ fn a_registered_arrow_collision_keeps_the_actual_projectile_for_chorus_loot() {
             "actual collision broke the source"
         );
         assert!(
-            game.creatures
-                .projectiles
+            game.entities.projectiles
                 .iter()
                 .find(|p| p.id == id)
                 .unwrap()
@@ -136,7 +134,7 @@ fn a_registered_snowball_collision_keeps_the_actual_projectile_for_chorus_loot()
         let id = launch(game, "snowball", 2, 4, 4, false);
         game.tick_projectiles().unwrap();
         assert!(game.run_command("execute if block 4 200 4 air"));
-        assert!(!game.creatures.projectiles.iter().any(|p| p.id == id));
+        assert!(!game.entities.projectiles.iter().any(|p| p.id == id));
         dropped(game, "minecraft:chorus_flower");
     });
 }
@@ -149,7 +147,7 @@ fn denied_hits_other_blocks_and_direct_destroy_keep_their_drop_contracts() {
         launch(game, "arrow", 3, 4, 4, false);
         game.tick_projectiles().unwrap();
         assert!(game.run_command("execute if block 4 200 4 chorus_flower"));
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         assert!(game.run_command("gamerule projectiles_can_break_blocks true"));
         assert!(
             game.ui
@@ -164,27 +162,27 @@ fn denied_hits_other_blocks_and_direct_destroy_keep_their_drop_contracts() {
         launch(game, "arrow", 4, 8, 4, true);
         game.tick_projectiles().unwrap();
         assert!(game.run_command("execute if block 8 200 4 chorus_flower"));
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         source(game, 12, 4, "chorus_flower");
         launch(game, "ender_pearl", 5, 12, 4, false);
         game.tick_projectiles().unwrap();
         assert!(game.run_command("execute if block 12 200 4 chorus_flower"));
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         source(game, 4, 8, "stone");
         launch(game, "arrow", 6, 4, 8, false);
         game.tick_projectiles().unwrap();
         assert!(game.run_command("execute if block 4 200 8 stone"));
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         assert!(game.run_command("gamerule block_drops false"));
         source(game, 8, 8, "chorus_flower");
         launch(game, "snowball", 7, 8, 8, false);
         game.tick_projectiles().unwrap();
         assert!(game.run_command("execute if block 8 200 8 air"));
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         assert!(game.run_command("gamerule block_drops true"));
         source(game, 4, 12, "chorus_flower");
         assert!(game.run_command("setblock 4 200 12 air destroy"));
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         source(game, 8, 12, "dirt");
         assert!(game.run_command("setblock 8 200 12 air destroy"));
         dropped(game, "minecraft:dirt");

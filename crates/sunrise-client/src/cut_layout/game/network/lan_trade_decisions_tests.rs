@@ -246,7 +246,7 @@ pub(crate) fn open(
         sunrise_gameplay_common::game::trading_common::MerchantState,
     };
     spawn(game, 40, "minecraft:villager");
-    game.mobs[0].extra.profession = sunrise_sim::mobs::villager::ProfessionState::from_index(5);
+    game.entities.mobs[0].extra.profession = sunrise_sim::mobs::villager::ProfessionState::from_index(5);
     let mut offer = offer("minecraft:wheat", "minecraft:emerald");
     offer.base_cost_a.stack.count = 1;
     offer.uses = 0;
@@ -254,11 +254,11 @@ pub(crate) fn open(
     offer.demand = 0;
     offer.special_price_diff = 0;
     offer.price_multiplier = 0.0;
-    game.mobs[0].extra.trade = Some(Box::new(Trader {
+    game.entities.mobs[0].extra.trade = Some(Box::new(Trader {
         offers: vec![offer.clone()],
         ..Trader::default()
     }));
-    game.mobs[0].extra.flag2 = true;
+    game.entities.mobs[0].extra.flag2 = true;
     let mut session = Session::new(vec![offer], true);
     // Avoid a level-up changing the one-offer test while still awarding real trade XP.
     session.level = 5;
@@ -325,7 +325,7 @@ pub(crate) fn prepare_work(
     game.world.game_time = WORK_TICK;
     game.world.day_time = WORK_TICK;
     *game.world.random = LegacyRandom::new(4096);
-    let mob = &mut game.mobs[0];
+    let mob = &mut game.entities.mobs[0];
     mob.position = Vec3::new(1.5, 80.0, 0.5);
     mob.previous = mob.position;
     mob.no_gravity = true;
@@ -406,7 +406,7 @@ fn a_restock_while_a_guest_trades_reaches_the_screen_the_save_and_the_mob() {
                 open(game, 2);
                 prepare_work(game, save.path());
                 work_screen_mut(game).merchant.session.offers[0].uses = 10;
-                let trader = game.mobs[0].extra.trade.as_mut().unwrap();
+                let trader = game.entities.mobs[0].extra.trade.as_mut().unwrap();
                 trader.offers[0].uses = 10;
                 trader.last_restock = -13_000;
                 trader.restocks_today = 2;
@@ -439,7 +439,7 @@ fn a_restock_while_a_guest_trades_reaches_the_screen_the_save_and_the_mob() {
                 );
 
                 game.guest_close_all(12);
-                let trader = game.mobs[0].extra.trade.as_ref().unwrap();
+                let trader = game.entities.mobs[0].extra.trade.as_ref().unwrap();
                 assert_eq!(
                     (
                         trader.offers[0].uses,
@@ -532,13 +532,13 @@ fn restock_after_hero_change(test: &str, before_work: bool) {
                 screen.slots = [Some(ItemStack::new("minecraft:wheat", 4)), None, None];
                 let offer = &mut screen.merchant.session.offers[0];
                 (offer.base_cost_a.stack.count, offer.uses) = (5, 10);
-                let trader = game.mobs[0].extra.trade.as_mut().unwrap();
+                let trader = game.entities.mobs[0].extra.trade.as_mut().unwrap();
                 (
                     trader.offers[0].base_cost_a.stack.count,
                     trader.offers[0].uses,
                 ) = (5, 10);
                 // The voice from opening the screen has finished its cooldown by work time.
-                game.mobs[0].ambient_timer = 0;
+                game.entities.mobs[0].ambient_timer = 0;
                 game.start_audio_capture();
 
                 tick_work(game);
@@ -613,7 +613,7 @@ fn an_offer_edit_after_the_work_step_survives_the_restock() {
                     open(game, 1);
                     prepare_work(game, save.path());
                     work_screen_mut(game).merchant.session.offers[0].uses = 10;
-                    game.mobs[0].extra.trade.as_mut().unwrap().offers[0].uses = 10;
+                    game.entities.mobs[0].extra.trade.as_mut().unwrap().offers[0].uses = 10;
 
                     tick_work(game);
 
@@ -637,7 +637,7 @@ fn a_silent_trade_edit_keeps_the_mob_clock_and_rng_when_the_threshold_wraps() {
         || {
             with_guests(|game| {
                 open(game, 1);
-                let mob = &mut game.mobs[0];
+                let mob = &mut game.entities.mobs[0];
                 Arc::make_mut(&mut mob.kind).ambient_interval = -i32::MAX;
                 mob.ambient_timer = 17;
                 let random = <(u64, Option<f64>)>::from(&mob.random);
@@ -649,8 +649,8 @@ fn a_silent_trade_edit_keeps_the_mob_clock_and_rng_when_the_threshold_wraps() {
 
                 let result = work_screen(game).slots[2].as_ref().unwrap();
                 assert_eq!(result.item.as_ref(), "minecraft:diamond");
-                assert_eq!(game.mobs[0].ambient_timer, 17);
-                assert_eq!(<(u64, Option<f64>)>::from(&game.mobs[0].random), random);
+                assert_eq!(game.entities.mobs[0].ambient_timer, 17);
+                assert_eq!(<(u64, Option<f64>)>::from(&game.entities.mobs[0].random), random);
                 assert!(!packets(&rx).iter().any(|packet| matches!(
                     packet,
                     Clientbound::Sound(_) | Clientbound::SoundEntity(_)
@@ -672,7 +672,7 @@ fn an_unused_offer_stays_unchanged_when_the_villager_starts_work() {
                 prepare_work(game, save.path());
                 let offer = work_screen(game).merchant.session.offers[0].clone();
                 let result = work_screen(game).slots[2].clone();
-                let trader = game.mobs[0].extra.trade.as_mut().unwrap();
+                let trader = game.entities.mobs[0].extra.trade.as_mut().unwrap();
                 // Signed int from RestocksToday: no Java subtraction on this same-day check.
                 trader.restocks_today = i32::MIN;
                 let rx = record_packets(game);
@@ -687,7 +687,7 @@ fn an_unused_offer_stays_unchanged_when_the_villager_starts_work() {
                 let screen = work_screen(game);
                 assert_eq!(screen.merchant.session.offers[0], offer);
                 assert_eq!(screen.slots[2], result);
-                let trader = game.mobs[0].extra.trade.as_ref().unwrap();
+                let trader = game.entities.mobs[0].extra.trade.as_ref().unwrap();
                 assert_eq!((trader.last_restock, trader.restocks_today), (0, i32::MIN));
             })
         },
@@ -729,7 +729,7 @@ fn an_earlier_restock_does_not_skip_a_paused_mobs_first_action() {
                     open(game, 1);
                     prepare_work(game, save.path());
                     work_screen_mut(game).merchant.session.offers[0].uses = 10;
-                    game.mobs[0].extra.trade.as_mut().unwrap().offers[0].uses = 10;
+                    game.entities.mobs[0].extra.trade.as_mut().unwrap().offers[0].uses = 10;
                     let make = |id, kind, x| {
                         let mut mob = Mob::new(
                             id,
@@ -753,8 +753,8 @@ fn an_earlier_restock_does_not_skip_a_paused_mobs_first_action() {
                             .intersects(pig.bounds())
                     );
                     let health = pig.health;
-                    game.mobs.push(fish);
-                    game.mobs.push(pig);
+                    game.entities.mobs.push(fish);
+                    game.entities.mobs.push(pig);
 
                     tick_work(game);
 
@@ -780,7 +780,7 @@ fn refusal_restores_crafted_score_and_another_merchants_offers() {
                 sunrise_gameplay_common::game::server_side::native_merchant_refs::tests::offer,
             };
             spawn(game, 41, "minecraft:villager");
-            game.mobs[1].extra.trade = Some(Box::new(Trader {
+            game.entities.mobs[1].extra.trade = Some(Box::new(Trader {
                 offers: vec![offer("minecraft:stick", "minecraft:emerald")],
                 ..Trader::default()
             }));
@@ -812,7 +812,7 @@ fn refusal_restores_crafted_score_and_another_merchants_offers() {
             assert_eq!(CALLS.get(), 1);
             assert!(game.score.board.objective("temporary").is_none());
             assert!(game.score.board.score(&player, "crafted").is_none());
-            let other = game.mobs[1].extra.trade.as_ref().unwrap();
+            let other = game.entities.mobs[1].extra.trade.as_ref().unwrap();
             assert_eq!(other.offers[0].uses, 1);
         })
     });
@@ -829,7 +829,7 @@ fn an_invalid_offer_restores_another_merchants_effects_and_modifiers() {
                 41,
                 "minecraft:villager",
             );
-            let mob = &mut game.mobs[1];
+            let mob = &mut game.entities.mobs[1];
             mob.add_effect("minecraft:slowness", 300, 0);
             mob.effects_dirty = false;
             let speed = mob.movement_speed().to_bits();
@@ -845,7 +845,7 @@ fn an_invalid_offer_restores_another_merchants_effects_and_modifiers() {
                 "effect writes must succeed before refusing the trade"
             );
             unchanged(game, 2);
-            let other = &game.mobs[1];
+            let other = &game.entities.mobs[1];
             assert_eq!(other.extra.effects.len(), 1);
             assert_eq!(other.extra.effects[0].id, "minecraft:slowness");
             assert_eq!(other.extra.effects[0].duration, 300);
@@ -861,7 +861,7 @@ fn an_invalid_offer_restores_another_merchants_effects_and_modifiers() {
 pub(crate) fn speed_modifier_ids(
     game: &sunrise_gameplay::game::ServerGame<'_>,
 ) -> [Vec<String>; 2] {
-    let attrs = game.mobs[1].extra.attributes.as_deref().unwrap();
+    let attrs = game.entities.mobs[1].extra.attributes.as_deref().unwrap();
     let legacy = attrs
         .modifiers
         .iter()
@@ -892,7 +892,7 @@ fn a_refused_trade_restores_modifier_order_after_reapplying_the_same_effect() {
                 41,
                 "minecraft:villager",
             );
-            let mob = &mut game.mobs[1];
+            let mob = &mut game.entities.mobs[1];
             mob.add_effect("minecraft:speed", 300, 0);
             finalize::add_modifier(
                 mob,
@@ -939,7 +939,7 @@ fn a_refused_trade_restores_modifier_order_after_a_nested_effect_clear() {
                 41,
                 "minecraft:villager",
             );
-            let mob = &mut game.mobs[1];
+            let mob = &mut game.entities.mobs[1];
             mob.add_effect("minecraft:speed", 300, 0);
             mob.add_effect("minecraft:slowness", 400, 0);
             finalize::add_modifier(
@@ -986,7 +986,7 @@ fn a_refused_trade_restores_a_replaced_transient_in_place() {
                 41,
                 "minecraft:villager",
             );
-            let mob = &mut game.mobs[1];
+            let mob = &mut game.entities.mobs[1];
             finalize::add_transient_modifier(
                 mob,
                 Attr::MovementSpeed,
@@ -1023,7 +1023,7 @@ fn a_refused_trade_restores_a_replaced_transient_in_place() {
             }
             assert_eq!(
                 finalize::transient_modifier_amount(
-                    &game.mobs[1],
+                    &game.entities.mobs[1],
                     Attr::MovementSpeed,
                     "minecraft:effect.speed"
                 ),
@@ -1153,7 +1153,7 @@ pub(crate) fn unchanged(game: &mut sunrise_gameplay::game::ServerGame<'_>, payme
     let session = game.lan_trade_session(12).unwrap();
     assert_eq!(session.offers[0].uses, 0);
     assert_eq!(session.xp, 0);
-    assert!(game.orbs.is_empty());
+    assert!(game.entities.orbs.is_empty());
     let host = game.server.lan.as_ref().unwrap();
     let slots = &host.menus[&12].merchant.as_ref().unwrap().slots;
     assert_eq!(count(slots[0].as_ref()), payment);
@@ -1209,7 +1209,7 @@ fn accepted_trade_keeps_the_collect_answer() {
             );
             assert_eq!(offers.offers[0].uses, 6);
             assert_eq!(content.carried.as_ref().unwrap().count, 1);
-            assert!(!game.orbs.is_empty());
+            assert!(!game.entities.orbs.is_empty());
             assert!(game.transactions.is_empty());
         })
     });
@@ -1313,7 +1313,7 @@ fn an_outer_abort_undoes_an_accepted_trade() {
             game.storage_scope(|game, _| {
                 assert!(game.lan_merchant_click(12, &click));
                 assert_eq!((result(game), dirt(game), stat(game)), (1, 0, 1));
-                assert!(game.orbs.is_empty(), "orb creation waits for root commit");
+                assert!(game.entities.orbs.is_empty(), "orb creation waits for root commit");
                 assert!(packets(&rx).is_empty());
                 ((), false)
             });

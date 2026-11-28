@@ -30,19 +30,19 @@ pub(crate) mod tests {
         with_resident_game(|game| {
             for (id, kind) in [(12, "minecraft:zombie"), (13, "minecraft:cow")] {
                 let kind = game.res.mob_types().get(kind).unwrap().clone();
-                game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
             }
             let zombie = game.living(game.entity(12).unwrap()).unwrap();
 
             assert!(game.living_swing(zombie, Hand::Off, false));
-            assert!(game.mobs[0].ai.swinging);
-            assert_eq!(game.mobs[0].extra.swing_right_arm, Some(false));
+            assert!(game.entities.mobs[0].ai.swinging);
+            assert_eq!(game.entities.mobs[0].extra.swing_right_arm, Some(false));
             // In the first half of a swing it doesn't restart, past it does.
-            game.mobs[0].ai.swing_time = 1;
+            game.entities.mobs[0].ai.swing_time = 1;
             assert!(!game.living_swing(zombie, Hand::Main, false));
-            game.mobs[0].ai.swing_time = 3;
+            game.entities.mobs[0].ai.swing_time = 3;
             assert!(game.living_swing(zombie, Hand::Main, false));
-            assert_eq!(game.mobs[0].ai.swing_time, -1);
+            assert_eq!(game.entities.mobs[0].ai.swing_time, -1);
 
             // A mob keeps what is stuck in it, but no spin and, using nothing,
             // no item use timer.
@@ -52,7 +52,7 @@ pub(crate) mod tests {
             assert!(game.living_set_arrow_removal_ticks(zombie, 4));
             assert!(game.living_set_stinger_removal_ticks(zombie, 5));
             assert_eq!(
-                game.mobs[0].extra.stuck,
+                game.entities.mobs[0].extra.stuck,
                 Stuck {
                     arrows: 3,
                     stingers: 2,
@@ -99,14 +99,14 @@ pub(crate) mod tests {
             game.tick_mobs().unwrap();
             assert_eq!(game.living_arrow_count(zombie), Some(2));
             // The next one waits `20 * (30 - 2)` ticks from the new count.
-            assert_eq!(game.mobs[0].extra.stuck.remove_arrow_time, 0);
+            assert_eq!(game.entities.mobs[0].extra.stuck.remove_arrow_time, 0);
             game.tick_mobs().unwrap();
             assert_eq!(
-                game.mobs[0].extra.stuck.remove_arrow_time,
+                game.entities.mobs[0].extra.stuck.remove_arrow_time,
                 20 * (30 - 2) - 1
             );
             // The other zombie has none of it.
-            assert_eq!(game.mobs[1].extra.stuck, Stuck::default());
+            assert_eq!(game.entities.mobs[1].extra.stuck, Stuck::default());
         });
     }
     /// A spear's use counts its own ticks, which a write to the ticks left
@@ -119,16 +119,16 @@ pub(crate) mod tests {
             floor_and_zombies(game);
             let zombie = game.living(game.entity(12).unwrap()).unwrap();
             let spear = ItemStack::new("minecraft:iron_spear", 1);
-            game.mobs[0].extra.set_slot_stack(MAINHAND, Some(spear));
-            game.mobs[0].ai.targets.clear();
-            game.mobs[0].ai.goals.clear();
+            game.entities.mobs[0].extra.set_slot_stack(MAINHAND, Some(spear));
+            game.entities.mobs[0].ai.targets.clear();
+            game.entities.mobs[0].ai.goals.clear();
             assert!(game.living_start_using_item(zombie, Hand::Main));
             let own = game.living_item_use_remaining(zombie).unwrap();
             assert!(own > 10);
             assert!(game.living_set_item_use_remaining(zombie, own - 10));
-            assert_eq!(game.mobs[0].extra.using_item, 11);
+            assert_eq!(game.entities.mobs[0].extra.using_item, 11);
             game.tick_mobs().unwrap();
-            assert_eq!(game.mobs[0].extra.using_item, 12);
+            assert_eq!(game.entities.mobs[0].extra.using_item, 12);
             assert_eq!(game.living_item_use_remaining(zombie), Some(own - 11));
         });
     }
@@ -424,18 +424,18 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(40, kind, Vec3::new(3.0, 64.0, 5.0), 0.0));
             let zombie = game.living(game.entity(40).unwrap()).unwrap();
             // The hand in the swing packet the flush sends after each swing.
             let mut sent = Vec::new();
             for natural in [false, true] {
                 for hand in [Hand::Off, Hand::Main] {
-                    game.mobs[0].ai.swinging = false;
-                    game.mobs[0].ai.swing_time = 0;
+                    game.entities.mobs[0].ai.swinging = false;
+                    game.entities.mobs[0].ai.swing_time = 0;
                     if natural {
                         // A swing no hand was named for (a melee attack).
-                        game.mobs[0].swing();
+                        game.entities.mobs[0].swing();
                     } else {
                         assert!(game.living_swing(zombie, hand, false));
                     }
@@ -450,7 +450,7 @@ pub(crate) mod tests {
                         }
                     }
                     // The swing runs on, so the next one is a new start.
-                    game.mobs[0].ai.swing_time = 3;
+                    game.entities.mobs[0].ai.swing_time = 3;
                     game.lan_flush_effects();
                     if natural {
                         break;

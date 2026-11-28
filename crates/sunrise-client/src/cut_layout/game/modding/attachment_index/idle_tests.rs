@@ -32,7 +32,7 @@ fn idle_tick_does_no_index_work_with_ten_thousand_bound_holders() {
             ]);
             game.load_painting(entity, Some(uuid), (0, 0));
         }
-        assert_eq!(game.paintings.len(), 10_000);
+        assert_eq!(game.entities.paintings.len(), 10_000);
         let index = game.attachment_indexes[&Dim::Overworld].clone();
         let before = index.lock().unwrap().snapshot_named("idle", "value");
         assert_eq!(before.len(), 10_000);
@@ -47,7 +47,7 @@ fn idle_tick_does_no_index_work_with_ten_thousand_bound_holders() {
             work,
             "idle tick touched the index"
         );
-        assert_eq!(game.paintings.len(), 10_000);
+        assert_eq!(game.entities.paintings.len(), 10_000);
         let after = index.lock().unwrap().snapshot_named("idle", "value");
         assert!(Arc::ptr_eq(&before, &after));
     });

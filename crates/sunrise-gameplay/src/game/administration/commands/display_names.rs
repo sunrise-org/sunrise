@@ -17,7 +17,7 @@ impl ServerGame<'_> {
                 .map_or_else(String::new, |g| g.name.clone()),
             Target::Mob(id) => self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map_or_else(String::new, |m| m.command_name().plain()),

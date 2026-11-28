@@ -464,12 +464,12 @@ impl ServerGame<'_> {
     /// The tags a mod gave the mobs from index `from` on before they joined
     /// move to where the level keeps a joined entity's tags.
     pub(in crate::game) fn join_spawn_tags(&mut self, from: usize) {
-        for i in from..self.common.mobs.len() {
-            if self.common.mobs[i].extra.spawn_tags.is_empty() {
+        for i in from..self.common.entities.mobs.len() {
+            if self.common.entities.mobs[i].extra.spawn_tags.is_empty() {
                 continue;
             }
-            let given = std::mem::take(&mut self.common.mobs[i].extra.spawn_tags);
-            let target = super::commands::Target::Mob(self.common.mobs[i].id);
+            let given = std::mem::take(&mut self.common.entities.mobs[i].extra.spawn_tags);
+            let target = super::commands::Target::Mob(self.common.entities.mobs[i].id);
             let mut tags = self.tags_of(target);
             for tag in given {
                 if !tags.contains(&tag) {

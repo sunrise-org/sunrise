@@ -1151,7 +1151,7 @@ mod request_save_tests {
     fn requested_save_waits_without_consuming_the_queue_while_lifted() {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
             game.server.levels.0.request_save(Dim::Overworld);
-            let pass = game.dropped.lift();
+            let pass = game.entities.dropped.lift();
             game.run_requested_saves();
             assert_eq!(game.server.levels.0.requested_saves, [Dim::Overworld]);
             drop(pass);

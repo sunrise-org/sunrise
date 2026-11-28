@@ -72,22 +72,22 @@ fn fence_ties_without_a_lead_only_on_main_hand() {
             0.0,
         );
         mob.extra.leash = Some(Holder::Player);
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         game.server.forced_hit = Some(hit);
         game.server.guest_use = Some(GuestUse::on_block(Hand::Off));
         game.with_hand(Hand::Off, |game| game.use_hand(Some(&hit)))
             .unwrap();
-        assert_eq!(game.mobs[0].extra.leash, Some(Holder::Player));
+        assert_eq!(game.entities.mobs[0].extra.leash, Some(Holder::Player));
         game.offhand = Some(ItemStack::new("minecraft:lead", 1));
         game.with_hand(Hand::Off, |game| game.use_hand(Some(&hit)))
             .unwrap();
-        assert_eq!(game.mobs[0].extra.leash, Some(Holder::Knot(hit.pos)));
-        game.mobs[0].extra.leash = Some(Holder::Player);
+        assert_eq!(game.entities.mobs[0].extra.leash, Some(Holder::Knot(hit.pos)));
+        game.entities.mobs[0].extra.leash = Some(Holder::Player);
         game.offhand = None;
         game.server.guest_use = Some(GuestUse::on_block(Hand::Main));
         game.with_hand(Hand::Main, |game| game.use_hand(Some(&hit)))
             .unwrap();
-        assert_eq!(game.mobs[0].extra.leash, Some(Holder::Knot(hit.pos)));
+        assert_eq!(game.entities.mobs[0].extra.leash, Some(Holder::Knot(hit.pos)));
     });
 }
 
@@ -314,7 +314,7 @@ fn right_click_block_controls_cauldron_use() {
             0.0,
         );
         mob.extra.leash = Some(sunrise_sim::mobs::leash::Holder::Player);
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         game.common.inventory[game.common.selected] = Some(ItemStack::new("minecraft:lead", 1));
         game.server.guest_use = Some(GuestUse::on_block(Hand::Main));
         game.server.forced_hit = Some(hit);
@@ -323,7 +323,7 @@ fn right_click_block_controls_cauldron_use() {
         game.use_item_as_player().unwrap();
         assert_eq!(calls.load(Ordering::SeqCst), before + 1);
         assert_eq!(
-            game.mobs.last().unwrap().extra.leash,
+            game.entities.mobs.last().unwrap().extra.leash,
             Some(sunrise_sim::mobs::leash::Holder::Player)
         );
 

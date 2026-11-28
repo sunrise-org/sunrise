@@ -36,7 +36,7 @@ impl ClientGame<'_> {
         } else {
             let mob = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == id as u32 && m.extra.using_item > 0);
             let item = mob.and_then(|m| {

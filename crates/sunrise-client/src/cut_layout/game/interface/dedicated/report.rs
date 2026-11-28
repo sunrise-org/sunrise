@@ -80,7 +80,7 @@ mod tests {
         let at = sunrise_core::geometry::Vec3::new(0.5, 4.0, 0.5);
         let mut cow = sunrise_sim::mobs::Mob::new(1, kind, at, 0.0);
         cow.custom_name = Some("Zorblax".into());
-        game.mobs.push(cow);
+        game.entities.mobs.push(cow);
         let sign = SignData {
             front: SignText {
                 lines: [

@@ -7,11 +7,13 @@ ROOT = pathlib.Path(__file__).resolve().parents[1]
 FIELDS = (
     "mobs|dropped|orbs|boats|carts|armor_stands|item_frames|paintings|tnts|"
     "falling|rockets|tridents|crystals|creatures\\.projectiles|others|"
-    "fangs\\.list|ominous_spawners|breath_clouds"
+    "fangs\\.list|ominous_spawners|breath_clouds|projectiles|cushions|bolts|knots|general\\.rows"
 )
+DOT = r"\s*\.\s*"
 RAW_TAKE = re.compile(
     r"(?:std::)?mem::take\s*\(\s*&mut\s+"
-    r"(?:self|game|lists)\.(?:common\.)?(?:" + FIELDS + r")\s*\)"
+    r"(?:self|game|lists)" + DOT + r"(?:common" + DOT + r")?(?:entities" + DOT + r")?(?:"
+    + FIELDS.replace(r"\.", DOT) + r")\s*\)"
     r"|std::mem::take\(&mut self\$\(\.\$list\)\+\)"
     r"|std::mem::take\(\s*projectiles\s*\)"
 )
@@ -33,14 +35,16 @@ class EntityLifts(unittest.TestCase):
     def test_guard_catches_direct_and_generated_entity_lists(self):
         for text in (
             "std::mem::take(&mut self.mobs)",
-            "std::mem::take(&mut self.common.mobs)",
+            "std::mem::take(&mut self.common.entities.mobs)",
+            "std::mem::take(&mut game.entities.dropped)",
+            "mem::take(\n &mut game.common\n .entities\n .projectiles\n)",
             "mem::take(\n &mut game.creatures.projectiles\n)",
             "std::mem::take(&mut self$(.$list)+)",
             "std::mem::take(projectiles)",
         ):
             with self.subTest(text=text):
                 self.assertIsNotNone(RAW_TAKE.search(text))
-        for text in ("std::mem::take(&mut self.mobs[i].outbox)",
+        for text in ("std::mem::take(&mut self.entities.mobs[i].outbox)",
                      "std::mem::take(&mut menu.dropped)"):
             with self.subTest(text=text):
                 self.assertIsNone(RAW_TAKE.search(text))

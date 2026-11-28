@@ -16,7 +16,7 @@ pub(crate) const AT: Vec3 = Vec3::new(4.5, 64.0, 4.5);
 
 pub(crate) fn push_pig(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32) {
     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-    game.mobs.push(Mob::new(id, kind, AT, 0.0));
+    game.entities.mobs.push(Mob::new(id, kind, AT, 0.0));
 }
 
 pub(crate) fn tick_area(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
@@ -56,9 +56,9 @@ fn nested_blast_skips_the_stand_or_cushion_already_being_removed() {
                 push_pig(game, 72);
                 game.mob_object_mut(72).unwrap().extra.mount = Some(71);
                 if stand {
-                    game.armor_stands.push(ArmorStand::new(71, AT, 0.0));
+                    game.entities.armor_stands.push(ArmorStand::new(71, AT, 0.0));
                 } else {
-                    game.cushions.push(Cushion {
+                    game.entities.cushions.push(Cushion {
                         attachment_lifetime: Default::default(),
                         join: Default::default(),
                         id: 71,
@@ -77,7 +77,7 @@ fn nested_blast_skips_the_stand_or_cushion_already_being_removed() {
                     assert!(game.break_cushion_by(0, None));
                 }
                 assert!(gate.fired());
-                assert!(game.armor_stands.is_empty() && game.cushions.is_empty());
+                assert!(game.entities.armor_stands.is_empty() && game.entities.cushions.is_empty());
                 assert_eq!(game.mob_object(72).unwrap().extra.mount, None);
             },
         );
@@ -116,18 +116,18 @@ fn stand_equipment_and_below_world_spills_are_visible_at_dismount() {
                     "stand" => {
                         let mut stand = ArmorStand::new(71, AT, 0.0);
                         stand.equipment[0] = Some(stack);
-                        game.armor_stands.push(stand);
+                        game.entities.armor_stands.push(stand);
                     }
                     "boat" => {
                         let mut boat = Boat::new(71, "oak".into(), below, 0.0).with_chest();
                         boat.items[0] = Some(stack);
                         boat.leash = Some(sunrise_sim::mobs::leash::Holder::Mob(300));
-                        game.boats.push(boat);
+                        game.entities.boats.push(boat);
                     }
                     _ => {
                         let mut cart = Minecart::new(71, CartKind::Chest, below);
                         cart.items[0] = Some(stack);
-                        game.carts.push(cart);
+                        game.entities.carts.push(cart);
                     }
                 }
                 gate.arm();
@@ -146,9 +146,9 @@ fn stand_equipment_and_below_world_spills_are_visible_at_dismount() {
                 }
                 assert!(gate.fired(), "{case}");
                 assert_eq!(game.mob_object(72).unwrap().extra.mount, None);
-                assert_eq!(game.dropped[0].stack.item.as_ref(), "minecraft:diamond");
+                assert_eq!(game.entities.dropped[0].stack.item.as_ref(), "minecraft:diamond");
                 if case == "boat" {
-                    assert_eq!(game.dropped[1].stack.item.as_ref(), "minecraft:lead");
+                    assert_eq!(game.entities.dropped[1].stack.item.as_ref(), "minecraft:lead");
                 }
             },
         );
@@ -257,7 +257,7 @@ fn mob_removal_keeps_a_veto_until_the_next_eligible_pre_with_or_without_off_leve
             assert!(game.try_mount_mob(72, 71));
             if off_level {
                 push_pig(game, 73);
-                let mut rejected = Mob::new(75, game.mobs[2].kind.clone(), AT, 0.0);
+                let mut rejected = Mob::new(75, game.entities.mobs[2].kind.clone(), AT, 0.0);
                 rejected.extra.mount = Some(73);
                 game.persist.off_level.insert(
                     75,
@@ -301,7 +301,7 @@ fn mob_removal_order_witness() {
 pub(crate) fn run_mob_removal_order_witness() {
     let observation = Arc::new(Observation::default());
     with_removal_test_hooks(Observe(observation.clone()), |game| {
-        game.boats
+        game.entities.boats
             .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                 70,
                 "oak".into(),

@@ -62,7 +62,7 @@ pub fn assert_resident_mobs(
 ) {
     for &identity in expected {
         let found = table.entity_lookup(&owner.dimension, identity.0, |at| {
-            let mob = &game.common.mobs[game.common.mobs.locate(at.join)?];
+            let mob = &game.common.entities.mobs[game.common.entities.mobs.locate(at.join)?];
             Some(SourceEntity {
                 id: mob.id,
                 value: (mob.id, mob.join),

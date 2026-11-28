@@ -112,9 +112,9 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_outside_the_ticking_chunks_d
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(px, py, pz)));
 
         for case in &witness.cases {
-            game.fangs.list.clear();
-            game.ominous_spawners.clear();
-            game.dropped.clear();
+            game.entities.fangs.list.clear();
+            game.entities.ominous_spawners.clear();
+            game.entities.dropped.clear();
             game.server.streaming.forced.clear();
 
             match case {
@@ -135,9 +135,9 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_outside_the_ticking_chunks_d
                     for _ in 0..*ticks {
                         game.tick_fangs();
                     }
-                    let fangs = game.fangs.list.first();
+                    let fangs = game.entities.fangs.list.first();
                     assert_eq!(
-                        game.fangs.list.len(),
+                        game.entities.fangs.list.len(),
                         usize::from(*expected_present),
                         "case {name}: fangs count"
                     );
@@ -177,11 +177,11 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_outside_the_ticking_chunks_d
                         game.tick_ominous_item_spawners();
                     }
                     assert_eq!(
-                        game.ominous_spawners.len(),
+                        game.entities.ominous_spawners.len(),
                         usize::from(*expected_present),
                         "case {name}: spawner count"
                     );
-                    if let Some(spawner) = game.ominous_spawners.first() {
+                    if let Some(spawner) = game.entities.ominous_spawners.first() {
                         assert_eq!(
                             spawner.position.map(f64::to_bits),
                             pos.map(f64::to_bits),
@@ -189,11 +189,11 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_outside_the_ticking_chunks_d
                         );
                     }
                     assert_eq!(
-                        game.dropped.len(),
+                        game.entities.dropped.len(),
                         *expected_spawned_items,
                         "case {name}: spawned items"
                     );
-                    for dropped in game.dropped.iter() {
+                    for dropped in game.entities.dropped.iter() {
                         assert_eq!(
                             dropped.stack.item.as_ref(),
                             item.as_str(),
@@ -341,7 +341,7 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_re
             );
 
             let t_fangs = game
-                .fangs
+                .entities.fangs
                 .list
                 .iter()
                 .find(|f| f.pos.map(f64::to_bits) == pause.target_fangs_pos.map(f64::to_bits));
@@ -351,7 +351,7 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_re
                 "stage {}: target fangs warmup",
                 stage.name
             );
-            let t_spawner = game.ominous_spawners.iter().any(|s| {
+            let t_spawner = game.entities.ominous_spawners.iter().any(|s| {
                 s.position.map(f64::to_bits) == pause.target_spawner_pos.map(f64::to_bits)
             });
             assert_eq!(
@@ -360,7 +360,7 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_re
                 stage.name
             );
             let t_items: Vec<_> = game
-                .dropped
+                .entities.dropped
                 .iter()
                 .filter(|d| in_chunk(d.position, pause.target_chunk))
                 .collect();
@@ -376,7 +376,7 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_re
             }
 
             let c_fangs = game
-                .fangs
+                .entities.fangs
                 .list
                 .iter()
                 .find(|f| f.pos.map(f64::to_bits) == pause.control_fangs_pos.map(f64::to_bits));
@@ -386,7 +386,7 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_re
                 "stage {}: control fangs warmup",
                 stage.name
             );
-            let c_spawner = game.ominous_spawners.iter().any(|s| {
+            let c_spawner = game.entities.ominous_spawners.iter().any(|s| {
                 s.position.map(f64::to_bits) == pause.control_spawner_pos.map(f64::to_bits)
             });
             assert_eq!(
@@ -395,7 +395,7 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_re
                 stage.name
             );
             let c_items: Vec<_> = game
-                .dropped
+                .entities.dropped
                 .iter()
                 .filter(|d| in_chunk(d.position, pause.control_chunk))
                 .collect();

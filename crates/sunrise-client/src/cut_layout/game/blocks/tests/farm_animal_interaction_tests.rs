@@ -68,9 +68,9 @@ fn game_at<'a>(
 }
 
 fn spawn(game: &mut sunrise_gameplay::game::ServerGame<'_>, kind: &str, id: u32, at: [f64; 3]) {
-    game.mobs.clear();
+    game.entities.mobs.clear();
     let kind = game.res.mob_types().get(kind).unwrap().clone();
-    game.mobs
+    game.entities.mobs
         .push(Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0));
 }
 
@@ -164,7 +164,7 @@ fn a_brown_mooshroom_milks_the_effects_of_a_mod_block_item() {
     let mut resources = None;
     let mut game = game_at(&mut resources, root);
     spawn(&mut game, "minecraft:mooshroom", 7, [2.5, 64.0, 2.5]);
-    game.mobs[0].extra.variant = 1;
+    game.entities.mobs[0].extra.variant = 1;
     game.inventory[0] = Some(ItemStack::new("stewtest:herb", 1));
     assert!(game.interact_mob(target(7)).unwrap());
     assert!(game.inventory[0].is_none());
@@ -180,7 +180,7 @@ fn a_brown_mooshroom_milks_the_effects_of_a_mod_block_item() {
             (Arc::from("minecraft:speed"), 24)
         ]
     );
-    assert!(game.mobs[0].extra.stew_effects.is_none());
+    assert!(game.entities.mobs[0].extra.stew_effects.is_none());
     drop(game);
     std::fs::remove_dir_all(scratch).unwrap();
 }

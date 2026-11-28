@@ -15,7 +15,7 @@ fn zombie(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> MobRef {
         .get("minecraft:zombie")
         .unwrap()
         .clone();
-    game.mobs
+    game.entities.mobs
         .push(Mob::new(99, kind, Vec3::new(3.5, 65.0, 3.5), 0.0));
     game.mob(game.entity(99).unwrap()).unwrap()
 }
@@ -53,7 +53,7 @@ fn navigation_flags_literal_values_and_current_path_unchanged() {
             dist_to_target: 0.0,
             reached: true,
         };
-        game.mobs[0].ai.nav.path = Some(path.clone());
+        game.entities.mobs[0].ai.nav.path = Some(path.clone());
         assert_eq!(mob.can_open_doors(game), Some(false));
         assert!(mob.set_can_open_doors(game, true));
         assert_eq!(mob.can_open_doors(game), Some(true));
@@ -63,7 +63,7 @@ fn navigation_flags_literal_values_and_current_path_unchanged() {
         assert_eq!(mob.can_float(game), Some(false));
         assert!(mob.set_can_float(game, true));
         assert_eq!(mob.can_float(game), Some(true));
-        assert_eq!(game.mobs[0].ai.nav.path, Some(path));
+        assert_eq!(game.entities.mobs[0].ai.nav.path, Some(path));
     });
 }
 #[test]
@@ -83,9 +83,9 @@ fn navigation_flags_refuse_stale_handle() {
 fn navigation_flags_refuse_held_out_of_level() {
     with_resident_game(|game| {
         let mob = zombie(game);
-        let held = game.mobs.lift();
+        let held = game.entities.mobs.lift();
         refused(game, mob);
-        game.mobs
+        game.entities.mobs
             .restore(held, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
     });
 }
@@ -100,7 +100,7 @@ fn navigation_flags_refuse_no_ground_or_flying_navigation() {
                 prefers_shallow: false,
             },
         ] {
-            game.mobs[0].ai.nav.kind = kind;
+            game.entities.mobs[0].ai.nav.kind = kind;
             refused(game, mob);
         }
     });
@@ -120,14 +120,14 @@ fn navigation_flags_refuse_client() {
 // Ask for exact reach (0) so this fixture can assert the literal goal block;
 // the public coordinate move_to normally allows a path within one block.
 fn path_to_exact_goal(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32) -> bool {
-    let mut mobs = game.mobs.lift();
+    let mut mobs = game.entities.mobs.lift();
     let index = mobs.iter().position(|m| m.id == id).unwrap();
     let started = {
         let world = game.mob_world_base(&[]);
         let path = mobs[index].create_path_to(&world, [10, 65, 3], 0);
         mobs[index].nav_move_to_path(&world, path, 1.0)
     };
-    game.mobs
+    game.entities.mobs
         .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
     started
 }
@@ -188,12 +188,12 @@ fn navigation_flags_closed_door_path_reaches_goal_only_when_passable() {
                 .spawn_mob_raw("minecraft:zombie", [3.5, 65.0, 3.5], true)
                 .unwrap();
             let mob = game.mob(game.entity(id).unwrap()).unwrap(); // start block [3, 65, 3]
-            game.mobs[0].ground.on_ground = true;
-            game.mobs[0].persistent = true;
-            game.mobs[0].ai.goals = GoalSelector::default();
-            game.mobs[0].ai.targets = GoalSelector::default();
-            game.mobs[0].ai.goals.add(1, BreakDoor::zombie());
-            game.mobs[0].extra.can_break_doors = true;
+            game.entities.mobs[0].ground.on_ground = true;
+            game.entities.mobs[0].persistent = true;
+            game.entities.mobs[0].ai.goals = GoalSelector::default();
+            game.entities.mobs[0].ai.targets = GoalSelector::default();
+            game.entities.mobs[0].ai.goals.add(1, BreakDoor::zombie());
+            game.entities.mobs[0].extra.can_break_doors = true;
             assert!(mob.set_can_open_doors(game, true));
             assert!(mob.set_can_pass_doors(game, passable));
             path_to_exact_goal(game, id); // goal block [10, 65, 3]
@@ -205,13 +205,13 @@ fn navigation_flags_closed_door_path_reaches_goal_only_when_passable() {
                     path_to_exact_goal(game, id);
                 }
                 let before = game
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .find(|m| m.id == id)
                     .map(|m| (m.position, m.health));
                 game.tick().unwrap();
                 let at = game
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .find(|m| m.id == id)
                     .unwrap_or_else(|| panic!("zombie removed at tick {tick}, before={before:?}"))
@@ -230,7 +230,7 @@ fn navigation_flags_closed_door_path_reaches_goal_only_when_passable() {
                 reached,
                 passable,
                 "600 ticks, can_pass_doors={passable}, final={:?}",
-                game.mobs.iter().find(|m| m.id == id).map(|m| (
+                game.entities.mobs.iter().find(|m| m.id == id).map(|m| (
                     m.position,
                     m.health,
                     m.ai.nav.is_done()

@@ -29,18 +29,18 @@ pub(in crate::game) mod tests {
                 let kind = game.res.mob_types().get(kind).unwrap().clone();
                 let mut mob = Mob::new(id, kind, Vec3::new(x, 100.0, 0.0), 0.0);
                 mobs::ai::register(&mut mob);
-                game.mobs.push(mob);
+                game.entities.mobs.push(mob);
             }
             let seed = (0..10_000)
                 .find(|&seed| LegacyRandom::new(seed).next_int_bound(21) == Ok(1))
                 .unwrap();
-            game.mobs[0].random = LegacyRandom::new(seed);
+            game.entities.mobs[0].random = LegacyRandom::new(seed);
             let actor = game.mob(game.entity(12).unwrap()).unwrap();
             let other = game.mob(game.entity(13).unwrap()).unwrap();
             let target = game.living(game.entity(14).unwrap()).unwrap();
             assert!(actor.set_target(game, Some(target)));
-            assert_eq!(game.mobs[0].extra.counter, 1);
-            game.mobs[0].extra.counter2 = 0;
+            assert_eq!(game.entities.mobs[0].extra.counter, 1);
+            game.entities.mobs[0].extra.counter2 = 0;
             game.start_audio_capture();
             game.tick_mobs().unwrap();
             assert_eq!(other.target(game), Some(target));

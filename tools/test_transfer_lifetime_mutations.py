@@ -45,9 +45,9 @@ for short, name, variant, family in [
 ]:
     line = f'self.rebind_transferred_entity({name}.id, {name});'
     cases.append((f'omit-arrival-{short}', levels, line, ';', arrival))
-    line = f'OffLevel::{variant}({name}) => self.common.{family}.push({name}),'
+    line = f'OffLevel::{variant}({name}) => self.common.entities.{family}.push({name}),'
     cases.append((f'clone-arrival-{short}', levels, line,
-                  f'OffLevel::{variant}({name}) => self.common.{family}.push({name}.clone()),', arrival))
+                  f'OffLevel::{variant}({name}) => self.common.entities.{family}.push({name}.clone()),', arrival))
 
 
 def run(label, test, ignored=False, kill=False):

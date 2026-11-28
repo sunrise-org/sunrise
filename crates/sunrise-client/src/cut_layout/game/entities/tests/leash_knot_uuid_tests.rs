@@ -38,16 +38,16 @@ fn a_mob_leashed_to_a_knots_uuid_is_tied_to_its_post() {
     assert!(
         game.run_command("summon minecraft:wolf 2.5 64 6.5 {NoAI:1b,leash:{UUID:[I;7193,0,0,1]}}")
     );
-    let id = game.mobs.last().unwrap().id;
-    let dropped = game.dropped.len();
+    let id = game.entities.mobs.last().unwrap().id;
+    let dropped = game.entities.dropped.len();
     for _ in 0..150 {
         game.tick_server(false).unwrap();
     }
-    let wolf = game.mobs.iter().find(|m| m.id == id).unwrap();
+    let wolf = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
     assert_eq!(wolf.extra.leash, Some(Holder::Knot([4, 64, 6])));
     assert!(wolf.extra.leash_pending.is_none());
     // Past the 100 ticks an unfound holder gets, no lead was dropped.
-    assert_eq!(game.dropped.len(), dropped);
+    assert_eq!(game.entities.dropped.len(), dropped);
 }
 
 #[test]
@@ -59,7 +59,7 @@ fn a_boat_leashed_to_a_knots_uuid_is_tied_to_its_post() {
     for _ in 0..150 {
         game.tick_server(false).unwrap();
     }
-    let boat = game.boats.last().unwrap();
+    let boat = game.entities.boats.last().unwrap();
     assert_eq!(boat.leash, Some(Holder::Knot([4, 64, 6])));
     assert!(boat.leash_pending.is_none());
 }

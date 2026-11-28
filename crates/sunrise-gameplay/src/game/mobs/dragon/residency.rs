@@ -4,7 +4,7 @@ impl crate::game::ServerGame<'_> {
     /// Install a replacement only after retiring the previous parts' sidecars.
     pub fn replace_resident_dragon(&mut self, dragon: Dragon) {
         self.discard_resident_dragon();
-        self.common.dragon.replace(dragon);
+        self.common.entities.dragon.replace(dragon);
     }
 
     /// Physical retirement must forget sidecar data before IDs can be reused,
@@ -12,7 +12,7 @@ impl crate::game::ServerGame<'_> {
     pub fn discard_resident_dragon(&mut self) {
         if let Some(id) = self
             .common
-            .dragon
+            .entities.dragon
             .as_ref()
             .filter(|dragon| dragon.id != 0)
             .map(|dragon| dragon.id)
@@ -24,7 +24,7 @@ impl crate::game::ServerGame<'_> {
             // included; the parts above are its separate entity ids.
             self.forget_entity(id);
         }
-        self.common.dragon.discard();
+        self.common.entities.dragon.discard();
     }
 
     /// The dragon the level holds and the index (`getSubEntities` order) of
@@ -48,7 +48,7 @@ impl crate::game::ServerGame<'_> {
         let Source::DragonPart(offset) = location.source else {
             return None;
         };
-        Some((self.common.dragon.as_ref()?, usize::from(offset)))
+        Some((self.common.entities.dragon.as_ref()?, usize::from(offset)))
     }
 
     pub(in crate::game) fn server_resident_dragon_part_index(&self, id: u32) -> Option<usize> {
@@ -57,7 +57,7 @@ impl crate::game::ServerGame<'_> {
 
     pub(in crate::game::server_side) fn assign_resident_crystal_ids(&mut self) {
         crate::game::entity_residency::assign_resident_ids!(
-            self.common.crystals,
+            self.common.entities.crystals,
             c,
             &mut self.server.next_entity,
             None

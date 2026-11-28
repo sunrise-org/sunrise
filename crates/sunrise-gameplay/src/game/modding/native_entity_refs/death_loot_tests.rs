@@ -92,9 +92,9 @@ fn rolls_live_death_context_without_dropping() {
         let mut sword = ItemStack::new("minecraft:iron_sword", 1);
         sword.enchant("minecraft:looting", 3);
         killer.set_equipment_stack(0, Some(sword));
-        game.mobs.push(victim);
-        game.mobs.push(killer);
-        game.mobs.push(Mob::new(14, zombie, Vec3::ZERO, 0.0));
+        game.entities.mobs.push(victim);
+        game.entities.mobs.push(killer);
+        game.entities.mobs.push(Mob::new(14, zombie, Vec3::ZERO, 0.0));
         game.server.next_entity = game.server.next_entity.max(14);
         let victim = game.entity(12).unwrap();
         let killer = game.entity(13).unwrap();
@@ -158,12 +158,12 @@ fn rolls_live_death_context_without_dropping() {
                 .collect::<Vec<_>>()
         };
         assert!(saddles(game).is_empty());
-        game.mobs[0].extra.mount = Some(14);
+        game.entities.mobs[0].extra.mount = Some(14);
         assert_eq!(saddles(game), ["minecraft:saddle"]);
-        game.mobs[0].extra.mount = None;
-        assert!(game.dropped.is_empty());
-        assert!(game.orbs.is_empty());
-        assert_eq!(game.mobs[0].health, health);
+        game.entities.mobs[0].extra.mount = None;
+        assert!(game.entities.dropped.is_empty());
+        assert!(game.entities.orbs.is_empty());
+        assert_eq!(game.entities.mobs[0].health, health);
 
         game.spawn_item(
             ItemStack::new("minecraft:stick", 1),
@@ -171,8 +171,8 @@ fn rolls_live_death_context_without_dropping() {
             [0.0; 3],
             0,
         );
-        let item = game.entity(game.dropped[0].id).unwrap();
-        game.mobs[0].extra.death_table_seed = 0;
+        let item = game.entity(game.entities.dropped[0].id).unwrap();
+        game.entities.mobs[0].extra.death_table_seed = 0;
         *game.world.random = LegacyRandom::new(741);
         let expected_next = game.world.random.clone().next_long();
         let unknown_type = Identifier::parse("test:no_damage_type").unwrap();

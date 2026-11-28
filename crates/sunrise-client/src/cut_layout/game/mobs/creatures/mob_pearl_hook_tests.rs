@@ -125,7 +125,7 @@ pub(crate) fn run_mob_pearls_use_the_hook_and_recheck_listener_writes_without_pl
                 mob.velocity = Vec3::new(0.5, -0.25, 0.75);
                 mob.fall_distance = 9.0;
                 let health = mob.health;
-                game.mobs.push(mob);
+                game.entities.mobs.push(mob);
                 let mut pearl = Projectile::new(
                     ProjectileKind::EnderPearl,
                     Vec3::new(6.0, 75.0, 6.0),
@@ -147,7 +147,7 @@ pub(crate) fn run_mob_pearls_use_the_hook_and_recheck_listener_writes_without_pl
                     expected_random.next_long(),
                     "mob pearl handling makes no player endermite draw"
                 );
-                let mob = game.mobs.iter().find(|m| m.id == id && !m.removed);
+                let mob = game.entities.mobs.iter().find(|m| m.id == id && !m.removed);
                 match action {
                     0 => {
                         let m = mob.unwrap();
@@ -167,7 +167,7 @@ pub(crate) fn run_mob_pearls_use_the_hook_and_recheck_listener_writes_without_pl
                     3 => assert!(mob.is_none()),
                     _ => unreachable!(),
                 }
-                assert!(!game.mobs.iter().any(|m| m.species() == Species::Endermite));
+                assert!(!game.entities.mobs.iter().any(|m| m.species() == Species::Endermite));
                 assert_eq!(
                     *command_teleports.lock().unwrap(),
                     if action < 2 { vec![] } else { vec![42] },

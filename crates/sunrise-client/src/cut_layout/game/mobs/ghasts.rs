@@ -67,7 +67,7 @@ pub(crate) mod hatch_tests {
             }
             game.server_process_level_events().unwrap();
 
-            let (ghastling, tadpoles) = game.mobs.split_first().unwrap();
+            let (ghastling, tadpoles) = game.entities.mobs.split_first().unwrap();
             assert_eq!(ghastling.kind.id, "minecraft:happy_ghast");
             assert!(ghastling.is_baby());
             assert!(!ghastling.persistent);
@@ -129,14 +129,14 @@ pub(crate) mod item_collision_tests {
                 game.tick_world(true).unwrap();
             }
             let rest = |x: f64| {
-                game.dropped
+                game.entities.dropped
                     .iter()
                     .find(|d| (d.position.x - x).abs() < 0.5)
                     .map(|d| d.position.y)
                     .unwrap()
             };
             assert_eq!(rest(4.5), 200.0, "through the minecart to the stone");
-            let boat_top = game.boats[0].bounds().max_position().y;
+            let boat_top = game.entities.boats[0].bounds().max_position().y;
             assert_eq!(rest(10.5), boat_top, "on the boat");
         });
     }

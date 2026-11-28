@@ -952,7 +952,7 @@ pub(crate) mod slot_mutation_tests {
                     game.world.block_entities.get(&A),
                     Some(BlockEntity::Furnace(_))
                 ));
-                assert_eq!(game.dropped.len(), 1, "no hopper tick took the item");
+                assert_eq!(game.entities.dropped.len(), 1, "no hopper tick took the item");
             },
         );
     }
@@ -1014,7 +1014,7 @@ pub(crate) mod slot_mutation_tests {
                     1,
                     "the outer pass's hopper took the item"
                 );
-                assert!(game.dropped.is_empty());
+                assert!(game.entities.dropped.is_empty());
                 assert_eq!(game.spawner_tick_positions, [B]);
                 assert!(game.server.item_columns.is_none());
             },

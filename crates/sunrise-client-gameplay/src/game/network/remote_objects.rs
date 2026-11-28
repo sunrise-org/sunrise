@@ -55,12 +55,12 @@ impl ClientGame<'_> {
             // knot's id (handleEntityLinkPacket's delayed holder); now it can
             // be tied to the fence.
             self.client.remote_knots.insert(id, block);
-            for m in &mut self.common.mobs {
+            for m in &mut self.common.entities.mobs {
                 if m.extra.leash == Some(Holder::Mob(id)) {
                     m.extra.leash = Some(Holder::Knot(block));
                 }
             }
-            self.common.boats.for_each_mut(|b| {
+            self.common.entities.boats.for_each_mut(|b| {
                 if b.leash == Some(Holder::Mob(id)) {
                     b.leash = Some(Holder::Knot(block));
                 }
@@ -87,7 +87,7 @@ impl ClientGame<'_> {
             c.previous_yaw = yaw;
             c.pitch = pitch;
             c.previous_pitch = pitch;
-            self.common.carts.push(c);
+            self.common.entities.carts.push(c);
         } else if let Some((wood, chest)) =
             sunrise_gameplay_common::game::boats_common::any_boat_wood(kind)
             && self.client.boat_models.has(wood, chest)
@@ -101,7 +101,7 @@ impl ClientGame<'_> {
             if chest {
                 b = b.with_chest();
             }
-            self.common.boats.push(b);
+            self.common.entities.boats.push(b);
         } else if kind == "minecraft:armor_stand" {
             // LivingEntity.recreateFromPacket seeds the body and head from
             // the packet's head yaw, independently of the view yaw.
@@ -113,9 +113,9 @@ impl ClientGame<'_> {
             let clamped = (pitch % 360.0).clamp(-90.0, 90.0);
             stand.pitch = clamped;
             stand.previous_pitch = clamped;
-            self.common.armor_stands.push(stand);
+            self.common.entities.armor_stands.push(stand);
         } else if kind == "minecraft:item_frame" || kind == "minecraft:glow_item_frame" {
-            self.common.item_frames.push(ItemFrame {
+            self.common.entities.item_frames.push(ItemFrame {
                 attachment_lifetime: Default::default(),
                 join: Default::default(),
                 id,
@@ -134,7 +134,7 @@ impl ClientGame<'_> {
             });
         } else if kind == "minecraft:cushion" {
             // BlockAttachedEntity.pos: `BlockPos.containing` of the spawn.
-            self.common.cushions.push(Cushion {
+            self.common.entities.cushions.push(Cushion {
                 attachment_lifetime: Default::default(),
                 join: Default::default(),
                 id,
@@ -162,7 +162,7 @@ impl ClientGame<'_> {
                 5 => 3,
                 _ => 0,
             };
-            self.common.paintings.push(Painting {
+            self.common.entities.paintings.push(Painting {
                 attachment_lifetime: Default::default(),
                 join: Default::default(),
                 id,
@@ -217,22 +217,22 @@ impl ClientGame<'_> {
         let id = id as u32;
         for (index, _, value) in values {
             if let (8, Value::Item(stack)) = (index, value)
-                && self.common.ominous_spawners.iter().any(|s| s.id == id)
+                && self.common.entities.ominous_spawners.iter().any(|s| s.id == id)
             {
                 // OminousItemSpawner.DATA_ITEM.
                 if let (Some(item), Some(i)) = (
                     self.to_stack(stack),
-                    self.common.ominous_spawners.iter().position(|s| s.id == id),
+                    self.common.entities.ominous_spawners.iter().position(|s| s.id == id),
                 ) {
-                    self.common.ominous_spawners.update(i, |s| s.item = item);
+                    self.common.entities.ominous_spawners.update(i, |s| s.item = item);
                 }
-            } else if self.common.item_frames.iter().any(|f| f.id == id) {
+            } else if self.common.entities.item_frames.iter().any(|f| f.id == id) {
                 // HangingEntity.DATA_DIRECTION, ItemFrame.DATA_ITEM and DATA_ROTATION.
                 let item = match (index, value) {
                     (9, Value::Item(stack)) => Some(self.to_stack(stack)),
                     _ => None,
                 };
-                let Some(f) = self.common.item_frames.iter_mut().find(|f| f.id == id) else {
+                let Some(f) = self.common.entities.item_frames.iter_mut().find(|f| f.id == id) else {
                     continue;
                 };
                 match (index, value) {
@@ -244,17 +244,17 @@ impl ClientGame<'_> {
                 if let Some(item) = item {
                     f.item = item;
                 }
-            } else if self.common.paintings.iter().any(|p| p.id == id) {
+            } else if self.common.entities.paintings.iter().any(|p| p.id == id) {
                 // HangingEntity.DATA_DIRECTION, kept as the painting's 2D value; it is never vertical.
                 if let (8, Value::Id(direction)) = (index, value)
                     && let Some(facing) = painting_facing(*direction)
-                    && let Some(p) = self.common.paintings.iter_mut().find(|p| p.id == id)
+                    && let Some(p) = self.common.entities.paintings.iter_mut().find(|p| p.id == id)
                 {
                     p.facing = facing;
                 }
                 // Painting.DATA_PAINTING_VARIANT_ID: holder already resolved during packet decode.
                 if let (9, Value::PaintingVariant(holder)) = (index, value)
-                    && let Some(p) = self.common.paintings.iter_mut().find(|p| p.id == id)
+                    && let Some(p) = self.common.entities.paintings.iter_mut().find(|p| p.id == id)
                 {
                     let (variant_name, v) = match holder {
                         PaintingHolder::Reference { name, variant, .. } => {
@@ -269,7 +269,7 @@ impl ClientGame<'_> {
                     p.width = v.width;
                     p.height = v.height;
                 }
-            } else if let Some(a) = self.common.armor_stands.iter_mut().find(|a| a.id == id) {
+            } else if let Some(a) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id) {
                 match (index, value) {
                     // Entity.DATA_SHARED_FLAGS_ID: FLAG_ONFIRE (`Entity.isOnFire` on a client, which
                     // draws the flames; the client never counts it down) and FLAG_INVISIBLE.
@@ -299,8 +299,8 @@ impl ClientGame<'_> {
                     }
                     _ => {}
                 }
-            } else if let Some(i) = self.common.bolts.iter().position(|b| b.id == id) {
-                self.common.bolts.update(i, |b| match (index, value) {
+            } else if let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) {
+                self.common.entities.bolts.update(i, |b| match (index, value) {
                     (0, Value::Byte(flags)) => {
                         b.fire_ticks = i32::from(flags & 1);
                         b.glowing = (*flags as u8 & 0x40) != 0;
@@ -314,13 +314,13 @@ impl ClientGame<'_> {
                     (7, Value::Int(frozen)) => b.ticks_frozen = *frozen,
                     _ => {}
                 });
-            } else if let Some(c) = self.common.cushions.iter_mut().find(|c| c.id == id) {
+            } else if let Some(c) = self.common.entities.cushions.iter_mut().find(|c| c.id == id) {
                 // Cushion.DATA_COLOR (DyeColor, a byte-backed id).
                 if let (8, Value::Id(color)) = (index, value) {
                     c.color = (*color).clamp(0, 15) as u8;
                 }
-            } else if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
-                self.common.boats.update(i, |b| {
+            } else if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
+                self.common.entities.boats.update(i, |b| {
                     // VehicleEntity's hurt, direction and damage; the paddles and
                     // the bubble time.
                     match (index, value) {
@@ -334,8 +334,8 @@ impl ClientGame<'_> {
                         _ => {}
                     }
                 });
-            } else if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
-                self.common.carts.update(i, |c| match (index, value) {
+            } else if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
+                self.common.entities.carts.update(i, |c| match (index, value) {
                     (8, Value::Int(v)) => c.hurt_time = *v,
                     (9, Value::Int(v)) => c.hurt_dir = *v,
                     (10, Value::Float(v)) => c.damage = *v,
@@ -380,7 +380,7 @@ impl ClientGame<'_> {
         id: i32,
         slots: &[(u8, Option<sunrise_protocol::item::Stack>)],
     ) {
-        if !self.common.armor_stands.iter().any(|a| a.id == id as u32) {
+        if !self.common.entities.armor_stands.iter().any(|a| a.id == id as u32) {
             return;
         }
         let items: Vec<_> = slots
@@ -389,7 +389,7 @@ impl ClientGame<'_> {
             .collect();
         if let Some(a) = self
             .common
-            .armor_stands
+            .entities.armor_stands
             .iter_mut()
             .find(|a| a.id == id as u32)
         {
@@ -409,8 +409,8 @@ impl ClientGame<'_> {
         let id = id as u32;
         // The boat the player drives turns here (isLocalInstanceAuthoritative).
         let driven = self.common.riding.filter(|&id| self.controls_boat(id));
-        if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
-            self.common.boats.update(i, |b| {
+        if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
+            self.common.entities.boats.update(i, |b| {
                 if Some(id) == driven {
                     return;
                 }
@@ -419,10 +419,10 @@ impl ClientGame<'_> {
                 // the boat's yaw at once, so only its ground state is taken here.
                 b.ground.on_ground = on_ground;
             });
-        } else if let Some(i) = self.common.carts.iter().position(|c| c.id == id)
+        } else if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id)
             && let Some(yaw) = yaw
         {
-            self.common.carts.update(i, |c| c.yaw = yaw);
+            self.common.entities.carts.update(i, |c| c.yaw = yaw);
         }
     }
 
@@ -430,11 +430,11 @@ impl ClientGame<'_> {
     pub(in crate::game::client_side) fn remote_cart_primed(&mut self, id: u32) {
         if let Some(i) = self
             .common
-            .carts
+            .entities.carts
             .iter()
             .position(|c| c.id == id && c.kind == super::minecarts::CartKind::Tnt)
         {
-            self.common.carts.update(i, |c| c.fuse = 80);
+            self.common.entities.carts.update(i, |c| c.fuse = 80);
         }
     }
 
@@ -450,8 +450,8 @@ impl ClientGame<'_> {
     ) {
         let improved = self.minecart_improvements();
         let mut cart = 0;
-        while cart < self.common.carts.len() {
-            let (id, from, to, kind, fuse, fuel) = self.common.carts.update(cart, |c| {
+        while cart < self.common.entities.carts.len() {
+            let (id, from, to, kind, fuse, fuel) = self.common.entities.carts.update(cart, |c| {
                 let from = c.position;
                 c.previous = c.position;
                 c.previous_yaw = c.yaw;
@@ -472,8 +472,8 @@ impl ClientGame<'_> {
             if improved {
                 let [x, y, z] = self.rail_block(to, true);
                 let on_rails = self.is_rail(self.common.world.block(x, y, z));
-                if self.common.carts[cart].on_rails != on_rails {
-                    self.common.carts.update(cart, |c| c.on_rails = on_rails);
+                if self.common.entities.carts[cart].on_rails != on_rails {
+                    self.common.entities.carts.update(cart, |c| c.on_rails = on_rails);
                 }
             }
             if kind == super::minecarts::CartKind::Furnace
@@ -502,8 +502,8 @@ impl ClientGame<'_> {
         // The boat the player drives moves here, not where the server says.
         let driven = self.common.riding.filter(|&id| self.controls_boat(id));
         let mut boat = 0;
-        while boat < self.common.boats.len() {
-            let (id, from, to) = self.common.boats.update(boat, |b| {
+        while boat < self.common.entities.boats.len() {
+            let (id, from, to) = self.common.entities.boats.update(boat, |b| {
                 if Some(b.id) == driven {
                     return (b.id, b.position, b.position);
                 }
@@ -522,9 +522,9 @@ impl ClientGame<'_> {
             boat += 1;
         }
         let mut stand = 0;
-        while stand < self.common.armor_stands.len() {
+        while stand < self.common.entities.armor_stands.len() {
             let (id, from, to) = {
-                let a = &mut self.common.armor_stands[stand];
+                let a = &mut self.common.entities.armor_stands[stand];
                 let from = a.position;
                 a.position = step(a.id, a.position);
                 (a.id, from, a.position)
@@ -536,10 +536,10 @@ impl ClientGame<'_> {
         }
         // `Entity.tickCount` on the client: a painting's and an item frame's lived ticks, which
         // their renderers read as the age.
-        for painting in &mut self.common.paintings {
+        for painting in &mut self.common.entities.paintings {
             painting.ticks = painting.ticks.saturating_add(1);
         }
-        for frame in &mut self.common.item_frames {
+        for frame in &mut self.common.entities.item_frames {
             frame.ticks = frame.ticks.saturating_add(1);
         }
         self.tick_remote_boat_bubbles();
@@ -551,15 +551,15 @@ impl ClientGame<'_> {
         use serde_json::json;
         let at = |p: Vec3| [p.x, p.y, p.z];
         let mut out = Vec::new();
-        for b in &self.common.boats {
+        for b in &self.common.entities.boats {
             out.push(json!({"id": b.id, "kind": b.entity_type(), "position": at(b.position), "yaw": b.yaw}));
         }
-        for c in &self.common.carts {
+        for c in &self.common.entities.carts {
             out.push(
                 json!({"id": c.id, "kind": c.kind.id(), "position": at(c.position), "yaw": c.yaw}),
             );
         }
-        for a in &self.common.armor_stands {
+        for a in &self.common.entities.armor_stands {
             let items: Vec<_> = a
                 .equipment
                 .iter()
@@ -568,7 +568,7 @@ impl ClientGame<'_> {
             out.push(json!({"id": a.id, "kind": "minecraft:armor_stand", "position": at(a.position), "yaw": a.yaw,
                 "small": a.small, "arms": a.show_arms, "no_base_plate": a.no_base_plate, "equipment": items}));
         }
-        for c in &self.common.cushions {
+        for c in &self.common.entities.cushions {
             out.push(
                 json!({"id": c.id, "kind": "minecraft:cushion", "position": at(c.position),
                 "yaw": c.yaw, "color": c.color_name()}),
@@ -579,13 +579,13 @@ impl ClientGame<'_> {
                 "position": at(i.position), "width": i.width, "height": i.height,
                 "response": i.response}));
         }
-        for f in &self.common.item_frames {
+        for f in &self.common.entities.item_frames {
             out.push(
                 json!({"id": f.id, "kind": f.kind(), "position": f.pos, "facing": f.facing,
                 "item": f.item.as_ref().map(|i| &*i.item), "rotation": f.rotation}),
             );
         }
-        for p in &self.common.paintings {
+        for p in &self.common.entities.paintings {
             out.push(json!({"id": p.id, "kind": "minecraft:painting", "position": p.pos, "facing": p.facing,
                 "variant": &*p.variant}));
         }
@@ -601,42 +601,42 @@ impl ClientGame<'_> {
     pub(in crate::game) fn clear_remote_objects(&mut self) {
         self.client.text_displays.0.clear();
         self.client.interactions.clear();
-        self.common.ominous_spawners.clear();
+        self.common.entities.ominous_spawners.clear();
         self.client.remote_knots.clear();
-        self.common.carts.clear();
-        self.common.boats.clear();
-        self.common.armor_stands.clear();
-        self.common.cushions.clear();
-        self.common.item_frames.clear();
-        self.common.paintings.clear();
-        self.common.orbs.clear();
+        self.common.entities.carts.clear();
+        self.common.entities.boats.clear();
+        self.common.entities.armor_stands.clear();
+        self.common.entities.cushions.clear();
+        self.common.entities.item_frames.clear();
+        self.common.entities.paintings.clear();
+        self.common.entities.orbs.clear();
         self.pick_section_clear();
     }
 
     pub fn remove_remote_object(&mut self, id: u32) {
         self.client.text_displays.0.shift_remove(&(id as i32));
         self.client.interactions.remove(&(id as i32));
-        self.common.ominous_spawners.retain(|s| s.id != id);
+        self.common.entities.ominous_spawners.retain(|s| s.id != id);
         self.client.remote_knots.remove(&id);
-        self.common.carts.retain(|c| c.id != id);
-        self.common.boats.retain(|b| b.id != id);
-        self.common.armor_stands.retain(|a| a.id != id);
+        self.common.entities.carts.retain(|c| c.id != id);
+        self.common.entities.boats.retain(|b| b.id != id);
+        self.common.entities.armor_stands.retain(|a| a.id != id);
         // `Entity.setRemoved`: the cushion's rider gets off where it sat
         // (`LivingEntity.dismountVehicle`), not inside the block below.
         if self.common.riding == Some(id)
             && let Some(y) = self
                 .common
-                .cushions
+                .entities.cushions
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.position.y)
         {
             self.common.dismount_removed_vehicle(y);
         }
-        self.common.cushions.retain(|c| c.id != id);
-        self.common.item_frames.retain(|f| f.id != id);
-        self.common.paintings.retain(|p| p.id != id);
-        self.common.bolts.retain(|b| b.id != id);
+        self.common.entities.cushions.retain(|c| c.id != id);
+        self.common.entities.item_frames.retain(|f| f.id != id);
+        self.common.entities.paintings.retain(|p| p.id != id);
+        self.common.entities.bolts.retain(|b| b.id != id);
         self.pick_section_remove(id);
     }
 }
@@ -676,7 +676,7 @@ mod tests {
             game.common.player = Some(PlayerMotion::new(game.common.motion, at));
             let mut cart = Minecart::new(71, CartKind::Tnt, Vec3::new(2.5, 64.0, 0.5));
             cart.fuse = 3;
-            game.common.carts.push(cart);
+            game.common.entities.carts.push(cart);
             // Capture what the level is asked for, ahead of the camera-distance limiter.
             game.client.particles.0.requested = Some(Vec::new());
             let mut smoke = || {

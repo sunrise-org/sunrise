@@ -20,13 +20,13 @@ pub(crate) mod tests {
                 .enchantments
                 .push(("minecraft:unbreaking".into(), 2));
             mob.extra.set_body_stack(Some(armor.clone()));
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             let mut menu = game.mount_engine_menu(0, 0);
             assert_eq!(menu.slot(1), Some(&armor));
             let env = game.menu_env();
             let _ = menu.click(&env, 2, 0, Input::Pickup);
             game.lan_mount_store(0, 0, &menu);
-            assert_eq!(game.mobs[0].equipment_stacks()[6], Some(armor));
+            assert_eq!(game.entities.mobs[0].equipment_stacks()[6], Some(armor));
         });
     }
 }

@@ -435,7 +435,7 @@ fn committed_effects_leave_unrelated_queues_intact_prevent_sound_recursion_and_k
                     let max_damage = game.items().stack_max_damage(&helmet);
                     assert!(max_damage > 0, "iron helmet has durability");
                     helmet.damage = max_damage - 1;
-                    game.mobs
+                    game.entities.mobs
                         .iter_mut()
                         .find(|m| m.id == zombie_id)
                         .unwrap()
@@ -1421,7 +1421,7 @@ fn cross_level_sound_listener_block_writes_journal_by_dimension_on_abort_commit_
                     .unwrap();
                     let stack = sunrise_items::items::ItemStack::new("minecraft:stone", 1);
                     game.spawn_item(stack, at, [0.0; 3], 10);
-                    let entity = game.entity(game.dropped.last().unwrap().id).unwrap();
+                    let entity = game.entity(game.entities.dropped.last().unwrap().id).unwrap();
                     let item = game.item_entity(entity).unwrap();
                     let abandoned_abort = game.storage_transaction(|game, _| {
                         assert_eq!(

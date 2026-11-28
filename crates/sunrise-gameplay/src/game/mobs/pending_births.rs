@@ -127,7 +127,7 @@ impl ServerGame<'_> {
                 origin == action
                     && !self.common.persist.uuids.contains_key(&id)
                     && !self.common.entity_attachments.contains_key(&id)
-                    && !self.common.mobs.iter().any(|m| m.id == id)
+                    && !self.common.entities.mobs.iter().any(|m| m.id == id)
             })
             .map(|(_, id)| id);
         mob.id = match reused {
@@ -238,8 +238,8 @@ impl ServerGame<'_> {
             // A failure admitting one child leaves earlier joins alone and drops the rest
             // with their unpublished state, with no state on the level to clean up.
             let mob = self.issue_pending_child(child, action);
-            self.common.mobs.push(mob);
-            self.admit_new_mobs(self.common.mobs.len() - 1);
+            self.common.entities.mobs.push(mob);
+            self.admit_new_mobs(self.common.entities.mobs.len() - 1);
         }
     }
 

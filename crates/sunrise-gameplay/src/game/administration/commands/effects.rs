@@ -67,7 +67,7 @@ impl crate::game::ServerGame<'_> {
                 (Target::Player | Target::Guest(_), Some(e)) => self
                     .for_player(t, |g| g.remove_player_effects(Some(e.index)))
                     .unwrap_or(false),
-                (Target::Mob(id), e) => match self.common.mobs.iter_mut().find(|m| m.id == id) {
+                (Target::Mob(id), e) => match self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
                     Some(m) => m.retain_effects(|x| e.is_some_and(|e| x.id != namespaced(e.id))),
                     None => false,
                 },
@@ -175,7 +175,7 @@ impl crate::game::ServerGame<'_> {
             // Include enchantments kept in the mob's gear as well as in the stack.
             Target::Mob(id) => self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == id)
                 .and_then(|m| sunrise_sim::mobs::finalize::item_stack(m, MAINHAND)),
@@ -213,19 +213,19 @@ impl crate::game::ServerGame<'_> {
         match t {
             Target::Player => self.common.inventory[self.common.selected] = Some(stack),
             Target::Mob(id) => {
-                let Some(mob) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+                let Some(mob) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
                     return Ok(false);
                 };
                 mob.set_equipment_stack(MAINHAND, Some(stack));
             }
             Target::Stand(id) => {
-                let Some(stand) = self.common.armor_stands.iter_mut().find(|a| a.id == id) else {
+                let Some(stand) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id) else {
                     return Ok(false);
                 };
                 stand.equipment[MAINHAND] = Some(stack);
             }
             Target::Dragon(id) => {
-                let Some(dragon) = self.common.dragon.as_mut().filter(|d| d.id == id) else {
+                let Some(dragon) = self.common.entities.dragon.as_mut().filter(|d| d.id == id) else {
                     return Ok(false);
                 };
                 dragon.equipment[MAINHAND] = Some(stack);

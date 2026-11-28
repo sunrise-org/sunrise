@@ -145,7 +145,7 @@ mod tests {
         let state = raider::state_mut(&mut mob);
         state.raid_id = Some(raid);
         state.wave = wave;
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
     }
 
     #[test]

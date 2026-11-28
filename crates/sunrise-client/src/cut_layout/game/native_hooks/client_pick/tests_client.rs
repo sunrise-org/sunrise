@@ -137,7 +137,7 @@ fn frame_pick_is_shared_ordered_and_refuses_stale_or_invalid_output() {
             game.refresh_client_pick(1.0);
             assert_eq!(game.crosshair_target(), Some(entity_hit));
             assert!(game.entity_targeted());
-            assert_eq!(game.mob_hit().map(|(i, _, _)| game.mobs[i].id), Some(31));
+            assert_eq!(game.mob_hit().map(|(i, _, _)| game.entities.mobs[i].id), Some(31));
             game.native_lifecycle.begin_open(None);
             game.refresh_client_pick(1.0);
             assert!(
@@ -261,7 +261,7 @@ fn rider_pick_rejects_shared_passengers_unless_their_part_allows_them() {
                 // The brush uses the margin-overload ray, not the mounted
                 // crosshair's root-vehicle exclusion or rider part.
                 let (mob, _, _) = game.mob_hit_within(game.block_reach).unwrap();
-                assert_eq!(game.mobs[mob].id, 31);
+                assert_eq!(game.entities.mobs[mob].id, 31);
                 assert_eq!(*calls.lock().unwrap(), usize::from(subscribed));
                 if !subscribed {
                     assert_eq!(game.client.client_pick.rider_candidates.capacity(), 0);
@@ -292,8 +292,8 @@ fn rider_pick_rejects_shared_passengers_unless_their_part_allows_them() {
 
                 // Put the root vehicle's box around the camera. Inside hits are
                 // pickable without asking any part; remove the later passenger.
-                game.mobs.update(0, |mob| mob.removed = true);
-                game.boats.update(0, |boat| {
+                game.entities.mobs.update(0, |mob| mob.removed = true);
+                game.entities.boats.update(0, |boat| {
                     boat.position = sunrise_core::geometry::Vec3::new(0.5, 2.5, 0.5);
                 });
                 game.refresh_client_pick(1.0);

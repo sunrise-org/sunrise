@@ -64,7 +64,7 @@ pub(crate) mod tests {
         .into();
         mod_platform::testing::with_mods(mods, || {
             super::super::native_entity_refs::tests::with_game(|game| {
-                game.dragon.discard();
+                game.entities.dragon.discard();
                 game.native_joins_skip();
                 let at = [4.5, 200.0, 4.5];
                 let id = game
@@ -76,7 +76,7 @@ pub(crate) mod tests {
                         ),
                     )
                     .unwrap();
-                assert_eq!(game.dragon.as_ref().unwrap().id, id);
+                assert_eq!(game.entities.dragon.as_ref().unwrap().id, id);
                 assert_eq!(*joins.lock().unwrap(), vec![(id, false)]);
                 game.native_joins_flush(false, 0);
                 assert_eq!(joins.lock().unwrap().len(), 1, "a join is told only once");
@@ -85,11 +85,11 @@ pub(crate) mod tests {
                 assert!(game.spawn_dragon_spawned(at, dispenser).is_none());
                 assert_eq!(joins.lock().unwrap().len(), 1, "no second dragon joins");
 
-                game.dragon.discard();
+                game.entities.dragon.discard();
                 cancel.store(true, Ordering::Relaxed);
                 // The dispenser calls the shared constructor directly.
                 assert!(game.spawn_dragon_spawned(at, dispenser).is_none());
-                assert!(game.dragon.is_none(), "a refused dragon never stays loaded");
+                assert!(game.entities.dragon.is_none(), "a refused dragon never stays loaded");
                 game.native_joins_flush(false, 0);
                 assert_eq!(*joins.lock().unwrap(), vec![(id, false), (id + 9, false)]);
             });
@@ -136,7 +136,7 @@ pub(crate) mod tests {
         super::super::native_entity_refs::tests::with_game(|game| {
             for reason in [Reason::SpawnItemUse, Reason::Dispenser] {
                 for answer in [Answer::Keep, Answer::Skip, Answer::Refuse] {
-                    game.dragon.discard();
+                    game.entities.dragon.discard();
                     game.world.random.set_seed(42);
                     let calls = Arc::new(AtomicUsize::new(0));
                     let mods: mod_api::Mods = vec![ModEntry::new(
@@ -153,13 +153,13 @@ pub(crate) mod tests {
                     });
                     assert_eq!(calls.load(Ordering::Relaxed), 1);
                     assert_eq!(result.is_none(), answer == Answer::Refuse);
-                    assert_eq!(game.dragon.is_none(), answer == Answer::Refuse);
+                    assert_eq!(game.entities.dragon.is_none(), answer == Answer::Refuse);
                     // snapTo always draws yaw; only completed Mob.finalizeSpawn
                     // draws the follow-range triangle and handedness roll.
                     let mut expected = LegacyRandom::new(42);
                     let yaw =
                         sunrise_level::camera_math::wrap_degrees(expected.next_float() * 360.0);
-                    if let Some(dragon) = game.dragon.as_ref() {
+                    if let Some(dragon) = game.entities.dragon.as_ref() {
                         assert_eq!(dragon.yaw, yaw);
                         assert_eq!(dragon.previous_yaw, yaw);
                     }
@@ -237,7 +237,7 @@ pub(crate) mod tests {
                     Answer::Refuse,
                     Answer::RefuseJoin,
                 ] {
-                    game.dragon.discard();
+                    game.entities.dragon.discard();
                     game.world.random.set_seed(42);
                     let calls = Arc::new(AtomicUsize::new(0));
                     let joins = Arc::new(AtomicUsize::new(0));
@@ -267,10 +267,10 @@ pub(crate) mod tests {
                     );
                     let refused = refused_finalization || answer == Answer::RefuseJoin;
                     assert_eq!(result, !refused);
-                    assert_eq!(game.dragon.is_none(), refused);
+                    assert_eq!(game.entities.dragon.is_none(), refused);
                     if !refused {
                         assert_eq!(game.dragon_silent(), nbt == Some("{Silent:1b}"));
-                        let dragon = game.dragon.as_ref().unwrap();
+                        let dragon = game.entities.dragon.as_ref().unwrap();
                         assert_eq!(dragon.position, Vec3::new(4.5, 200.0, 4.5));
                         assert_eq!(dragon.yaw, 0.0);
                         assert_eq!(dragon.previous_yaw, 0.0);
@@ -314,7 +314,7 @@ pub(crate) mod tests {
         .into();
         mod_platform::testing::with_mods(mods, || {
             super::super::native_entity_refs::tests::with_game(|game| {
-                game.dragon.replace(dragon(Phase::Scanning { time: 0 }));
+                game.entities.dragon.replace(dragon(Phase::Scanning { time: 0 }));
                 let arrow = ProjectileKind::Trident;
                 let hit = |game: &mut sunrise_gameplay::game::ServerGame<'_>, counts, direct| {
                     game.hurt_dragon_part_at(
@@ -336,8 +336,8 @@ pub(crate) mod tests {
                 };
                 assert_eq!(hit(game, true, Some(&arrow)), Hurt::Shrugged);
                 assert_eq!(heard.load(Ordering::SeqCst), 0);
-                game.dragon.replace(dragon(flying()));
-                let id = game.dragon.as_ref().unwrap().id;
+                game.entities.dragon.replace(dragon(flying()));
+                let id = game.entities.dragon.as_ref().unwrap().id;
                 assert!(game.command_damage_dragon(
                     id,
                     2.0,
@@ -369,7 +369,7 @@ pub(crate) mod tests {
                     1,
                 )),
             );
-            game.dragon.replace(d);
+            game.entities.dragon.replace(d);
             game.refresh_stand_and_dragon_equipment_attributes();
             let resistance = f64::from(0.1_f32);
             assert_eq!(game.dragon_knockback_resistance(), resistance);
@@ -393,7 +393,7 @@ pub(crate) mod tests {
             assert_eq!(hurt, Hurt::Landed { full: true });
             let power = f64::from(0.4_f32) * (1.0 - resistance);
             assert_eq!(
-                game.dragon.as_ref().unwrap().velocity,
+                game.entities.dragon.as_ref().unwrap().velocity,
                 Vec3::new(0.5 - 0.6 * power, -0.3, 0.25 - 0.8 * power)
             );
         });
@@ -404,7 +404,7 @@ pub(crate) mod tests {
         use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
         sunrise_gameplay::game::native_entity_refs::tests::with_resident_game(|game| {
             game.create_new_dragon();
-            let dragon = game.common.dragon.as_mut().unwrap();
+            let dragon = game.common.entities.dragon.as_mut().unwrap();
             assert_ne!(dragon.yaw, 0.0);
             assert_eq!((dragon.body_yaw, dragon.head_yaw), (0.0, 0.0));
             dragon.yaw = 35.0;
@@ -416,7 +416,7 @@ pub(crate) mod tests {
             game.tick_dragon();
             // A 75-degree limit turns the body 15 degrees toward the head.
             assert_eq!(entity.body_yaw(game), Some(15.0));
-            assert_eq!(game.common.dragon.as_ref().unwrap().yaw, 35.0);
+            assert_eq!(game.common.entities.dragon.as_ref().unwrap().yaw, 35.0);
         });
     }
 
@@ -427,7 +427,7 @@ pub(crate) mod tests {
         super::super::native_entity_refs::tests::with_game(|game| {
             let mut dragon = Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = 15;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let state = game.lan_dragon_state().unwrap();
             assert_eq!(
                 state.defaults,

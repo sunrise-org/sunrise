@@ -29,7 +29,7 @@ pub(crate) mod order_tests {
             chunk.set(5, 200, 5, moving.0);
             game.world.chunks.insert((0, 0), Arc::new(chunk));
             assert!(game.run_command("summon armor_stand 5.5 200 5.5 {Health:0f}"));
-            assert_eq!(game.armor_stands[0].health, 0.0);
+            assert_eq!(game.entities.armor_stands[0].health, 0.0);
 
             let pos = BlockPos::new(5, 200, 5);
             let piston = MovingPiston {
@@ -52,7 +52,7 @@ pub(crate) mod order_tests {
             )];
             game.sync_moving_pistons();
             game.push_piston_entities(vec![(pos, piston, 0.5)]);
-            assert_eq!(game.armor_stands[0].position.x, 5.5 + (0.25 + 0.01));
+            assert_eq!(game.entities.armor_stands[0].position.x, 5.5 + (0.25 + 0.01));
         });
     }
 
@@ -125,9 +125,9 @@ pub(crate) mod order_tests {
                 vec![near, far]
             };
             game.sync_moving_pistons();
-            game.tnts.clear();
+            game.entities.tnts.clear();
             assert!(game.run_command("summon tnt 5.5 200 5.5 {fuse:80,Motion:[0.0d,0.0d,0.0d]}"));
-            let before = game.tnts[0].position.x;
+            let before = game.entities.tnts[0].position.x;
             let pushes: Vec<_> = game
                 .block_ticks
                 .moving_pistons
@@ -138,7 +138,7 @@ pub(crate) mod order_tests {
                 piston.progress += 0.5;
             }
             game.push_piston_entities(pushes);
-            moved.push(game.tnts[0].position.x - before);
+            moved.push(game.entities.tnts[0].position.x - before);
         }
         let expected = f64::from(0.98_f32) * 0.5 + 0.01;
         assert!(
@@ -232,11 +232,11 @@ pub(crate) mod order_tests {
                 game.block_ticks.moving_pistons =
                     vec![(BlockPos::new(5, 200, 5), piston(1, Direction::East, 0.0))];
                 game.sync_moving_pistons();
-                game.tnts.clear();
+                game.entities.tnts.clear();
                 assert!(
                     game.run_command("summon tnt 5.5 200 5.5 {fuse:80,Motion:[0.0d,0.0d,0.0d]}")
                 );
-                let before = game.tnts[0].position.x;
+                let before = game.entities.tnts[0].position.x;
                 let pushes: Vec<_> = game
                     .block_ticks
                     .moving_pistons
@@ -247,7 +247,7 @@ pub(crate) mod order_tests {
                     piston.progress += 0.5;
                 }
                 game.push_piston_entities(pushes);
-                travelled.push(game.tnts[0].position.x - before);
+                travelled.push(game.entities.tnts[0].position.x - before);
             }
             assert!(
                 travelled[0].abs() < 1e-9,
@@ -324,12 +324,12 @@ pub(crate) mod order_tests {
         };
         game.block_ticks.moving_pistons = vec![(BlockPos::new(5, 200, 5), piston)];
         game.sync_moving_pistons();
-        game.tnts.clear();
+        game.entities.tnts.clear();
         assert!(game.run_command("summon tnt 5.5 200 5.5 {fuse:80,Motion:[0.4d,0.0d,0.0d]}"));
         assert!(
-            (game.tnts[0].velocity.x - 0.4).abs() < 1.0e-9,
+            (game.entities.tnts[0].velocity.x - 0.4).abs() < 1.0e-9,
             "TNT starts with vx 0.4, got {:?}",
-            game.tnts[0].velocity
+            game.entities.tnts[0].velocity
         );
         let pushes: Vec<_> = game
             .block_ticks
@@ -342,9 +342,9 @@ pub(crate) mod order_tests {
         }
         game.push_piston_entities(pushes);
         assert!(
-            game.tnts[0].velocity.x.abs() < 1.0e-9,
+            game.entities.tnts[0].velocity.x.abs() < 1.0e-9,
             "TNT velocity.x should be zeroed by the wall, got {:?}",
-            game.tnts[0].velocity
+            game.entities.tnts[0].velocity
         );
     }
 
@@ -418,11 +418,11 @@ pub(crate) mod order_tests {
             game.world.set(5, 199, 5, floor).unwrap();
             game.block_ticks.moving_pistons = vec![(BlockPos::new(5, 200, 5), piston)];
             game.sync_moving_pistons();
-            game.tnts.clear();
+            game.entities.tnts.clear();
             assert!(game.run_command(&format!(
                 "summon tnt 5.5 {y} 5.5 {{fuse:80,Motion:[0.0d,{vy}d,0.0d]}}"
             )));
-            assert_eq!(game.tnts[0].velocity.y, vy);
+            assert_eq!(game.entities.tnts[0].velocity.y, vy);
             let pushes: Vec<_> = game
                 .block_ticks
                 .moving_pistons
@@ -433,9 +433,9 @@ pub(crate) mod order_tests {
                 piston.progress += 0.5;
             }
             game.push_piston_entities(pushes);
-            assert_eq!(game.tnts[0].position, Vec3::new(5.5, final_y, 5.5));
-            assert_eq!(game.tnts[0].velocity.y.to_bits(), final_vy.to_bits());
-            assert!(game.tnts[0].ground.on_ground);
+            assert_eq!(game.entities.tnts[0].position, Vec3::new(5.5, final_y, 5.5));
+            assert_eq!(game.entities.tnts[0].velocity.y.to_bits(), final_vy.to_bits());
+            assert!(game.entities.tnts[0].ground.on_ground);
         }
     }
 }
@@ -550,7 +550,7 @@ pub(crate) mod h255_mob_piston_ground_tests {
             .iter()
             .find_map(|(id, u)| (*u == [255, 1, 0, n]).then_some(*id))
             .unwrap();
-        game.mobs.iter().position(|m| m.id == id).unwrap()
+        game.entities.mobs.iter().position(|m| m.id == id).unwrap()
     }
 
     #[test]
@@ -576,12 +576,12 @@ pub(crate) mod h255_mob_piston_ground_tests {
             let main = mob_index(game, 1);
             let idle = mob_index(game, 2);
             let vertical = mob_index(game, 3);
-            let id = game.mobs[main].id;
-            let age = game.mobs[main].age;
-            assert!(game.mobs[main].ground.on_ground);
-            assert!(game.mobs[idle].ground.on_ground);
-            assert!(!game.mobs[vertical].ground.on_ground);
-            assert_eq!(game.mobs[main].position, Vec3::new(4.5, 202.0, 4.5));
+            let id = game.entities.mobs[main].id;
+            let age = game.entities.mobs[main].age;
+            assert!(game.entities.mobs[main].ground.on_ground);
+            assert!(game.entities.mobs[idle].ground.on_ground);
+            assert!(!game.entities.mobs[vertical].ground.on_ground);
+            assert_eq!(game.entities.mobs[main].position, Vec3::new(4.5, 202.0, 4.5));
             assert_eq!(
                 game.res
                     .facts()
@@ -615,32 +615,32 @@ pub(crate) mod h255_mob_piston_ground_tests {
                         .default_state("minecraft:honey_block")
                         .unwrap()
                 );
-                assert_eq!(game.mobs[main].id, id);
+                assert_eq!(game.entities.mobs[main].id, id);
                 assert_eq!(game.uuid_for(id), [255, 1, 0, 1]);
-                assert_eq!(game.mobs[main].age, age + tick);
-                assert!(game.mobs[main].no_ai);
-                assert_eq!(game.mobs[main].health, 10.0);
-                assert_eq!(game.mobs[main].velocity, Vec3::ZERO);
-                if game.mobs[main].ground.on_ground {
+                assert_eq!(game.entities.mobs[main].age, age + tick);
+                assert!(game.entities.mobs[main].no_ai);
+                assert_eq!(game.entities.mobs[main].health, 10.0);
+                assert_eq!(game.entities.mobs[main].velocity, Vec3::ZERO);
+                if game.entities.mobs[main].ground.on_ground {
                     failures.push(format!("tick{tick}: actual Mob still grounded"));
                 }
-                if game.mobs[main].position != Vec3::new(5.0, 202.0, 4.5) {
+                if game.entities.mobs[main].position != Vec3::new(5.0, 202.0, 4.5) {
                     failures.push(format!(
                         "tick{tick}: position {:?}",
-                        game.mobs[main].position
+                        game.entities.mobs[main].position
                     ));
                 }
                 if game.mob_tree_nbt(main).get("OnGround") != Some(&sunrise_core::nbt::Tag::Byte(0))
                 {
                     failures.push(format!("tick{tick}: saved ground is stale"));
                 }
-                assert_eq!(game.mobs[idle].position, Vec3::new(4.5, 202.0, 12.5));
-                assert!(game.mobs[idle].ground.on_ground);
+                assert_eq!(game.entities.mobs[idle].position, Vec3::new(4.5, 202.0, 12.5));
+                assert!(game.entities.mobs[idle].ground.on_ground);
                 assert_eq!(
-                    game.mobs[vertical].position,
+                    game.entities.mobs[vertical].position,
                     Vec3::new(12.5, if tick == 1 { 202.51 } else { 203.01 }, 12.5)
                 );
-                assert!(!game.mobs[vertical].ground.on_ground);
+                assert!(!game.entities.mobs[vertical].ground.on_ground);
             }
             assert!(
                 failures.is_empty(),
@@ -662,9 +662,9 @@ pub(crate) mod h255_mob_piston_ground_tests {
             i32::from(no_ai)
         )));
         let i = mob_index(game, n);
-        assert_eq!(game.mobs[i].no_ai, no_ai);
-        assert!(game.mobs[i].ground.on_ground);
-        assert_eq!(game.uuid_for(game.mobs[i].id), [255, 1, 0, n]);
+        assert_eq!(game.entities.mobs[i].no_ai, no_ai);
+        assert!(game.entities.mobs[i].ground.on_ground);
+        assert_eq!(game.uuid_for(game.entities.mobs[i].id), [255, 1, 0, n]);
         i
     }
 
@@ -673,7 +673,7 @@ pub(crate) mod h255_mob_piston_ground_tests {
         i: usize,
         movement: Vec3,
     ) {
-        let m = &game.mobs[i];
+        let m = &game.entities.mobs[i];
         let (bounds, at, step, ground) = (
             m.bounds(),
             [m.position.x, m.position.z],
@@ -698,20 +698,19 @@ pub(crate) mod h255_mob_piston_ground_tests {
     fn a_stuck_arrow_whose_push_a_wall_stops_falls_when_nothing_holds_it() {
         with_game(|game| {
             assert!(game.run_command("setblock 6 202 4 minecraft:stone"));
-            game.creatures.projectiles.clear();
+            game.entities.projectiles.clear();
             assert!(game.run_command("summon minecraft:arrow 5.75 202.5 4.5 {NoGravity:0b}"));
             let i = game
-                .creatures
-                .projectiles
+                .entities.projectiles
                 .iter()
                 .position(|p| p.arrow.is_some())
                 .expect("the arrow");
-            game.creatures.projectiles.update(i, |p| {
+            game.entities.projectiles.update(i, |p| {
                 p.velocity = Vec3::ZERO;
                 p.stuck = true;
                 p.arrow.as_mut().unwrap().in_ground = true;
             });
-            let p = &game.creatures.projectiles[i];
+            let p = &game.entities.projectiles[i];
             let (bounds, at) = (p.bounds(), [p.position.x, p.position.z]);
             let before = p.position;
             game.move_pushed(
@@ -725,7 +724,7 @@ pub(crate) mod h255_mob_piston_ground_tests {
                 &mut std::collections::HashMap::new(),
                 &mut Vec::new(),
             );
-            let p = &game.creatures.projectiles[i];
+            let p = &game.entities.projectiles[i];
             assert_eq!(p.position, before, "the stone stops the push");
             assert!(
                 !p.arrow.as_ref().unwrap().in_ground,
@@ -751,7 +750,7 @@ pub(crate) mod h255_mob_piston_ground_tests {
                 let push = |game: &mut sunrise_gameplay::game::ServerGame<'_>,
                             budget: &mut std::collections::HashMap<_, _>,
                             movement| {
-                    let tnt = &game.tnts[0];
+                    let tnt = &game.entities.tnts[0];
                     game.move_pushed(
                         MoveWho::Entity(EntityHandle::Tnt(0)),
                         tnt.bounds(),
@@ -765,16 +764,16 @@ pub(crate) mod h255_mob_piston_ground_tests {
                     );
                 };
                 push(game, &mut budget, Vec3::ZERO);
-                assert_eq!(game.tnts[0].position.y, 200.5);
-                assert_eq!(game.tnts[0].velocity.y, -0.4);
+                assert_eq!(game.entities.tnts[0].position.y, 200.5);
+                assert_eq!(game.entities.tnts[0].velocity.y, -0.4);
                 push(game, &mut budget, Vec3::new(0.0, -0.51, 0.0));
                 let expected = 0.3510000138133766_f64;
-                assert_eq!(game.tnts[0].velocity.y.to_bits(), expected.to_bits());
-                game.tnts[0].position.y = 200.5;
-                game.tnts[0].velocity.y = -0.4;
+                assert_eq!(game.entities.tnts[0].velocity.y.to_bits(), expected.to_bits());
+                game.entities.tnts[0].position.y = 200.5;
+                game.entities.tnts[0].velocity.y = -0.4;
                 push(game, &mut budget, Vec3::new(0.0, -0.51, 0.0));
-                assert_eq!(game.tnts[0].position.y, 200.5);
-                assert_eq!(game.tnts[0].velocity.y, -0.4);
+                assert_eq!(game.entities.tnts[0].position.y, 200.5);
+                assert_eq!(game.entities.tnts[0].velocity.y, -0.4);
             });
         }
     }
@@ -785,49 +784,49 @@ pub(crate) mod h255_mob_piston_ground_tests {
         with_game(|game| {
             let i = added_mob(game, 20, "horse", true, 8.5);
             added_push(game, i, Vec3::ZERO);
-            assert!(game.mobs[i].ground.on_ground);
-            assert_eq!(game.mobs[i].position, Vec3::new(8.5, 202.0, 4.5));
-            game.mobs[i].set_saddle(Some(sunrise_items::items::ItemStack::new(
+            assert!(game.entities.mobs[i].ground.on_ground);
+            assert_eq!(game.entities.mobs[i].position, Vec3::new(8.5, 202.0, 4.5));
+            game.entities.mobs[i].set_saddle(Some(sunrise_items::items::ItemStack::new(
                 "minecraft:saddle",
                 1,
             )));
             assert!(game.run_command("ride @s mount 000000ff-0000-0001-0000-000000000014"));
-            assert_eq!(game.riding, Some(game.mobs[i].id));
+            assert_eq!(game.riding, Some(game.entities.mobs[i].id));
             added_push(game, i, Vec3::new(0.51, 0.0, 0.0));
             assert!(
-                game.mobs[i].ground.on_ground,
+                game.entities.mobs[i].ground.on_ground,
                 "occupied path remains excluded"
             );
-            assert_eq!(game.mobs[i].position, Vec3::new(9.01, 202.0, 4.5));
+            assert_eq!(game.entities.mobs[i].position, Vec3::new(9.01, 202.0, 4.5));
             assert!(game.run_command("setblock 9 201 4 slime_block"));
-            game.mobs[i].position.y = 202.25;
-            game.mobs[i].velocity = Vec3::new(0.0, -1.0, 0.0);
-            game.mobs[i].sync_position = false;
+            game.entities.mobs[i].position.y = 202.25;
+            game.entities.mobs[i].velocity = Vec3::new(0.0, -1.0, 0.0);
+            game.entities.mobs[i].sync_position = false;
             added_push(game, i, Vec3::new(0.0, -0.5, 0.0));
             assert_eq!(
-                game.mobs[i].velocity.y, -1.0,
+                game.entities.mobs[i].velocity.y, -1.0,
                 "the controlling rider's client owns restitution"
             );
-            assert_eq!(game.mobs[i].position.y, 202.0);
+            assert_eq!(game.entities.mobs[i].position.y, 202.0);
             assert!(
-                game.mobs[i].ground.on_ground,
+                game.entities.mobs[i].ground.on_ground,
                 "even the observer records vertical collision"
             );
-            assert!(!game.mobs[i].sync_position);
+            assert!(!game.entities.mobs[i].sync_position);
             assert!(game.run_command("ride @s dismount"));
             assert!(game.riding.is_none());
-            assert!(game.mobs[i].rider.is_none());
-            assert!(game.mobs[i].extra.rider.is_none());
-            assert!(game.mobs[i].extra.mount.is_none());
-            assert!(!game.mobs[i].extra.passenger);
-            let before = game.mobs[i].position;
+            assert!(game.entities.mobs[i].rider.is_none());
+            assert!(game.entities.mobs[i].extra.rider.is_none());
+            assert!(game.entities.mobs[i].extra.mount.is_none());
+            assert!(!game.entities.mobs[i].extra.passenger);
+            let before = game.entities.mobs[i].position;
             added_push(game, i, Vec3::new(0.25, 0.0, 0.0));
             assert_eq!(
-                game.mobs[i].position, before,
+                game.entities.mobs[i].position, before,
                 "real same-tick piston budget is exhausted"
             );
             assert!(
-                game.mobs[i].ground.on_ground,
+                game.entities.mobs[i].ground.on_ground,
                 "limitedZERO precedes the ground update"
             );
         });
@@ -841,15 +840,15 @@ pub(crate) mod h255_mob_piston_ground_tests {
             let width = game.res.mob_types().get("minecraft:husk").unwrap().width as f32;
             let x = 9.0 - f64::from(width) * 0.5;
             let i = added_mob(game, 21, "husk", true, x);
-            assert_eq!(game.mobs[i].bounds().max_position().x, 9.0);
-            let before = game.mobs[i].position;
+            assert_eq!(game.entities.mobs[i].bounds().max_position().x, 9.0);
+            let before = game.entities.mobs[i].position;
             added_push(game, i, Vec3::new(0.25, 0.0, 0.0));
             assert_eq!(
-                game.mobs[i].position, before,
+                game.entities.mobs[i].position, before,
                 "actual loaded wall blocks the nonzero request"
             );
             assert!(
-                !game.mobs[i].ground.on_ground,
+                !game.entities.mobs[i].ground.on_ground,
                 "Entity.move ground ordering, source/unit-only coverage"
             );
         });
@@ -875,11 +874,11 @@ pub(crate) mod h255_mob_piston_ground_tests {
         ] {
             with_role_game(role, |game| {
                 let i = added_mob(game, 22, "husk", no_ai, 8.5);
-                let before = game.mobs[i].position;
+                let before = game.entities.mobs[i].position;
                 added_push(game, i, movement);
-                assert_eq!(game.mobs[i].position, before.add_vector(movement));
+                assert_eq!(game.entities.mobs[i].position, before.add_vector(movement));
                 assert_eq!(
-                    game.mobs[i].ground.on_ground, on_ground,
+                    game.entities.mobs[i].ground.on_ground, on_ground,
                     "{role:?}, NoAI={no_ai}"
                 );
             });
@@ -892,13 +891,13 @@ pub(crate) mod h255_mob_piston_ground_tests {
         with_game(|game| {
             assert!(game.run_command("setblock 8 201 4 slime_block"));
             let i = added_mob(game, 23, "iron_golem", true, 8.5);
-            game.mobs[i].position.y = 202.25;
-            game.mobs[i].velocity = Vec3::new(0.0, -1.0, 0.0);
-            game.mobs[i].sync_position = false;
+            game.entities.mobs[i].position.y = 202.25;
+            game.entities.mobs[i].velocity = Vec3::new(0.0, -1.0, 0.0);
+            game.entities.mobs[i].sync_position = false;
             added_push(game, i, Vec3::new(0.0, -0.5, 0.0));
-            assert_eq!(game.mobs[i].position, Vec3::new(8.5, 202.0, 4.5));
-            assert!(game.mobs[i].velocity.y > 0.9);
-            assert!(game.mobs[i].sync_position);
+            assert_eq!(game.entities.mobs[i].position, Vec3::new(8.5, 202.0, 4.5));
+            assert!(game.entities.mobs[i].velocity.y > 0.9);
+            assert!(game.entities.mobs[i].sync_position);
         });
     }
 }
@@ -917,7 +916,7 @@ pub(crate) mod lid_push_tests {
 
     fn shulker(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> u32 {
         assert!(game.run_command("summon minecraft:shulker 24 200 24 {NoAI:1b}"));
-        game.mobs
+        game.entities.mobs
             .iter()
             .find(|m| m.species() == Species::Shulker)
             .expect("the shulker")
@@ -929,13 +928,12 @@ pub(crate) mod lid_push_tests {
     }
 
     fn item_y(game: &sunrise_gameplay::game::ServerGame<'_>) -> f64 {
-        game.dropped.iter().next().expect("the item").position.y
+        game.entities.dropped.iter().next().expect("the item").position.y
     }
 
     fn arrow_y(game: &sunrise_gameplay::game::ServerGame<'_>) -> f64 {
         let arrow = game
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .find(|p| p.arrow.is_some());
         arrow.expect("the arrow").position.y
@@ -970,8 +968,8 @@ pub(crate) mod lid_push_tests {
                                 game.move_listed_entity(handle, cause, Vec3::new(0.0, -0.5, 0.0));
                             assert_eq!(moved.y, -0.25, "{cause:?}");
                             let ground = match handle {
-                                EntityHandle::ArmorStand(i) => &game.armor_stands[i].ground,
-                                EntityHandle::Mob(i) => &game.mobs[i].ground,
+                                EntityHandle::ArmorStand(i) => &game.entities.armor_stands[i].ground,
+                                EntityHandle::Mob(i) => &game.entities.mobs[i].ground,
                                 _ => unreachable!(),
                             };
                             assert!(ground.on_ground);
@@ -995,9 +993,9 @@ pub(crate) mod lid_push_tests {
                     assert!(game.run_command("summon armor_stand 10.5 200.25 10.5"));
                     let shulker = shulker(game);
                     assert!(game.run_command("summon armor_stand 13.5 200.25 10.5"));
-                    let shulker_join = game.mobs.iter().find(|m| m.id == shulker).unwrap().join;
-                    assert!(game.armor_stands[0].join < shulker_join);
-                    assert!(game.armor_stands[1].join > shulker_join);
+                    let shulker_join = game.entities.mobs.iter().find(|m| m.id == shulker).unwrap().join;
+                    assert!(game.entities.armor_stands[0].join < shulker_join);
+                    assert!(game.entities.armor_stands[1].join > shulker_join);
                     let swept = area(9.0, 9.0, 15.0, 12.0);
                     game.handle_mob_events(vec![MobEvent::LidPush {
                         shulker,
@@ -1005,7 +1003,7 @@ pub(crate) mod lid_push_tests {
                         delta: [0.0, -0.5, 0.0],
                     }])
                     .unwrap();
-                    for (stand, x) in game.armor_stands.iter().zip([10, 13]) {
+                    for (stand, x) in game.entities.armor_stands.iter().zip([10, 13]) {
                         assert_eq!(stand.position.y, 200.0);
                         assert!(stand.ground.on_ground);
                         assert_eq!(
@@ -1019,7 +1017,7 @@ pub(crate) mod lid_push_tests {
                         delta: [0.25, 0.0, 0.0],
                     }])
                     .unwrap();
-                    for (stand, x) in game.armor_stands.iter().zip([10.75, 13.75]) {
+                    for (stand, x) in game.entities.armor_stands.iter().zip([10.75, 13.75]) {
                         assert_eq!(stand.position.x, x);
                         assert!(!stand.ground.on_ground);
                         assert_eq!(stand.ground.supporting_block, None);
@@ -1047,7 +1045,7 @@ pub(crate) mod lid_push_tests {
             .unwrap();
             assert_eq!(item_y(game), 200.25, "the item rises with the lid");
             assert_eq!(
-                game.boats[0].position.y, 200.25,
+                game.entities.boats[0].position.y, 200.25,
                 "the boat rises with the lid"
             );
             assert_eq!(arrow_y(game), 200.25, "the arrow rises with the lid");
@@ -1071,7 +1069,7 @@ pub(crate) mod lid_push_tests {
             game.lid_push(lid, area(13.0, 13.0, 14.0, 14.0), Vec3::new(0.0, 0.5, 0.0));
             game.lid_push(lid, area(2.0, 2.0, 3.0, 3.0), Vec3::new(0.0, 0.5, 0.0));
             assert_eq!(item_y(game), 200.75, "the stone stops the item");
-            let pig = game.mobs.iter().find(|m| m.species() == Species::Pig);
+            let pig = game.entities.mobs.iter().find(|m| m.species() == Species::Pig);
             let pig = pig.expect("the pig").position.y;
             let pig_height = f64::from(0.9_f32);
             assert!(
@@ -1088,7 +1086,7 @@ pub(crate) mod lid_push_tests {
     }
 
     fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) -> usize {
-        game.dropped
+        game.entities.dropped
             .iter()
             .filter(|d| &*d.stack.item == item)
             .count()
@@ -1109,23 +1107,23 @@ pub(crate) mod lid_push_tests {
                 "summon minecraft:item_frame 16.5 200.5 10.5 {Facing:2b,Fixed:1b,Item:{id:\"minecraft:stick\",count:1}}"
             ));
             assert!(game.run_command("summon minecraft:cushion 19.5 200 10.5"));
-            assert_eq!(game.paintings.len(), 1);
-            assert_eq!(game.item_frames.len(), 2);
-            assert_eq!(game.cushions.len(), 1);
+            assert_eq!(game.entities.paintings.len(), 1);
+            assert_eq!(game.entities.item_frames.len(), 2);
+            assert_eq!(game.entities.cushions.len(), 1);
             game.handle_mob_events(vec![MobEvent::LidPush {
                 shulker,
                 area: area(9.0, 9.0, 21.0, 12.0),
                 delta: [0.0, 0.25, 0.0],
             }])
             .unwrap();
-            assert!(game.paintings.is_empty(), "the painting broke");
+            assert!(game.entities.paintings.is_empty(), "the painting broke");
             assert_eq!(dropped(game, "minecraft:painting"), 1);
-            assert_eq!(game.item_frames.len(), 1, "the loose frame broke");
-            assert!(game.item_frames[0].fixed, "the fixed frame stays");
-            assert!(game.item_frames[0].item.is_some(), "with its stick");
+            assert_eq!(game.entities.item_frames.len(), 1, "the loose frame broke");
+            assert!(game.entities.item_frames[0].fixed, "the fixed frame stays");
+            assert!(game.entities.item_frames[0].item.is_some(), "with its stick");
             assert_eq!(dropped(game, "minecraft:item_frame"), 1);
             assert_eq!(dropped(game, "minecraft:stick"), 1);
-            assert!(game.cushions.is_empty(), "the cushion broke");
+            assert!(game.entities.cushions.is_empty(), "the cushion broke");
             assert_eq!(dropped(game, "minecraft:white_cushion"), 1);
         });
     }
@@ -1138,14 +1136,14 @@ pub(crate) mod lid_push_tests {
         with_game(|game| {
             let shulker = shulker(game);
             assert!(game.run_command("summon minecraft:oak_boat 2.5 200 6.5"));
-            let boat = game.boats[0].id;
-            let i = game.mobs.iter().position(|m| m.id == shulker).unwrap();
-            game.mobs[i].extra.mount = Some(boat);
+            let boat = game.entities.boats[0].id;
+            let i = game.entities.mobs.iter().position(|m| m.id == shulker).unwrap();
+            game.entities.mobs[i].extra.mount = Some(boat);
             game.riding = Some(boat);
             let (around, lift) = (area(1.0, 1.0, 4.0, 8.0), Vec3::new(0.0, 0.25, 0.0));
             game.lid_push(Lid::Shulker(shulker), around, lift);
             assert_eq!(
-                game.boats[0].position.y, 200.0,
+                game.entities.boats[0].position.y, 200.0,
                 "the shulker's vehicle stays"
             );
             let player_y = |game: &sunrise_gameplay::game::ServerGame<'_>| {
@@ -1167,25 +1165,24 @@ pub(crate) mod lid_push_tests {
             let lift = Vec3::new(0.0, 0.25, 0.0);
             game.lid_push(Lid::Shulker(shulker), lid, lift);
             assert_eq!(
-                game.armor_stands[0].position.y, 200.0,
+                game.entities.armor_stands[0].position.y, 200.0,
                 "the stand has no physics"
             );
             let bullet = game
-                .creatures
-                .projectiles
+                .entities.projectiles
                 .iter()
                 .next()
                 .expect("the bullet");
             assert_eq!(bullet.position.y, 200.0, "the bullet has no physics");
             let other = game
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id != shulker)
                 .expect("the other shulker");
             assert_eq!(other.position.y, 200.0, "a shulker is not pushed");
             game.lid_push(Lid::Box, lid, lift);
             assert_eq!(
-                game.armor_stands[0].position.y, 200.25,
+                game.entities.armor_stands[0].position.y, 200.25,
                 "a box's lid moves the stand"
             );
         });

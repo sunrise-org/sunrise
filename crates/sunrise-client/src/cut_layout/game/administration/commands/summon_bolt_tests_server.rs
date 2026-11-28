@@ -121,9 +121,9 @@ pub(crate) fn run_a_bolt_summoned_with_nbt_strikes_and_goes() {
                             .all(|o| o.kind != "minecraft:lightning_bolt"),
                         "step {index} ({cmd}): lightning_bolt must never be stored in others"
                     );
-                    if !game.bolts.is_empty() {
+                    if !game.entities.bolts.is_empty() {
                         let keys: HashSet<(i32, i32)> = game
-                            .bolts
+                            .entities.bolts
                             .iter()
                             .map(|b| ((b.at[0].floor() as i32) >> 4, (b.at[2].floor() as i32) >> 4))
                             .collect();
@@ -137,7 +137,7 @@ pub(crate) fn run_a_bolt_summoned_with_nbt_strikes_and_goes() {
                             }
                         }
                         saw_live_bolt_save_check = true;
-                        if game.bolts.iter().any(|b| b.mount.is_some()) {
+                        if game.entities.bolts.iter().any(|b| b.mount.is_some()) {
                             saw_mounted_bolt_save_check = true;
                         }
                     }
@@ -160,7 +160,7 @@ pub(crate) fn run_a_bolt_summoned_with_nbt_strikes_and_goes() {
             "witness must exercise mounted bolt save exclusion"
         );
         assert!(
-            game.bolts.is_empty(),
+            game.entities.bolts.is_empty(),
             "bolts must be gone after 26.3 witness"
         );
     });

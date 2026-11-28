@@ -31,7 +31,7 @@ fn deferred_position_records_do_not_resurrect_a_rejected_duplicate_uuid() {
         game.world.queue_entity_nbt(source, vec![duplicate]);
         game.spawn_loaded_entities();
         // Remove the original after disk admission has rejected the duplicate.
-        game.mobs.retain(|mob| mob.id != id);
+        game.entities.mobs.retain(|mob| mob.id != id);
         game.forget_entity(id);
         let unloaded = game.entity_chunks(&HashSet::from([source]), true);
         assert!(
@@ -120,7 +120,7 @@ fn neutral_mob_load_notifies_target_even_without_saved_anger() {
             let pig = game.load_mob(entity("minecraft:pig"), None).unwrap();
             for id in [wolf, golem, pig] {
                 assert_eq!(
-                    game.mobs.iter().find(|mob| mob.id == id).unwrap().position,
+                    game.entities.mobs.iter().find(|mob| mob.id == id).unwrap().position,
                     Vec3::ZERO
                 );
             }
@@ -134,7 +134,7 @@ fn neutral_mob_load_notifies_target_even_without_saved_anger() {
                     Tag::compound([("id", Tag::String("minecraft:pig".into())), ("Pos", pos)]);
                 let id = game.load_mob(raw, None).unwrap();
                 assert_eq!(
-                    game.mobs.iter().find(|mob| mob.id == id).unwrap().position,
+                    game.entities.mobs.iter().find(|mob| mob.id == id).unwrap().position,
                     Vec3::ZERO
                 );
             }

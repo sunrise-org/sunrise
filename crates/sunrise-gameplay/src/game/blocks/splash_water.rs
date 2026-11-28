@@ -144,8 +144,8 @@ impl ServerGame<'_> {
             );
             let attacker = by_player.then_some(Who::Player);
             let attack = self.attack_of_who(attacker);
-            for index in 0..self.common.mobs.len() {
-                let m = &self.common.mobs[index];
+            for index in 0..self.common.entities.mobs.len() {
+                let m = &self.common.entities.mobs[index];
                 // WATER_SENSITIVE_OR_ON_FIRE.
                 let sensitive = m.kind.flags.water_sensitive;
                 if m.removed
@@ -160,7 +160,7 @@ impl ServerGame<'_> {
                     let invulnerable = m.invulnerable_flag;
                     let plan = self.prepare_knockback_credit(mob_id as i32, attacker, &attack);
                     let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
-                    let m = &mut self.common.mobs[index];
+                    let m = &mut self.common.entities.mobs[index];
                     m.damage(
                         crate::game::server_side::entity_server::damage_level_of!(
                             self,
@@ -172,7 +172,7 @@ impl ServerGame<'_> {
                         source,
                     );
                     self.complete_mob_hurt(index, false);
-                    let Some(m) = self.common.mobs.get_mut(index) else {
+                    let Some(m) = self.common.entities.mobs.get_mut(index) else {
                         continue;
                     };
                     // `Enderman.hurtServer` for a thrown potion: the hit is
@@ -189,7 +189,7 @@ impl ServerGame<'_> {
                     }
                     self.finish_mob_damage_at(index);
                 }
-                let m = &mut self.common.mobs[index];
+                let m = &mut self.common.entities.mobs[index];
                 if extinguishes && m.is_on_fire() && m.alive() {
                     m.extinguish_fire();
                 }
@@ -199,7 +199,7 @@ impl ServerGame<'_> {
             self.for_each_player(|g| g.extinguish_player_in_splash(reach, at));
             // Armor stands are living entities too.
             let mut put_out = Vec::new();
-            for stand in self.common.armor_stands.iter_mut() {
+            for stand in self.common.entities.armor_stands.iter_mut() {
                 if stand.fire_ticks > 0
                     && stand.health > 0.5
                     && reach.intersects(stand.bounds())
@@ -221,7 +221,7 @@ impl ServerGame<'_> {
             );
             for m in self
                 .common
-                .mobs
+                .entities.mobs
                 .iter_mut()
                 .filter(|m| m.species() == Species::Axolotl && !m.removed)
             {

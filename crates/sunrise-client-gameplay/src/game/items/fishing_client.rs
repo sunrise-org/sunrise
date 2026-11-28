@@ -159,7 +159,7 @@ impl crate::game::ClientGame<'_> {
                 if self.hides_as_camera(h.id) {
                     return None;
                 }
-                let owner = self.common.mobs.iter().find(|m| m.id == h.owner)?;
+                let owner = self.common.entities.mobs.iter().find(|m| m.id == h.owner)?;
                 let feet = lerp(owner.previous, owner.position);
                 let body = mod_api::client::camera::lerp(
                     alpha as f32,
@@ -296,7 +296,7 @@ impl crate::game::ClientGame<'_> {
             let before = h.position;
             let owner = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == h.owner)
                 .map(|m| m.position);

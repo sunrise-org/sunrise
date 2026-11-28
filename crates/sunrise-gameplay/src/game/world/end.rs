@@ -863,20 +863,20 @@ impl crate::game::ServerGame<'_> {
         let ticks = |at: Vec3| ticking(at.x.floor() as i32, at.z.floor() as i32);
         let items: Vec<(u32, Vec3, f32, f32)> = self
             .common
-            .dropped
+            .entities.dropped
             .iter()
             .filter(|e| ticks(e.position))
             .map(|e| (e.id, e.position, 0.25, 0.25))
             .collect();
         let mobs: Vec<(u32, Vec3, f32, f32)> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| ticks(m.position) && self.mob_portal_eligible(m))
             .map(|m| (m.id, m.position, m.width(), m.height()))
             .chain(
                 self.common
-                    .boats
+                    .entities.boats
                     .iter()
                     .filter(|b| ticks(b.position) && self.vehicle_can_use_portal(b.id))
                     .map(|b| {
@@ -890,7 +890,7 @@ impl crate::game::ServerGame<'_> {
             )
             .chain(
                 self.common
-                    .carts
+                    .entities.carts
                     .iter()
                     .filter(|c| ticks(c.position) && self.vehicle_can_use_portal(c.id))
                     .map(|c| {
@@ -916,8 +916,7 @@ impl crate::game::ServerGame<'_> {
         // A pearl's move this tick, from where it started it.
         let pearls: Vec<(u32, Option<Who>, Option<u32>, BlockPos)> = self
             .common
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .filter(|p| ticks(p.position))
             .filter_map(|p| {
@@ -999,31 +998,30 @@ impl crate::game::ServerGame<'_> {
         let ticks = |at: Vec3| ticking(at.x.floor() as i32, at.z.floor() as i32);
         let ids: Vec<(u32, bool, bool)> = self
             .common
-            .dropped
+            .entities.dropped
             .iter()
             .map(|e| (e.id, true, ticks(e.position)))
             .chain(
                 self.common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .map(|m| (m.id, self.mob_portal_eligible(m), ticks(m.position))),
             )
             .chain(
                 self.common
-                    .boats
+                    .entities.boats
                     .iter()
                     .map(|b| (b.id, self.vehicle_can_use_portal(b.id), ticks(b.position))),
             )
             .chain(
                 self.common
-                    .carts
+                    .entities.carts
                     .iter()
                     .map(|c| (c.id, self.vehicle_can_use_portal(c.id), ticks(c.position))),
             )
             .chain(
                 self.common
-                    .creatures
-                    .projectiles
+                    .entities.projectiles
                     .iter()
                     .filter(|p| matches!(p.kind, ProjectileKind::EnderPearl))
                     .map(|p| (p.id, true, ticks(p.position))),
@@ -1052,8 +1050,7 @@ impl crate::game::ServerGame<'_> {
             }
             let is_pearl = self
                 .common
-                .creatures
-                .projectiles
+                .entities.projectiles
                 .iter()
                 .any(|p| p.id == id && matches!(p.kind, ProjectileKind::EnderPearl));
             if is_pearl != after_move {
@@ -1105,12 +1102,11 @@ impl crate::game::ServerGame<'_> {
         }
         if let Some(i) = self
             .common
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .position(|p| p.id == id)
         {
-            let pearl = Box::new(self.common.creatures.projectiles.remove(i));
+            let pearl = Box::new(self.common.entities.projectiles.remove(i));
             self.native_leave_skip(id);
             let (job, target) = self.gateway_job([gateway.x, gateway.y, gateway.z]);
             let arrival = GatewayArrival {
@@ -1322,7 +1318,7 @@ pub(in crate::game) mod tests {
                 Vec3::ZERO,
                 None,
             ));
-            let id = game.creatures.projectiles[0].id;
+            let id = game.entities.projectiles[0].id;
             let pearl = game.entity(id).unwrap();
             assert_eq!(pearl.portal_cooldown(game), Some(0));
             // The write refuses a pearl by name: its cooldown is the End

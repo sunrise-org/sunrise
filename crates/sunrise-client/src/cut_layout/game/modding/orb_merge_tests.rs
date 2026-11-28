@@ -53,7 +53,7 @@ fn experience_orb_ref_writes_live_ints_and_refuses_invalid_count() {
     with_game(|game| {
         fixture_resident_column(&mut game.world, (0, 0));
         game.options.dedicated = Some(Vec::new());
-        game.orbs.push(orb(7, 3, 2));
+        game.entities.orbs.push(orb(7, 3, 2));
         let entity = game.entity(7).expect("live orb entity");
         let orb_ref = game
             .experience_orb(entity)
@@ -64,10 +64,10 @@ fn experience_orb_ref_writes_live_ints_and_refuses_invalid_count() {
         assert_eq!(orb_ref.set_age(game, 100_000), Ok(()));
         assert_eq!(orb_ref.value(&*game), Ok(40_000));
         assert_eq!(orb_ref.age(&*game), Ok(100_000));
-        assert_eq!((game.orbs[0].value, game.orbs[0].age), (40_000, 100_000));
+        assert_eq!((game.entities.orbs[0].value, game.entities.orbs[0].age), (40_000, 100_000));
 
         // Serialization (`ExperienceOrb.addAdditionalSaveData`) truncates Value and Age to (short).
-        let saved = orb_to_nbt(&game.orbs[0], [0; 4]);
+        let saved = orb_to_nbt(&game.entities.orbs[0], [0; 4]);
         assert_eq!(saved.get("Value"), Some(&Tag::Short(40_000_i32 as i16)));
         assert_eq!(saved.get("Age"), Some(&Tag::Short(100_000_i32 as i16)));
 
@@ -81,10 +81,10 @@ fn experience_orb_ref_writes_live_ints_and_refuses_invalid_count() {
             Err(ExperienceOrbWriteError::InvalidCount)
         );
         assert_eq!(orb_ref.count(&*game), Ok(2));
-        assert_eq!(game.orbs[0].count, 2);
+        assert_eq!(game.entities.orbs[0].count, 2);
 
         assert_eq!(orb_ref.set_value(game, 11), Ok(()));
         assert_eq!(orb_ref.set_count(game, 1), Ok(()));
-        assert_eq!((game.orbs[0].value, game.orbs[0].count), (11, 1));
+        assert_eq!((game.entities.orbs[0].value, game.entities.orbs[0].count), (11, 1));
     });
 }

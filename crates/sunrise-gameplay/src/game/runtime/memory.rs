@@ -150,13 +150,13 @@ impl ServerGame<'_> {
             }
         };
         level(
-            &self.common.mobs,
+            &self.common.entities.mobs,
             [
-                self.common.dropped.len(),
-                self.common.orbs.len(),
-                self.common.creatures.projectiles.len(),
-                self.common.carts.len(),
-                self.common.boats.len(),
+                self.common.entities.dropped.len(),
+                self.common.entities.orbs.len(),
+                self.common.entities.projectiles.len(),
+                self.common.entities.carts.len(),
+                self.common.entities.boats.len(),
             ],
         );
         for dim in self.server.levels.0.parked_dims() {
@@ -333,7 +333,7 @@ pub(in crate::game) mod tests {
                 .get(&format!("minecraft:{kind}"))
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(
+            game.entities.mobs.push(Mob::new(
                 id,
                 kind,
                 sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5),

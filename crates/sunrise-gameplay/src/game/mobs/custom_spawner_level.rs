@@ -10,7 +10,7 @@ impl CustomSpawnerLevel for ServerGame<'_> {
     fn parts(&mut self) -> SpawnerParts<'_> {
         SpawnerParts {
             world: &mut self.common.world,
-            mobs: &mut self.common.mobs,
+            mobs: &mut self.common.entities.mobs,
             facts: self.common.res.facts(),
         }
     }

@@ -130,7 +130,7 @@ fn tracking_emitters_follow_the_packet_target() {
     let last = [18.0, 65.0, -2.0];
     game.common
         .mob_index
-        .get_mut(&mut game.common.mobs, target as u32)
+        .get_mut(&mut game.common.entities.mobs, target as u32)
         .unwrap()
         .position = Vec3::new(last[0], last[1], last[2]);
     game.handle_packet(C::RemoveEntities(play::RemoveEntities {

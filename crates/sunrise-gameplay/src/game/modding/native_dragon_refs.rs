@@ -11,7 +11,7 @@ impl crate::game::ServerGame<'_> {
         let Target::Dragon(id) = self.native_entity_target(entity)? else {
             return None;
         };
-        self.common.dragon.as_ref().filter(|d| d.id == id)
+        self.common.entities.dragon.as_ref().filter(|d| d.id == id)
     }
     pub(in crate::game::server_side) fn native_dragon_mut(
         &mut self,
@@ -20,7 +20,7 @@ impl crate::game::ServerGame<'_> {
         let Target::Dragon(id) = self.native_entity_target(entity)? else {
             return None;
         };
-        self.common.dragon.as_mut().filter(|d| d.id == id)
+        self.common.entities.dragon.as_mut().filter(|d| d.id == id)
     }
 
     /// The entity as the ender dragon, or None for another kind, a stale
@@ -116,7 +116,7 @@ impl crate::game::ServerGame<'_> {
         match target {
             Target::Mob(id) => self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .any(|m| m.id == id && !m.removed && m.alive() && !m.invulnerable_flag),
             Target::Player | Target::Guest(_) => self

@@ -38,7 +38,7 @@ pub(crate) mod off_level_tests {
                     game.motion.attributes().create(&m.kind.id).map(Box::new);
                 sulfur_cube::adopt_body(&mut m);
                 m.extra.mount = mount;
-                game.mobs.push(m);
+                game.entities.mobs.push(m);
             }
             let ghost = sunrise_sim::mobs::Mob::new(72, kind, Vec3::ZERO, 0.0);
             game.persist.off_level.insert(

@@ -285,7 +285,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn mob_drown(&mut self, mob: u32, at: [f64; 3], bubbles: i32) {
         let v = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == mob)
             .map_or([0.0; 3], |m| [m.velocity.x, m.velocity.y, m.velocity.z]);
@@ -295,7 +295,7 @@ impl crate::game::ServerGame<'_> {
     }
     /// The display name of a mob: its custom name or its type's name.
     pub(in crate::game::server_side) fn mob_display_name(&self, id: u32) -> Option<Text> {
-        let m = self.common.mobs.iter().find(|m| m.id == id)?;
+        let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
         Some(match &m.custom_name {
             Some(name) => Text::literal(name.clone()),
             None => Text::translate(&format!("entity.{}", m.kind.id.replace(':', ".")), &[]),
@@ -316,7 +316,7 @@ impl crate::game::ServerGame<'_> {
             self.note_named_attacker(damage_type, mob, name);
         }
     }
-    /// `note_attacker` for an entity that is not one of `self.mobs` (the
+    /// `note_attacker` for an entity that is not one of `self.entities.mobs` (the
     /// ender dragon).
     pub(in crate::game) fn note_named_attacker(&mut self, damage_type: &str, id: u32, name: Text) {
         self.note_player_attacker(damage_type, id, name, None);
@@ -379,7 +379,7 @@ impl crate::game::ServerGame<'_> {
         captured_player: Option<[i32; 4]>,
     ) {
         let now = self.common.world.game_time;
-        match self.common.mobs.iter().find(|m| m.id == id) {
+        match self.common.entities.mobs.iter().find(|m| m.id == id) {
             None => {
                 let uuid = captured_player
                     .map(sunrise_sim::lan::playerdata::ints_uuid)
@@ -628,7 +628,7 @@ impl crate::game::ServerGame<'_> {
     }
     /// The display component of a custom-named held stack.
     pub(in crate::game::server_side) fn mob_main_hand_name(&self, id: u32) -> Option<Text> {
-        let m = self.common.mobs.iter().find(|m| m.id == id)?;
+        let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
         let mut stack = m.extra.main_hand_stack()?.clone();
         if !has_custom_name(&stack) {
             return None;
@@ -982,8 +982,8 @@ impl crate::game::ServerGame<'_> {
 
     /// `LivingEntity.setLastHurtMob` on a mob at the end of its attack or on impact.
     pub(in crate::game) fn remember_mob_target(&mut self, mob: u32, target: Option<u32>) {
-        if let Some(i) = self.common.mob_index.find(&self.common.mobs, mob) {
-            let m = &mut self.common.mobs[i];
+        if let Some(i) = self.common.mob_index.find(&self.common.entities.mobs, mob) {
+            let m = &mut self.common.entities.mobs[i];
             m.last_hurt_mob = target.map(|id| (id, m.age as i32));
         }
     }
@@ -1026,17 +1026,17 @@ impl crate::game::ServerGame<'_> {
         match self.last_hurt_living_target(id) {
             Some((Target::Mob(_), join)) => self
                 .common
-                .mobs
+                .entities.mobs
                 .locate(join)
-                .is_some_and(|i| self.common.mobs[i].alive()),
+                .is_some_and(|i| self.common.entities.mobs[i].alive()),
             Some((Target::Stand(_), join)) => self
                 .common
-                .armor_stands
+                .entities.armor_stands
                 .locate(join)
-                .is_some_and(|i| self.common.armor_stands[i].health > 0.0),
+                .is_some_and(|i| self.common.entities.armor_stands[i].health > 0.0),
             Some((Target::Dragon(id), _)) => self
                 .common
-                .dragon
+                .entities.dragon
                 .as_ref()
                 .is_some_and(|d| d.id == id && d.health > 0.0),
             _ => self.parked_living_alive(id),
@@ -1105,7 +1105,7 @@ impl crate::game::ServerGame<'_> {
         };
         self.server.combat.0.hit_landed = landed;
         if !landed {
-            if let Some(b) = mob.and_then(|id| self.common.mobs.iter_mut().find(|m| m.id == id)) {
+            if let Some(b) = mob.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id)) {
                 sunrise_sim::mobs::bee::sting_refused(b);
             }
             return;
@@ -1130,7 +1130,7 @@ impl crate::game::ServerGame<'_> {
         let Some(mob) = mob else {
             return;
         };
-        if let Some(b) = self.common.mobs.iter_mut().find(|m| m.id == mob)
+        if let Some(b) = self.common.entities.mobs.iter_mut().find(|m| m.id == mob)
             && sunrise_sim::mobs::bee::sting_landed(b)
         {
             self.server_play_sound("minecraft:entity.bee.sting", from, 1.0, 1.0);
@@ -1159,9 +1159,9 @@ impl crate::game::ServerGame<'_> {
         {
             return false;
         }
-        // The mobs added during the tick come first in `self.mobs`; the
+        // The mobs added during the tick come first in `self.entities.mobs`; the
         // ticked ones keep their tick order after them.
-        let at = |id: u32| self.common.mobs.iter().position(|m| m.id == id);
+        let at = |id: u32| self.common.entities.mobs.iter().position(|m| m.id == id);
         matches!((at(attacker), at(target)), (Some(a), Some(t)) if a < t)
     }
 }

@@ -34,17 +34,16 @@ impl crate::game::ClientGame<'_> {
             return false;
         }
         self.send(S::Attack(play::Attack { id }));
-        if let Some(index) = self.common.mobs.iter().position(|mob| mob.id as i32 == id) {
+        if let Some(index) = self.common.entities.mobs.iter().position(|mob| mob.id as i32 == id) {
             let kind = format!(
                 "minecraft:{}",
-                self.mobs[index].kind.id.trim_start_matches("minecraft:")
+                self.entities.mobs[index].kind.id.trim_start_matches("minecraft:")
             );
             self.remote_sweep_event(&kind, true);
             self.remote_player_attack(index);
         } else if let Some(projectile) = self
             .common
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .find(|p| p.id as i32 == id)
         {

@@ -238,7 +238,7 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn begin_crystal_geometry(
         &self,
     ) -> Option<CrystalDrawFrame<'_>> {
-        if self.common.crystals.is_empty() {
+        if self.common.entities.crystals.is_empty() {
             return None;
         }
         let model = self.client.crystal_model.as_ref()?;

@@ -49,7 +49,8 @@ impl Locate for Vec<ExperienceOrb> {
 }
 struct Dim;
 impl Dim { fn id(&self) -> &'static str { "minecraft:overworld" } }
-struct CommonGame { orbs: Vec<ExperienceOrb>, remote: Option<()>, dim: Dim }
+struct EntityStore { orbs: Vec<ExperienceOrb> }
+struct CommonGame { entities: EntityStore, remote: Option<()>, dim: Dim }
 impl CommonGame {
     fn is_logical_server(&self) -> bool { self.remote.is_none() }
 }
@@ -70,11 +71,11 @@ impl ServerGame {
         self.seen.push((call.into_value, call.into_count, call.from_value, call.from_count));
         *call.canceled = self.cancel;
         if let Some((value, count)) = self.write {
-            let o = self.common.orbs.iter_mut().find(|o| o.id == call.into).unwrap();
+            let o = self.common.entities.orbs.iter_mut().find(|o| o.id == call.into).unwrap();
             (o.value, o.count) = (value, count);
         }
         if self.stale {
-            self.common.orbs.iter_mut().find(|o| o.id == call.from).unwrap().value += 1;
+            self.common.entities.orbs.iter_mut().find(|o| o.id == call.from).unwrap().value += 1;
         }
     }
     fn add_orb(&mut self, _: [f64; 3], value: u32) { self.added.push(value); }
@@ -90,7 +91,7 @@ fn orb(id: u32, x: f64, value: i32, ticks: u32) -> ExperienceOrb {
     ExperienceOrb { join: id, id, x, value, count: 1, age: 10, ticks }
 }
 fn game(orbs: Vec<ExperienceOrb>, flip: bool, cancel: bool) -> ServerGame {
-    ServerGame { common: CommonGame { orbs, remote: None, dim: Dim }, added: vec![], flip, cancel, asked: vec![], merged: vec![],
+    ServerGame { common: CommonGame { entities: EntityStore { orbs }, remote: None, dim: Dim }, added: vec![], flip, cancel, asked: vec![], merged: vec![],
                  write: None, stale: false, seen: vec![] }
 }
 fn counted(id: u32, x: f64, value: i32, count: u32) -> ExperienceOrb {
@@ -103,25 +104,25 @@ fn a_merge_hook_write_is_the_merged_orb() {
     g.write = Some((11, 1));
     g.merge_orb(0);
     assert_eq!(g.seen, [(3, 2, 5, 1)]);
-    assert_eq!((g.common.orbs.len(), g.common.orbs[0].value, g.common.orbs[0].count), (1, 11, 1));
+    assert_eq!((g.common.entities.orbs.len(), g.common.entities.orbs[0].value, g.common.entities.orbs[0].count), (1, 11, 1));
     // A spawning 5 into 3 x2: from is 0 and counts as 1; the write is not counted again.
     let mut g = game(vec![counted(41, 0.0, 3, 2)], true, false);
     g.write = Some((11, 1));
     g.award_orb([0.0, 0.0, 0.0], 5, 1);
     assert_eq!((g.merged.clone(), g.seen.clone()), (vec![(41, 0)], vec![(3, 2, 5, 1)]));
-    assert_eq!((g.common.orbs[0].value, g.common.orbs[0].count, g.common.orbs[0].age, g.added.len()), (11, 1, 0, 0));
+    assert_eq!((g.common.entities.orbs[0].value, g.common.entities.orbs[0].count, g.common.entities.orbs[0].age, g.added.len()), (11, 1, 0, 0));
     // A canceled merge keeps both orbs as they were, whatever the mod wrote to into.
     let mut g = game(vec![counted(1, 0.0, 3, 2), counted(41, 0.2, 5, 1)], true, true);
     g.write = Some((11, 1));
     g.merge_orb(0);
-    let left: Vec<_> = g.common.orbs.iter().map(|o| (o.value, o.count)).collect();
+    let left: Vec<_> = g.common.entities.orbs.iter().map(|o| (o.value, o.count)).collect();
     assert_eq!(left, [(3, 2), (5, 1)]);
     // The same for a spawning orb: the write is put back and a fresh orb spawns.
     let mut g = game(vec![counted(41, 0.0, 3, 2)], true, true);
     g.write = Some((11, 1));
     g.award_orb([0.0, 0.0, 0.0], 5, 1);
-    assert_eq!((g.common.orbs[0].value, g.common.orbs[0].count, g.common.orbs[0].age), (3, 2, 10));
-    assert_eq!((g.common.orbs.len(), g.added.clone()), (1, vec![5]));
+    assert_eq!((g.common.entities.orbs[0].value, g.common.entities.orbs[0].count, g.common.entities.orbs[0].age), (3, 2, 10));
+    assert_eq!((g.common.entities.orbs.len(), g.added.clone()), (1, vec![5]));
 }
 #[test]
 fn a_spawning_merge_tells_the_hook_the_signed_value() {
@@ -137,76 +138,76 @@ fn a_stale_or_overflowing_merge_leaves_both_orbs() {
     g.write = Some((11, 1));
     g.stale = true;
     g.merge_orb(0);
-    let left: Vec<_> = g.common.orbs.iter().map(|o| (o.value, o.count)).collect();
+    let left: Vec<_> = g.common.entities.orbs.iter().map(|o| (o.value, o.count)).collect();
     assert_eq!(left, [(3, 2), (6, 1)]);
     // A count past what a save holds refuses rather than saturating.
     let mut g = game(vec![counted(1, 0.0, 3, i32::MAX as u32), counted(41, 0.2, 3, 1)], false, false);
     g.merge_orb(0);
-    let left: Vec<_> = g.common.orbs.iter().map(|o| o.count).collect();
+    let left: Vec<_> = g.common.entities.orbs.iter().map(|o| o.count).collect();
     assert_eq!(left, [i32::MAX as u32, 1]);
     let mut g = game(vec![counted(41, 0.0, 3, i32::MAX as u32)], false, false);
     g.award_orb([0.0, 0.0, 0.0], 3, 1);
-    assert_eq!((g.common.orbs[0].count, g.added.clone()), (i32::MAX as u32, vec![3]));
+    assert_eq!((g.common.entities.orbs[0].count, g.added.clone()), (i32::MAX as u32, vec![3]));
 }
 #[test]
 fn spawn_merge_is_vanilla_unless_a_mod_decides() {
     // vanilla: same value, ids 40 apart -> merges
     let mut g = game(vec![orb(41, 0.0, 3, 0)], false, false);
     g.award_orb([0.0, 0.0, 0.0], 3, 1);
-    assert_eq!((g.common.orbs[0].count, g.common.orbs[0].age, g.added.len()), (2, 0, 0));
+    assert_eq!((g.common.entities.orbs[0].count, g.common.entities.orbs[0].age, g.added.len()), (2, 0, 0));
     assert_eq!(g.asked, [(41, 0, 3, 3)]);
     // different value: vanilla refuses, a mod flips it
     let mut g = game(vec![orb(41, 0.0, 3, 0)], true, false);
     g.award_orb([0.0, 0.0, 0.0], 7, 1);
-    assert_eq!(g.common.orbs[0].count, 2);
+    assert_eq!(g.common.entities.orbs[0].count, 2);
     // vanilla yes, a mod flips to no -> fresh orb
     let mut g = game(vec![orb(41, 0.0, 3, 0)], true, false);
     g.award_orb([0.0, 0.0, 0.0], 3, 1);
-    assert_eq!((g.common.orbs[0].count, g.added.clone()), (1, vec![3]));
+    assert_eq!((g.common.entities.orbs[0].count, g.added.clone()), (1, vec![3]));
     // canceled -> fresh orb; out of reach is not asked
     let mut g = game(vec![orb(41, 0.0, 3, 0), orb(81, 5.0, 3, 0)], false, true);
     g.award_orb([0.0, 0.0, 0.0], 3, 1);
-    assert_eq!((g.common.orbs[0].count, g.added.clone(), g.merged.clone()), (1, vec![3], vec![(41, 0)]));
+    assert_eq!((g.common.entities.orbs[0].count, g.added.clone(), g.merged.clone()), (1, vec![3], vec![(41, 0)]));
     // a client of a server never merges or asks
     let mut g = game(vec![orb(41, 0.0, 3, 0)], false, false);
     g.common.remote = Some(());
     g.award_orb([0.0, 0.0, 0.0], 3, 1);
-    assert_eq!((g.common.orbs[0].count, g.added.clone(), g.asked.len()), (1, vec![3], 0));
+    assert_eq!((g.common.entities.orbs[0].count, g.added.clone(), g.asked.len()), (1, vec![3], 0));
 }
 #[test]
 fn tick_merge_is_vanilla_unless_a_mod_decides() {
     let two = |a, b| vec![orb(1, 0.0, 3, a), orb(41, 0.2, 3, b)];
     let mut g = game(two(0, 0), false, false);
     g.merge_orb(0);
-    assert_eq!((g.common.orbs.len(), g.common.orbs[0].count, g.common.orbs[0].age), (1, 2, 10));
+    assert_eq!((g.common.entities.orbs.len(), g.common.entities.orbs[0].count, g.common.entities.orbs[0].age), (1, 2, 10));
     assert_eq!(g.asked, [(1, 41, 3, 3)]);
     // Hooks see the signed value, including values which yield no pickup points.
     for value in [-7, 0] {
         let mut g = game(vec![orb(1, 0.0, value, 0), orb(41, 0.2, value, 0)], false, false);
         g.merge_orb(0);
         assert_eq!(g.asked, [(1, 41, value, value)]);
-        assert_eq!((g.common.orbs.len(), g.common.orbs[0].count), (1, 2));
+        assert_eq!((g.common.entities.orbs.len(), g.common.entities.orbs[0].count), (1, 2));
     }
     // only an orb on its scan tick asks: tickCount 20 is not the cadence
     let mut g = game(two(19, 0), false, false);
     g.merge_orb(0);
-    assert_eq!((g.common.orbs.len(), g.asked.len()), (2, 0));
+    assert_eq!((g.common.entities.orbs.len(), g.asked.len()), (2, 0));
     // vanilla yes, mod no
     let mut g = game(two(0, 0), true, false);
     g.merge_orb(0);
-    assert_eq!(g.common.orbs.len(), 2);
+    assert_eq!(g.common.entities.orbs.len(), 2);
     // different ids: vanilla no, mod yes
     let mut g = game(vec![orb(1, 0.0, 3, 0), orb(2, 0.2, 3, 5)], true, false);
     g.merge_orb(0);
-    assert_eq!((g.common.orbs.len(), g.common.orbs[0].count), (1, 2));
+    assert_eq!((g.common.entities.orbs.len(), g.common.entities.orbs[0].count), (1, 2));
     // canceled merge keeps both
     let mut g = game(two(0, 0), false, true);
     g.merge_orb(0);
-    assert_eq!((g.common.orbs.len(), g.merged.clone()), (2, vec![(1, 41)]));
+    assert_eq!((g.common.entities.orbs.len(), g.merged.clone()), (2, vec![(1, 41)]));
     // every eligible orb in reach is absorbed in the one scan
     let mut g = game(vec![orb(1, 0.0, 3, 0), orb(41, 0.2, 3, 0), orb(81, 0.4, 3, 5)], false, false);
     g.merge_orb(0);
-    assert_eq!((g.common.orbs.len(), g.common.orbs[0].count), (1, 3));
+    assert_eq!((g.common.entities.orbs.len(), g.common.entities.orbs[0].count), (1, 3));
 }
 """
 

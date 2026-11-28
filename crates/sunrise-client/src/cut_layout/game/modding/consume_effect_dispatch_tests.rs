@@ -79,7 +79,7 @@ fn nested_consume_effects_follow_call_order_even_for_the_same_kind() {
             game.server_items = Some(Arc::new(items));
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
             fixture_resident_column(&mut game.world, (0, 0));
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(21, kind, Vec3::new(0.0, 64.0, 0.0), 0.0));
             let living = game.living(game.entity(21).unwrap()).unwrap();
             let stack = ItemStack::new("minecraft:pufferfish", 2)
@@ -194,7 +194,7 @@ fn replacing_the_consumed_hand_keeps_the_new_item_and_emits_no_remainder() {
             game.finish_consuming(&info, &consumable, &stack);
             assert_eq!(game.held(), Some(&ItemStack::new("minecraft:stick", 1)));
             assert_eq!(game.inventory.iter().flatten().count(), 1);
-            assert!(game.dropped.is_empty());
+            assert!(game.entities.dropped.is_empty());
         });
     });
 }
@@ -562,7 +562,7 @@ fn a_foxs_later_custom_effect_keeps_the_original_user_and_stack_after_discard() 
                 sunrise_sim::mobs::fox::decide_consumption(&fox, &game.mob_world_base(&[]))
                     .unwrap();
             fixture_resident_column(&mut game.world, (0, 0));
-            game.mobs.push(fox);
+            game.entities.mobs.push(fox);
             let user = game.entity(21).unwrap();
             assert!(!game.apply_fox_consumption(&decision));
             assert!(game.entity(21).is_none());
@@ -826,8 +826,7 @@ fn a_panicking_guest_turn_restores_cross_level_state_and_quarantines_its_join_li
                     game.for_player(
                         sunrise_gameplay_common::game::commands_common::Target::Guest(13),
                         |game| {
-                            game.creatures
-                                .projectiles
+                            game.entities.projectiles
                                 .iter()
                                 .any(|projectile| projectile.guest == Some(13))
                         },

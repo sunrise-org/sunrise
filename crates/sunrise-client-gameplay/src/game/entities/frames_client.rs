@@ -98,7 +98,7 @@ impl ClientGame<'_> {
         // of 1.
         let range = 16.0 * 64.0 * self.view_scale();
         let partial = alpha as f32;
-        for f in &self.common.item_frames {
+        for f in &self.common.entities.item_frames {
             // LevelExtractor: the camera entity is not drawn from its own eyes.
             if self.hides_as_camera(f.id) {
                 continue;

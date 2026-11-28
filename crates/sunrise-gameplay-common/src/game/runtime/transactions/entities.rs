@@ -255,7 +255,7 @@ impl crate::game::CommonGame<'_> {
         };
         match target {
             Target::Mob(id) => {
-                for mob in self.mobs.iter_mut().filter(|m| m.id == id) {
+                for mob in self.entities.mobs.iter_mut().filter(|m| m.id == id) {
                     level.lifetimes.mob_removed.entry(id).or_insert(mob.removed);
                     mob.removed = true;
                 }

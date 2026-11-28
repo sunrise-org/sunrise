@@ -168,34 +168,34 @@ pub(crate) mod tests {
             ] {
                 game.summon_with_nbt(kind, [1.0, 70.0, 1.0], nbt).unwrap();
             }
-            pending!(game.tnts);
-            pending!(game.falling);
-            pending!(game.creatures.projectiles);
-            pending!(game.tridents);
-            pending!(game.rockets);
+            pending!(game.entities.tnts);
+            pending!(game.entities.falling);
+            pending!(game.entities.projectiles);
+            pending!(game.entities.tridents);
+            pending!(game.entities.rockets);
             let base = game.server.next_entity;
             let joined = game.persist.joined_seq;
             let announced = game.persist.live.clone();
             game.assign_pending_join_ids();
             let ids = [
-                game.tnts[0].id,
-                game.falling[0].id,
-                game.creatures.projectiles[0].id,
-                game.tridents[0].id,
-                game.rockets[0].id,
+                game.entities.tnts[0].id,
+                game.entities.falling[0].id,
+                game.entities.projectiles[0].id,
+                game.entities.tridents[0].id,
+                game.entities.rockets[0].id,
             ];
             assert_eq!(ids, [base + 1, base + 2, base + 3, base + 4, base + 5]);
             let mut identities =
                 crate::game::server_side::entity_server::taken_pass_tests::SlotIdentities::default(
                 );
             identities.observe(
-                &mut game.common.falling,
+                &mut game.common.entities.falling,
                 game.common.native_lifecycle.epoch().unwrap(),
                 |f| f.id,
             );
             game.assign_pending_join_ids();
             identities.observe(
-                &mut game.common.falling,
+                &mut game.common.entities.falling,
                 game.common.native_lifecycle.epoch().unwrap(),
                 |f| f.id,
             );
@@ -204,11 +204,11 @@ pub(crate) mod tests {
             assert_eq!(game.persist.live, announced);
             assert_eq!(
                 [
-                    game.tnts[0].id,
-                    game.falling[0].id,
-                    game.creatures.projectiles[0].id,
-                    game.tridents[0].id,
-                    game.rockets[0].id
+                    game.entities.tnts[0].id,
+                    game.entities.falling[0].id,
+                    game.entities.projectiles[0].id,
+                    game.entities.tridents[0].id,
+                    game.entities.rockets[0].id
                 ],
                 ids
             );
@@ -233,9 +233,9 @@ pub(crate) mod tests {
                     .insert((0, 0), std::sync::Arc::new(Chunk::empty(0, 0)));
                 game.summon_with_nbt(kind, [2.0, 70.0, 1.0], nbt).unwrap();
                 match kind {
-                    "minecraft:tnt" => pending!(game.tnts),
-                    "minecraft:falling_block" => pending!(game.falling),
-                    _ => pending!(game.rockets),
+                    "minecraft:tnt" => pending!(game.entities.tnts),
+                    "minecraft:falling_block" => pending!(game.entities.falling),
+                    _ => pending!(game.entities.rockets),
                 }
                 let base = game.server.next_entity;
                 let (Tag::Compound(tag), _) = sunrise_core::nbt::parse_snbt(nbt).unwrap() else {
@@ -251,9 +251,9 @@ pub(crate) mod tests {
                 assert_eq!(game.server.next_entity, base + 1);
                 assert_eq!(game.entity(id), Some(entity));
                 let waiting = match kind {
-                    "minecraft:tnt" => game.tnts[0].id,
-                    "minecraft:falling_block" => game.falling[0].id,
-                    _ => game.rockets[0].id,
+                    "minecraft:tnt" => game.entities.tnts[0].id,
+                    "minecraft:falling_block" => game.entities.falling[0].id,
+                    _ => game.entities.rockets[0].id,
                 };
                 assert_eq!(waiting, 0);
                 if kind == "minecraft:falling_block" {
@@ -270,12 +270,12 @@ pub(crate) mod tests {
                         .id();
                     assert_eq!(fallback, base + 2);
                     assert_eq!(game.server.next_entity, base + 2);
-                    assert_eq!(game.falling.len(), 3);
-                    assert_eq!(game.falling[0].id, 0);
-                    assert_eq!(game.falling[1].id, id);
-                    assert_eq!(game.falling[2].id, fallback);
+                    assert_eq!(game.entities.falling.len(), 3);
+                    assert_eq!(game.entities.falling[0].id, 0);
+                    assert_eq!(game.entities.falling[1].id, id);
+                    assert_eq!(game.entities.falling[2].id, fallback);
                     assert_eq!(
-                        game.falling[2].state,
+                        game.entities.falling[2].state,
                         game.pack
                             .assets
                             .registry
@@ -300,30 +300,30 @@ pub(crate) mod tests {
                 )
                 .unwrap();
             }
-            for t in &mut game.tridents {
+            for t in &mut game.entities.tridents {
                 t.id = 0;
                 t.in_ground = true;
                 t.previous = t.position;
             }
-            game.tridents[0].in_ground = false;
-            game.tridents[2].previous.x -= 1.0;
-            for r in &mut game.rockets {
+            game.entities.tridents[0].in_ground = false;
+            game.entities.tridents[2].previous.x -= 1.0;
+            for r in &mut game.entities.rockets {
                 r.id = 0;
                 r.attached = false;
                 r.attached_to = None;
             }
-            game.rockets[1].attached_to = Some(123);
-            game.rockets[2].attached = true;
+            game.entities.rockets[1].attached_to = Some(123);
+            game.entities.rockets[2].attached = true;
             let base = game.server.next_entity;
             game.find_ridden_vehicle_portals(&[999]);
             assert_eq!(game.server.next_entity, base);
             game.find_entity_portals();
             assert_eq!(
-                game.tridents.iter().map(|t| t.id).collect::<Vec<_>>(),
+                game.entities.tridents.iter().map(|t| t.id).collect::<Vec<_>>(),
                 [base + 1, 0, base + 2]
             );
             assert_eq!(
-                game.rockets.iter().map(|r| r.id).collect::<Vec<_>>(),
+                game.entities.rockets.iter().map(|r| r.id).collect::<Vec<_>>(),
                 [base + 3, 0, 0]
             );
             game.find_entity_portals();
@@ -367,9 +367,9 @@ pub(crate) mod tests {
                     }};
                 }
                 if kind == "minecraft:arrow" {
-                    bind_zero!(game.creatures.projectiles);
+                    bind_zero!(game.entities.projectiles);
                 } else {
-                    bind_zero!(game.falling);
+                    bind_zero!(game.entities.falling);
                 }
                 let before = game.server.next_entity;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -377,8 +377,8 @@ pub(crate) mod tests {
                 }));
                 assert!(result.is_err());
                 assert_eq!(game.server.next_entity, before);
-                assert!(game.falling.iter().all(|owner| owner.id == 0));
-                assert!(game.creatures.projectiles.iter().all(|owner| owner.id == 0));
+                assert!(game.entities.falling.iter().all(|owner| owner.id == 0));
+                assert!(game.entities.projectiles.iter().all(|owner| owner.id == 0));
             });
         }
     }
@@ -439,9 +439,9 @@ pub(crate) mod tests {
                 let sheep = game.res.mob_types().get("minecraft:sheep").unwrap().clone();
                 let child = Mob::new(base + 1, cow.clone(), Vec3::ZERO, 0.0);
                 game.server.next_entity += 2;
-                game.mobs.push(Mob::new(base + 2, cow, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(base + 2, cow, Vec3::ZERO, 0.0));
                 game.native_joins_flush(false, 0);
-                game.mobs.push(child);
+                game.entities.mobs.push(child);
                 game.native_joins_flush(false, 0);
                 game.native_joins_flush(false, 0);
                 assert_eq!(
@@ -452,9 +452,9 @@ pub(crate) mod tests {
                     ]
                 );
                 game.server.next_entity += 1;
-                game.mobs.push(Mob::new(base + 3, sheep, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(base + 3, sheep, Vec3::ZERO, 0.0));
                 assert!(!game.native_joins_flush(true, base + 3));
-                assert!(!game.mobs.iter().any(|mob| mob.id == base + 3));
+                assert!(!game.entities.mobs.iter().any(|mob| mob.id == base + 3));
                 game.native_entity_left(base + 3);
                 assert!(leaves.lock().unwrap().is_empty());
                 assert_eq!(
@@ -462,14 +462,14 @@ pub(crate) mod tests {
                     Some(&(base + 3, "minecraft:sheep".into(), true))
                 );
 
-                game.crystals
+                game.entities.crystals
                     .push(sunrise_gameplay_common::game::dragon_common::Crystal::new(
                         base + 4,
                         Vec3::ZERO,
                         true,
                         0,
                     ));
-                game.cushions.push(sunrise_sim::entities::Cushion {
+                game.entities.cushions.push(sunrise_sim::entities::Cushion {
                     attachment_lifetime: Default::default(),
                     join: Default::default(),
                     id: base + 5,
@@ -480,7 +480,7 @@ pub(crate) mod tests {
                     check_interval: 0,
                     custom_name: None,
                 });
-                game.paintings.push(sunrise_sim::entities::Painting {
+                game.entities.paintings.push(sunrise_sim::entities::Painting {
                     attachment_lifetime: Default::default(),
                     join: Default::default(),
                     id: base + 6,
@@ -493,7 +493,7 @@ pub(crate) mod tests {
                     check_interval: 0,
                     ticks: 0,
                 });
-                game.item_frames.push(sunrise_sim::entities::ItemFrame {
+                game.entities.item_frames.push(sunrise_sim::entities::ItemFrame {
                     attachment_lifetime: Default::default(),
                     join: Default::default(),
                     id: base + 7,
@@ -514,7 +514,7 @@ pub(crate) mod tests {
                     sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
                 dragon.id = base + 8;
                 dragon.join = sunrise_sim::join_seq::JoinSeq::next();
-                game.dragon.replace(dragon);
+                game.entities.dragon.replace(dragon);
                 game.server.next_entity = base + 8;
                 game.native_joins_flush(true, 0);
                 game.native_joins_flush(true, 0);
@@ -530,7 +530,7 @@ pub(crate) mod tests {
                     ]
                 );
                 drop(seen);
-                game.tnts
+                game.entities.tnts
                     .push(sunrise_gameplay_common::game::tnt_common::PrimedTnt {
                         size_answer: None,
                         attachment_lifetime: Default::default(),
@@ -555,7 +555,7 @@ pub(crate) mod tests {
                     });
                 game.native_joins_flush(false, 0);
                 game.native_joins_flush(false, 0);
-                assert_eq!(game.tnts.last().unwrap().id, base + 9);
+                assert_eq!(game.entities.tnts.last().unwrap().id, base + 9);
                 assert_eq!(
                     joins.lock().unwrap().last(),
                     Some(&(base + 9, "minecraft:tnt".into(), false))

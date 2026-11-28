@@ -14,7 +14,7 @@ mod tests {
 
     fn spawn(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, kind: &str) -> EntityRef {
         let kind = game.res.mob_types().get(kind).unwrap().clone();
-        game.mobs
+        game.entities.mobs
             .push(Mob::new(id, kind, Vec3::new(1.5, 64.0, 2.5), 0.0));
         game.entity(id).unwrap()
     }
@@ -42,7 +42,7 @@ mod tests {
             assert_eq!(source(game, slime), Some(SoundSource::Hostile));
             assert_eq!(source(game, sulfur), Some(SoundSource::Neutral));
             assert_eq!(source(game, bunny), Some(SoundSource::Neutral));
-            game.mobs
+            game.entities.mobs
                 .iter_mut()
                 .find(|m| m.id == 15)
                 .unwrap()
@@ -70,9 +70,9 @@ mod tests {
             assert_eq!(sound.source as usize, SoundSource::Neutral.index());
             assert_eq!((sound.volume, sound.pitch, sound.except), (0.5, 1.5, None));
             // A silent mob plays nothing; a malformed event key is refused.
-            game.mobs[0].silent = true;
+            game.entities.mobs[0].silent = true;
             assert!(!game.entity_play_sound(cow, "minecraft:entity.cow.ambient", 1.0, 1.0));
-            game.mobs[0].silent = false;
+            game.entities.mobs[0].silent = false;
             assert!(!game.entity_play_sound(cow, "invalid key", 1.0, 1.0));
             assert_eq!(game.server.pending_native_sounds.len(), 1);
             // A player doesn't hear their own sound, silent or not.

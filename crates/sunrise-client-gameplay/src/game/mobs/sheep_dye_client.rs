@@ -14,7 +14,7 @@ impl ClientGame<'_> {
         let Some(mut stack) = self.with_hand(hand, |g| g.held().cloned()) else {
             return false;
         };
-        sheep_dye::interact(&mut self.common.mobs[index].clone(), &mut stack, true)
+        sheep_dye::interact(&mut self.common.entities.mobs[index].clone(), &mut stack, true)
     }
 
     /// Client-side sheep dyeing prediction: plays local sound and leaves wool/dye to server sync.
@@ -22,10 +22,10 @@ impl ClientGame<'_> {
         let Some(mut stack) = self.with_hand(hand, |g| g.held().cloned()) else {
             return false;
         };
-        if !sheep_dye::interact(&mut self.common.mobs[index], &mut stack, true) {
+        if !sheep_dye::interact(&mut self.common.entities.mobs[index], &mut stack, true) {
             return false;
         }
-        let mob = &self.common.mobs[index];
+        let mob = &self.common.entities.mobs[index];
         if !mob.silent {
             let at = [mob.position.x, mob.position.y, mob.position.z];
             self.play_client_local_sound(

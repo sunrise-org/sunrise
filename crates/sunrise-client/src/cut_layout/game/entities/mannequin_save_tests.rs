@@ -71,7 +71,7 @@ fn a_mannequin_saves_its_own_fields_and_no_mob_fields() {
         "summon mannequin 8.5 100 4.5 {UUID:[I;321,0,0,6],NoGravity:1b,NoAI:1b,PersistenceRequired:1b,CanPickUpLoot:1b,LeftHanded:1b}"
     ));
     let id = |g: &sunrise_gameplay::game::ServerGame<'_>, n: i32| {
-        g.mobs
+        g.entities.mobs
             .iter()
             .find(|m| g.persist.uuids.get(&m.id) == Some(&[321, 0, 0, n]))
             .unwrap()
@@ -121,7 +121,7 @@ fn a_mannequin_reads_and_saves_from_its_own_state() {
                 "summon {kind} {}.5 100 4.5 {{UUID:[I;321,0,0,{n}],NoGravity:1b,{fields}}}",
                 n * 2
             )));
-            g.mobs
+            g.entities.mobs
                 .iter()
                 .position(|m| g.persist.uuids.get(&m.id) == Some(&[321, 0, 0, n]))
                 .unwrap()
@@ -133,7 +133,7 @@ fn a_mannequin_reads_and_saves_from_its_own_state() {
         1,
         &format!("{flags},main_hand:\"right\""),
     );
-    let m = &game.mobs[mannequin];
+    let m = &game.entities.mobs[mannequin];
     assert_eq!(
         (
             m.no_ai,
@@ -154,7 +154,7 @@ fn a_mannequin_reads_and_saves_from_its_own_state() {
         2,
         "LeftHanded:0b,main_hand:\"left\"",
     );
-    assert!(game.mobs[left].extra.main_hand_left);
+    assert!(game.entities.mobs[left].extra.main_hand_left);
     let bogus = summon(
         &mut game,
         "mannequin",
@@ -162,19 +162,19 @@ fn a_mannequin_reads_and_saves_from_its_own_state() {
         "hidden_layers:[\"hat\",\"bogus\"]",
     );
     assert_eq!(
-        game.mobs[bogus].extra.hidden_model_parts, 0,
+        game.entities.mobs[bogus].extra.hidden_model_parts, 0,
         "the whole list fails"
     );
     let pig = summon(&mut game, "pig", 4, flags);
-    let p = &game.mobs[pig];
+    let p = &game.entities.mobs[pig];
     assert_eq!(
         (p.no_ai, p.persistent, p.extra.left_handed),
         (true, true, true)
     );
     // The live state is what it saves: no loaded compound, then a stale one.
-    let id = game.mobs[mannequin].id;
+    let id = game.entities.mobs[mannequin].id;
     {
-        let m = &mut game.mobs[mannequin];
+        let m = &mut game.entities.mobs[mannequin];
         m.extra.avatar_pose = sunrise_sim::pose::Pose::Crouching;
         m.extra.main_hand_left = true;
         m.extra.hidden_model_parts = 1 | 1 << 6;
@@ -203,7 +203,7 @@ fn a_mannequin_reads_and_saves_from_its_own_state() {
         assert!(tag.get("Health").is_some() && tag.get("UUID").is_some());
     }
     // A copy carries the state; a merge reaches it.
-    let copy = game.mobs[mannequin].clone();
+    let copy = game.entities.mobs[mannequin].clone();
     assert_eq!(
         (copy.extra.main_hand_left, copy.extra.hidden_model_parts),
         (true, 1 | 1 << 6)
@@ -211,13 +211,13 @@ fn a_mannequin_reads_and_saves_from_its_own_state() {
     assert!(game.run_command(
         "data merge entity 00000141-0000-0000-0000-000000000001 {hidden_layers:[\"right_sleeve\"],main_hand:\"right\"}"
     ));
-    let m = game.mobs.iter().find(|m| m.id == id).unwrap();
+    let m = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
     assert_eq!(
         (m.extra.hidden_model_parts, m.extra.main_hand_left),
         (1 << 3, false)
     );
     // The pig's save keeps its Mob fields.
-    let pig_id = game.mobs[pig].id;
+    let pig_id = game.entities.mobs[pig].id;
     let tag = game
         .command_target_nbt(sunrise_gameplay_common::game::commands_common::Target::Mob(
             pig_id,

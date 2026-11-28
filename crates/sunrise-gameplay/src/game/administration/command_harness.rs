@@ -356,9 +356,9 @@ impl ServerGame<'_> {
                     let index = self
                         .common
                         .mob_index
-                        .find(&self.common.mobs, id)
+                        .find(&self.common.entities.mobs, id)
                         .ok_or("mob damage state: missing row")?;
-                    let mob = &mut self.common.mobs[index];
+                    let mob = &mut self.common.entities.mobs[index];
                     if let Some(seed) = op["no_action_time"].as_i64() {
                         mob.ai.no_action_time = i32::try_from(seed)?;
                     }
@@ -390,7 +390,7 @@ impl ServerGame<'_> {
                         if sunrise_sim::lan::playerdata::ints_uuid(actual) != uuid {
                             return Err("projectile type: UUID mismatch".into());
                         }
-                        let p = g.creatures.projectiles.iter().find(|p| p.id == id)
+                        let p = g.entities.projectiles.iter().find(|p| p.id == id)
                             .ok_or("projectile type: missing model")?;
                         // Read the live save adapter's type, not the generic selector alias.
                         // No Duration value is supplied by this admission observation.
@@ -435,7 +435,7 @@ impl ServerGame<'_> {
                             return Err("anger state: UUID mismatch".into());
                         }
                         let m = g
-                            .mobs
+                            .entities.mobs
                             .iter()
                             .find(|m| m.id == id && m.alive() && !m.removed)
                             .ok_or("anger state: missing live actor")?;
@@ -794,7 +794,7 @@ impl ServerGame<'_> {
                     self.in_owner_level(|g| -> Result<()> {
                         let id = g
                             .mob_by_uuid(sunrise_sim::lan::playerdata::uuid_ints(uuid))
-                            .filter(|id| g.mobs.iter().any(|m| m.id == *id && !m.removed))
+                            .filter(|id| g.entities.mobs.iter().any(|m| m.id == *id && !m.removed))
                             .ok_or("mob click: missing live mob")?;
                         let owner = g
                             .server
@@ -915,7 +915,7 @@ impl ServerGame<'_> {
                             return Err("frame map: UUID is not a live frame".into());
                         };
                         let actual = *g.persist.uuids.get(&id).ok_or("frame map: no UUID")?;
-                        let frame = g.item_frames.iter().find(|f| f.id == id)
+                        let frame = g.entities.item_frames.iter().find(|f| f.id == id)
                             .ok_or("frame map: missing frame")?.clone();
                         if sunrise_sim::lan::playerdata::ints_uuid(actual) != uuid {
                             return Err("frame map: UUID mismatch".into());
@@ -1350,9 +1350,9 @@ impl ServerGame<'_> {
                     let matches = |f: &super::FallingBlock| {
                         &*facts.get(f.state).name == block && f.no_gravity == no_gravity
                     };
-                    let count = self.common.falling.iter().filter(|f| matches(f)).count();
+                    let count = self.common.entities.falling.iter().filter(|f| matches(f)).count();
                     if op["discard"].as_bool() == Some(true) {
-                        self.common.falling.retain(|f| !matches(f));
+                        self.common.entities.falling.retain(|f| !matches(f));
                     }
                     self.enter_level(back)?;
                     let record = json!({

@@ -52,12 +52,12 @@ impl crate::game::ServerGame<'_> {
             ))?;
         }
         let mut seed = 0;
-        self.common.mobs.for_each_mut(|mob| {
+        self.common.entities.mobs.for_each_mut(|mob| {
             seed += 1;
             mob.random = LegacyRandom::new(seed);
         });
-        if self.common.mobs.len() as u64 != count {
-            return Err(format!("{} of {count} mobs were summoned", self.mobs.len()).into());
+        if self.common.entities.mobs.len() as u64 != count {
+            return Err(format!("{} of {count} mobs were summoned", self.entities.mobs.len()).into());
         }
         // The summoned mobs join the level as its next tick opens. A level that opened has
         // bound its entities to their holders; this one does it here.
@@ -130,7 +130,7 @@ impl crate::game::ServerGame<'_> {
     fn hot_level_state(&self) -> (Vec<[u64; 3]>, Vec<((i32, i32, i32), u32)>) {
         let mobs = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .map(|mob| {
                 [

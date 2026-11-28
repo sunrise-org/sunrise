@@ -23,7 +23,7 @@ impl crate::game::CommonGame<'_> {
             facts.gold_rabbit,
             &mut self.world.random,
         );
-        let Some(m) = self.mobs.iter_mut().find(|m| m.id == parent) else {
+        let Some(m) = self.entities.mobs.iter_mut().find(|m| m.id == parent) else {
             return Some(own);
         };
         if m.random.next_int_bound(20).unwrap_or(1) == 0 {

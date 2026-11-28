@@ -14,20 +14,20 @@ fn a_landed_sting_sets_the_stinger_and_poisons_on_normal_and_hard() {
     let mut resources = None;
     let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
     for (difficulty, poison_ticks) in [(Difficulty::Normal, 200), (Difficulty::Hard, 360)] {
-        game.mobs.clear();
+        game.entities.mobs.clear();
         game.world.health_rules.difficulty = difficulty;
         game.start_audio_capture();
         let bee = spawn(&mut game, 41, "minecraft:bee", Vec3::new(1.5, 64.0, 0.5));
         let pig = spawn(&mut game, 42, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
-        let bee_mob = game.mobs.iter_mut().find(|m| m.id == bee).unwrap();
+        let bee_mob = game.entities.mobs.iter_mut().find(|m| m.id == bee).unwrap();
         let b = bee_mob.extra.bee.get_or_insert_with(Default::default);
         b.angry_at = Some(Who::Mob(pig));
         b.anger_end = 400;
         sting(&mut game, bee, Who::Mob(pig));
-        let bee_mob = game.mobs.iter().find(|m| m.id == bee).unwrap();
+        let bee_mob = game.entities.mobs.iter().find(|m| m.id == bee).unwrap();
         assert!(bee::has_stung(bee_mob), "{difficulty:?}");
         assert_eq!(bee::get(bee_mob).unwrap().angry_at, None, "{difficulty:?}");
-        let pig_mob = game.mobs.iter().find(|m| m.id == pig).unwrap();
+        let pig_mob = game.entities.mobs.iter().find(|m| m.id == pig).unwrap();
         assert!(pig_mob.health < 10.0, "{difficulty:?}");
         let poison = pig_mob
             .extra
@@ -59,33 +59,33 @@ fn a_refused_sting_leaves_the_bee_alone() {
     game.start_audio_capture();
     let bee = spawn(&mut game, 41, "minecraft:bee", Vec3::new(1.5, 64.0, 0.5));
     let pig = spawn(&mut game, 42, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
-    game.mobs
+    game.entities.mobs
         .iter_mut()
         .find(|m| m.id == pig)
         .unwrap()
         .invulnerable_flag = true;
-    let bee_mob = game.mobs.iter_mut().find(|m| m.id == bee).unwrap();
+    let bee_mob = game.entities.mobs.iter_mut().find(|m| m.id == bee).unwrap();
     let b = bee_mob.extra.bee.get_or_insert_with(Default::default);
     b.angry_at = Some(Who::Mob(pig));
     b.anger_end = 400;
     sting(&mut game, bee, Who::Mob(pig));
-    let bee_mob = game.mobs.iter().find(|m| m.id == bee).unwrap();
+    let bee_mob = game.entities.mobs.iter().find(|m| m.id == bee).unwrap();
     assert!(!bee::has_stung(bee_mob), "invulnerable mob");
     assert_eq!(bee::get(bee_mob).unwrap().angry_at, Some(Who::Mob(pig)));
     assert!(sting_sounds(&mut game).is_empty());
 
-    game.mobs.clear();
+    game.entities.mobs.clear();
     game.start_audio_capture();
     game.creative = true;
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
     game.player.as_mut().unwrap().invulnerable = true;
     let bee = spawn(&mut game, 43, "minecraft:bee", Vec3::new(1.5, 64.0, 0.5));
     sting(&mut game, bee, Who::Player);
-    let bee_mob = game.mobs.iter().find(|m| m.id == bee).unwrap();
+    let bee_mob = game.entities.mobs.iter().find(|m| m.id == bee).unwrap();
     assert!(!bee::has_stung(bee_mob));
     assert!(sting_sounds(&mut game).is_empty());
 
-    game.mobs.clear();
+    game.entities.mobs.clear();
     game.start_audio_capture();
     game.creative = false;
     game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
@@ -95,7 +95,7 @@ fn a_refused_sting_leaves_the_bee_alone() {
     game.using = Some((sunrise_gameplay::game::server_side::shield::OFFHAND_SLOT, 5));
     let bee = spawn(&mut game, 44, "minecraft:bee", Vec3::new(0.5, 64.0, 2.5));
     sting(&mut game, bee, Who::Player);
-    let bee_mob = game.mobs.iter().find(|m| m.id == bee).unwrap();
+    let bee_mob = game.entities.mobs.iter().find(|m| m.id == bee).unwrap();
     assert!(!bee::has_stung(bee_mob));
     assert!(sting_sounds(&mut game).is_empty());
 }

@@ -1396,7 +1396,7 @@ mod tests {
                 .insert(mod_key, Tag::String("Holder".into()));
             assert_eq!(mod_ref.set_lock(game, Some(Compound::new())), Ok(true));
             game.world.modified.clear();
-            game.dropped.clear();
+            game.entities.dropped.clear();
 
             assert_eq!(mod_ref.remove(game), Ok(()));
             assert_eq!(game.world.block(1, 64, 1), stone);
@@ -1406,7 +1406,7 @@ mod tests {
             assert_eq!(mod_ref.lock(game), None);
             assert!(!game.world.block_names.contains_key(&mod_key));
             assert!(game.world.block_lock(mod_key).is_none());
-            assert!(game.dropped.is_empty(), "preRemoveSideEffects must not run");
+            assert!(game.entities.dropped.is_empty(), "preRemoveSideEffects must not run");
             assert!(
                 !game.world.modified.contains(&(0, 0)),
                 "LevelChunk.removeBlockEntity does not mark the chunk unsaved"
@@ -1426,13 +1426,13 @@ mod tests {
             let chest_ref = game.block_entity(level, chest_pos).unwrap();
             assert_eq!(chest_ref.set_name(game, Some("Stash")), Ok(true));
             game.world.modified.clear();
-            game.dropped.clear();
+            game.entities.dropped.clear();
 
             assert_eq!(chest_ref.remove(game), Ok(()));
             assert_eq!(game.world.block(2, 64, 1), chest_state);
             assert!(game.block_entity(level, chest_pos).is_none());
             assert_eq!(chest_ref.remove(game), Err(BlockEntityError::Stale));
-            assert!(game.dropped.is_empty(), "chest contents must not drop");
+            assert!(game.entities.dropped.is_empty(), "chest contents must not drop");
             assert!(!game.world.modified.contains(&(0, 0)));
 
             // Accessing the still-chest block recreates a fresh, empty block entity.
@@ -1817,7 +1817,7 @@ mod tests {
                 .block_entities
                 .insert((3, 64, 1), BlockEntity::Chest(chest_slots));
             let suppress_ref = game.block_entity(level, suppress_pos).unwrap();
-            game.dropped.clear();
+            game.entities.dropped.clear();
 
             let host: &mut dyn ServerHost = game;
             let committed: Result<(), TransactionError<()>> = host.transaction(|host, _| {
@@ -1832,7 +1832,7 @@ mod tests {
             assert_eq!(game.world.block(3, 64, 1), air);
             assert!(game.block_entity(level, suppress_pos).is_none());
             assert!(
-                game.dropped.is_empty(),
+                game.entities.dropped.is_empty(),
                 "remove followed by set_block(air) in one tx must not drop chest items"
             );
 
@@ -1845,7 +1845,7 @@ mod tests {
             game.world
                 .block_entities
                 .insert((4, 64, 1), BlockEntity::Chest(replay_slots));
-            game.dropped.clear();
+            game.entities.dropped.clear();
 
             let host: &mut dyn ServerHost = game;
             let committed: Result<(), TransactionError<()>> = host.transaction(|host, _| {
@@ -1867,7 +1867,7 @@ mod tests {
                 "barrel block entity removed after set_block must remain removed at commit"
             );
             assert!(
-                game.dropped
+                game.entities.dropped
                     .iter()
                     .any(|item| &*item.stack.item == "minecraft:gold_ingot"),
                 "first chest's preRemoveSideEffects must still replay at commit"

@@ -179,7 +179,7 @@ mod shulker_lock_drop_tests {
                     Some(&Tag::String("Box".into()))
                 );
             }
-            let start = game.dropped.len();
+            let start = game.entities.dropped.len();
             match route {
                 "command" => {
                     assert!(game.run_command(&format!("setblock {x} 200 {z} air destroy")))
@@ -206,7 +206,7 @@ mod shulker_lock_drop_tests {
                 "actual external source was removed"
             );
             let item_id = format!("minecraft:{kind}");
-            let drops: Vec<_> = game.dropped[start..]
+            let drops: Vec<_> = game.entities.dropped[start..]
                 .iter()
                 .filter(|d| *d.stack.item == item_id)
                 .collect();
@@ -273,14 +273,14 @@ mod explicit_source_tests {
             for mode in 0..5 {
                 let nested = mode == 4;
                 game.server.combat.0 = Default::default();
-                game.mobs.clear();
-                game.orbs.clear();
-                game.dropped.clear();
+                game.entities.mobs.clear();
+                game.entities.orbs.clear();
+                game.entities.dropped.clear();
                 game.player = Some(PlayerMotion::new(game.motion, Vec3::new(10.5, 64.0, 8.5)));
                 let kind = game.res.mob_types().get("minecraft:husk").unwrap().clone();
                 let species = kind.species;
                 if mode == 2 || nested {
-                    game.mobs
+                    game.entities.mobs
                         .push(Mob::new(43, kind, Vec3::new(40.0, 64.0, 40.0), 0.0));
                 }
                 // An enclosing blast must not leak its owner into an explicit source.

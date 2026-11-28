@@ -145,7 +145,7 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn place_ghast_under(&mut self, id: u32, spot: Vec3) {
         let Some(m) = self
             .common
-            .mobs
+            .entities.mobs
             .iter_mut()
             .find(|m| m.id == id && m.species() == sunrise_sim::mobs::Species::HappyGhast)
         else {
@@ -368,7 +368,7 @@ impl crate::game::ClientGame<'_> {
             .entity
             .as_ref()
             .and_then(|e| {
-                let m = self.common.mobs.iter().find(|m| m.id == e.id as u32)?;
+                let m = self.common.entities.mobs.iter().find(|m| m.id == e.id as u32)?;
                 let y = if e.anchor == EYES {
                     m.eye_y()
                 } else {

@@ -332,21 +332,21 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
             let mut mob = Mob::new(id, zombie.clone(), Vec3::new(x, 64.0, 5.0), 0.0);
             mob.no_ai = true;
             mob.no_gravity = true;
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
         }
 
         // Naked mobs emit nothing and allocate no equipment history.
         game.tick_creature_entities().unwrap();
         assert_eq!(take(heard), Heard::new());
-        assert!(!game.mobs[0].extra.live.has_worn());
-        assert!(!game.mobs[1].extra.live.has_worn());
-        let bare = armor::values(&game.mobs[1]);
+        assert!(!game.entities.mobs[0].extra.live.has_worn());
+        assert!(!game.entities.mobs[1].extra.live.has_worn());
+        let bare = armor::values(&game.entities.mobs[1]);
 
         // Equip mob 42 with a damaged enchanted chestplate (gear overlay on stored stack).
         let mut chest = ItemStack::new("minecraft:iron_chestplate", 1);
         chest.damage = 3;
         chest.set_crafting_enchantments(vec![(Arc::from("minecraft:protection"), 2)]);
-        finalize::set_item_stack(&mut game.mobs[1], CHEST, chest.clone());
+        finalize::set_item_stack(&mut game.entities.mobs[1], CHEST, chest.clone());
 
         game.tick_creature_entities().unwrap();
         assert_eq!(
@@ -360,9 +360,9 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
             )]
         );
         // Unchanged mob 41 still allocates no history; mob 42 retains only chest.
-        assert!(!game.mobs[0].extra.live.has_worn());
-        assert!(game.mobs[1].extra.live.has_worn());
-        let wearing_iron = armor::values(&game.mobs[1]);
+        assert!(!game.entities.mobs[0].extra.live.has_worn());
+        assert!(game.entities.mobs[1].extra.live.has_worn());
+        let wearing_iron = armor::values(&game.entities.mobs[1]);
         assert!(wearing_iron.0 > bare.0);
 
         // An unchanged tick with overlaid gear reports nothing.
@@ -373,10 +373,10 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
         // when the subscriber is disabled. Enabling it does not replay that change.
         let diamond = ItemStack::new("minecraft:diamond_chestplate", 1);
         assert!(mod_api::__private::set_mod_enabled("counter", false));
-        game.mobs[1].set_equipment_stack(CHEST, Some(diamond.clone()));
+        game.entities.mobs[1].set_equipment_stack(CHEST, Some(diamond.clone()));
         game.tick_creature_entities().unwrap();
         assert_eq!(take(heard), Heard::new());
-        assert!(armor::values(&game.mobs[1]).0 > wearing_iron.0);
+        assert!(armor::values(&game.entities.mobs[1]).0 > wearing_iron.0);
         assert!(mod_api::__private::set_mod_enabled("counter", true));
         game.tick_creature_entities().unwrap();
         assert_eq!(take(heard), Heard::new());
@@ -385,7 +385,7 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
         // body's next notification; its previous value is the silent change.
         let mob = game.living(game.entity(42).unwrap()).unwrap();
         assert!(game.living_set_equipment(mob, EquipmentSlot::Chest, None));
-        assert_eq!(armor::values(&game.mobs[1]), bare);
+        assert_eq!(armor::values(&game.entities.mobs[1]), bare);
         game.tick_creature_entities().unwrap();
         assert_eq!(
             take(heard),
@@ -397,6 +397,6 @@ fn mobs_compare_equipment_by_borrow_and_retain_only_changed_slots() {
                 None,
             )]
         );
-        assert!(!game.mobs[1].extra.live.has_worn());
+        assert!(!game.entities.mobs[1].extra.live.has_worn());
     });
 }

@@ -57,7 +57,7 @@ fn client_sleep_metadata_and_tick_preserve_shape_and_authoritative_positions() {
         let kind = remote.player_type.as_ref().unwrap().clone();
         let authoritative = Vec3::new(8.5, 70.0, 8.5);
         game.player = Some(PlayerMotion::new(game.motion, authoritative));
-        game.mobs.push(Mob::new(66, kind, authoritative, 0.0));
+        game.entities.mobs.push(Mob::new(66, kind, authoritative, 0.0));
         game.client
             .streaming
             .insert_remote(&mut game.common.world, Chunk::empty(0, 0));
@@ -120,7 +120,7 @@ fn client_sleep_metadata_and_tick_preserve_shape_and_authoritative_positions() {
             let other = game
                 .common
                 .mob_index
-                .get_mut(&mut game.common.mobs, 66)
+                .get_mut(&mut game.common.entities.mobs, 66)
                 .unwrap();
             other.position = authoritative;
             other.previous = authoritative;
@@ -136,7 +136,7 @@ fn client_sleep_metadata_and_tick_preserve_shape_and_authoritative_positions() {
                 "own metadata: {case:?}"
             );
             assert_eq!(game.previous_position, at, "own old position: {case:?}");
-            let other = game.common.mob_index.get(&game.common.mobs, 66).unwrap();
+            let other = game.common.mob_index.get(&game.common.entities.mobs, 66).unwrap();
             assert_eq!(other.position, at, "other metadata: {case:?}");
             assert_eq!(other.previous, at, "other old position: {case:?}");
             assert_eq!((other.head_pitch, other.previous_head_pitch), (0.0, 0.0));
@@ -158,7 +158,7 @@ fn client_sleep_metadata_and_tick_preserve_shape_and_authoritative_positions() {
                 assert_eq!(
                     game.common
                         .mob_index
-                        .get(&game.common.mobs, 66)
+                        .get(&game.common.entities.mobs, 66)
                         .unwrap()
                         .position,
                     at,
@@ -174,7 +174,7 @@ fn client_sleep_metadata_and_tick_preserve_shape_and_authoritative_positions() {
                 at,
                 "clearing metadata does not relocate"
             );
-            let other = game.common.mob_index.get(&game.common.mobs, 66).unwrap();
+            let other = game.common.mob_index.get(&game.common.entities.mobs, 66).unwrap();
             assert_eq!(other.position, at);
             assert_eq!(other.extra.ints[1], 0);
             assert_eq!(other.extra.synced_pose, 0);

@@ -38,7 +38,7 @@ impl ClientGame<'_> {
                 Some((inputs, HotbarSource::Own))
             }
             CameraPlayer::Other(i) => {
-                let m = &self.common.mobs[i];
+                let m = &self.common.entities.mobs[i];
                 // A client never syncs another player's selected slot: the main hand is slot 0.
                 let inputs = HotbarInputs {
                     selected: 0,
@@ -73,12 +73,12 @@ impl ClientGame<'_> {
             CameraPlayer::Absent | CameraPlayer::Detached => return None,
             CameraPlayer::Own => self.common.riding?,
             CameraPlayer::Other(i) => {
-                let rider = self.common.mobs[i].id as i32;
+                let rider = self.common.entities.mobs[i].id as i32;
                 self.client
                     .remote
                     .as_ref()
                     .and_then(|r| r.entities.get(&rider)?.vehicle)
-                    .or(self.common.mobs[i].extra.mount)?
+                    .or(self.common.entities.mobs[i].extra.mount)?
             }
         };
         // Another player can ride the local player, whose attributes and health
@@ -94,15 +94,15 @@ impl ClientGame<'_> {
             return Some((max_health, p.health.health()));
         }
         let (default_max, health) =
-            if let Some(dragon) = self.common.dragon.as_ref().filter(|d| d.id == id) {
+            if let Some(dragon) = self.common.entities.dragon.as_ref().filter(|d| d.id == id) {
                 (
                     sunrise_gameplay_common::game::dragon_common::MAX_HEALTH,
                     dragon.health,
                 )
-            } else if let Some(m) = self.common.mob_index.get(&self.common.mobs, id) {
+            } else if let Some(m) = self.common.mob_index.get(&self.common.entities.mobs, id) {
                 (m.attrs.max_health, m.health)
             } else {
-                let stand = self.common.armor_stands.iter().find(|s| s.id == id)?;
+                let stand = self.common.entities.armor_stands.iter().find(|s| s.id == id)?;
                 (20.0, stand.health)
             };
         let max_health = self
@@ -161,7 +161,7 @@ impl ClientGame<'_> {
                     poison,
                     wither,
                 ) = {
-                    let m = &self.common.mobs[i];
+                    let m = &self.common.entities.mobs[i];
                     let fx = &m.extra.client_effects;
                     (
                         m.id as i32,
@@ -273,7 +273,7 @@ impl ClientGame<'_> {
             }
             CameraPlayer::Other(i) => {
                 let (mob_id, fallback) = {
-                    let m = &self.common.mobs[i];
+                    let m = &self.common.entities.mobs[i];
                     (m.id as i32, finalize::value(m, Attr::Armor) as i32)
                 };
                 Some(
@@ -310,7 +310,7 @@ impl ClientGame<'_> {
                 tick,
                 food: REMOTE_FOOD,
                 saturation: REMOTE_SATURATION,
-                hunger: self.common.mobs[i]
+                hunger: self.common.entities.mobs[i]
                     .extra
                     .client_effects
                     .get("hunger")
@@ -347,7 +347,7 @@ impl ClientGame<'_> {
                 ))
             }
             CameraPlayer::Other(i) => {
-                let m = &self.common.mobs[i];
+                let m = &self.common.entities.mobs[i];
                 Some((
                     AirInputs {
                         tick,

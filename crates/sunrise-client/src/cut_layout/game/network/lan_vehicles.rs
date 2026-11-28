@@ -105,8 +105,8 @@ pub(crate) mod controller_tests {
             .unwrap();
         assert!(game.run_command("forceload add 0 0"));
         assert!(game.run_command("summon minecraft:oak_boat 4.5 200 4.5"));
-        let boat = game.boats[0].id;
-        let start = game.boats[0].position;
+        let boat = game.entities.boats[0].id;
+        let start = game.entities.boats[0].position;
         game.lan_host(
             sunrise_gameplay::game::server_side::lan::LanSettings {
                 port: 0,
@@ -171,22 +171,22 @@ pub(crate) mod controller_tests {
         game.server.lan = Some(host);
         game.guest_move_vehicle(2, &move_to(start.x + 0.3));
         assert_eq!(
-            game.boats[0].position, start,
+            game.entities.boats[0].position, start,
             "the second seat moves nothing"
         );
         game.guest_move_vehicle(3, &move_to(start.x + 0.3));
         assert!(
-            (game.boats[0].position.x - (start.x + 0.3)).abs() < 1.0e-9,
+            (game.entities.boats[0].position.x - (start.x + 0.3)).abs() < 1.0e-9,
             "the driver moves the boat: {:?}",
-            game.boats[0].position
+            game.entities.boats[0].position
         );
         // handleMoveVehicle's `vehicle.move` runs AbstractBoat.checkFallDamage:
         // a boat that lands on the ground (a fall loaded from its save, here)
         // has no fall left.
-        game.boats.update(0, |b| b.fall_distance = 5.0);
+        game.entities.boats.update(0, |b| b.fall_distance = 5.0);
         game.guest_move_vehicle(3, &move_to(start.x + 0.6));
         assert_eq!(
-            game.boats[0].fall_distance, 0.0,
+            game.entities.boats[0].fall_distance, 0.0,
             "a guest's boat on the ground"
         );
         // `AbstractBoat.tick` still runs `applyEffectsFromBlocks` on the server
@@ -198,7 +198,7 @@ pub(crate) mod controller_tests {
             .registry
             .default_state("minecraft:cobweb")
             .unwrap();
-        let p = game.boats[0].position;
+        let p = game.entities.boats[0].position;
         game.world
             .set(
                 p.x.floor() as i32,
@@ -207,7 +207,7 @@ pub(crate) mod controller_tests {
                 cobweb,
             )
             .unwrap();
-        game.boats.update(0, |b| b.fall_distance = 4.0);
+        game.entities.boats.update(0, |b| b.fall_distance = 4.0);
         game.guest_move_vehicle(
             3,
             &play::MoveVehicleRequest {
@@ -217,10 +217,10 @@ pub(crate) mod controller_tests {
                 on_ground: false,
             },
         );
-        assert_eq!(game.boats[0].fall_distance, 4.0, "still falling");
+        assert_eq!(game.entities.boats[0].fall_distance, 4.0, "still falling");
         game.tick_boats();
         assert_eq!(
-            game.boats[0].fall_distance, 0.0,
+            game.entities.boats[0].fall_distance, 0.0,
             "a cobweb resets the fall of a boat its guest drives"
         );
     }
@@ -263,9 +263,9 @@ pub(crate) mod controller_tests {
             .unwrap();
         assert!(game.run_command("forceload add 0 0"));
         assert!(game.run_command("summon minecraft:horse 4.5 210 4.5 {NoAI:1b,Tame:1b}"));
-        let horse = game.mobs[0].id;
-        game.mobs[0].extra.set_saddled(true);
-        game.mobs[0].rider = Some(sunrise_sim::mobs::equine::Rider {
+        let horse = game.entities.mobs[0].id;
+        game.entities.mobs[0].extra.set_saddled(true);
+        game.entities.mobs[0].rider = Some(sunrise_sim::mobs::equine::Rider {
             client: true,
             ..Default::default()
         });
@@ -310,7 +310,7 @@ pub(crate) mod controller_tests {
 
         with_game(|game| {
             let (horse, _packets) = guest_horse_at_start_of_fall(game);
-            game.mobs.update(0, |mob| {
+            game.entities.mobs.update(0, |mob| {
                 mob.health = 1.0;
                 mob.add_effect("minecraft:poison", 25, 0);
                 mob.extra
@@ -335,7 +335,7 @@ pub(crate) mod controller_tests {
                     },
                 );
             }
-            let mob = game.mobs.iter().find(|mob| mob.id == horse).unwrap();
+            let mob = game.entities.mobs.iter().find(|mob| mob.id == horse).unwrap();
             assert!(mob.alive());
             assert!(mob.extra.main_hand_stack().is_none());
             assert!(!mob.has_effect("minecraft:poison"));
@@ -385,7 +385,7 @@ pub(crate) mod controller_tests {
         .unwrap();
         let (_, packets) = guest_horse_at_start_of_fall(&mut game);
         // What the landing should do: the horse's own fall damage for the whole drop.
-        let mut twin = game.mobs[0].clone();
+        let mut twin = game.entities.mobs[0].clone();
         twin.cause_fall_damage_from(
             &game.loop_context,
             &mut sunrise_sim::health::TestLevel::new(0).level(),
@@ -394,7 +394,7 @@ pub(crate) mod controller_tests {
             &mut Vec::new(),
         );
         assert!(
-            twin.health < game.mobs[0].health,
+            twin.health < game.entities.mobs[0].health,
             "a 10-block fall hurts a horse"
         );
 
@@ -407,15 +407,15 @@ pub(crate) mod controller_tests {
         for y in [209.0, 207.0, 204.0] {
             game.guest_move_vehicle(2, &move_to(y, false));
         }
-        assert_eq!(game.mobs[0].position.y, 204.0, "the guest moves the horse");
+        assert_eq!(game.entities.mobs[0].position.y, 204.0, "the guest moves the horse");
         assert_eq!(
-            game.mobs[0].fall_distance, 6.0,
+            game.entities.mobs[0].fall_distance, 6.0,
             "each drop adds to the fall"
         );
         game.guest_move_vehicle(2, &move_to(200.0, true));
-        assert_eq!(game.mobs[0].fall_distance, 0.0, "the landing ends the fall");
+        assert_eq!(game.entities.mobs[0].fall_distance, 0.0, "the landing ends the fall");
         assert_eq!(
-            game.mobs[0].health, twin.health,
+            game.entities.mobs[0].health, twin.health,
             "the landing hurts as the fall does"
         );
         // propagateFallToPassengers: the rider's own causeFallDamage of the fall,
@@ -444,8 +444,8 @@ pub(crate) mod controller_tests {
         // it (FALLDAMAGE_RESETTING, WATER), and the cobweb it crosses resets
         // the fall (a fall loaded from its save, here) before the move counts.
         game.guest_move_vehicle(2, &move_to(205.5, false));
-        assert_eq!(game.mobs[0].position.y, 205.5, "the guest lifts the horse");
-        game.mobs[0].fall_distance = 4.0;
+        assert_eq!(game.entities.mobs[0].position.y, 205.5, "the guest lifts the horse");
+        game.entities.mobs[0].fall_distance = 4.0;
         game.guest_move_vehicle(
             2,
             &play::MoveVehicleRequest {
@@ -455,14 +455,14 @@ pub(crate) mod controller_tests {
                 on_ground: false,
             },
         );
-        assert_eq!(game.mobs[0].position.x, 6.5, "the guest moves the horse on");
+        assert_eq!(game.entities.mobs[0].position.x, 6.5, "the guest moves the horse on");
         assert_eq!(
-            game.mobs[0].fall_distance, 0.0,
+            game.entities.mobs[0].fall_distance, 0.0,
             "a long move through a cobweb resets the fall"
         );
         // handleMoveVehicle moves the horse before it checks the move: one
         // into a wall is put back (moved wrongly), and keeps the reset.
-        game.mobs[0].fall_distance = 4.0;
+        game.entities.mobs[0].fall_distance = 4.0;
         game.guest_move_vehicle(
             2,
             &play::MoveVehicleRequest {
@@ -472,9 +472,9 @@ pub(crate) mod controller_tests {
                 on_ground: false,
             },
         );
-        assert_eq!(game.mobs[0].position.x, 6.5, "the move is put back");
+        assert_eq!(game.entities.mobs[0].position.x, 6.5, "the move is put back");
         assert_eq!(
-            game.mobs[0].fall_distance, 0.0,
+            game.entities.mobs[0].fall_distance, 0.0,
             "a move put back keeps the cobweb's reset"
         );
     }

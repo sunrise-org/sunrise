@@ -174,9 +174,9 @@ fn the_totem_hook_fires_after_the_health_is_gone_and_a_cancel_lets_the_mob_die()
         let mut hit = zombie(game, 226005);
         hit.extra
             .set_main_hand(Some("minecraft:totem_of_undying".into()));
-        game.mobs.push(hit);
+        game.entities.mobs.push(hit);
         assert!(game.mob_hits_mob(226005, 1000.0, Damage::of(DamageKind::Generic)));
-        assert_eq!(game.mobs[0].health, 0.0);
+        assert_eq!(game.entities.mobs[0].health, 0.0);
     });
     assert_eq!(
         heard.totem,
@@ -205,9 +205,9 @@ fn an_uncanceled_totem_saves_the_mob() {
             hit.extra.set_main_hand_stack(Some(main.clone()));
             hit.extra
                 .set_slot_stack(sunrise_items::equipment::OFFHAND, Some(off));
-            game.mobs.push(hit);
+            game.entities.mobs.push(hit);
             assert!(game.mob_hits_mob(226006, 1000.0, Damage::of(DamageKind::Generic)));
-            let hit = &game.mobs[0];
+            let hit = &game.entities.mobs[0];
             assert_eq!(hit.health, 1.0);
             assert_eq!(hit.extra.main_hand_stack(), Some(&main));
             assert_eq!(
@@ -242,9 +242,9 @@ fn a_mods_protector_from_outside_the_hands_saves_the_mob() {
         |game| {
             let mut hit = zombie(game, 226008);
             hit.extra.set_main_hand_stack(Some(totem.clone()));
-            game.mobs.push(hit);
+            game.entities.mobs.push(hit);
             assert!(game.mob_hits_mob(226008, 1000.0, Damage::of(DamageKind::Generic)));
-            let hit = &game.mobs[0];
+            let hit = &game.entities.mobs[0];
             assert_eq!(hit.health, 1.0, "saved");
             assert_eq!(
                 hit.extra.main_hand_stack(),
@@ -262,9 +262,9 @@ fn a_mods_protector_from_outside_the_hands_saves_the_mob() {
         },
         |game| {
             let attacker = zombie(game, 226009);
-            game.mobs.push(attacker);
+            game.entities.mobs.push(attacker);
             assert!(game.mob_hits_mob(226009, 1000.0, Damage::of(DamageKind::Generic)));
-            assert_eq!(game.mobs[0].health, 0.0);
+            assert_eq!(game.entities.mobs[0].health, 0.0);
         },
     );
     assert_eq!(died.order, ["shield", "protection", "post"]);

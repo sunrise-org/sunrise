@@ -39,7 +39,7 @@ impl crate::game::ServerGame<'_> {
             .entity(pause.mob)
             .and_then(|entity| self.living(entity))?;
         self.ask_breath(living, pause.step.vanilla, |game| {
-            game.mobs.iter().any(|m| pause.still_valid(m))
+            game.entities.mobs.iter().any(|m| pause.still_valid(m))
         })
     }
     /// The acting (guest) player's breathing, the answer to apply to the air
@@ -64,7 +64,7 @@ impl crate::game::ServerGame<'_> {
     ) -> Option<sunrise_sim::breathing::Breath> {
         let living = self.entity(id).and_then(|entity| self.living(entity))?;
         self.ask_breath(living, step.vanilla, move |game| {
-            game.armor_stands
+            game.entities.armor_stands
                 .iter()
                 .any(|a| a.id == id && a.health > 0.0 && a.air == step.air)
         })

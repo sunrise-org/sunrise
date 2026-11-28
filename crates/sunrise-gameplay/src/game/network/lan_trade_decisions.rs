@@ -118,7 +118,7 @@ impl crate::game::ServerGame<'_> {
         let std::collections::hash_map::Entry::Vacant(entry) = level.trades.mobs.entry(id) else {
             return;
         };
-        let Some(m) = self.common.mobs.iter().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
             return;
         };
         let random = m.random.clone();

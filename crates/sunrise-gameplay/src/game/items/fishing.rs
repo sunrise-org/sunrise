@@ -288,20 +288,20 @@ impl crate::game::ServerGame<'_> {
             hook.nibble = 10;
             hook.random = LegacyRandom::new(seed);
             self.install_fishing_hook(hook);
-            let item_start = self.common.dropped.len();
-            let orb_start = self.common.orbs.len();
+            let item_start = self.common.entities.dropped.len();
+            let orb_start = self.common.entities.orbs.len();
             self.common.world.random.set_seed(seed);
             self.use_fishing_rod(&rod);
             let items: Vec<_> = self
                 .common
-                .dropped
+                .entities.dropped
                 .iter()
                 .skip(item_start)
                 .map(|item| item.stack.item.to_string())
                 .collect();
             let xp: Vec<_> = self
                 .common
-                .orbs
+                .entities.orbs
                 .iter()
                 .skip(orb_start)
                 .map(|orb| orb.value)
@@ -574,32 +574,32 @@ impl crate::game::ServerGame<'_> {
             );
             let pulled = |v: Vec3| pull_hooked(v, hook.position, owner);
             let mut hooked_item = false;
-            if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+            if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
                 m.velocity = pulled(m.velocity);
-            } else if let Some(item) = self.common.dropped.iter_mut().find(|i| i.id == id) {
+            } else if let Some(item) = self.common.entities.dropped.iter_mut().find(|i| i.id == id) {
                 pull_item(item, Vec3::new(d.x * 0.1, d.y * 0.1, d.z * 0.1));
                 hooked_item = true;
             } else if let Some(t) = self
                 .common
-                .tnts
+                .entities.tnts
                 .iter_mut()
                 .find(|t| t.id != 0 && t.id == id)
             {
                 t.velocity = pulled(t.velocity);
-            } else if let Some(a) = self.common.armor_stands.iter_mut().find(|a| a.id == id) {
+            } else if let Some(a) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id) {
                 a.velocity = pulled(a.velocity);
-            } else if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
-                self.common.boats.update(i, |b| {
+            } else if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
+                self.common.entities.boats.update(i, |b| {
                     b.velocity = pulled(b.velocity);
                 });
-            } else if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
+            } else if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
                 // `AbstractMinecart` is pickable, so `pullEntity` moves it too.
                 self.common
-                    .carts
+                    .entities.carts
                     .update(i, |c| c.velocity = pulled(c.velocity));
-            } else if let Some(i) = self.common.falling.iter().position(|f| f.id == id) {
+            } else if let Some(i) = self.common.entities.falling.iter().position(|f| f.id == id) {
                 self.common
-                    .falling
+                    .entities.falling
                     .update(i, |f| f.velocity = pulled(f.velocity));
             } else if self
                 .common
@@ -619,7 +619,7 @@ impl crate::game::ServerGame<'_> {
             // CriteriaTriggers.FISHING_ROD_HOOKED for any hooked entity type.
             let hooked = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| self.mob_entity(m))
@@ -1126,7 +1126,7 @@ impl crate::game::ServerGame<'_> {
                     } else if id != 0 {
                         let breeze = self
                             .common
-                            .mobs
+                            .entities.mobs
                             .iter()
                             .find(|m| {
                                 m.id == id
@@ -1195,7 +1195,7 @@ impl crate::game::ServerGame<'_> {
                 // updateHookedEntity: ride the hooked mob, player or item at 0.8 of its height.
                 let hooked = self
                     .common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .find(|m| m.id == id && m.alive())
                     .map(|m| (m.position, f64::from(m.height())))
@@ -1214,7 +1214,7 @@ impl crate::game::ServerGame<'_> {
                     })
                     .or_else(|| {
                         self.common
-                            .armor_stands
+                            .entities.armor_stands
                             .iter()
                             .find(|a| a.id == id)
                             .map(|a| {
@@ -1223,7 +1223,7 @@ impl crate::game::ServerGame<'_> {
                             })
                     })
                     .or_else(|| {
-                        self.common.boats.iter().find(|b| b.id == id).map(|b| {
+                        self.common.entities.boats.iter().find(|b| b.id == id).map(|b| {
                             (
                                 b.position,
                                 sunrise_gameplay_common::game::boats_common::HEIGHT,
@@ -1232,21 +1232,21 @@ impl crate::game::ServerGame<'_> {
                     })
                     .or_else(|| {
                         self.common
-                            .carts
+                            .entities.carts
                             .iter()
                             .find(|c| c.id == id)
                             .map(|c| (c.position, super::minecarts::HEIGHT))
                     })
                     .or_else(|| {
                         self.common
-                            .dropped
+                            .entities.dropped
                             .iter()
                             .find(|i| i.id == id)
                             .map(|i| (i.position, sunrise_sim::entities::ItemEntity::WIDTH))
                     })
                     .or_else(|| {
                         self.common
-                            .tnts
+                            .entities.tnts
                             .iter()
                             .find(|t| t.id != 0 && t.id == id)
                             .map(|t| {
@@ -1258,7 +1258,7 @@ impl crate::game::ServerGame<'_> {
                     })
                     .or_else(|| {
                         self.common
-                            .item_frames
+                            .entities.item_frames
                             .iter()
                             .find(|f| f.id == id)
                             .map(|f| {
@@ -1274,7 +1274,7 @@ impl crate::game::ServerGame<'_> {
                             })
                     })
                     .or_else(|| {
-                        self.common.paintings.iter().find(|p| p.id == id).map(|p| {
+                        self.common.entities.paintings.iter().find(|p| p.id == id).map(|p| {
                             let (lo, hi) = p.bounds();
                             (
                                 Vec3::new(
@@ -1288,29 +1288,28 @@ impl crate::game::ServerGame<'_> {
                     })
                     .or_else(|| {
                         self.common
-                            .falling
+                            .entities.falling
                             .iter()
                             .find(|f| f.id == id)
                             .map(|f| (f.position, f64::from(0.98_f32)))
                     })
                     .or_else(|| {
                         self.common
-                            .crystals
+                            .entities.crystals
                             .iter()
                             .find(|c| c.id != 0 && c.id == id)
                             .map(|c| (c.position, 2.0))
                     })
                     .or_else(|| {
                         self.common
-                            .cushions
+                            .entities.cushions
                             .iter()
                             .find(|c| c.id == id)
                             .map(|c| (c.position, f64::from(0.25_f32)))
                     })
                     .or_else(|| {
                         self.common
-                            .resident_entities
-                            .knots
+                            .entities.knots
                             .iter()
                             .find(|k| k.id == id)
                             .map(|k| {

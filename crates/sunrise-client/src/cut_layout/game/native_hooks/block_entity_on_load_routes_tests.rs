@@ -506,8 +506,8 @@ mod tests {
                 .unwrap()
                 .is_some()
             );
-            let join = game.falling[0].join;
-            let mut block = game.falling.extract(join).unwrap();
+            let join = game.entities.falling[0].join;
+            let mut block = game.entities.falling.extract(join).unwrap();
             let id = block.id;
             block.saved = Some(Box::new((
                 [1, 2, 3, 4],
@@ -517,7 +517,7 @@ mod tests {
                 )])),
             )));
             game.finish_falling_block(block, [1, 64, 1]);
-            game.falling.retire_extracted(id, join);
+            game.entities.falling.retire_extracted(id, join);
             assert_first_two_ticks(game, &log, 29);
         });
     }

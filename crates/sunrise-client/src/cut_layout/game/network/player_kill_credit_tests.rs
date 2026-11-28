@@ -423,7 +423,7 @@ fn a_displaced_archer_receives_resistance_credit() {
     assert!(
         game.run_command("effect give @e[type=pig,limit=1] minecraft:resistance infinite 0 true")
     );
-    let pig = game.mobs.last().unwrap().id;
+    let pig = game.entities.mobs.last().unwrap().id;
     let mut arrow = Projectile::new(
         ProjectileKind::Arrow {
             base_damage: 2.0,
@@ -518,7 +518,7 @@ fn surviving_mob_hit_awards_resistance_before_pre_and_post() {
                 "effect give @e[type=pig,limit=1] minecraft:resistance infinite 0 true"
             )
         );
-        let pig = game.mobs.last().unwrap().id;
+        let pig = game.entities.mobs.last().unwrap().id;
         game.as_guest(CONN, |game| {
             assert!(game.mob_hits_mob(pig, 2.5, Damage::player([5.5, 100.0, 6.5])));
             let victim = game.mob_object(pig).unwrap();
@@ -727,7 +727,7 @@ fn a_wither_killing_a_player_leaves_a_rose() {
     assert!(
         game.run_command("summon wither 8.5 100 4.5 {NoAI:1b,Silent:1b,PersistenceRequired:1b}")
     );
-    let wither = game.mobs.last().unwrap().id;
+    let wither = game.entities.mobs.last().unwrap().id;
     kill(&mut game, Attacker::Mob(wither), "minecraft:mob_attack");
     let name = &*game.res.facts().get(game.world.block(22, 100, 9)).name;
     assert_eq!(name, "minecraft:wither_rose", "the rose block");
@@ -737,7 +737,7 @@ fn a_wither_killing_a_player_leaves_a_rose() {
         "a mob's kill credits no score"
     );
     assert_eq!(game.stats.get("custom", "minecraft:player_kills"), 0);
-    assert!(game.dropped.is_empty(), "the block leaves no item");
+    assert!(game.entities.dropped.is_empty(), "the block leaves no item");
 }
 
 /// The same with mobGriefing off: the rose is an item at the death position.
@@ -764,18 +764,18 @@ fn a_wither_killing_a_player_without_mob_griefing_drops_the_rose() {
     assert!(
         game.run_command("summon wither 8.5 100 4.5 {NoAI:1b,Silent:1b,PersistenceRequired:1b}")
     );
-    let wither = game.mobs.last().unwrap().id;
+    let wither = game.entities.mobs.last().unwrap().id;
     kill(&mut game, Attacker::Mob(wither), "minecraft:mob_attack");
-    let rose = game.dropped.last().expect("a rose item");
+    let rose = game.entities.dropped.last().expect("a rose item");
     assert_eq!(&*rose.stack.item, "minecraft:wither_rose");
     assert_eq!(rose.stack.count, 1);
     let p = rose.position;
     assert_eq!((p.x, p.y, p.z), (22.5, 100.0, 9.5));
     // `dropAllDeathLoot` drops the experience first: the orbs take their ids
     // and their own randoms' seeds before the rose's item entity.
-    assert!(!game.orbs.is_empty(), "the experience orbs");
+    assert!(!game.entities.orbs.is_empty(), "the experience orbs");
     assert!(
-        game.orbs.iter().all(|o| o.id < rose.id),
+        game.entities.orbs.iter().all(|o| o.id < rose.id),
         "the rose's item entity comes after the orbs"
     );
 }

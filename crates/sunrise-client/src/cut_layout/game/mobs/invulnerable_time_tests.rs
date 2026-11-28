@@ -71,7 +71,7 @@ fn health(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> f32 {
         .unwrap();
     match target {
         sunrise_gameplay_common::game::commands_common::Target::Mob(id) => {
-            game.mobs.iter().find(|m| m.id == id).unwrap().health
+            game.entities.mobs.iter().find(|m| m.id == id).unwrap().health
         }
         other => panic!("{other:?}"),
     }
@@ -114,7 +114,7 @@ use sunrise_core::nbt::Tag;
 fn mob(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> usize {
     match game.target_with_uuid(sunrise_sim::save::uuid_from_text(EDIT).unwrap()) {
         Some(sunrise_gameplay_common::game::commands_common::Target::Mob(id)) => {
-            game.mobs.iter().position(|m| m.id == id).unwrap()
+            game.entities.mobs.iter().position(|m| m.id == id).unwrap()
         }
         other => panic!("{other:?}"),
     }
@@ -141,7 +141,7 @@ fn the_hurt_cooldown_and_invulnerable_time_are_separate_fields() {
     // A hit: the cooldown only.
     assert!(game.run_command(&format!("damage {EDIT} 2 minecraft:generic")));
     assert_eq!(
-        (game.mobs[i].invulnerable, game.mobs[i].invulnerable_time),
+        (game.entities.mobs[i].invulnerable, game.entities.mobs[i].invulnerable_time),
         (20, 0),
         "a hit"
     );
@@ -154,7 +154,7 @@ fn the_hurt_cooldown_and_invulnerable_time_are_separate_fields() {
     assert!(game.run_command(&format!("data merge entity {EDIT} {{invulnerable_time:3}}")));
     let i = mob(&mut game);
     assert_eq!(
-        (game.mobs[i].invulnerable, game.mobs[i].invulnerable_time),
+        (game.entities.mobs[i].invulnerable, game.entities.mobs[i].invulnerable_time),
         (20, 3),
         "both positive"
     );
@@ -166,18 +166,18 @@ fn the_hurt_cooldown_and_invulnerable_time_are_separate_fields() {
     // Both positive: even a stronger hit is refused (the cooldown alone would let 2 through).
     assert!(!game.run_command(&format!("damage {EDIT} 4 minecraft:generic")));
     assert_eq!(
-        game.mobs[i].health, 18.0,
+        game.entities.mobs[i].health, 18.0,
         "refused while invulnerable_time > 0"
     );
     // The NoAI mob's invulnerable_time counts down with the ticks, then ends.
     step(&mut game, 1);
     assert_eq!(
-        (game.mobs[i].invulnerable, game.mobs[i].invulnerable_time),
+        (game.entities.mobs[i].invulnerable, game.entities.mobs[i].invulnerable_time),
         (19, 2),
         "one tick"
     );
     step(&mut game, 2);
-    assert_eq!(game.mobs[i].invulnerable_time, 0, "expired");
+    assert_eq!(game.entities.mobs[i].invulnerable_time, 0, "expired");
     assert_eq!(
         game.mob_tree_nbt(i).get("invulnerable_time"),
         None,
@@ -185,7 +185,7 @@ fn the_hurt_cooldown_and_invulnerable_time_are_separate_fields() {
     );
     // At 0 the cooldown rules alone: a stronger hit deals the difference.
     assert!(game.run_command(&format!("damage {EDIT} 4 minecraft:generic")));
-    assert_eq!(game.mobs[i].health, 16.0, "the cooldown alone");
+    assert_eq!(game.entities.mobs[i].health, 16.0, "the cooldown alone");
     // A bypassing source passes invulnerable_time.
     assert!(game.run_command(&format!(
         "data merge entity {EDIT} {{invulnerable_time:100}}"

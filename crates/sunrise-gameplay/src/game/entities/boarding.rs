@@ -118,7 +118,7 @@ impl ServerGame<'_> {
                 .any(|row| matches((row.vehicle_order, row.id, false)))
             || self
                 .common
-                .bolts
+                .entities.bolts
                 .iter()
                 .filter(|b| b.mount == Some(vehicle))
                 .any(|b| matches((b.vehicle_order, b.id, false)))

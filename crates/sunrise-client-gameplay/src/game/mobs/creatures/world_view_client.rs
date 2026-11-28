@@ -92,7 +92,7 @@ impl crate::game::ClientGame<'_> {
             .flatten()
             .any(|s| gold_tag.is_some_and(|t| t.contains(&*s.item)));
         let vehicle = self.common.riding.and_then(|id| {
-            if let Some(b) = self.common.boats.iter().find(|b| b.id == id) {
+            if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id) {
                 let w = 0.6875;
                 return Some(Vehicle {
                     nautilus: false,
@@ -103,7 +103,7 @@ impl crate::game::ClientGame<'_> {
                     velocity: b.velocity,
                 });
             }
-            let m = self.common.mobs.iter().find(|m| m.id == id)?;
+            let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
             matches!(m.species(), Species::Nautilus | Species::ZombieNautilus).then(|| Vehicle {
                 nautilus: true,
                 bounds: m.bounds(),

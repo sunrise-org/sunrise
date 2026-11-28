@@ -68,8 +68,8 @@ fn a_carried_block_is_not_placed_into_an_entity() {
         ("the player", None),
     ];
     for (what, summon) in summons {
-        game.dropped.clear();
-        game.armor_stands.clear();
+        game.entities.dropped.clear();
+        game.entities.armor_stands.clear();
         game.player = (what == "the player")
             .then(|| PlayerMotion::new(game.motion, Vec3::new(5.5, 100.0, 5.5)));
         if let Some(command) = summon {
@@ -78,13 +78,13 @@ fn a_carried_block_is_not_placed_into_an_entity() {
         game.world.set(5, 100, 5, air).unwrap();
         let mut mob = Mob::new(900, kind.clone(), Vec3::new(9.5, 100.0, 9.5), 0.0);
         mob.extra.carried = Some(stone);
-        game.mobs.clear();
-        game.mobs.push(mob);
+        game.entities.mobs.clear();
+        game.entities.mobs.push(mob);
         game.enderman_place_block(900, [5, 100, 5], stone, &[])
             .unwrap();
         let placed = game.world.block(5, 100, 5) == stone;
         assert_eq!(placed, what == "nothing", "{what}");
-        assert_eq!(game.mobs[0].extra.carried.is_none(), placed, "{what}");
+        assert_eq!(game.entities.mobs[0].extra.carried.is_none(), placed, "{what}");
     }
 }
 

@@ -67,7 +67,7 @@ fn every_ordinary_resident_family_binds_its_actual_owned_slot() {
                 bind(game, id, Kind::$kind);
             }};
         }
-        summon!("pig", Mob, mobs);
+        summon!("pig", Mob, entities.mobs);
         game.summon_with_nbt(
             "minecraft:item",
             [0.5, 70.0, 0.5],
@@ -75,48 +75,48 @@ fn every_ordinary_resident_family_binds_its_actual_owned_slot() {
         )
         .unwrap();
         game.lan_assign_ids();
-        let id = game.dropped[0].id;
+        let id = game.entities.dropped[0].id;
         bind(game, id, Kind::Item);
-        summon!("experience_orb", Orb, orbs);
-        summon!("snowball", Projectile, creatures.projectiles);
-        summon!("armor_stand", Stand, armor_stands);
-        summon!("item_frame", Frame, item_frames);
-        summon!("painting", Painting, paintings);
-        summon!("oak_boat", Boat, boats);
-        summon!("minecart", Cart, carts);
+        summon!("experience_orb", Orb, entities.orbs);
+        summon!("snowball", Projectile, entities.projectiles);
+        summon!("armor_stand", Stand, entities.armor_stands);
+        summon!("item_frame", Frame, entities.item_frames);
+        summon!("painting", Painting, entities.paintings);
+        summon!("oak_boat", Boat, entities.boats);
+        summon!("minecart", Cart, entities.carts);
         summon!("marker", Other, server.others.0);
         game.add_fangs([0.5, 70.0, 0.5], 0.0, 0, 0);
-        let id = game.fangs.list[0].id;
+        let id = game.entities.fangs.list[0].id;
         bind(game, id, Kind::Fangs);
-        summon!("end_crystal", Crystal, crystals);
-        summon!("tnt", Tnt, tnts);
-        summon!("falling_block", Falling, falling);
-        summon!("firework_rocket", Rocket, rockets);
-        summon!("trident", Trident, tridents);
+        summon!("end_crystal", Crystal, entities.crystals);
+        summon!("tnt", Tnt, entities.tnts);
+        summon!("falling_block", Falling, entities.falling);
+        summon!("firework_rocket", Rocket, entities.rockets);
+        summon!("trident", Trident, entities.tridents);
         game.add_ominous_item_spawner(ItemStack::new("minecraft:stone", 1), [0.5, 70.0, 0.5], 60);
-        let id = game.ominous_spawners[0].id;
+        let id = game.entities.ominous_spawners[0].id;
         bind(game, id, Kind::Spawner);
-        summon!("area_effect_cloud", Cloud, breath_clouds);
-        summon!("lightning_bolt", Bolt, bolts);
-        summon!("cushion", Cushion, cushions);
+        summon!("area_effect_cloud", Cloud, entities.breath_clouds);
+        summon!("lightning_bolt", Bolt, entities.bolts);
+        summon!("cushion", Cushion, entities.cushions);
         let fence = [0, 70, 0];
         game.tie_knot(fence);
-        let mob_id = game.mobs[0].id;
+        let mob_id = game.entities.mobs[0].id;
         assert!(game.set_leash(
             sunrise_gameplay_common::game::commands_common::Target::Mob(mob_id),
             sunrise_sim::mobs::leash::Holder::Knot(fence),
             None,
         ));
-        let id = game.resident_entities.knots[0].id;
+        let id = game.entities.knots[0].id;
         bind(game, id, Kind::Knot);
         game.summon_with_nbt("minecraft:ender_dragon", [0.5, 70.0, 0.5], "{}")
             .unwrap();
         game.lan_assign_ids();
-        let id = game.dragon.as_ref().unwrap().id;
+        let id = game.entities.dragon.as_ref().unwrap().id;
         bind(game, id, Kind::Dragon);
         // #792: a general row joins its own family's list; the lookup is the
         // same table path every family takes.
-        game.resident_entities.general.rows.push(
+        game.entities.general.rows.push(
             sunrise_gameplay_common::game::general::GeneralRow {
                 id: 4242,
                 uuid: [11, 12, 13, 14],

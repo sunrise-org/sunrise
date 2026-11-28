@@ -68,7 +68,7 @@ impl crate::game::ServerGame<'_> {
         ));
         let supported = behind.legacy_solid || (s[1] == 0 && behind.has_class("DiodeBlock"));
         // canCoexist(true): only hanging entities facing the same way block it.
-        supported && frame_coexists(f, &self.common.item_frames, &self.common.paintings)
+        supported && frame_coexists(f, &self.common.entities.item_frames, &self.common.entities.paintings)
     }
     /// Asks the mods whether the acting guest may place a hanging entity
     /// of type `kind` at `pos` (`native_hanging_place`): true when one
@@ -187,7 +187,7 @@ impl crate::game::ServerGame<'_> {
             map.remove(&"UUID".into());
         }
         self.common.persist.raw.insert(frame.id, raw);
-        self.common.item_frames.push(frame);
+        self.common.entities.item_frames.push(frame);
         if !self.common.creative {
             self.consume_held();
         }
@@ -199,7 +199,7 @@ impl crate::game::ServerGame<'_> {
     pub fn interact_frame(&mut self, target: Option<InteractTarget>) -> bool {
         let Some((i, d)) = (match target {
             Some(t) => sunrise_gameplay_common::game::item_actions::named_entity(
-                &self.common.item_frames,
+                &self.common.entities.item_frames,
                 t.id,
                 |f| f.id,
             )
@@ -209,13 +209,13 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         // Only a client's own pick is stopped by a block: the range check passed.
-        if (target.is_none() && !self.before_block(d)) || self.common.item_frames[i].fixed {
+        if (target.is_none() && !self.before_block(d)) || self.common.entities.item_frames[i].fixed {
             return false;
         }
-        let at = center(&self.common.item_frames[i]);
-        let entity_id = self.common.item_frames[i].id;
+        let at = center(&self.common.entities.item_frames[i]);
+        let entity_id = self.common.entities.item_frames[i].id;
         let action;
-        if self.common.item_frames[i].item.is_none() {
+        if self.common.entities.item_frames[i].item.is_none() {
             let Some(held) = self.common.held().cloned() else {
                 return false;
             };
@@ -226,22 +226,22 @@ impl crate::game::ServerGame<'_> {
             {
                 return true;
             }
-            self.common.item_frames[i].set_item(Some(held));
+            self.common.entities.item_frames[i].set_item(Some(held));
             action = "put";
             self.server_play_sound(
-                &sound(&self.common.item_frames[i], "add_item"),
+                &sound(&self.common.entities.item_frames[i], "add_item"),
                 at,
                 1.0,
                 1.0,
             );
         } else {
-            let s = sound(&self.common.item_frames[i], "rotate_item");
+            let s = sound(&self.common.entities.item_frames[i], "rotate_item");
             self.server_play_sound(&s, at, 1.0, 1.0);
-            let f = &mut self.common.item_frames[i];
+            let f = &mut self.common.entities.item_frames[i];
             f.rotation = (f.rotation + 1) % 8;
             action = "rotate";
         }
-        let p = self.common.item_frames[i].pos;
+        let p = self.common.entities.item_frames[i].pos;
         self.common.world.modified.insert((p[0] >> 4, p[2] >> 4));
         self.frame_output_changed(p);
         // ItemFrame.interact: BLOCK_CHANGE by the player after setItem or
@@ -255,7 +255,7 @@ impl crate::game::ServerGame<'_> {
             self.server.lan_acting_uuid,
             self.server.lan_acting_name.clone(),
         ) {
-            let frame = self.common.item_frames.iter().find(|f| f.id == entity_id);
+            let frame = self.common.entities.item_frames.iter().find(|f| f.id == entity_id);
             let item = frame
                 .and_then(|f| f.item.as_ref())
                 .map_or_else(String::new, |s| s.item.to_string());
@@ -280,7 +280,7 @@ impl crate::game::ServerGame<'_> {
         if !self.before_block(d) || self.mob_hit().is_some_and(|m| m.1 < d) {
             return false;
         }
-        if self.common.item_frames[i].fixed {
+        if self.common.entities.item_frames[i].fixed {
             // A fixed frame refuses the hit of a player who isn't in creative
             // (canHurtWhenFixed), so skipAttackInteraction is false and
             // Player.attack goes on to onAttack.
@@ -291,8 +291,8 @@ impl crate::game::ServerGame<'_> {
         }
         // `isInvulnerableToBase`: a refused hit goes on to onAttack, as a fixed frame's does.
         if self.native_player_hit_invulnerable(
-            self.common.item_frames[i].id,
-            self.common.item_frames[i].kind(),
+            self.common.entities.item_frames[i].id,
+            self.common.entities.item_frames[i].kind(),
         ) {
             self.server.attack_ticks = 0;
             return true;
@@ -315,7 +315,7 @@ impl crate::game::ServerGame<'_> {
         source: Option<super::commands::Target>,
         damage_type: &str,
     ) -> bool {
-        let Some(i) = self.common.item_frames.iter().position(|f| f.id == id) else {
+        let Some(i) = self.common.entities.item_frames.iter().position(|f| f.id == id) else {
             return false;
         };
         let bypasses = self
@@ -335,12 +335,12 @@ impl crate::game::ServerGame<'_> {
             .rules
             .bool_at(sunrise_game_data::gamerules::vanilla::MOB_GRIEFING)
             && matches!(source, Some(super::commands::Target::Mob(_)));
-        let fixed = self.common.item_frames[i].fixed;
+        let fixed = self.common.entities.item_frames[i].fixed;
         if fixed {
             if (!creative && !bypasses) || mob_blocked {
                 return false;
             }
-        } else if self.common.item_frames[i].item.is_none() && mob_blocked {
+        } else if self.common.entities.item_frames[i].item.is_none() && mob_blocked {
             return false;
         }
         self.hit_frame_by(i, by_player, creative, source, fixed);
@@ -355,12 +355,12 @@ impl crate::game::ServerGame<'_> {
         source: Option<super::commands::Target>,
         force_break: bool,
     ) {
-        let with_frame = force_break || self.common.item_frames[i].item.is_none();
-        let entity_id = self.common.item_frames[i].id;
+        let with_frame = force_break || self.common.entities.item_frames[i].item.is_none();
+        let entity_id = self.common.entities.item_frames[i].id;
         if with_frame {
             let (kind, pos) = (
-                self.common.item_frames[i].kind(),
-                self.common.item_frames[i].pos,
+                self.common.entities.item_frames[i].kind(),
+                self.common.entities.item_frames[i].pos,
             );
             if self.hanging_break_cancelled(kind, pos, by_player) {
                 return;
@@ -368,28 +368,28 @@ impl crate::game::ServerGame<'_> {
             // The listener had the game in its hands: find the frame again by id.
             match self
                 .common
-                .item_frames
+                .entities.item_frames
                 .iter()
                 .position(|f| f.id == entity_id)
             {
-                Some(now) if force_break || self.common.item_frames[now].item.is_none() => i = now,
+                Some(now) if force_break || self.common.entities.item_frames[now].item.is_none() => i = now,
                 _ => return,
             }
         }
-        let old_item = self.common.item_frames[i]
+        let old_item = self.common.entities.item_frames[i]
             .item
             .as_ref()
             .map_or("", |s| &*s.item)
             .to_owned();
-        let rotation = self.common.item_frames[i].rotation;
-        let at = center(&self.common.item_frames[i]);
+        let rotation = self.common.entities.item_frames[i].rotation;
+        let at = center(&self.common.entities.item_frames[i]);
         let mut f = if with_frame {
-            self.common.item_frames.remove(i)
+            self.common.entities.item_frames.remove(i)
         } else {
-            self.common.item_frames[i].clone()
+            self.common.entities.item_frames[i].clone()
         };
         if !with_frame {
-            self.common.item_frames[i].item = None;
+            self.common.entities.item_frames[i].item = None;
         } else {
             // BlockAttachedEntity.kill precedes ItemFrame.dropItem's break sound.
             self.entity_killed_event_by(at, source);
@@ -405,7 +405,7 @@ impl crate::game::ServerGame<'_> {
         if !with_frame
             && let Some(frame) = self
                 .common
-                .item_frames
+                .entities.item_frames
                 .iter_mut()
                 .find(|frame| frame.id == entity_id)
         {
@@ -535,15 +535,15 @@ impl crate::game::ServerGame<'_> {
             return;
         }
         let mut i = 0;
-        while i < self.common.item_frames.len() {
-            let c = center(&self.common.item_frames[i]);
+        while i < self.common.entities.item_frames.len() {
+            let c = center(&self.common.entities.item_frames[i]);
             let dist =
                 ((c[0] - blast[0]).powi(2) + (c[1] - blast[1]).powi(2) + (c[2] - blast[2]).powi(2))
                     .sqrt()
                     / diameter;
             if dist > 1.0
-                || self.common.item_frames[i].fixed
-                || !self.server.combat.0.visits(self.common.item_frames[i].id)
+                || self.common.entities.item_frames[i].fixed
+                || !self.server.combat.0.visits(self.common.entities.item_frames[i].id)
                 || !self.break_frame_by(i, self.explosion_kill_credit())
             {
                 i += 1;
@@ -563,10 +563,10 @@ impl crate::game::ServerGame<'_> {
         source: Option<super::commands::Target>,
     ) -> bool {
         let (id, kind, pos, was_empty) = (
-            self.common.item_frames[index].id,
-            self.common.item_frames[index].kind(),
-            self.common.item_frames[index].pos,
-            self.common.item_frames[index].item.is_none(),
+            self.common.entities.item_frames[index].id,
+            self.common.entities.item_frames[index].kind(),
+            self.common.entities.item_frames[index].pos,
+            self.common.entities.item_frames[index].item.is_none(),
         );
         if self.hanging_break_cancelled(kind, pos, false) {
             return false;
@@ -575,13 +575,13 @@ impl crate::game::ServerGame<'_> {
         // filled now, nothing breaks.
         let Some(index) = self
             .common
-            .item_frames
+            .entities.item_frames
             .iter()
             .position(|f| f.id == id && !(was_empty && f.item.is_some()))
         else {
             return false;
         };
-        let mut f = self.common.item_frames.remove(index);
+        let mut f = self.common.entities.item_frames.remove(index);
         self.entity_killed_event_by(center(&f), source);
         self.server_play_sound(&sound(&f, "break"), center(&f), 1.0, 1.0);
         self.drop_frame_items(&mut f, true, false, false);
@@ -604,13 +604,13 @@ impl crate::game::ServerGame<'_> {
         i: usize,
         stack: Option<ItemStack>,
     ) {
-        let f = &mut self.common.item_frames[i];
+        let f = &mut self.common.entities.item_frames[i];
         f.set_item(stack);
         let (pos, filled) = (f.pos, f.item.is_some());
         if filled {
             let (name, at) = (
-                sound(&self.common.item_frames[i], "add_item"),
-                center(&self.common.item_frames[i]),
+                sound(&self.common.entities.item_frames[i], "add_item"),
+                center(&self.common.entities.item_frames[i]),
             );
             self.server_play_sound(&name, at, 1.0, 1.0);
         }
@@ -627,7 +627,7 @@ impl crate::game::ServerGame<'_> {
         // the frames that were there when it began, each found again by its join.
         let joins: Option<Vec<_>> = round
             .told_listening()
-            .then(|| self.common.item_frames.iter().map(|f| f.join).collect());
+            .then(|| self.common.entities.item_frames.iter().map(|f| f.join).collect());
         let mut turns = joins.iter().flatten();
         let mut i = 0;
         loop {
@@ -636,21 +636,21 @@ impl crate::game::ServerGame<'_> {
             }
             if joins.is_some() {
                 let Some(&join) = turns.next() else { break };
-                let Some(at) = self.common.item_frames.locate(join) else {
+                let Some(at) = self.common.entities.item_frames.locate(join) else {
                     continue;
                 };
                 i = at;
-            } else if i >= self.common.item_frames.len() {
+            } else if i >= self.common.entities.item_frames.len() {
                 break;
             }
-            let at = center(&self.common.item_frames[i]);
+            let at = center(&self.common.entities.item_frames[i]);
             if !ticking(at[0].floor() as i32, at[2].floor() as i32) {
                 i += 1;
                 continue;
             }
             let (id, kind) = (
-                self.common.item_frames[i].id,
-                self.common.item_frames[i].kind(),
+                self.common.entities.item_frames[i].id,
+                self.common.entities.item_frames[i].kind(),
             );
             // ServerLevel.tick skips an entity that `isRemoved`, here one whose removal is queued.
             let target = super::commands::Target::Frame(id);
@@ -663,33 +663,33 @@ impl crate::game::ServerGame<'_> {
                 i += 1;
                 continue;
             }
-            if self.common.item_frames.get(i).is_none_or(|f| f.id != id) {
-                let Some(now) = self.common.item_frames.iter().position(|f| f.id == id) else {
+            if self.common.entities.item_frames.get(i).is_none_or(|f| f.id != id) {
+                let Some(now) = self.common.entities.item_frames.iter().position(|f| f.id == id) else {
                     continue;
                 };
                 i = now;
             }
             told = Some((id, kind));
             // `Entity.tickCount` is raised before the rest of the tick, and is not saved.
-            self.common.item_frames[i].ticks = self.common.item_frames[i].ticks.saturating_add(1);
-            self.common.item_frames[i].check_interval += 1;
-            if self.common.item_frames[i].check_interval >= 100 {
-                self.common.item_frames[i].check_interval = 0;
-                let f = self.common.item_frames[i].clone();
+            self.common.entities.item_frames[i].ticks = self.common.entities.item_frames[i].ticks.saturating_add(1);
+            self.common.entities.item_frames[i].check_interval += 1;
+            if self.common.entities.item_frames[i].check_interval >= 100 {
+                self.common.entities.item_frames[i].check_interval = 0;
+                let f = self.common.entities.item_frames[i].clone();
                 if !self.frame_survives(&f) && !self.hanging_break_cancelled(f.kind(), f.pos, false)
                 {
                     // Found again by id after the listener: gone, nothing is
                     // removed; empty before and filled now, it stays.
-                    let Some(now) = self.common.item_frames.iter().position(|g| g.id == f.id)
+                    let Some(now) = self.common.entities.item_frames.iter().position(|g| g.id == f.id)
                     else {
                         continue;
                     };
-                    if f.item.is_none() && self.common.item_frames[now].item.is_some() {
+                    if f.item.is_none() && self.common.entities.item_frames[now].item.is_some() {
                         i = now + 1;
                         continue;
                     }
                     i = now;
-                    let mut f = self.common.item_frames.remove(i);
+                    let mut f = self.common.entities.item_frames.remove(i);
                     // BlockAttachedEntity.tick discards without a death event.
                     self.server_play_sound(&sound(&f, "break"), center(&f), 1.0, 1.0);
                     if f.item.is_some() {

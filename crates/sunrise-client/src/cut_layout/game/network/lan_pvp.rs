@@ -347,15 +347,15 @@ mod tests {
                 strike.amount = 5.0;
                 strike.damage_type = "minecraft:mace_smash".into();
                 let cow = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-                game.mobs
+                game.entities.mobs
                     .push(Mob::new(41, cow, Vec3::new(3.0, 64.0, 5.0), 0.0));
-                let bystander_health = game.mobs[0].health;
+                let bystander_health = game.entities.mobs[0].health;
                 assert!(game.pvp_land(Victim::Guest(13), &strike).is_some());
                 let victim = game.server.lan.as_ref().unwrap().hub.guest(13).unwrap();
                 // CombatRules.getDamageAfterAbsorb: full diamond blocks 0.75 of a 5-point
                 // hit; Breach IV subtracts 0.60 from that fraction, leaving 4.25 damage.
                 assert_eq!(victim.health, 15.75);
-                assert_eq!(game.mobs[0].health, bystander_health);
+                assert_eq!(game.entities.mobs[0].health, bystander_health);
             });
         });
     }

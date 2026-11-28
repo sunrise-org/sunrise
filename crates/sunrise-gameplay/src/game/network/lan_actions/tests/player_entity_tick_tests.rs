@@ -175,7 +175,7 @@ fn a_player_riding_a_pig_is_told_its_own_tick_as_the_pig_is() {
             pig.no_ai = true;
             pig.no_gravity = true;
             pig.ground.on_ground = true;
-            game.mobs.push(pig);
+            game.entities.mobs.push(pig);
             game.server
                 .lan
                 .as_mut()
@@ -212,7 +212,7 @@ fn a_player_riding_a_pig_is_told_its_own_tick_as_the_pig_is() {
 
             *cancel.lock().unwrap() = None;
             heard.lock().unwrap().clear();
-            game.mobs[0].position.x += 1.0;
+            game.entities.mobs[0].position.x += 1.0;
             game.tick_guests();
             assert_eq!(
                 *heard.lock().unwrap(),

@@ -92,7 +92,7 @@ impl finalize::FinalizeLevel for FinalizeGame<'_, '_> {
         self.game.finalize_free_chicken(bounds)
     }
     fn ride_chicken(&mut self, chicken: u32, rider: u32) {
-        if let Some(c) = self.game.mobs.iter_mut().find(|m| m.id == chicken) {
+        if let Some(c) = self.game.entities.mobs.iter_mut().find(|m| m.id == chicken) {
             c.extra.jockey = true;
             c.extra.rider = Some(rider);
         }
@@ -137,7 +137,7 @@ impl ServerGame<'_> {
     /// the bounds.
     pub(in crate::game::server_side) fn finalize_free_chicken(&self, bounds: Aabb) -> Option<u32> {
         self.common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|c| {
                 c.species() == Species::Chicken
@@ -225,8 +225,8 @@ impl ServerGame<'_> {
         let game = level.game;
         game.world.random = random;
         for m in created {
-            game.mobs.push(m);
-            game.admit_new_mobs(game.mobs.len() - 1);
+            game.entities.mobs.push(m);
+            game.admit_new_mobs(game.entities.mobs.len() - 1);
         }
     }
 }

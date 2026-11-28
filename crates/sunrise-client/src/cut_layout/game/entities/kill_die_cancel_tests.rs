@@ -39,7 +39,7 @@ impl Hooks for ProbeMod {
 }
 
 fn porkchops(game: &sunrise_gameplay::game::ServerGame<'_>) -> usize {
-    game.dropped
+    game.entities.dropped
         .iter()
         .filter(|i| &*i.stack.item == "minecraft:porkchop")
         .count()
@@ -78,7 +78,7 @@ fn a_vetoed_kill_keeps_the_mob_and_a_later_kill_dies_once_isolated() {
             game.sculk_sync_index();
             assert!(game.run_command("summon pig 5.5 100 8.5 {NoAI:1b,NoGravity:1b,PersistenceRequired:1b,UUID:[I;593,0,0,1]}"));
             let pig = game
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.species() == sunrise_sim::mobs::Species::Pig)
                 .unwrap()
@@ -89,7 +89,7 @@ fn a_vetoed_kill_keeps_the_mob_and_a_later_kill_dies_once_isolated() {
             let posted = deaths(game, |g| assert!(run(g, &format!("kill {PIG}")).0));
             assert_eq!(calls(&probe).len(), 1, "the veto is asked during /kill");
             assert_eq!(posted, [], "no event for a vetoed death");
-            let m = game.mobs.iter().find(|m| m.id == pig).unwrap();
+            let m = game.entities.mobs.iter().find(|m| m.id == pig).unwrap();
             assert_eq!(
                 (m.health, m.death_time),
                 (5.0, 0),
@@ -98,7 +98,7 @@ fn a_vetoed_kill_keeps_the_mob_and_a_later_kill_dies_once_isolated() {
             assert_eq!(porkchops(game), 0, "no loot");
             let later = deaths(game, |g| g.tick_creature_entities().unwrap());
             assert_eq!((calls(&probe).len(), later), (0, vec![]), "nothing more");
-            assert!(game.mobs.iter().any(|m| m.id == pig && m.alive()));
+            assert!(game.entities.mobs.iter().any(|m| m.id == pig && m.alive()));
             // Allowed: one call, one event, one loot drop, and no more next tick.
             probe.veto.store(false, Ordering::Relaxed);
             let posted = deaths(game, |g| assert!(run(g, &format!("kill {PIG}")).0));
@@ -113,7 +113,7 @@ fn a_vetoed_kill_keeps_the_mob_and_a_later_kill_dies_once_isolated() {
                 (0, vec![], vec![], 1),
                 "a second kill and the next tick do not die again"
             );
-            let m = game.mobs.iter().find(|m| m.id == pig).unwrap();
+            let m = game.entities.mobs.iter().find(|m| m.id == pig).unwrap();
             assert!(!m.removed && m.health == 0.0, "the body stays");
         });
     });

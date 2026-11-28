@@ -24,38 +24,37 @@ impl crate::game::ServerGame<'_> {
             Target::Guest(conn) => self.command_guest(conn).map(|g| g.position),
             Target::Mob(id) => self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| [m.position.x, m.position.y, m.position.z]),
             Target::Item(id) => self
                 .common
-                .dropped
+                .entities.dropped
                 .iter()
                 .find(|i| i.id == id)
                 .map(|i| [i.position.x, i.position.y, i.position.z]),
             Target::Orb(id) => self
                 .common
-                .orbs
+                .entities.orbs
                 .iter()
                 .find(|o| o.id == id)
                 .map(|o| [o.position.x, o.position.y, o.position.z]),
             Target::Projectile(id) => self
                 .common
-                .creatures
-                .projectiles
+                .entities.projectiles
                 .iter()
                 .find(|a| a.id == id)
                 .map(|a| [a.position.x, a.position.y, a.position.z]),
             Target::Stand(id) => self
                 .common
-                .armor_stands
+                .entities.armor_stands
                 .iter()
                 .find(|a| a.id == id)
                 .map(|a| [a.position.x, a.position.y, a.position.z]),
             Target::Frame(id) => self
                 .common
-                .item_frames
+                .entities.item_frames
                 .iter()
                 .find(|f| f.id == id)
                 .map(|f| {
@@ -66,7 +65,7 @@ impl crate::game::ServerGame<'_> {
                         (lo[2] + hi[2]) / 2.0,
                     ]
                 }),
-            Target::Painting(id) => self.common.paintings.iter().find(|p| p.id == id).map(|p| {
+            Target::Painting(id) => self.common.entities.paintings.iter().find(|p| p.id == id).map(|p| {
                 let (lo, hi) = p.bounds();
                 [
                     (lo[0] + hi[0]) / 2.0,
@@ -76,13 +75,13 @@ impl crate::game::ServerGame<'_> {
             }),
             Target::Boat(id) => self
                 .common
-                .boats
+                .entities.boats
                 .iter()
                 .find(|b| b.id == id)
                 .map(|b| [b.position.x, b.position.y, b.position.z]),
             Target::Cart(id) => self
                 .common
-                .carts
+                .entities.carts
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| [c.position.x, c.position.y, c.position.z]),
@@ -95,19 +94,19 @@ impl crate::game::ServerGame<'_> {
                 .map(|o| [o.position.x, o.position.y, o.position.z]),
             Target::Crystal(id) => self
                 .common
-                .crystals
+                .entities.crystals
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| [c.position.x, c.position.y, c.position.z]),
             Target::Dragon(id) => self
                 .common
-                .dragon
+                .entities.dragon
                 .as_ref()
                 .filter(|d| d.id == id)
                 .map(|d| [d.position.x, d.position.y, d.position.z]),
             Target::Cushion(id) => self
                 .common
-                .cushions
+                .entities.cushions
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| [c.position.x, c.position.y, c.position.z]),
@@ -117,49 +116,49 @@ impl crate::game::ServerGame<'_> {
             }),
             Target::Tnt(id) => self
                 .common
-                .tnts
+                .entities.tnts
                 .iter()
                 .find(|t| t.id == id)
                 .map(|t| [t.position.x, t.position.y, t.position.z]),
             Target::Falling(id) => self
                 .common
-                .falling
+                .entities.falling
                 .iter()
                 .find(|f| f.id == id)
                 .map(|f| [f.position.x, f.position.y, f.position.z]),
             Target::Rocket(id) => self
                 .common
-                .rockets
+                .entities.rockets
                 .iter()
                 .find(|r| r.id == id)
                 .map(|r| [r.position.x, r.position.y, r.position.z]),
             Target::Cloud(id) => self
                 .common
-                .breath_clouds
+                .entities.breath_clouds
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.at),
-            Target::Bolt(id) => self.common.bolts.iter().find(|b| b.id == id).map(|b| b.at),
+            Target::Bolt(id) => self.common.entities.bolts.iter().find(|b| b.id == id).map(|b| b.at),
             Target::Hook(id) => self.fishing_hook_by_id(id).map(|(h, _)| {
                 let p = h.position;
                 [p.x, p.y, p.z]
             }),
             Target::Trident(id) => self
                 .common
-                .tridents
+                .entities.tridents
                 .iter()
                 .find(|t| t.id == id)
                 .map(|t| [t.position.x, t.position.y, t.position.z]),
             Target::Fangs(id) => self
                 .common
-                .fangs
+                .entities.fangs
                 .list
                 .iter()
                 .find(|f| f.id == id)
                 .map(|f| f.pos),
             Target::Spawner(id) => self
                 .common
-                .ominous_spawners
+                .entities.ominous_spawners
                 .iter()
                 .find(|s| s.id == id)
                 .map(|s| s.position),
@@ -169,8 +168,7 @@ impl crate::game::ServerGame<'_> {
             }),
             Target::General(id) => self
                 .common
-                .resident_entities
-                .general
+                .entities.general
                 .row(id)
                 .map(|row| [row.position.x, row.position.y, row.position.z]),
         }

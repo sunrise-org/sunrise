@@ -17,8 +17,8 @@ fn lightning_items_take_five_damage_per_strike() {
             ] {
                 game.spawn_item_own(ItemStack::new(item, 1), [0.0, 64.0, 0.0], 10);
             }
-            let survivor = game.dropped[2].id;
-            game.dropped[2].health = 10;
+            let survivor = game.entities.dropped[2].id;
+            game.entities.dropped[2].health = 10;
             let mut bolt = Bolt::struck_at(77, [0.5, 64.0, 0.5]);
             let mut resistant = ItemStack::new("minecraft:stone", 1);
             resistant.data_mut().set_other(
@@ -30,7 +30,7 @@ fn lightning_items_take_five_damage_per_strike() {
                 ),
             );
             game.spawn_item_own(resistant, [0.0, 64.0, 0.0], 10);
-            let resistant_id = game.dropped.last().unwrap().id;
+            let resistant_id = game.entities.dropped.last().unwrap().id;
             let mut box_stack = ItemStack::new("minecraft:shulker_box", 1);
             box_stack.data_mut().container = vec![
                 (0, ItemStack::new("minecraft:stone", 2)),
@@ -39,7 +39,7 @@ fn lightning_items_take_five_damage_per_strike() {
             ];
             game.spawn_item_own(box_stack, [0.0, 64.0, 0.0], 10);
             game.spawn_item_own(ItemStack::new("minecraft:stone", 1), [0.0, 64.0, 0.0], 10);
-            let invulnerable_id = game.dropped.last().unwrap().id;
+            let invulnerable_id = game.entities.dropped.last().unwrap().id;
             game.persist.raw.insert(
                 invulnerable_id,
                 sunrise_core::nbt::parse_snbt("{Invulnerable:1b}")
@@ -47,9 +47,9 @@ fn lightning_items_take_five_damage_per_strike() {
                     .0,
             );
             game.thunder_hit(&mut bolt);
-            assert_eq!(game.dropped.len(), 6);
+            assert_eq!(game.entities.dropped.len(), 6);
             for id in [survivor, resistant_id, invulnerable_id] {
-                assert_eq!(game.dropped.iter().find(|e| e.id == id).unwrap().health, 5);
+                assert_eq!(game.entities.dropped.iter().find(|e| e.id == id).unwrap().health, 5);
             }
             for (item, count) in [
                 ("minecraft:stone", 2),
@@ -57,7 +57,7 @@ fn lightning_items_take_five_damage_per_strike() {
                 ("minecraft:glass", 3),
             ] {
                 let e = game
-                    .dropped
+                    .entities.dropped
                     .iter()
                     .find(|e| e.stack.item.as_ref() == item && e.stack.count == count)
                     .unwrap();
@@ -89,8 +89,8 @@ fn lightning_item_listener_can_refuse_damage() {
                 game.spawn_item_own(ItemStack::new("minecraft:stone", 1), [0.0, 64.0, 0.0], 10);
                 let mut bolt = Bolt::struck_at(77, [0.5, 64.0, 0.5]);
                 game.thunder_hit(&mut bolt);
-                assert_eq!(game.dropped.len(), 1);
-                assert_eq!(game.dropped[0].health, 5);
+                assert_eq!(game.entities.dropped.len(), 1);
+                assert_eq!(game.entities.dropped[0].health, 5);
             })
         },
     );

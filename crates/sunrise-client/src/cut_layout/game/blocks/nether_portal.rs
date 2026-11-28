@@ -50,7 +50,7 @@ pub(crate) mod tests {
             );
             assert!(game.run_command(r#"summon minecraft:pig 0 64 0 {UUID:[I;0,0,0,175],Tags:["portal_root"],Passengers:[{id:"minecraft:pig",UUID:[I;0,0,0,175],Passengers:[{id:"minecraft:pig",UUID:[I;0,0,0,176]}]}]}"#));
             let root = game
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| {
                     game.persist_raw(m.id)
@@ -60,7 +60,7 @@ pub(crate) mod tests {
                 .id;
             let child = game.mob_passenger_ids(root)[0];
             let leaf = game.mob_passenger_ids(child)[0];
-            assert!(!game.mobs.iter().any(|m| m.id == child));
+            assert!(!game.entities.mobs.iter().any(|m| m.id == child));
             game.server.chunk_ticking.tickets.add_portal((0, 0));
             game.update_chunk_tickets();
             assert!(game.entity_ticking_area()(0, 0));
@@ -101,8 +101,8 @@ pub(crate) mod tests {
                 .id;
             let new_child = game.mob_passenger_ids(new_root)[0];
             let new_leaf = game.mob_passenger_ids(new_child)[0];
-            assert!(!game.mobs.iter().any(|m| m.id == new_root));
-            assert!(game.mobs.iter().any(|m| m.id == new_child));
+            assert!(!game.entities.mobs.iter().any(|m| m.id == new_root));
+            assert!(game.entities.mobs.iter().any(|m| m.id == new_child));
             assert!(game.mobs_below_off_level().contains(&new_child));
             assert!(game.mobs_below_off_level().contains(&new_leaf));
             assert_eq!(
@@ -223,14 +223,14 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn portal_cooldown_follows_the_class_then_the_first_passenger() {
         sunrise_gameplay::game::native_guest_turn_tests::with_guests(|game| {
-            game.boats
+            game.entities.boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     101,
                     Arc::from("oak"),
                     Vec3::ZERO,
                     0.0,
                 ));
-            game.carts
+            game.entities.carts
                 .push(sunrise_gameplay_common::game::minecarts::Minecart::new(
                     103,
                     sunrise_gameplay_common::game::minecarts::CartKind::Rideable,
@@ -241,8 +241,8 @@ pub(crate) mod tests {
                 sunrise_sim::mobs::Mob::new(id, kind, Vec3::ZERO, 0.0)
             };
             let (cow, pig) = (mob("minecraft:cow", 102), mob("minecraft:pig", 104));
-            game.mobs.push(cow);
-            game.mobs.push(pig);
+            game.entities.mobs.push(cow);
+            game.entities.mobs.push(pig);
             assert_eq!(game.dimension_changing_delay(12), 10);
             let mut projectile = sunrise_sim::projectiles::Projectile::new(
                 sunrise_sim::projectiles::ProjectileKind::Snowball,
@@ -250,7 +250,7 @@ pub(crate) mod tests {
                 None,
             );
             projectile.id = 106;
-            game.creatures.projectiles.push(projectile);
+            game.entities.projectiles.push(projectile);
             assert_eq!(game.dimension_changing_delay(106), 2);
             let entry = BlockPos::new(0, 64, 0);
             // Boats and minecarts (`VehicleEntity`) are 10 whoever rides them;
@@ -269,8 +269,8 @@ pub(crate) mod tests {
                         g.vehicle = player.then_some(vehicle);
                         g.vehicle_order = 0;
                     });
-                    game.mobs[0].extra.mount = mob_order.map(|_| vehicle);
-                    game.mobs[0].extra.vehicle_order = mob_order.unwrap_or_default();
+                    game.entities.mobs[0].extra.mount = mob_order.map(|_| vehicle);
+                    game.entities.mobs[0].extra.vehicle_order = mob_order.unwrap_or_default();
                     assert_eq!(
                         game.dimension_changing_delay(vehicle),
                         expected,
@@ -316,13 +316,13 @@ pub(crate) mod tests {
             let stone = || sunrise_items::items::ItemStack::new("minecraft:stone", 1);
             game.spawn_item(stone(), [0.5, 64.0, 0.5], [0.0; 3], 0);
             game.spawn_item(stone(), [2.5, 64.0, 0.5], [0.0; 3], 0);
-            let ids: Vec<u32> = game.dropped.iter().map(|d| d.id).collect();
+            let ids: Vec<u32> = game.entities.dropped.iter().map(|d| d.id).collect();
             assert_eq!(ids.len(), 2);
             spare.store(ids[0], Ordering::Relaxed);
             for id in &ids {
                 game.send_through_portal(*id, BlockPos::new(0, 64, 0));
             }
-            let left: Vec<u32> = game.dropped.iter().map(|d| d.id).collect();
+            let left: Vec<u32> = game.entities.dropped.iter().map(|d| d.id).collect();
             assert_eq!(left, [ids[0]]);
             assert_eq!(game.server.portals.arrivals.len(), 1);
             assert_eq!(game.server.portals.arrivals[0].plan.dim, Dim::Nether);
@@ -348,17 +348,17 @@ pub(crate) mod tests {
                 [0.0; 3],
                 0,
             );
-            let id = game.dropped[0].id;
+            let id = game.entities.dropped[0].id;
             game.send_through_portal(id, BlockPos::new(0, 64, 0));
             assert!(game.server.portals.arrivals.is_empty());
             assert_eq!(heard.lock().unwrap().len(), 1);
             assert!(game.level_entity(id as i32).is_none());
             assert_eq!(game.persist.removals.len(), 1);
             game.native_removals_flush();
-            assert!(game.dropped.is_empty());
+            assert!(game.entities.dropped.is_empty());
             assert!(game.persist.removals.is_empty());
             game.native_removals_flush();
-            assert!(game.dropped.is_empty());
+            assert!(game.entities.dropped.is_empty());
         });
     }
     #[test]
@@ -366,14 +366,14 @@ pub(crate) mod tests {
     fn discarded_mob_and_tnt_do_not_travel() {
         with_gate_mode(true, |game, _, heard| {
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-            game.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 101,
                 kind,
                 Vec3::new(0.5, 64.0, 0.5),
                 0.0,
             ));
             game.spawn_primed_tnt(BlockPos::new(2, 64, 0), false, None, None);
-            let tnt = game.tnts.last().unwrap().id;
+            let tnt = game.entities.tnts.last().unwrap().id;
             for id in [101, tnt] {
                 game.send_through_portal(id, BlockPos::new(0, 64, 0));
                 assert!(game.level_entity(id as i32).is_none());
@@ -394,13 +394,13 @@ pub(crate) mod tests {
                 if id != 101 {
                     mob.extra.mount = Some(101);
                 }
-                game.mobs.push(mob);
+                game.entities.mobs.push(mob);
             }
             spare.store(102, Ordering::Relaxed);
             game.send_through_portal(101, BlockPos::new(0, 64, 0));
             assert_eq!(game.server.portals.arrivals.len(), 1);
-            assert_eq!(game.mobs.iter().map(|m| m.id).collect::<Vec<_>>(), [102]);
-            assert_eq!(game.mobs[0].extra.mount, None);
+            assert_eq!(game.entities.mobs.iter().map(|m| m.id).collect::<Vec<_>>(), [102]);
+            assert_eq!(game.entities.mobs[0].extra.mount, None);
             assert_eq!(
                 heard
                     .lock()
@@ -429,7 +429,7 @@ pub(crate) mod tests {
                     if id != 101 {
                         mob.extra.mount = Some(101);
                     }
-                    game.mobs.push(mob);
+                    game.entities.mobs.push(mob);
                 }
                 spare.store(attack, Ordering::Relaxed);
                 assert!(game.entity_may_travel(101, Dim::Nether, TravelCause::Teleport));
@@ -443,8 +443,8 @@ pub(crate) mod tests {
                     }
                 );
                 assert!(
-                    !(game.mobs[0].extra.mount == Some(102)
-                        && game.mobs[1].extra.mount == Some(101))
+                    !(game.entities.mobs[0].extra.mount == Some(102)
+                        && game.entities.mobs[1].extra.mount == Some(101))
                 );
             });
         }
@@ -467,7 +467,7 @@ pub(crate) mod tests {
                     mob.extra.mount = Some(101);
                     mob.extra.vehicle_order = 20;
                 }
-                game.mobs.push(mob);
+                game.entities.mobs.push(mob);
             }
             for (conn, order) in [(12, 30), (13, 10)] {
                 game.server

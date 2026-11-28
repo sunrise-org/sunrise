@@ -44,7 +44,7 @@ impl ClientGame<'_> {
             })
         } else {
             self.common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == id as u32)
                 .map(|m| {

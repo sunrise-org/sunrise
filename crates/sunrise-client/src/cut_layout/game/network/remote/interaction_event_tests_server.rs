@@ -491,7 +491,7 @@ fn air_event_skips_the_item_and_consuming_results_end_the_click() {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 42,
                 kind,
                 Vec3::new(0.5, 64.0, 5.5),

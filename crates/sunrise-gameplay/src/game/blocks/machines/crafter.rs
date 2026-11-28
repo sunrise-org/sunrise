@@ -418,21 +418,21 @@ pub(in crate::game) mod tests {
         let mut game = server_game(&mut resources);
         let at = Vec3::new(9.5, 64.0, 8.5);
         for kind in [CartKind::Chest, CartKind::Hopper] {
-            game.carts.clear();
-            game.boats.clear();
-            game.carts.push(Minecart::new(1, kind, at));
+            game.entities.carts.clear();
+            game.entities.boats.clear();
+            game.entities.carts.push(Minecart::new(1, kind, at));
             game.crafter_eject(
                 (8, 64, 8),
                 Direction::East,
                 ItemStack::new("minecraft:pumpkin_pie", 3),
                 "minecraft:pumpkin_pie",
             );
-            let cart = game.carts.first().expect("the cart is still there");
+            let cart = game.entities.carts.first().expect("the cart is still there");
             assert_eq!(cart.items[0].as_ref().map(|s| s.count), Some(3));
-            assert!(game.dropped.is_empty(), "nothing is dropped beside it");
+            assert!(game.entities.dropped.is_empty(), "nothing is dropped beside it");
         }
-        game.carts.clear();
-        game.boats
+        game.entities.carts.clear();
+        game.entities.boats
             .push(Boat::new(1, Arc::from("oak"), at, 0.0).with_chest());
         game.crafter_eject(
             (8, 64, 8),
@@ -440,9 +440,9 @@ pub(in crate::game) mod tests {
             ItemStack::new("minecraft:pumpkin_pie", 3),
             "minecraft:pumpkin_pie",
         );
-        let boat = game.boats.first().expect("the boat is still there");
+        let boat = game.entities.boats.first().expect("the boat is still there");
         assert_eq!(boat.items[0].as_ref().map(|s| s.count), Some(3));
-        assert!(game.dropped.is_empty(), "nothing is dropped beside it");
+        assert!(game.entities.dropped.is_empty(), "nothing is dropped beside it");
     }
     /// One transfer into a composter is one item, however big the stack: the
     /// `InputContainer` is `changed` after it composts, and its
@@ -470,7 +470,7 @@ pub(in crate::game) mod tests {
         );
         assert_eq!(game.composter_level([pos.0, pos.1, pos.2]), Some(1));
         let dropped: Vec<(String, u32)> = game
-            .dropped
+            .entities.dropped
             .iter()
             .map(|d| (d.stack.item.to_string(), d.stack.count))
             .collect();

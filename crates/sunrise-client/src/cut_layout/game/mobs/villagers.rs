@@ -33,7 +33,7 @@ pub(crate) mod off_level_tests {
                 );
             }
             m.extra.mount = Some(72);
-            game.mobs.push(m);
+            game.entities.mobs.push(m);
             let ghost = Mob::new(72, kind, Vec3::ZERO, 0.0);
             game.persist.off_level.insert(
                 72,
@@ -68,7 +68,7 @@ pub(crate) mod birth_tests {
     const BED: [i32; 3] = [3, 64, 1];
 
     fn parents(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> (u32, u32) {
-        game.mobs.clear();
+        game.entities.mobs.clear();
         game.world
             .chunks
             .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
@@ -98,7 +98,7 @@ pub(crate) mod birth_tests {
         let partner = parent + 1;
         game.server.next_entity = partner;
         for id in [parent, partner] {
-            game.mobs.push(Mob::with_random(
+            game.entities.mobs.push(Mob::with_random(
                 id,
                 kind.clone(),
                 Vec3::new(1.5, 64.0, 1.5),
@@ -108,7 +108,7 @@ pub(crate) mod birth_tests {
         }
         // The brain has already eaten, selected BED and aged the initiating
         // parent before emitting VillagerBirth; the Game owns the other half.
-        game.mobs[0].extra.age = 6000;
+        game.entities.mobs[0].extra.age = 6000;
         game.native_joins_skip();
         game.start_audio_capture();
         game.server.lan_queues.entity_events.clear();
@@ -124,7 +124,7 @@ pub(crate) mod birth_tests {
         .unwrap();
         for id in [parent, partner] {
             assert_eq!(
-                game.mobs.iter().find(|m| m.id == id).unwrap().extra.age,
+                game.entities.mobs.iter().find(|m| m.id == id).unwrap().extra.age,
                 6000
             );
         }
@@ -133,7 +133,7 @@ pub(crate) mod birth_tests {
     fn bed_owners(game: &sunrise_gameplay::game::ServerGame<'_>) -> Vec<u32> {
         // The same Seen.bed projection supplies the POI ticket searches and
         // take_bed_for_child; no independent reservation exists in the Game.
-        game.mobs
+        game.entities.mobs
             .iter()
             .filter(|m| m.seen(None, game.items()).bed == Some(BED))
             .map(|m| m.id)
@@ -169,7 +169,7 @@ pub(crate) mod birth_tests {
                 assert!(bed_owners(game).is_empty());
                 birth(game, parent, partner);
                 assert_eq!(joins.load(Ordering::SeqCst), 1);
-                assert_eq!(game.mobs.len(), 2);
+                assert_eq!(game.entities.mobs.len(), 2);
                 assert!(bed_owners(game).is_empty());
                 assert!(game.server.lan_queues.entity_events.is_empty());
             });
@@ -177,9 +177,9 @@ pub(crate) mod birth_tests {
     }
 
     fn assert_baby(game: &sunrise_gameplay::game::ServerGame<'_>, parent: u32, partner: u32) {
-        assert_eq!(game.mobs.len(), 3);
+        assert_eq!(game.entities.mobs.len(), 3);
         let baby = game
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id != parent && m.id != partner)
             .unwrap();

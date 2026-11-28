@@ -60,7 +60,7 @@ impl crate::game::ServerGame<'_> {
             .find(|g| g.conn == conn && g.placed)?;
         let id = gm.merchant.mob?;
         self.common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == id && m.alive() && !m.removed)?;
         let stack = |s: &Option<ItemStack>| s.as_ref().map(|s| json!([s.item.as_ref(), s.count]));
@@ -344,7 +344,7 @@ impl crate::game::ServerGame<'_> {
         let opaque = gm
             .merchant
             .mob
-            .and_then(|id| self.common.mobs.iter().find(|m| m.id == id))
+            .and_then(|id| self.common.entities.mobs.iter().find(|m| m.id == id))
             .is_some_and(|m| {
                 opaque_villager(
                     &self.stations().professions,
@@ -395,7 +395,7 @@ impl crate::game::ServerGame<'_> {
         Self::merchant_sync_in(
             &mut session,
             self.common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| Some(m.id) == gm.merchant.mob),
         );
@@ -663,7 +663,7 @@ impl crate::game::ServerGame<'_> {
         let mob = gm
             .merchant
             .mob
-            .and_then(|id| self.common.mobs.iter().find(|m| m.id == id));
+            .and_then(|id| self.common.entities.mobs.iter().find(|m| m.id == id));
         Self::merchant_sync_in(&mut gm.merchant.session, mob);
         self.merchant_closed(&mut gm.merchant);
         if removal == super::lan_crafting::MenuRemoval::Live {
@@ -688,7 +688,7 @@ impl crate::game::ServerGame<'_> {
         id: u32,
     ) -> bool {
         self.common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == id)
             .is_some_and(|m| {
@@ -861,7 +861,7 @@ impl crate::game::ServerGame<'_> {
             else {
                 continue;
             };
-            let mob = self.common.mobs.iter_mut().find(|m| m.id == id);
+            let mob = self.common.entities.mobs.iter_mut().find(|m| m.id == id);
             let session = &mut gm.merchant.session;
             Self::merchant_sync_in(session, mob.as_deref());
             session.reputation = reputation;
@@ -1096,14 +1096,14 @@ pub mod tests {
         game.server.lan.as_mut().unwrap().hub.guests.push(guest);
 
         let villager = spawn(game, 40, "minecraft:villager");
-        game.mobs[0].extra.profession = sunrise_sim::mobs::villager::ProfessionState::from_index(5);
+        game.entities.mobs[0].extra.profession = sunrise_sim::mobs::villager::ProfessionState::from_index(5);
         let profession = "minecraft:farmer".to_owned();
         let first = offer("minecraft:wheat", "minecraft:emerald");
-        game.mobs[0].extra.trade = Some(Box::new(Trader {
+        game.entities.mobs[0].extra.trade = Some(Box::new(Trader {
             offers: vec![first.clone()],
             ..Trader::default()
         }));
-        game.mobs[0].extra.flag2 = true;
+        game.entities.mobs[0].extra.flag2 = true;
         let mut session = merchant::Session::new(vec![first.clone()], true);
         session.level = level;
         session.profession = profession;

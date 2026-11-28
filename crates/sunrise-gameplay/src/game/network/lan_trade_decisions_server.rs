@@ -119,7 +119,7 @@ impl crate::game::ServerGame<'_> {
         };
         if self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == mob)
             .is_some_and(|m| {
@@ -351,7 +351,7 @@ impl crate::game::ServerGame<'_> {
                         });
                     }
                     let kind = game
-                        .mobs
+                        .entities.mobs
                         .iter()
                         .find(|m| m.id == mob)
                         .map(sunrise_gameplay_common::game::native_hooks::mob_kind);
@@ -483,7 +483,7 @@ pub(in crate::game) fn rollback_trade_journal(
             variant,
             villager,
         } = *kept;
-        if let Some(m) = game.mobs.iter_mut().find(|m| m.id == id) {
+        if let Some(m) = game.entities.mobs.iter_mut().find(|m| m.id == id) {
             m.random = random;
             m.ambient_timer = timer;
             m.extra.trade = trade;
@@ -517,7 +517,7 @@ impl TakeReads {
                         .is_some_and(|gm| gm.window == self.window && gm.merchant.mob == Some(mob))
             })
             && game
-                .mobs
+                .entities.mobs
                 .iter()
                 .any(|m| m.id == mob && m.alive() && !m.removed)
             && guest.menu_generation == self.hub_generation

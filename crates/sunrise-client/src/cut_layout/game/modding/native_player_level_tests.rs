@@ -13,9 +13,9 @@ pub(crate) const NETHER: &str = "minecraft:the_nether";
 /// How many item entities lie in each of the Overworld and the Nether.
 pub(crate) fn dropped(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> [usize; 2] {
     let here = game.dim;
-    let overworld = game.dropped.len();
+    let overworld = game.entities.dropped.len();
     game.enter_level(Dim::Nether).unwrap();
-    let nether = game.dropped.len();
+    let nether = game.entities.dropped.len();
     game.enter_level(here).unwrap();
     [overworld, nether]
 }
@@ -147,7 +147,7 @@ fn a_give_that_fits_plays_pickup_in_the_players_level() {
         .unwrap();
         assert_eq!(dropped(game), [0, 1]);
         game.enter_level(Dim::Nether).unwrap();
-        let fake = game.dropped.last().unwrap();
+        let fake = game.entities.dropped.last().unwrap();
         assert_eq!(
             (&*fake.stack.item, fake.stack.count),
             ("minecraft:diamond", 1)
@@ -263,7 +263,7 @@ fn a_give_to_a_player_in_another_level_drops_overflow_there() {
             }
             assert_eq!(dropped(game), [before[0], before[1] + 5], "{case}");
             game.enter_level(Dim::Nether).unwrap();
-            for (item, count) in game.dropped.iter().skip(before[1] + 2).zip([1, 2, 2]) {
+            for (item, count) in game.entities.dropped.iter().skip(before[1] + 2).zip([1, 2, 2]) {
                 assert_eq!(&*item.stack.item, "minecraft:diamond", "{case}");
                 assert_eq!(item.stack.count, count, "{case}");
                 assert_eq!([item.position.x, item.position.z], [3.0, 5.0], "{case}");
@@ -331,10 +331,10 @@ fn a_give_to_a_borrowed_player_drops_in_their_level() {
             })
             .unwrap();
         let player = game.player(13).unwrap();
-        let overworld_before = game.dropped.len();
+        let overworld_before = game.entities.dropped.len();
         game.enter_level(Dim::Nether).unwrap();
         fixture_resident_column(&mut game.world, (0, 0));
-        let nether_before = game.dropped.len();
+        let nether_before = game.entities.dropped.len();
         game.enter_level(Dim::Overworld).unwrap();
         let joined = GiveJoin::default();
         let mods = vec![mod_api::ModEntry::new(
@@ -356,7 +356,7 @@ fn a_give_to_a_borrowed_player_drops_in_their_level() {
             assert_eq!(dropped(game), [overworld_before, nether_before + 1]);
         });
         game.enter_level(Dim::Nether).unwrap();
-        let item = game.dropped.last().unwrap();
+        let item = game.entities.dropped.last().unwrap();
         assert_eq!(
             (&*item.stack.item, item.stack.count),
             ("minecraft:diamond", 1)
@@ -423,10 +423,10 @@ fn a_give_command_in_a_transaction_for_a_borrowed_player_lands_in_their_level() 
             if commit {
                 assert_eq!(dropped(game), [before[0], before[1] + 1], "{case}");
                 game.enter_level(Dim::Nether).unwrap();
-                let lying = game.dropped.iter().next().unwrap();
+                let lying = game.entities.dropped.iter().next().unwrap();
                 assert_eq!(&*lying.stack.item, "minecraft:diamond", "{case}");
                 assert_eq!([lying.position.x, lying.position.z], [3.0, 5.0], "{case}");
-                game.dropped.clear();
+                game.entities.dropped.clear();
                 game.enter_level(Dim::Overworld).unwrap();
             } else {
                 assert_eq!(dropped(game), before, "{case}");
@@ -595,9 +595,9 @@ fn an_inventory_reward_for_a_player_in_another_level_waits_for_their_own_tick() 
                 "{case}: the reward drops in their level"
             );
             game.enter_level(Dim::Nether).unwrap();
-            let reward = game.dropped.last().unwrap();
+            let reward = game.entities.dropped.last().unwrap();
             assert_eq!(&*reward.stack.item, "minecraft:emerald");
-            game.dropped.clear();
+            game.entities.dropped.clear();
             game.enter_level(Dim::Overworld).unwrap();
         }
     });
@@ -641,7 +641,7 @@ fn give_to_oneself_under_execute_in_another_level_drops_in_the_players_level() {
         assert_eq!(game.dim, Dim::Overworld, "the command's own level is back");
         assert_eq!(diamonds(game, 13), 0);
         assert_eq!(dropped(game), [before[0] + 1, before[1]]);
-        let lying = game.dropped.iter().next().unwrap();
+        let lying = game.entities.dropped.iter().next().unwrap();
         assert_eq!(&*lying.stack.item, "minecraft:diamond");
         assert!((lying.position.x - 3.0).abs() < 3.0 && (lying.position.z - 5.0).abs() < 3.0);
     });

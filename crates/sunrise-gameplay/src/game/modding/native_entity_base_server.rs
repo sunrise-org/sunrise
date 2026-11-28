@@ -32,8 +32,7 @@ impl ServerGame<'_> {
             Target::Projectile(id) => {
                 match self
                     .common
-                    .creatures
-                    .projectiles
+                    .entities.projectiles
                     .iter()
                     .find(|p| p.id == id)?
                     .kind
@@ -83,10 +82,10 @@ impl ServerGame<'_> {
         match t {
             Target::Falling(id) => {
                 let uuid = self.uuid_for(id);
-                let Some(i) = self.common.falling.iter().position(|f| f.id == id) else {
+                let Some(i) = self.common.entities.falling.iter().position(|f| f.id == id) else {
                     return false;
                 };
-                self.common.falling.update(i, |f| {
+                self.common.entities.falling.update(i, |f| {
                     let saved = f
                         .saved
                         .get_or_insert_with(|| Box::new((uuid, Tag::Compound(Compound::new()))));
@@ -95,10 +94,10 @@ impl ServerGame<'_> {
                 true
             }
             Target::Spawner(id) => {
-                let Some(i) = self.common.ominous_spawners.iter().position(|s| s.id == id) else {
+                let Some(i) = self.common.entities.ominous_spawners.iter().position(|s| s.id == id) else {
                     return false;
                 };
-                self.common.ominous_spawners.update(i, |spawner| {
+                self.common.entities.ominous_spawners.update(i, |spawner| {
                     let raw = spawner
                         .raw
                         .get_or_insert_with(|| Box::new(Tag::Compound(Compound::new())));
@@ -128,7 +127,7 @@ impl ServerGame<'_> {
                 (FIRE | INVULNERABLE, p.mod_fire_immune)
             }
             Target::Mob(id) => {
-                let m = self.common.mobs.iter().find(|m| m.id == id)?;
+                let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
                 *base = EntityBase {
                     fire_ticks: m.fire_ticks,
                     invulnerable: m.invulnerable_flag,
@@ -139,13 +138,13 @@ impl ServerGame<'_> {
                 (ALL, m.fire_immune())
             }
             Target::Stand(id) => {
-                let s = self.common.armor_stands.iter().find(|s| s.id == id)?;
+                let s = self.common.entities.armor_stands.iter().find(|s| s.id == id)?;
                 base.fire_ticks = s.fire_ticks;
                 base.no_gravity = s.no_gravity;
                 (FIRE | NO_GRAVITY, s.mod_fire_immune)
             }
             Target::Item(id) => {
-                let i = self.common.dropped.iter().find(|i| i.id == id)?;
+                let i = self.common.entities.dropped.iter().find(|i| i.id == id)?;
                 base.fire_ticks = i.fire_ticks;
                 base.no_gravity = i.no_gravity;
                 // `ItemEntity.fireImmune`: a stack that fire cannot hurt.
@@ -154,27 +153,26 @@ impl ServerGame<'_> {
                 (FIRE | NO_GRAVITY, immune)
             }
             Target::Orb(id) => {
-                let o = self.common.orbs.iter().find(|o| o.id == id)?;
+                let o = self.common.entities.orbs.iter().find(|o| o.id == id)?;
                 base.fire_ticks = o.fire_ticks;
                 base.no_gravity = o.no_gravity;
                 (FIRE | NO_GRAVITY, false)
             }
             Target::Boat(id) => {
-                let b = self.common.boats.iter().find(|b| b.id == id)?;
+                let b = self.common.entities.boats.iter().find(|b| b.id == id)?;
                 base.fire_ticks = b.fire_ticks;
                 base.no_gravity = b.no_gravity;
                 (FIRE | NO_GRAVITY, false)
             }
             Target::Cart(id) => {
-                let c = self.common.carts.iter().find(|c| c.id == id)?;
+                let c = self.common.entities.carts.iter().find(|c| c.id == id)?;
                 base.no_gravity = c.no_gravity;
                 (NO_GRAVITY, false)
             }
             Target::Projectile(id) => {
                 let p = self
                     .common
-                    .creatures
-                    .projectiles
+                    .entities.projectiles
                     .iter()
                     .find(|p| p.id == id)?;
                 base.no_gravity = p.no_gravity;
@@ -191,30 +189,30 @@ impl ServerGame<'_> {
                 }
             }
             Target::Trident(id) => {
-                let t = self.common.tridents.iter().find(|t| t.id == id)?;
+                let t = self.common.entities.tridents.iter().find(|t| t.id == id)?;
                 base.fire_ticks = t.fire_ticks;
                 base.no_gravity = t.no_gravity;
                 (FIRE | NO_GRAVITY, false)
             }
             Target::Tnt(id) => {
-                let t = self.common.tnts.iter().find(|t| t.id == id)?;
+                let t = self.common.entities.tnts.iter().find(|t| t.id == id)?;
                 base.no_gravity = t.no_gravity;
                 (NO_GRAVITY, BuiltinKind::Tnt.fire_immune())
             }
             Target::Falling(id) => {
-                let f = self.common.falling.iter().find(|f| f.id == id)?;
+                let f = self.common.entities.falling.iter().find(|f| f.id == id)?;
                 base.fire_ticks = f.fire_ticks;
                 base.no_gravity = f.no_gravity;
                 (FIRE | NO_GRAVITY, false)
             }
             Target::Crystal(id) => {
-                let c = self.common.crystals.iter().find(|c| c.id == id)?;
+                let c = self.common.entities.crystals.iter().find(|c| c.id == id)?;
                 base.fire_ticks = c.fire;
                 base.invulnerable = c.invulnerable;
                 (FIRE | INVULNERABLE, BuiltinKind::EndCrystal.fire_immune())
             }
             Target::Bolt(id) => {
-                let b = self.common.bolts.iter().find(|b| b.id == id)?;
+                let b = self.common.entities.bolts.iter().find(|b| b.id == id)?;
                 *base = EntityBase {
                     fire_ticks: b.fire_ticks,
                     invulnerable: b.invulnerable,
@@ -225,19 +223,19 @@ impl ServerGame<'_> {
                 (ALL, false)
             }
             Target::Rocket(id) => {
-                let r = self.common.rockets.iter().find(|r| r.id == id)?;
+                let r = self.common.entities.rockets.iter().find(|r| r.id == id)?;
                 base.silent = r.silent;
                 (SILENT, false)
             }
             Target::Fangs(id) => {
-                let f = self.common.fangs.list.iter().find(|f| f.id == id)?;
+                let f = self.common.entities.fangs.list.iter().find(|f| f.id == id)?;
                 base.fire_ticks = f.fire_ticks;
                 (FIRE, false)
             }
             Target::Dragon(_) => (0, BuiltinKind::EnderDragon.fire_immune()),
             Target::Cloud(_) => (0, BuiltinKind::AreaEffectCloud.fire_immune()),
             Target::General(id) => {
-                let row = self.common.resident_entities.general.row(id)?;
+                let row = self.common.entities.general.row(id)?;
                 *base = row.base;
                 (ALL, general_type_catalog().fire_immune(row.type_slot))
             }
@@ -252,8 +250,7 @@ impl ServerGame<'_> {
             Target::Knot(id) => {
                 let k = self
                     .common
-                    .resident_entities
-                    .knots
+                    .entities.knots
                     .iter()
                     .find(|k| k.id == id)?;
                 *base = EntityBase {
@@ -286,7 +283,7 @@ impl ServerGame<'_> {
                 p.health.permanently_invulnerable = new.invulnerable;
             }
             Target::Mob(id) => {
-                let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+                let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
                     return false;
                 };
                 m.fire_ticks = new.fire_ticks;
@@ -297,14 +294,14 @@ impl ServerGame<'_> {
                 m.needs_sync |= sync;
             }
             Target::Stand(id) => {
-                let Some(s) = self.common.armor_stands.iter_mut().find(|s| s.id == id) else {
+                let Some(s) = self.common.entities.armor_stands.iter_mut().find(|s| s.id == id) else {
                     return false;
                 };
                 s.fire_ticks = new.fire_ticks;
                 s.no_gravity = new.no_gravity;
             }
             Target::Item(id) => {
-                let Some(i) = self.common.dropped.iter_mut().find(|i| i.id == id) else {
+                let Some(i) = self.common.entities.dropped.iter_mut().find(|i| i.id == id) else {
                     return false;
                 };
                 i.fire_ticks = new.fire_ticks;
@@ -312,40 +309,39 @@ impl ServerGame<'_> {
                 i.needs_sync |= changed & owned::NO_GRAVITY != 0;
             }
             Target::Orb(id) => {
-                let Some(o) = self.common.orbs.iter_mut().find(|o| o.id == id) else {
+                let Some(o) = self.common.entities.orbs.iter_mut().find(|o| o.id == id) else {
                     return false;
                 };
                 o.fire_ticks = new.fire_ticks;
                 o.no_gravity = new.no_gravity;
             }
             Target::Boat(id) => {
-                let Some(i) = self.common.boats.iter().position(|b| b.id == id) else {
+                let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) else {
                     return false;
                 };
-                self.common.boats.update(i, |b| {
+                self.common.entities.boats.update(i, |b| {
                     b.fire_ticks = new.fire_ticks;
                     b.no_gravity = new.no_gravity;
                 });
             }
             Target::Cart(id) => {
-                let Some(i) = self.common.carts.iter().position(|c| c.id == id) else {
+                let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) else {
                     return false;
                 };
                 self.common
-                    .carts
+                    .entities.carts
                     .update(i, |c| c.no_gravity = new.no_gravity);
             }
             Target::Projectile(id) => {
                 let Some(i) = self
                     .common
-                    .creatures
-                    .projectiles
+                    .entities.projectiles
                     .iter()
                     .position(|p| p.id == id)
                 else {
                     return false;
                 };
-                self.common.creatures.projectiles.update(i, |p| {
+                self.common.entities.projectiles.update(i, |p| {
                     p.no_gravity = new.no_gravity;
                     if let Some(a) = p.arrow.as_mut() {
                         a.fire_ticks = new.fire_ticks;
@@ -355,45 +351,45 @@ impl ServerGame<'_> {
                 });
             }
             Target::Trident(id) => {
-                let Some(i) = self.common.tridents.iter().position(|t| t.id == id) else {
+                let Some(i) = self.common.entities.tridents.iter().position(|t| t.id == id) else {
                     return false;
                 };
-                self.common.tridents.update(i, |t| {
+                self.common.entities.tridents.update(i, |t| {
                     t.fire_ticks = new.fire_ticks;
                     t.no_gravity = new.no_gravity;
                 });
             }
             Target::Tnt(id) => {
-                let Some(i) = self.common.tnts.iter().position(|t| t.id == id) else {
+                let Some(i) = self.common.entities.tnts.iter().position(|t| t.id == id) else {
                     return false;
                 };
                 self.common
-                    .tnts
+                    .entities.tnts
                     .update(i, |t| t.no_gravity = new.no_gravity);
             }
             Target::Falling(id) => {
-                let Some(i) = self.common.falling.iter().position(|f| f.id == id) else {
+                let Some(i) = self.common.entities.falling.iter().position(|f| f.id == id) else {
                     return false;
                 };
-                self.common.falling.update(i, |f| {
+                self.common.entities.falling.update(i, |f| {
                     f.fire_ticks = new.fire_ticks;
                     f.no_gravity = new.no_gravity;
                 });
             }
             Target::Crystal(id) => {
-                let Some(i) = self.common.crystals.iter().position(|c| c.id == id) else {
+                let Some(i) = self.common.entities.crystals.iter().position(|c| c.id == id) else {
                     return false;
                 };
-                self.common.crystals.update(i, |c| {
+                self.common.entities.crystals.update(i, |c| {
                     c.fire = new.fire_ticks;
                     c.invulnerable = new.invulnerable;
                 });
             }
             Target::Bolt(id) => {
-                let Some(i) = self.common.bolts.iter().position(|b| b.id == id) else {
+                let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) else {
                     return false;
                 };
-                self.common.bolts.update(i, |b| {
+                self.common.entities.bolts.update(i, |b| {
                     b.fire_ticks = new.fire_ticks;
                     b.invulnerable = new.invulnerable;
                     b.no_gravity = new.no_gravity;
@@ -402,22 +398,22 @@ impl ServerGame<'_> {
                 });
             }
             Target::Rocket(id) => {
-                let Some(i) = self.common.rockets.iter().position(|r| r.id == id) else {
+                let Some(i) = self.common.entities.rockets.iter().position(|r| r.id == id) else {
                     return false;
                 };
-                self.common.rockets.update(i, |r| r.silent = new.silent);
+                self.common.entities.rockets.update(i, |r| r.silent = new.silent);
             }
             Target::Fangs(id) => {
-                let Some(i) = self.common.fangs.list.iter().position(|f| f.id == id) else {
+                let Some(i) = self.common.entities.fangs.list.iter().position(|f| f.id == id) else {
                     return false;
                 };
                 self.common
-                    .fangs
+                    .entities.fangs
                     .list
                     .update(i, |f| f.fire_ticks = new.fire_ticks);
             }
             Target::General(id) => {
-                let Some(row) = self.common.resident_entities.general.row_mut(id) else {
+                let Some(row) = self.common.entities.general.row_mut(id) else {
                     return false;
                 };
                 row.base = *new;
@@ -434,14 +430,13 @@ impl ServerGame<'_> {
             Target::Knot(id) => {
                 let Some(i) = self
                     .common
-                    .resident_entities
-                    .knots
+                    .entities.knots
                     .iter()
                     .position(|k| k.id == id)
                 else {
                     return false;
                 };
-                self.common.resident_entities.knots.update(i, |k| {
+                self.common.entities.knots.update(i, |k| {
                     k.fire_ticks = new.fire_ticks;
                     k.invulnerable = new.invulnerable;
                     k.no_gravity = new.no_gravity;

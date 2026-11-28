@@ -421,7 +421,7 @@ impl ClientGame<'_> {
         }
         // The healing beam to the nearest crystal.
         if let Some(d) = world
-            && let Some(c) = d.nearest_crystal.and_then(|i| self.common.crystals.get(i))
+            && let Some(c) = d.nearest_crystal.and_then(|i| self.common.entities.crystals.get(i))
         {
             let bob = f64::from(sunrise_client::end_crystal::y(c.time as f32 + a));
             let to = glam::DVec3::new(c.position.x, c.position.y + bob, c.position.z);
@@ -517,7 +517,7 @@ impl ClientGame<'_> {
         };
         // DragonFireballRenderer.submit: turned by the camera's orientation.
         let [right, up] = super::billboard_axes(self.camera_orientation());
-        for b in self.common.creatures.projectiles.iter().filter(|p| {
+        for b in self.common.entities.projectiles.iter().filter(|p| {
             p.kind == sunrise_sim::projectiles::ProjectileKind::DragonFireball
                 && !self.hides_as_camera(p.id)
         }) {
@@ -555,7 +555,7 @@ impl ClientGame<'_> {
     /// puffs an explosion every 10 ticks and the last growls on every tick.
     pub(in crate::game::client_side) fn remote_dragon_phase_tick(&mut self) {
         let look = self.common.dragon_look_normalised();
-        let Some(d) = self.common.dragon.as_mut() else {
+        let Some(d) = self.common.entities.dragon.as_mut() else {
             return;
         };
         let head = d.parts[0].0;
@@ -615,7 +615,7 @@ impl ClientGame<'_> {
         &mut self,
         lerp: Option<([f64; 3], Option<f32>, u32)>,
     ) {
-        let Some(d) = self.common.dragon.as_mut() else {
+        let Some(d) = self.common.entities.dragon.as_mut() else {
             return;
         };
         d.previous = d.position;
@@ -657,7 +657,7 @@ impl ClientGame<'_> {
                     [0.0; 3],
                 );
             }
-            if let Some(d) = self.common.dragon.as_mut() {
+            if let Some(d) = self.common.entities.dragon.as_mut() {
                 // deathMove is new Vec3(0.0, 0.1F, 0.0): the float widened.
                 let rise = f64::from(0.1_f32);
                 d.position.y += rise;
@@ -669,7 +669,7 @@ impl ClientGame<'_> {
             // before the `isDeadOrDying` branch, then a dead dragon adds
             // `ParticleTypes.EXPLOSION` every tick. Both use the risen spot.
             let mut growl = None;
-            if let Some(d) = self.common.dragon.as_mut()
+            if let Some(d) = self.common.entities.dragon.as_mut()
                 && !sitting
             {
                 d.growl -= 1;
@@ -683,7 +683,7 @@ impl ClientGame<'_> {
             if let Some((at, pitch)) = growl {
                 self.play_audio("minecraft:entity.ender_dragon.growl", Some(at), 2.5, pitch);
             }
-            let Some(d) = self.common.dragon.as_mut() else {
+            let Some(d) = self.common.entities.dragon.as_mut() else {
                 return;
             };
             let p = d.position;
@@ -713,7 +713,7 @@ impl ClientGame<'_> {
             let pitch = 0.8 + self.common.world.random.next_float() * 0.3;
             self.play_audio("minecraft:entity.ender_dragon.flap", Some(at), 5.0, pitch);
         }
-        let d = self.common.dragon.as_mut().expect("dragon");
+        let d = self.common.entities.dragon.as_mut().expect("dragon");
         if !d.phase.sitting() {
             d.growl -= 1;
             if d.growl < 0 {
@@ -723,13 +723,13 @@ impl ClientGame<'_> {
             }
         }
         // checkCrystals' search runs on a client too (the healing beam).
-        let d = self.common.dragon.as_mut().expect("dragon");
+        let d = self.common.entities.dragon.as_mut().expect("dragon");
         if d.random.next_int_bound(10).unwrap_or(1) == 0 {
             let p = d.position;
             let nearest = self.common.nearest_crystal_to(p);
-            self.common.dragon.as_mut().expect("dragon").nearest_crystal = nearest;
+            self.common.entities.dragon.as_mut().expect("dragon").nearest_crystal = nearest;
         }
-        let d = self.common.dragon.as_mut().expect("dragon");
+        let d = self.common.entities.dragon.as_mut().expect("dragon");
         d.yaw = wrap(d.yaw);
         // EnderDragon.aiStep on a client with isNoAi, as on the server.
         if d.no_ai {
@@ -754,7 +754,7 @@ impl ClientGame<'_> {
     }
 
     pub(in crate::game) fn client_resident_dragon_part_index(&self, id: u32) -> Option<usize> {
-        let dragon = self.common.dragon.as_ref()?;
+        let dragon = self.common.entities.dragon.as_ref()?;
         dragon_part_index(dragon.id, id)
     }
 
@@ -771,13 +771,13 @@ impl ClientGame<'_> {
                 .as_ref()
                 .is_some_and(|p| touches(p.bounds().min_position(), p.bounds().max_position()));
         player
-            || self.common.crystals.iter().any(|c| {
+            || self.common.entities.crystals.iter().any(|c| {
                 touches(
                     Vec3::new(c.position.x - 1.0, c.position.y, c.position.z - 1.0),
                     Vec3::new(c.position.x + 1.0, c.position.y + 2.0, c.position.z + 1.0),
                 )
             })
-            || self.common.mobs.iter().any(|m| {
+            || self.common.entities.mobs.iter().any(|m| {
                 let w = f64::from(m.width()) / 2.0;
                 let h = f64::from(m.height());
                 touches(
@@ -791,7 +791,7 @@ impl ClientGame<'_> {
     pub(in crate::game::client_side) fn client_discard_dragon(&mut self) {
         if let Some(id) = self
             .common
-            .dragon
+            .entities.dragon
             .as_ref()
             .filter(|dragon| dragon.id != 0 || self.client.remote.is_some())
             .map(|dragon| dragon.id)
@@ -801,7 +801,7 @@ impl ClientGame<'_> {
             }
             self.client_forget_entity(id);
         }
-        self.common.dragon.discard();
+        self.common.entities.dragon.discard();
     }
 
     /// `handleAddEntity` for `minecraft:ender_dragon`. Its constructor
@@ -814,9 +814,9 @@ impl ClientGame<'_> {
         d.phase = Phase::from_id(10);
         d.join = sunrise_sim::join_seq::JoinSeq::next();
         self.client_discard_dragon();
-        self.common.dragon.replace(d);
+        self.common.entities.dragon.replace(d);
         self.common.place_dragon_parts();
-        if let Some(d) = self.common.dragon.as_mut() {
+        if let Some(d) = self.common.entities.dragon.as_mut() {
             for part in &mut d.parts {
                 part.1 = part.0;
             }
@@ -830,7 +830,7 @@ impl ClientGame<'_> {
     ) -> Option<&mut Dragon> {
         let uid = id as u32;
         let remote = self.client.remote.is_some();
-        self.common.dragon.as_mut().filter(|d| {
+        self.common.entities.dragon.as_mut().filter(|d| {
             (d.id != 0 || remote) && (d.id == uid || dragon_part_index(d.id, uid).is_some())
         })
     }
@@ -875,17 +875,17 @@ impl ClientGame<'_> {
     pub fn remove_remote_dragon(&mut self, id: i32) {
         if self
             .common
-            .dragon
+            .entities.dragon
             .as_ref()
             .is_some_and(|d| d.id as i32 == id)
         {
             self.client_discard_dragon();
             return;
         }
-        let Some(index) = self.common.crystals.iter().position(|c| c.id as i32 == id) else {
+        let Some(index) = self.common.entities.crystals.iter().position(|c| c.id as i32 == id) else {
             return;
         };
-        if let Some(d) = self.common.dragon.as_mut() {
+        if let Some(d) = self.common.entities.dragon.as_mut() {
             match d.nearest_crystal {
                 Some(n) if n == index => d.nearest_crystal = None,
                 Some(n) if n > index => d.nearest_crystal = Some(n - 1),

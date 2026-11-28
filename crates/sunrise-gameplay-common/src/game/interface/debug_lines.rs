@@ -31,33 +31,33 @@ pub struct ServerDebug {
 impl crate::game::CommonGame<'_> {
     /// `Level.getEntityCount` over the entities Sunrise keeps.
     pub fn debug_entity_count(&self) -> usize {
-        self.mobs.iter().filter(|m| !m.removed).count()
-            + self.dropped.len()
-            + self.orbs.len()
-            + self.paintings.len()
-            + self.item_frames.len()
-            + self.armor_stands.len()
-            + self.boats.len()
-            + self.carts.len()
-            + self.crystals.len()
-            + self.creatures.projectiles.len()
+        self.entities.mobs.iter().filter(|m| !m.removed).count()
+            + self.entities.dropped.len()
+            + self.entities.orbs.len()
+            + self.entities.paintings.len()
+            + self.entities.item_frames.len()
+            + self.entities.armor_stands.len()
+            + self.entities.boats.len()
+            + self.entities.carts.len()
+            + self.entities.crystals.len()
+            + self.entities.projectiles.len()
     }
 
     /// The sections holding a mob, an item or an orb
     /// (`EntitySectionStorage.count`).
     pub fn debug_entity_sections(&self) -> usize {
         let sections: HashSet<[i32; 3]> = self
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| !m.removed)
             .map(|m| [m.position.x, m.position.y, m.position.z])
             .chain(
-                self.dropped
+                self.entities.dropped
                     .iter()
                     .map(|i| [i.position.x, i.position.y, i.position.z]),
             )
             .chain(
-                self.orbs
+                self.entities.orbs
                     .iter()
                     .map(|o| [o.position.x, o.position.y, o.position.z]),
             )

@@ -39,7 +39,7 @@ pub(crate) mod tests {
             );
             game.spawn_phantoms();
             assert!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .all(|mob| (mob.position.x - 1000.0).abs() > 20.0)
             );

@@ -146,7 +146,7 @@ impl crate::game::ServerGame<'_> {
         self.claim_owner(&mut new);
         let last_state = in_block.and_then(|t| self.state_from_nbt(&t));
         let read = new.arrow.take()?;
-        self.common.creatures.projectiles.update(index, |p| {
+        self.common.entities.projectiles.update(index, |p| {
             p.kind = new.kind;
             p.position = new.position;
             // Entity.load: setOldPosAndRot.
@@ -224,10 +224,10 @@ impl crate::game::ServerGame<'_> {
     pub fn set_entity_tags(&mut self, t: Target, tags: &[String]) -> bool {
         if let Target::Falling(id) = t {
             let uuid = self.uuid_for(id);
-            let Some(i) = self.common.falling.iter().position(|f| f.id == id) else {
+            let Some(i) = self.common.entities.falling.iter().position(|f| f.id == id) else {
                 return false;
             };
-            self.common.falling.update(i, |f| {
+            self.common.entities.falling.update(i, |f| {
                 let raw = &mut f.saved.get_or_insert_with(|| Box::new((uuid, empty()))).1;
                 set_key(
                     raw,
@@ -242,10 +242,10 @@ impl crate::game::ServerGame<'_> {
             return true;
         }
         if let Target::Spawner(id) = t {
-            let Some(i) = self.common.ominous_spawners.iter().position(|s| s.id == id) else {
+            let Some(i) = self.common.entities.ominous_spawners.iter().position(|s| s.id == id) else {
                 return false;
             };
-            self.common.ominous_spawners.update(i, |spawner| {
+            self.common.entities.ominous_spawners.update(i, |spawner| {
                 let raw = &mut **spawner.raw.get_or_insert_with(|| Box::new(empty()));
                 if tags.is_empty() {
                     if let Tag::Compound(map) = raw {
@@ -1009,7 +1009,7 @@ impl crate::game::ServerGame<'_> {
         {
             return Err(err("commands.summon.failed.uuid", &[]));
         }
-        let from = self.common.mobs.len();
+        let from = self.common.entities.mobs.len();
         let canceled = self.common.persist.joins_canceled;
         let target = self.spawn_staged_entity_from_nbt(tree);
         self.admit_new_mobs(from);

@@ -75,7 +75,7 @@ fn mining_uses_admitted_stack_tools_and_actual_eye_immersion() {
     );
     assert_eq!(game.stats.get("used", "minecraft:stick"), 1);
     assert!(
-        game.dropped
+        game.entities.dropped
             .iter()
             .any(|item| &*item.stack.item == "minecraft:cobblestone")
     );
@@ -220,7 +220,7 @@ fn a_custom_durable_stick_wears_while_mining() {
         game.damage_held(0);
         assert_eq!(game.held().unwrap().damage, 20);
         assert!(
-            game.dropped
+            game.entities.dropped
                 .iter()
                 .any(|item| &*item.stack.item == "minecraft:cobblestone")
         );

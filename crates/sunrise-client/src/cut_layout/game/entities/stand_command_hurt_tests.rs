@@ -208,7 +208,7 @@ fn cause_damage_and_explosion_post_attributed_game_events() {
     let mut game = game(&mut resources);
     summon(&mut game, ",Fire:200s");
     assert!(game.run_command("summon pig 14.5 100 2.5 {NoAI:1b}"));
-    let pig_id = game.mobs[0].id;
+    let pig_id = game.entities.mobs[0].id;
     let at = [2.5, 100.0, 8.5];
 
     // Burning stand hurt by in_fire (0.15) posts entity_damage attributed to the pig.
@@ -369,7 +369,7 @@ fn a_player_attack_from_damage_wobbles_then_breaks_the_stand() {
     assert!(said.starts_with("Applied"), "{said}");
     assert!(game.run_command(&format!("execute if entity {STAND}")));
     assert_eq!(items(&mut game), "Test failed");
-    assert_eq!(game.armor_stands[0].last_hit, game.world.game_time);
+    assert_eq!(game.entities.armor_stands[0].last_hit, game.world.game_time);
     // A second hit within five ticks breaks it (brokenByPlayer): the stand
     // item and its helmet drop.
     assert!(game.run_command(&format!(

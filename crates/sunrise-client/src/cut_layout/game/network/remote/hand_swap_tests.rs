@@ -31,17 +31,17 @@ fn the_hand_swap_event_keeps_whole_stacks() {
         let mut mob = Mob::new(31, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
         mob.extra.set_slot_stack(MAINHAND, Some(sword.clone()));
         mob.extra.set_slot_stack(OFFHAND, Some(shield.clone()));
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         let swap = |game: &mut sunrise_client_gameplay::game::ClientGame<'_>| {
             game.handle_packet(C::EntityEvent(EntityEvent { id: 31, event: 55 }))
                 .unwrap();
         };
         swap(game);
-        let m = game.mobs.iter().find(|m| m.id == 31).unwrap();
+        let m = game.entities.mobs.iter().find(|m| m.id == 31).unwrap();
         assert_eq!(m.extra.slot_stack(MAINHAND), Some(&shield));
         assert_eq!(m.extra.slot_stack(OFFHAND), Some(&sword));
         swap(game);
-        let m = game.mobs.iter().find(|m| m.id == 31).unwrap();
+        let m = game.entities.mobs.iter().find(|m| m.id == 31).unwrap();
         assert_eq!(m.extra.slot_stack(MAINHAND), Some(&sword));
         assert_eq!(m.extra.slot_stack(OFFHAND), Some(&shield));
     });

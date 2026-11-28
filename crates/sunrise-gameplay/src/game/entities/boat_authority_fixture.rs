@@ -46,12 +46,12 @@ impl ServerGame<'_> {
             let Some(attack) = case.attack else {
                 continue;
             };
-            self.common.boats.clear();
+            self.common.entities.boats.clear();
             let mut boat = Boat::new(1, "oak".into(), Vec3::new(0.0, 100.0, 0.0), 0.0);
             let [x, y, z] = case.velocity;
             boat.velocity = Vec3::new(x, y, z);
             boat.delta_rotation = case.spin;
-            self.common.boats.push(boat);
+            self.common.entities.boats.push(boat);
             let mut player = sunrise_sim::motion::PlayerMotion::new(self.common.motion, Vec3::ZERO);
             player.velocity = Vec3::new(
                 attack.player_velocity[0],
@@ -77,8 +77,8 @@ impl ServerGame<'_> {
                 index,
                 json!({
                     "name": case.name,
-                    "velocity": self.boats.first().map(|boat| boat.velocity.components().map(|v| format!("{:016x}", v.to_bits()))),
-                    "destroyed": self.boats.is_empty(),
+                    "velocity": self.entities.boats.first().map(|boat| boat.velocity.components().map(|v| format!("{:016x}", v.to_bits()))),
+                    "destroyed": self.entities.boats.is_empty(),
                     "player_velocity": player.velocity.components().map(|v| format!("{:016x}", v.to_bits())),
                     "sprint": player.sprinting,
                 }),

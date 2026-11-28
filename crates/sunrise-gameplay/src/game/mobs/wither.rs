@@ -44,7 +44,7 @@ impl ServerGame<'_> {
     /// `getKillCredit` naming a wither that is still in the level.
     fn is_wither(&self, id: u32) -> bool {
         self.common
-            .mobs
+            .entities.mobs
             .iter()
             .any(|o| o.id == id && o.alive() && o.species() == Species::Wither)
     }
@@ -185,7 +185,7 @@ impl ServerGame<'_> {
             90.0
         };
         let id = self.create_triggered("minecraft:wither", at, yaw);
-        if let Some(m) = id.and_then(|id| self.common.mobs.iter_mut().find(|m| m.id == id)) {
+        if let Some(m) = id.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id)) {
             m.persistent = true;
             sunrise_sim::mobs::wither::make_invulnerable(m);
         }
@@ -288,7 +288,7 @@ impl ServerGame<'_> {
             }
             Some(Who::Mob(id)) => {
                 let owner_species = owner
-                    .and_then(|o| self.common.mobs.iter().find(|m| m.id == o))
+                    .and_then(|o| self.common.entities.mobs.iter().find(|m| m.id == o))
                     .map(|m| sunrise_sim::mobs::species::vanilla_id(m.species()));
                 let source = Damage {
                     kind,
@@ -299,7 +299,7 @@ impl ServerGame<'_> {
                     attacker_species: owner_species,
                 };
                 let mut survived_hit = false;
-                let killed = match self.common.mob_index.find(&self.common.mobs, id) {
+                let killed = match self.common.mob_index.find(&self.common.entities.mobs, id) {
                     Some(index) => {
                         let plan = self.prepare_knockback_credit(
                             id as i32,
@@ -329,7 +329,7 @@ impl ServerGame<'_> {
                         self.finish_mob_damage_at(index);
                         let alive = self
                             .common
-                            .mobs
+                            .entities.mobs
                             .get(index)
                             .is_some_and(|m| m.id == id && m.alive());
                         survived_hit = hit && alive;
@@ -426,16 +426,15 @@ impl ServerGame<'_> {
         p: &Projectile,
         blast: impl FnOnce(&mut Self) -> R,
     ) -> R {
-        self.common.creatures.projectiles.push(p.clone());
+        self.common.entities.projectiles.push(p.clone());
         let result = blast(self);
         let row = self
             .common
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .position(|q| q.id == p.id && q.join == p.join);
         if let Some(row) = row {
-            self.common.creatures.projectiles.remove(row);
+            self.common.entities.projectiles.remove(row);
         }
         result
     }
@@ -446,7 +445,7 @@ impl ServerGame<'_> {
             Some(Who::Mob(id)) => {
                 if let Some(w) = self
                     .common
-                    .mobs
+                    .entities.mobs
                     .iter_mut()
                     .find(|m| m.id == id && m.alive())
                 {

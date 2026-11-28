@@ -45,7 +45,7 @@ fn converted_place(
             }
             game.creative = false;
             let m = game
-                .mobs
+                .entities.mobs
                 .iter_mut()
                 .find(|m| m.species() != into)
                 .expect("the mob was summoned");
@@ -56,11 +56,11 @@ fn converted_place(
             assert!(game.run_command("tick step 1"));
             game.tick_server(false).unwrap();
             assert!(
-                !game.mobs.iter().any(|m| m.id == id && !m.removed),
+                !game.entities.mobs.iter().any(|m| m.id == id && !m.removed),
                 "the mob converted"
             );
             let new = game
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.species() == into)
                 .expect("the new mob joined");

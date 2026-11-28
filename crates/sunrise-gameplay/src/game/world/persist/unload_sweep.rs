@@ -42,15 +42,14 @@ impl crate::game::ServerGame<'_> {
             .map(|m| m.id)
             .chain(
                 self.common
-                    .resident_entities
-                    .general
+                    .entities.general
                     .rows
                     .iter()
                     .filter(|r| leaves(r.id, r.position, r.mount))
                     .map(|r| r.id),
             )
             .collect();
-        self.common.boats.retain(|b| {
+        self.common.entities.boats.retain(|b| {
             let keep = !gone(b.position) || ridden_roots.contains(&b.id);
             if !keep {
                 removed.push(b.id);
@@ -58,9 +57,9 @@ impl crate::game::ServerGame<'_> {
             keep
         });
         self.common
-            .crystals
+            .entities.crystals
             .retain(|c| keep_row(c.id, c.position, &mut self.common.persist.transient));
-        self.common.ominous_spawners.retain(|s| {
+        self.common.entities.ominous_spawners.retain(|s| {
             let keep = !gone(Vec3::new(s.position[0], s.position[1], s.position[2]));
             if !keep {
                 removed.push(s.id);
@@ -69,20 +68,20 @@ impl crate::game::ServerGame<'_> {
         });
         if self
             .common
-            .dragon
+            .entities.dragon
             .as_ref()
             .is_some_and(|d| gone(d.position))
         {
             self.discard_resident_dragon();
         }
-        self.common.carts.retain(|c| {
+        self.common.entities.carts.retain(|c| {
             let keep = !gone(c.position) || ridden_roots.contains(&c.id);
             if !keep {
                 removed.push(c.id);
             }
             keep
         });
-        self.common.fangs.list.retain(|f| {
+        self.common.entities.fangs.list.retain(|f| {
             let keep = !gone(Vec3::new(f.pos[0], f.pos[1], f.pos[2]));
             if !keep {
                 removed.push(f.id);
@@ -96,14 +95,14 @@ impl crate::game::ServerGame<'_> {
             }
             keep
         });
-        self.common.armor_stands.retain(|a| {
+        self.common.entities.armor_stands.retain(|a| {
             let keep = !gone(a.position) || ridden_roots.contains(&a.id);
             if !keep {
                 removed.push(a.id);
             }
             keep
         });
-        self.common.item_frames.retain(|f| {
+        self.common.entities.item_frames.retain(|f| {
             let (lo, hi) = f.bounds();
             let keep = !gone(Vec3::new(
                 (lo[0] + hi[0]) / 2.0,
@@ -115,14 +114,14 @@ impl crate::game::ServerGame<'_> {
             }
             keep
         });
-        self.common.paintings.retain(|p| {
+        self.common.entities.paintings.retain(|p| {
             let keep = !gone(painting_center(p));
             if !keep {
                 removed.push(p.id);
             }
             keep
         });
-        self.common.cushions.retain(|c| {
+        self.common.entities.cushions.retain(|c| {
             let keep = !gone(c.position);
             if !keep {
                 removed.push(c.id);
@@ -131,7 +130,7 @@ impl crate::game::ServerGame<'_> {
         });
         // The potion clouds written above leave with their chunk; a
         // dragon's breath (no potion) was not written and stays.
-        self.common.breath_clouds.retain(|c| {
+        self.common.entities.breath_clouds.retain(|c| {
             let keep = c.potion.is_none() || !gone(Vec3::new(c.at[0], c.at[1], c.at[2]));
             if !keep {
                 removed.push(c.id);
@@ -139,14 +138,14 @@ impl crate::game::ServerGame<'_> {
             keep
         });
         // Lightning bolts never save (`EntityType.noSave()`); drop them when their chunk unloads.
-        self.common.bolts.retain(|b| {
+        self.common.entities.bolts.retain(|b| {
             let keep = !gone(Vec3::new(b.at[0], b.at[1], b.at[2]));
             if !keep {
                 removed.push(b.id);
             }
             keep
         });
-        self.common.mobs.retain(|m| {
+        self.common.entities.mobs.retain(|m| {
             let keep = !leaving.contains(&m.id);
             if !keep {
                 removed.push(m.id);
@@ -168,8 +167,7 @@ impl crate::game::ServerGame<'_> {
                 .filter_map(|m| m.extra.mount)
                 .chain(
                     self.common
-                        .resident_entities
-                        .general
+                        .entities.general
                         .rows
                         .iter()
                         .filter(|row| !leaving.contains(&row.id))
@@ -185,7 +183,7 @@ impl crate::game::ServerGame<'_> {
                 keep
             });
         }
-        self.common.dropped.retain(|e| {
+        self.common.entities.dropped.retain(|e| {
             let keep = !gone(e.position);
             if !keep {
                 removed.push(e.id);
@@ -193,12 +191,12 @@ impl crate::game::ServerGame<'_> {
             keep
         });
         self.common
-            .orbs
+            .entities.orbs
             .retain(|o| keep_row(o.id, o.position, &mut self.common.persist.transient));
         // Unloaded with their chunk: PersistentEntitySectionManager.stopTracking.
         self.native_leaves_flush();
         // the ones saved with the chunk go with it (a trident too, unsaved).
-        self.common.creatures.projectiles.retain(|p| {
+        self.common.entities.projectiles.retain(|p| {
             let leaves = entity_nbt::saved_with_chunk(p) || p.arrow.is_some();
             let keep = !leaves || !gone(p.position);
             if !keep {
@@ -207,18 +205,18 @@ impl crate::game::ServerGame<'_> {
             keep
         });
         self.common
-            .falling
+            .entities.falling
             .retain(|f| keep_row(f.id, f.position, &mut self.common.persist.transient));
         self.common
-            .rockets
+            .entities.rockets
             .retain(|r| keep_row(r.id, r.position, &mut self.common.persist.transient));
         self.common
-            .tridents
+            .entities.tridents
             .retain(|t| keep_row(t.id, t.position, &mut self.common.persist.transient));
         self.common
-            .tnts
+            .entities.tnts
             .retain(|t| keep_row(t.id, t.position, &mut self.common.persist.transient));
-        self.common.resident_entities.general.rows.retain(|row| {
+        self.common.entities.general.rows.retain(|row| {
             let keep = !leaving.contains(&row.id);
             if !keep {
                 removed.push(row.id);

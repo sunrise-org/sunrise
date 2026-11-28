@@ -104,7 +104,7 @@ impl crate::game::ClientGame<'_> {
     /// `ClientPacketListener.handleMinecartAlongTrack`: the steps join the ones
     /// the minecart has queued, if it runs `NewMinecartBehavior`.
     pub(in crate::game) fn remote_move_minecart(&mut self, p: play::MoveMinecartAlongTrack) {
-        if !self.minecart_improvements() || !self.common.carts.iter().any(|c| c.id == p.id as u32) {
+        if !self.minecart_improvements() || !self.common.entities.carts.iter().any(|c| c.id == p.id as u32) {
             return;
         }
         let Some(r) = self.client.remote.as_mut() else {
@@ -205,7 +205,7 @@ mod tests {
                     weight: 1.0,
                 });
                 assert!(lerp.tick(&mut cart));
-                game.common.carts.push(cart);
+                game.common.entities.carts.push(cart);
                 game.client
                     .remote
                     .as_mut()

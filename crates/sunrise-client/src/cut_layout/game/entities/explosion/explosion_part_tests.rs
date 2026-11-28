@@ -593,7 +593,7 @@ fn block_parts_answer_drops_from_explosions() {
             "only the admitted roll serializes"
         );
         // TNT answering true drops one TNT item and still primes; unanswered it only primes.
-        let primed = game.tnts.len();
+        let primed = game.entities.tnts.len();
         let stacks = hit(game, tnt, 3);
         let tnt_drops: Vec<_> = stacks
             .iter()
@@ -601,10 +601,10 @@ fn block_parts_answer_drops_from_explosions() {
             .map(|(at, stack)| (*at, stack.count))
             .collect();
         assert_eq!(tnt_drops, [([2, 64, 3], 1)]);
-        assert_eq!(game.tnts.len(), primed + 2);
+        assert_eq!(game.entities.tnts.len(), primed + 2);
         // Refused infested stone lets no silverfish out; the one beside it does.
         let silverfish = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-            game.mobs
+            game.entities.mobs
                 .iter()
                 .filter(|m| m.kind.id == "minecraft:silverfish")
                 .count()
@@ -688,7 +688,7 @@ fn a_block_part_keeps_its_block_from_a_dangerous_skull_cap() {
                 for _ in 0..5 {
                     game.tick_projectiles_now().unwrap();
                 }
-                assert!(game.creatures.projectiles.is_empty(), "the skull hit");
+                assert!(game.entities.projectiles.is_empty(), "the skull hit");
                 game.world.block(2, 64, 0) == stone
             };
             // Capped at 0.8, a step through the stone costs (0.8 + 0.3) × 0.3 = 0.33.

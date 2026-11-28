@@ -28,16 +28,15 @@ impl crate::game::ServerGame<'_> {
         match self.native_entity_target(entity)? {
             Target::Player => Some(self.common.player.as_ref()?.spectator),
             Target::Guest(conn) => Some(self.command_guest(conn)?.motion.as_deref()?.spectator),
-            Target::Mob(id) => Some(self.common.mobs.iter().find(|m| m.id == id)?.no_physics),
-            Target::General(id) => Some(self.resident_entities.general.row(id)?.no_physics),
+            Target::Mob(id) => Some(self.common.entities.mobs.iter().find(|m| m.id == id)?.no_physics),
+            Target::General(id) => Some(self.entities.general.row(id)?.no_physics),
             Target::Dragon(id) | Target::Cloud(id) | Target::Spawner(id) | Target::Bolt(id) => {
                 Some(self.stored_no_physics(id))
             }
             Target::Projectile(id) => {
                 let p = self
                     .common
-                    .creatures
-                    .projectiles
+                    .entities.projectiles
                     .iter()
                     .find(|p| p.id == id)?;
                 match (&p.kind, &p.arrow) {
@@ -47,10 +46,10 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Trident(id) => {
-                Some(self.common.tridents.iter().find(|t| t.id == id)?.no_physics)
+                Some(self.common.entities.tridents.iter().find(|t| t.id == id)?.no_physics)
             }
             Target::Stand(id) => {
-                let stand = self.common.armor_stands.iter().find(|s| s.id == id)?;
+                let stand = self.common.entities.armor_stands.iter().find(|s| s.id == id)?;
                 Some(stand.no_physics.unwrap_or(stand.marker || stand.no_gravity))
             }
             Target::Other(id) => Some(
@@ -95,7 +94,7 @@ impl crate::game::ServerGame<'_> {
         }
         match self.native_entity_target(entity) {
             Some(Target::Mob(id)) => {
-                let Some(mob) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+                let Some(mob) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
                     return false;
                 };
                 if mob.species() == Species::Vex {
@@ -105,8 +104,7 @@ impl crate::game::ServerGame<'_> {
                 true
             }
             Some(Target::General(id)) => {
-                self.resident_entities
-                    .general
+                self.entities.general
                     .row_mut(id)
                     .is_some_and(|row| {
                         row.no_physics = no_physics;
@@ -122,28 +120,26 @@ impl crate::game::ServerGame<'_> {
             Some(Target::Projectile(id)) => {
                 let Some(index) = self
                     .common
-                    .creatures
-                    .projectiles
+                    .entities.projectiles
                     .iter()
                     .position(|p| p.id == id)
                 else {
                     return false;
                 };
                 if matches!(
-                    self.creatures.projectiles[index].kind,
+                    self.entities.projectiles[index].kind,
                     ProjectileKind::ShulkerBullet { .. }
                 ) {
                     self.common.persist.no_physics.insert(id, no_physics);
                     return true;
                 }
                 self.common
-                    .creatures
-                    .projectiles
+                    .entities.projectiles
                     .update(index, |p| p.set_no_physics(no_physics))
             }
             Some(Target::Trident(id)) => self
                 .common
-                .tridents
+                .entities.tridents
                 .iter_mut()
                 .find(|t| t.id == id)
                 .is_some_and(|t| {
@@ -152,7 +148,7 @@ impl crate::game::ServerGame<'_> {
                 }),
             Some(Target::Stand(id)) => self
                 .common
-                .armor_stands
+                .entities.armor_stands
                 .iter_mut()
                 .find(|s| s.id == id)
                 .is_some_and(|s| {
@@ -183,14 +179,14 @@ impl crate::game::ServerGame<'_> {
     /// `/kill` and the native discard drop a projectile from its list: the
     /// `noPhysics` write stored for a shulker bullet leaves with it.
     pub(in crate::game::server_side) fn remove_projectile(&mut self, id: u32) {
-        self.common.creatures.projectiles.retain(|p| p.id != id);
+        self.common.entities.projectiles.retain(|p| p.id != id);
         self.forget_entity(id);
     }
 
     /// A player's blow takes a projectile out at `i` (`hit_shulker_bullet`):
     /// the `noPhysics` write stored for a shulker bullet leaves with it.
     pub(in crate::game::server_side) fn remove_projectile_at(&mut self, i: usize) -> Projectile {
-        let p = self.common.creatures.projectiles.remove(i);
+        let p = self.common.entities.projectiles.remove(i);
         self.forget_entity(p.id);
         p
     }
@@ -198,14 +194,14 @@ impl crate::game::ServerGame<'_> {
     /// A command drops an ominous item spawner: its stored `noPhysics` write
     /// leaves with it.
     pub(in crate::game::server_side) fn remove_ominous_spawner(&mut self, id: u32) {
-        self.common.ominous_spawners.retain(|s| s.id != id);
+        self.common.entities.ominous_spawners.retain(|s| s.id != id);
         self.forget_entity(id);
     }
 
     /// A command drops one breath cloud: its stored `noPhysics` write leaves
     /// with it.
     pub(in crate::game::server_side) fn remove_breath_cloud(&mut self, id: u32) {
-        self.common.breath_clouds.retain(|c| c.id != id);
+        self.common.entities.breath_clouds.retain(|c| c.id != id);
         self.forget_entity(id);
     }
 
@@ -216,7 +212,7 @@ impl crate::game::ServerGame<'_> {
         mut keep: impl FnMut(&sunrise_gameplay_common::game::dragon_common::Breath) -> bool,
     ) {
         let mut gone = Vec::new();
-        self.common.breath_clouds.retain(|c| {
+        self.common.entities.breath_clouds.retain(|c| {
             let kept = keep(c);
             if !kept {
                 gone.push(c.id);
@@ -278,7 +274,7 @@ mod tests {
             assert_eq!(player.no_physics(game), Some(true));
 
             let kind = game.res.mob_types().get("minecraft:vex").unwrap().clone();
-            game.mobs.push(Mob::new(42, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(42, kind, Vec3::ZERO, 0.0));
             let mob = game.entity(42).unwrap();
             assert_eq!(mob.no_physics(game), Some(false));
 
@@ -293,26 +289,25 @@ mod tests {
             );
             arrow.id = game.take_entity_id();
             let arrow_id = arrow.id;
-            game.creatures.projectiles.push(arrow);
+            game.entities.projectiles.push(arrow);
             let arrow = game.entity(arrow_id).unwrap();
             assert_eq!(arrow.no_physics(game), Some(false));
-            game.creatures
-                .projectiles
+            game.entities.projectiles
                 .update(0, |p| p.arrow.as_mut().unwrap().no_physics = true);
             assert_eq!(arrow.no_physics(game), Some(true));
 
             let trident_id = game.take_entity_id();
-            game.tridents
+            game.entities.tridents
                 .push(ThrownTrident::remote(trident_id, Vec3::ZERO, 0.0, 0.0));
             let trident = game.entity(trident_id).unwrap();
             assert_eq!(trident.no_physics(game), Some(false));
-            game.tridents[0].no_physics = true;
+            game.entities.tridents[0].no_physics = true;
             assert_eq!(trident.no_physics(game), Some(true));
 
             let mut snowball = Projectile::new(ProjectileKind::Snowball, Vec3::ZERO, None);
             snowball.id = game.take_entity_id();
             let snowball_id = snowball.id;
-            game.creatures.projectiles.push(snowball);
+            game.entities.projectiles.push(snowball);
             let snowball = game.entity(snowball_id).unwrap();
             assert_eq!(snowball.no_physics(game), None);
 
@@ -329,7 +324,7 @@ mod tests {
             );
             bullet.id = game.take_entity_id();
             let bullet_id = bullet.id;
-            game.creatures.projectiles.push(bullet);
+            game.entities.projectiles.push(bullet);
             let bullet = game.entity(bullet_id).unwrap();
             assert_eq!(bullet.no_physics(game), Some(true));
 
@@ -337,11 +332,11 @@ mod tests {
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = game.take_entity_id();
             let dragon_id = dragon.id;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let dragon = game.entity(dragon_id).unwrap();
             assert_eq!(dragon.no_physics(game), Some(true));
 
-            game.boats.push(super::super::boats_common::Boat::new(
+            game.entities.boats.push(super::super::boats_common::Boat::new(
                 44,
                 "oak".into(),
                 Vec3::ZERO,
@@ -424,13 +419,13 @@ mod tests {
                 [0.0; 3],
                 0,
             );
-            let item = game.entity(game.dropped[0].id).unwrap();
+            let item = game.entity(game.entities.dropped[0].id).unwrap();
             assert!(!item.set_no_physics(game, true));
             assert_eq!(item.no_physics(game), None);
 
             // A vex sets it inside its own tick.
             let vex = game.res.mob_types().get("minecraft:vex").unwrap().clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(42, vex, Vec3::new(0.5, 100.0, 0.5), 0.0));
             let vex = game.entity(42).unwrap();
             assert!(!vex.set_no_physics(game, true));
@@ -443,7 +438,7 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(43, zombie, Vec3::new(1.5, 100.0, 0.5), 0.0));
             let zombie = game.entity(43).unwrap();
             assert!(zombie.set_no_physics(game, true));
@@ -462,28 +457,28 @@ mod tests {
             );
             arrow.id = game.take_entity_id();
             let arrow_id = arrow.id;
-            game.creatures.projectiles.push(arrow);
+            game.entities.projectiles.push(arrow);
             let arrow = game.entity(arrow_id).unwrap();
             assert!(arrow.set_no_physics(game, true));
             assert_eq!(arrow.no_physics(game), Some(true));
-            assert!(game.creatures.projectiles[0].needs_sync);
+            assert!(game.entities.projectiles[0].needs_sync);
 
             let trident_id = game.take_entity_id();
-            game.tridents
+            game.entities.tridents
                 .push(ThrownTrident::remote(trident_id, Vec3::ZERO, 0.0, 0.0));
-            let trident_id = game.tridents[0].id;
+            let trident_id = game.entities.tridents[0].id;
             let trident = game.entity(trident_id).unwrap();
             assert!(trident.set_no_physics(game, true));
             assert_eq!(trident.no_physics(game), Some(true));
-            assert!(game.tridents[0].needs_sync);
+            assert!(game.entities.tridents[0].needs_sync);
 
             // An armor stand takes it, and recomputes it on a load.
-            game.armor_stands.push(ArmorStand::new(44, Vec3::ZERO, 0.0));
+            game.entities.armor_stands.push(ArmorStand::new(44, Vec3::ZERO, 0.0));
             let stand = game.entity(44).unwrap();
             assert!(stand.set_no_physics(game, true));
             assert_eq!(stand.no_physics(game), Some(true));
             let saved = sunrise_sim::entity_nbt::armor_stand_to_nbt(
-                &game.armor_stands[0],
+                &game.entities.armor_stands[0],
                 [1, 2, 3, 4],
                 None,
                 &Default::default(),
@@ -509,7 +504,7 @@ mod tests {
             );
             bullet.id = game.take_entity_id();
             let bullet_id = bullet.id;
-            game.creatures.projectiles.push(bullet);
+            game.entities.projectiles.push(bullet);
             let bullet = game.entity(bullet_id).unwrap();
             assert_eq!(bullet.no_physics(game), Some(true));
             assert!(bullet.set_no_physics(game, false));
@@ -521,7 +516,7 @@ mod tests {
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = game.take_entity_id();
             let dragon_id = dragon.id;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let dragon = game.entity(dragon_id).unwrap();
             assert_eq!(dragon.no_physics(game), Some(true));
             assert!(dragon.set_no_physics(game, false));
@@ -556,7 +551,7 @@ mod tests {
             );
             bullet.id = game.take_entity_id();
             let id = bullet.id;
-            game.creatures.projectiles.push(bullet);
+            game.entities.projectiles.push(bullet);
             id
         };
 
@@ -567,7 +562,7 @@ mod tests {
                 .get("minecraft:shulker")
                 .expect("the shulker type")
                 .clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(24, kind, Vec3::new(24.0, 200.0, 24.0), 0.0));
             let cleared = bullet(game, Vec3::new(10.5, 200.0, 10.5));
             let left_alone = bullet(game, Vec3::new(13.5, 200.0, 10.5));
@@ -578,8 +573,7 @@ mod tests {
             let area = Aabb::new(Vec3::new(9.0, 200.0, 9.0), Vec3::new(15.0, 201.0, 12.0));
             game.lid_push(Lid::Shulker(24), area, Vec3::new(0.0, 0.25, 0.0));
             let y = |id: u32| {
-                game.creatures
-                    .projectiles
+                game.entities.projectiles
                     .iter()
                     .find(|p| p.id == id)
                     .expect("the bullet")
@@ -624,7 +618,7 @@ mod tests {
             );
             bullet.id = game.take_entity_id();
             let id = bullet.id;
-            game.creatures.projectiles.push(bullet);
+            game.entities.projectiles.push(bullet);
             let bullet = game.entity(id).expect("the bullet handle");
             assert!(bullet.set_no_physics(game, false));
             assert!(game.persist.no_physics.contains_key(&id));
@@ -661,7 +655,7 @@ mod tests {
             );
             bullet.id = game.take_entity_id();
             let id = bullet.id;
-            game.creatures.projectiles.push(bullet);
+            game.entities.projectiles.push(bullet);
             let bullet = game.entity(id).expect("the bullet handle");
             assert!(bullet.set_no_physics(game, false));
             assert!(game.persist.no_physics.contains_key(&id));
@@ -671,7 +665,7 @@ mod tests {
                 game.run_command("kill @e[type=minecraft:shulker_bullet]"),
                 "the command found and removed the bullet"
             );
-            assert!(!game.creatures.projectiles.iter().any(|p| p.id == id));
+            assert!(!game.entities.projectiles.iter().any(|p| p.id == id));
             assert!(
                 !game.persist.no_physics.contains_key(&id),
                 "the entry left with the entity the command killed"
@@ -702,13 +696,13 @@ mod tests {
             );
             bullet.id = game.take_entity_id();
             let id = bullet.id;
-            game.creatures.projectiles.push(bullet);
+            game.entities.projectiles.push(bullet);
             let bullet = game.entity(id).expect("the bullet handle");
             assert!(bullet.set_no_physics(game, false));
             assert!(game.persist.no_physics.contains_key(&id));
 
             game.hit_shulker_bullet(0);
-            assert!(!game.creatures.projectiles.iter().any(|p| p.id == id));
+            assert!(!game.entities.projectiles.iter().any(|p| p.id == id));
             assert!(
                 !game.persist.no_physics.contains_key(&id),
                 "the entry left with the bullet the player's blow removed"
@@ -726,13 +720,13 @@ mod tests {
 
         with_game(|game| {
             game.add_ominous_item_spawner(ItemStack::new("minecraft:air", 1), [4.5, 200.0, 4.5], 1);
-            let id = game.ominous_spawners[0].id;
+            let id = game.entities.ominous_spawners[0].id;
             game.persist.no_physics.insert(id, false);
             assert!(game.persist.no_physics.contains_key(&id));
 
             game.tick_ominous_item_spawners();
             assert!(
-                !game.ominous_spawners.iter().any(|s| s.id == id),
+                !game.entities.ominous_spawners.iter().any(|s| s.id == id),
                 "the spawner finished"
             );
             assert!(
@@ -752,7 +746,7 @@ mod tests {
 
         with_game(|game| {
             let id = game.take_entity_id();
-            game.breath_clouds.push(Breath {
+            game.entities.breath_clouds.push(Breath {
                 attachment_lifetime: Default::default(),
                 join: Default::default(),
                 id,
@@ -773,7 +767,7 @@ mod tests {
 
             game.tick_breath();
             assert!(
-                !game.breath_clouds.iter().any(|c| c.id == id),
+                !game.entities.breath_clouds.iter().any(|c| c.id == id),
                 "the cloud expired"
             );
             assert!(
@@ -795,9 +789,9 @@ mod tests {
         with_game(|game| {
             let mut dragon = Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = game.take_entity_id();
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let id = game.take_entity_id();
-            game.breath_clouds.push(Breath {
+            game.entities.breath_clouds.push(Breath {
                 attachment_lifetime: Default::default(),
                 join: Default::default(),
                 id,
@@ -816,10 +810,10 @@ mod tests {
             game.persist.no_physics.insert(id, false);
             assert!(game.persist.no_physics.contains_key(&id));
 
-            game.dragon.as_mut().unwrap().flame_ended = true;
+            game.entities.dragon.as_mut().unwrap().flame_ended = true;
             game.tick_breath();
             assert!(
-                !game.breath_clouds.iter().any(|c| c.id == id),
+                !game.entities.breath_clouds.iter().any(|c| c.id == id),
                 "the flame cloud is gone"
             );
             assert!(

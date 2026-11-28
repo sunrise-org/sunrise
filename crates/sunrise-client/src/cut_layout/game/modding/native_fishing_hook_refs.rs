@@ -71,7 +71,7 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(99, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(99, kind, Vec3::ZERO, 0.0));
             let mob = game.entity(99).unwrap();
             assert!(game.fishing_hook(mob).is_none());
 
@@ -88,7 +88,7 @@ mod tests {
 
             game.hook.as_mut().unwrap().set_hooked_in(99);
             assert_eq!(hook.hooked_in(game), Some(mob));
-            game.mobs.clear();
+            game.entities.mobs.clear();
             assert_eq!(hook.hooked_in(game), None);
 
             // A box query finds it, as `Level.getEntities` does.

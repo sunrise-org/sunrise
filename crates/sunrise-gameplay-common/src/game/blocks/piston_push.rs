@@ -146,7 +146,7 @@ impl crate::game::CommonGame<'_> {
 
     /// Whether a pushed body is a shulker, which a shulker's lid leaves out.
     pub(in crate::game) fn pushed_shulker(&self, target: MoveWho) -> bool {
-        matches!(target, MoveWho::Entity(EntityHandle::Mob(i)) if self.mobs[i].species() == Species::Shulker)
+        matches!(target, MoveWho::Entity(EntityHandle::Mob(i)) if self.entities.mobs[i].species() == Species::Shulker)
     }
 
     /// Whether a body moves with `noPhysics`, which `Entity.move` follows with `setPos` the
@@ -243,10 +243,10 @@ pub trait PistonPushGameExt1<'__sg>: crate::game::SideGame<'__sg> {
     {
         match target {
             MoveWho::Entity(EntityHandle::Mob(i)) => {
-                Some(self.mobs[i].support_collision(Some(&self.items().entity_type_tags)))
+                Some(self.entities.mobs[i].support_collision(Some(&self.items().entity_type_tags)))
             }
             MoveWho::Entity(EntityHandle::ArmorStand(i)) => {
-                Some(self.armor_stands[i].support_collision())
+                Some(self.entities.armor_stands[i].support_collision())
             }
             _ => None,
         }

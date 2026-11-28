@@ -50,7 +50,7 @@ fn base_allow_does_not_override_worn_immunity() {
                 "{\"minecraft:attribute_modifiers\":[],",
                 "\"minecraft:enchantments\":{\"minecraft:frost_walker\":1}}}}}"
             )));
-            let pig = game.mobs.last().unwrap().id;
+            let pig = game.entities.mobs.last().unwrap().id;
             assert!(
                 !game
                     .run_command("damage @e[type=pig,limit=1] 2 minecraft:campfire at 5.5 100 4.5")

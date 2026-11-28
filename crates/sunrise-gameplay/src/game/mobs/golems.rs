@@ -100,7 +100,7 @@ impl ServerGame<'_> {
         let id = self.create_triggered(kind, at, 0.0);
         // CarvedPumpkinBlock.trySpawnGolem: setPlayerCreated(true) on the iron golem.
         if kind == "minecraft:iron_golem"
-            && let Some(m) = id.and_then(|id| self.common.mobs.iter_mut().find(|m| m.id == id))
+            && let Some(m) = id.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id))
         {
             m.extra.player_created = true;
         }
@@ -163,7 +163,7 @@ impl ServerGame<'_> {
                     .insert((below[0], below[1], below[2]), entity);
             }
         }
-        if let Some(m) = id.and_then(|id| self.common.mobs.iter_mut().find(|m| m.id == id)) {
+        if let Some(m) = id.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id)) {
             m.extra.variant = weather;
             let p = [m.position.x, m.position.y, m.position.z];
             self.server_play_sound("minecraft:entity.copper_golem.spawn", p, 1.0, 1.0);
@@ -176,7 +176,7 @@ impl ServerGame<'_> {
     /// (`WitherSkullBlock.checkSpawn`).
     pub(in crate::game) fn trigger_summoned(&mut self, id: Option<u32>, reach: f64) {
         let Some(built) = id
-            .and_then(|id| self.common.mobs.iter().find(|m| m.id == id))
+            .and_then(|id| self.common.entities.mobs.iter().find(|m| m.id == id))
             .cloned()
         else {
             return;
@@ -242,8 +242,8 @@ impl ServerGame<'_> {
         mob.previous_body_yaw = yaw;
         mob.previous_head_yaw = yaw;
         let id = mob.id;
-        self.common.mobs.push(mob);
-        self.admit_new_mobs(self.common.mobs.len() - 1);
+        self.common.entities.mobs.push(mob);
+        self.admit_new_mobs(self.common.entities.mobs.len() - 1);
         Some(id)
     }
     /// `CarvedPumpkinBlock.clearPatternBlocks`: every cell of the match
@@ -475,7 +475,7 @@ mod golem_heads_tests {
     }
 
     fn built(game: &ServerGame<'_>, kind: &str) -> bool {
-        game.mobs.iter().any(|m| m.kind.id == kind && !m.removed)
+        game.entities.mobs.iter().any(|m| m.kind.id == kind && !m.removed)
     }
 
     fn head_stands(game: &ServerGame<'_>, at: [i32; 3]) -> bool {
@@ -531,7 +531,7 @@ mod golem_heads_tests {
             put(game, [2, 65, 2], "minecraft:snow_block");
             put(game, [2, 66, 2], HEAD);
             assert!(built(game, "minecraft:snow_golem"));
-            game.mobs.clear();
+            game.entities.mobs.clear();
 
             set_tag(game, &[]);
             put(game, [2, 64, 2], "minecraft:snow_block");

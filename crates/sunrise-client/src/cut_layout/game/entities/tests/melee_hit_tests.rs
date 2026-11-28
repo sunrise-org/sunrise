@@ -84,12 +84,12 @@ fn summon_pig(game: &mut sunrise_gameplay::game::ServerGame<'_>, extra: &str) {
     assert!(game.run_command(&format!(
         "summon minecraft:pig 0.5 64.0 2.5 {{NoAI:1b,NoGravity:1b,Silent:1b,PersistenceRequired:1b{extra}}}"
     )));
-    assert_eq!(game.mobs.len(), 1, "the pig was summoned");
+    assert_eq!(game.entities.mobs.len(), 1, "the pig was summoned");
 }
 
 /// Look at the center of the first mob, as the attack fixture does.
 fn aim_at_mob(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
-    let center = game.mobs[0].center();
+    let center = game.entities.mobs[0].center();
     let eye = game.eye_position().expect("player");
     let (dx, dy, dz) = (center[0] - eye[0], center[1] - eye[1], center[2] - eye[2]);
     game.yaw = (-dx).atan2(dz).to_degrees() as f32;
@@ -114,7 +114,7 @@ fn a_hit_that_deals_no_damage_has_no_knockback_anger_or_exhaustion() {
     );
     aim_at_mob(&mut game);
     assert!(game.attack(), "the attack reached the pig");
-    let pig = &game.mobs[0];
+    let pig = &game.entities.mobs[0];
     assert_eq!(pig.health, 10.0, "the pig took no damage");
     assert_eq!(
         (pig.velocity.x, pig.velocity.z),
@@ -155,7 +155,7 @@ fn the_melee_knockback_scales_with_the_attackers_attack_knockback() {
     aim_at_mob(&mut game);
     // A fully charged hit at 0 ATTACK_KNOCKBACK: only the hit's own 0.4 knockback.
     assert!(game.attack(), "the attack reached the pig");
-    let plain = game.mobs[0].velocity.z;
+    let plain = game.entities.mobs[0].velocity.z;
     assert!(
         (plain - 0.4).abs() < 1e-6,
         "a plain hit's knockback: {plain}, expected 0.4"
@@ -167,12 +167,12 @@ fn the_melee_knockback_scales_with_the_attackers_attack_knockback() {
         "minecraft:attack_knockback",
         5.0,
     );
-    game.mobs[0].velocity = Vec3::ZERO;
-    game.mobs[0].invulnerable = 0;
-    game.mobs[0].last_hurt = 0.0;
+    game.entities.mobs[0].velocity = Vec3::ZERO;
+    game.entities.mobs[0].invulnerable = 0;
+    game.entities.mobs[0].last_hurt = 0.0;
     game.server.attack_ticks = 20;
     assert!(game.attack(), "the second attack reached the pig");
-    let boosted = game.mobs[0].velocity.z;
+    let boosted = game.entities.mobs[0].velocity.z;
     assert!(
         (boosted - 2.7).abs() < 1e-6,
         "the knockback of ATTACK_KNOCKBACK 5: {boosted}, expected 2.7"
@@ -187,11 +187,11 @@ fn a_creative_player_hurts_an_invulnerable_mob() {
     let mut resources = None;
     let mut game = game(&mut resources, false);
     summon_pig(&mut game, ",Invulnerable:1b");
-    assert!(game.mobs[0].invulnerable_flag, "the pig is Invulnerable");
+    assert!(game.entities.mobs[0].invulnerable_flag, "the pig is Invulnerable");
     aim_at_mob(&mut game);
     assert!(game.attack(), "the attack reached the pig");
     assert_eq!(
-        game.mobs[0].health, 10.0,
+        game.entities.mobs[0].health, 10.0,
         "a survival player's hit on an Invulnerable pig"
     );
     // The same hit from a creative player: `source.isCreativePlayer()`.
@@ -200,7 +200,7 @@ fn a_creative_player_hurts_an_invulnerable_mob() {
     game.server.attack_ticks = 20;
     assert!(game.attack(), "the second attack reached the pig");
     assert_eq!(
-        game.mobs[0].health, 9.0,
+        game.entities.mobs[0].health, 9.0,
         "a creative player's hit on an Invulnerable pig"
     );
 }

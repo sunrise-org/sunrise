@@ -15,7 +15,7 @@ impl crate::game::ServerGame<'_> {
     ) -> Option<u32> {
         self.push_item_entity(thrown, at, Some(v), 40, None);
         let id = self.server.next_entity;
-        if let Some(item) = self.common.dropped.last_mut() {
+        if let Some(item) = self.common.entities.dropped.last_mut() {
             item.thrower = thrower;
         }
         if mod_api::__private::listened(mod_api::HookId::ItemToss)
@@ -28,7 +28,7 @@ impl crate::game::ServerGame<'_> {
             self.common.native_lifecycle.held_joins.pop();
             if canceled {
                 // A canceled toss never enters the world; what was thrown is gone.
-                if let Some(at) = self.common.dropped.iter().rposition(|d| d.id == id) {
+                if let Some(at) = self.common.entities.dropped.iter().rposition(|d| d.id == id) {
                     self.remove_dropped(at);
                 }
                 self.forget_entity(id);
@@ -39,7 +39,7 @@ impl crate::game::ServerGame<'_> {
         }
         let _ = self.join_item_entity(id, at);
         self.common
-            .dropped
+            .entities.dropped
             .iter()
             .rev()
             .any(|d| d.id == id)

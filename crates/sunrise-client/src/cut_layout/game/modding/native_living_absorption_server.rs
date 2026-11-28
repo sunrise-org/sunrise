@@ -68,7 +68,7 @@ mod tests {
     fn a_mobs_absorption_takes_a_hit_before_its_health() {
         with_resident_game(|game| {
             let zombie = absorbing_zombie(game);
-            game.mobs.push(zombie);
+            game.entities.mobs.push(zombie);
             let living = game.living(game.entity(12).unwrap()).unwrap();
             let full = living.health(game).unwrap();
             assert!(living.set_absorption(game, 9.0));
@@ -94,11 +94,11 @@ mod tests {
     fn a_mobs_set_absorption_survives_a_save_and_reload() {
         with_resident_game(|game| {
             let zombie = absorbing_zombie(game);
-            game.mobs.push(zombie);
+            game.entities.mobs.push(zombie);
             let living = game.living(game.entity(12).unwrap()).unwrap();
             assert!(living.set_absorption(game, 3.0));
             let saved = sunrise_sim::entity_nbt::mob_to_nbt(
-                &game.mobs[0],
+                &game.entities.mobs[0],
                 [1, 0, 0, 1],
                 None,
                 None,
@@ -129,14 +129,14 @@ mod tests {
             game.player = Some(player);
             bind_local_player(game, 20, 123);
             let zombie = absorbing_zombie(game);
-            game.mobs.push(zombie);
-            game.mobs[0].needs_sync = false;
+            game.entities.mobs.push(zombie);
+            game.entities.mobs[0].needs_sync = false;
             let player = game.living(game.entity(20).unwrap()).unwrap();
             let mob = game.living(game.entity(12).unwrap()).unwrap();
             assert!(player.set_absorption(game, 5.0));
             assert!(mob.set_absorption(game, 2.0));
             let events = game.player.as_ref().unwrap().events.len();
-            game.mobs[0].needs_sync = false;
+            game.entities.mobs[0].needs_sync = false;
             game.storage_scope(|game, _| {
                 assert!(player.set_absorption(game, 9.0));
                 assert!(mob.set_absorption(game, 4.0));
@@ -145,7 +145,7 @@ mod tests {
             assert_eq!(player.absorption(game), Some(5.0));
             assert_eq!(mob.absorption(game), Some(2.0));
             assert_eq!(game.player.as_ref().unwrap().events.len(), events);
-            assert!(!game.mobs[0].needs_sync);
+            assert!(!game.entities.mobs[0].needs_sync);
             game.storage_scope(|game, _| {
                 assert!(player.set_absorption(game, 9.0));
                 assert!(mob.set_absorption(game, 4.0));
@@ -153,7 +153,7 @@ mod tests {
             });
             assert_eq!(player.absorption(game), Some(9.0));
             assert_eq!(mob.absorption(game), Some(4.0));
-            assert!(game.mobs[0].needs_sync);
+            assert!(game.entities.mobs[0].needs_sync);
         });
     }
 }

@@ -116,7 +116,7 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::living_
                 let mut mob = sheep(game, player_blow);
                 // The last hurt by a player, so the death rolls experience.
                 mob.ai.last_hurt_by_player = 100;
-                game.mobs.last_mut().unwrap().ai.last_hurt_by_player = 100;
+                game.entities.mobs.last_mut().unwrap().ai.last_hurt_by_player = 100;
                 game.mob_die(&mob);
                 assert_eq!(
                     *heard.lock().unwrap(),
@@ -135,11 +135,11 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::living_
                     assert!(post.experience_before, "the experience rolled before it");
                 }
                 assert_eq!(
-                    game.dropped.len(),
+                    game.entities.dropped.len(),
                     drops.load(Ordering::SeqCst),
                     "every item drop it heard of is in the world"
                 );
-                assert!(!game.dropped.is_empty());
+                assert!(!game.entities.dropped.is_empty());
 
                 heard.lock().unwrap().clear();
                 *post.lock().unwrap() = Post::default();
@@ -171,7 +171,7 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::living_
                     },
                 );
                 mob.health = 20.0;
-                game.mobs.last_mut().unwrap().health = 20.0;
+                game.entities.mobs.last_mut().unwrap().health = 20.0;
                 // `/kill` replaces the earlier damage source with generic_kill.
                 game.kill_target(sunrise_gameplay_common::game::commands_common::Target::Mob(
                     mob.id,
@@ -198,7 +198,7 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::living_
                 game.mob_die(&mob);
                 assert_eq!(*heard.lock().unwrap(), ["death"]);
                 assert_eq!(
-                    game.mobs.last().unwrap().health,
+                    game.entities.mobs.last().unwrap().health,
                     0.0,
                     "cancellation alone does not heal the body"
                 );
@@ -261,7 +261,7 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::living_
                 assert_eq!(post.attacker, Some(0), "no attacker was recorded");
                 assert!(post.experience_before, "the experience ran before it");
                 assert!(
-                    game.dropped
+                    game.entities.dropped
                         .iter()
                         .any(|d| &*d.stack.item == "minecraft:stone"),
                     "the inventory was dropped before it"

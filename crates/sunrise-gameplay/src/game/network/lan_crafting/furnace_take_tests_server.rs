@@ -194,7 +194,7 @@ fn recipes_used_empty(game: &ServerGame<'_>) -> bool {
 
 fn total_orb_xp(game: &ServerGame<'_>) -> i64 {
     game.common
-        .orbs
+        .entities.orbs
         .iter()
         .map(|orb| i64::from(orb.value) * i64::from(orb.count))
         .sum()

@@ -120,22 +120,22 @@ fn indexed_pickup_keeps_bound_survivors_and_processes_shifted_tail() {
                             0,
                         )
                         .unwrap();
-                    game.dropped
+                    game.entities.dropped
                         .iter_mut()
                         .find(|row| row.id == item.id())
                         .unwrap()
                         .thrower = Some(uuid);
                     ids.push(item.id());
                 }
-                let joins: Vec<_> = game.dropped.iter().map(|item| item.join_seq()).collect();
+                let joins: Vec<_> = game.entities.dropped.iter().map(|item| item.join_seq()).collect();
                 let mut registrations =
                     crate::game::server_side::entity_server::taken_pass_tests::SlotIdentities::default();
-                for item in &mut game.dropped {
+                for item in &mut game.entities.dropped {
                     let id = item.id;
                     registrations.observe_one(item, level.epoch(), id);
                 }
                 let mut table = EntityTable::new(Journal::default());
-                game.common.dropped.bind_residency(
+                game.common.entities.dropped.bind_residency(
                     &table.producer(),
                     Owner {
                         dimension: game.common.dim.key(),
@@ -178,25 +178,25 @@ fn indexed_pickup_keeps_bound_survivors_and_processes_shifted_tail() {
                     "client pickup pitches do not consume the server level random"
                 );
                 assert_eq!(
-                    game.dropped
+                    game.entities.dropped
                         .iter()
                         .map(|item| (item.id, item.stack.count, item.pickup_delay))
                         .collect::<Vec<_>>(),
                     [(ids[1], 2, 0), (ids[2], 2, 0)]
                 );
                 assert_eq!(
-                    game.dropped
+                    game.entities.dropped
                         .iter()
                         .map(|item| item.join_seq())
                         .collect::<Vec<_>>(),
                     joins[1..]
                 );
-                for item in &mut game.dropped {
+                for item in &mut game.entities.dropped {
                     let id = item.id;
                     registrations.observe_one(item, level.epoch(), id);
                 }
-                for (index, item) in game.dropped.iter().enumerate() {
-                    assert_eq!(game.dropped.locate(item.join_seq()), Some(index));
+                for (index, item) in game.entities.dropped.iter().enumerate() {
+                    assert_eq!(game.entities.dropped.locate(item.join_seq()), Some(index));
                 }
                 table
                     .end_tick()
@@ -204,9 +204,9 @@ fn indexed_pickup_keeps_bound_survivors_and_processes_shifted_tail() {
                 for &id in &ids {
                     use sunrise_sim::join_seq::residency::table::{EntityLookup, SourceEntity};
                     let result = table.entity_lookup(&game.dim.key(), id, |location| {
-                        let index = game.dropped.locate(location.join)?;
+                        let index = game.entities.dropped.locate(location.join)?;
                         Some(SourceEntity {
-                            id: game.dropped[index].id,
+                            id: game.entities.dropped[index].id,
                             value: index,
                         })
                     });
@@ -218,7 +218,7 @@ fn indexed_pickup_keeps_bound_survivors_and_processes_shifted_tail() {
                 }
 
                 // A pickup the full inventory refuses is not heard.
-                for item in &mut game.dropped {
+                for item in &mut game.entities.dropped {
                     if item.id == ids[1] {
                         item.stack.count = 1;
                     }
@@ -234,7 +234,7 @@ fn indexed_pickup_keeps_bound_survivors_and_processes_shifted_tail() {
                 );
                 assert!(posts.lock().unwrap().is_empty());
                 assert_eq!(
-                    game.dropped
+                    game.entities.dropped
                         .iter()
                         .find(|item| item.id == ids[1])
                         .unwrap()
@@ -261,14 +261,14 @@ fn indexed_pickup_keeps_bound_survivors_and_processes_shifted_tail() {
                         game.mode = sunrise_command::args::GameMode::Spectator;
                     }
                     let before: Vec<_> = game
-                        .dropped
+                        .entities.dropped
                         .iter()
                         .map(|item| (item.id, item.join_seq(), item.stack.count))
                         .collect();
                     let mut round = game.native_tick_round();
                     game.tick_dropped_items(&mut round);
                     assert_eq!(
-                        game.dropped
+                        game.entities.dropped
                             .iter()
                             .map(|item| (item.id, item.join_seq(), item.stack.count))
                             .collect::<Vec<_>>(),

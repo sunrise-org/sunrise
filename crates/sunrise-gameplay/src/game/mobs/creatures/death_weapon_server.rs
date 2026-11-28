@@ -187,8 +187,8 @@ impl crate::game::ServerGame<'_> {
         let Some(index) = self
             .common
             .mob_index
-            .find(&self.common.mobs, id)
-            .filter(|&i| !self.common.mobs[i].removed)
+            .find(&self.common.entities.mobs, id)
+            .filter(|&i| !self.common.entities.mobs[i].removed)
         else {
             return false;
         };
@@ -244,7 +244,7 @@ impl crate::game::ServerGame<'_> {
             .accepted_hit
             .take()
             .filter(|hit| hit.belongs_to(m.last_damage));
-        if let Some(body) = self.common.mobs.iter_mut().find(|body| body.id == m.id) {
+        if let Some(body) = self.common.entities.mobs.iter_mut().find(|body| body.id == m.id) {
             body.accepted_hit = None;
         }
         let weapon = accepted.as_ref().and_then(|hit| hit.weapon.as_ref());
@@ -258,7 +258,7 @@ impl crate::game::ServerGame<'_> {
                 Some(Who::Player) => Some(player()),
                 Some(Who::Mob(id)) => self
                     .common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .any(|mob| mob.id == id)
                     .then(|| self.target_loot_entity(crate::game::commands::Target::Mob(id)))
@@ -376,7 +376,7 @@ impl crate::game::ServerGame<'_> {
         if skulls && let Some(Who::Mob(id)) = m.last_damage.and_then(|(d, _)| d.attacker) {
             // Creeper.droppedSkulls: one head per charged explosion.
             self.server.combat.0.charged_exploders.retain(|c| *c != id);
-            if let Some(creeper) = self.common.mobs.iter_mut().find(|o| o.id == id) {
+            if let Some(creeper) = self.common.entities.mobs.iter_mut().find(|o| o.id == id) {
                 creeper.extra.charged = false;
             }
         }
@@ -525,7 +525,7 @@ impl crate::game::ServerGame<'_> {
         };
         let victim = if victim >= sunrise_gameplay_common::game::dragon_common::SPECIAL {
             self.common
-                .dragon
+                .entities.dragon
                 .as_ref()
                 .map_or(victim, |dragon| dragon.id)
         } else {

@@ -108,7 +108,7 @@ impl crate::game::ServerGame<'_> {
             &mut Vec<HeartEvent>,
         ),
     ) -> Result<()> {
-        let mut mobs = self.common.mobs.lift();
+        let mut mobs = self.common.entities.mobs.lift();
         #[cfg(any(test, feature = "test-support"))]
         crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
         let mut uuids = std::mem::take(&mut self.common.persist.uuids);
@@ -149,7 +149,7 @@ impl crate::game::ServerGame<'_> {
         self.common.mob_index = index;
         mobs.extend(added);
         self.common
-            .mobs
+            .entities.mobs
             .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         self.common.persist.uuids = uuids;
         self.server.next_entity = next_entity;
@@ -225,7 +225,7 @@ impl crate::game::ServerGame<'_> {
             && live_heart(self)
             && let Some(mob) = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter_mut()
                 .find(|m| m.id == id && m.join == join && !m.removed)
         {

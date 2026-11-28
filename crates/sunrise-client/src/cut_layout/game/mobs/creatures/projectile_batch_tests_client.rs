@@ -31,7 +31,7 @@ fn an_arrow_does_not_stick_when_the_impact_listener_clears_its_block() {
         assert_eq!(hits.len(), 1);
         assert_eq!(hits[0].at, [2.0, 64.5, 0.5]);
         assert_eq!(hits[0].projectile_pos, hits[0].at);
-        let p = &game.creatures.projectiles[0];
+        let p = &game.entities.projectiles[0];
         let arrow = p.arrow.as_ref().unwrap();
         if clear {
             assert_eq!(

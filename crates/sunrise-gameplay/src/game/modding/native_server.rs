@@ -96,7 +96,7 @@ pub mod fake_action_tests {
             .unwrap()
             .clone();
         let [x, y, z] = at;
-        game.mobs.push(sunrise_sim::mobs::Mob::new(
+        game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
             id,
             kind,
             sunrise_core::geometry::Vec3::new(x, y, z),
@@ -178,7 +178,7 @@ pub mod fake_action_tests {
             .unwrap()
             .clone();
         let [x, y, z] = at;
-        game.mobs.push(sunrise_sim::mobs::Mob::new(
+        game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
             id,
             kind,
             sunrise_core::geometry::Vec3::new(x, y, z),
@@ -188,7 +188,7 @@ pub mod fake_action_tests {
     }
     #[cfg(test)]
     pub(in crate::game) fn health(game: &crate::game::ServerGame<'_>, id: u32) -> f32 {
-        game.mobs.iter().find(|m| m.id == id).unwrap().health
+        game.entities.mobs.iter().find(|m| m.id == id).unwrap().health
     }
     #[cfg(test)]
     #[test]

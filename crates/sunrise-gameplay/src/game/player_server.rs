@@ -116,7 +116,7 @@ impl crate::game::ServerGame<'_> {
         if let Some(i) = self
             .common
             .riding
-            .and_then(|v| self.common.mobs.iter().position(|m| m.id == v))
+            .and_then(|v| self.common.entities.mobs.iter().position(|m| m.id == v))
         {
             return self.common.mob_speed(i).scale(1.0 / 20.0);
         }
@@ -250,66 +250,66 @@ impl crate::game::ServerGame<'_> {
                 visit(id, raw_bb, radius);
             }
         };
-        for m in self.common.mobs.iter() {
+        for m in self.common.entities.mobs.iter() {
             if m.is_pickable() {
                 emit(m.id, m.bounds(), 0.0);
             }
         }
-        for b in self.common.boats.iter() {
+        for b in self.common.entities.boats.iter() {
             emit(b.id, b.bounds(), 0.0);
         }
-        for c in self.common.carts.iter() {
+        for c in self.common.entities.carts.iter() {
             emit(c.id, c.bounds(), 0.0);
         }
-        for a in self.common.armor_stands.iter() {
+        for a in self.common.entities.armor_stands.iter() {
             if a.is_pickable() {
                 emit(a.id, a.bounds(), 0.0);
             }
         }
-        for t in self.common.tnts.iter() {
+        for t in self.common.entities.tnts.iter() {
             emit(t.id, t.bounds(), 0.0);
         }
-        for f in self.common.falling.iter() {
+        for f in self.common.entities.falling.iter() {
             emit(f.id, f.bounds(), 0.0);
         }
-        for p in self.common.creatures.projectiles.iter() {
+        for p in self.common.entities.projectiles.iter() {
             if self.projectile_is_pickable(p) {
                 emit(p.id, p.bounds(), self.projectile_pick_radius(p));
             }
         }
-        for t in self.common.tridents.iter() {
+        for t in self.common.entities.tridents.iter() {
             if self.trident_is_pickable(t) {
                 emit(t.id, t.bounds(), 1.0);
             }
         }
         if self.rocket_is_pickable() {
-            for r in self.common.rockets.iter() {
+            for r in self.common.entities.rockets.iter() {
                 emit(r.id, r.bounds(), 1.0);
             }
         }
-        for row in self.common.resident_entities.general.rows.iter() {
+        for row in self.common.entities.general.rows.iter() {
             if row.is_pickable() {
                 emit(row.id, row.bounds(), 0.0);
             }
         }
-        for p in self.common.paintings.iter() {
+        for p in self.common.entities.paintings.iter() {
             emit(p.id, aabb_extents(p.bounds()), 0.0);
         }
-        for f in self.common.item_frames.iter() {
+        for f in self.common.entities.item_frames.iter() {
             emit(f.id, aabb_extents(f.bounds()), 0.0);
         }
-        for c in self.common.cushions.iter() {
+        for c in self.common.entities.cushions.iter() {
             emit(c.id, aabb_extents(c.bounds()), 0.0);
         }
-        for k in self.common.resident_entities.knots.iter() {
+        for k in self.common.entities.knots.iter() {
             emit(k.id, server_knot_bounds(k.fence), 0.0);
         }
-        for c in self.common.crystals.iter() {
+        for c in self.common.entities.crystals.iter() {
             emit(c.id, c.bounds(), 0.0);
         }
         if let Some(d) = self
             .common
-            .dragon
+            .entities.dragon
             .as_ref()
             .filter(|d| !self.server_is_pick_camera(d.id))
         {
@@ -496,9 +496,9 @@ impl crate::game::ServerGame<'_> {
         let CrosshairDecision::Entity(hit) = self.server_pick_ray_decision() else {
             return None;
         };
-        let i = self.common.mob_index.find_ref(&self.common.mobs, hit.id)?;
+        let i = self.common.mob_index.find_ref(&self.common.entities.mobs, hit.id)?;
         let point = v3(hit.point);
-        let feet = self.common.mobs[i].position;
+        let feet = self.common.entities.mobs[i].position;
         Some((
             i,
             hit.distance_sq.sqrt(),
@@ -522,7 +522,7 @@ impl crate::game::ServerGame<'_> {
         let (from, to) = pick_ray_segment(eye, dir, reach);
         let mut pick = PickAccumulator::new(reach * reach);
         let mut best = None;
-        for (i, f) in self.common.item_frames.iter().enumerate() {
+        for (i, f) in self.common.entities.item_frames.iter().enumerate() {
             if pick.consider_box(self, f.id, from, to, aabb_extents(f.bounds())) {
                 best = Some((i, pick.hovered.unwrap().distance_sq.sqrt()));
             }
@@ -536,7 +536,7 @@ impl crate::game::ServerGame<'_> {
         let (from, to) = pick_ray_segment(eye, dir, reach);
         let mut pick = PickAccumulator::new(reach * reach);
         let mut best = None;
-        for (i, b) in self.common.boats.iter().enumerate() {
+        for (i, b) in self.common.entities.boats.iter().enumerate() {
             if pick.consider_box(self, b.id, from, to, b.bounds()) {
                 best = Some((i, pick.hovered.unwrap().distance_sq.sqrt()));
             }
@@ -550,7 +550,7 @@ impl crate::game::ServerGame<'_> {
         let (from, to) = pick_ray_segment(eye, dir, reach);
         let mut pick = PickAccumulator::new(reach * reach);
         let mut best = None;
-        for (i, c) in self.common.carts.iter().enumerate() {
+        for (i, c) in self.common.entities.carts.iter().enumerate() {
             if pick.consider_box(self, c.id, from, to, c.bounds()) {
                 best = Some((i, pick.hovered.unwrap().distance_sq.sqrt()));
             }
@@ -564,7 +564,7 @@ impl crate::game::ServerGame<'_> {
         let (from, to) = pick_ray_segment(eye, dir, reach);
         let mut pick = PickAccumulator::new(reach * reach);
         let mut best = None;
-        for (i, a) in self.common.armor_stands.iter().enumerate() {
+        for (i, a) in self.common.entities.armor_stands.iter().enumerate() {
             if a.marker {
                 continue;
             }
@@ -582,7 +582,7 @@ impl crate::game::ServerGame<'_> {
         let (from, to) = pick_ray_segment(eye, dir, reach);
         let mut pick = PickAccumulator::new(reach * reach);
         let mut best = None;
-        for (i, p) in self.common.paintings.iter().enumerate() {
+        for (i, p) in self.common.entities.paintings.iter().enumerate() {
             if pick.consider_box(self, p.id, from, to, aabb_extents(p.bounds())) {
                 best = Some((i, pick.hovered.unwrap().distance_sq.sqrt()));
             }
@@ -614,7 +614,7 @@ impl crate::game::ServerGame<'_> {
         }
         self.vehicle_of_any(entity).or_else(|| {
             self.common
-                .armor_stands
+                .entities.armor_stands
                 .iter()
                 .find(|a| a.id == entity)
                 .and_then(|a| a.vehicle)

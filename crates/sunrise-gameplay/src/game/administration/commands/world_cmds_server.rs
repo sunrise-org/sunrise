@@ -585,7 +585,7 @@ impl crate::game::ServerGame<'_> {
             match t {
                 Target::Player => self.swing_arm(),
                 Target::Mob(id) => {
-                    if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+                    if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
                         m.ai.swinging = true;
                         m.ai.swing_time = -1;
                     }
@@ -615,7 +615,7 @@ impl crate::game::ServerGame<'_> {
     /// `Zombie.hurtServer`'s reinforcement requests before the command returns.
     /// Health-changing hits also raise their damage vibration before return.
     pub fn command_damage_mob(&mut self, id: u32, amount: f32, damage: Damage) -> bool {
-        let Some(index) = self.common.mob_index.find(&self.common.mobs, id) else {
+        let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, id) else {
             return false;
         };
         let plan = self.prepare_knockback_credit(
@@ -625,7 +625,7 @@ impl crate::game::ServerGame<'_> {
         );
         let attack = self.server.combat.0.attack();
         let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
-        let mob = &mut self.common.mobs[index];
+        let mob = &mut self.common.entities.mobs[index];
         let (queued, old_health) = (mob.outbox.len(), mob.health);
         let hurt = mob.damage(
             crate::game::server_side::entity_server::damage_level_of!(
@@ -640,9 +640,9 @@ impl crate::game::ServerGame<'_> {
         let Some((index, hurt)) = self.complete_mob_hurt(index, hurt) else {
             return false;
         };
-        let health_changed = hurt && self.common.mobs[index].health != old_health;
+        let health_changed = hurt && self.common.entities.mobs[index].health != old_health;
         let reinforcements = if hurt {
-            take_new_reinforcements(&mut self.common.mobs[index].outbox, queued)
+            take_new_reinforcements(&mut self.common.entities.mobs[index].outbox, queued)
         } else {
             Vec::new()
         };
@@ -702,13 +702,13 @@ impl crate::game::ServerGame<'_> {
         let entity_kind = match target {
             Target::Boat(_) => self
                 .common
-                .boats
+                .entities.boats
                 .iter()
                 .find(|b| b.id == id)
                 .map(|b| b.entity_type()),
             Target::Cart(_) => self
                 .common
-                .carts
+                .entities.carts
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.kind.id().to_owned()),
@@ -746,13 +746,13 @@ impl crate::game::ServerGame<'_> {
         match target {
             Target::Boat(_) => self
                 .common
-                .boats
+                .entities.boats
                 .iter()
                 .position(|b| b.id == id)
                 .is_some_and(|i| self.hurt_boat_result(i, amount, creative).is_some()),
             Target::Cart(_) => self
                 .common
-                .carts
+                .entities.carts
                 .iter()
                 .position(|c| c.id == id)
                 .is_some_and(|i| {
@@ -773,7 +773,7 @@ impl crate::game::ServerGame<'_> {
         t: Target,
     ) -> Option<&mut sunrise_world::attributes::entity::EntityAttributes> {
         if let Target::Mob(id) = t {
-            let mob = self.common.mobs.iter_mut().find(|m| m.id == id)?;
+            let mob = self.common.entities.mobs.iter_mut().find(|m| m.id == id)?;
             return sunrise_sim::mobs::finalize::attribute_map(
                 mob,
                 self.common.motion.attributes(),
@@ -846,7 +846,7 @@ impl crate::game::ServerGame<'_> {
                 let attacker_species = match attacker {
                     Some(Who::Mob(i)) => self
                         .common
-                        .mobs
+                        .entities.mobs
                         .iter()
                         .find(|m| m.id == i)
                         .map(|m| sunrise_sim::mobs::species::vanilla_id(m.species())),
@@ -912,15 +912,15 @@ impl crate::game::ServerGame<'_> {
         let id = match t {
             Target::Player => self.common.riding?,
             Target::Guest(conn) => self.command_guest(conn)?.vehicle?,
-            Target::Mob(id) => self.common.mobs.iter().find(|m| m.id == id)?.extra.mount?,
-            Target::Bolt(id) => self.common.bolts.iter().find(|b| b.id == id)?.mount?,
+            Target::Mob(id) => self.common.entities.mobs.iter().find(|m| m.id == id)?.extra.mount?,
+            Target::Bolt(id) => self.common.entities.bolts.iter().find(|b| b.id == id)?.mount?,
             _ => return None,
         };
-        Some(if self.common.boats.iter().any(|b| b.id == id) {
+        Some(if self.common.entities.boats.iter().any(|b| b.id == id) {
             Target::Boat(id)
-        } else if self.common.carts.iter().any(|c| c.id == id) {
+        } else if self.common.entities.carts.iter().any(|c| c.id == id) {
             Target::Cart(id)
-        } else if self.common.armor_stands.iter().any(|a| a.id == id) {
+        } else if self.common.entities.armor_stands.iter().any(|a| a.id == id) {
             Target::Stand(id)
         } else if self.server.others.0.iter().any(|o| o.id == id) {
             Target::Other(id)
@@ -1015,7 +1015,7 @@ pub mod datapack_damage_tests {
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
         let mut pig = Mob::new(id, kind, at, 0.0);
         pig.no_ai = true;
-        game.mobs.push(pig);
+        game.entities.mobs.push(pig);
     }
 }
 

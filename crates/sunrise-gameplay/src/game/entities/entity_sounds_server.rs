@@ -53,7 +53,7 @@ impl ServerGame<'_> {
                 removed: false,
             });
         }
-        if let Some(t) = self.common.tridents.iter().find(|t| t.id == id) {
+        if let Some(t) = self.common.entities.tridents.iter().find(|t| t.id == id) {
             return Some(SoundEntityState {
                 position: [t.position.x, t.position.y, t.position.z],
                 silent: false,
@@ -61,7 +61,7 @@ impl ServerGame<'_> {
             });
         }
         self.common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == id)
             .map(|m| SoundEntityState {

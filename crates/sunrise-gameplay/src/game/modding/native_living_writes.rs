@@ -49,7 +49,7 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Mob(id) => self
                 .common
-                .mobs
+                .entities.mobs
                 .iter_mut()
                 .find(|m| m.id == id)
                 .map(|m| &mut m.extra.stuck),
@@ -68,7 +68,7 @@ impl crate::game::ServerGame<'_> {
         match self.native_living_target(living) {
             Some(Target::Mob(id)) => self
                 .common
-                .mobs
+                .entities.mobs
                 .iter_mut()
                 .find(|m| m.id == id)
                 .is_some_and(|m| m.swing_hand_modified(hand == Hand::Off, SwingAnimation::DEFAULT)),
@@ -346,10 +346,10 @@ pub(in crate::game) mod tests {
                         });
                     game.inventory[5] = Some(ItemStack::new("minecraft:arrow", 8));
                     assert!(game.living_start_using_item(player, Hand::Main));
-                    let projectiles = game.creatures.projectiles.len();
+                    let projectiles = game.entities.projectiles.len();
                     game.tick_using_server();
                     assert_eq!(game.using, None, "{item} {cancel} {duration:?}");
-                    assert_eq!(game.creatures.projectiles.len(), projectiles);
+                    assert_eq!(game.entities.projectiles.len(), projectiles);
                     let expected_count = if item == "minecraft:bow" { 2 } else { 1 };
                     assert_eq!(
                         game.inventory[game.selected].as_ref().unwrap().count,
@@ -594,13 +594,13 @@ pub(in crate::game) mod tests {
                 assert_eq!(game.living_used_item_hand(player), Some(hand));
                 assert_eq!(game.living_item_use_remaining(player), Some(71_975));
 
-                let arrows = game.creatures.projectiles.len();
+                let arrows = game.entities.projectiles.len();
                 assert!(game.living_release_using_item(player));
-                assert_eq!(game.creatures.projectiles.len(), arrows + 1);
+                assert_eq!(game.entities.projectiles.len(), arrows + 1);
                 assert_eq!(game.living_used_item_hand(player), None);
                 assert_eq!(game.living_item_use_remaining(player), Some(0));
                 assert!(!game.living_release_using_item(player));
-                assert_eq!(game.creatures.projectiles.len(), arrows + 1);
+                assert_eq!(game.entities.projectiles.len(), arrows + 1);
                 let uses = uses.lock().unwrap();
                 assert_eq!(uses.stops.len(), round + 1);
                 assert_eq!(uses.stops[round], (Some(20), hand, 71_975));
@@ -682,7 +682,7 @@ pub(in crate::game) mod tests {
             ];
             for (id, kind) in kinds {
                 let kind = game.res.mob_types().get(kind).unwrap().clone();
-                game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
             }
             let zombie = game.living(game.entity(12).unwrap()).unwrap();
             let piglin = game.living(game.entity(13).unwrap()).unwrap();
@@ -692,23 +692,23 @@ pub(in crate::game) mod tests {
             {
                 assert!(!game.living_start_using_item(zombie, hand));
                 let bow = ItemStack::new("minecraft:bow", 1);
-                game.mobs[0].extra.set_slot_stack(slot, Some(bow));
+                game.entities.mobs[0].extra.set_slot_stack(slot, Some(bow));
                 assert_eq!(game.living_used_item_hand(zombie), None);
                 assert!(game.living_start_using_item(zombie, hand));
                 assert!(!game.living_start_using_item(zombie, hand));
                 assert_eq!(game.living_used_item_hand(zombie), Some(hand));
                 // Its clients are told through the counter and the hand.
-                assert_eq!(game.mobs[0].extra.using_item, 1);
-                assert_eq!(game.mobs[0].extra.using_off_hand, hand == Hand::Off);
+                assert_eq!(game.entities.mobs[0].extra.using_item, 1);
+                assert_eq!(game.entities.mobs[0].extra.using_off_hand, hand == Hand::Off);
                 // A bow is used for 72000 ticks, and a write moves the counter
                 // to where 100 are left of them.
                 assert_eq!(game.living_item_use_remaining(zombie), Some(72_000));
                 assert!(game.living_set_item_use_remaining(zombie, 100));
-                assert_eq!(game.mobs[0].extra.using_item, 71_901);
+                assert_eq!(game.entities.mobs[0].extra.using_item, 71_901);
                 assert_eq!(game.living_item_use_remaining(zombie), Some(100));
 
-                game.mobs[0].extra.using_item = 6;
-                let arrows = game.creatures.projectiles.len();
+                game.entities.mobs[0].extra.using_item = 6;
+                let arrows = game.entities.projectiles.len();
                 assert!(game.living_release_using_item(zombie));
                 assert_eq!(game.living_used_item_hand(zombie), None);
                 assert!(!game.living_release_using_item(zombie));
@@ -716,37 +716,37 @@ pub(in crate::game) mod tests {
                 assert_eq!(game.living_item_use_remaining(zombie), Some(0));
                 assert!(!game.living_set_item_use_remaining(zombie, 5));
                 // `BowItem.releaseUsing` shoots for a player only.
-                assert_eq!(game.creatures.projectiles.len(), arrows);
+                assert_eq!(game.entities.projectiles.len(), arrows);
                 let uses = uses.lock().unwrap();
                 assert_eq!(uses.stops.len(), round + 1);
                 assert_eq!(uses.stops[round], (Some(12), hand, 71_995));
                 assert_eq!(uses.releases[round], (Some(12), 71_995));
                 drop(uses);
-                game.mobs[0].extra.set_slot_stack(slot, None);
+                game.entities.mobs[0].extra.set_slot_stack(slot, None);
             }
 
             // A piglin's off hand makes the counter its admiring timer.
             let gold = ItemStack::new("minecraft:gold_ingot", 1);
-            game.mobs[1]
+            game.entities.mobs[1]
                 .extra
                 .set_slot_stack(OFFHAND, Some(gold.clone()));
-            game.mobs[1].extra.set_slot_stack(MAINHAND, Some(gold));
+            game.entities.mobs[1].extra.set_slot_stack(MAINHAND, Some(gold));
             assert!(!game.living_start_using_item(piglin, Hand::Main));
-            assert_eq!(game.mobs[1].extra.using_item, 0);
+            assert_eq!(game.entities.mobs[1].extra.using_item, 0);
             assert_eq!(game.living_item_use_remaining(piglin), Some(0));
 
             // A witch's drink is its own timer: no use to read, end or replace.
             let witch = game.living(game.entity(14).unwrap()).unwrap();
             let potion = ItemStack::new("minecraft:potion", 1);
-            game.mobs[2].extra.set_slot_stack(MAINHAND, Some(potion));
-            game.mobs[2].extra.using_item = 10;
-            game.mobs[2].extra.flag = true;
+            game.entities.mobs[2].extra.set_slot_stack(MAINHAND, Some(potion));
+            game.entities.mobs[2].extra.using_item = 10;
+            game.entities.mobs[2].extra.flag = true;
             assert_eq!(game.living_used_item_hand(witch), None);
             assert!(!game.living_start_using_item(witch, Hand::Main));
             assert!(!game.living_release_using_item(witch));
             assert_eq!(game.living_item_use_remaining(witch), Some(0));
             assert!(!game.living_set_item_use_remaining(witch, 5));
-            assert_eq!(game.mobs[2].extra.using_item, 10);
+            assert_eq!(game.entities.mobs[2].extra.using_item, 10);
         });
     }
 

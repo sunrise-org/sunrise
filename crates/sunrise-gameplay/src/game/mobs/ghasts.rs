@@ -13,11 +13,11 @@ impl ServerGame<'_> {
     pub(in crate::game) fn dismount_happy_ghast(&mut self, id: u32) {
         // removePassenger: held still for half a second, and with no one
         // aboard the ghast forgets its home.
-        if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+        if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
             m.extra.counter = 10;
             m.ai.clear_home();
         }
-        let Some(m) = self.common.mobs.iter().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
             return;
         };
         let top = crate::game::mounts::on_top(m);
@@ -49,7 +49,7 @@ impl ServerGame<'_> {
             _ => 0.0,
         };
         if let Some(id) = self.spawn_mob_raw("minecraft:happy_ghast", at, false)
-            && let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id)
+            && let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id)
         {
             // DriedGhastBlock.spawnGhastling sets the baby age before
             // addFreshEntity, so ageBoundaryReached runs the ghastling setup

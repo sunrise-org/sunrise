@@ -49,7 +49,7 @@ fn a_hit_posts_one_entity_damage_from_its_causing_entity() {
     let mut resources = None;
     let mut game = game_with_player(&mut resources);
     let at = Vec3::new(8.5, 64.0, 8.5);
-    game.carts.push(Minecart::new(1, CartKind::Rideable, at));
+    game.entities.carts.push(Minecart::new(1, CartKind::Rideable, at));
     start_events();
     assert!(game.hurt_cart_result(0, 1.0, false, false, CartHit::player()));
     assert_eq!(
@@ -61,9 +61,9 @@ fn a_hit_posts_one_entity_damage_from_its_causing_entity() {
         )],
         "one event, at the cart, from the player whose hit it was"
     );
-    assert_eq!((game.carts[0].hurt_time, game.carts[0].damage), (10, 10.0));
+    assert_eq!((game.entities.carts[0].hurt_time, game.entities.carts[0].damage), (10, 10.0));
     // An arrow's hit is the shooter's (`AbstractArrow.getOwner`), here a mob.
-    game.carts.push(Minecart::new(2, CartKind::Rideable, at));
+    game.entities.carts.push(Minecart::new(2, CartKind::Rideable, at));
     assert!(game.hurt_cart_result(
         1,
         1.0,
@@ -82,7 +82,7 @@ fn a_hit_posts_one_entity_damage_from_its_causing_entity() {
     );
     // A creative hit breaks the cart at once, and is heard the same way.
     assert!(game.hurt_cart_result(0, 0.0, true, false, CartHit::player()));
-    assert!(game.carts.iter().all(|c| c.id != 1));
+    assert!(game.entities.carts.iter().all(|c| c.id != 1));
     assert_eq!(take_events().len(), 1, "a creative hit posts it too");
     stop_events();
 }
@@ -95,12 +95,12 @@ fn a_broken_cart_drops_its_item_under_its_name() {
     let mut resources = None;
     let mut game = game_with_player(&mut resources);
     assert!(game.run_command(r#"summon minecart 8.5 64 8.5 {CustomName:"Boat"}"#));
-    assert_eq!(game.carts.len(), 1);
-    assert_eq!(game.carts[0].kind, CartKind::Rideable);
+    assert_eq!(game.entities.carts.len(), 1);
+    assert_eq!(game.entities.carts[0].kind, CartKind::Rideable);
     assert!(game.hurt_cart_result(0, 100.0, false, false, CartHit::default()));
-    assert!(game.carts.is_empty(), "the cart is broken");
-    assert_eq!(game.dropped.len(), 1, "the cart item alone");
-    let stack = &game.dropped[0].stack;
+    assert!(game.entities.carts.is_empty(), "the cart is broken");
+    assert_eq!(game.entities.dropped.len(), 1, "the cart item alone");
+    let stack = &game.entities.dropped[0].stack;
     assert_eq!(&*stack.item, "minecraft:minecart");
     assert_eq!(
         stack.custom_name().as_deref(),
@@ -111,7 +111,7 @@ fn a_broken_cart_drops_its_item_under_its_name() {
 
 /// The piglin calm again, before the next case.
 fn calm(game: &mut sunrise_gameplay::game::ServerGame<'_>, piglin: usize) {
-    let m = &mut game.mobs[piglin];
+    let m = &mut game.entities.mobs[piglin];
     m.extra.anger = 0;
     m.ai.target = None;
     m.extra.piglin.guarded_angry_at = None;
@@ -127,7 +127,7 @@ fn a_chest_cart_broken_by_a_player_angers_the_piglins_that_see_them() {
     let mut game = game_with_player(&mut resources);
     assert!(game.run_command("summon piglin 8.5 64 12.5 {NoAI:1b,PersistenceRequired:1b}"));
     let piglin = game
-        .mobs
+        .entities.mobs
         .iter()
         .position(|m| m.species() == Species::Piglin)
         .expect("the summoned piglin");
@@ -137,13 +137,13 @@ fn a_chest_cart_broken_by_a_player_angers_the_piglins_that_see_them() {
             .bool_at(sunrise_game_data::gamerules::vanilla::ENTITY_DROPS)
     );
     let at = Vec3::new(8.5, 64.0, 8.5);
-    game.carts.push(Minecart::new(1, CartKind::Chest, at));
-    game.carts.push(Minecart::new(2, CartKind::Chest, at));
+    game.entities.carts.push(Minecart::new(1, CartKind::Chest, at));
+    game.entities.carts.push(Minecart::new(2, CartKind::Chest, at));
     // A creative hit discards the cart: nothing drops, no one is angered.
     assert!(game.hurt_cart_result(0, 0.0, true, false, CartHit::player()));
-    assert!(game.dropped.is_empty());
+    assert!(game.entities.dropped.is_empty());
     assert!(
-        game.mobs[piglin].extra.piglin.guarded_angry_at.is_none(),
+        game.entities.mobs[piglin].extra.piglin.guarded_angry_at.is_none(),
         "a creative hit angers no piglin"
     );
     // `/damage ... by @p`: the player is the hit's direct entity, too.
@@ -152,17 +152,17 @@ fn a_chest_cart_broken_by_a_player_angers_the_piglins_that_see_them() {
             "damage @e[type=chest_minecart,limit=1] 100 minecraft:player_attack by @p"
         )
     );
-    assert!(game.carts.is_empty(), "the damage command broke the cart");
+    assert!(game.entities.carts.is_empty(), "the damage command broke the cart");
     assert!(
-        game.mobs[piglin].extra.piglin.guarded_angry_at.is_some(),
+        game.entities.mobs[piglin].extra.piglin.guarded_angry_at.is_some(),
         "by @p angers the piglins that see the player"
     );
     calm(&mut game, piglin);
     // A player's own hit that breaks it does.
-    game.carts.push(Minecart::new(3, CartKind::Chest, at));
+    game.entities.carts.push(Minecart::new(3, CartKind::Chest, at));
     assert!(game.hurt_cart_result(0, 100.0, false, false, CartHit::player()));
-    assert!(game.carts.is_empty());
-    let m = &game.mobs[piglin];
+    assert!(game.entities.carts.is_empty());
+    let m = &game.entities.mobs[piglin];
     assert!(
         m.extra.piglin.guarded_angry_at.is_some(),
         "the piglin saw it"

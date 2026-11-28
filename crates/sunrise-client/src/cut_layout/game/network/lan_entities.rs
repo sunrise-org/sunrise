@@ -33,15 +33,15 @@ pub(crate) mod tests {
             ] {
                 game.summon_with_nbt(kind, [1.0, 70.0, 1.0], nbt).unwrap();
             }
-            pending!(game.tnts);
-            pending!(game.falling);
-            pending!(game.creatures.projectiles);
-            pending!(game.tridents);
-            pending!(game.rockets);
-            pending!(game.crystals);
-            pending!(game.ominous_spawners);
-            pending!(game.breath_clouds);
-            game.bolts.push(
+            pending!(game.entities.tnts);
+            pending!(game.entities.falling);
+            pending!(game.entities.projectiles);
+            pending!(game.entities.tridents);
+            pending!(game.entities.rockets);
+            pending!(game.entities.crystals);
+            pending!(game.entities.ominous_spawners);
+            pending!(game.entities.breath_clouds);
+            game.entities.bolts.push(
                 sunrise_gameplay_common::game::lightning_common::Bolt::new(
                     0,
                     [1.0, 70.0, 1.0],
@@ -64,21 +64,21 @@ pub(crate) mod tests {
             for _ in 0..2 {
                 game.lan_assign_ids();
                 let ids = [
-                    game.tnts[0].id,
-                    game.falling[0].id,
-                    game.creatures.projectiles[0].id,
-                    game.tridents[0].id,
-                    game.rockets[0].id,
-                    game.crystals[0].id,
-                    game.bolts[0].id,
-                    game.ominous_spawners[0].id,
+                    game.entities.tnts[0].id,
+                    game.entities.falling[0].id,
+                    game.entities.projectiles[0].id,
+                    game.entities.tridents[0].id,
+                    game.entities.rockets[0].id,
+                    game.entities.crystals[0].id,
+                    game.entities.bolts[0].id,
+                    game.entities.ominous_spawners[0].id,
                     *sunrise_gameplay::game::server_side::potions_server::thrown_ids(
                         &mut game.common.potions,
                     )
                     .next()
                     .unwrap(),
                     *game.common.end.eye_ids().next().unwrap(),
-                    game.common.breath_clouds[0].id,
+                    game.common.entities.breath_clouds[0].id,
                 ];
                 assert_eq!(
                     ids,
@@ -88,8 +88,8 @@ pub(crate) mod tests {
                 assert_eq!(game.persist.joined_seq, joined);
                 assert_eq!(game.persist.live, announced);
                 let epoch = game.native_lifecycle.epoch().unwrap();
-                slots.observe(&mut game.falling, epoch, |f| f.id);
-                game.creatures.projectiles.for_each_mut(|p| {
+                slots.observe(&mut game.entities.falling, epoch, |f| f.id);
+                game.entities.projectiles.for_each_mut(|p| {
                     let id = p.id;
                     slots.observe_one(p, epoch, id);
                 });
@@ -111,13 +111,12 @@ pub(crate) mod tests {
                 let mut slots =
                     crate::game::entity_server::taken_pass_tests::SlotIdentities::default();
                 if kind == "minecraft:arrow" {
-                    pending!(game.creatures.projectiles);
-                    game.creatures
-                        .projectiles
+                    pending!(game.entities.projectiles);
+                    game.entities.projectiles
                         .for_each_mut(|p| slots.observe_one(p, epoch, 0));
                 } else {
-                    pending!(game.falling);
-                    slots.observe(&mut game.falling, epoch, |f| f.id);
+                    pending!(game.entities.falling);
+                    slots.observe(&mut game.entities.falling, epoch, |f| f.id);
                 }
                 let before = game.server.next_entity;
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -160,20 +159,19 @@ pub(crate) mod tests {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
             game.summon_with_nbt("minecraft:arrow", [1.0, 70.0, 1.0], "{}")
                 .unwrap();
-            pending!(game.creatures.projectiles);
+            pending!(game.entities.projectiles);
             let taken = game.take_entities();
             game.summon_with_nbt("minecraft:arrow", [2.0, 70.0, 1.0], "{}")
                 .unwrap();
-            pending!(game.creatures.projectiles);
+            pending!(game.entities.projectiles);
             let base = game.server.next_entity;
             game.lan_assign_ids();
-            assert_eq!(game.creatures.projectiles[0].id, base + 1);
+            assert_eq!(game.entities.projectiles[0].id, base + 1);
             game.restore_entities(taken);
-            assert_eq!(game.creatures.projectiles[0].id, 0);
+            assert_eq!(game.entities.projectiles[0].id, 0);
             game.lan_assign_ids();
             assert_eq!(
-                game.creatures
-                    .projectiles
+                game.entities.projectiles
                     .iter()
                     .map(|p| p.id)
                     .collect::<Vec<_>>(),
@@ -185,13 +183,13 @@ pub(crate) mod tests {
             "minecraft:area_effect_cloud",
             "{Duration:200,Radius:3.0f}",
             game,
-            game.breath_clouds
+            game.entities.breath_clouds
         );
         check!(
             "minecraft:ominous_item_spawner",
             "{}",
             game,
-            game.ominous_spawners
+            game.entities.ominous_spawners
         );
     }
     #[test]
@@ -200,20 +198,20 @@ pub(crate) mod tests {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
             game.summon_with_nbt("minecraft:ender_dragon", [1.0, 70.0, 1.0], "{}")
                 .unwrap();
-            let mut dragon = game.dragon.extract().unwrap();
+            let mut dragon = game.entities.dragon.extract().unwrap();
             dragon.id = 0;
-            assert!(game.dragon.install(dragon).is_ok());
+            assert!(game.entities.dragon.install(dragon).is_ok());
             for _ in 0..2 {
                 game.summon_with_nbt("minecraft:end_crystal", [1.0, 70.0, 1.0], "{}")
                     .unwrap();
-                pending!(game.crystals);
+                pending!(game.entities.crystals);
             }
             let base = game.server.next_entity;
             for _ in 0..2 {
                 game.assign_dragon_and_crystal_ids();
-                assert_eq!(game.dragon.as_ref().unwrap().id, base + 1);
+                assert_eq!(game.entities.dragon.as_ref().unwrap().id, base + 1);
                 assert_eq!(
-                    game.crystals.iter().map(|c| c.id).collect::<Vec<_>>(),
+                    game.entities.crystals.iter().map(|c| c.id).collect::<Vec<_>>(),
                     [base + 10, base + 11]
                 );
                 assert_eq!(game.server.next_entity, base + 11);

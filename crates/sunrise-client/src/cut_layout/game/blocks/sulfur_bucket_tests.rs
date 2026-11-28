@@ -61,12 +61,12 @@ fn mob(
     kind: &str,
     edit: impl FnOnce(&mut Mob),
 ) -> u32 {
-    game.mobs.clear();
+    game.entities.mobs.clear();
     let kind = game.res.mob_types().get(kind).unwrap().clone();
     let mut m = Mob::new(42, kind, Vec3::new(0.5, 64.0, 2.5), 0.0);
     m.no_ai = true;
     edit(&mut m);
-    game.mobs.push(m);
+    game.entities.mobs.push(m);
     42
 }
 
@@ -88,7 +88,7 @@ fn click(
             location: [0.0, 1.0, 0.0],
         }))
         .unwrap();
-    let there = game.mobs.iter().any(|m| m.id == id && !m.removed);
+    let there = game.entities.mobs.iter().any(|m| m.id == id && !m.removed);
     let held = game
         .inventory
         .iter()

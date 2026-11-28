@@ -193,17 +193,16 @@ fn spawner_batch(
     let created = level.spawned.take();
     let rides = level.rides.take();
     drop(level);
-    let mob_start = game.mobs.len();
-    let general_start = game.resident_entities.general.rows.len();
+    let mob_start = game.entities.mobs.len();
+    let general_start = game.entities.general.rows.len();
     let roots = game.add_planned(planned, created, rides);
     let mut installed: Vec<_> = game
-        .mobs
+        .entities.mobs
         .iter()
         .skip(mob_start)
         .map(|mob| (mob.id, mob.kind.id.strip_prefix("minecraft:").unwrap()))
         .chain(
-            game.resident_entities
-                .general
+            game.entities.general
                 .rows
                 .iter()
                 .skip(general_start)
@@ -332,13 +331,13 @@ fn spawn_entity_obstruction() {
                         )
                         .expect(name);
                         if installation == "dragon-part" {
-                            game.dragon.as_mut().unwrap().parts[0].0 = Vec3::new(8.5, 64.0, z);
+                            game.entities.dragon.as_mut().unwrap().parts[0].0 = Vec3::new(8.5, 64.0, z);
                         }
                     } else if matches!(installation, "live" | "removed") {
                         let summoned = game.summon_with_nbt(id, at, data);
                         assert!(matches!(summoned, Ok(Some(_))), "failed to summon {name}");
                         if installation == "removed" {
-                            let mob = game.mobs.last_mut().unwrap();
+                            let mob = game.entities.mobs.last_mut().unwrap();
                             assert_eq!(mob.kind.id, id);
                             mob.removed = true;
                         }

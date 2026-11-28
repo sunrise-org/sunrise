@@ -35,7 +35,7 @@ fn h13076_loaded_anger_end_time_is_kept() {
         let zero = summon(2, "iron_golem", 0, true);
         let future = summon(3, "iron_golem", 999_999, false);
         let saved = |game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32| {
-            let i = game.mobs.iter().position(|m| m.id == id).unwrap();
+            let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
             game.mob_tree_nbt(i).get("anger_end_time").cloned()
         };
         for (id, end) in [(past, 1), (zero, 0), (future, 999_999)] {
@@ -60,10 +60,10 @@ fn h13076_loaded_anger_end_time_is_kept() {
         for (id, end) in [(past, 1), (zero, 0), (future, 999_999)] {
             assert_eq!(saved(game, id), Some(Tag::Long(end)), "ticked");
         }
-        let i = game.mobs.iter().position(|m| m.id == future).unwrap();
+        let i = game.entities.mobs.iter().position(|m| m.id == future).unwrap();
         // The countdown counted the missed ticks too.
         assert_eq!(
-            i64::from(game.mobs[i].extra.anger),
+            i64::from(game.entities.mobs[i].extra.anger),
             999_999 - game.world.game_time
         );
     });

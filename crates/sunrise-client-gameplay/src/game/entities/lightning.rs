@@ -13,25 +13,25 @@ impl ClientGame<'_> {
     /// `ClientLevel.addEntity` for a server's lightning bolt: on a client it
     /// only flashes, sounds and draws (`LightningBolt.tick` off the server).
     pub fn spawn_remote_bolt(&mut self, id: u32, at: [f64; 3]) {
-        self.common.bolts.retain(|b| b.id != id);
+        self.common.entities.bolts.retain(|b| b.id != id);
         let (bolt, _) = Bolt::new(id, at, true);
         self.client.lightning_seen[0] += 1;
-        self.common.bolts.push(bolt);
+        self.common.entities.bolts.push(bolt);
     }
     /// Client-side `LightningBolt.tick`: thunder/impact sounds and sky flash.
     pub fn client_tick_bolts(&mut self) {
         let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();
-        let ids: Vec<u32> = self.common.bolts.iter().map(|b| b.id).collect();
+        let ids: Vec<u32> = self.common.entities.bolts.iter().map(|b| b.id).collect();
         for id in ids {
-            let Some(i) = self.common.bolts.iter().position(|b| b.id == id) else {
+            let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) else {
                 continue;
             };
             let (at, life, silent) = {
-                let b = &self.common.bolts[i];
+                let b = &self.common.entities.bolts[i];
                 (b.at, b.life, b.silent)
             };
             if life == 2 && !silent {
-                let (thunder_pitch, impact_pitch) = self.common.bolts.update(i, |b| {
+                let (thunder_pitch, impact_pitch) = self.common.entities.bolts.update(i, |b| {
                     (
                         0.8 + b.random.next_float() * 0.2,
                         0.5 + b.random.next_float() * 0.2,
@@ -50,7 +50,7 @@ impl ClientGame<'_> {
                     impact_pitch,
                 );
             }
-            let Some(i) = self.common.bolts.iter().position(|b| b.id == id) else {
+            let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) else {
                 continue;
             };
             enum Step {
@@ -59,7 +59,7 @@ impl ClientGame<'_> {
                 Active,
                 Idle,
             }
-            let step = self.common.bolts.update(i, |b| {
+            let step = self.common.entities.bolts.update(i, |b| {
                 b.life -= 1;
                 if b.life < 0 {
                     if b.flashes == 0 {
@@ -79,7 +79,7 @@ impl ClientGame<'_> {
                 }
             });
             if matches!(step, Step::Discard) {
-                self.common.bolts.retain(|b| b.id != id);
+                self.common.entities.bolts.retain(|b| b.id != id);
                 continue;
             }
             if matches!(step, Step::Reflash | Step::Active) {
@@ -97,7 +97,7 @@ impl ClientGame<'_> {
     pub fn bolt_instances(&self, camera: glam::DVec3) -> Vec<sunrise_client::gfx::lightning::Bolt> {
         let range = 64.0 * self.view_scale();
         self.common
-            .bolts
+            .entities.bolts
             .iter()
             .filter(|b| {
                 !self.hides_as_camera(b.id) && {

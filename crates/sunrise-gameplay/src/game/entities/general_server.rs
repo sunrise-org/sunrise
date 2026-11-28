@@ -23,7 +23,7 @@ impl crate::game::ServerGame<'_> {
         if self.common.persist.removals.contains(&Target::General(id)) {
             return false;
         }
-        let store = &mut self.common.resident_entities.general;
+        let store = &mut self.common.entities.general;
         let Some(row) = store.rows.iter_mut().find(|row| row.id == id) else {
             return false;
         };
@@ -161,7 +161,7 @@ impl crate::game::ServerGame<'_> {
         root: u32,
         destination: super::Dim,
     ) -> bool {
-        !self.common.resident_entities.general.rows.is_empty()
+        !self.common.entities.general.rows.is_empty()
             && self
                 .vehicle_tree_ids(root)
                 .into_iter()
@@ -202,7 +202,7 @@ impl crate::game::ServerGame<'_> {
         }
         // The whole tree, root first, each row exactly once: a mount link
         // this walk cannot reach from the root is not the tree's.
-        let rows = &self.common.resident_entities.general.rows;
+        let rows = &self.common.entities.general.rows;
         let Some(root) = rows
             .iter()
             .position(|row| row.id == root_id && row.mount.is_none())
@@ -238,7 +238,7 @@ impl crate::game::ServerGame<'_> {
         tree.sort_unstable();
         let mut extracted = Vec::new();
         for &index in tree.iter().rev() {
-            let row = self.common.resident_entities.general.rows.remove(index);
+            let row = self.common.entities.general.rows.remove(index);
             let transient = self.common.persist.transient.remove(&row.id);
             extracted.push((index, row, transient));
         }
@@ -254,8 +254,7 @@ impl crate::game::ServerGame<'_> {
                     self.common.persist.transient.insert(row.id);
                 }
                 self.common
-                    .resident_entities
-                    .general
+                    .entities.general
                     .rows
                     .insert(index, row);
             }
@@ -282,7 +281,7 @@ impl crate::game::ServerGame<'_> {
                 self.common.persist.transient.insert(row.id);
             }
             row.join = JoinSeq::UNJOINED;
-            self.common.resident_entities.general.rows.push(row);
+            self.common.entities.general.rows.push(row);
         }
         if let Err(error) = self.enter_level(source) {
             log::error!("could not reopen {}: {error}", source.id());
@@ -528,7 +527,7 @@ impl crate::game::ServerGame<'_> {
             attachment_lifetime: Default::default(),
         };
         self.bind_saved_entity_attachments(id, &mut row.attachment_lifetime);
-        self.common.resident_entities.general.rows.push(row);
+        self.common.entities.general.rows.push(row);
         id
     }
 }
@@ -562,7 +561,7 @@ impl ServerEntity for GeneralRow {
         index: usize,
         keys: &HashSet<ChunkKey>,
     ) -> Option<(ChunkKey, Tag)> {
-        let row = &game.resident_entities.general.rows[index];
+        let row = &game.entities.general.rows[index];
         let catalog = general_type_catalog();
         // `noSave`: instances produce zero persisted records.
         if catalog.save_policy(row.type_slot) == mod_api::GeneralSavePolicy::NoSave {

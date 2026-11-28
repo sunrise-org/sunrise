@@ -5,14 +5,14 @@ use sunrise_core::position::ChunkPos;
 use sunrise_gameplay::game::native_entity_refs::tests::prepare_entity_ticking_neighborhood;
 
 fn mob_id(game: &sunrise_gameplay::game::ServerGame<'_>, kind: &str) -> u32 {
-    game.mobs.iter().find(|m| &*m.kind.id == kind).unwrap().id
+    game.entities.mobs.iter().find(|m| &*m.kind.id == kind).unwrap().id
 }
 
 /// An empty boat and a pig touching it, both held still, and the boat's id.
 fn set_up(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> u32 {
     assert!(game.run_command("summon oak_boat 8.5 100 8.5"));
     assert!(game.run_command("summon pig 8.5 100 8.5 {NoAI:1b,Silent:1b}"));
-    game.boats[0].id
+    game.entities.boats[0].id
 }
 
 #[test]
@@ -30,8 +30,8 @@ fn a_boat_the_listener_removed_ends_the_contact_pass() {
             gate.arm();
             game.boat_contacts(0);
             assert!(gate.fired());
-            assert!(game.boats.is_empty());
-            assert_eq!(game.mobs[0].extra.mount, None, "the pig boarded nothing");
+            assert!(game.entities.boats.is_empty());
+            assert_eq!(game.entities.mobs[0].extra.mount, None, "the pig boarded nothing");
         },
     );
 }

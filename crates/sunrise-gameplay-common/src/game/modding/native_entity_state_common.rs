@@ -38,7 +38,7 @@ pub trait NativeEntityStateCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
                     conn,
                 )?,
             ),
-            Target::Mob(id) => Body::Mob(self.mobs.iter().find(|m| m.id == id)?),
+            Target::Mob(id) => Body::Mob(self.entities.mobs.iter().find(|m| m.id == id)?),
             t => Body::Other(t),
         })
     }
@@ -54,7 +54,7 @@ pub trait NativeEntityStateCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         let Target::Stand(id) = self.native_entity_read_target(entity)? else {
             return None;
         };
-        self.armor_stands.iter().find(|s| s.id == id)
+        self.entities.armor_stands.iter().find(|s| s.id == id)
     }
 
     /// `ArmorStand.getHeadPose` ... `getRightLegPose`, in `POSE_KEYS` order.
@@ -89,7 +89,7 @@ pub trait NativeEntityStateCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             Body::Player(p) => Some(p.fluids.was_touching_water),
             Body::Mob(m) => Some(m.fluids.in_water),
             Body::Other(Target::General(id)) => {
-                Some(self.resident_entities.general.row(id)?.fluids.in_water)
+                Some(self.entities.general.row(id)?.fluids.in_water)
             }
             Body::Other(_) => None,
         }
@@ -122,8 +122,7 @@ pub trait NativeEntityStateCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             ),
             Some(Body::Other(Target::General(id))) => {
                 let fluids = self
-                    .resident_entities
-                    .general
+                    .entities.general
                     .row(id)
                     .ok_or(EntityReadError::Unavailable)?
                     .fluids;
@@ -147,7 +146,7 @@ pub trait NativeEntityStateCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
                 Body::Player(p) => eye_fluid(p.is_eye_in_fluid(WATER), p.is_eye_in_fluid(LAVA)),
                 Body::Mob(m) => eye_fluid(m.fluids.eye_in_water, m.fluids.eye_in_lava),
                 Body::Other(Target::General(id)) => {
-                    let fluids = self.resident_entities.general.row(id)?.fluids;
+                    let fluids = self.entities.general.row(id)?.fluids;
                     eye_fluid(fluids.eye_in_water, fluids.eye_in_lava)
                 }
                 Body::Other(_) => return None,
@@ -162,7 +161,7 @@ pub trait NativeEntityStateCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             Body::Player(p) => Some(p.fluids.was_eye_in_water && p.fluids.was_touching_water),
             Body::Mob(m) => Some(m.was_eye_in_water && m.fluids.in_water),
             Body::Other(Target::General(id)) => {
-                Some(self.resident_entities.general.row(id)?.under_water)
+                Some(self.entities.general.row(id)?.under_water)
             }
             Body::Other(_) => None,
         }
@@ -257,13 +256,13 @@ pub trait NativeEntityStateCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
                     conn,
                 )?
             }
-            Target::Mob(id) => self.mobs.iter().find(|m| m.id == id)?.age as i32,
-            Target::Stand(id) => self.armor_stands.iter().find(|s| s.id == id)?.tick_count,
-            Target::Dragon(id) => self.dragon.as_ref().filter(|d| d.id == id)?.ticks,
-            Target::Item(id) => self.dropped.iter().find(|i| i.id == id)?.ticks as i32,
-            Target::Orb(id) => self.orbs.iter().find(|o| o.id == id)?.ticks as i32,
-            Target::Cart(id) => self.carts.iter().find(|c| c.id == id)?.tick_count,
-            Target::General(id) => self.resident_entities.general.row(id)?.tick_count,
+            Target::Mob(id) => self.entities.mobs.iter().find(|m| m.id == id)?.age as i32,
+            Target::Stand(id) => self.entities.armor_stands.iter().find(|s| s.id == id)?.tick_count,
+            Target::Dragon(id) => self.entities.dragon.as_ref().filter(|d| d.id == id)?.ticks,
+            Target::Item(id) => self.entities.dropped.iter().find(|i| i.id == id)?.ticks as i32,
+            Target::Orb(id) => self.entities.orbs.iter().find(|o| o.id == id)?.ticks as i32,
+            Target::Cart(id) => self.entities.carts.iter().find(|c| c.id == id)?.tick_count,
+            Target::General(id) => self.entities.general.row(id)?.tick_count,
             _ => return None,
         })
     }

@@ -36,7 +36,7 @@ fn blows(cases: &[Case]) -> Vec<(i32, f32)> {
     with_game(|g| {
         for &(kind, hand, burning, seed, landed, difficulty) in cases {
             g.world.health_rules.difficulty = difficulty;
-            g.mobs.clear();
+            g.entities.mobs.clear();
             // A whole player each blow: the earlier ones took health away.
             g.player = Some(PlayerMotion::new(g.motion, Vec3::new(0.5, 64.0, 0.5)));
             let p = g.player.as_mut().unwrap();
@@ -50,9 +50,9 @@ fn blows(cases: &[Case]) -> Vec<(i32, f32)> {
             m.fire_ticks = if burning { 100 } else { 0 };
             m.extra.set_main_hand(hand.map(Arc::from));
             m.random = LegacyRandom::new(seed);
-            g.mobs.push(m);
+            g.entities.mobs.push(m);
             // The mob out of the level while its own blow runs, as in its tick.
-            let mut mobs = std::mem::take(&mut g.mobs);
+            let mut mobs = std::mem::take(&mut g.entities.mobs);
             let mut test_level = sunrise_sim::health::TestLevel::new(0);
             let mut level = test_level.level();
             let mut events = Vec::new();
@@ -65,11 +65,11 @@ fn blows(cases: &[Case]) -> Vec<(i32, f32)> {
                 };
                 do_hurt_target(&mut mobs[0], Who::Player, &mut cx);
             }
-            g.mobs = mobs;
+            g.entities.mobs = mobs;
             g.handle_mob_events(events).unwrap();
             out.push((
                 g.player.as_ref().unwrap().fire_ticks,
-                g.mobs[0].random.next_float(),
+                g.entities.mobs[0].random.next_float(),
             ));
         }
     });

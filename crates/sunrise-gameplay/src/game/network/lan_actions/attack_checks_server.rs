@@ -72,7 +72,7 @@ impl crate::game::ServerGame<'_> {
     pub(super) fn cannot_attack(&self, id: i32) -> bool {
         if self
             .common
-            .falling
+            .entities.falling
             .iter()
             .any(|block| block.id as i32 == id)
         {

@@ -1065,7 +1065,7 @@ impl crate::game::ClientGame<'_> {
             && let Some((index, _, _)) = self.mob_hit()
         {
             let (kind, position, id) = {
-                let m = &self.common.mobs[index];
+                let m = &self.common.entities.mobs[index];
                 (m.kind.id.clone(), m.position, m.id)
             };
             if query {
@@ -1162,7 +1162,7 @@ impl crate::game::ClientGame<'_> {
                 // else where it was last.
                 let position = self
                     .common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .find(|m| m.id == id)
                     .map_or(position, |m| m.position);
@@ -1241,7 +1241,7 @@ impl crate::game::ClientGame<'_> {
             .flatten();
         let lerp = |a: f64, b: f64| a + f64::from(alpha) * (b - a);
         let lerpf = |a: f32, b: f32| a + alpha * (b - a);
-        for m in self.common.mobs.iter() {
+        for m in self.common.entities.mobs.iter() {
             if m.removed || m.is_invisible() || hide_camera == Some(m.id) {
                 continue;
             }
@@ -1268,7 +1268,7 @@ impl crate::game::ClientGame<'_> {
             Some([width, height, eye]) => ((width, height), eye),
             None => (size, eye),
         };
-        for item in &self.common.dropped {
+        for item in &self.common.entities.dropped {
             if hide_camera == Some(item.id) {
                 continue;
             }
@@ -1290,7 +1290,7 @@ impl crate::game::ClientGame<'_> {
                 lerp(previous.z, now.z),
             ]
         };
-        for p in &self.common.paintings {
+        for p in &self.common.entities.paintings {
             if hide_camera == Some(p.id) {
                 continue;
             }
@@ -1300,7 +1300,7 @@ impl crate::game::ClientGame<'_> {
         }
         for f in self
             .common
-            .item_frames
+            .entities.item_frames
             .iter()
             .filter(|f| !f.invisible && hide_camera != Some(f.id))
         {
@@ -1308,7 +1308,7 @@ impl crate::game::ClientGame<'_> {
             let centre = std::array::from_fn(|i| (min[i] + max[i]) / 2.0);
             g.entity_box(min, max, centre, 0.0, false, step_view(f.step()));
         }
-        for c in &self.common.cushions {
+        for c in &self.common.entities.cushions {
             if hide_camera == Some(c.id) {
                 continue;
             }
@@ -1344,7 +1344,7 @@ impl crate::game::ClientGame<'_> {
         }
         for a in self
             .common
-            .armor_stands
+            .entities.armor_stands
             .iter()
             .filter(|a| !a.invisible && hide_camera != Some(a.id))
         {
@@ -1364,7 +1364,7 @@ impl crate::game::ClientGame<'_> {
                 (0.0, a.render_yaw(alpha)),
             );
         }
-        for b in &self.common.boats {
+        for b in &self.common.entities.boats {
             if hide_camera == Some(b.id) {
                 continue;
             }
@@ -1376,7 +1376,7 @@ impl crate::game::ClientGame<'_> {
             );
             g.hitbox(at(b.previous, b.position), size, eye, false, (0.0, b.yaw));
         }
-        for c in &self.common.carts {
+        for c in &self.common.entities.carts {
             if hide_camera == Some(c.id) {
                 continue;
             }
@@ -1387,28 +1387,28 @@ impl crate::game::ClientGame<'_> {
             let (size, eye) = sized(c.id, (w, h), h * 0.85);
             g.hitbox(at(c.previous, c.position), size, eye, false, (0.0, c.yaw));
         }
-        for o in &self.common.orbs {
+        for o in &self.common.entities.orbs {
             if hide_camera == Some(o.id) {
                 continue;
             }
             let (size, eye) = sized(o.id, (0.5, 0.5), 0.425);
             g.hitbox(at(o.previous, o.position), size, eye, false, (0.0, 0.0));
         }
-        for f in &self.common.falling {
+        for f in &self.common.entities.falling {
             if hide_camera == Some(f.id) {
                 continue;
             }
             let (size, eye) = sized(f.id, (0.98, 0.98), 0.833);
             g.hitbox(at(f.previous, f.position), size, eye, false, (0.0, 0.0));
         }
-        for t in &self.common.tnts {
+        for t in &self.common.entities.tnts {
             if hide_camera == Some(t.id) {
                 continue;
             }
             let (size, eye) = sized(t.id, (0.98, 0.98), 0.15);
             g.hitbox(at(t.previous, t.position), size, eye, false, (0.0, 0.0));
         }
-        for c in &self.common.crystals {
+        for c in &self.common.entities.crystals {
             if hide_camera == Some(c.id) {
                 continue;
             }
@@ -1416,7 +1416,7 @@ impl crate::game::ClientGame<'_> {
             let (size, eye) = sized(c.id, (2.0, 2.0), 1.7);
             g.hitbox([p.x, p.y, p.z], size, eye, false, (0.0, 0.0));
         }
-        for p in &self.common.creatures.projectiles {
+        for p in &self.common.entities.projectiles {
             if hide_camera == Some(p.id) {
                 continue;
             }
@@ -1445,7 +1445,7 @@ impl crate::game::ClientGame<'_> {
                 (p.pitch, p.yaw),
             );
         }
-        for t in &self.common.tridents {
+        for t in &self.common.entities.tridents {
             if hide_camera == Some(t.id) {
                 continue;
             }
@@ -1469,7 +1469,7 @@ impl crate::game::ClientGame<'_> {
                 (0.0, 0.0),
             );
         }
-        for r in &self.common.rockets {
+        for r in &self.common.entities.rockets {
             if hide_camera == Some(r.id) {
                 continue;
             }
@@ -1494,7 +1494,7 @@ impl crate::game::ClientGame<'_> {
         {
             g.hitbox(at(h.0, h.1), (0.25, 0.25), 0.2125, false, (0.0, 0.0));
         }
-        for b in &self.common.bolts {
+        for b in &self.common.entities.bolts {
             g.hitbox(b.at, (0.0, 0.0), 0.0, false, (0.0, 0.0));
         }
         // AreaEffectCloud.getDimensions: diameter follows synced radius,
@@ -1506,7 +1506,7 @@ impl crate::game::ClientGame<'_> {
         // The dragon: 16 by 8, a living entity; its parts follow.
         if let Some(d) = self
             .common
-            .dragon
+            .entities.dragon
             .as_ref()
             .filter(|d| hide_camera != Some(d.id))
         {

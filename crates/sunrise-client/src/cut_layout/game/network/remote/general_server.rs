@@ -142,7 +142,7 @@ pub(crate) mod tests {
                 };
                 game.load_listed(PACKAGE, None, None, record.to_tag())
                     .unwrap();
-                let id = game.resident_entities.general.rows[0].id as i32;
+                let id = game.entities.general.rows[0].id as i32;
                 add_guest(game);
                 let at = Vec3::new(0.5, 65.0, 0.5);
                 let mut body = PlayerMotion::new(game.motion, at);
@@ -183,7 +183,7 @@ pub(crate) mod tests {
                     "an unclaimed hit cannot hurt a plain row"
                 );
                 assert_eq!(game.as_guest(1, |guest| guest.server.attack_ticks), Some(0));
-                assert!(game.resident_entities.general.row(id as u32).is_some());
+                assert!(game.entities.general.row(id as u32).is_some());
                 game.as_guest(1, |guest| guest.player.as_mut().unwrap().position.z = -64.5)
                     .unwrap();
                 let too_far = Err(mod_api::ActionRefused::OutOfReach);

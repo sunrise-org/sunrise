@@ -18,7 +18,7 @@ fn with_hanging(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) 
 }
 
 fn with_hanging_entities(game: &mut sunrise_gameplay_common::game::CommonGame<'_>) {
-    game.item_frames.push(ItemFrame {
+    game.entities.item_frames.push(ItemFrame {
         attachment_lifetime: Default::default(),
         join: Default::default(),
         id: FRAME,
@@ -35,7 +35,7 @@ fn with_hanging_entities(game: &mut sunrise_gameplay_common::game::CommonGame<'_
         check_interval: 0,
         ticks: 0,
     });
-    game.paintings.push(Painting {
+    game.entities.paintings.push(Painting {
         attachment_lifetime: Default::default(),
         join: Default::default(),
         id: PAINTING,
@@ -65,17 +65,17 @@ fn thin((lo, hi): ([f64; 3], [f64; 3])) -> [bool; 3] {
 fn a_frame_turns_to_every_direction_and_its_bounds_follow() {
     with_hanging(|game| {
         let frame = game.entity(FRAME).expect("the frame's handle");
-        assert_eq!(thin(game.item_frames[0].bounds()), [false, false, true]);
+        assert_eq!(thin(game.entities.item_frames[0].bounds()), [false, false, true]);
         assert!(game.entity_set_hanging_direction(frame, Direction::West));
-        assert_eq!(game.item_frames[0].facing, 4);
-        assert_eq!(thin(game.item_frames[0].bounds()), [true, false, false]);
+        assert_eq!(game.entities.item_frames[0].facing, 4);
+        assert_eq!(thin(game.entities.item_frames[0].bounds()), [true, false, false]);
         assert!(game.entity_set_hanging_direction(frame, Direction::Up));
-        assert_eq!(game.item_frames[0].facing, 1);
-        assert_eq!(thin(game.item_frames[0].bounds()), [false, true, false]);
+        assert_eq!(game.entities.item_frames[0].facing, 1);
+        assert_eq!(thin(game.entities.item_frames[0].bounds()), [false, true, false]);
         assert!(game.entity_set_hanging_direction(frame, Direction::Down));
-        assert_eq!(game.item_frames[0].facing, 0);
+        assert_eq!(game.entities.item_frames[0].facing, 0);
         assert!(game.entity_set_hanging_direction(frame, Direction::South));
-        assert_eq!(game.item_frames[0].facing, 3);
+        assert_eq!(game.entities.item_frames[0].facing, 3);
     });
 }
 
@@ -86,14 +86,14 @@ fn a_painting_turns_only_to_a_horizontal_direction() {
         let painting = game.entity(PAINTING).expect("the painting's handle");
         // Its 2D data value: south 0, west 1, north 2, east 3.
         assert!(game.entity_set_hanging_direction(painting, Direction::East));
-        assert_eq!(game.paintings[0].facing, 3);
-        assert_eq!(thin(game.paintings[0].bounds()), [true, false, false]);
+        assert_eq!(game.entities.paintings[0].facing, 3);
+        assert_eq!(thin(game.entities.paintings[0].bounds()), [true, false, false]);
         assert!(game.entity_set_hanging_direction(painting, Direction::North));
-        assert_eq!(game.paintings[0].facing, 2);
+        assert_eq!(game.entities.paintings[0].facing, 2);
         assert!(!game.entity_set_hanging_direction(painting, Direction::Up));
         assert!(!game.entity_set_hanging_direction(painting, Direction::Down));
         assert_eq!(
-            game.paintings[0].facing, 2,
+            game.entities.paintings[0].facing, 2,
             "a refused direction changes nothing"
         );
     });
@@ -106,12 +106,12 @@ fn a_frames_item_turns_with_vanillas_wrap_and_other_kinds_are_refused() {
         let frame = game.entity(FRAME).expect("the frame's handle");
         let painting = game.entity(PAINTING).expect("the painting's handle");
         assert!(game.entity_set_item_frame_rotation(frame, 5));
-        assert_eq!(game.item_frames[0].rotation, 5);
+        assert_eq!(game.entities.item_frames[0].rotation, 5);
         // ItemFrame.setRotation keeps `rotation % 8`.
         assert!(game.entity_set_item_frame_rotation(frame, 13));
-        assert_eq!(game.item_frames[0].rotation, 5);
+        assert_eq!(game.entities.item_frames[0].rotation, 5);
         assert!(game.entity_set_item_frame_rotation(frame, 8));
-        assert_eq!(game.item_frames[0].rotation, 0);
+        assert_eq!(game.entities.item_frames[0].rotation, 0);
         // A painting has no item to turn.
         assert!(!game.entity_set_item_frame_rotation(painting, 2));
     });
@@ -170,13 +170,13 @@ fn a_client_turns_its_painting_with_the_servers_direction() {
         let direction = |d| [(8, serializer::DIRECTION, Value::Id(d))];
         // West (3D value 4): the painting keeps its 2D value, 1.
         game.remote_object_data(PAINTING as i32, &direction(4));
-        assert_eq!(game.paintings[0].facing, 1);
+        assert_eq!(game.entities.paintings[0].facing, 1);
         // Up is no direction a painting takes: it stays.
         game.remote_object_data(PAINTING as i32, &direction(1));
-        assert_eq!(game.paintings[0].facing, 1);
+        assert_eq!(game.entities.paintings[0].facing, 1);
         // Back to south, the default the server sends: 0.
         game.remote_object_data(PAINTING as i32, &direction(3));
-        assert_eq!(game.paintings[0].facing, 0);
+        assert_eq!(game.entities.paintings[0].facing, 0);
     });
 }
 
@@ -207,7 +207,7 @@ fn a_frame_is_hidden_and_shown_through_its_handle() {
         };
         assert_eq!(game.entity_is_invisible(frame), Some(false));
         assert!(game.entity_set_invisible(frame, true));
-        assert!(game.item_frames[0].invisible);
+        assert!(game.entities.item_frames[0].invisible);
         assert_eq!(game.entity_is_invisible(frame), Some(true));
         assert_eq!(tracked_flags(game), Some(0x20));
         assert!(game.entity_set_invisible(frame, false));

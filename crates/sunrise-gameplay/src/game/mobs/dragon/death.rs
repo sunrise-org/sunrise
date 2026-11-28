@@ -5,7 +5,7 @@ impl crate::game::ServerGame<'_> {
     /// `tickDeath`: rising for 200 ticks, explosions, experience, then the
     /// exit portal, the egg and a gateway.
     pub fn tick_dragon_death(&mut self) {
-        let Some(d) = self.common.dragon.as_mut() else {
+        let Some(d) = self.common.entities.dragon.as_mut() else {
             return;
         };
         d.death_time += 1;
@@ -50,7 +50,7 @@ impl crate::game::ServerGame<'_> {
             let at = [p.x, p.y, p.z].map(|v| v.floor() as i32);
             self.global_level_event(1028, at, 0);
         }
-        if let Some(d) = self.common.dragon.as_mut() {
+        if let Some(d) = self.common.entities.dragon.as_mut() {
             // deathMove is new Vec3(0.0, 0.1F, 0.0): the float widened.
             let rise = f64::from(0.1_f32);
             d.position.y += rise;
@@ -64,7 +64,7 @@ impl crate::game::ServerGame<'_> {
             }
             let (id, at) = self
                 .common
-                .dragon
+                .entities.dragon
                 .as_ref()
                 .map_or((0, p), |d| (d.id, d.position));
             self.discard_resident_dragon();

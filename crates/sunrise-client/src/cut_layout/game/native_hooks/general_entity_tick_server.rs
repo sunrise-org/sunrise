@@ -31,12 +31,12 @@ pub(crate) mod tests {
                     );
                     game.spawn_item(ItemStack::new("minecraft:stick", 1), [0.0; 3], [0.0; 3], 0);
                     let peer = game
-                        .item_entity(game.entity(game.dropped[0].id).unwrap())
+                        .item_entity(game.entity(game.entities.dropped[0].id).unwrap())
                         .unwrap();
                     game.server.next_entity += 1;
                     let id = game.server.next_entity;
                     let epoch = game.native_lifecycle.epoch().unwrap();
-                    game.resident_entities.general.rows.push(GeneralRow {
+                    game.entities.general.rows.push(GeneralRow {
                         id,
                         uuid: [1, 2, 3, 4],
                         join: Default::default(),
@@ -103,13 +103,13 @@ pub(crate) mod tests {
                                 .then_some(())
                                 .ok_or(mod_api::TransactionError::Aborted(()))
                         );
-                        let row = game.resident_entities.general.row(id).unwrap();
+                        let row = game.entities.general.row(id).unwrap();
                         assert_eq!(
                             (
                                 row.velocity.components(),
                                 row.rotation,
                                 row.fall_distance,
-                                game.dropped[0].stack.count
+                                game.entities.dropped[0].stack.count
                             ),
                             if commit {
                                 ([8.0; 3], [9.0, 10.0], 0.0, 2)

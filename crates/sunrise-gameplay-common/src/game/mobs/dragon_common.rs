@@ -20,7 +20,7 @@ pub fn dragon_part_index(dragon_id: u32, candidate_id: u32) -> Option<usize> {
 impl crate::game::CommonGame<'_> {
     /// The boxes of the living dragon's parts a projectile can hit, in `getSubEntities` order.
     pub fn dragon_part_boxes(&self) -> Option<[Aabb; 8]> {
-        self.dragon
+        self.entities.dragon
             .as_ref()
             .filter(|d| d.alive())
             .map(|d| std::array::from_fn(|i| d.part_box(i)))
@@ -28,13 +28,13 @@ impl crate::game::CommonGame<'_> {
 
     /// Whether `id` is a live End crystal entity id.
     pub fn is_crystal_id(&self, id: u32) -> bool {
-        self.crystals.iter().any(|c| c.id == id)
+        self.entities.crystals.iter().any(|c| c.id == id)
     }
 
     /// Targets for projectiles: crystals (by real entity id) and dragon parts.
     pub fn special_targets(&self) -> Vec<(u32, Aabb)> {
         let mut out = Vec::new();
-        for c in self.crystals.iter() {
+        for c in self.entities.crystals.iter() {
             out.push((c.id, c.bounds()));
         }
         if let Some(boxes) = self.dragon_part_boxes() {
@@ -65,7 +65,7 @@ impl crate::game::CommonGame<'_> {
 
     /// `getHeadLookVector`.
     pub fn dragon_look(&self) -> [f64; 3] {
-        let Some(d) = self.dragon.as_ref() else {
+        let Some(d) = self.entities.dragon.as_ref() else {
             return [0.0; 3];
         };
         let pitch = match d.phase {
@@ -98,7 +98,7 @@ impl crate::game::CommonGame<'_> {
 
     /// The part positions from the yaw and the flight history.
     pub fn place_dragon_parts(&mut self) {
-        let Some(d) = self.dragon.as_mut() else {
+        let Some(d) = self.entities.dragon.as_mut() else {
             return;
         };
         // Mth.sin / Mth.cos on floats, as EnderDragon.aiStep places them.
@@ -158,7 +158,7 @@ impl crate::game::CommonGame<'_> {
             Vec3::new(p.x + 8.0, p.y + 8.0, p.z + 8.0),
         )
         .inflate(Vec3::new(32.0, 32.0, 32.0));
-        self.crystals
+        self.entities.crystals
             .iter()
             .enumerate()
             .filter(|(_, c)| {
@@ -186,7 +186,7 @@ pub trait DragonCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
     fn wire_entity_id(&self, id: u32) -> Option<i32> {
         if (SPECIAL..SPECIAL + 8).contains(&id) {
             let dragon = self
-                .dragon
+                .entities.dragon
                 .as_ref()
                 .filter(|d| d.id != 0 || self.side_has_remote())?;
             return Some(dragon_part_wire_id(dragon.id, (id - SPECIAL) as usize));
@@ -202,7 +202,7 @@ pub trait DragonCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         '__sg: '__loan,
     {
         let part = self.side_resident_dragon_part_index(id)?;
-        Some((self.dragon.as_ref()?, part))
+        Some((self.entities.dragon.as_ref()?, part))
     }
 
     /// The box of the dragon part or end crystal guests know as entity `id`
@@ -210,7 +210,7 @@ pub trait DragonCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
     fn tracked_special_box(&self, id: i32) -> Option<Aabb> {
         let uid = id as u32;
         if let Some(d) = self
-            .dragon
+            .entities.dragon
             .as_ref()
             .filter(|d| d.id != 0 || self.side_has_remote())
             && let Some(part) = dragon_part_index(d.id, uid)
@@ -218,7 +218,7 @@ pub trait DragonCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             return Some(d.part_box(part));
         }
         let id = u32::try_from(id).ok().filter(|&id| id != 0)?;
-        self.crystals
+        self.entities.crystals
             .iter()
             .find(|c| c.id == id)
             .map(Crystal::bounds)

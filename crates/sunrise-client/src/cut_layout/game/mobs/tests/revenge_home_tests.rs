@@ -86,7 +86,7 @@ fn a_zombie_takes_revenge_only_on_a_cow_inside_its_home() {
     step(&mut game, 2);
     for (i, (name, _)) in CASES.iter().enumerate() {
         let (zombie, cow) = (id(&game, 2 * i + 1), id(&game, 2 * i + 2));
-        let z = game.mobs.iter().find(|m| m.id == zombie).unwrap();
+        let z = game.entities.mobs.iter().find(|m| m.id == zombie).unwrap();
         assert_eq!(z.ai.target, None, "{name}: no target before the hit");
         assert!(!z.no_ai, "{name}: the zombie's AI runs");
         // The loaded home, as the zombie keeps it.
@@ -102,7 +102,7 @@ fn a_zombie_takes_revenge_only_on_a_cow_inside_its_home() {
             2 * i + 1,
             2 * i + 2
         )));
-        let z = game.mobs.iter().find(|m| m.id == zombie).unwrap();
+        let z = game.entities.mobs.iter().find(|m| m.id == zombie).unwrap();
         assert_eq!(
             z.ai.last_hurt_by,
             Some(Who::Mob(cow)),
@@ -114,7 +114,7 @@ fn a_zombie_takes_revenge_only_on_a_cow_inside_its_home() {
     let mut outcome = Vec::new();
     for (i, (name, _)) in CASES.iter().enumerate() {
         let (zombie, cow) = (id(&game, 2 * i + 1), id(&game, 2 * i + 2));
-        let z = game.mobs.iter().find(|m| m.id == zombie).unwrap();
+        let z = game.entities.mobs.iter().find(|m| m.id == zombie).unwrap();
         outcome.push((*name, z.ai.target == Some(Who::Mob(cow))));
     }
     // The cow's block is eight blocks from the home's centre: outside radius

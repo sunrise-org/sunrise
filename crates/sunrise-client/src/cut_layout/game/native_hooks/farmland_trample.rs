@@ -368,7 +368,7 @@ pub(crate) mod tests {
                     mob.fall_distance = 6.0;
                     mob.velocity.y = -0.5;
                     let health = mob.health;
-                    game.mobs.push(mob);
+                    game.entities.mobs.push(mob);
                     game.entity_section_joined(LANDING, [1.5, 64.125, 1.5]);
                     health
                 };
@@ -380,10 +380,10 @@ pub(crate) mod tests {
                         0.0,
                     );
                     other.no_ai = true;
-                    game.mobs.push(other);
+                    game.entities.mobs.push(other);
                     game.entity_section_joined(id, [x, LANDING_Y, 1.5]);
                 }
-                let drops = game.dropped.len();
+                let drops = game.entities.dropped.len();
                 if player {
                     game.tick_lan_packets();
                     let guest = game.server.lan.as_ref().unwrap().hub.guest(1).unwrap();
@@ -407,14 +407,14 @@ pub(crate) mod tests {
                     game.tick_creature_entities().unwrap();
                 }
                 if choice == Choice::Cancel {
-                    assert_eq!(game.dropped.len(), drops);
+                    assert_eq!(game.entities.dropped.len(), drops);
                 } else if choice == Choice::CancelAndBreakCrop {
                     assert!(
-                        game.dropped.len() > drops,
+                        game.entities.dropped.len() > drops,
                         "destroying the crop in a cancelling trample listener spawns its drops"
                     );
                     assert!(
-                        game.dropped[drops..]
+                        game.entities.dropped[drops..]
                             .iter()
                             .any(|item| item.stack.item.as_ref() == "minecraft:wheat_seeds")
                     );
@@ -805,7 +805,7 @@ pub(crate) mod tests {
                         mob.fall_distance = 6.0;
                         mob.velocity.y = -0.5;
                         let initial_health = mob.health;
-                        game.mobs.push(mob);
+                        game.entities.mobs.push(mob);
                         game.entity_section_joined(LANDING, [1.5, 64.125, 1.5]);
 
                         game.tick_creature_entities().unwrap();

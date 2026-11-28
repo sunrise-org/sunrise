@@ -103,16 +103,16 @@ mod tests {
                             let round = game.native_tick_round();
                             assert_eq!(round.listening(), listening);
                             let joins: Vec<_> =
-                                game.falling.iter().map(|block| block.join).collect();
+                                game.entities.falling.iter().map(|block| block.join).collect();
                             // Continuing falls keep every resident's identity and order;
                             // only the selected owner's state advances.
-                            let untouched = game.falling[1].position;
+                            let untouched = game.entities.falling[1].position;
                             for _ in 0..3 {
                                 game.tick_one_falling(0, &[]).unwrap();
-                                assert_eq!(game.falling.len(), 6);
-                                assert_eq!(game.falling[1].position, untouched);
+                                assert_eq!(game.entities.falling.len(), 6);
+                                assert_eq!(game.entities.falling[1].position, untouched);
                                 assert_eq!(
-                                    game.falling
+                                    game.entities.falling
                                         .iter()
                                         .map(|block| block.join)
                                         .collect::<Vec<_>>(),
@@ -123,7 +123,7 @@ mod tests {
                                     Ok(())
                                 );
                             }
-                            let id = game.falling[0].id;
+                            let id = game.entities.falling[0].id;
                             assert!(game.entity(id).is_some());
                             observed.landed_id.store(id, Ordering::Relaxed);
                             let stone = game
@@ -133,7 +133,7 @@ mod tests {
                                 .default_state("minecraft:stone")
                                 .unwrap();
                             game.world.set(0, 69, 0, stone).unwrap();
-                            game.falling.update(0, |block| {
+                            game.entities.falling.update(0, |block| {
                                 block.position.y = 70.0;
                                 block.velocity.y = -0.5;
                             });
@@ -142,19 +142,19 @@ mod tests {
                             game.server.chunk_ticking.tickets.update(None);
                             game.begin_ordered_ticks();
                             game.run_ordered_ticks(JoinSeq::MAX, false).unwrap();
-                            assert!(game.tnts.is_empty());
-                            assert!(!game.falling.iter().any(|block| block.id == id));
-                            assert_eq!(game.falling.len(), 5);
+                            assert!(game.entities.tnts.is_empty());
+                            assert!(!game.entities.falling.iter().any(|block| block.id == id));
+                            assert_eq!(game.entities.falling.len(), 5);
                             assert_eq!(game.world.block(0, 70, 0), sand);
                             assert_eq!(observed.detonated.load(Ordering::Relaxed), listening);
                             // Expired blocks permanently leave the resident list.
-                            for _ in 0..game.falling.len() {
-                                game.falling.update(0, |block| {
+                            for _ in 0..game.entities.falling.len() {
+                                game.entities.falling.update(0, |block| {
                                     block.state = sunrise_world::registry::BlockStateId(0)
                                 });
                                 game.tick_one_falling(0, &[]).unwrap();
                             }
-                            assert!(game.falling.is_empty());
+                            assert!(game.entities.falling.is_empty());
                             assert_eq!(game.resident_entities.table.get_mut().end_tick(), Ok(()));
                         });
                     });

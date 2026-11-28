@@ -19,7 +19,7 @@ fn a_portal_over_obsidian_spawns_a_grunting_piglin() {
         vec!["minecraft:zombified_piglin".to_owned()],
         "obsidian floor"
     );
-    let id = game.mobs[0].id;
+    let id = game.entities.mobs[0].id;
     // setPortalCooldown: Entity.getDimensionChangingDelay.
     assert_eq!(
         game.server

@@ -12,7 +12,7 @@ impl crate::game::ServerGame<'_> {
         i: usize,
         moved: Vec3,
     ) {
-        let mut f = self.common.falling[i].clone();
+        let mut f = self.common.entities.falling[i].clone();
         if moved.y < 0.0 {
             f.fall_distance -= f64::from(moved.y as f32);
         }
@@ -24,7 +24,7 @@ impl crate::game::ServerGame<'_> {
             }
             f.fall_distance = 0.0;
         }
-        self.common.falling.update(i, |block| *block = f);
+        self.common.entities.falling.update(i, |block| *block = f);
     }
     /// FallingBlockEntity.tick: fall with 0.04 gravity and 0.98F drag, then land.
     /// One falling block's `tick`: places or drops its block in its own tick,
@@ -40,7 +40,7 @@ impl crate::game::ServerGame<'_> {
         // Like boats, tick an unbound state clone while the resident owner keeps
         // its slot. Extracting and reinserting every airborne block shifts the
         // whole list tail twice per entity, making a sand-filled cobweb O(n^2).
-        let mut f = self.common.falling[i].clone();
+        let mut f = self.common.entities.falling[i].clone();
         let from = f.position;
         let (id, join) = (f.id, f.join);
         self.with_entity_held_out(id, |game| {
@@ -54,7 +54,7 @@ impl crate::game::ServerGame<'_> {
                     .persist
                     .removals
                     .contains(&super::commands::Target::Falling(id))
-                    && game.falling.store_back(i, f)
+                    && game.entities.falling.store_back(i, f)
                 {
                     game.note_falling_tick(id, join, state);
                 }
@@ -69,7 +69,7 @@ impl crate::game::ServerGame<'_> {
                         .persist
                         .removals
                         .contains(&super::commands::Target::Falling(id))
-                        && game.falling.store_back(i, kept)
+                        && game.entities.falling.store_back(i, kept)
                     {
                         game.note_falling_tick(id, join, state);
                     }
@@ -83,7 +83,7 @@ impl crate::game::ServerGame<'_> {
             }
             // Only terminal owners leave storage. Carry the original lifetime
             // into the final state until placement, drops or travel finish.
-            let Some(mut owner) = game.falling.extract(join) else {
+            let Some(mut owner) = game.entities.falling.extract(join) else {
                 return Ok(());
             };
             sunrise_sim::join_seq::store_back(&mut owner, f);
@@ -96,12 +96,12 @@ impl crate::game::ServerGame<'_> {
                 // Entity.scale(getAirDrag()) ends the tick of a block that stays.
                 kept.velocity = sunrise_sim::entity_rules::scale_air_drag(kept.velocity);
                 let state = kept.state;
-                let falling = &mut game.common.falling;
+                let falling = &mut game.common.entities.falling;
                 falling.put_back(i.min(falling.len()), kept);
                 game.note_falling_tick(id, join, state);
                 return Ok(());
             }
-            game.falling.retire_extracted(id, join);
+            game.entities.falling.retire_extracted(id, join);
             Ok(())
         })
     }

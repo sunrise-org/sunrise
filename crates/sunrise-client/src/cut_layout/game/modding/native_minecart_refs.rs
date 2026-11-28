@@ -22,7 +22,7 @@ mod tests {
         id: u32,
         kind: CartKind,
     ) -> MinecartRef {
-        game.carts.push(Minecart::new(id, kind, Vec3::ZERO));
+        game.entities.carts.push(Minecart::new(id, kind, Vec3::ZERO));
         game.minecart(game.entity(id).unwrap()).unwrap()
     }
 
@@ -56,7 +56,7 @@ mod tests {
             assert_eq!(game.minecart_push(furnace), Some([0.0, 0.0, 0.0]));
             assert!(game.minecart_set_push(furnace, [0.5, 0.0, -0.5]));
             assert_eq!(game.minecart_push(furnace), Some([0.5, 0.0, -0.5]));
-            assert_eq!(game.carts[0].push, Vec3::new(0.5, 0.0, -0.5));
+            assert_eq!(game.entities.carts[0].push, Vec3::new(0.5, 0.0, -0.5));
             // Not a furnace cart, or a push that isn't finite: refused.
             assert_eq!(game.minecart_push(chest), None);
             assert!(!game.minecart_set_push(chest, [0.5, 0.0, 0.0]));
@@ -84,12 +84,12 @@ mod tests {
             assert_eq!(cart.display_offset(game), Some(3));
 
             // Saved and loaded back as the same state and offset.
-            let saved = game.carts[0].to_nbt([0; 4], None, game.res.items());
+            let saved = game.entities.carts[0].to_nbt([0; 4], None, game.res.items());
             let mut loaded = Minecart::from_nbt(&saved, 61, CartKind::Chest).unwrap();
             sunrise_gameplay_common::game::minecarts::forget_unreadable_display(&mut loaded, |t| {
                 game.state_from_nbt(t).is_some()
             });
-            game.carts.push(loaded);
+            game.entities.carts.push(loaded);
             let loaded = game.minecart(game.entity(61).unwrap()).unwrap();
             assert_eq!(loaded.custom_display_block(game), Some(Some(lit)));
             assert_eq!(loaded.display_offset(game), Some(3));
@@ -101,7 +101,7 @@ mod tests {
             assert!(cart.set_custom_display_block(game, None));
             assert_eq!(cart.custom_display_block(game), Some(None));
             assert!(
-                game.carts[0]
+                game.entities.carts[0]
                     .to_nbt([0; 4], None, game.res.items())
                     .get("DisplayState")
                     .is_none()
@@ -141,15 +141,15 @@ mod tests {
             let [rideable, _, furnace, tnt, hopper, ..] = carts[..] else {
                 unreachable!()
             };
-            game.armor_stands.push(ArmorStand::new(99, Vec3::ZERO, 0.0));
+            game.entities.armor_stands.push(ArmorStand::new(99, Vec3::ZERO, 0.0));
             assert!(game.minecart(game.entity(99).unwrap()).is_none());
 
             // Max speed: old behaviour, water, furnace, then the experiment's rule.
             assert_eq!(rideable.max_speed(game), Some(0.4));
             assert_eq!(furnace.max_speed(game), Some(0.2));
-            game.carts.update(2, |c| c.in_water = true);
+            game.entities.carts.update(2, |c| c.in_water = true);
             assert_eq!(furnace.max_speed(game), Some(0.2 * 0.75));
-            game.carts.update(2, |c| c.in_water = false);
+            game.entities.carts.update(2, |c| c.in_water = false);
             let mut features = game.level.enabled_features.to_vec();
             features.push("minecraft:minecart_improvements".into());
             game.level.enabled_features = features.into();
@@ -158,11 +158,11 @@ mod tests {
             );
             assert_eq!(rideable.max_speed(game), Some(8.0 / 20.0));
             assert_eq!(furnace.max_speed(game), Some(8.0 / 20.0 * 0.5));
-            game.carts.update(0, |c| c.in_water = true);
+            game.entities.carts.update(0, |c| c.in_water = true);
             assert_eq!(rideable.max_speed(game), Some(8.0 / 20.0 * 0.5));
 
             assert_eq!(rideable.is_on_rails(game), Some(false));
-            game.carts.update(0, |c| c.on_rails = true);
+            game.entities.carts.update(0, |c| c.on_rails = true);
             assert_eq!(rideable.is_on_rails(game), Some(true));
 
             assert!(rideable.set_flipped(game, true));
@@ -173,7 +173,7 @@ mod tests {
                 (rideable.damage(game), rideable.hurt_time(game)),
                 (Some(12.5), Some(7))
             );
-            let saved = game.carts[0].to_nbt([0; 4], None, game.res.items());
+            let saved = game.entities.carts[0].to_nbt([0; 4], None, game.res.items());
             assert_eq!(saved.get("FlippedRotation"), Some(&Tag::Byte(1)));
 
             // Furnace fuel, saved and synced as the lit flag.
@@ -182,13 +182,13 @@ mod tests {
             assert_eq!(furnace.fuel(game), Some(3600));
             assert!(!tnt.set_fuel(game, 5));
             assert_eq!(tnt.fuel(game), None);
-            let saved = game.carts[2].to_nbt([0; 4], None, game.res.items());
+            let saved = game.entities.carts[2].to_nbt([0; 4], None, game.res.items());
             assert_eq!(saved.get("Fuel"), Some(&Tag::Short(3600)));
             // The field is an int; only the save casts to a short.
             assert!(furnace.set_fuel(game, 40_000));
             assert_eq!(furnace.fuel(game), Some(40_000));
             assert_eq!(
-                game.carts[2]
+                game.entities.carts[2]
                     .to_nbt([0; 4], None, game.res.items())
                     .get("Fuel"),
                 Some(&Tag::Short(40_000_i32 as i16))
@@ -212,7 +212,7 @@ mod tests {
             );
             game.stop_audio_capture();
             assert_eq!(
-                game.carts[3]
+                game.entities.carts[3]
                     .to_nbt([0; 4], None, game.res.items())
                     .get("fuse"),
                 Some(&Tag::Int(80))
@@ -222,7 +222,7 @@ mod tests {
                 "tnt_explodes",
                 sunrise_game_data::gamerules::Value::Bool(false),
             );
-            game.carts.update(3, |c| c.fuse = -1);
+            game.entities.carts.update(3, |c| c.fuse = -1);
             assert!(!tnt.prime_fuse(game));
             assert_eq!(tnt.fuse(game), Some(-1));
 
@@ -250,7 +250,7 @@ mod tests {
             assert_eq!(hopper.hopper_enabled(game), Some(true));
             assert!(hopper.set_hopper_enabled(game, false));
             assert_eq!(
-                game.carts[4]
+                game.entities.carts[4]
                     .to_nbt([0; 4], None, game.res.items())
                     .get("Enabled"),
                 Some(&Tag::Byte(0))
@@ -262,13 +262,13 @@ mod tests {
             // for clients (`onUpdated`), and the cart then runs the new command.
             let command = carts[5];
             assert_eq!(command.command(game).as_deref(), Some(""));
-            game.carts.update(5, |c| c.command.success_count = 3);
+            game.entities.carts.update(5, |c| c.command.success_count = 3);
             assert!(command.set_command(game, "gamerule mob_griefing false"));
             assert_eq!(
                 command.command(game).as_deref(),
                 Some("gamerule mob_griefing false")
             );
-            let cart = &game.carts[5];
+            let cart = &game.entities.carts[5];
             assert_eq!(cart.command.success_count, 0);
             assert_eq!(cart.synced_command, "gamerule mob_griefing false");
             assert!(cart.synced_output.is_none());

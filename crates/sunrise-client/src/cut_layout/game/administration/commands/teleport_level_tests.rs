@@ -32,14 +32,13 @@ fn a_mod_sends_an_item_and_an_arrow_to_another_level_with_their_motion() {
         let thrower = Some([1, 2, 3, 4]);
         let owner = Some([5, 6, 7, 8]);
         let item = game
-            .dropped
+            .entities.dropped
             .iter()
             .find(|e| e.thrower == thrower)
             .unwrap()
             .id;
         let arrow = game
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .find(|p| p.owner_uuid == owner)
             .unwrap()
@@ -49,24 +48,22 @@ fn a_mod_sends_an_item_and_an_arrow_to_another_level_with_their_motion() {
         assert!(game.entity_teleport_to_level(item, nether, [3.5, 70.0, -2.5], None));
         assert!(game.entity_teleport_to_level(arrow, nether, [4.5, 71.0, -2.5], None));
         assert_eq!(game.dim, Dim::Overworld);
-        assert!(!game.dropped.iter().any(|e| e.thrower == thrower));
+        assert!(!game.entities.dropped.iter().any(|e| e.thrower == thrower));
         assert!(
             !game
-                .creatures
-                .projectiles
+                .entities.projectiles
                 .iter()
                 .any(|p| p.owner_uuid == owner)
         );
         assert!(!game.entity_teleport_to_level(item, nether, [0.5, 70.0, 0.5], None));
 
         game.enter_level(Dim::Nether).unwrap();
-        let e = game.dropped.iter().find(|e| e.thrower == thrower).unwrap();
+        let e = game.entities.dropped.iter().find(|e| e.thrower == thrower).unwrap();
         assert_eq!((&*e.stack.item, e.stack.count), ("minecraft:diamond", 7));
         assert_eq!(e.position, Vec3::new(3.5, 70.0, -2.5));
         assert_eq!(e.velocity, Vec3::new(0.1, 0.2, -0.3));
         let p = game
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .find(|p| p.owner_uuid == owner)
             .unwrap();
@@ -89,17 +86,17 @@ fn a_mod_sends_a_minecart_to_another_level_with_its_known_movement() {
         )
         .unwrap();
         game.lan_assign_ids();
-        let cart = game.entity(game.carts[0].id).unwrap();
+        let cart = game.entity(game.entities.carts[0].id).unwrap();
         assert!(game.entity_teleport_to_level(
             cart,
             "minecraft:the_nether",
             [3.5, 70.0, -2.5],
             None
         ));
-        assert!(game.carts.is_empty());
+        assert!(game.entities.carts.is_empty());
         game.enter_level(Dim::Nether).unwrap();
-        assert_eq!(game.carts.len(), 1);
-        assert_eq!(game.carts[0].velocity, Vec3::new(0.3, 0.1, -0.4));
+        assert_eq!(game.entities.carts.len(), 1);
+        assert_eq!(game.entities.carts[0].velocity, Vec3::new(0.3, 0.1, -0.4));
     });
 }
 
@@ -131,10 +128,10 @@ fn a_mod_sends_a_primed_tnt_to_another_level_with_its_fuse_and_motion() {
             game,
             "minecraft:tnt",
             "{fuse:200s,Motion:[0.1d,0.2d,-0.3d]}",
-            |g| g.tnts.first().map(|t| t.id),
+            |g| g.entities.tnts.first().map(|t| t.id),
         );
-        assert_eq!(game.tnts.len(), 1);
-        let tnt = &game.tnts[0];
+        assert_eq!(game.entities.tnts.len(), 1);
+        let tnt = &game.entities.tnts[0];
         assert_eq!(tnt.fuse, 200);
         assert_eq!(tnt.position, Vec3::new(3.5, 70.0, -2.5));
         assert_eq!(tnt.velocity, Vec3::new(0.1, 0.2, -0.3));
@@ -150,10 +147,10 @@ fn a_mod_sends_an_experience_orb_to_another_level_with_its_value_and_motion() {
             game,
             "minecraft:experience_orb",
             "{Value:7s,Count:2,Motion:[0.1d,0.2d,-0.3d]}",
-            |g| g.orbs.first().map(|o| o.id),
+            |g| g.entities.orbs.first().map(|o| o.id),
         );
-        assert_eq!(game.orbs.len(), 1);
-        let orb = &game.orbs[0];
+        assert_eq!(game.entities.orbs.len(), 1);
+        let orb = &game.entities.orbs[0];
         assert_eq!((orb.value, orb.count), (7, 2));
         assert_eq!(orb.position, Vec3::new(3.5, 70.0, -2.5));
         assert_eq!(orb.velocity, Vec3::new(0.1, 0.2, -0.3));
@@ -170,10 +167,10 @@ fn a_mod_sends_a_firework_to_another_level_with_its_owner_and_motion() {
             game,
             "minecraft:firework_rocket",
             r#"{LifeTime:40,Owner:[I;5,6,7,8],Motion:[0.1d,0.2d,-0.3d],FireworksItem:{id:"minecraft:firework_rocket",count:1}}"#,
-            |g| g.rockets.first().map(|r| r.id),
+            |g| g.entities.rockets.first().map(|r| r.id),
         );
-        assert_eq!(game.rockets.len(), 1);
-        let rocket = &game.rockets[0];
+        assert_eq!(game.entities.rockets.len(), 1);
+        let rocket = &game.entities.rockets[0];
         assert_eq!(&*rocket.item.item, "minecraft:firework_rocket");
         assert_eq!(rocket.owner_uuid, Some([5, 6, 7, 8]));
         assert_eq!(rocket.position, Vec3::new(3.5, 70.0, -2.5));
@@ -190,10 +187,10 @@ fn a_mod_sends_a_trident_to_another_level_with_its_stack_and_motion() {
             game,
             "minecraft:trident",
             r#"{Motion:[0.1d,0.2d,-0.3d],item:{id:"minecraft:trident",count:1}}"#,
-            |g| g.tridents.first().map(|t| t.id),
+            |g| g.entities.tridents.first().map(|t| t.id),
         );
-        assert_eq!(game.tridents.len(), 1);
-        let trident = &game.tridents[0];
+        assert_eq!(game.entities.tridents.len(), 1);
+        let trident = &game.entities.tridents[0];
         assert_eq!(&*trident.stack.item, "minecraft:trident");
         assert_eq!(trident.position, Vec3::new(3.5, 70.0, -2.5));
         assert_eq!(trident.velocity, Vec3::new(0.1, 0.2, -0.3));
@@ -209,17 +206,17 @@ fn a_mod_sends_an_armor_stand_to_another_level() {
         game.summon_with_nbt("minecraft:armor_stand", [0.5, 80.0, 0.5], "{}")
             .unwrap();
         game.lan_assign_ids();
-        let stand = game.entity(game.armor_stands[0].id).unwrap();
+        let stand = game.entity(game.entities.armor_stands[0].id).unwrap();
         assert!(game.entity_teleport_to_level(
             stand,
             "minecraft:the_nether",
             [3.5, 70.0, -2.5],
             None
         ));
-        assert!(game.armor_stands.is_empty());
+        assert!(game.entities.armor_stands.is_empty());
         game.enter_level(Dim::Nether).unwrap();
-        assert_eq!(game.armor_stands.len(), 1);
-        assert_eq!(game.armor_stands[0].position, Vec3::new(3.5, 70.0, -2.5));
+        assert_eq!(game.entities.armor_stands.len(), 1);
+        assert_eq!(game.entities.armor_stands[0].position, Vec3::new(3.5, 70.0, -2.5));
     });
 }
 
@@ -237,9 +234,9 @@ pub(crate) fn run_portal_arrival_effects_mod_items_merge_immediately() {
             [0.5, 80.0, 0.5],
             10,
         );
-        game.dropped[0].age = 7;
-        game.dropped[0].velocity = Vec3::new(0.1, 0.2, -0.3);
-        let item = game.entity(game.dropped[0].id).unwrap();
+        game.entities.dropped[0].age = 7;
+        game.entities.dropped[0].velocity = Vec3::new(0.1, 0.2, -0.3);
+        let item = game.entity(game.entities.dropped[0].id).unwrap();
         game.enter_level(Dim::Nether).unwrap();
         prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, -1));
         game.spawn_item_own(
@@ -247,8 +244,8 @@ pub(crate) fn run_portal_arrival_effects_mod_items_merge_immediately() {
             [3.5, 70.0, -2.5],
             10,
         );
-        game.dropped[0].age = 41;
-        let waiting = game.dropped[0].id;
+        game.entities.dropped[0].age = 41;
+        let waiting = game.entities.dropped[0].id;
         game.enter_level(Dim::Overworld).unwrap();
         assert!(game.entity_teleport_to_level(
             item,
@@ -256,10 +253,10 @@ pub(crate) fn run_portal_arrival_effects_mod_items_merge_immediately() {
             [3.5, 70.0, -2.5],
             None
         ));
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         game.enter_level(Dim::Nether).unwrap();
-        assert_eq!(game.dropped.len(), 1);
-        let survivor = &game.dropped[0];
+        assert_eq!(game.entities.dropped.len(), 1);
+        let survivor = &game.entities.dropped[0];
         assert_eq!(survivor.id, waiting);
         assert_eq!(
             (survivor.stack.count, survivor.age, survivor.ticks),
@@ -289,8 +286,8 @@ pub(crate) fn run_portal_arrival_effects_explicit_tnt_teleports_protect_portals(
                 "{fuse:200s,NoGravity:1b}",
             )
             .unwrap();
-            let old = game.tnts[0].id;
-            assert!(!game.tnts[0].used_portal);
+            let old = game.entities.tnts[0].id;
+            assert!(!game.entities.tnts[0].used_portal);
             if command {
                 assert!(game.run_command(
                     "execute in minecraft:the_nether run tp @e[type=minecraft:tnt] 8.5 70 8.5"
@@ -304,11 +301,11 @@ pub(crate) fn run_portal_arrival_effects_explicit_tnt_teleports_protect_portals(
                     None,
                 ));
             }
-            assert!(game.tnts.is_empty());
+            assert!(game.entities.tnts.is_empty());
             game.enter_level(Dim::Nether).unwrap();
-            assert_eq!(game.tnts.len(), 1);
-            assert_ne!(game.tnts[0].id, old);
-            assert!(game.tnts[0].used_portal);
+            assert_eq!(game.entities.tnts.len(), 1);
+            assert_ne!(game.entities.tnts[0].id, old);
+            assert!(game.entities.tnts[0].used_portal);
             crate::game::server_side::nether_portal::arrival_effects_tests::assert_tnt_blast(
                 game, true,
             );
@@ -318,7 +315,7 @@ pub(crate) fn run_portal_arrival_effects_explicit_tnt_teleports_protect_portals(
                 "{fuse:200s,NoGravity:1b}",
             )
             .unwrap();
-            assert!(!game.tnts[0].used_portal);
+            assert!(!game.entities.tnts[0].used_portal);
             crate::game::server_side::nether_portal::arrival_effects_tests::assert_tnt_blast(
                 game, false,
             );

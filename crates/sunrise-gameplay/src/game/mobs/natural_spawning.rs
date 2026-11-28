@@ -499,7 +499,7 @@ impl<'g> GameLevel<'g, '_> {
         if asked <= SCANNED_QUERIES && self.boxes.get().is_none() {
             return Box::new(
                 self.game
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .enumerate()
                     .filter(|(_, m)| !m.removed)
@@ -508,7 +508,7 @@ impl<'g> GameLevel<'g, '_> {
         }
         Box::new(
             self.boxes
-                .get_or_init(|| MobBoxes::new(&self.game.mobs))
+                .get_or_init(|| MobBoxes::new(&self.game.entities.mobs))
                 .near(area),
         )
     }
@@ -1127,14 +1127,14 @@ impl NaturalLevel for GameLevel<'_, '_> {
                 .any(|mob| obstructs(mob.bounds))
             && !self.mobs_near(query).any(|(_, b, _)| obstructs(b))
             // The parent is a LivingEntity; its separate parts do not block building.
-            && !self.game.dragon.as_ref().is_some_and(|dragon| obstructs(dragon.body_bounds()))
+            && !self.game.entities.dragon.as_ref().is_some_and(|dragon| obstructs(dragon.body_bounds()))
             && !entities
                 .non_mob_building_blocker_boxes(
                     entities
                         .carts
                         .iter()
                         .map(sunrise_gameplay_common::game::minecarts::Minecart::bounds),
-                    &self.game.crystals,
+                    &self.game.entities.crystals,
                 )
                 .any(obstructs)
     }
@@ -1202,7 +1202,7 @@ impl sunrise_sim::mobs::spawner::SpawnerLevel for GameLevel<'_, '_> {
     fn count_entities(&self, id: &str, bounds: Aabb) -> usize {
         let mobs = self
             .mobs_near(bounds)
-            .filter(|&(i, b, ..)| self.game.mobs[i].kind.id == id && b.intersects(bounds))
+            .filter(|&(i, b, ..)| self.game.entities.mobs[i].kind.id == id && b.intersects(bounds))
             .count();
         let pending = self
             .pending
@@ -1251,14 +1251,14 @@ impl<'a> crate::game::ServerGame<'a> {
         ));
         !self
             .common
-            .boats
+            .entities.boats
             .iter()
             .any(|boat| boat.bounds().intersects(query))
             && !mob_collision(query)
     }
 
     pub(in crate::game::server_side) fn live_spawn_mob_collision(&self, query: Aabb) -> bool {
-        self.common.mobs.iter().any(|mob| {
+        self.common.entities.mobs.iter().any(|mob| {
             !mob.removed && mob_collidable_for_spawn(mob) && mob.bounds().intersects(query)
         })
     }
@@ -1396,7 +1396,7 @@ impl<'a> crate::game::ServerGame<'a> {
         }
         for (chicken, rider) in rides {
             let rider = links.get(rider).copied().unwrap_or(*rider);
-            if let Some(c) = self.common.mobs.iter_mut().find(|m| m.id == *chicken) {
+            if let Some(c) = self.common.entities.mobs.iter_mut().find(|m| m.id == *chicken) {
                 c.extra.jockey = true;
                 c.extra.rider = Some(rider);
             }
@@ -1436,12 +1436,12 @@ impl<'a> crate::game::ServerGame<'a> {
         self.resolve_spawn_ids([&mut pending, &mut created], &rides);
         let ids = pending.iter().map(|m| m.id).collect();
         for mob in pending {
-            self.common.mobs.push(mob);
-            self.admit_new_mobs(self.common.mobs.len() - 1);
+            self.common.entities.mobs.push(mob);
+            self.admit_new_mobs(self.common.entities.mobs.len() - 1);
         }
         for mob in created {
-            self.common.mobs.push(mob);
-            self.admit_new_mobs(self.common.mobs.len() - 1);
+            self.common.entities.mobs.push(mob);
+            self.admit_new_mobs(self.common.entities.mobs.len() - 1);
         }
         ids
     }
@@ -1681,7 +1681,7 @@ impl<'a> crate::game::ServerGame<'a> {
             laps.lap("sn_level");
             let counted: Vec<Counted> = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .map(|m| Counted {
                     entity: &m.kind.id,
@@ -1840,7 +1840,7 @@ impl<'a> crate::game::ServerGame<'a> {
         ) {
             return false;
         }
-        let mut mob = self.common.mobs.remove(index);
+        let mut mob = self.common.entities.mobs.remove(index);
         mob.extra.spawn_tags = self.tags_of(Target::Mob(id));
         mob.join = JoinSeq::UNJOINED;
         self.server.natural_admission = Some(NaturalAdmission::Detached(Box::new(mob)));
@@ -1896,10 +1896,10 @@ impl<'a> crate::game::ServerGame<'a> {
                         Some(NaturalAdmission::Detached(Box::new(body)));
                     continue;
                 }
-                let index = self.common.mobs.len();
+                let index = self.common.entities.mobs.len();
                 self.common.persist.uuids.insert(body_id, uuid);
-                self.common.mobs.push(body);
-                let join = self.common.mobs[index].join;
+                self.common.entities.mobs.push(body);
+                let join = self.common.entities.mobs[index].join;
                 if body_id == id {
                     self.server.natural_admission = Some(NaturalAdmission::Placed {
                         level: self.common.dim,
@@ -1914,7 +1914,7 @@ impl<'a> crate::game::ServerGame<'a> {
                         ids.get(&rider).copied()
                     };
                     if resolved == Some(body_id)
-                        && let Some(chicken) = self.common.mobs.iter_mut().find(|m| m.id == chicken)
+                        && let Some(chicken) = self.common.entities.mobs.iter_mut().find(|m| m.id == chicken)
                     {
                         chicken.extra.jockey = true;
                         chicken.extra.rider = Some(body_id);
@@ -1931,7 +1931,7 @@ impl<'a> crate::game::ServerGame<'a> {
             let view = match &outcome {
                 NaturalAdmission::Placed { level, id, join } if *level == self.common.dim => {
                     let mob = if join.is_joined() {
-                        self.common.mobs.locate(*join).map(|i| &self.common.mobs[i])
+                        self.common.entities.mobs.locate(*join).map(|i| &self.common.entities.mobs[i])
                     } else {
                         self.common.persist.off_level.get(id).and_then(
                             sunrise_gameplay_common::game::entity_memory::OffLevel::as_mob,
@@ -3021,7 +3021,7 @@ mod tests {
             };
             let tick = |game: &mut crate::game::ServerGame<'_>, extra: Option<(&str, Tag)>| {
                 let (mobs, entities, tracked) = (
-                    game.mobs.len(),
+                    game.entities.mobs.len(),
                     game.server.next_entity,
                     game.persist.uuids.len(),
                 );
@@ -3038,14 +3038,14 @@ mod tests {
                 };
                 game.server_tick_spawner_of(key, &mut spawner, None)
                     .unwrap();
-                let added: Vec<Snap> = game.mobs[mobs..].iter().map(snap).collect();
+                let added: Vec<Snap> = game.entities.mobs[mobs..].iter().map(snap).collect();
                 let out = (
                     added,
                     game.server.next_entity - entities,
                     game.persist.uuids.len() - tracked,
                     game.world.random.next_int(),
                 );
-                for m in game.mobs.drain(mobs..) {
+                for m in game.entities.mobs.drain(mobs..) {
                     game.persist.uuids.remove(&m.id);
                 }
                 game.server.next_entity = entities;
@@ -3172,7 +3172,7 @@ mod tests {
                 ),
             ]
             .into();
-            game.carts.update(0, |cart| {
+            game.entities.carts.update(0, |cart| {
                 cart.spawner = Some(Box::new(Spawner {
                     spawn_delay: 0,
                     spawn_count: 1,
@@ -3182,7 +3182,7 @@ mod tests {
             });
             game.world.random.set_seed(7);
             let (_, heard) = with_checks(Some(SpawnCheck::Default), Vec::new, || game.tick_carts());
-            let position = game.carts[0].position.components();
+            let position = game.entities.carts[0].position.components();
             assert_ne!(position, start, "the cart moved before its spawner ticked");
             for hook in ["position", "finalize"] {
                 let event = heard.iter().find(|h| h.hook == hook).unwrap();
@@ -3229,7 +3229,7 @@ mod tests {
             };
             let tick = |game: &mut crate::game::ServerGame<'_>, configured: bool| {
                 let (mobs, entities, tracked) = (
-                    game.mobs.len(),
+                    game.entities.mobs.len(),
                     game.server.next_entity,
                     game.persist.uuids.len(),
                 );
@@ -3245,14 +3245,14 @@ mod tests {
                 };
                 game.server_tick_trial_spawner(key, &mut spawner, TrialState::Active, false)
                     .unwrap();
-                let added: Vec<Snap> = game.mobs[mobs..].iter().map(snap).collect();
+                let added: Vec<Snap> = game.entities.mobs[mobs..].iter().map(snap).collect();
                 let out = (
                     added,
                     game.server.next_entity - entities,
                     game.persist.uuids.len() - tracked,
                     game.world.random.next_int(),
                 );
-                for m in game.mobs.drain(mobs..) {
+                for m in game.entities.mobs.drain(mobs..) {
                     game.persist.uuids.remove(&m.id);
                 }
                 game.server.next_entity = entities;
@@ -3370,7 +3370,7 @@ mod tests {
         with_game(|game| {
             spawn_check_world(game, Vec3::new(0.5, 70.0, 0.5));
             game.world.random.set_seed(7);
-            let before = game.mobs.len();
+            let before = game.entities.mobs.len();
             let uuid_count = game.persist.uuids.len();
             let mut entity = Compound::default();
             entity.insert("id".into(), Tag::String(SULFUR_CUBE.into()));
@@ -3403,11 +3403,11 @@ mod tests {
                 [("position", name()), ("finalize", name())]
             );
             if veto {
-                assert_eq!(game.mobs.len(), before);
+                assert_eq!(game.entities.mobs.len(), before);
                 assert_eq!(game.persist.uuids.len(), uuid_count);
             } else {
-                assert_eq!(game.mobs.len(), before + 1);
-                let mob = &game.mobs[before];
+                assert_eq!(game.entities.mobs.len(), before + 1);
+                let mob = &game.entities.mobs[before];
                 assert_eq!(mob.custom_name.as_deref(), Some("edited"));
                 // No `Size`: AbstractCubeMob.readAdditionalSaveData sets size 1, whose maximum
                 // health of 4 clamps the saved 5 (LivingEntity.setHealth).
@@ -3450,7 +3450,7 @@ mod tests {
                              with_equipment: bool,
                              answer: Option<FinalizeAnswer>| {
                 let (mobs, entities, tracked) = (
-                    game.mobs.len(),
+                    game.entities.mobs.len(),
                     game.server.next_entity,
                     game.persist.uuids.len(),
                 );
@@ -3489,13 +3489,13 @@ mod tests {
                     ),
                 }
                 let out = (
-                    game.mobs.len() - mobs,
+                    game.entities.mobs.len() - mobs,
                     game.server.next_entity - entities,
                     game.persist.uuids.len() - tracked,
                     game.server.rand_sequences.to_nbt(),
                     game.world.random.next_int(),
                 );
-                for m in game.mobs.drain(mobs..) {
+                for m in game.entities.mobs.drain(mobs..) {
                     game.persist.uuids.remove(&m.id);
                 }
                 game.server.next_entity = entities;
@@ -3575,7 +3575,7 @@ mod tests {
             let run_trial = |game: &mut crate::game::ServerGame<'_>,
                              answer: Option<FinalizeAnswer>| {
                 let (mobs, entities, tracked) = (
-                    game.mobs.len(),
+                    game.entities.mobs.len(),
                     game.server.next_entity,
                     game.persist.uuids.len(),
                 );
@@ -3600,14 +3600,14 @@ mod tests {
                     ),
                 }
                 let out = (
-                    game.mobs.len() - mobs,
+                    game.entities.mobs.len() - mobs,
                     game.server.next_entity - entities,
                     game.persist.uuids.len() - tracked,
                     spawner.total_mobs_spawned,
                     spawner.current_mobs.len(),
                     game.server.rand_sequences.to_nbt(),
                 );
-                for m in game.mobs.drain(mobs..) {
+                for m in game.entities.mobs.drain(mobs..) {
                     game.persist.uuids.remove(&m.id);
                 }
                 game.server.next_entity = entities;
@@ -3694,7 +3694,7 @@ mod tests {
                     "skip={skip}, veto={veto}"
                 );
                 if let Some(id) = spawned {
-                    let mob = game.mobs.iter().find(|mob| mob.id == id).unwrap();
+                    let mob = game.entities.mobs.iter().find(|mob| mob.id == id).unwrap();
                     assert!(!mob.extra.attributes.as_ref().is_some_and(|a| {
                         a.modifiers
                             .iter()
@@ -3809,7 +3809,7 @@ mod tests {
                 // its random is where an untouched copy of it is.
                 let ask = |game: &mut crate::game::ServerGame<'_>, said, peaceful: bool| {
                     *answer.lock().unwrap() = said;
-                    let mut mob = game.mobs.iter().find(|m| m.id == id).unwrap().clone();
+                    let mut mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap().clone();
                     mob.ai.no_action_time = 601;
                     let mut untouched = mob.random.clone();
                     let handle = mod_api::MobRef::new(mod_api::EntityRef::new(
@@ -3875,7 +3875,7 @@ mod tests {
                     sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                 )
                 .unwrap();
-            let mut mob = game.mobs.iter().find(|m| m.id == id).unwrap().clone();
+            let mut mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap().clone();
             mob.ai.no_action_time = 601;
             let mut untouched = mob.random.clone();
             let mut world = game.mob_world_base(&[]);
@@ -4059,7 +4059,7 @@ mod tests {
                         (!veto).then_some(*rider)
                     );
                     if !veto {
-                        let mob = game.mobs.iter().find(|m| m.id == *rider).unwrap();
+                        let mob = game.entities.mobs.iter().find(|m| m.id == *rider).unwrap();
                         assert_eq!(mob.extra.mount, Some(*horse));
                     }
                 });
@@ -4202,7 +4202,7 @@ mod tests {
                 );
                 game.native_joins_flush(false, 0);
                 assert!(
-                    game.mobs
+                    game.entities.mobs
                         .iter()
                         .all(|m| !(first..=first + 2).contains(&m.id))
                 );
@@ -4221,7 +4221,7 @@ mod tests {
             );
             let id = JOINED_CANDIDATE.load(std::sync::atomic::Ordering::Relaxed);
             assert_ne!(id, 0);
-            assert_eq!(game.mobs.iter().any(|m| m.id == id), case == "valid");
+            assert_eq!(game.entities.mobs.iter().any(|m| m.id == id), case == "valid");
             if case == "move" {
                 let moved = game.server.levels.0.parked_mobs(Dim::Nether).unwrap();
                 assert!(moved.iter().any(|m| {
@@ -4351,7 +4351,7 @@ mod tests {
                         &mut scratch,
                     );
                     let actual: Vec<_> = game
-                        .mobs
+                        .entities.mobs
                         .iter()
                         .filter(|mob| mob.kind.id == SILVERFISH)
                         .map(|mob| {

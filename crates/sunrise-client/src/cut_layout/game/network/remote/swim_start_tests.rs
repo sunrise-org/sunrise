@@ -168,7 +168,7 @@ fn local_swim_eligibility_replaces_entry_and_the_shallow_sprint_query() {
                     let p = game.player.as_mut().unwrap();
                     p.swimming = false;
                     p.set_sprinting(true).unwrap();
-                    game.boats
+                    game.entities.boats
                         .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                             71,
                             "oak".into(),

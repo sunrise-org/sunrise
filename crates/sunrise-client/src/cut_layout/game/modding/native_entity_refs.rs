@@ -64,14 +64,13 @@ pub(crate) mod general_handle_tests {
                 std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
             );
             let uuid = [21, 22, 23, 24];
-            game.resident_entities.general.rows.push(row(42, uuid, 7.0));
+            game.entities.general.rows.push(row(42, uuid, 7.0));
             let handle = game.entity(42).expect("the row became a handle");
             assert_eq!(handle.id(), 42);
             assert!(game.native_entity_target(handle).is_some());
 
             // The row leaves; the handle refuses.
-            game.resident_entities
-                .general
+            game.entities.general
                 .rows
                 .retain(|row| row.id != 42);
             assert!(game.entity(42).is_none());
@@ -79,7 +78,7 @@ pub(crate) mod general_handle_tests {
 
             // The next row is id 43 — the counter moved on, the same UUID
             // notwithstanding — and the old handle still refuses.
-            game.resident_entities.general.rows.push(row(43, uuid, 7.0));
+            game.entities.general.rows.push(row(43, uuid, 7.0));
             let fresh = game.entity(43).expect("the next row became a handle");
             assert_ne!(fresh.id(), handle.id());
             assert!(
@@ -91,8 +90,7 @@ pub(crate) mod general_handle_tests {
                 .expect("the next row's handle resolves");
             assert!(matches!(target, Target::General(43)));
             let next = game
-                .resident_entities
-                .general
+                .entities.general
                 .rows
                 .iter()
                 .find(|row| row.id == 43)
@@ -112,8 +110,7 @@ pub(crate) mod general_handle_tests {
                 (0, 0),
                 std::sync::Arc::new(sunrise_client::chunk::Chunk::empty(0, 0)),
             );
-            game.resident_entities
-                .general
+            game.entities.general
                 .rows
                 .push(row(42, [21, 22, 23, 24], 7.0));
             let handle = game.entity(42).expect("the row became a handle");
@@ -448,9 +445,9 @@ pub(crate) mod tests {
                     1.0 / hardness / divisor,
                     "{block}"
                 );
-                game.dropped.clear();
+                game.entities.dropped.clear();
                 game.break_block(pos).unwrap();
-                let dropped = game.dropped.iter().any(|item| &*item.stack.item == drop);
+                let dropped = game.entities.dropped.iter().any(|item| &*item.stack.item == drop);
                 assert_eq!(dropped, harvest, "{block}: drops {drop}");
             }
             std::fs::remove_dir_all(scratch).unwrap();
@@ -1448,8 +1445,8 @@ pub(crate) mod tests {
                 held.damage = 7;
                 held.data_mut().custom_name = Some(sunrise_core::nbt::Tag::String("kept".into()));
                 game.common.inventory[game.common.selected] = Some(held.clone());
-                let index = game.mobs.len();
-                game.mobs.push(mob);
+                let index = game.entities.mobs.len();
+                game.entities.mobs.push(mob);
                 let used = match id {
                     12 => game.interact_mount(index, item),
                     13 => game.interact_llama(index, item),
@@ -1459,7 +1456,7 @@ pub(crate) mod tests {
                 assert!(used, "{item}");
                 assert_eq!(game.inventory[game.selected].as_ref().unwrap().count, 2);
                 held.count = 1;
-                assert_eq!(game.mobs[index].equipment_stacks()[6], Some(held), "{item}");
+                assert_eq!(game.entities.mobs[index].equipment_stacks()[6], Some(held), "{item}");
             }
         });
     }
@@ -1482,13 +1479,13 @@ pub(crate) mod tests {
             let mut held = ItemStack::new(&item, 3);
             held.data_mut().custom_name = Some(sunrise_core::nbt::Tag::String("kept".into()));
             game.common.inventory[game.common.selected] = Some(held.clone());
-            game.mobs.push(Mob::new(12, kind.clone(), Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, kind.clone(), Vec3::ZERO, 0.0));
             assert!(game.interact_sulfur_cube(0, &item));
             assert_eq!(game.inventory[game.selected].as_ref().unwrap().count, 2);
             held.count = 1;
-            assert_eq!(game.mobs[0].equipment_stacks()[6], Some(held.clone()));
-            game.mobs.clear();
-            game.mobs.push(Mob::new(13, kind, Vec3::ZERO, 0.0));
+            assert_eq!(game.entities.mobs[0].equipment_stacks()[6], Some(held.clone()));
+            game.entities.mobs.clear();
+            game.entities.mobs.push(Mob::new(13, kind, Vec3::ZERO, 0.0));
             game.creatures.ticked.insert(13);
             game.spawn_item(
                 ItemStack {
@@ -1500,8 +1497,8 @@ pub(crate) mod tests {
                 0,
             );
             game.sulfur_cube_pickups();
-            assert_eq!(game.mobs[0].equipment_stacks()[6], Some(held));
-            assert_eq!(game.dropped[0].stack.count, 2);
+            assert_eq!(game.entities.mobs[0].equipment_stacks()[6], Some(held));
+            assert_eq!(game.entities.dropped[0].stack.count, 2);
         });
     }
 
@@ -1523,8 +1520,8 @@ pub(crate) mod tests {
                 stack.damage = 7;
                 stack.data_mut().custom_name = Some(sunrise_core::nbt::Tag::String("kept".into()));
                 mob.extra.set_body_stack(Some(stack.clone()));
-                let index = game.mobs.len();
-                game.mobs.push(mob);
+                let index = game.entities.mobs.len();
+                game.entities.mobs.push(mob);
                 game.common.inventory[game.common.selected] =
                     Some(ItemStack::new("minecraft:shears", 1));
                 let used = if item.ends_with("carpet") {
@@ -1533,8 +1530,8 @@ pub(crate) mod tests {
                     game.interact_happy_ghast(index, "minecraft:shears")
                 };
                 assert!(used);
-                assert!(game.dropped.iter().any(|drop| drop.stack == stack));
-                assert!(game.mobs[index].extra.body_id().is_none());
+                assert!(game.entities.dropped.iter().any(|drop| drop.stack == stack));
+                assert!(game.entities.mobs[index].extra.body_id().is_none());
             }
         });
     }
@@ -1901,7 +1898,7 @@ pub(crate) mod tests {
                 .chunks
                 .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 21,
                 kind,
                 sunrise_core::geometry::Vec3::ZERO,
@@ -1934,10 +1931,10 @@ pub(crate) mod tests {
         use sunrise_sim::entities::ArmorStand;
         with_resident_game(|game| {
             let level = game.level(game.dim.id()).unwrap();
-            game.armor_stands
+            game.entities.armor_stands
                 .push(ArmorStand::new(0, Vec3::new(0.5, 0.0, 0.0), 0.0));
             assert!(game.entity(0).is_none());
-            game.armor_stands
+            game.entities.armor_stands
                 .push(ArmorStand::new(12, Vec3::new(1.0, 0.0, 0.0), 0.0));
             let found =
                 collect_game_entities_in(game, level, [0.0, 0.0, -1.0], [0.8, 1.0, 1.0]).unwrap();
@@ -3359,7 +3356,7 @@ pub(crate) mod tests {
                 )
                 .unwrap();
             let mob = game.living(game.entity(id).unwrap()).unwrap();
-            let zombie = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+            let zombie = game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
             zombie.extra.drop_chances = None;
             assert_eq!(
                 mob.equipment_drop_chance(game, EquipmentSlot::Head),
@@ -3370,7 +3367,7 @@ pub(crate) mod tests {
                 Some(2.0)
             );
             // `EQUIPMENT_SLOTS` order: mainhand, offhand, feet, legs, chest, head, body, saddle.
-            let zombie = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+            let zombie = game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
             zombie.extra.drop_chances = Some(Box::new([0.1, 0.2, 0.3, 0.4, 0.5, 2.0, 0.7, 0.0]));
             for (slot, chance) in [
                 (EquipmentSlot::MainHand, 0.1),
@@ -3465,7 +3462,7 @@ pub(crate) mod tests {
                             let flags = BlockUpdateFlags::NEIGHBORS | BlockUpdateFlags::CLIENTS;
                             let pig_kind =
                                 game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                            game.mobs
+                            game.entities.mobs
                                 .push(Mob::new(42, pig_kind, Vec3::new(0.5, 64.0, 2.5), 0.0));
                             let pig = game.entity(42).unwrap();
                             assert_eq!(
@@ -3506,7 +3503,7 @@ pub(crate) mod tests {
                                 ),
                                 Some(Vec::new())
                             );
-                            assert!(game.dropped.is_empty());
+                            assert!(game.entities.dropped.is_empty());
                             let info = sensor_vibration(game).expect("sculk sensor heard break");
                             assert_eq!(info.source, None);
 
@@ -3547,7 +3544,7 @@ pub(crate) mod tests {
                             );
                             assert_eq!(game.world.block(0, 64, 0), air);
                             assert!(
-                                game.dropped
+                                game.entities.dropped
                                     .iter()
                                     .any(|item| item.stack.item.as_ref()
                                         == "minecraft:chorus_flower")
@@ -3556,7 +3553,7 @@ pub(crate) mod tests {
                             assert_eq!(info.source, Some(EventSource::Mob(42)));
 
                             // Same with a breaker inside a committed transaction.
-                            game.dropped.clear();
+                            game.entities.dropped.clear();
                             assert_eq!(
                                 game.level_set_block(level, [0, 64, 0], chorus_flower, flags),
                                 Ok(true)
@@ -3574,13 +3571,13 @@ pub(crate) mod tests {
                                     ),
                                     Some(Vec::new())
                                 );
-                                assert!(game.dropped.is_empty());
+                                assert!(game.entities.dropped.is_empty());
                                 Ok(())
                             });
                             assert!(ok.is_ok());
                             assert_eq!(game.world.block(0, 64, 0), air);
                             assert!(
-                                game.dropped
+                                game.entities.dropped
                                     .iter()
                                     .any(|item| item.stack.item.as_ref()
                                         == "minecraft:chorus_flower")
@@ -3779,9 +3776,9 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(12, zombie.clone(), Vec3::new(1.5, 60.0, 0.5), 0.0));
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(13, zombie, Vec3::new(1.5, 70.0, 0.5), 0.0));
             let (below, above) = (game.entity(12).unwrap(), game.entity(13).unwrap());
             let (from, to) = ([1.5, 66.0, 0.5], [1.5, 64.5, 0.5]);
@@ -4190,12 +4187,12 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
-            game.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = 14;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             for (id, max) in [(12, 20.0), (13, 20.0), (14, 200.0)] {
                 let living = game.living(game.entity(id).unwrap()).unwrap();
                 assert_eq!(
@@ -4451,7 +4448,7 @@ pub(crate) mod tests {
             .unwrap();
         let flags = BlockUpdateFlags::NEIGHBORS;
         let count = |game: &sunrise_gameplay::game::ServerGame<'_>, item: &str| {
-            game.dropped
+            game.entities.dropped
                 .iter()
                 .filter(|dropped| dropped.stack.item.as_ref() == item)
                 .map(|dropped| dropped.stack.count)
@@ -4469,7 +4466,7 @@ pub(crate) mod tests {
                 .iter()
                 .any(|stack| stack.item.as_ref() == "minecraft:cobblestone")
         );
-        assert!(game.dropped.is_empty(), "collected, not spawned");
+        assert!(game.entities.dropped.is_empty(), "collected, not spawned");
         assert_eq!(game.world.block(0, 64, 0), stone, "the block stays");
         assert_eq!(
             game.level_drop_resources(level, [0, 64, 0], None, None, false),
@@ -4477,7 +4474,7 @@ pub(crate) mod tests {
         );
         assert_eq!(count(&game, "minecraft:cobblestone"), 1);
         assert_eq!(game.world.block(0, 64, 0), stone);
-        game.dropped.clear();
+        game.entities.dropped.clear();
 
         assert_eq!(
             game.level_set_block(level, [0, 64, 0], chest, flags),
@@ -4505,7 +4502,7 @@ pub(crate) mod tests {
             panic!("chest block entity missing")
         };
         assert_eq!(items[0].as_ref().map(|stack| stack.count), Some(3));
-        game.dropped.clear();
+        game.entities.dropped.clear();
 
         // Inside a transaction: rolled now, spawned at commit.
         let host: &mut dyn mod_api::ServerHost = &mut game;
@@ -4521,7 +4518,7 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(count(&game, "minecraft:chest"), 1);
         assert_eq!(game.world.block(0, 64, 0), chest);
-        game.dropped.clear();
+        game.entities.dropped.clear();
 
         assert!(game.ui.rules.set(
             "block_drops",
@@ -4531,7 +4528,7 @@ pub(crate) mod tests {
             game.level_drop_resources(level, [0, 64, 0], None, None, true),
             Some(Vec::new())
         );
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
 
         assert_eq!(
             game.level_set_block(level, [0, 64, 0], air, flags),
@@ -4801,14 +4798,14 @@ pub(crate) mod tests {
             Ok(true)
         );
         assert_eq!(
-            game.dropped
+            game.entities.dropped
                 .iter()
                 .filter(|item| item.stack.item.as_ref() == "minecraft:diamond")
                 .map(|item| item.stack.count)
                 .sum::<u32>(),
             3
         );
-        game.dropped.clear();
+        game.entities.dropped.clear();
         assert_eq!(
             game.level_set_block(level, [0, 64, 0], chest, flags),
             Ok(true)
@@ -4824,7 +4821,7 @@ pub(crate) mod tests {
             Ok(true)
         );
         assert!(!game.world.block_entities.contains_key(&(0, 64, 0)));
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         assert_eq!(
             game.level_set_block(level, [0, 64, 0], stone, flags),
             Ok(true)
@@ -4833,7 +4830,7 @@ pub(crate) mod tests {
             game.level_destroy_block(level, [0, 64, 0], false, None, None, false)
                 .is_some()
         );
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         assert_eq!(game.world.block(0, 64, 0), air);
         assert_eq!(
             game.level_set_block(level, [0, 64, 0], stone, flags),
@@ -4844,7 +4841,7 @@ pub(crate) mod tests {
                 .is_some()
         );
         assert!(
-            game.dropped
+            game.entities.dropped
                 .iter()
                 .any(|item| item.stack.item.as_ref() == "minecraft:cobblestone")
         );
@@ -4852,7 +4849,7 @@ pub(crate) mod tests {
             game.level_destroy_block(level, [0, 64, 0], true, None, None, false)
                 .is_none()
         );
-        game.dropped.clear();
+        game.entities.dropped.clear();
         assert_eq!(
             game.level_set_block(level, [0, 64, 0], chest, flags),
             Ok(true)
@@ -4874,7 +4871,7 @@ pub(crate) mod tests {
         });
         assert_eq!(rolled_back, Err(mod_api::TransactionError::Aborted(())));
         assert_eq!(game.world.block(0, 64, 0), chest);
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         let Some(sunrise_level::containers::BlockEntity::Chest(restored)) =
             game.world.block_entities.get(&(0, 64, 0))
         else {
@@ -4894,7 +4891,7 @@ pub(crate) mod tests {
         .unwrap();
         assert_eq!(game.world.block(0, 64, 0), air);
         assert_eq!(
-            game.dropped
+            game.entities.dropped
                 .iter()
                 .filter(|item| item.stack.item.as_ref() == "minecraft:chest")
                 .map(|item| item.stack.count)
@@ -4902,14 +4899,14 @@ pub(crate) mod tests {
             1
         );
         assert_eq!(
-            game.dropped
+            game.entities.dropped
                 .iter()
                 .filter(|item| item.stack.item.as_ref() == "minecraft:diamond")
                 .map(|item| item.stack.count)
                 .sum::<u32>(),
             3
         );
-        game.dropped.clear();
+        game.entities.dropped.clear();
         assert_eq!(
             game.level_set_block(level, [0, 64, 0], stone, flags),
             Ok(true)
@@ -4926,7 +4923,7 @@ pub(crate) mod tests {
             })
             .unwrap();
         assert_eq!(collected.len(), 1);
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         assert_eq!(game.world.block(0, 64, 0), air);
         let copper = game
             .pack
@@ -4955,7 +4952,7 @@ pub(crate) mod tests {
             panic!("copper chest entity missing")
         };
         assert_eq!(items[0].as_ref().unwrap().count, 3);
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         let sensor = game
             .pack
             .assets
@@ -5135,7 +5132,7 @@ pub(crate) mod tests {
             assert!(
                 [18, 19, 20]
                     .iter()
-                    .all(|id| game.mobs.iter().any(|m| m.id == *id))
+                    .all(|id| game.entities.mobs.iter().any(|m| m.id == *id))
             );
             let level = game.level("minecraft:overworld").unwrap();
             let ids = |host: &dyn Host, level: LevelRef, min, max| {

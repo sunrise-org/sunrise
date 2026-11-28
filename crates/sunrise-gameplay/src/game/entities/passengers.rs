@@ -68,7 +68,7 @@ impl ServerGame<'_> {
             .map(|m| (m.id, m.extra.mount))
             .collect();
         self.common
-            .mobs
+            .entities.mobs
             .iter()
             .filter_map(|m| {
                 let mut mount = m.extra.mount;
@@ -90,9 +90,9 @@ impl ServerGame<'_> {
     }
     /// `Entity.startRiding` for two mobs: false when a mod canceled it.
     pub fn try_mount_mob(&mut self, rider: u32, vehicle: u32) -> bool {
-        let vehicle = if self.common.boats.iter().any(|b| b.id == vehicle) {
+        let vehicle = if self.common.entities.boats.iter().any(|b| b.id == vehicle) {
             super::commands::Target::Boat(vehicle)
-        } else if self.common.carts.iter().any(|c| c.id == vehicle) {
+        } else if self.common.entities.carts.iter().any(|c| c.id == vehicle) {
             super::commands::Target::Cart(vehicle)
         } else {
             super::commands::Target::Mob(vehicle)
@@ -122,62 +122,62 @@ impl ServerGame<'_> {
             return;
         }
         // Entity.baseTick.
-        for m in &mut self.common.mobs {
+        for m in &mut self.common.entities.mobs {
             if m.extra.boarding_cooldown > 0 {
                 m.extra.boarding_cooldown -= 1;
             }
         }
         let boats: std::collections::HashSet<u32> =
-            self.common.boats.iter().map(|b| b.id).collect();
+            self.common.entities.boats.iter().map(|b| b.id).collect();
         let carts: std::collections::HashSet<u32> =
-            self.common.carts.iter().map(|c| c.id).collect();
+            self.common.entities.carts.iter().map(|c| c.id).collect();
         let cushions: std::collections::HashSet<u32> =
-            self.common.cushions.iter().map(|c| c.id).collect();
+            self.common.entities.cushions.iter().map(|c| c.id).collect();
         let tnts: std::collections::HashSet<u32> = self
             .common
-            .tnts
+            .entities.tnts
             .iter()
             .map(|t| t.id)
             .filter(|&id| id != 0)
             .collect();
         let index: HashMap<u32, usize> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .enumerate()
             .map(|(i, m)| (m.id, i))
             .collect();
         let mut riding: HashMap<u32, (i64, u32)> = HashMap::new();
-        for i in 0..self.common.mobs.len() {
-            let Some(v) = self.common.mobs[i].extra.mount else {
+        for i in 0..self.common.entities.mobs.len() {
+            let Some(v) = self.common.entities.mobs[i].extra.mount else {
                 continue;
             };
             // Not a text display: a server's display mounts come through
             // `remote_set_passengers`, which seats them in `position_riders`.
-            let valid = !self.common.mobs[i].removed
+            let valid = !self.common.entities.mobs[i].removed
                 && (boats.contains(&v)
                     || carts.contains(&v)
                     || tnts.contains(&v)
                     || cushions.contains(&v)
                     || self.seat(v).is_some()
-                    || index.get(&v).is_some_and(|&j| !self.common.mobs[j].removed)
+                    || index.get(&v).is_some_and(|&j| !self.common.entities.mobs[j].removed)
                     || self.player_vehicle(v).is_some());
             if valid {
                 let place = (
-                    self.common.mobs[i].extra.vehicle_order,
-                    self.common.mobs[i].id,
+                    self.common.entities.mobs[i].extra.vehicle_order,
+                    self.common.entities.mobs[i].id,
                 );
                 riding
                     .entry(v)
                     .and_modify(|first| *first = (*first).min(place))
                     .or_insert(place);
             } else {
-                let m = &mut self.common.mobs[i];
+                let m = &mut self.common.entities.mobs[i];
                 m.extra.mount = None;
                 m.extra.passenger = false;
             }
         }
-        for m in &mut self.common.mobs {
+        for m in &mut self.common.entities.mobs {
             m.extra.rider = riding.get(&m.id).map(|&(_, id)| id);
         }
         self.position_riders();
@@ -198,8 +198,8 @@ impl ServerGame<'_> {
                 let valid = self.common.mob_object(v).is_some_and(|m| !m.removed)
                     || self.boat_object(v).is_some()
                     || self.cart_object(v).is_some()
-                    || self.common.cushions.iter().any(|c| c.id == v)
-                    || self.common.tnts.iter().any(|t| t.id == v && v != 0)
+                    || self.common.entities.cushions.iter().any(|c| c.id == v)
+                    || self.common.entities.tnts.iter().any(|t| t.id == v && v != 0)
                     || self.seat(v).is_some()
                     || self.player_vehicle(v).is_some();
                 (!valid).then_some((m.id, v))
@@ -228,7 +228,7 @@ impl ServerGame<'_> {
             self.mob_object_mut(id).unwrap().extra.rider = first.get(&id).map(|&(_, id)| id);
         }
         let blocked = self.mobs_below_off_level();
-        for m in &mut self.common.mobs {
+        for m in &mut self.common.entities.mobs {
             if !blocked.contains(&m.id) && m.extra.boarding_cooldown > 0 {
                 m.extra.boarding_cooldown -= 1;
             }
@@ -259,16 +259,16 @@ impl ServerGame<'_> {
         if let Some(seat) = self.seat(vehicle) {
             return Some(seat.passenger_position(0.0));
         }
-        if let Some(b) = self.common.boats.iter().find(|b| b.id == vehicle) {
+        if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == vehicle) {
             let (index, count) = self.passenger_place(vehicle, rider);
             return Some(b.seat(index, count, false, 0.0, false));
         }
-        if let Some(c) = self.common.carts.iter().find(|c| c.id == vehicle) {
+        if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == vehicle) {
             return Some(super::minecarts::cart_general_seat(c.position));
         }
         if let Some(t) = self
             .common
-            .tnts
+            .entities.tnts
             .iter()
             .find(|t| t.id == vehicle && t.id != 0)
         {
@@ -278,7 +278,7 @@ impl ServerGame<'_> {
         }
         if let Some(v) = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == vehicle && !m.removed)
         {
@@ -321,8 +321,8 @@ impl ServerGame<'_> {
         }
         if let Some(v) = index
             .get(&vehicle)
-            .map(|&j| &self.common.mobs[j])
-            .or_else(|| self.common.mobs.iter().find(|m| m.id == vehicle))
+            .map(|&j| &self.common.entities.mobs[j])
+            .or_else(|| self.common.entities.mobs.iter().find(|m| m.id == vehicle))
         {
             let attachment = if &*v.kind.id == "minecraft:player" {
                 [
@@ -336,18 +336,18 @@ impl ServerGame<'_> {
             let at = riders::seat(attachment, 0.0, v.position, v.yaw);
             return Some(glam::DVec3::new(at.x, at.y, at.z));
         }
-        if let Some(b) = self.common.boats.iter().find(|b| b.id == vehicle) {
+        if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == vehicle) {
             let count = self.boat_players(vehicle).max(1) + self.boat_mobs(vehicle).len();
             let at = b.seat(0, count, false, 0.0, false);
             return Some(glam::DVec3::new(at.x, at.y, at.z));
         }
-        if let Some(c) = self.common.carts.iter().find(|c| c.id == vehicle) {
+        if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == vehicle) {
             let at = c
                 .position
                 .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0));
             return Some(glam::DVec3::new(at.x, at.y, at.z));
         }
-        if let Some(a) = self.common.armor_stands.iter().find(|a| a.id == vehicle) {
+        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == vehicle) {
             let height = if a.marker {
                 0.0
             } else if a.small {
@@ -373,7 +373,7 @@ impl ServerGame<'_> {
     pub(in crate::game) fn server_position_riders(&mut self) {
         let blocked = self.mobs_below_off_level();
         let mut riders = Riders::default();
-        for (j, m) in self.common.mobs.iter().enumerate() {
+        for (j, m) in self.common.entities.mobs.iter().enumerate() {
             if blocked.contains(&m.id) {
                 continue;
             }
@@ -382,9 +382,9 @@ impl ServerGame<'_> {
             }
         }
         let mut general_vehicles =
-            std::mem::take(&mut self.common.resident_entities.general.riders.mob_vehicles);
+            std::mem::take(&mut self.common.entities.general.riders.mob_vehicles);
         general_vehicles.clear();
-        if !self.common.resident_entities.general.rows.is_empty() {
+        if !self.common.entities.general.rows.is_empty() {
             general_vehicles.extend(
                 riders
                     .keys()
@@ -392,7 +392,7 @@ impl ServerGame<'_> {
                     .filter(|&vehicle| self.common.general_object(vehicle).is_some()),
             );
         }
-        self.common.resident_entities.general.riders.mob_vehicles = general_vehicles;
+        self.common.entities.general.riders.mob_vehicles = general_vehicles;
         self.seat_boat_mobs(&riders);
         self.common.seat_cart_mobs(&riders);
         self.common.seat_tnt_mobs(&riders);
@@ -400,17 +400,17 @@ impl ServerGame<'_> {
         self.seat_static_mobs(&riders);
         let index: HashMap<u32, usize> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .enumerate()
             .map(|(i, m)| (m.id, i))
             .collect();
         for _ in 0..3 {
-            for i in 0..self.common.mobs.len() {
-                if blocked.contains(&self.common.mobs[i].id) {
+            for i in 0..self.common.entities.mobs.len() {
+                if blocked.contains(&self.common.entities.mobs[i].id) {
                     continue;
                 }
-                let Some(v) = self.common.mobs[i].extra.mount else {
+                let Some(v) = self.common.entities.mobs[i].extra.mount else {
                     continue;
                 };
                 let Some(&j) = index.get(&v) else {
@@ -420,25 +420,25 @@ impl ServerGame<'_> {
                     let _ = self.seat_player_passenger(i, v);
                     continue;
                 };
-                let vehicle = &self.common.mobs[j];
+                let vehicle = &self.common.entities.mobs[j];
                 let place = if sunrise_sim::mobs::camel::is_camel(vehicle.species())
                     || vehicle.species() == sunrise_sim::mobs::Species::HappyGhast
                     || vehicle.kind.passenger_attachments.len() > 1
                 {
-                    self.passenger_place(v, self.common.mobs[i].id)
+                    self.passenger_place(v, self.common.entities.mobs[i].id)
                 } else {
                     (0, 1)
                 };
                 let attach = sunrise_gameplay_common::game::CommonGame::mob_passenger_attachment(
                     vehicle,
-                    sunrise_sim::mobs::drops::is_animal(self.common.mobs[i].species()),
+                    sunrise_sim::mobs::drops::is_animal(self.common.entities.mobs[i].species()),
                     place.0,
                     place.1,
                 );
                 let (pos, prev) = (vehicle.position, vehicle.previous);
                 let (yaw, prev_yaw) = (vehicle.yaw, vehicle.previous_yaw);
                 let (body, prev_body) = (vehicle.body_yaw, vehicle.previous_body_yaw);
-                let rider = &self.common.mobs[i];
+                let rider = &self.common.entities.mobs[i];
                 let controlling = riders::controls_vehicle(
                     vehicle,
                     rider,
@@ -451,7 +451,7 @@ impl ServerGame<'_> {
                 let takes_body = riders::takes_vehicle_body(vehicle, rider, controlling);
                 let vehicle_width = vehicle.width();
                 let vehicle_box = vehicle.bounds();
-                let m = &mut self.common.mobs[i];
+                let m = &mut self.common.entities.mobs[i];
                 let offset = riders::vehicle_attachment(m, vehicle_width);
                 m.seated(v, offset, vehicle_box);
                 sunrise_sim::mobs::living::teleports::set_pos(
@@ -471,8 +471,8 @@ impl ServerGame<'_> {
                 m.ai.nav.stop();
             }
         }
-        for i in 0..self.common.armor_stands.len() {
-            let Some(vehicle) = self.common.armor_stands[i].vehicle else {
+        for i in 0..self.common.entities.armor_stands.len() {
+            let Some(vehicle) = self.common.entities.armor_stands[i].vehicle else {
                 continue;
             };
             let Some(at) = self.server_passenger_riding_position(vehicle, None, None, &index)
@@ -482,7 +482,7 @@ impl ServerGame<'_> {
             let before = index
                 .get(&vehicle)
                 .map(|&j| {
-                    let v = &self.common.mobs[j];
+                    let v = &self.common.entities.mobs[j];
                     riders::seat(
                         riders::passenger_attachment(v),
                         0.0,
@@ -490,9 +490,9 @@ impl ServerGame<'_> {
                         v.previous_yaw,
                     )
                 })
-                .unwrap_or(self.common.armor_stands[i].previous);
+                .unwrap_or(self.common.entities.armor_stands[i].previous);
             let at = Vec3::new(at.x, at.y, at.z);
-            let stand = &mut self.common.armor_stands[i];
+            let stand = &mut self.common.entities.armor_stands[i];
             stand.position = at;
             stand.previous = before;
             stand.velocity = Vec3::ZERO;
@@ -512,7 +512,7 @@ impl ServerGame<'_> {
             .collect();
         let mut sprung = Vec::new();
         let blocked = self.mobs_below_off_level();
-        for m in &mut self.common.mobs {
+        for m in &mut self.common.entities.mobs {
             if blocked.contains(&m.id) {
                 continue;
             }
@@ -538,7 +538,7 @@ impl ServerGame<'_> {
         }
     }
     pub fn spring_skeleton_trap(&mut self, id: u32) {
-        let Some(horse) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(horse) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return;
         };
         horse.extra.trap = false;
@@ -561,18 +561,18 @@ impl ServerGame<'_> {
             ) else {
                 continue;
             };
-            if let Some(h) = self.common.mobs.iter_mut().find(|m| m.id == other) {
+            if let Some(h) = self.common.entities.mobs.iter_mut().find(|m| m.id == other) {
                 h.invulnerable_time = TRAP_INVULNERABLE;
                 h.extra.tame = true;
                 h.extra.age = 0;
             }
             if let Some(rider) = self.trap_skeleton(at) {
                 self.mount_mob(rider, other);
-                let Some(horse) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+                let Some(horse) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
                     continue;
                 };
                 let (dx, dz) = trap_horse_scatter(&mut horse.random);
-                if let Some(h) = self.common.mobs.iter_mut().find(|m| m.id == other) {
+                if let Some(h) = self.common.entities.mobs.iter_mut().find(|m| m.id == other) {
                     h.velocity = Vec3::new(h.velocity.x + dx, h.velocity.y, h.velocity.z + dz);
                 }
             }
@@ -589,7 +589,7 @@ impl ServerGame<'_> {
                 sunrise_sim::mobs::spawn_rules::Reason::Triggered,
             ),
         )?;
-        let m = self.common.mobs.iter_mut().find(|m| m.id == id)?;
+        let m = self.common.entities.mobs.iter_mut().find(|m| m.id == id)?;
         m.invulnerable = TRAP_INVULNERABLE;
         if m.extra.head_id().is_none() {
             m.extra.set_slot_id(
@@ -604,7 +604,7 @@ impl ServerGame<'_> {
             sunrise_sim::mobs::finalize::MAINHAND,
             sunrise_sim::mobs::finalize::HEAD,
         ] {
-            if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+            if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
                 sunrise_sim::mobs::finalize::set_slot_enchantments(m, slot, Vec::new());
             }
             self.enchant_item(id, slot, special);

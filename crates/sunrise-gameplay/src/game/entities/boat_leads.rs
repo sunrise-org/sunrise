@@ -128,7 +128,7 @@ impl ServerGame<'_> {
                 )
             }
             Holder::Mob(id) => {
-                let Some(m) = self.common.mobs.iter().find(|m| m.id == id && m.alive()) else {
+                let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id && m.alive()) else {
                     return Held::Gone;
                 };
                 let (lo, hi) = (m.bounds().min_position(), m.bounds().max_position());
@@ -148,7 +148,7 @@ impl ServerGame<'_> {
                     leash::quad_holder_offsets(m).is_some(),
                 )
             }
-            Holder::Boat(id) => match self.common.boats.iter().find(|o| o.id == id) {
+            Holder::Boat(id) => match self.common.entities.boats.iter().find(|o| o.id == id) {
                 // supportQuadLeashAsHolder is the ghasts' alone.
                 Some(o) => Held::At(boat_state(o).1, false),
                 None => Held::Gone,
@@ -196,10 +196,10 @@ impl ServerGame<'_> {
     }
 
     pub fn release_stored_boat_leash(&mut self, i: usize, drop: bool) {
-        let (holder, id) = (self.common.boats[i].leash, self.common.boats[i].id);
+        let (holder, id) = (self.common.entities.boats[i].leash, self.common.entities.boats[i].id);
         let at = self
             .common
-            .boats
+            .entities.boats
             .update(i, |b| Self::take_boat_leash(b, drop));
         self.notify_knot_leashee_removed(holder, id);
         if let Some(at) = at {
@@ -209,7 +209,7 @@ impl ServerGame<'_> {
 
     /// `AbstractBoat.remove`: a boat that is destroyed drops its lead.
     pub(in crate::game::server_side) fn drop_removed_boat_lead(&mut self, i: usize) {
-        let (holder, id, at) = self.common.boats.update(i, |b| {
+        let (holder, id, at) = self.common.entities.boats.update(i, |b| {
             let holder = b.leash;
             let had_pending = b.leash_pending.take().is_some();
             let at = Self::take_boat_leash(b, true)
@@ -257,7 +257,7 @@ impl ServerGame<'_> {
         // Leashable.whenLeashedTo: `leashHolder.notifyLeashHolder(this)`; a
         // boat supports a quad lead.
         if let Holder::Mob(id) = holder
-            && let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id)
+            && let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id)
         {
             sunrise_sim::mobs::happy_ghast::notify_leash_holder(m);
         }
@@ -360,7 +360,7 @@ impl ServerGame<'_> {
     pub(in crate::game::server_side) fn write_boat_leash(&mut self, tag: &mut Tag, index: usize) {
         let Tag::Compound(map) = tag else { return };
         map.remove(&"leash".into());
-        let b = &self.common.boats[index];
+        let b = &self.common.entities.boats[index];
         let (holder, pending, player) = (b.leash, b.leash_pending, self.boat_leash_player(b));
         let value = match (holder, pending) {
             (Some(Holder::Mob(id)), _) => {
@@ -384,7 +384,7 @@ impl ServerGame<'_> {
     /// Whether the player acting holds this boat's lead.
     pub(in crate::game::server_side) fn boat_led_by_player(&mut self, i: usize) -> bool {
         let me = self.acting_player_uuid();
-        let b = &self.common.boats[i];
+        let b = &self.common.entities.boats[i];
         b.leash == Some(Holder::Player) && self.boat_leash_player(b) == Some(me)
     }
 
@@ -396,7 +396,7 @@ impl ServerGame<'_> {
             .iter()
             .find(|(id, u)| {
                 **u == uuid
-                    && self.common.boats.iter().any(|b| b.id == **id)
+                    && self.common.entities.boats.iter().any(|b| b.id == **id)
                     && self.resident_source_target_visible(
                         self.common.dim.key(),
                         super::commands::Target::Boat(**id),
@@ -424,9 +424,9 @@ impl ServerGame<'_> {
     /// The boats on the acting player's lead within 32 blocks of a point
     /// (`Leashable.leashableInArea`).
     pub(in crate::game) fn player_led_boats(&mut self, around: glam::DVec3) -> Vec<usize> {
-        (0..self.common.boats.len())
+        (0..self.common.entities.boats.len())
             .filter(|&i| {
-                let c = center(&self.common.boats[i]);
+                let c = center(&self.common.entities.boats[i]);
                 self.boat_led_by_player(i)
                     && (c.x - around.x).abs() <= 16.0 + f64::from(WIDTH) / 2.0
                     && (c.y - around.y).abs() <= 16.0
@@ -437,15 +437,15 @@ impl ServerGame<'_> {
 
     /// The boats whose lead hangs on `holder`.
     pub(in crate::game) fn boats_on(&self, holder: Holder) -> Vec<usize> {
-        (0..self.common.boats.len())
-            .filter(|&i| self.common.boats[i].leash == Some(holder))
+        (0..self.common.entities.boats.len())
+            .filter(|&i| self.common.entities.boats[i].leash == Some(holder))
             .collect()
     }
 
     /// `Leashable.canHaveALeashAttachedTo` for the boat at `i` and an entity
     /// whose box centre is `at`.
     pub(in crate::game::server_side) fn boat_can_attach(&self, i: usize, at: glam::DVec3) -> bool {
-        let c = center(&self.common.boats[i]);
+        let c = center(&self.common.entities.boats[i]);
         distance(Vec3::new(at.x, at.y, at.z), c) <= leash::SNAP
     }
 
@@ -460,11 +460,11 @@ impl ServerGame<'_> {
         let mut any = false;
         for i in self.player_led_boats(at) {
             // Leashable.setLeashedTo: `this != holder`.
-            if to == Holder::Boat(self.common.boats[i].id) {
+            if to == Holder::Boat(self.common.entities.boats[i].id) {
                 continue;
             }
             if self.boat_can_attach(i, at) {
-                self.common.boats.update(i, |b| {
+                self.common.entities.boats.update(i, |b| {
                     b.leash = Some(to);
                     b.leash_knot_id = knot_id;
                     b.leash_player = None;
@@ -484,9 +484,9 @@ impl ServerGame<'_> {
         for i in self.boats_on(Holder::Knot(knot)) {
             if self.boat_can_attach(i, player) {
                 self.common
-                    .boats
+                    .entities.boats
                     .update(i, |b| b.leash = Some(Holder::Player));
-                self.common.boats.update(i, |b| b.leash_player = Some(me));
+                self.common.entities.boats.update(i, |b| b.leash_player = Some(me));
                 any = true;
             }
         }
@@ -496,9 +496,9 @@ impl ServerGame<'_> {
 
     /// `Leashable.dropLeash` for each boat in `list`.
     pub fn drop_boat_leashes(&mut self, list: &[usize]) {
-        let ids: Vec<_> = list.iter().map(|&i| self.common.boats[i].id).collect();
+        let ids: Vec<_> = list.iter().map(|&i| self.common.entities.boats[i].id).collect();
         for id in ids {
-            if let Some(i) = self.common.boats.iter().position(|boat| boat.id == id) {
+            if let Some(i) = self.common.entities.boats.iter().position(|boat| boat.id == id) {
                 self.release_stored_boat_leash(i, true);
             }
         }
@@ -530,9 +530,9 @@ impl ServerGame<'_> {
     /// the click.
     pub(in crate::game) fn interact_boat_leash(&mut self, i: usize) -> bool {
         let item = self.common.held().map(|s| s.item.to_string());
-        let c = center(&self.common.boats[i]);
+        let c = center(&self.common.entities.boats[i]);
         let at = [c.x, c.y, c.z];
-        let id = self.common.boats[i].id;
+        let id = self.common.entities.boats[i].id;
         // The sneak branch: the player's mobs and boats on leads are re-tied
         // to this boat.
         let sneaking = self.server_acting_sneak();
@@ -548,13 +548,13 @@ impl ServerGame<'_> {
         if self.held_shears(SHEARS_HARVEST) {
             let held_mobs: Vec<u32> = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .filter(|m| m.extra.leash == Some(Holder::Boat(id)))
                 .map(|m| m.id)
                 .collect();
             let mut held_boats = self.boats_on(Holder::Boat(id));
-            if self.common.boats[i].leash.is_some() {
+            if self.common.entities.boats[i].leash.is_some() {
                 held_boats.push(i);
             }
             if !held_mobs.is_empty() || !held_boats.is_empty() {
@@ -576,16 +576,16 @@ impl ServerGame<'_> {
             self.lead_sound("untied", at);
             return true;
         }
-        let taken_by_player = self.common.boats[i].leash == Some(Holder::Player);
+        let taken_by_player = self.common.entities.boats[i].leash == Some(Holder::Player);
         if item.as_deref() == Some("minecraft:lead") && !taken_by_player {
             let player = self.player_center();
             if self.boat_can_attach(i, player) {
                 self.release_stored_boat_leash(i, true);
-                let Some(i) = self.common.boats.iter().position(|boat| boat.id == id) else {
+                let Some(i) = self.common.entities.boats.iter().position(|boat| boat.id == id) else {
                     return true;
                 };
                 let player_uuid = self.acting_player_uuid();
-                self.common.boats.update(i, |b| {
+                self.common.entities.boats.update(i, |b| {
                     // LeashData.setLeashHolder forgets a holder still waiting in the save.
                     b.leash = Some(Holder::Player);
                     b.leash_pending = None;

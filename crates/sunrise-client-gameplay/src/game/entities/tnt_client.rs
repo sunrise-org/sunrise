@@ -21,7 +21,7 @@ impl ClientGame<'_> {
             glam::DVec3::splat(PrimedTnt::SIZE),
             self.view_scale(),
         );
-        for t in &self.common.tnts[run] {
+        for t in &self.common.entities.tnts[run] {
             // LevelExtractor: the camera entity is not drawn from its own eyes.
             if self.hides_as_camera(t.id) {
                 continue;

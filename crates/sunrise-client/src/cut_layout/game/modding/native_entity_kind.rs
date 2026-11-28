@@ -45,16 +45,16 @@ mod tests {
         with_resident_game(|game| {
             game.build_registries();
             let pig_ty = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(10, pig_ty, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(10, pig_ty, Vec3::ZERO, 0.0));
             let mut stand = ArmorStand::new(11, Vec3::ZERO, 0.0);
             stand.marker = true;
-            game.armor_stands.push(stand);
+            game.entities.armor_stands.push(stand);
             assert!(game.as_console(|game| {
                 game.run_command("summon minecraft:item_frame 0 64 0 {Facing:2b,Fixed:1b}")
             }));
             assert_eq!(read(game, 10), (PushPull, false));
             assert_eq!(read(game, 11), (IgnoreEntity, false));
-            assert_eq!(read(game, game.item_frames[0].id), (PushPull, true));
+            assert_eq!(read(game, game.entities.item_frames[0].id), (PushPull, true));
         });
         with_client_game(|game| {
             let (client, _server) = sunrise_protocol::connection::Pipe::pair();

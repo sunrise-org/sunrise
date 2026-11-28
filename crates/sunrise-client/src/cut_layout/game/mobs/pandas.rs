@@ -9,7 +9,7 @@ pub(crate) mod nested_spawn_tests {
     fn lifted_mob_callback_keeps_nested_spawns_until_the_next_pass() {
         taken_pass_tests::in_both_dimensions(|game, balance| {
             let kind = game.res.mob_types().get("minecraft:panda").unwrap().clone();
-            game.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 99,
                 kind,
                 sunrise_core::geometry::Vec3::new(0.5, 80.0, 0.5),
@@ -99,7 +99,7 @@ pub(crate) mod pickup_tests {
         }
         let id = game.mob_by_uuid([9, 9, 9, 9]).unwrap();
         let holding = |g: &sunrise_gameplay::game::ServerGame<'_>| {
-            g.mobs
+            g.entities.mobs
                 .iter()
                 .any(|m| m.id == id && m.extra.main_hand_id() == Some("minecraft:bamboo"))
         };

@@ -75,7 +75,7 @@ mod tests {
                     guests.push(g);
                 }
                 for id in [900, 901, 902] {
-                    game.orbs.push(orb(id, [1.0, 64.0, 0.0]));
+                    game.entities.orbs.push(orb(id, [1.0, 64.0, 0.0]));
                 }
                 let followed = game.orb_followed();
                 let half = game.server.lan.as_ref().unwrap().hub.guests[0].eye_height() / 2.0;

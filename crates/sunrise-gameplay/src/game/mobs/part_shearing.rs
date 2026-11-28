@@ -22,10 +22,10 @@ impl crate::game::ServerGame<'_> {
         player: Option<PlayerRef>,
         shears: &ItemStack,
     ) -> Option<((usize, usize), bool)> {
-        if !self.common.mobs[index].alive() {
+        if !self.common.entities.mobs[index].alive() {
             return None;
         }
-        let kind = std::sync::Arc::clone(&self.common.mobs[index].kind);
+        let kind = std::sync::Arc::clone(&self.common.entities.mobs[index].kind);
         let kind = &kind.id;
         if !mod_api::__private::has_scoped_hook(mod_api::HookId::IsShearable)
             || !mod_api::__private::entity_part_hooked(
@@ -36,7 +36,7 @@ impl crate::game::ServerGame<'_> {
         {
             return None;
         }
-        let entity = self.entity(self.common.mobs[index].id)?;
+        let entity = self.entity(self.common.entities.mobs[index].id)?;
         let metadata = stack_read_metadata(shears).ok()?;
         let project = |metadata| project_stack(shears, metadata).ok();
         let shears_view = mod_api::ItemStackView::resident(metadata, &project);
@@ -57,9 +57,9 @@ impl crate::game::ServerGame<'_> {
         shears: &ItemStack,
     ) -> Result<(), ()> {
         let (id, at, kind) = (
-            self.common.mobs[index].id,
-            self.common.mobs[index].position,
-            std::sync::Arc::clone(&self.common.mobs[index].kind),
+            self.common.entities.mobs[index].id,
+            self.common.entities.mobs[index].position,
+            std::sync::Arc::clone(&self.common.entities.mobs[index].kind),
         );
         let (Some(entity), Ok(metadata)) = (self.entity(id), stack_read_metadata(shears)) else {
             return Ok(());
@@ -80,19 +80,19 @@ impl crate::game::ServerGame<'_> {
         // The part may have moved or removed the mob: its drops fall where it is now.
         let index = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .position(|m| m.id == id && !m.removed);
-        let at = index.map_or(at, |i| self.common.mobs[i].position);
+        let at = index.map_or(at, |i| self.common.entities.mobs[i].position);
         for stack in accepted {
             // `IShearable.spawnShearedDrop`: each species' own height; a mooshroom's drop has
             // no pickup delay and the rest fall with `Sheep.shear`'s push, drawn from the mob's
             // random only for an item that actually joined the level.
             let species = index.map(|i| {
                 (
-                    self.common.mobs[i].species(),
-                    self.common.mobs[i].eye_height(),
-                    f64::from(self.common.mobs[i].height()),
+                    self.common.entities.mobs[i].species(),
+                    self.common.entities.mobs[i].eye_height(),
+                    f64::from(self.common.entities.mobs[i].height()),
                 )
             });
             match species {
@@ -111,7 +111,7 @@ impl crate::game::ServerGame<'_> {
                     if self.just_spawned_item().is_none() {
                         continue;
                     }
-                    let r = &mut self.common.mobs[i].random;
+                    let r = &mut self.common.entities.mobs[i].random;
                     let push = [
                         f64::from((r.next_float() - r.next_float()) * 0.1),
                         f64::from(r.next_float() * 0.05),
@@ -139,7 +139,7 @@ impl crate::game::ServerGame<'_> {
         if part.is_some_and(|(_, shearable)| !shearable) {
             return Some(false);
         }
-        let mob = &self.common.mobs[index];
+        let mob = &self.common.entities.mobs[index];
         let (id, at) = (mob.id, mob.position);
         let shearable = part.is_some()
             || match mob.species() {
@@ -164,9 +164,9 @@ impl crate::game::ServerGame<'_> {
             // its id, and it must still be there, not removed, with the same
             // shears in hand. Otherwise the click is spent and nothing is
             // sheared.
-            match self.common.mobs.iter().position(|m| m.id == id) {
+            match self.common.entities.mobs.iter().position(|m| m.id == id) {
                 Some(now)
-                    if !self.common.mobs[now].removed
+                    if !self.common.entities.mobs[now].removed
                         && Self::same_item_and_count(self.common.held(), Some(&shears)) =>
                 {
                     index = now;
@@ -273,7 +273,7 @@ mod tests {
             let mut add = |id: u32, kind: &str, x: i32| {
                 let kind = game.res.mob_types().get(kind).unwrap().clone();
                 let at = Vec3::new(f64::from(x) + 0.5, 64.0, 0.5);
-                game.mobs.push(Mob::new(id, kind, at, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind, at, 0.0));
             };
             add(1, "minecraft:cow", 0);
             add(2, "minecraft:sheep", 4);
@@ -285,7 +285,7 @@ mod tests {
                 "the cow is sheared"
             );
             let leather: Vec<_> = game
-                .dropped
+                .entities.dropped
                 .iter()
                 .filter(|d| &*d.stack.item == "minecraft:leather")
                 .map(|d| d.stack.count)
@@ -296,8 +296,8 @@ mod tests {
                 !game.shear_entity((4, 64, 0), &shears).unwrap(),
                 "the sheep refuses"
             );
-            assert!(!game.mobs.iter().any(|m| m.id == 2 && m.extra.sheared));
-            assert!(!game.dropped.iter().any(|d| d.stack.item.ends_with("_wool")));
+            assert!(!game.entities.mobs.iter().any(|m| m.id == 2 && m.extra.sheared));
+            assert!(!game.entities.dropped.iter().any(|d| d.stack.item.ends_with("_wool")));
         });
     }
 }

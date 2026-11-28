@@ -342,14 +342,14 @@ pub(crate) mod mob_pickup_sync_tests {
         game.build_registries();
         game.set_allow_commands(true);
         assert!(game.run_command("summon piglin 8.5 80 8.5 {NoAI:1b,PersistenceRequired:1b}"));
-        let mob = game.mobs[0].id;
+        let mob = game.entities.mobs[0].id;
         game.spawn_item(
             ItemStack::new("minecraft:gold_ingot", 3),
             [8.5, 80.0, 8.5],
             [0.0; 3],
             0,
         );
-        let item = game.dropped[0].clone();
+        let item = game.entities.dropped[0].clone();
         let rx = guest_at(&mut game, [8.5, 80.0, 8.5]);
         game.server_mob_take_item(&item, mob);
         let sent = takes(&rx);
@@ -452,10 +452,10 @@ pub(crate) mod mob_swing_sync_tests {
         let piglin = "{NoAI:1b,PersistenceRequired:1b}";
         assert!(game.run_command(&format!("summon piglin 8.5 80 8.5 {piglin}")));
         assert!(game.run_command(&format!("summon piglin 10.5 80 10.5 {piglin}")));
-        let (off, main) = (game.mobs[0].id, game.mobs[1].id);
+        let (off, main) = (game.entities.mobs[0].id, game.entities.mobs[1].id);
         let rx = guest_at(&mut game, [8.5, 80.0, 8.5]);
-        game.mobs[0].swing_hand_modified(true, SwingAnimation::DEFAULT);
-        game.mobs[1].swing_hand_modified(false, SwingAnimation::DEFAULT);
+        game.entities.mobs[0].swing_hand_modified(true, SwingAnimation::DEFAULT);
+        game.entities.mobs[1].swing_hand_modified(false, SwingAnimation::DEFAULT);
         let host = game.server.lan.take().expect("the hub");
         game.server.lan = Some(host);
         game.lan_flush_effects();

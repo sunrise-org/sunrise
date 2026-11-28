@@ -38,7 +38,7 @@ impl ClientGame<'_> {
         if let Some(seat) = self.client_general_seat(id, false) {
             return Some(seat);
         }
-        if let Some(a) = self.common.armor_stands.iter().find(|a| a.id == id) {
+        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
             let (height, width) = if a.marker {
                 (0.0, 0.0)
             } else if a.small {
@@ -88,7 +88,7 @@ impl ClientGame<'_> {
                 continue;
             };
             for &j in js {
-                seat.position_mob(&mut self.common.mobs[j]);
+                seat.position_mob(&mut self.common.entities.mobs[j]);
             }
         }
     }
@@ -102,16 +102,16 @@ impl ClientGame<'_> {
         if let Some(seat) = self.client_seat(vehicle) {
             return Some(seat.passenger_position(0.0));
         }
-        if let Some(b) = self.common.boats.iter().find(|b| b.id == vehicle) {
+        if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == vehicle) {
             let (index, count) = self.client_passenger_place(vehicle, rider);
             return Some(b.seat(index, count, false, 0.0, false));
         }
-        if let Some(c) = self.common.carts.iter().find(|c| c.id == vehicle) {
+        if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == vehicle) {
             return Some(super::minecarts::cart_general_seat(c.position));
         }
         if let Some(t) = self
             .common
-            .tnts
+            .entities.tnts
             .iter()
             .find(|t| t.id == vehicle && t.id != 0)
         {
@@ -121,7 +121,7 @@ impl ClientGame<'_> {
         }
         if let Some(v) = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == vehicle && !m.removed)
         {
@@ -164,8 +164,8 @@ impl ClientGame<'_> {
         }
         if let Some(v) = index
             .get(&vehicle)
-            .map(|&j| &self.common.mobs[j])
-            .or_else(|| self.common.mobs.iter().find(|m| m.id == vehicle))
+            .map(|&j| &self.common.entities.mobs[j])
+            .or_else(|| self.common.entities.mobs.iter().find(|m| m.id == vehicle))
         {
             // Another player: the top of its box for the pose its server synced.
             let attachment = if &*v.kind.id == "minecraft:player" {
@@ -195,18 +195,18 @@ impl ClientGame<'_> {
             let at = i.position;
             return Some(glam::DVec3::new(at.x, at.y, at.z));
         }
-        if let Some(b) = self.common.boats.iter().find(|b| b.id == vehicle) {
+        if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == vehicle) {
             let count = self.client_passenger_order(vehicle).len().max(1);
             let at = b.seat(0, count, false, 0.0, false);
             return Some(glam::DVec3::new(at.x, at.y, at.z));
         }
-        if let Some(c) = self.common.carts.iter().find(|c| c.id == vehicle) {
+        if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == vehicle) {
             let at = c
                 .position
                 .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0));
             return Some(glam::DVec3::new(at.x, at.y, at.z));
         }
-        if let Some(a) = self.common.armor_stands.iter().find(|a| a.id == vehicle) {
+        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == vehicle) {
             let height = if a.marker {
                 0.0
             } else if a.small {
@@ -255,7 +255,7 @@ impl ClientGame<'_> {
     /// Client-side `Entity.positionRider` for mobs, displays, interactions, and stands.
     pub(in crate::game) fn client_position_riders(&mut self) {
         let mut riders = Riders::default();
-        for (j, m) in self.common.mobs.iter().enumerate() {
+        for (j, m) in self.common.entities.mobs.iter().enumerate() {
             if let Some(v) = m.extra.mount {
                 riders.entry(v).or_default().push(j);
             }
@@ -268,15 +268,15 @@ impl ClientGame<'_> {
         self.client_seat_static_mobs(&riders);
         let index: HashMap<u32, usize> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .enumerate()
             .map(|(i, m)| (m.id, i))
             .collect();
         // Riders of riders settle over a few passes.
         for _ in 0..3 {
-            for i in 0..self.common.mobs.len() {
-                let Some(v) = self.common.mobs[i].extra.mount else {
+            for i in 0..self.common.entities.mobs.len() {
+                let Some(v) = self.common.entities.mobs[i].extra.mount else {
                     continue;
                 };
                 let Some(&j) = index.get(&v) else {
@@ -301,14 +301,14 @@ impl ClientGame<'_> {
                         .get(&(v as i32))
                         .map(|d| d.seat().1)
                         .unwrap_or_else(|| {
-                            let old = self.common.mobs[i].previous;
+                            let old = self.common.entities.mobs[i].previous;
                             glam::DVec3::new(
                                 old.x,
-                                old.y + riders::vehicle_attachment(&self.common.mobs[i], 0.0),
+                                old.y + riders::vehicle_attachment(&self.common.entities.mobs[i], 0.0),
                                 old.z,
                             )
                         });
-                    let m = &mut self.common.mobs[i];
+                    let m = &mut self.common.entities.mobs[i];
                     let offset = riders::vehicle_attachment(m, 0.0);
                     let seat = Vec3::new(at.x, at.y, at.z);
                     m.seated(v, offset, Aabb::new(seat, seat));
@@ -324,25 +324,25 @@ impl ClientGame<'_> {
                     m.ai.nav.stop();
                     continue;
                 };
-                let vehicle = &self.common.mobs[j];
+                let vehicle = &self.common.entities.mobs[j];
                 let place = if sunrise_sim::mobs::camel::is_camel(vehicle.species())
                     || vehicle.species() == sunrise_sim::mobs::Species::HappyGhast
                     || vehicle.kind.passenger_attachments.len() > 1
                 {
-                    self.client_passenger_place(v, self.common.mobs[i].id)
+                    self.client_passenger_place(v, self.common.entities.mobs[i].id)
                 } else {
                     (0, 1)
                 };
                 let attach = sunrise_gameplay_common::game::CommonGame::mob_passenger_attachment(
                     vehicle,
-                    sunrise_sim::mobs::drops::is_animal(self.common.mobs[i].species()),
+                    sunrise_sim::mobs::drops::is_animal(self.common.entities.mobs[i].species()),
                     place.0,
                     place.1,
                 );
                 let (pos, prev) = (vehicle.position, vehicle.previous);
                 let (yaw, prev_yaw) = (vehicle.yaw, vehicle.previous_yaw);
                 let (body, prev_body) = (vehicle.body_yaw, vehicle.previous_body_yaw);
-                let rider = &self.common.mobs[i];
+                let rider = &self.common.entities.mobs[i];
                 let controlling = riders::controls_vehicle(
                     vehicle,
                     rider,
@@ -355,7 +355,7 @@ impl ClientGame<'_> {
                 let takes_body = riders::takes_vehicle_body(vehicle, rider, controlling);
                 let vehicle_width = vehicle.width();
                 let vehicle_box = vehicle.bounds();
-                let m = &mut self.common.mobs[i];
+                let m = &mut self.common.entities.mobs[i];
                 let offset = riders::vehicle_attachment(m, vehicle_width);
                 m.seated(v, offset, vehicle_box);
                 sunrise_sim::mobs::living::teleports::set_pos(
@@ -413,8 +413,8 @@ impl ClientGame<'_> {
                 }
             }
         }
-        for i in 0..self.common.armor_stands.len() {
-            let Some(vehicle) = self.common.armor_stands[i].vehicle else {
+        for i in 0..self.common.entities.armor_stands.len() {
+            let Some(vehicle) = self.common.entities.armor_stands[i].vehicle else {
                 continue;
             };
             let Some(at) = self.client_passenger_riding_position(vehicle, me, own_seat, &index)
@@ -424,7 +424,7 @@ impl ClientGame<'_> {
             let before = index
                 .get(&vehicle)
                 .map(|&j| {
-                    let v = &self.common.mobs[j];
+                    let v = &self.common.entities.mobs[j];
                     riders::seat(
                         riders::passenger_attachment(v),
                         0.0,
@@ -432,9 +432,9 @@ impl ClientGame<'_> {
                         v.previous_yaw,
                     )
                 })
-                .unwrap_or(self.common.armor_stands[i].previous);
+                .unwrap_or(self.common.entities.armor_stands[i].previous);
             let at = Vec3::new(at.x, at.y, at.z);
-            let stand = &mut self.common.armor_stands[i];
+            let stand = &mut self.common.entities.armor_stands[i];
             stand.position = at;
             stand.previous = before;
             stand.velocity = Vec3::ZERO;
@@ -457,7 +457,7 @@ impl ClientGame<'_> {
         );
         for stand in self
             .common
-            .armor_stands
+            .entities.armor_stands
             .iter_mut()
             .filter(|a| a.vehicle == Some(me))
         {

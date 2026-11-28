@@ -22,7 +22,7 @@ pub(crate) mod tests {
             game.sculk_fixture(&format!("{},{}", input.display(), output.display()))
                 .unwrap();
             assert_eq!(
-                game.orbs
+                game.entities.orbs
                     .iter()
                     .map(|orb| i64::from(orb.value) * i64::from(orb.count))
                     .sum::<i64>(),

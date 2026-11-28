@@ -17,7 +17,7 @@ pub(crate) mod tests {
         super::super::native_entity_refs::tests::with_game(|game| {
             let (id, uuid, actual_holder, unknown) =
                 (1, [326, 1, 0, 1], [326, 2, 0, 1], [111, 222, 333, 444]);
-            game.boats
+            game.entities.boats
                 .push(Boat::new(id, "oak".into(), Vec3::new(6.5, 100.0, 4.5), 0.0));
             game.persist.uuids.insert(id, uuid);
             game.level.player_uuid = Some([326, 3, 0, 1]);
@@ -27,9 +27,9 @@ pub(crate) mod tests {
             assert!(!game.persist.raw.contains_key(&id));
             assert_eq!(read(game).get("UUID"), Some(&Tag::IntArray(uuid.to_vec())));
             assert!(read(game).get("leash").is_none());
-            game.boats
+            game.entities.boats
                 .update(0, |boat| boat.leash = Some(Holder::Player));
-            game.boats
+            game.entities.boats
                 .update(0, |boat| boat.leash_player = Some(actual_holder));
             let expected = Tag::compound([("UUID", Tag::IntArray(actual_holder.to_vec()))]);
             assert_eq!(read(game).get("leash"), Some(&expected));
@@ -39,12 +39,12 @@ pub(crate) mod tests {
                 .raw
                 .insert(id, Tag::compound([("leash", delayed.clone())]));
             assert_eq!(read(game).get("leash"), Some(&expected));
-            game.boats.update(0, |boat| boat.leash = None);
-            game.boats.update(0, |boat| boat.leash_player = None);
-            game.boats
+            game.entities.boats.update(0, |boat| boat.leash = None);
+            game.entities.boats.update(0, |boat| boat.leash_player = None);
+            game.entities.boats
                 .update(0, |boat| boat.leash_pending = Some(Pending::Uuid(unknown)));
             assert_eq!(read(game).get("leash"), Some(&delayed));
-            game.boats.update(0, |boat| boat.leash_pending = None);
+            game.entities.boats.update(0, |boat| boat.leash_pending = None);
             assert!(read(game).get("leash").is_none());
         });
     }
@@ -56,7 +56,7 @@ pub(crate) mod tests {
         game.build_registries();
         game.set_allow_commands(true);
         assert!(game.run_command("summon oak_boat 6.5 100 4.5 {UUID:[I;327,1,0,1]}"));
-        let (id, expected) = game.boats.update(0, |boat| {
+        let (id, expected) = game.entities.boats.update(0, |boat| {
             boat.velocity = Vec3::new(0.25, -0.125, 0.5);
             (boat.id, boat.velocity)
         });
@@ -66,7 +66,7 @@ pub(crate) mod tests {
         assert_eq!(state.velocity, expected);
         assert!(!quad);
         assert!(game.run_command("summon pig 4.5 100 4.5 {UUID:[I;327,2,0,1],NoAI:1b}"));
-        let mob = &mut game.mobs[0];
+        let mob = &mut game.entities.mobs[0];
         mob.velocity = Vec3::new(-0.5, 0.25, 0.125);
         let (id, expected) = (mob.id, mob.velocity);
         let Held::At(state, quad) = game.boat_holder(Holder::Mob(id), None) else {

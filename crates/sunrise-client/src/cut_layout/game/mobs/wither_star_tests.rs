@@ -62,7 +62,7 @@ fn a_withers_nether_star_lives_12000_ticks() {
         )
         .unwrap();
         let wither_at = game
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.species() == Species::Wither)
             .map(|m| m.position)
@@ -70,7 +70,7 @@ fn a_withers_nether_star_lives_12000_ticks() {
         // `Entity.kill` through `/kill`: the hit runs LivingEntity.die now.
         game.kill_target(wither);
         let star = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-            game.dropped
+            game.entities.dropped
                 .iter()
                 .find(|i| &*i.stack.item == "minecraft:nether_star")
                 .map(|i| (i.age, i.position))
@@ -83,7 +83,7 @@ fn a_withers_nether_star_lives_12000_ticks() {
             "spawnAtLocation at the death drop's position"
         );
         let ordinary = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-            game.dropped
+            game.entities.dropped
                 .iter()
                 .any(|i| &*i.stack.item == "minecraft:stone")
         };
@@ -228,7 +228,7 @@ fn loot_stack_edits_leave_custom_drop_age_attached() {
                 "LivingDrops sees complete records after table edits"
             );
             let spawned: Vec<_> = game
-                .dropped
+                .entities.dropped
                 .iter()
                 .map(|drop| (&*drop.stack.item, drop.age))
                 .collect();

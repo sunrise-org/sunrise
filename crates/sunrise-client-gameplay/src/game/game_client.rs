@@ -257,7 +257,7 @@ impl crate::game::ClientGame<'_> {
             forward: falling_forward,
         } = *setup;
         let tables = &self.client.client_pack.context.mesh.tables;
-        for f in &self.common.falling[run] {
+        for f in &self.common.entities.falling[run] {
             if self.hides_as_camera(f.id) {
                 continue;
             }
@@ -626,7 +626,7 @@ impl crate::game::ClientGame<'_> {
             })
         };
         laps.lap("eg_prep");
-        for item in &self.common.dropped {
+        for item in &self.common.entities.dropped {
             if self.hides_as_camera(item.id) {
                 continue;
             }
@@ -656,7 +656,7 @@ impl crate::game::ClientGame<'_> {
             }
         }
         laps.lap("eg_fire_items");
-        for stand in &self.common.armor_stands {
+        for stand in &self.common.entities.armor_stands {
             if self.hides_as_camera(stand.id) {
                 continue;
             }
@@ -716,7 +716,7 @@ impl crate::game::ClientGame<'_> {
                     // A dragon summoned outside the End draws at its join slot too.
                     if let Some(dragon) = self
                         .common
-                        .dragon
+                        .entities.dragon
                         .as_ref()
                         .filter(|d| !self.hides_as_camera(d.id))
                     {
@@ -725,7 +725,7 @@ impl crate::game::ClientGame<'_> {
                 }
                 F::Crystal => {
                     if let Some(frame) = &crystal_frame {
-                        for crystal in &self.common.crystals[range] {
+                        for crystal in &self.common.entities.crystals[range] {
                             self.end_crystal_geometry(crystal, frame, camera, &mut out);
                         }
                     }
@@ -737,7 +737,7 @@ impl crate::game::ClientGame<'_> {
                 }
                 F::Orb => {
                     self.mark_entity(out.len(), "minecraft:experience_orb");
-                    let live = self.common.orbs[range]
+                    let live = self.common.entities.orbs[range]
                         .iter()
                         .filter(|o| !self.hides_as_camera(o.id))
                         .map(|o| {
@@ -802,7 +802,7 @@ impl crate::game::ClientGame<'_> {
         self.mark_motion(out.len(), 0);
         laps.lap("eg_other_creatures");
         // These billboards stay in their later pass, outside the ordered body runs.
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if self.hides_as_camera(m.id) {
                 continue;
             }
@@ -908,7 +908,7 @@ impl crate::game::ClientGame<'_> {
             let mut casters: Vec<(glam::DVec3, glam::DVec3, f32, f32)> =
                 sunrise_client::shadows::mob_casters(
                     self.common
-                        .mobs
+                        .entities.mobs
                         .iter()
                         .filter(|m| !self.hides_as_camera(m.id)),
                     self.client_res().client_mob_models(),
@@ -919,7 +919,7 @@ impl crate::game::ClientGame<'_> {
             let item = sunrise_client::shadows::shadow_params("minecraft:item");
             casters.extend(
                 self.common
-                    .dropped
+                    .entities.dropped
                     .iter()
                     .filter(|i| !self.hides_as_camera(i.id))
                     .map(|i| {
@@ -930,7 +930,7 @@ impl crate::game::ClientGame<'_> {
             let orb = sunrise_client::shadows::shadow_params("minecraft:experience_orb");
             casters.extend(
                 self.common
-                    .orbs
+                    .entities.orbs
                     .iter()
                     .filter(|o| !self.hides_as_camera(o.id))
                     .map(|o| {
@@ -3622,7 +3622,7 @@ impl crate::game::ClientGame<'_> {
                 p.position.y += lift_dy(body);
             }
         }
-        for m in &mut self.common.mobs {
+        for m in &mut self.common.entities.mobs {
             if !m.removed {
                 let body = m.bounds();
                 if body.intersects(bounds) {
@@ -3630,33 +3630,33 @@ impl crate::game::ClientGame<'_> {
                 }
             }
         }
-        for i in 0..self.common.dropped.len() {
-            let body = self.common.dropped[i].bounds();
+        for i in 0..self.common.entities.dropped.len() {
+            let body = self.common.entities.dropped[i].bounds();
             if body.intersects(bounds) {
                 let dy = lift_dy(body);
-                self.common.dropped.update(i, |item| item.position.y += dy);
+                self.common.entities.dropped.update(i, |item| item.position.y += dy);
             }
         }
-        for i in 0..self.common.boats.len() {
-            let body = self.common.boats[i].bounds();
+        for i in 0..self.common.entities.boats.len() {
+            let body = self.common.entities.boats[i].bounds();
             if body.intersects(bounds) {
                 let dy = lift_dy(body);
-                self.common.boats.update(i, |boat| boat.position.y += dy);
+                self.common.entities.boats.update(i, |boat| boat.position.y += dy);
             }
         }
-        for i in 0..self.common.carts.len() {
-            let body = self.common.carts[i].bounds();
+        for i in 0..self.common.entities.carts.len() {
+            let body = self.common.entities.carts[i].bounds();
             if body.intersects(bounds) {
                 let dy = lift_dy(body);
-                self.common.carts.update(i, |cart| cart.position.y += dy);
+                self.common.entities.carts.update(i, |cart| cart.position.y += dy);
             }
         }
-        for i in 0..self.common.armor_stands.len() {
-            let body = self.common.armor_stands[i].bounds();
+        for i in 0..self.common.entities.armor_stands.len() {
+            let body = self.common.entities.armor_stands[i].bounds();
             if body.intersects(bounds) {
                 let dy = lift_dy(body);
                 self.common
-                    .armor_stands
+                    .entities.armor_stands
                     .update(i, |stand| stand.position.y += dy);
             }
         }

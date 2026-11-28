@@ -109,7 +109,7 @@ impl crate::game::ServerGame<'_> {
         let sees_sky = |g: &Self, p: [i32; 3]| g.world.light(p[0], p[1], p[2]) >> 4 == 15;
         let mut candidates: Vec<[i32; 3]> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| m.alive())
             .map(|m| {
@@ -156,7 +156,7 @@ impl crate::game::ServerGame<'_> {
         let id = self.take_entity_id();
         let (bolt, uuid) = Bolt::new(id, at, visual_only);
         self.common.persist.uuids.insert(id, uuid);
-        self.common.bolts.push(bolt);
+        self.common.entities.bolts.push(bolt);
     }
     pub(in crate::game) fn lightning_strike_allowed(
         &mut self,
@@ -171,9 +171,9 @@ impl crate::game::ServerGame<'_> {
     /// Remove a live bolt and release its UUID and scoreboard membership.
     pub(in crate::game::server_side) fn remove_bolt(&mut self, id: u32) {
         let uuid = self.common.persist.uuid_of(id);
-        let before = self.common.bolts.len();
-        self.common.bolts.retain(|b| b.id != id);
-        if self.common.bolts.len() != before {
+        let before = self.common.entities.bolts.len();
+        self.common.entities.bolts.retain(|b| b.id != id);
+        if self.common.entities.bolts.len() != before {
             if let Some(uuid) = uuid {
                 self.common
                     .score
@@ -279,17 +279,17 @@ impl crate::game::ServerGame<'_> {
         }
         if let Some(mob) = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == vehicle && !m.removed)
         {
             let y = mob.position.y + f64::from(mob.height());
             return Some([mob.position.x, y, mob.position.z]);
         }
-        if let Some(boat) = self.common.boats.iter().find(|b| b.id == vehicle) {
+        if let Some(boat) = self.common.entities.boats.iter().find(|b| b.id == vehicle) {
             return Some([boat.position.x, boat.position.y + 0.35, boat.position.z]);
         }
-        if let Some(cart) = self.common.carts.iter().find(|c| c.id == vehicle) {
+        if let Some(cart) = self.common.entities.carts.iter().find(|c| c.id == vehicle) {
             return Some([cart.position.x, cart.position.y, cart.position.z]);
         }
         self.vehicle_position_by_id(vehicle)
@@ -348,17 +348,17 @@ impl crate::game::ServerGame<'_> {
     pub fn server_tick_bolts(&mut self) {
         let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();
         let ticking = self.entity_ticking_area();
-        let ids: Vec<u32> = self.common.bolts.iter().map(|b| b.id).collect();
+        let ids: Vec<u32> = self.common.entities.bolts.iter().map(|b| b.id).collect();
         for id in ids {
-            let Some(i) = self.common.bolts.iter().position(|b| b.id == id) else {
+            let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) else {
                 continue;
             };
-            let mut at = self.common.bolts[i].at;
+            let mut at = self.common.entities.bolts[i].at;
             // ServerLevel.tick: only entities in entity-ticking chunks tick.
             if !ticking(at[0].floor() as i32, at[2].floor() as i32) {
                 continue;
             }
-            let mount = self.common.bolts[i].mount;
+            let mount = self.common.entities.bolts[i].mount;
             let mount_gone = mount.is_some_and(|vehicle| {
                 self.level_entity(vehicle as i32).is_none()
                     && !self
@@ -368,7 +368,7 @@ impl crate::game::ServerGame<'_> {
                         .is_some_and(|p| p.entity_id as u32 == vehicle)
             });
             let below_world = at[1] < f64::from(self.common.world.bottom_y() - 64);
-            self.common.bolts.update(i, |b| {
+            self.common.entities.bolts.update(i, |b| {
                 // Entity.rideTick clears deltaMovement before Entity.tick.
                 if b.mount.is_some() {
                     b.velocity = Vec3::ZERO;
@@ -393,16 +393,16 @@ impl crate::game::ServerGame<'_> {
                 continue;
             }
             let (life, visual_only) = {
-                let b = &self.common.bolts[i];
+                let b = &self.common.entities.bolts[i];
                 (b.life, b.visual_only)
             };
             if life == 2 {
                 // Only Normal and Hard start fires with the strike itself.
                 if !visual_only && self.common.ui.difficulty >= 2 {
-                    let mut rng = self.common.bolts[i].random.clone();
+                    let mut rng = self.common.entities.bolts[i].random.clone();
                     let set = self.bolt_fire(at, 4, &mut rng);
-                    if let Some(i) = self.common.bolts.iter().position(|b| b.id == id) {
-                        self.common.bolts.update(i, |b| {
+                    if let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) {
+                        self.common.entities.bolts.update(i, |b| {
                             b.random = rng;
                             b.fires += set;
                         });
@@ -415,7 +415,7 @@ impl crate::game::ServerGame<'_> {
                 let ctx = self.entity_event_context(id, None);
                 self.post_game_event("minecraft:lightning_strike", at, ctx);
             }
-            let Some(i) = self.common.bolts.iter().position(|b| b.id == id) else {
+            let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) else {
                 continue;
             };
             enum Step {
@@ -424,7 +424,7 @@ impl crate::game::ServerGame<'_> {
                 Active,
                 Idle,
             }
-            let step = self.common.bolts.update(i, |b| {
+            let step = self.common.entities.bolts.update(i, |b| {
                 b.life -= 1;
                 if b.life < 0 {
                     if b.flashes == 0 {
@@ -446,7 +446,7 @@ impl crate::game::ServerGame<'_> {
             match step {
                 Step::Discard => {
                     let (fires, hit, hit_items) = {
-                        let b = &self.common.bolts[i];
+                        let b = &self.common.entities.bolts[i];
                         (b.fires, b.strike.hit.clone(), b.strike.hit_items.clone())
                     };
                     self.lightning_strike_triggers(at, fires, &hit, &hit_items);
@@ -455,10 +455,10 @@ impl crate::game::ServerGame<'_> {
                 }
                 Step::Reflash => {
                     if !visual_only {
-                        let mut rng = self.common.bolts[i].random.clone();
+                        let mut rng = self.common.entities.bolts[i].random.clone();
                         let set = self.bolt_fire(at, 0, &mut rng);
-                        if let Some(i) = self.common.bolts.iter().position(|b| b.id == id) {
-                            self.common.bolts.update(i, |b| {
+                        if let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) {
+                            self.common.entities.bolts.update(i, |b| {
                                 b.random = rng;
                                 b.fires += set;
                             });
@@ -468,16 +468,16 @@ impl crate::game::ServerGame<'_> {
                 Step::Active | Step::Idle => {}
             }
             if matches!(step, Step::Reflash | Step::Active) && !visual_only {
-                let Some(i) = self.common.bolts.iter().position(|b| b.id == id) else {
+                let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) else {
                     continue;
                 };
                 let (mut strike, cause) = self
                     .common
-                    .bolts
+                    .entities.bolts
                     .update(i, |b| (std::mem::take(&mut b.strike), b.cause));
                 let struck = self.thunder_hit_state(id, at, &mut strike);
-                if let Some(i) = self.common.bolts.iter().position(|b| b.id == id) {
-                    self.common.bolts.update(i, |b| b.strike = strike);
+                if let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) {
+                    self.common.entities.bolts.update(i, |b| b.strike = strike);
                 }
                 if let Some(cause) = cause {
                     let who = cause.map_or(Target::Player, Target::Guest);
@@ -485,12 +485,12 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             // Entity.rideTick: vehicle.positionRider(this).
-            if let Some(i) = self.common.bolts.iter().position(|b| b.id == id)
-                && let Some(vehicle) = self.common.bolts[i].mount
+            if let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id)
+                && let Some(vehicle) = self.common.entities.bolts[i].mount
                 && let Some(seat) = self.vehicle_passenger_pos(vehicle)
             {
                 at = seat;
-                self.common.bolts.update(i, |b| b.at = at);
+                self.common.entities.bolts.update(i, |b| b.at = at);
             }
         }
     }
@@ -568,7 +568,7 @@ impl crate::game::ServerGame<'_> {
         };
         let viewers: Vec<EntityView> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| m.alive() && !hit.contains(&m.id))
             .filter(|m| in_viewer_box(at, [m.position.x, m.position.y, m.position.z]))
@@ -578,7 +578,7 @@ impl crate::game::ServerGame<'_> {
         let mut viewers = viewers;
         viewers.extend(
             self.common
-                .dropped
+                .entities.dropped
                 .iter()
                 .filter(|e| !hit_items.contains(&e.id))
                 .filter(|e| in_viewer_box(at, [e.position.x, e.position.y, e.position.z]))
@@ -710,7 +710,7 @@ impl crate::game::ServerGame<'_> {
             kept.insert("Team".into(), team.clone());
         }
         self.remember(id, Some(uuid), sunrise_core::nbt::Tag::Compound(kept));
-        self.common.bolts.push(bolt);
+        self.common.entities.bolts.push(bolt);
         Some(id)
     }
     pub(in crate::game) fn thunder_hit_state(
@@ -751,20 +751,20 @@ impl crate::game::ServerGame<'_> {
                 continue;
             }
             left -= 1;
-            struck.push(self.mob_entity(&self.common.mobs[i]));
+            struck.push(self.mob_entity(&self.common.entities.mobs[i]));
             // LivingConversionEvent.Pre: a canceled conversion leaves the
             // mob to the lightning's fire and damage, as `super.thunderHit`.
-            let outcome = match self.common.mobs[i].species() {
+            let outcome = match self.common.entities.mobs[i].species() {
                 Species::Pig if !peaceful => Some("minecraft:zombified_piglin"),
                 Species::Villager if !peaceful => Some("minecraft:witch"),
                 _ => None,
             };
-            state.hit.push(self.common.mobs[i].id);
-            if !self.lightning_may_strike(self.common.mobs[i].id, bolt) {
+            state.hit.push(self.common.entities.mobs[i].id);
+            if !self.lightning_may_strike(self.common.entities.mobs[i].id, bolt) {
                 continue;
             }
             if let Some(outcome) = outcome {
-                let old = self.common.mobs[i].clone();
+                let old = self.common.entities.mobs[i].clone();
                 let params = sunrise_sim::mobs::conversion::Params {
                     keep_equipment: false,
                     preserve_can_pick_up_loot: old.species() == Species::Pig,
@@ -776,7 +776,7 @@ impl crate::game::ServerGame<'_> {
                     continue;
                 }
             }
-            let m = &mut self.common.mobs[i];
+            let m = &mut self.common.entities.mobs[i];
             let at = [m.position.x, m.position.y, m.position.z];
             match m.species() {
                 Species::Mooshroom => {
@@ -845,18 +845,18 @@ impl crate::game::ServerGame<'_> {
         // Cushion.thunderHit: a cushion whose box meets the strike box breaks and drops its item
         // (the bolt is no player, so no creative spare). Last first, since
         // break_cushion removes the entry.
-        for i in (0..self.common.cushions.len()).rev() {
-            let (lo, hi) = self.common.cushions[i].bounds();
+        for i in (0..self.common.entities.cushions.len()).rev() {
+            let (lo, hi) = self.common.entities.cushions[i].bounds();
             if strike.intersects(Aabb::new(
                 Vec3::new(lo[0], lo[1], lo[2]),
                 Vec3::new(hi[0], hi[1], hi[2]),
-            )) && self.lightning_may_strike(self.common.cushions[i].id, bolt)
+            )) && self.lightning_may_strike(self.common.entities.cushions[i].id, bolt)
             {
-                let before = self.common.dropped.len();
+                let before = self.common.entities.dropped.len();
                 self.break_cushion(i, false);
                 state
                     .spared
-                    .extend(self.common.dropped[before..].iter().map(|e| e.id));
+                    .extend(self.common.entities.dropped[before..].iter().map(|e| e.id));
             }
         }
         // Vehicles, then orbs: `VehicleEntity.hurtServer` for 5 damage (x 10
@@ -880,8 +880,8 @@ impl crate::game::ServerGame<'_> {
             }
             match h {
                 EntityHandle::Boat(i) => {
-                    let id = self.common.boats[i].id;
-                    let kind = self.common.boats[i].entity_type();
+                    let id = self.common.entities.boats[i].id;
+                    let kind = self.common.entities.boats[i].entity_type();
                     let source = sunrise_sim::health::HurtSource {
                         damage_type: "minecraft:lightning_bolt",
                         causing: bolt as i32,
@@ -895,7 +895,7 @@ impl crate::game::ServerGame<'_> {
                     }
                 }
                 EntityHandle::Cart(i) => {
-                    let (id, kind) = (self.common.carts[i].id, self.common.carts[i].kind.id());
+                    let (id, kind) = (self.common.entities.carts[i].id, self.common.entities.carts[i].kind.id());
                     let source = sunrise_sim::health::HurtSource {
                         damage_type: "minecraft:lightning_bolt",
                         causing: bolt as i32,
@@ -909,7 +909,7 @@ impl crate::game::ServerGame<'_> {
                     }
                 }
                 EntityHandle::Orb(i) => {
-                    let id = self.common.orbs[i].id;
+                    let id = self.common.entities.orbs[i].id;
                     let source = sunrise_sim::health::HurtSource {
                         damage_type: "minecraft:lightning_bolt",
                         causing: bolt as i32,
@@ -923,9 +923,9 @@ impl crate::game::ServerGame<'_> {
                         "minecraft:experience_orb",
                         source,
                         vanilla,
-                    ) && self.common.orbs[i].hurt(5.0)
+                    ) && self.common.entities.orbs[i].hurt(5.0)
                     {
-                        self.common.orbs.remove(i);
+                        self.common.entities.orbs.remove(i);
                     }
                 }
                 _ => {}
@@ -964,12 +964,12 @@ impl crate::game::ServerGame<'_> {
                 continue;
             }
             left -= 1;
-            let e = &self.common.dropped[i];
+            let e = &self.common.entities.dropped[i];
             state.hit_items.push(e.id);
             if !self.lightning_may_strike(e.id, bolt) {
                 continue;
             }
-            let e = &mut self.common.dropped[i];
+            let e = &mut self.common.entities.dropped[i];
             e.fire_ticks += 1;
             if e.fire_ticks == 0 {
                 e.fire_ticks = 160;
@@ -1057,7 +1057,7 @@ impl crate::game::ServerGame<'_> {
                 let at = [f64::from(pos[0]), f64::from(pos[1]), f64::from(pos[2])];
                 // ServerLevel.tickChunk: a trap horse waits for a player.
                 if let Some(id) = self.spawn_mob_raw("minecraft:skeleton_horse", at, false)
-                    && let Some(h) = self.common.mobs.iter_mut().find(|m| m.id == id)
+                    && let Some(h) = self.common.entities.mobs.iter_mut().find(|m| m.id == id)
                 {
                     h.extra.trap = true;
                     h.extra.age = 0;
@@ -1210,13 +1210,13 @@ mod strike_tests {
                 game.ui.difficulty = 2;
                 let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
                 for (id, x) in [(spared, 0.0), (struck, 1.0)] {
-                    game.mobs
+                    game.entities.mobs
                         .push(Mob::new(id, pig.clone(), Vec3::new(x, 64.0, 0.0), 0.0));
                 }
                 let mut bolt = Bolt::struck_at(77, [0.5, 64.0, 0.5]);
                 game.thunder_hit(&mut bolt);
                 let kind = |game: &crate::game::ServerGame<'_>, id| {
-                    game.mobs
+                    game.entities.mobs
                         .iter()
                         .find(|m| m.id == id && !m.removed)
                         .map(|m| m.species())
@@ -1224,7 +1224,7 @@ mod strike_tests {
                 assert_eq!(kind(game, spared), Some(Species::Pig));
                 assert_eq!(kind(game, struck), None, "converted");
                 let spared_pig = game
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .find(|m| m.id == spared && !m.removed)
                     .unwrap();

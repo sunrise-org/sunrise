@@ -7,11 +7,11 @@ impl crate::game::ServerGame<'_> {
         bounds: Aabb,
         visit_id: &mut impl FnMut(u32) -> ControlFlow<()>,
     ) -> ControlFlow<()> {
-        let Some(dragon) = self.common.dragon.as_ref().filter(|d| d.id != 0) else {
+        let Some(dragon) = self.common.entities.dragon.as_ref().filter(|d| d.id != 0) else {
             return ControlFlow::Continue(());
         };
         let mut cursor = None;
-        while let Some(id) = self.common.dragon.next_part(&mut cursor) {
+        while let Some(id) = self.common.entities.dragon.next_part(&mut cursor) {
             if let Some(part) =
                 sunrise_gameplay_common::game::dragon_common::dragon_part_index(dragon.id, id)
                 && bounds.intersects(dragon.part_geometry(part).1)

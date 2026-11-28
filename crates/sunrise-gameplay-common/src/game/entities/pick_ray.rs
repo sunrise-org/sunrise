@@ -91,7 +91,7 @@ impl PickAccumulator {
 impl crate::game::CommonGame<'_> {
     /// `Entity.canBePickedFromInside`, false only for a sulfur cube holding a body item.
     pub(in crate::game) fn pickable_from_inside(&self, id: u32) -> bool {
-        !self.mobs.iter().any(|m| {
+        !self.entities.mobs.iter().any(|m| {
             m.id == id
                 && m.species() == sunrise_sim::mobs::Species::SulfurCube
                 && sunrise_sim::mobs::sulfur_cube::has_body(m)

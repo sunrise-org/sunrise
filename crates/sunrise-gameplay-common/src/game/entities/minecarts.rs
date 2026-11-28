@@ -484,24 +484,24 @@ impl crate::game::CommonGame<'_> {
     /// `positionRider` for the mobs in minecarts: each sits on the cart's
     /// passenger attachment, less its own vehicle attachment.
     pub fn seat_cart_mobs(&mut self, riding: &crate::game::passengers_common::Riders) {
-        for i in 0..self.carts.len() {
-            let id = self.carts[i].id;
+        for i in 0..self.entities.carts.len() {
+            let id = self.entities.carts[i].id;
             let Some(js) = riding.get(&id) else {
                 continue;
             };
-            let (pos, prev) = (self.carts[i].position, self.carts[i].previous);
-            let cart_box = self.carts[i].bounds();
+            let (pos, prev) = (self.entities.carts[i].position, self.entities.carts[i].previous);
+            let cart_box = self.entities.carts[i].bounds();
             let seats: Vec<(usize, f64, f64)> = js
                 .iter()
                 .map(|&j| {
-                    let m = &self.mobs[j];
+                    let m = &self.entities.mobs[j];
                     // Minecart's box is 0.98 wide.
                     let attachment = riders::vehicle_attachment(m, 0.98);
                     (j, attachment, cart_seat_offset(m.species(), attachment))
                 })
                 .collect();
             for (j, attachment, offset) in seats {
-                let m = &mut self.mobs[j];
+                let m = &mut self.entities.mobs[j];
                 m.seated(id, attachment, cart_box);
                 sunrise_sim::mobs::living::teleports::set_pos(m, cart_seat(pos, offset));
                 m.previous = cart_seat(prev, offset);
@@ -519,7 +519,7 @@ impl crate::game::CommonGame<'_> {
             .persist
             .removals
             .contains(&crate::game::commands_common::Target::Cart(cart.id))
-            && self.carts.store_back(index, cart)
+            && self.entities.carts.store_back(index, cart)
     }
 
     /// A chest or hopper minecart or a chest boat is about to be removed
@@ -546,10 +546,10 @@ impl crate::game::CommonGame<'_> {
             return;
         };
         let items = items.clone();
-        if let Some(i) = self.carts.iter().position(|c| c.id as i32 == key.2) {
-            self.carts.update(i, |c| c.items = items);
-        } else if let Some(i) = self.boats.iter().position(|b| b.id as i32 == key.2) {
-            self.boats.update(i, |b| {
+        if let Some(i) = self.entities.carts.iter().position(|c| c.id as i32 == key.2) {
+            self.entities.carts.update(i, |c| c.items = items);
+        } else if let Some(i) = self.entities.boats.iter().position(|b| b.id as i32 == key.2) {
+            self.entities.boats.update(i, |b| {
                 b.items = items;
             });
         }
@@ -558,12 +558,12 @@ impl crate::game::CommonGame<'_> {
     pub fn open_cart_kind(&self) -> Option<CartKind> {
         let key = self.container.filter(|k| k.1 == CART_KEY_Y)?;
         // A chest boat's chest shows like a chest minecart's.
-        self.carts
+        self.entities.carts
             .iter()
             .find(|c| c.id as i32 == key.2)
             .map(|c| c.kind)
             .or_else(|| {
-                self.boats
+                self.entities.boats
                     .iter()
                     .any(|b| b.chest && b.id as i32 == key.2)
                     .then_some(CartKind::Chest)
@@ -938,7 +938,7 @@ impl<'g, G: crate::game::SideGame<'g>> MinecartRailGameExt<'g> for G {}
 pub trait CartDismountGameExt<'g>: crate::game::SideGame<'g> {
     /// Where the cart at `i` lets a player off.
     fn cart_player_dismount_target(&self, i: usize) -> Vec3 {
-        let c = &self.carts[i];
+        let c = &self.entities.carts[i];
         let (bx, by, bz) = (
             c.position.x.floor() as i32,
             c.position.y.floor() as i32,

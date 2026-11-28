@@ -81,7 +81,7 @@ fn loaded_queue_join_save_refuses_without_losing_remaining_rows() {
             2,
             "both loaded rows must notify"
         );
-        assert_eq!(game.dropped.len(), 2, "both rows remain live");
+        assert_eq!(game.entities.dropped.len(), 2, "both rows remain live");
         game.server.save.0.flush().unwrap();
         let disk = game.server.save.0.load_entities(0, 0).unwrap();
         assert!(

@@ -15,13 +15,13 @@ impl crate::game::ClientGame<'_> {
             }
             Target::Mob(id) => self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map_or(0.0, |m| m.eye_y() - m.position.y),
             // ArmorStand.getDefaultDimensions: a marker's are empty, a small
             // stand's are BABY_DIMENSIONS, whose eye height is 0.9875F.
-            Target::Stand(id) => match self.common.armor_stands.iter().find(|a| a.id == id) {
+            Target::Stand(id) => match self.common.entities.armor_stands.iter().find(|a| a.id == id) {
                 Some(a) if a.marker => 0.0,
                 Some(a) if a.small => f64::from(0.9875f32),
                 _ => self.common.type_eye_height("minecraft:armor_stand"),
@@ -43,15 +43,14 @@ impl crate::game::ClientGame<'_> {
             Target::Projectile(id) => {
                 let ty = self
                     .common
-                    .creatures
-                    .projectiles
+                    .entities.projectiles
                     .iter()
                     .find(|p| p.id == id)
                     .map_or("", |p| p.entity_type());
                 self.common.type_eye_height(ty)
             }
             Target::Frame(id) => {
-                let ty = if self.common.item_frames.iter().any(|f| f.id == id && f.glow) {
+                let ty = if self.common.entities.item_frames.iter().any(|f| f.id == id && f.glow) {
                     "minecraft:glow_item_frame"
                 } else {
                     "minecraft:item_frame"
@@ -61,7 +60,7 @@ impl crate::game::ClientGame<'_> {
             Target::Boat(id) => {
                 let ty = self
                     .common
-                    .boats
+                    .entities.boats
                     .iter()
                     .find(|b| b.id == id)
                     .map_or_else(|| "minecraft:oak_boat".into(), |b| b.entity_type());
@@ -70,7 +69,7 @@ impl crate::game::ClientGame<'_> {
             Target::Cart(id) => {
                 let ty = self
                     .common
-                    .carts
+                    .entities.carts
                     .iter()
                     .find(|c| c.id == id)
                     .map_or("minecraft:minecart", |c| c.kind.id());

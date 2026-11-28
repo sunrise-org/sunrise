@@ -15,7 +15,7 @@ impl ClientGame<'_> {
                 let known = id_i32 == remote.entity_id
                     || remote.tracked(id_i32).is_some()
                     || remote.tracked_entity(id_i32).is_some()
-                    || self.common.dragon.as_ref().is_some_and(|d| {
+                    || self.common.entities.dragon.as_ref().is_some_and(|d| {
                         sunrise_gameplay_common::game::dragon_common::dragon_part_index(d.id, id)
                             .is_some()
                     });

@@ -6,7 +6,7 @@ use sunrise_items::items::ItemStack;
 impl ServerGame<'_> {
     /// Sets an item place's stack. A drained place discards the item on commit.
     pub(in crate::game) fn journal_set_item_entity(&mut self, id: u32, stack: ItemStack) -> bool {
-        let Some(index) = self.common.dropped.iter().position(|item| item.id == id) else {
+        let Some(index) = self.common.entities.dropped.iter().position(|item| item.id == id) else {
             return false;
         };
         let Some(level) = self.common.transactions.level_frame(self.common.dim) else {
@@ -50,7 +50,7 @@ impl ServerGame<'_> {
         &mut sunrise_sim::entities::ItemEntity,
         Option<&mut KeptItemEntity>,
     ) {
-        let item = &mut self.common.dropped[index];
+        let item = &mut self.common.entities.dropped[index];
         let kept = self
             .common
             .transactions

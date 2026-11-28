@@ -846,7 +846,7 @@ impl crate::game::ServerGame<'_> {
         // there must neither decrement its cooldown nor travel before its blast.
         let removed_before_portal: std::collections::HashSet<u32> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|_| !vehicles)
             .filter(|m| sunrise_sim::mobs::sulfur_cube::removes_before_portal_tick(m))
@@ -884,12 +884,12 @@ impl crate::game::ServerGame<'_> {
                     .get(&id)
                     .map_or(0, |s| s.cooldown);
                 self.server.portals.carried_cooldown.insert(id, cooldown);
-                if let Some(c) = self.common.carts.iter().find(|c| c.id == id) {
+                if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == id) {
                     self.server.portals.carried_motion.insert(id, c.velocity);
                     self.server.portals.carried_at.insert(id, c.position);
-                } else if let Some(b) = self.common.boats.iter().find(|b| b.id == id) {
+                } else if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id) {
                     self.server.portals.carried_at.insert(id, b.position);
-                } else if let Some(m) = self.common.mobs.iter().find(|m| m.id == id) {
+                } else if let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) {
                     self.server.portals.carried_at.insert(id, m.position);
                 }
                 self.server
@@ -966,8 +966,8 @@ impl crate::game::ServerGame<'_> {
     /// entity takes its first passenger's delay when that is a server player
     /// (`Player.getDimensionChangingDelay`), else 300.
     pub fn dimension_changing_delay(&self, id: u32) -> i32 {
-        if self.common.boats.iter().any(|b| b.id == id)
-            || self.common.carts.iter().any(|c| c.id == id)
+        if self.common.entities.boats.iter().any(|b| b.id == id)
+            || self.common.entities.carts.iter().any(|c| c.id == id)
             || self.server.lan_acting_entity == Some(id)
             || self
                 .server
@@ -977,9 +977,9 @@ impl crate::game::ServerGame<'_> {
                 .any(|g| g.entity_id as u32 == id)
         {
             VEHICLE_DELAY
-        } else if self.common.creatures.projectiles.iter().any(|p| p.id == id)
-            || self.common.tridents.iter().any(|t| t.id == id)
-            || self.common.rockets.iter().any(|r| r.id == id)
+        } else if self.common.entities.projectiles.iter().any(|p| p.id == id)
+            || self.common.entities.tridents.iter().any(|t| t.id == id)
+            || self.common.entities.rockets.iter().any(|r| r.id == id)
         {
             PROJECTILE_DELAY
         } else if self
@@ -1076,7 +1076,7 @@ impl crate::game::ServerGame<'_> {
     /// `Entity.canUsePortal(false)` for a primed TNT: it carries no mob.
     pub(in crate::game::server_side) fn tnt_can_use_portal(&self, id: u32) -> bool {
         // Id 0: not tracked yet, nothing to key its portal state by.
-        id != 0 && !self.common.mobs.iter().any(|m| m.extra.mount == Some(id))
+        id != 0 && !self.common.entities.mobs.iter().any(|m| m.extra.mount == Some(id))
     }
     /// `canUsePortal(false)` of a boat or minecart: it is nobody's passenger;
     /// the mobs riding it, and on a server the players, cross with it.
@@ -1114,17 +1114,17 @@ impl crate::game::ServerGame<'_> {
                 .copied()
                 .unwrap_or(own)
         };
-        if let Some(m) = self.common.mobs.iter().find(|m| m.id == id) {
+        if let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) {
             return Some(self.entity_plan(entry, at(m.position), m.width(), m.height(), true));
         }
-        if let Some(b) = self.common.boats.iter().find(|b| b.id == id) {
+        if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id) {
             let (width, height) = (
                 sunrise_gameplay_common::game::boats_common::WIDTH as f32,
                 sunrise_gameplay_common::game::boats_common::HEIGHT as f32,
             );
             return Some(self.entity_plan(entry, at(b.position), width, height, true));
         }
-        let c = self.common.carts.iter().find(|c| c.id == id)?;
+        let c = self.common.entities.carts.iter().find(|c| c.id == id)?;
         let (width, height) = (
             super::minecarts::WIDTH as f32,
             super::minecarts::HEIGHT as f32,
@@ -1162,11 +1162,11 @@ impl crate::game::ServerGame<'_> {
         };
         // A trident or rocket in flight gets its id here, before the walk.
         if only.is_none() {
-            for index in 0..self.common.tridents.len() {
-                let t = &self.common.tridents[index];
+            for index in 0..self.common.entities.tridents.len() {
+                let t = &self.common.entities.tridents[index];
                 if !t.in_ground || t.previous != t.position {
                     super::entity_residency::assign_resident_id!(
-                        self.common.tridents,
+                        self.common.entities.tridents,
                         index,
                         t,
                         &mut self.server.next_entity,
@@ -1174,11 +1174,11 @@ impl crate::game::ServerGame<'_> {
                     );
                 }
             }
-            for index in 0..self.common.rockets.len() {
-                let r = &self.common.rockets[index];
+            for index in 0..self.common.entities.rockets.len() {
+                let r = &self.common.entities.rockets[index];
                 if r.attached_to.is_none() && !r.attached {
                     super::entity_residency::assign_resident_id!(
-                        self.common.rockets,
+                        self.common.entities.rockets,
                         index,
                         r,
                         &mut self.server.next_entity,
@@ -1360,19 +1360,19 @@ impl crate::game::ServerGame<'_> {
         &self,
         id: u32,
     ) -> Option<(Vec3, f32, f32)> {
-        if let Some(e) = self.common.dropped.iter().find(|e| e.id == id) {
+        if let Some(e) = self.common.entities.dropped.iter().find(|e| e.id == id) {
             return Some((e.position, 0.25, 0.25));
         }
-        if let Some(t) = self.common.tnts.iter().find(|t| t.id == id) {
+        if let Some(t) = self.common.entities.tnts.iter().find(|t| t.id == id) {
             return Some((t.position, 0.98, 0.98));
         }
-        if let Some(t) = self.common.tridents.iter().find(|t| t.id == id) {
+        if let Some(t) = self.common.entities.tridents.iter().find(|t| t.id == id) {
             return Some((t.position, 0.5, 0.5));
         }
-        if let Some(r) = self.common.rockets.iter().find(|r| r.id == id) {
+        if let Some(r) = self.common.entities.rockets.iter().find(|r| r.id == id) {
             return Some((r.position, 0.25, 0.25));
         }
-        if let Some(o) = self.common.orbs.iter().find(|o| o.id == id) {
+        if let Some(o) = self.common.entities.orbs.iter().find(|o| o.id == id) {
             return Some((o.position, 0.5, 0.5));
         }
         let entity = self.entity(id)?;
@@ -1398,8 +1398,7 @@ impl crate::game::ServerGame<'_> {
         }
         let p = self
             .common
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .find(|p| p.id == id && (is_arrow(p) || is_portal_projectile(p)))?;
         let (width, height) = projectile_box(p);
@@ -1452,18 +1451,18 @@ impl crate::game::ServerGame<'_> {
             let state = self.take_transferred_entity_state(id);
             // Remove only the resident body: no death, drops, or discard effects.
             match target {
-                Target::Stand(_) => self.common.armor_stands.retain(|e| e.id != id),
-                Target::Frame(_) => self.common.item_frames.retain(|e| e.id != id),
-                Target::Painting(_) => self.common.paintings.retain(|e| e.id != id),
-                Target::Falling(_) => self.common.falling.retain(|e| e.id != id),
-                Target::Cushion(_) => self.common.cushions.retain(|e| e.id != id),
+                Target::Stand(_) => self.common.entities.armor_stands.retain(|e| e.id != id),
+                Target::Frame(_) => self.common.entities.item_frames.retain(|e| e.id != id),
+                Target::Painting(_) => self.common.entities.paintings.retain(|e| e.id != id),
+                Target::Falling(_) => self.common.entities.falling.retain(|e| e.id != id),
+                Target::Cushion(_) => self.common.entities.cushions.retain(|e| e.id != id),
                 Target::Other(_) => self.server.others.0.retain(|e| e.id != id),
-                Target::Fangs(_) => self.common.fangs.list.retain(|e| e.id != id),
-                Target::Crystal(_) => self.common.crystals.retain(|e| e.id != id),
+                Target::Fangs(_) => self.common.entities.fangs.list.retain(|e| e.id != id),
+                Target::Crystal(_) => self.common.entities.crystals.retain(|e| e.id != id),
                 Target::Dragon(_) => self.discard_resident_dragon(),
-                Target::Spawner(_) => self.common.ominous_spawners.retain(|e| e.id != id),
-                Target::Cloud(_) => self.common.breath_clouds.retain(|e| e.id != id),
-                Target::Bolt(_) => self.common.bolts.retain(|e| e.id != id),
+                Target::Spawner(_) => self.common.entities.ominous_spawners.retain(|e| e.id != id),
+                Target::Cloud(_) => self.common.entities.breath_clouds.retain(|e| e.id != id),
+                Target::Bolt(_) => self.common.entities.bolts.retain(|e| e.id != id),
                 _ => unreachable!("lone traveller kind selected above"),
             }
             self.forget_entity(id);
@@ -1478,48 +1477,47 @@ impl crate::game::ServerGame<'_> {
             Projectile,
         }
         let (mut tag, list, i) =
-            if let Some(i) = self.common.dropped.iter().position(|e| e.id == id) {
+            if let Some(i) = self.common.entities.dropped.iter().position(|e| e.id == id) {
                 let uuid = self.uuid_for(id);
                 let tag = sunrise_sim::entity_nbt::item_entity_to_nbt(
-                    &self.common.dropped[i],
+                    &self.common.entities.dropped[i],
                     uuid,
                     self.common.persist_raw(id),
                     self.items(),
                 );
                 (tag, List::Item, i)
-            } else if let Some(i) = self.common.tnts.iter().position(|t| t.id == id) {
+            } else if let Some(i) = self.common.entities.tnts.iter().position(|t| t.id == id) {
                 (self.tnt_nbt(i), List::Tnt, i)
-            } else if let Some(i) = self.common.tridents.iter().position(|t| t.id == id) {
+            } else if let Some(i) = self.common.entities.tridents.iter().position(|t| t.id == id) {
                 let uuid = self.uuid_for(id);
-                let tag = self.common.tridents[i].to_nbt(
+                let tag = self.common.entities.tridents[i].to_nbt(
                     uuid,
                     self.common.pack.assets.registry,
                     self.common.persist_raw(id),
                     self.common.res.items(),
                 );
                 (tag, List::Trident, i)
-            } else if let Some(i) = self.common.rockets.iter().position(|r| r.id == id) {
+            } else if let Some(i) = self.common.entities.rockets.iter().position(|r| r.id == id) {
                 let uuid = self.uuid_for(id);
-                let tag = self.common.rockets[i].to_nbt(
+                let tag = self.common.entities.rockets[i].to_nbt(
                     uuid,
                     self.common.level.player_uuid,
                     self.common.persist_raw(id),
                     self.common.res.items(),
                 );
                 (tag, List::Rocket, i)
-            } else if let Some(i) = self.common.orbs.iter().position(|o| o.id == id) {
+            } else if let Some(i) = self.common.entities.orbs.iter().position(|o| o.id == id) {
                 let uuid = self.uuid_for(id);
-                let tag = sunrise_sim::entity_nbt::orb_to_nbt(&self.common.orbs[i], uuid);
+                let tag = sunrise_sim::entity_nbt::orb_to_nbt(&self.common.entities.orbs[i], uuid);
                 (tag, List::Orb, i)
             } else {
                 let i = self
                     .common
-                    .creatures
-                    .projectiles
+                    .entities.projectiles
                     .iter()
                     .position(|p| p.id == id && (is_arrow(p) || is_portal_projectile(p)))?;
                 let uuid = self.uuid_for(id);
-                let p = &self.common.creatures.projectiles[i];
+                let p = &self.common.entities.projectiles[i];
                 let in_block = p
                     .arrow
                     .as_ref()
@@ -1568,23 +1566,23 @@ impl crate::game::ServerGame<'_> {
                 self.detach_entity(id);
             }
             List::Tnt => {
-                self.common.tnts.remove(i);
+                self.common.entities.tnts.remove(i);
                 self.forget_entity(id);
             }
             List::Trident => {
-                self.common.tridents.remove(i);
+                self.common.entities.tridents.remove(i);
                 self.forget_entity(id);
             }
             List::Rocket => {
-                self.common.rockets.remove(i);
+                self.common.entities.rockets.remove(i);
                 self.forget_entity(id);
             }
             List::Orb => {
-                self.common.orbs.remove(i);
+                self.common.entities.orbs.remove(i);
                 self.forget_entity(id);
             }
             List::Projectile => {
-                self.common.creatures.projectiles.remove(i);
+                self.common.entities.projectiles.remove(i);
                 self.forget_entity(id);
             }
         }
@@ -1597,12 +1595,12 @@ impl crate::game::ServerGame<'_> {
         // restoreFrom copies to the arriving entity.
         let cooldown = self.dimension_changing_delay(id);
         if let Some((at, width, height)) = self.lone_traveller_box(id) {
-            let living = self.common.armor_stands.iter().any(|stand| stand.id == id);
+            let living = self.common.entities.armor_stands.iter().any(|stand| stand.id == id);
             let plan = self.entity_plan(entry, at, width, height, living);
             if !self.may_travel_through(id, &plan) {
                 return;
             }
-            let tnt_used_portal = self.common.tnts.iter().any(|t| t.id == id);
+            let tnt_used_portal = self.common.entities.tnts.iter().any(|t| t.id == id);
             let Some((tag, state)) = self.take_lone_traveller(id) else {
                 return;
             };
@@ -1613,8 +1611,8 @@ impl crate::game::ServerGame<'_> {
                 transferred: Some(TransferredArrivalState::Entity(state)),
             });
             self.server.portals.dirty = true;
-        } else if let Some(i) = self.common.mobs.iter().position(|m| m.id == id) {
-            let m = &self.common.mobs[i];
+        } else if let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == id) {
+            let m = &self.common.entities.mobs[i];
             let plan = self.entity_plan(entry, m.position, m.width(), m.height(), true);
             if !self.may_travel_through(id, &plan) {
                 return;
@@ -1637,8 +1635,8 @@ impl crate::game::ServerGame<'_> {
                 transferred: Some(TransferredArrivalState::VehicleTree(state)),
             });
             self.server.portals.dirty = true;
-        } else if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
-            let b = &self.common.boats[i];
+        } else if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
+            let b = &self.common.entities.boats[i];
             let (width, height) = (
                 sunrise_gameplay_common::game::boats_common::WIDTH as f32,
                 sunrise_gameplay_common::game::boats_common::HEIGHT as f32,
@@ -1662,8 +1660,8 @@ impl crate::game::ServerGame<'_> {
                 transferred: Some(TransferredArrivalState::VehicleTree(state)),
             });
             self.server.portals.dirty = true;
-        } else if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
-            let c = &self.common.carts[i];
+        } else if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
+            let c = &self.common.entities.carts[i];
             let (width, height) = (
                 super::minecarts::WIDTH as f32,
                 super::minecarts::HEIGHT as f32,
@@ -1874,11 +1872,11 @@ impl crate::game::ServerGame<'_> {
                 .borrow_mut()
                 .server_admitted_identity(id, |at| self.locate_resident_owner(at))
                 .map(|(at, _, _)| at);
-            if let Some(i) = location.and_then(|at| self.common.tnts.locate(at.join)) {
-                self.common.tnts[i].used_portal = true;
+            if let Some(i) = location.and_then(|at| self.common.entities.tnts.locate(at.join)) {
+                self.common.entities.tnts[i].used_portal = true;
             }
         } else {
-            let mut items = self.common.dropped.lift();
+            let mut items = self.common.entities.dropped.lift();
             let mut arrival = None;
             let mut removed: Vec<_> = items
                 .iter()

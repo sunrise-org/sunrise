@@ -25,7 +25,7 @@ impl ServerGame<'_> {
             // A server's player snaps every move it accepts, so at every hook moment the old
             // values match its current position and rotation.
             Target::Player | Target::Guest(_) => current(),
-            Target::General(_) => list_old(&self.common.resident_entities.general.rows, join?),
+            Target::General(_) => list_old(&self.common.entities.general.rows, join?),
             Target::Hook(id) => {
                 let (hook, _) = self.fishing_hook_by_id(id)?;
                 Some(Old {

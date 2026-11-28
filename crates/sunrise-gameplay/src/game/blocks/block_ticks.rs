@@ -47,7 +47,7 @@ impl crate::game::ServerGame<'_> {
                     [p.position.x + w, p.position.y + h, p.position.z + w],
                 )
             })
-            .chain(self.common.carts.iter().map(|c| {
+            .chain(self.common.entities.carts.iter().map(|c| {
                 let p = c.position;
                 (
                     [p.x - 0.49, p.y, p.z - 0.49],
@@ -69,8 +69,7 @@ impl crate::game::ServerGame<'_> {
         // the ones a thrown trident is in.
         for p in self
             .common
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .filter(|p| p.arrow.is_some())
         {
@@ -80,7 +79,7 @@ impl crate::game::ServerGame<'_> {
                     p.previous, p.position,
                 ));
         }
-        for t in &self.common.tridents {
+        for t in &self.common.entities.tridents {
             scratch
                 .inside
                 .extend(sunrise_sim::entities::arrows::blocks_inside(

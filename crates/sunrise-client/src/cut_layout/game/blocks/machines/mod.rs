@@ -383,7 +383,7 @@ pub(crate) mod part_front_tests {
                 c.items[3] = Some(stack("minecraft:oak_planks", 1));
                 c.items[6] = Some(stack("minecraft:oak_planks", 1));
             }
-            let dropped = game.dropped.len();
+            let dropped = game.entities.dropped.len();
             game.dispense_from(BlockPos::new(2, 64, 8), crafter)
                 .unwrap();
             let held = match game.world.block_entities.get(&(2, 64, 8)) {
@@ -396,7 +396,7 @@ pub(crate) mod part_front_tests {
                 _ => panic!("no crafter"),
             };
             assert_eq!(
-                (held, game.dropped.len() - dropped),
+                (held, game.entities.dropped.len() - dropped),
                 (vec![("minecraft:stick".into(), 4)], 0),
                 "a pipe routing output back into the grid must conserve four crafted sticks"
             );
@@ -442,7 +442,7 @@ pub(crate) mod part_front_tests {
             {
                 items[0] = Some(stack("minecraft:stick", 2));
             }
-            let dropped = game.dropped.len();
+            let dropped = game.entities.dropped.len();
             game.dispense_from(BlockPos::new(2, 64, 8), dropper)
                 .unwrap();
             let held = match game.world.block_entities.get(&(2, 64, 8)) {
@@ -452,7 +452,7 @@ pub(crate) mod part_front_tests {
                 _ => panic!("no dropper"),
             };
             assert_eq!(
-                (held, game.dropped.len() - dropped),
+                (held, game.entities.dropped.len() - dropped),
                 (2, 0),
                 "a pipe routing back into the source must conserve its items"
             );
@@ -554,10 +554,10 @@ pub(crate) mod part_front_tests {
                     c.items[0] = Some(stack("minecraft:oak_planks", 1));
                     c.items[3] = Some(stack("minecraft:oak_planks", 1));
                 }
-                let items = game.dropped.len();
+                let items = game.entities.dropped.len();
                 game.dispense_from(BlockPos::new(0, 64, z), crafter)
                     .unwrap();
-                let spawned = game.dropped.len() - items;
+                let spawned = game.entities.dropped.len() - items;
                 assert_eq!(
                     (chest_items(game, z), spawned),
                     if taken { (4, 0) } else { (0, 1) },
@@ -610,7 +610,7 @@ pub(crate) mod hopper_cart_transfer_tests {
             for player in [false, true] {
                 game.server.next_entity += 1;
                 let id = game.server.next_entity;
-                game.boats
+                game.entities.boats
                     .push(Boat::new(id, "oak".into(), Vec3::new(8.5, 65.0, 8.5), 0.0).with_chest());
                 game.persist.raw.insert(
                     id,
@@ -622,7 +622,7 @@ pub(crate) mod hopper_cart_transfer_tests {
                         ("LootTableSeed", Tag::Long(73)),
                     ]),
                 );
-                let i = game.boats.len() - 1;
+                let i = game.entities.boats.len() - 1;
                 game.as_guest(12, |game| {
                     game.unpack_boat_loot(i, player);
                     assert_eq!(game.adv.progress.done(&game.adv.tree.list[ai]), player);
@@ -668,7 +668,7 @@ pub(crate) mod hopper_cart_transfer_tests {
                         // The menu copy is authoritative, even if the entity is stale.
                         boat.items.fill(None);
                     }
-                    game.boats.push(boat);
+                    game.entities.boats.push(boat);
                     game.persist.raw.insert(
                         id,
                         Tag::compound([
@@ -695,7 +695,7 @@ pub(crate) mod hopper_cart_transfer_tests {
                     );
                     assert!(game.persist.raw[&id].get("LootTable").is_none());
                     assert!(game.persist.raw[&id].get("LootTableSeed").is_none());
-                    assert_eq!(game.boats.last().unwrap().items, items);
+                    assert_eq!(game.entities.boats.last().unwrap().items, items);
                     game.with_entity_container(id, |g, _| {
                         if let Some(BlockEntity::Chest(items)) =
                             g.world.block_entities.get_mut(&key)
@@ -762,14 +762,14 @@ pub(crate) mod hopper_cart_transfer_tests {
             let id = game.server.next_entity;
             let mut cart = Minecart::new(id, CartKind::Hopper, Vec3::new(8.5, 64.0625, 8.5));
             cart.enabled = true;
-            game.carts.push(cart);
+            game.entities.carts.push(cart);
             let count = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 let in_chest: u32 = match game.world.block_entities.get(&(8, 65, 8)) {
                     Some(BlockEntity::Chest(s)) => s.iter().flatten().map(|s| s.count).sum(),
                     _ => 0,
                 };
                 let in_cart: u32 = game
-                    .carts
+                    .entities.carts
                     .iter()
                     .find(|c| c.id == id)
                     .unwrap()

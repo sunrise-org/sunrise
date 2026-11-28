@@ -107,8 +107,8 @@ fn turn(game: &mut sunrise_gameplay::game::ServerGame<'_>, holder: u32, degrees:
 #[cfg(feature = "client")]
 fn shove(game: &mut sunrise_gameplay::game::ServerGame<'_>, holder: u32, x: f64) {
     let start = game.placed_moving_colliders();
-    let i = game.mobs.iter().position(|m| m.id == holder).unwrap();
-    game.mobs.update(i, |m| m.position.x = x);
+    let i = game.entities.mobs.iter().position(|m| m.id == holder).unwrap();
+    game.entities.mobs.update(i, |m| m.position.x = x);
     game.carry_pass(&start);
 }
 
@@ -134,17 +134,17 @@ fn a_collider_shoves_a_body_crossed_only_mid_sweep() {
                 empty_chunk(game);
                 let holder = holder(game, 2.5);
                 let velocity = Vec3::new(-0.125, 0.0, 0.0625);
-                game.dropped.push(item(80, 4.5, 4.5, velocity));
+                game.entities.dropped.push(item(80, 4.5, 4.5, velocity));
                 // The other item only grazes the sweep in Z.
-                game.dropped.push(item(81, 4.5, 5.375, velocity));
+                game.entities.dropped.push(item(81, 4.5, 5.375, velocity));
                 shove(game, holder, 6.5);
                 // The box ends at x=6.75; the item's half width is 0.125.
                 assert_eq!(
-                    game.dropped[0].position,
+                    game.entities.dropped[0].position,
                     Vec3::new(6.75 + 0.125 + 0.01, 70.25, 4.5)
                 );
-                assert_eq!(game.dropped[0].velocity, Vec3::new(0.0, 0.0, 0.0625));
-                assert_eq!(game.dropped[1].position, Vec3::new(4.5, 70.25, 5.375));
+                assert_eq!(game.entities.dropped[0].velocity, Vec3::new(0.0, 0.0, 0.0625));
+                assert_eq!(game.entities.dropped[1].position, Vec3::new(4.5, 70.25, 5.375));
             });
         },
     );
@@ -169,10 +169,10 @@ fn a_collider_shove_stops_at_a_wall_without_impact_damage() {
                 game.world.set(6, 70, 4, stone).unwrap();
                 let item = item(80, 4.5, 4.5, Vec3::ZERO);
                 let health = item.health;
-                game.dropped.push(item);
+                game.entities.dropped.push(item);
                 shove(game, holder, 6.5);
-                assert_eq!(game.dropped[0].position, Vec3::new(6.0 - 0.125, 70.25, 4.5));
-                assert_eq!(game.dropped[0].health, health);
+                assert_eq!(game.entities.dropped[0].position, Vec3::new(6.0 - 0.125, 70.25, 4.5));
+                assert_eq!(game.entities.dropped[0].health, health);
                 assert_eq!(game.collider_origin(holder).unwrap().x, 6.5);
             });
         },
@@ -191,8 +191,8 @@ fn a_later_shove_collides_with_a_holder_already_displaced() {
                 let source = holder(game, 2.5);
                 let first = game.take_entity_id();
                 let second = game.take_entity_id();
-                game.dropped.push(item(first, 4.0, 4.125, Vec3::ZERO));
-                game.dropped.push(item(second, 4.5, 4.875, Vec3::ZERO));
+                game.entities.dropped.push(item(first, 4.0, 4.125, Vec3::ZERO));
+                game.entities.dropped.push(item(second, 4.5, 4.875, Vec3::ZERO));
                 game.entity(first)
                     .unwrap()
                     .set_collider(
@@ -205,10 +205,10 @@ fn a_later_shove_collides_with_a_holder_already_displaced() {
                     .unwrap();
                 shove(game, source, 6.5);
                 let first_x = 6.75 + 0.125 + 0.01;
-                assert_eq!(game.dropped[0].position.x, first_x);
+                assert_eq!(game.entities.dropped[0].position.x, first_x);
                 // The first item's box began behind the second item. After the first shove,
                 // its west face stops the second item before the source's end position.
-                assert_eq!(game.dropped[1].position.x, first_x - 1.0 - 0.125);
+                assert_eq!(game.entities.dropped[1].position.x, first_x - 1.0 - 0.125);
             });
         },
     );
@@ -236,10 +236,10 @@ fn a_cancelled_turning_shove_leaves_velocity_alone() {
                     let holder = holder(game, 4.5);
                     let from = Vec3::new(5.2, 70.25, 4.5);
                     let velocity = Vec3::new(-0.3, 0.0, 0.2);
-                    game.dropped.push(item(80, 5.2, 4.5, velocity));
+                    game.entities.dropped.push(item(80, 5.2, 4.5, velocity));
                     turn(game, holder, 90.0);
-                    assert_eq!(game.dropped[0].position, from);
-                    assert_eq!(game.dropped[0].velocity, velocity);
+                    assert_eq!(game.entities.dropped[0].position, from);
+                    assert_eq!(game.entities.dropped[0].velocity, velocity);
                 });
             });
         },
@@ -266,27 +266,27 @@ fn an_upward_shove_leaves_the_colliders_vertical_speed() {
                         }])),
                     )
                     .unwrap();
-                game.dropped
+                game.entities.dropped
                     .push(item(80, 4.0, 4.5, Vec3::new(0.0, -0.4, 0.0)));
-                game.dropped
+                game.entities.dropped
                     .push(item(81, 5.0, 4.5, Vec3::new(0.0, 0.5, 0.0)));
                 let start = game.placed_moving_colliders();
                 let rise = (PIG_Y + 0.3) - PIG_Y;
-                let i = game.mobs.iter().position(|m| m.id == holder).unwrap();
-                game.mobs.update(i, |m| m.position.y = PIG_Y + 0.3);
+                let i = game.entities.mobs.iter().position(|m| m.id == holder).unwrap();
+                game.entities.mobs.update(i, |m| m.position.y = PIG_Y + 0.3);
                 game.carry_pass(&start);
                 assert!(
-                    (game.dropped[0].position.y - 70.41).abs() < 1.0e-6,
+                    (game.entities.dropped[0].position.y - 70.41).abs() < 1.0e-6,
                     "falling body: {}",
-                    game.dropped[0].position.y
+                    game.entities.dropped[0].position.y
                 );
-                assert_eq!(game.dropped[0].velocity, Vec3::new(0.0, rise, 0.0));
+                assert_eq!(game.entities.dropped[0].velocity, Vec3::new(0.0, rise, 0.0));
                 assert!(
-                    (game.dropped[1].position.y - 70.41).abs() < 1.0e-6,
+                    (game.entities.dropped[1].position.y - 70.41).abs() < 1.0e-6,
                     "rising body: {}",
-                    game.dropped[1].position.y
+                    game.entities.dropped[1].position.y
                 );
-                assert_eq!(game.dropped[1].velocity, Vec3::new(0.0, 0.5, 0.0));
+                assert_eq!(game.entities.dropped[1].velocity, Vec3::new(0.0, 0.5, 0.0));
             });
         },
     );
@@ -378,10 +378,10 @@ fn a_rider_on_a_turning_collider_is_carried_and_not_shoved_again() {
                     .unwrap();
                 let mut rider = item(80, 5.5, 4.5, Vec3::new(-0.3, 0.0, 0.2));
                 rider.ground.on_ground = true;
-                game.dropped.push(rider);
+                game.entities.dropped.push(rider);
                 turn(game, holder, 90.0);
-                assert_eq!(game.dropped[0].position, Vec3::new(4.5, 70.25, 3.5));
-                assert_eq!(game.dropped[0].velocity, Vec3::new(-0.3, 0.0, 0.2));
+                assert_eq!(game.entities.dropped[0].position, Vec3::new(4.5, 70.25, 3.5));
+                assert_eq!(game.entities.dropped[0].velocity, Vec3::new(-0.3, 0.0, 0.2));
             });
         },
     );

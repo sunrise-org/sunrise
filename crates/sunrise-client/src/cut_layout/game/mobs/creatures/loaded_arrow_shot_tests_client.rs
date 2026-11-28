@@ -22,7 +22,7 @@ fn a_falling_rocket_hits_the_ground_and_one_in_water_splashes() {
         let mut falls = Vec::new();
         for _ in 0..6 {
             game.tick_rockets();
-            falls.push(game.rockets[0].fall_distance);
+            falls.push(game.entities.rockets[0].fall_distance);
         }
         let events: Vec<_> = sunrise_gameplay_common::game::side_ops::events::TEST_POSTED_EVENTS
             .with(|v| {
@@ -35,7 +35,7 @@ fn a_falling_rocket_hits_the_ground_and_one_in_water_splashes() {
         stop_events();
         // The fourth move ends on the stone without a collision; the fifth lands.
         assert_eq!(falls, [0.5, 1.0, 1.5, 2.0, 0.0, 0.0]);
-        assert_eq!(game.rockets[1].fall_distance, 0.0);
+        assert_eq!(game.entities.rockets[1].fall_distance, 0.0);
         assert_eq!(
             events,
             [("minecraft:splash", 20), ("minecraft:hit_ground", 6)]
@@ -66,7 +66,7 @@ fn a_rocket_posts_its_shot_once_and_a_silent_one_launches_quietly() {
             game.run_command("summon firework_rocket 9.5 201.5 10.5 {LifeTime:100,HasBeenShot:1b}")
         );
         assert!(
-            game.rockets
+            game.entities.rockets
                 .iter()
                 .all(|r| r.has_been_shot == (r.position.x == 9.5))
         );
@@ -82,7 +82,7 @@ fn a_rocket_posts_its_shot_once_and_a_silent_one_launches_quietly() {
             vec![("minecraft:projectile_shoot", [6.5, 201.5, 10.5], None)]
         );
         assert!(second.is_empty());
-        assert!(game.rockets.iter().all(|r| r.has_been_shot));
+        assert!(game.entities.rockets.iter().all(|r| r.has_been_shot));
         // Only the rocket that isn't silent launches with a sound.
         assert_eq!(
             game.server

@@ -47,7 +47,7 @@ impl ServerGame<'_> {
             || sunrise_game_data::scoreboard::teams_allied(self.mob_team(mob), target_team)
             || self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|other| other.id == mob)
                 .is_none_or(|other| other.ai.target.is_some())
@@ -158,7 +158,7 @@ impl ServerGame<'_> {
     fn piglin_equip(&mut self, index: usize, stack: &ItemStack) -> bool {
         let item = &*stack.item;
         let mut slot = self.piglin_slot(item);
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         let mut replace = self.piglin_can_replace(m, stack, slot);
         if slot > 1 && !replace {
             slot = 0;
@@ -167,7 +167,7 @@ impl ServerGame<'_> {
         if !replace {
             return false;
         }
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         let old = item_stack(m, slot);
         let chance = stored_drop_chance(m, slot);
         let drop_old = old.is_some() && (m.random.next_float() - 0.1).max(0.0) < chance;
@@ -193,7 +193,7 @@ impl ServerGame<'_> {
     /// spot nearby.
     fn piglin_stash(&mut self, index: usize, mut stack: ItemStack) {
         let max = self.piglin_max_stack(&stack.item);
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         for s in &mut m.extra.inventory {
             if stack.count > 0 && s.same_item_same_components(&stack) && s.count < max {
                 let n = (max - s.count).min(stack.count);
@@ -234,7 +234,7 @@ impl ServerGame<'_> {
     /// Throw vector is `(targetPos - thrower.position()).normalize() * 0.30000001192092896`.
     /// Pickup delay is default (10 ticks). Hand Y pos is `eyeY - 0.3`.
     fn piglin_throw(&mut self, index: usize, target_pos: [f64; 3], stack: ItemStack) {
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         let from = [m.position.x, m.eye_y() - 0.3, m.position.z];
         let d = [
             target_pos[0] - m.position.x,
@@ -287,8 +287,8 @@ impl ServerGame<'_> {
         if !griefing && !self.grief_hooked() {
             return;
         }
-        for i in 0..self.common.mobs.len() {
-            let m = &self.common.mobs[i];
+        for i in 0..self.common.entities.mobs.len() {
+            let m = &self.common.entities.mobs[i];
             if m.species() != Species::Piglin
                 || !m.alive()
                 || !self.common.creatures.ticked.contains(&m.id)
@@ -306,37 +306,37 @@ impl ServerGame<'_> {
             let eye = Vec3::new(pos.x, m.eye_y(), pos.z);
             let nearest = self
                 .common
-                .dropped
+                .entities.dropped
                 .iter()
                 .enumerate()
                 .map(|(j, e)| (j, e.position.distance_squared(pos)))
                 .filter(|(_, d)| *d < 32.0 * 32.0)
-                .filter(|&(j, _)| self.piglin_wants(m, &self.common.dropped[j].stack))
+                .filter(|&(j, _)| self.piglin_wants(m, &self.common.entities.dropped[j].stack))
                 .filter(|&(j, _)| {
                     // ItemEntity's eye height is 0.2125.
-                    let e = &self.common.dropped[j];
+                    let e = &self.common.entities.dropped[j];
                     let at = Vec3::new(e.position.x, e.position.y + 0.2125, e.position.z);
                     w.line_of_sight(eye, at)
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1));
             let loved =
-                nearest.is_some_and(|(j, _)| self.piglin_loved(&self.common.dropped[j].stack.item));
+                nearest.is_some_and(|(j, _)| self.piglin_loved(&self.common.entities.dropped[j].stack.item));
             self.admire_seen_item(i, nearest.map(|(_, d)| d), loved);
             let best = nearest.filter(|(_, d)| *d <= 81.0);
             let Some((j, _)) = best else {
-                self.common.mobs[i].extra.point = None;
+                self.common.entities.mobs[i].extra.point = None;
                 continue;
             };
-            let e = &self.common.dropped[j];
+            let e = &self.common.entities.dropped[j];
             let close = (e.position.x - pos.x).abs() <= 1.3
                 && (e.position.z - pos.z).abs() <= 1.3
                 && (e.position.y - pos.y).abs() <= 1.0;
             if !close || e.pickup_delay > 0 {
-                self.common.mobs[i].extra.point = Some([e.position.x, e.position.y, e.position.z]);
+                self.common.entities.mobs[i].extra.point = Some([e.position.x, e.position.y, e.position.z]);
                 continue;
             }
             // Nuggets come whole, anything else one at a time.
-            let (taken_item, id) = (e.clone(), self.common.mobs[i].id);
+            let (taken_item, id) = (e.clone(), self.common.entities.mobs[i].id);
             let item = e.stack.item.clone();
             self.server_mob_take_item(&taken_item, id);
             // LivingEntity.onItemPickup, before PiglinAi.pickUpItem splits the stack.
@@ -344,7 +344,7 @@ impl ServerGame<'_> {
             let stack = if &*item == "minecraft:gold_nugget" {
                 self.remove_dropped(j).stack
             } else {
-                let e = &mut self.common.dropped[j];
+                let e = &mut self.common.entities.dropped[j];
                 e.stack.count -= 1;
                 let one = ItemStack {
                     count: 1,
@@ -358,13 +358,13 @@ impl ServerGame<'_> {
             if self.piglin_loved(&item) {
                 self.start_admiring(i, stack);
             } else if self.item_in_tag("minecraft:piglin_food", &item)
-                && !has_eaten_recently(&self.common.mobs[i])
+                && !has_eaten_recently(&self.common.entities.mobs[i])
             {
                 // PiglinAi.eat: the food is gone and it will not eat for a while.
-                eat(&mut self.common.mobs[i]);
-                self.common.mobs[i].nav_stop();
+                eat(&mut self.common.entities.mobs[i]);
+                self.common.entities.mobs[i].nav_stop();
             } else {
-                self.common.mobs[i].nav_stop();
+                self.common.entities.mobs[i].nav_stop();
                 self.piglin_keep(i, stack);
             }
         }
@@ -372,7 +372,7 @@ impl ServerGame<'_> {
     /// `StartAdmiringItemIfSeen` and the admire activity's stop behaviours, from the
     /// distance squared to `NEAREST_VISIBLE_WANTED_ITEM` and whether that item is loved.
     fn admire_seen_item(&mut self, index: usize, nearest: Option<f64>, loved: bool) {
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         let holding = m.extra.off_hand_id().is_some();
         // ADMIRING_ITEM remains present while the off hand is admired.
         if holding && m.extra.using_item > 0 {
@@ -384,15 +384,15 @@ impl ServerGame<'_> {
     /// took (`split(1)` from the ground, `consumeAndReturn(1)` from a hand), with its components.
     fn start_admiring(&mut self, index: usize, stack: ItemStack) {
         // PiglinAi.holdInOffhand: what the off hand held is dropped, whole.
-        if let Some(old) = item_stack(&self.common.mobs[index], OFFHAND) {
-            let m = &mut self.common.mobs[index];
+        if let Some(old) = item_stack(&self.common.entities.mobs[index], OFFHAND) {
+            let m = &mut self.common.entities.mobs[index];
             m.extra
                 .set_slot_stack(sunrise_items::equipment::OFFHAND, None);
             set_slot_enchantments(m, OFFHAND, Vec::new());
             let at = [m.position.x, m.position.y, m.position.z];
             self.spawn_item_own(old, at, 10);
         }
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         // The memory is set again, for the item it holds now.
         m.extra.piglin.seen_admire.erase();
         sunrise_sim::mobs::piglin::hold_in_offhand(m, stack);
@@ -407,7 +407,7 @@ impl ServerGame<'_> {
     /// `PiglinAi.mobInteract`: hand a piglin the held `stack` (`canAdmire`: only
     /// piglin currency is accepted from the hand; other loved items are passed over).
     pub fn give_piglin(&mut self, index: usize, stack: &ItemStack) -> bool {
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         if m.species() != Species::Piglin
             || m.is_baby()
             || m.extra.using_item > 0
@@ -433,32 +433,32 @@ impl ServerGame<'_> {
     /// after stashing or throwing the old item. An empty off hand (a second stop
     /// of the same hit) does nothing.
     pub fn finish_admiring(&mut self, mob: u32) {
-        let Some(i) = self.common.mobs.iter().position(|m| m.id == mob) else {
+        let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == mob) else {
             return;
         };
-        let barter = !std::mem::take(&mut self.common.mobs[i].extra.piglin.hit_stop);
-        if let Some(item) = self.common.mobs[i].extra.off_hand_id()
+        let barter = !std::mem::take(&mut self.common.entities.mobs[i].extra.piglin.hit_stop);
+        if let Some(item) = self.common.entities.mobs[i].extra.off_hand_id()
             && self.item_blocks_attacks(item)
         {
             return;
         }
-        let Some(stack) = item_stack(&self.common.mobs[i], OFFHAND) else {
+        let Some(stack) = item_stack(&self.common.entities.mobs[i], OFFHAND) else {
             return;
         };
-        let m = &mut self.common.mobs[i];
+        let m = &mut self.common.entities.mobs[i];
         m.extra
             .set_slot_stack(sunrise_items::equipment::OFFHAND, None);
         set_slot_enchantments(m, OFFHAND, Vec::new());
-        if self.common.mobs[i].is_baby() {
+        if self.common.entities.mobs[i].is_baby() {
             if !self.piglin_equip(i, &stack) {
-                if let Some(old) = item_stack(&self.common.mobs[i], 0) {
+                if let Some(old) = item_stack(&self.common.entities.mobs[i], 0) {
                     if self.piglin_loved(&old.item) {
                         self.piglin_stash(i, old);
                     } else {
                         self.piglin_throw_items(i, vec![old]);
                     }
                 }
-                let m = &mut self.common.mobs[i];
+                let m = &mut self.common.entities.mobs[i];
                 set_item_stack(m, 0, stack);
                 set_drop_chance(m, 0, 2.0);
                 m.persistent = true;
@@ -475,7 +475,7 @@ impl ServerGame<'_> {
         // `LootContextParamSets.PIGLIN_BARTER`: the piglin is THIS_ENTITY, and
         // nothing else is supplied.
         let piglin = sunrise_sim::mobs::drops::loot_entity_with_variants(
-            &self.common.mobs[i],
+            &self.common.entities.mobs[i],
             None,
             Some(self.world_variants()),
         );
@@ -497,8 +497,8 @@ impl ServerGame<'_> {
         }
         // `PiglinAi.throwItemsTowardPos` swings the off hand once before the
         // throws, so the barters leave the hand the piglin admires them in.
-        self.common.mobs[i].swing_hand_modified(true, SwingAnimation::DEFAULT);
-        let m = &self.common.mobs[i];
+        self.common.entities.mobs[i].swing_hand_modified(true, SwingAnimation::DEFAULT);
+        let m = &self.common.entities.mobs[i];
         let at = m.position;
         let host = self
             .common
@@ -597,10 +597,10 @@ impl ServerGame<'_> {
             .bool_at(sunrise_game_data::gamerules::vanilla::UNIVERSAL_ANGER);
         // The target hook may remove mobs, so the list's end is read at each step.
         let mut next = 0;
-        while next < self.common.mobs.len() {
+        while next < self.common.entities.mobs.len() {
             let i = next;
             next += 1;
-            let m = &self.common.mobs[i];
+            let m = &self.common.entities.mobs[i];
             if m.species() != Species::Piglin
                 || m.is_baby()
                 || !m.alive()
@@ -620,7 +620,7 @@ impl ServerGame<'_> {
             } else {
                 player_uuid
             };
-            let id = self.common.mobs[i].id;
+            let id = self.common.entities.mobs[i].id;
             let change = if mod_api::__private::listened(mod_api::HookId::LivingChangeTarget) {
                 let original = self
                     .server
@@ -645,13 +645,13 @@ impl ServerGame<'_> {
             // The piglin again by its id: one a listener removed is skipped.
             let Some(i) = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .position(|m| m.id == id && !m.removed)
             else {
                 continue;
             };
-            let m = &mut self.common.mobs[i];
+            let m = &mut self.common.entities.mobs[i];
             let previous = m.ai.target;
             sunrise_sim::mobs::piglin::set_guarded_anger_target(m, target_uuid);
             m.ai.target = match change {

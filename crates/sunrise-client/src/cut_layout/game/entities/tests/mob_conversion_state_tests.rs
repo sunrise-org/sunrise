@@ -46,12 +46,12 @@ fn a_struck_pig_leaves_a_zombified_piglin_that_keeps_its_state() {
     ));
     // A baby pig stays a baby through the conversion (#7510).
     let index = game
-        .mobs
+        .entities.mobs
         .iter()
         .position(|m| m.species() == Species::Pig)
         .expect("the pig was summoned");
-    game.mobs[index].extra.age = -24000;
-    let pig = game.mobs[index].clone();
+    game.entities.mobs[index].extra.age = -24000;
+    let pig = game.entities.mobs[index].clone();
     assert!(pig.is_baby(), "the summoned pig is a baby");
     assert!(!pig.persistent, "a summoned pig is not persistent");
     // `Pig.thunderHit` hands `ZombifiedPiglin.populateDefaultEquipmentSlots`
@@ -68,13 +68,13 @@ fn a_struck_pig_leaves_a_zombified_piglin_that_keeps_its_state() {
     game.server_tick_bolts();
 
     assert!(
-        game.mobs
+        game.entities.mobs
             .iter()
             .all(|m| m.species() != Species::Pig || m.removed),
         "the pig is gone"
     );
     let zombified = game
-        .mobs
+        .entities.mobs
         .iter()
         .find(|m| m.species() == Species::ZombifiedPiglin)
         .expect("the pig became a zombified piglin");
@@ -115,7 +115,7 @@ fn a_sheared_mooshroom_leaves_a_cow_that_keeps_its_state() {
         "summon minecraft:mooshroom 2.5 64 2.5 {CustomName:{text:\"Bessie\"},NoAI:1b,Silent:1b}"
     ));
     let mooshroom = game
-        .mobs
+        .entities.mobs
         .iter()
         .find(|m| m.species() == Species::Mooshroom)
         .expect("the mooshroom was summoned")
@@ -130,7 +130,7 @@ fn a_sheared_mooshroom_leaves_a_cow_that_keeps_its_state() {
         "the shears are used"
     );
     let cow = game
-        .mobs
+        .entities.mobs
         .iter()
         .find(|m| m.species() == Species::Cow)
         .expect("the mooshroom became a cow");
@@ -156,7 +156,7 @@ fn a_struck_villager_leaves_a_witch_that_keeps_its_state() {
     game.spawn_bolt([2.5, 64.0, 2.5], false);
     game.server_tick_bolts();
     let witch = game
-        .mobs
+        .entities.mobs
         .iter()
         .find(|m| m.species() == Species::Witch)
         .expect("the villager became a witch");
@@ -180,12 +180,12 @@ fn a_zombifying_piglin_leaves_a_nauseous_zombified_piglin() {
     let mut game = game(&mut resources);
     assert!(game.run_command("summon minecraft:piglin 2.5 64 2.5 {}"));
     let index = game
-        .mobs
+        .entities.mobs
         .iter()
         .position(|m| m.species() == Species::Piglin)
         .expect("the piglin was summoned");
-    let from = game.mobs[index].clone();
-    game.mobs[index].removed = true;
+    let from = game.entities.mobs[index].clone();
+    game.entities.mobs[index].removed = true;
     game.handle_mob_events(vec![MobEvent::Convert {
         from: Box::new(from),
         kind: "minecraft:zombified_piglin",
@@ -195,7 +195,7 @@ fn a_zombifying_piglin_leaves_a_nauseous_zombified_piglin() {
     }])
     .unwrap();
     let zombified = game
-        .mobs
+        .entities.mobs
         .iter()
         .find(|m| m.species() == Species::ZombifiedPiglin)
         .expect("the piglin became a zombified piglin");

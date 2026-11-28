@@ -23,7 +23,7 @@ mod tests {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let journal = game.resident_entities.table.borrow().producer();
             for id in 800..820 {
-                game.mobs.push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
             }
             game.tick().unwrap();
             let mut remaining = Vec::new();
@@ -32,7 +32,7 @@ mod tests {
                 remaining.is_empty(),
                 "remote tick left owner events buffered"
             );
-            game.mobs.clear();
+            game.entities.mobs.clear();
             let result = game.with_residency_tick(|_| Err("interrupted client tick".into()));
             assert!(result.is_err());
             journal.drain_into(&mut remaining);

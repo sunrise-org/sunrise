@@ -646,7 +646,7 @@ mod tests {
             let at = Vec3::new(5.5, 65.0, 5.5);
             let horse = game.res.mob_types().get("minecraft:horse").unwrap().clone();
             let ghast = game.res.mob_types().get("minecraft:ghast").unwrap().clone();
-            game.mobs.push(Mob::new(99, ghast, at, 0.0));
+            game.entities.mobs.push(Mob::new(99, ghast, at, 0.0));
             let mut damage = sunrise_sim::health::TestLevel::new(0);
             for (block, drag, spin, listens) in [
                 ("minecraft:stone", 0.10920001, 1.0920001, 0),
@@ -655,7 +655,7 @@ mod tests {
                 let state = game.pack.assets.registry.default_state(block).unwrap();
                 game.world.set(5, 64, 5, state).unwrap();
                 let snapshot: Vec<_> = game
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .map(|m| m.seen(None, game.items()))
                     .collect();

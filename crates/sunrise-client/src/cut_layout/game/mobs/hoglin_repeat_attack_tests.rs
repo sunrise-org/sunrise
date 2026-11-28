@@ -102,7 +102,7 @@ fn health(game: &mut sunrise_gameplay::game::ServerGame<'_>, uuid: &str) -> f32 
         .target_with_uuid(sunrise_sim::save::uuid_from_text(uuid).unwrap())
         .expect("the entity is in the level");
     match target {
-        Target::Mob(id) => game.mobs.iter().find(|m| m.id == id).unwrap().health,
+        Target::Mob(id) => game.entities.mobs.iter().find(|m| m.id == id).unwrap().health,
         other => panic!("{other:?} is not a mob"),
     }
 }
@@ -152,7 +152,7 @@ fn a_hoglin_keeps_attacking_its_attacker_beside_another_hit_hoglin() {
 
 fn hurt_time(game: &mut sunrise_gameplay::game::ServerGame<'_>, uuid: &str) -> i32 {
     let id = mob_id(game, uuid);
-    game.mobs.iter().find(|m| m.id == id).unwrap().hurt_time
+    game.entities.mobs.iter().find(|m| m.id == id).unwrap().hurt_time
 }
 
 /// Vanilla 26.3's hit pen: the hoglin enters the fight activity at the end of
@@ -189,17 +189,17 @@ fn deferred_stronger_hits_do_not_count_hurt_timers_down_twice() {
     game.creatures.deferred_hits = true;
     assert!(game.mob_hits_mob(target, 4.0, Damage::mob(first, [0.0; 3])));
     assert!(game.mob_hits_mob(target, 6.0, Damage::mob(second, [0.0; 3])));
-    let victim = game.mobs.iter().find(|m| m.id == target).unwrap();
+    let victim = game.entities.mobs.iter().find(|m| m.id == target).unwrap();
     assert_eq!((victim.hurt_time, victim.invulnerable), (9, 19));
     assert_eq!(victim.health, 94.0);
 
     // A stronger hit on the following tick also leaves the already-counted
     // timers alone rather than decrementing them again.
-    let victim = game.mobs.iter_mut().find(|m| m.id == target).unwrap();
+    let victim = game.entities.mobs.iter_mut().find(|m| m.id == target).unwrap();
     victim.hurt_time = 8;
     victim.invulnerable = 18;
     assert!(game.mob_hits_mob(target, 8.0, Damage::mob(first, [0.0; 3])));
-    let victim = game.mobs.iter().find(|m| m.id == target).unwrap();
+    let victim = game.entities.mobs.iter().find(|m| m.id == target).unwrap();
     assert_eq!((victim.hurt_time, victim.invulnerable), (8, 18));
     assert_eq!(victim.health, 92.0);
 }
@@ -225,7 +225,7 @@ fn a_broadcast_target_replaces_only_a_farther_one() {
     let receiver = mob_id(&mut game, HOGLIN);
     let (near, far) = (mob_id(&mut game, PIG), mob_id(&mut game, NEAR_PIG));
     let place = |game: &sunrise_gameplay::game::ServerGame<'_>, id: u32| {
-        game.mobs.iter().find(|m| m.id == id).unwrap().position
+        game.entities.mobs.iter().find(|m| m.id == id).unwrap().position
     };
     let (near_at, far_at) = (place(&game, near), place(&game, far));
     let position = |who: Who, _current| match who {
@@ -233,7 +233,7 @@ fn a_broadcast_target_replaces_only_a_farther_one() {
         Who::Mob(id) if id == far => Some(far_at),
         _ => None::<Vec3>,
     };
-    let m = game.mobs.iter_mut().find(|m| m.id == receiver).unwrap();
+    let m = game.entities.mobs.iter_mut().find(|m| m.id == receiver).unwrap();
     // No current target: the broadcast's is taken.
     m.ai.target = None;
     let proposal = receive_attack_target(m, Who::Mob(far), position);
@@ -298,7 +298,7 @@ fn the_sensed_receivers_are_visible_adult_hoglins() {
     let baby = mob_id(&mut game, "00006093-0000-0000-0000-000000000004");
     let walled = mob_id(&mut game, "00006093-0000-0000-0000-000000000005");
     let adults = &game
-        .mobs
+        .entities.mobs
         .iter()
         .find(|m| m.id == receiver)
         .unwrap()
@@ -372,7 +372,7 @@ fn hoglin_broadcast_obeys_target_cancellation_and_redirection() {
                 .unwrap()
                 .clone();
             for (id, x) in [(9001, 0.0), (9002, 4.0), (9003, 2.0)] {
-                game.mobs
+                game.entities.mobs
                     .push(Mob::new(id, kind.clone(), Vec3::new(x, 64.0, 0.0), 0.0));
             }
             let broadcast = || {
@@ -385,7 +385,7 @@ fn hoglin_broadcast_obeys_target_cancellation_and_redirection() {
             game.handle_mob_events(broadcast()).unwrap();
             assert_eq!(state.lock().unwrap().0, 1);
             assert_eq!(
-                game.mobs[0].ai.target, None,
+                game.entities.mobs[0].ai.target, None,
                 "cancellation preserves target"
             );
 
@@ -396,7 +396,7 @@ fn hoglin_broadcast_obeys_target_cancellation_and_redirection() {
             game.handle_mob_events(broadcast()).unwrap();
             assert_eq!(state.lock().unwrap().0, 2);
             assert_eq!(
-                game.mobs[0].ai.target,
+                game.entities.mobs[0].ai.target,
                 Some(Who::Mob(9003)),
                 "listener redirect is committed"
             );
@@ -405,11 +405,11 @@ fn hoglin_broadcast_obeys_target_cancellation_and_redirection() {
             // before listener dispatch, preserving vanilla's broadcast selection.
             game.handle_mob_events(broadcast()).unwrap();
             assert_eq!(state.lock().unwrap().0, 2);
-            game.mobs[0].ai.target = None;
-            game.mobs[0].extra.ints[0] = 200;
+            game.entities.mobs[0].ai.target = None;
+            game.entities.mobs[0].extra.ints[0] = 200;
             game.handle_mob_events(broadcast()).unwrap();
             assert_eq!(state.lock().unwrap().0, 2);
-            assert_eq!(game.mobs[0].ai.target, None);
+            assert_eq!(game.entities.mobs[0].ai.target, None);
 
             use {
                 sunrise_gameplay::game::server_side::native_item_places::tests::open_to_lan,
@@ -424,7 +424,7 @@ fn hoglin_broadcast_obeys_target_cancellation_and_redirection() {
             }
             let attacker_id = game.guest_identity(12).unwrap().1;
             let attacker = mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, attacker_id));
-            game.mobs[0].extra.ints[0] = 0;
+            game.entities.mobs[0].extra.ints[0] = 0;
             game.server
                 .lan
                 .as_mut()
@@ -441,12 +441,12 @@ fn hoglin_broadcast_obeys_target_cancellation_and_redirection() {
             state.lock().unwrap().1 = None;
             game.handle_mob_events(broadcast_player()).unwrap();
             assert_eq!(state.lock().unwrap().2, Some(attacker));
-            assert_eq!(game.mobs[0].ai.target, None);
+            assert_eq!(game.entities.mobs[0].ai.target, None);
             assert_eq!(game.server.lan.as_ref().unwrap().mob_players[&9001], 13);
             state.lock().unwrap().1 = Some(attacker);
             game.handle_mob_events(broadcast_player()).unwrap();
             assert_eq!(state.lock().unwrap().2, Some(attacker));
-            assert_eq!(game.mobs[0].ai.target, Some(Who::Player));
+            assert_eq!(game.entities.mobs[0].ai.target, Some(Who::Player));
             assert_eq!(game.server.lan.as_ref().unwrap().mob_players[&9001], 12);
             // Concrete players must be compared, not the shared Who::Player tag.
             let nearer_mob = mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, 9003));
@@ -460,11 +460,11 @@ fn hoglin_broadcast_obeys_target_cancellation_and_redirection() {
             .unwrap();
             assert_eq!(state.lock().unwrap().0, before + 1);
             assert_eq!(
-                game.mobs[0].ai.target,
+                game.entities.mobs[0].ai.target,
                 Some(Who::Mob(9003)),
                 "player at four loses to mob at two"
             );
-            game.mobs[0].ai.target = Some(Who::Mob(9002));
+            game.entities.mobs[0].ai.target = Some(Who::Mob(9002));
             let nearer_player = mod_api::LivingRef::new(mod_api::EntityRef::new(
                 epoch,
                 game.guest_identity(13).unwrap().1,
@@ -479,7 +479,7 @@ fn hoglin_broadcast_obeys_target_cancellation_and_redirection() {
             };
             game.handle_mob_events(broadcast_nearer_player()).unwrap();
             assert_eq!(state.lock().unwrap().0, before + 2);
-            assert_eq!(game.mobs[0].ai.target, Some(Who::Player));
+            assert_eq!(game.entities.mobs[0].ai.target, Some(Who::Player));
             assert_eq!(game.server.lan.as_ref().unwrap().mob_players[&9001], 13);
             game.server
                 .lan
@@ -518,7 +518,7 @@ fn target_of(
     game: &sunrise_gameplay::game::ServerGame<'_>,
     id: u32,
 ) -> Option<sunrise_sim::mobs::Who> {
-    game.mobs.iter().find(|m| m.id == id).unwrap().ai.target
+    game.entities.mobs.iter().find(|m| m.id == id).unwrap().ai.target
 }
 
 fn set_target(
@@ -526,7 +526,7 @@ fn set_target(
     id: u32,
     target: Option<sunrise_sim::mobs::Who>,
 ) {
-    game.mobs.iter_mut().find(|m| m.id == id).unwrap().ai.target = target;
+    game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap().ai.target = target;
 }
 
 fn place_player(game: &mut sunrise_gameplay::game::ServerGame<'_>, x: f64, z: f64) {

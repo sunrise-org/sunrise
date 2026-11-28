@@ -47,9 +47,9 @@ fn mobs_past_the_simulation_distance_neither_enter_portals_nor_cool_down() {
             game.world.set(x, 64, 8, portal).unwrap();
             game.world.set(x, 65, 8, portal).unwrap();
             let at = |z: f64| Vec3::new(f64::from(x) + 0.5, 64.0, z);
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(in_portal, zombie.clone(), at(8.5), 0.0));
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(cooling, zombie.clone(), at(12.5), 0.0));
             game.set_portal_cooldown(cooling);
         }
@@ -65,7 +65,7 @@ fn mobs_past_the_simulation_distance_neither_enter_portals_nor_cool_down() {
             game.find_entity_portals();
         }
         let state = |id| game.server.portals.level.entities.get(&id);
-        let here = |id| game.mobs.iter().any(|m| m.id == id);
+        let here = |id| game.entities.mobs.iter().any(|m| m.id == id);
         // A mob crosses a nether portal at once: the ticking zombie has gone.
         assert!(!here(1), "the ticking zombie went through its portal");
         assert!(here(2), "the far zombie is still here");

@@ -81,7 +81,7 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     assert!(game.remote_ride(Keys::default()));
     close(game.player.as_ref().unwrap().position, 2.0, 65.7, 3.0);
     close(
-        game.mobs.iter().find(|m| m.id == 41).unwrap().position,
+        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().position,
         2.0,
         65.7,
         3.0,
@@ -100,7 +100,7 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     }
     close(game.player.as_ref().unwrap().position, 12.0, 68.7, -4.0);
     close(
-        game.mobs.iter().find(|m| m.id == 41).unwrap().position,
+        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().position,
         12.0,
         68.7,
         -4.0,
@@ -116,7 +116,7 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     game.player.as_mut().unwrap().position = Vec3::new(20.0, 70.0, 25.0);
     game.position_riders();
     close(
-        game.mobs.iter().find(|m| m.id == 41).unwrap().position,
+        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().position,
         20.0,
         71.7,
         25.0,
@@ -126,7 +126,7 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     game.remote_ride(Keys::default());
     close(game.player.as_ref().unwrap().position, 12.0, 68.2, -4.0);
     close(
-        game.mobs.iter().find(|m| m.id == 41).unwrap().position,
+        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().position,
         12.0,
         68.2,
         -4.0,
@@ -135,7 +135,7 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     game.remove_entity(40);
     assert_eq!(game.riding, None);
     assert_eq!(
-        game.mobs.iter().find(|m| m.id == 41).unwrap().extra.mount,
+        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().extra.mount,
         None
     );
 }
@@ -191,7 +191,7 @@ fn a_stand_position_snap_keeps_the_first_draws_body_yaw() {
         .unwrap();
         let stand = game
             .common
-            .armor_stands
+            .entities.armor_stands
             .iter()
             .find(|a| a.id == 40)
             .unwrap();
@@ -344,7 +344,7 @@ fn client_entity_move_fires_for_simulated_bodies_and_not_observed() {
         player.velocity = Vec3::new(0.2, 0.0, 0.0);
         game.common.player = Some(player);
         // Client-simulated dropped item (`SERVER_AND_CLIENT`).
-        game.common.dropped.push(ItemEntity::new(
+        game.common.entities.dropped.push(ItemEntity::new(
             20,
             ItemStack::new("minecraft:stone", 1),
             Vec3::new(5.0, 64.0, 5.0),
@@ -463,11 +463,11 @@ fn entity_interpolate_to_steps_observed_boat_and_refuses_simulated_bodies() {
             // Accepted for observed boat: eases over 3 ticks.
             assert!(boat_ref.interpolate_to(host, [13.0, 64.0, 5.0], Some([90.0, 0.0])));
         }
-        assert_eq!(game.common.boats[0].position, Vec3::new(10.0, 64.0, 5.0));
+        assert_eq!(game.common.entities.boats[0].position, Vec3::new(10.0, 64.0, 5.0));
         for _ in 0..3 {
             game.tick_remote_entities(true);
         }
-        let at = game.common.boats[0].position;
+        let at = game.common.entities.boats[0].position;
         assert!(
             (at.x - 13.0).abs() < 1e-6 && (at.y - 64.0).abs() < 1e-6 && (at.z - 5.0).abs() < 1e-6,
             "boat should reach interpolation target after 3 steps, got {at:?}"
@@ -479,12 +479,12 @@ fn entity_interpolate_to_steps_observed_boat_and_refuses_simulated_bodies() {
             passengers: vec![7],
         }))
         .unwrap();
-        let before = game.common.boats[0].position;
+        let before = game.common.entities.boats[0].position;
         {
             let host: &mut dyn ClientHost = game;
             assert!(!boat_ref.interpolate_to(host, [20.0, 64.0, 5.0], None));
         }
-        assert_eq!(game.common.boats[0].position, before);
+        assert_eq!(game.common.entities.boats[0].position, before);
     });
 }
 

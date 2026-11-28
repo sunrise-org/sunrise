@@ -51,11 +51,11 @@ impl crate::game::ClientGame<'_> {
         self.client.screen == Screen::Inventory && self.client.mount_menu.open.is_some()
     }
     pub(in crate::game::client_side) fn mount_mob_index(&self, id: u32) -> Option<usize> {
-        self.common.mobs.iter().position(|m| m.id == id)
+        self.common.entities.mobs.iter().position(|m| m.id == id)
     }
     /// `AbstractHorse.openCustomInventoryScreen` for a tamed adult mount.
     pub fn open_mount_menu(&mut self, index: usize) {
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         let species = m.species();
         if !has_mount_menu(species) {
             return;
@@ -113,7 +113,7 @@ impl crate::game::ClientGame<'_> {
         self.common
             .riding
             .and_then(|id| self.mount_mob_index(id))
-            .is_some_and(|i| has_mount_menu(self.common.mobs[i].species()))
+            .is_some_and(|i| has_mount_menu(self.common.entities.mobs[i].species()))
     }
     /// A server closed its window: the screen's copy goes.
     pub(in crate::game::client_side) fn mount_menu_reset(&mut self) {
@@ -122,7 +122,7 @@ impl crate::game::ClientGame<'_> {
     /// The entity type of the open mount menu's mount (`minecraft:horse`).
     pub(in crate::game::client_side) fn mount_menu_entity(&self) -> Option<String> {
         let open = self.client.mount_menu.open.as_ref()?;
-        let m = self.common.mobs.iter().find(|m| m.id == open.mob)?;
+        let m = self.common.entities.mobs.iter().find(|m| m.id == open.mob)?;
         Some(m.kind.id.to_string())
     }
     /// The chest columns of the open mount menu (the server's window's).
@@ -146,7 +146,7 @@ impl crate::game::ClientGame<'_> {
         let mob = open.mob;
         let mount = self
             .mount_mob_index(mob)
-            .map(|i| (self.common.mobs[i].alive(), self.common.mobs[i].bounds()));
+            .map(|i| (self.common.entities.mobs[i].alive(), self.common.entities.mobs[i].bounds()));
         let valid = match mount {
             Some((true, bounds)) => self.common.within_entity_interaction_range(&bounds, 4.0),
             _ => false,
@@ -377,7 +377,7 @@ impl crate::game::ClientGame<'_> {
             batch.sprite(atlas, sprite, ox + 8.0, oy + 36.0);
         }
         let grey = rgba(64, 64, 64, 255);
-        let title = match self.common.mobs.iter().find(|m| m.id == open.mob) {
+        let title = match self.common.entities.mobs.iter().find(|m| m.id == open.mob) {
             Some(m) => m.custom_name.clone().unwrap_or_else(|| {
                 let key = format!(
                     "entity.minecraft.{}",
@@ -391,7 +391,7 @@ impl crate::game::ClientGame<'_> {
         batch.text(atlas, &title, ox + 8.0, oy + 6.0, grey, false);
         let inventory = self.translate_with_fallback("container.inventory", "Inventory");
         batch.text(atlas, &inventory, ox + 8.0, oy + 72.0, grey, false);
-        if let Some(m) = self.common.mobs.iter().find(|m| m.id == open.mob) {
+        if let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == open.mob) {
             self.draw_mob_preview(
                 batch,
                 m,

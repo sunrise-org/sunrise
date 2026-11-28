@@ -82,9 +82,9 @@ impl crate::game::ClientGame<'_> {
                 return Ok(ControlFlow::Break(()));
             }
         }
-        if let Some(dragon) = self.common.dragon.as_ref().filter(|d| d.id != 0) {
+        if let Some(dragon) = self.common.entities.dragon.as_ref().filter(|d| d.id != 0) {
             let mut cursor = None;
-            while let Some(id) = self.common.dragon.next_part(&mut cursor) {
+            while let Some(id) = self.common.entities.dragon.next_part(&mut cursor) {
                 if let Some(part) =
                     sunrise_gameplay_common::game::dragon_common::dragon_part_index(dragon.id, id)
                     && bounds.intersects(dragon.part_geometry(part).1)
@@ -128,13 +128,13 @@ impl crate::game::ClientGame<'_> {
                 let remote = self.client.remote.as_ref()?;
                 remote.tracked(member.id as i32)?;
                 let id = member.id;
-                if let Some(dragon) = self.common.dragon.as_ref().filter(|d| d.id == id) {
+                if let Some(dragon) = self.common.entities.dragon.as_ref().filter(|d| d.id == id) {
                     return Some(dragon.body_bounds());
                 }
-                if let Some(frame) = self.common.item_frames.iter().find(|f| f.id == id) {
+                if let Some(frame) = self.common.entities.item_frames.iter().find(|f| f.id == id) {
                     return Some(aabb_extents(frame.bounds()));
                 }
-                if let Some(painting) = self.common.paintings.iter().find(|p| p.id == id) {
+                if let Some(painting) = self.common.entities.paintings.iter().find(|p| p.id == id) {
                     return Some(aabb_extents(painting.bounds()));
                 }
                 fn list_bounds<T: Entity>(items: &[T], id: u32) -> Option<Aabb> {
@@ -143,18 +143,18 @@ impl crate::game::ClientGame<'_> {
                         .find(|e| e.id() == id && !e.is_removed())
                         .map(Entity::bounds)
                 }
-                list_bounds(&self.common.mobs, id)
-                    .or_else(|| list_bounds(&self.common.dropped, id))
-                    .or_else(|| list_bounds(&self.common.orbs, id))
-                    .or_else(|| list_bounds(&self.common.boats, id))
-                    .or_else(|| list_bounds(&self.common.carts, id))
-                    .or_else(|| list_bounds(&self.common.armor_stands, id))
-                    .or_else(|| list_bounds(&self.common.tnts, id))
-                    .or_else(|| list_bounds(&self.common.falling, id))
-                    .or_else(|| list_bounds(&self.common.creatures.projectiles, id))
-                    .or_else(|| list_bounds(&self.common.rockets, id))
-                    .or_else(|| list_bounds(&self.common.tridents, id))
-                    .or_else(|| list_bounds(&self.common.resident_entities.general.rows, id))
+                list_bounds(&self.common.entities.mobs, id)
+                    .or_else(|| list_bounds(&self.common.entities.dropped, id))
+                    .or_else(|| list_bounds(&self.common.entities.orbs, id))
+                    .or_else(|| list_bounds(&self.common.entities.boats, id))
+                    .or_else(|| list_bounds(&self.common.entities.carts, id))
+                    .or_else(|| list_bounds(&self.common.entities.armor_stands, id))
+                    .or_else(|| list_bounds(&self.common.entities.tnts, id))
+                    .or_else(|| list_bounds(&self.common.entities.falling, id))
+                    .or_else(|| list_bounds(&self.common.entities.projectiles, id))
+                    .or_else(|| list_bounds(&self.common.entities.rockets, id))
+                    .or_else(|| list_bounds(&self.common.entities.tridents, id))
+                    .or_else(|| list_bounds(&self.common.entities.general.rows, id))
             }
         }
     }

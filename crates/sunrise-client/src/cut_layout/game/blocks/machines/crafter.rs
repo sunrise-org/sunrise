@@ -56,10 +56,10 @@ pub(crate) mod part_remainder_tests {
                 game.world
                     .block_entities
                     .insert((0, 100, 0), BlockEntity::Crafter(crafter));
-                game.dropped.clear();
+                game.entities.dropped.clear();
                 game.crafter_dispense(pos, state).unwrap();
                 let output: Vec<_> = game
-                    .dropped
+                    .entities.dropped
                     .iter()
                     .map(|e| (e.stack.item.to_string(), e.stack.count))
                     .collect();

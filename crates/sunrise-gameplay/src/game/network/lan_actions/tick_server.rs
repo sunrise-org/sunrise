@@ -123,7 +123,7 @@ impl crate::game::ServerGame<'_> {
             swept,
             riding,
             self.common
-                .mobs
+                .entities.mobs
                 .iter()
                 .map(|m| (m.id, m.removed, m.bounds())),
         ) else {

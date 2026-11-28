@@ -99,14 +99,14 @@ pub(crate) mod vehicle_contact_hurt_tests {
         with_hull_heat(1.0, |game| {
             let mut b = boat(1);
             b.ground.on_ground = true;
-            game.boats.push(b);
+            game.entities.boats.push(b);
             game.tick_boats();
-            assert_eq!(game.boats.len(), 1);
+            assert_eq!(game.entities.boats.len(), 1);
             assert!(
-                game.boats[0].damage > 0.0,
+                game.entities.boats[0].damage > 0.0,
                 "the contact wears the stored hull"
             );
-            assert_eq!(game.boats[0].hurt_time, 10);
+            assert_eq!(game.entities.boats[0].hurt_time, 10);
         });
     }
 
@@ -117,14 +117,14 @@ pub(crate) mod vehicle_contact_hurt_tests {
         with_hull_heat(1.0, |game| {
             let mut c = cart(2);
             c.ground.on_ground = true;
-            game.carts.push(c);
+            game.entities.carts.push(c);
             game.tick_carts();
-            assert_eq!(game.carts.len(), 1);
+            assert_eq!(game.entities.carts.len(), 1);
             assert!(
-                game.carts[0].damage > 0.0,
+                game.entities.carts[0].damage > 0.0,
                 "the contact wears the stored cart"
             );
-            assert_eq!(game.carts[0].hurt_time, 10);
+            assert_eq!(game.entities.carts[0].hurt_time, 10);
         });
     }
 
@@ -136,9 +136,9 @@ pub(crate) mod vehicle_contact_hurt_tests {
         with_hull_heat(5.0, |game| {
             let mut b = boat(1);
             b.ground.on_ground = true;
-            game.boats.push(b);
+            game.entities.boats.push(b);
             game.tick_boats();
-            assert!(game.boats.is_empty());
+            assert!(game.entities.boats.is_empty());
         });
     }
 
@@ -151,9 +151,9 @@ pub(crate) mod vehicle_contact_hurt_tests {
         with_hull_heat(2.5, |game| {
             let mut b = boat(1);
             b.ground.on_ground = true;
-            game.boats.push(b);
+            game.entities.boats.push(b);
             game.tick_boats();
-            assert!(game.boats.is_empty());
+            assert!(game.entities.boats.is_empty());
         });
     }
 
@@ -163,9 +163,9 @@ pub(crate) mod vehicle_contact_hurt_tests {
         with_hull_heat(5.0, |game| {
             let mut c = cart(2);
             c.ground.on_ground = true;
-            game.carts.push(c);
+            game.entities.carts.push(c);
             game.tick_carts();
-            assert!(game.carts.is_empty());
+            assert!(game.entities.carts.is_empty());
         });
     }
 
@@ -175,8 +175,8 @@ pub(crate) mod vehicle_contact_hurt_tests {
     #[ignore = "daily"]
     fn an_invulnerable_vehicle_refuses_a_contact_hurt() {
         with_game(|game| {
-            game.boats.push(boat(1));
-            game.carts.push(cart(2));
+            game.entities.boats.push(boat(1));
+            game.entities.carts.push(cart(2));
             for id in [1, 2] {
                 let mut compound = Compound::new();
                 compound.insert("Invulnerable".into(), Tag::Byte(1));
@@ -184,10 +184,10 @@ pub(crate) mod vehicle_contact_hurt_tests {
             }
             assert!(!game.vehicle_contact_hurt(Target::Boat(1), "minecraft:cactus", 2.0));
             assert!(!game.vehicle_contact_hurt(Target::Cart(2), "minecraft:cactus", 2.0));
-            assert_eq!(game.boats[0].damage, 0.0);
-            assert_eq!(game.carts[0].damage, 0.0);
-            assert_eq!(game.boats[0].hurt_time, 0);
-            assert_eq!(game.carts[0].hurt_time, 0);
+            assert_eq!(game.entities.boats[0].damage, 0.0);
+            assert_eq!(game.entities.carts[0].damage, 0.0);
+            assert_eq!(game.entities.boats[0].hurt_time, 0);
+            assert_eq!(game.entities.carts[0].hurt_time, 0);
         });
     }
 }

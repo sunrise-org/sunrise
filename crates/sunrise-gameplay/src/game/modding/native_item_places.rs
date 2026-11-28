@@ -105,14 +105,14 @@ impl ServerGame<'_> {
         let key = (i32::MAX - 15, super::minecarts::CART_KEY_Y, id as i32);
         let at = |p: &sunrise_core::geometry::Vec3| [p.x, p.y, p.z];
         let container = |c: &super::minecarts::Minecart| c.id == id && c.kind.slots() > 0;
-        let position = if let Some(c) = self.common.carts.iter().find(|c| container(c)) {
+        let position = if let Some(c) = self.common.entities.carts.iter().find(|c| container(c)) {
             at(&c.position)
-        } else if let Some(b) = self.common.boats.iter().find(|b| b.id == id && b.chest) {
+        } else if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id && b.chest) {
             at(&b.position)
         } else {
             let m = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter_mut()
                 .find(|m| m.id == id && m.extra.chested)?;
             let size = sunrise_gameplay_common::mount_rules::mount_columns(m) * 3;
@@ -125,7 +125,7 @@ impl ServerGame<'_> {
             }
             return Some(edit(&mut m.extra.items[..size], at(&m.position)));
         };
-        if self.common.carts.iter().any(container) {
+        if self.common.entities.carts.iter().any(container) {
             return self.edit_cart_slots(id, |slots| edit(slots, position));
         }
         self.unpack_loot(
@@ -134,7 +134,7 @@ impl ServerGame<'_> {
         );
         let i = self
             .common
-            .boats
+            .entities.boats
             .iter()
             .position(|b| b.id == id && b.chest)?;
         if let Some(super::BlockEntity::Chest(open)) =
@@ -144,7 +144,7 @@ impl ServerGame<'_> {
         }
         Some(
             self.common
-                .boats
+                .entities.boats
                 .update(i, |b| edit(&mut b.items, position)),
         )
     }
@@ -206,7 +206,7 @@ impl ServerGame<'_> {
         self.entity_automation_size(entity).or_else(|| {
             let m = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == entity && m.extra.chested)?;
             Some(sunrise_gameplay_common::mount_rules::mount_columns(m) * 3)
@@ -219,11 +219,11 @@ impl ServerGame<'_> {
         if !self.common.is_logical_server() {
             return None;
         }
-        if let Some(c) = self.common.carts.iter().find(|c| c.id == entity) {
+        if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == entity) {
             let container = c.kind.slots() > 0;
             return container.then_some(c.items.len());
         }
-        let b = self.common.boats.iter().find(|b| b.id == entity)?;
+        let b = self.common.entities.boats.iter().find(|b| b.id == entity)?;
         b.chest.then_some(b.items.len())
     }
     /// How many equipment slots living entity `entity`'s [`ENTITY_ITEMS`](mod_api::ENTITY_ITEMS)
@@ -239,10 +239,10 @@ impl ServerGame<'_> {
         }
         (self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .any(|m| m.id == entity && !m.removed)
-            || self.common.armor_stands.iter().any(|a| a.id == entity))
+            || self.common.entities.armor_stands.iter().any(|a| a.id == entity))
         .then_some(7)
     }
     /// Lend a native place's stack without encoding components. Reading a chest vehicle's
@@ -276,7 +276,7 @@ impl ServerGame<'_> {
             ItemPlace::ItemEntity { id } => {
                 return self
                     .common
-                    .dropped
+                    .entities.dropped
                     .iter()
                     .find(|entity| entity.id == *id)
                     .map(|entity| EquipmentRead::resident(&entity.stack));
@@ -284,7 +284,7 @@ impl ServerGame<'_> {
             ItemPlace::EntitySlot { entity, slot } => {
                 if self
                     .common
-                    .carts
+                    .entities.carts
                     .iter()
                     .any(|c| c.id == *entity && c.kind.slots() > 0)
                 {
@@ -294,7 +294,7 @@ impl ServerGame<'_> {
                         ),
                         None,
                     );
-                } else if self.common.boats.iter().any(|b| b.id == *entity && b.chest) {
+                } else if self.common.entities.boats.iter().any(|b| b.id == *entity && b.chest) {
                     self.unpack_loot(
                         sunrise_gameplay_common::game::container_loot_level::LootTarget::Boat(
                             *entity,
@@ -304,13 +304,13 @@ impl ServerGame<'_> {
                 }
                 let vehicle = self
                     .common
-                    .carts
+                    .entities.carts
                     .iter()
                     .find(|c| c.id == *entity && c.kind.slots() > 0)
                     .map(|cart| cart.items.as_slice())
                     .or_else(|| {
                         self.common
-                            .boats
+                            .entities.boats
                             .iter()
                             .find(|b| b.id == *entity && b.chest)
                             .map(|boat| boat.items.as_slice())
@@ -325,7 +325,7 @@ impl ServerGame<'_> {
                 } else {
                     let mob = self
                         .common
-                        .mobs
+                        .entities.mobs
                         .iter()
                         .find(|m| m.id == *entity && m.extra.chested)?;
                     let size = sunrise_gameplay_common::mount_rules::mount_columns(mob) * 3;
@@ -432,7 +432,7 @@ impl ServerGame<'_> {
                 let index = slot as usize;
                 let (equipment, mob_gear, prepared) = if let Some(mob) = self
                     .common
-                    .mobs
+                    .entities.mobs
                     .iter_mut()
                     .find(|m| m.id == entity && !m.removed)
                 {
@@ -443,7 +443,7 @@ impl ServerGame<'_> {
                         prepared,
                     )
                 } else if let Some(stand) =
-                    self.common.armor_stands.iter_mut().find(|a| a.id == entity)
+                    self.common.entities.armor_stands.iter_mut().find(|a| a.id == entity)
                 {
                     let prepared =
                         prepare(stand.equipment.get(index).map(EquipmentRead::resident))?;
@@ -769,7 +769,7 @@ impl ServerGame<'_> {
             return stack.count - rest.count;
         }
         if let ItemPlace::ItemEntity { id } = place {
-            let Some(e) = self.common.dropped.iter().find(|e| e.id == *id) else {
+            let Some(e) = self.common.entities.dropped.iter().find(|e| e.id == *id) else {
                 return 0;
             };
             let at = [e.position.x, e.position.y, e.position.z];
@@ -901,7 +901,7 @@ impl ServerGame<'_> {
             return took;
         }
         if let ItemPlace::ItemEntity { id } = place {
-            let Some(e) = self.common.dropped.iter().find(|e| e.id == *id) else {
+            let Some(e) = self.common.entities.dropped.iter().find(|e| e.id == *id) else {
                 return 0;
             };
             let took = taken(Some(&e.stack));
@@ -987,13 +987,13 @@ impl ServerGame<'_> {
     ) -> Option<Option<EquipmentRead<'_>>> {
         if let Some(mob) = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == entity && !m.removed)
         {
             return Some(finalize::equipment_slot(mob, slot));
         }
-        let stand = self.common.armor_stands.iter().find(|a| a.id == entity)?;
+        let stand = self.common.entities.armor_stands.iter().find(|a| a.id == entity)?;
         Some(
             stand
                 .equipment
@@ -1084,7 +1084,7 @@ pub mod tests {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.mobs.push(sunrise_sim::mobs::Mob::new(
+        game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
             30,
             kind,
             sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5),
@@ -1099,7 +1099,7 @@ pub mod tests {
         attribute: &str,
     ) -> mod_api::Tag {
         use mod_api::Tag;
-        let mob = game.mobs.iter().find(|mob| mob.id == entity).unwrap();
+        let mob = game.entities.mobs.iter().find(|mob| mob.id == entity).unwrap();
         let saved = sunrise_sim::entity_nbt::mob_to_nbt(
             mob,
             [0, 0, 0, 1],
@@ -1247,7 +1247,7 @@ pub mod tests {
 
     pub fn pig(game: &mut crate::game::ServerGame<'_>, id: u32, y: f64) {
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-        game.mobs.push(sunrise_sim::mobs::Mob::new(
+        game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
             id,
             kind,
             sunrise_core::geometry::Vec3::new(0.5, y, 0.5),

@@ -169,7 +169,7 @@ impl ServerGame<'_> {
         {
             out.push(PLAYER);
         }
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if !m.removed && m.bounds().intersects(area) {
                 out.push(u64::from(m.id));
             }
@@ -188,7 +188,7 @@ impl ServerGame<'_> {
             .get(&pos)
             .and_then(|b| b.nearby.clone())
             .unwrap_or_default();
-        for m in &mut self.common.mobs {
+        for m in &mut self.common.entities.mobs {
             if m.alive()
                 && !m.removed
                 && nearby.contains(&u64::from(m.id))
@@ -209,7 +209,7 @@ impl ServerGame<'_> {
             alive: p.alive,
             raider: false,
         });
-        let mobs = &self.common.mobs;
+        let mobs = &self.common.entities.mobs;
         let entity = |h: u64| {
             if h == PLAYER {
                 return player;
@@ -244,7 +244,7 @@ impl ServerGame<'_> {
             // makeRaidersGlow (the server's effect).
             let targets: Vec<u32> = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .filter(|m| glow.contains(&u64::from(m.id)))
                 .map(|m| m.id)
@@ -539,7 +539,7 @@ impl ServerGame<'_> {
             Some(None) => None,
             Some(Some(id)) => self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)
                 .filter(|m| {
@@ -567,11 +567,11 @@ impl ServerGame<'_> {
         }
         let Some(index) = conduit
             .target
-            .and_then(|id| self.common.mob_index.find(&self.common.mobs, id))
+            .and_then(|id| self.common.mob_index.find(&self.common.entities.mobs, id))
         else {
             return;
         };
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         let at = [m.position.x, m.position.y, m.position.z];
         m.damage(
             crate::game::server_side::entity_server::damage_level_of!(
@@ -596,7 +596,7 @@ impl ServerGame<'_> {
         );
         let near: Vec<(u32, bool, Vec3, f64)> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             // `instanceof Enemy`, not the monster category: the zombie horse,
             // camel husk and zombie nautilus are `Animal`s.
@@ -777,8 +777,8 @@ pub mod conduit_target_tests {
     /// A mob of `kind` beside the conduit, in the water.
     pub fn summon(game: &mut crate::game::ServerGame<'_>, kind: &str) -> u32 {
         assert!(game.run_command(&format!("summon minecraft:{kind} 4.5 100 8.5")));
-        let id = game.mobs.last().unwrap().id;
-        game.mobs.last_mut().unwrap().fluids.in_water = true;
+        let id = game.entities.mobs.last().unwrap().id;
+        game.entities.mobs.last_mut().unwrap().fluids.in_water = true;
         id
     }
 

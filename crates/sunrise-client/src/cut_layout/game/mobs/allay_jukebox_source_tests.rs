@@ -81,7 +81,7 @@ fn step(game: &mut sunrise_gameplay::game::ServerGame<'_>, ticks: usize) {
 }
 
 fn dancing(game: &sunrise_gameplay::game::ServerGame<'_>) -> bool {
-    game.mobs
+    game.entities.mobs
         .iter()
         .find(|m| m.species() == sunrise_sim::mobs::Species::Allay)
         .expect("the allay")

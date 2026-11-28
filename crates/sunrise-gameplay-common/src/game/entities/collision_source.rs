@@ -93,7 +93,7 @@ pub trait CollisionSourceGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         let solids = Solids::new(rule, area);
         match mover {
             Mover::Player | Mover::PlayerAt { .. } | Mover::Passive => {
-                for (j, m) in self.mobs.iter().enumerate() {
+                for (j, m) in self.entities.mobs.iter().enumerate() {
                     if solids.takes(m.solid_kind()) {
                         let c = m.solid_candidate();
                         if solids.accepts(&c, || None) {
@@ -102,7 +102,7 @@ pub trait CollisionSourceGameExt1<'__sg>: crate::game::SideGame<'__sg> {
                     }
                 }
                 for b in self
-                    .boats
+                    .entities.boats
                     .iter()
                     .map(|b| boat(|id, p, bounds| self.client_copy_box(id, p, bounds), b))
                 {

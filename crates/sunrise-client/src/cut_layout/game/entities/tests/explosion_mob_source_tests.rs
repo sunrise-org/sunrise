@@ -19,16 +19,16 @@ fn blast_boat(
     player: bool,
     mob_griefing: bool,
 ) -> (f32, Vec3) {
-    game.boats.clear();
-    game.boats
+    game.entities.boats.clear();
+    game.entities.boats
         .push(Boat::new(1, "oak".into(), Vec3::new(16.2, 64.0, 8.5), 0.0));
     assert!(game.ui.rules.set("mob_griefing", Value::Bool(mob_griefing)));
     game.server.combat.0.blast_owner = owner;
     game.server.combat.0.blast_owner_player = player;
     game.server_explode([8.5, 64.0, 8.5], 4.0, BlockInteraction::Destroy, false)
         .unwrap();
-    assert_eq!(game.boats.len(), 1, "the boat survives the blast");
-    let boat = &game.boats[0];
+    assert_eq!(game.entities.boats.len(), 1, "the boat survives the blast");
+    let boat = &game.entities.boats[0];
     (boat.damage, boat.velocity)
 }
 
@@ -39,7 +39,7 @@ fn a_mob_owned_blast_spares_vehicles_only_without_mob_griefing() {
     let mut game = server_game(&mut resources);
     game.build_registries();
     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-    game.mobs
+    game.entities.mobs
         .push(Mob::new(7, kind, Vec3::new(40.0, 64.0, 40.0), 0.0));
     let pig = || (7, Text::translate("entity.minecraft.pig", &[]));
     let steve = (1, Text::literal("Steve"));
@@ -57,7 +57,7 @@ fn a_mob_owned_blast_spares_vehicles_only_without_mob_griefing() {
     assert!(damage > 0.0, "a player's blast still hurts the boat");
     assert_ne!(velocity, Vec3::ZERO, "and pushes it");
     // PrimedTnt.getOwner no longer resolves a removed mob.
-    game.mobs[0].removed = true;
+    game.entities.mobs[0].removed = true;
     let (damage, _) = blast_boat(&mut game, Some(pig()), false, false);
     assert!(damage > 0.0, "a removed owner no longer spares the boat");
 }
@@ -75,7 +75,7 @@ fn a_creeper_blast_primes_tnt_with_the_creeper_as_its_owner() {
         .get("minecraft:creeper")
         .unwrap()
         .clone();
-    game.mobs
+    game.entities.mobs
         .push(Mob::new(creeper, kind, Vec3::new(8.5, 64.0, 8.5), 0.0));
     let uuid = game.uuid_for(creeper);
     let tnt = game
@@ -97,9 +97,9 @@ fn a_creeper_blast_primes_tnt_with_the_creeper_as_its_owner() {
         MobEvent::Explode([8.5, 64.0, 8.5], 3.0, Species::Creeper, false),
     ])
     .unwrap();
-    assert_eq!(game.tnts.len(), 1, "the blast primed the TNT block");
+    assert_eq!(game.entities.tnts.len(), 1, "the blast primed the TNT block");
     assert_eq!(
-        game.tnts[0].owner,
+        game.entities.tnts[0].owner,
         Some(Who::Mob(creeper)),
         "the chain TNT remembers the creeper"
     );
@@ -116,7 +116,7 @@ fn a_projectiles_owner_primes_tnt_and_a_gone_owner_does_not() {
     game.build_registries();
     let ghast = 91;
     let kind = game.res.mob_types().get("minecraft:ghast").unwrap().clone();
-    game.mobs
+    game.entities.mobs
         .push(Mob::new(ghast, kind, Vec3::new(40.0, 64.0, 40.0), 0.0));
     let uuid = game.uuid_for(ghast);
     let tnt = game
@@ -131,9 +131,9 @@ fn a_projectiles_owner_primes_tnt_and_a_gone_owner_does_not() {
     game.world.set(9, 64, 8, tnt).unwrap();
     game.server_explode([8.5, 64.0, 8.5], 3.0, BlockInteraction::Destroy, false)
         .unwrap();
-    assert_eq!(game.tnts.len(), 1, "the blast primed the TNT block");
+    assert_eq!(game.entities.tnts.len(), 1, "the blast primed the TNT block");
     assert_eq!(
-        game.tnts[0].owner,
+        game.entities.tnts[0].owner,
         Some(Who::Mob(ghast)),
         "the chain TNT remembers the fireball's owner"
     );
@@ -143,13 +143,13 @@ fn a_projectiles_owner_primes_tnt_and_a_gone_owner_does_not() {
     );
     // `Projectile.getOwner` is an `EntityReference`: a removed owner does not
     // resolve, so the TNT it primes is left without one.
-    game.tnts.clear();
-    game.mobs[0].removed = true;
+    game.entities.tnts.clear();
+    game.entities.mobs[0].removed = true;
     game.world.set(9, 64, 8, tnt).unwrap();
     game.server_explode([8.5, 64.0, 8.5], 3.0, BlockInteraction::Destroy, false)
         .unwrap();
-    assert_eq!(game.tnts.len(), 1, "the blast primed the TNT block again");
-    assert_eq!(game.tnts[0].owner, None, "a gone owner primes no one");
+    assert_eq!(game.entities.tnts.len(), 1, "the blast primed the TNT block again");
+    assert_eq!(game.entities.tnts[0].owner, None, "a gone owner primes no one");
     game.server.combat.0.explosion_owner = None;
 }
 

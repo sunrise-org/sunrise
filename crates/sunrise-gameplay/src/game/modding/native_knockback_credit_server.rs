@@ -51,7 +51,7 @@ impl crate::game::ServerGame<'_> {
     ) -> CreditPlan {
         let observed = mod_api::__private::listened(mod_api::HookId::LivingKnockback);
         let mob = observed
-            .then(|| self.common.mobs.iter().find(|mob| mob.id as i32 == victim))
+            .then(|| self.common.entities.mobs.iter().find(|mob| mob.id as i32 == victim))
             .flatten();
         let existing_player = self
             .server
@@ -67,7 +67,7 @@ impl crate::game::ServerGame<'_> {
                 .map(|uuid| Some(PlayerCredit(sunrise_sim::lan::playerdata::ints_uuid(uuid)))),
             Some(Who::Mob(id)) => self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|mob| mob.id == id && mob.species() == Species::Wolf && mob.extra.tame)
                 .map(|wolf| {
@@ -106,7 +106,7 @@ impl crate::game::ServerGame<'_> {
             });
         let hurt_by = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .any(|m| m.id as i32 == victim && m.species() == Species::Villager)
             .then(|| HurtBy {

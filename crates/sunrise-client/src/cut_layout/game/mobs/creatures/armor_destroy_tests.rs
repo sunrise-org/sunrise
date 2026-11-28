@@ -9,30 +9,30 @@ fn body_armor_guards_and_break_event_are_preserved() {
     use sunrise_sim::mobs::Mob;
     with_game(|game| {
         let kind = game.res.mob_types().get("minecraft:horse").unwrap().clone();
-        game.mobs.push(Mob::new(21, kind, Vec3::ZERO, 0.0));
+        game.entities.mobs.push(Mob::new(21, kind, Vec3::ZERO, 0.0));
         game.start_audio_capture();
         let sword = ItemStack::new("minecraft:diamond_sword", 1);
-        game.mobs[0].set_equipment_stack(EquipmentSlot::Body as usize, Some(sword.clone()));
+        game.entities.mobs[0].set_equipment_stack(EquipmentSlot::Body as usize, Some(sword.clone()));
         game.hurt_mob_armor(
             21,
             4.0,
             &sunrise_sim::health::NO_ATTACK.player_source("minecraft:generic", 0),
         );
-        assert_eq!(game.mobs[0].item_by_slot(EquipmentSlot::Body), Some(sword));
+        assert_eq!(game.entities.mobs[0].item_by_slot(EquipmentSlot::Body), Some(sword));
         let resistant = ItemStack::new("minecraft:netherite_chestplate", 1);
         assert!(
             !game
                 .stack_can_be_hurt_by(&resistant, "minecraft:lava")
                 .unwrap()
         );
-        game.mobs[0].set_equipment_stack(EquipmentSlot::Body as usize, Some(resistant.clone()));
+        game.entities.mobs[0].set_equipment_stack(EquipmentSlot::Body as usize, Some(resistant.clone()));
         game.hurt_mob_armor(
             21,
             4.0,
             &sunrise_sim::health::NO_ATTACK.player_source("minecraft:lava", 0),
         );
         assert_eq!(
-            game.mobs[0].item_by_slot(EquipmentSlot::Body),
+            game.entities.mobs[0].item_by_slot(EquipmentSlot::Body),
             Some(resistant)
         );
         let source = mod_api::ItemDamageSource {
@@ -52,14 +52,14 @@ fn body_armor_guards_and_break_event_are_preserved() {
             game.item_resource_can_be_hurt_by(&vulnerable, &source),
             Some(true)
         );
-        game.mobs[0].set_equipment_stack(EquipmentSlot::Body as usize, Some(vulnerable));
+        game.entities.mobs[0].set_equipment_stack(EquipmentSlot::Body as usize, Some(vulnerable));
         game.hurt_mob_armor(
             21,
             4.0,
             &sunrise_sim::health::NO_ATTACK.player_source("minecraft:lava", 0),
         );
         assert_eq!(
-            game.mobs[0]
+            game.entities.mobs[0]
                 .item_by_slot(EquipmentSlot::Body)
                 .unwrap()
                 .damage,
@@ -77,14 +77,14 @@ fn body_armor_guards_and_break_event_are_preserved() {
             game.item_resource_can_be_hurt_by(&resistant, &source),
             Some(false)
         );
-        game.mobs[0].set_equipment_stack(EquipmentSlot::Body as usize, Some(resistant));
+        game.entities.mobs[0].set_equipment_stack(EquipmentSlot::Body as usize, Some(resistant));
         game.hurt_mob_armor(
             21,
             4.0,
             &sunrise_sim::health::NO_ATTACK.player_source("minecraft:lava", 0),
         );
         assert_eq!(
-            game.mobs[0]
+            game.entities.mobs[0]
                 .item_by_slot(EquipmentSlot::Body)
                 .unwrap()
                 .damage,
@@ -92,13 +92,13 @@ fn body_armor_guards_and_break_event_are_preserved() {
         );
         let mut armor = ItemStack::new("minecraft:wolf_armor", 1);
         armor.damage = game.items().get(&armor.item).unwrap().max_damage - 1;
-        game.mobs[0].set_equipment_stack(EquipmentSlot::Body as usize, Some(armor));
+        game.entities.mobs[0].set_equipment_stack(EquipmentSlot::Body as usize, Some(armor));
         game.hurt_mob_armor(
             21,
             4.0,
             &sunrise_sim::health::NO_ATTACK.player_source("minecraft:generic", 0),
         );
-        assert!(game.mobs[0].item_by_slot(EquipmentSlot::Body).is_none());
+        assert!(game.entities.mobs[0].item_by_slot(EquipmentSlot::Body).is_none());
         assert_eq!(
             game.server
                 .lan_queues
@@ -123,16 +123,16 @@ fn sun_protection_uses_mob_draw_and_broadcasts_break() {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.mobs.push(Mob::new(21, kind, Vec3::ZERO, 0.0));
+        game.entities.mobs.push(Mob::new(21, kind, Vec3::ZERO, 0.0));
         let mut helmet = ItemStack::new("minecraft:diamond_helmet", 1);
         helmet.damage = game.items().get(&helmet.item).unwrap().max_damage - 1;
-        game.mobs[0].set_equipment_stack(EquipmentSlot::Head as usize, Some(helmet));
+        game.entities.mobs[0].set_equipment_stack(EquipmentSlot::Head as usize, Some(helmet));
         game.start_audio_capture();
-        while game.mobs[0].random.clone().next_int_bound(2) != Ok(1) {
-            let _ = game.mobs[0].random.next_int_bound(2);
+        while game.entities.mobs[0].random.clone().next_int_bound(2) != Ok(1) {
+            let _ = game.entities.mobs[0].random.next_int_bound(2);
         }
         game.wear_sun_protection(21);
-        assert!(game.mobs[0].item_by_slot(EquipmentSlot::Head).is_none());
+        assert!(game.entities.mobs[0].item_by_slot(EquipmentSlot::Head).is_none());
         assert_eq!(
             game.server
                 .lan_queues
@@ -201,7 +201,7 @@ fn a_break_effect_follows_only_an_applied_break() {
             )
             .unwrap();
         let jump = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
-            game.mobs.iter().find(|m| m.id == id).unwrap().ai.jumping
+            game.entities.mobs.iter().find(|m| m.id == id).unwrap().ai.jumping
         };
         let ifbroke = || MobEvent::IfBroke {
             mob: id,
@@ -209,7 +209,7 @@ fn a_break_effect_follows_only_an_applied_break() {
             otherwise: vec![MobEvent::Jump { mob: id }],
         };
         // No break of this mob in the batch: the otherwise events run.
-        game.mobs
+        game.entities.mobs
             .iter_mut()
             .find(|m| m.id == id)
             .unwrap()
@@ -218,7 +218,7 @@ fn a_break_effect_follows_only_an_applied_break() {
         game.handle_mob_events(vec![ifbroke()]).unwrap();
         assert!(jump(game));
         // An applied break (no mod cancels): the effects run, the jump does not.
-        game.mobs
+        game.entities.mobs
             .iter_mut()
             .find(|m| m.id == id)
             .unwrap()
@@ -269,7 +269,7 @@ fn an_enderman_does_not_take_a_changed_block() {
             std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
         );
         game.world.set(0, 64, 0, dirt).unwrap();
-        game.mobs
+        game.entities.mobs
             .iter_mut()
             .find(|m| m.id == id)
             .unwrap()
@@ -283,7 +283,7 @@ fn an_enderman_does_not_take_a_changed_block() {
         .unwrap();
         assert_eq!(game.world.block(0, 64, 0), dirt);
         assert!(
-            game.mobs
+            game.entities.mobs
                 .iter()
                 .find(|m| m.id == id)
                 .unwrap()

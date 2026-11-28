@@ -125,7 +125,7 @@ pub(crate) mod tests {
             let mut mob = Mob::new(id, kind.clone(), at, 0.0);
             mob.extra.leash = Some(Holder::Player);
             mob.extra.leash_player = Some(owner);
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
         };
         let here = Vec3::new(feet[0] + 1.0, feet[1], feet[2]);
         leashed(1, here, me);
@@ -139,20 +139,20 @@ pub(crate) mod tests {
         game.start_audio_capture();
 
         assert!(!game.boost_firework(&stack));
-        assert_eq!(game.mobs[0].extra.leash, Some(Holder::Player));
-        assert!(game.dropped.is_empty());
+        assert_eq!(game.entities.mobs[0].extra.leash, Some(Holder::Player));
+        assert!(game.entities.dropped.is_empty());
         assert!(game.server.pending_sounds.is_empty());
 
         game.player.as_mut().unwrap().fall_flying = true;
         assert!(game.boost_firework(&stack));
         assert!(
-            game.mobs[0].extra.leash.is_none(),
+            game.entities.mobs[0].extra.leash.is_none(),
             "the mob on the lead comes free"
         );
-        assert_eq!(game.mobs[1].extra.leash, Some(Holder::Player));
-        assert_eq!(game.mobs[2].extra.leash, Some(Holder::Player));
+        assert_eq!(game.entities.mobs[1].extra.leash, Some(Holder::Player));
+        assert_eq!(game.entities.mobs[2].extra.leash, Some(Holder::Player));
         let leads: Vec<_> = game
-            .dropped
+            .entities.dropped
             .iter()
             .filter(|d| &*d.stack.item == "minecraft:lead")
             .collect();

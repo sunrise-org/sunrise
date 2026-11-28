@@ -66,11 +66,11 @@ fn death_weapon_immune_crossbow_cannot_replace_accepted_crossbow() {
                 .get("minecraft:sulfur_cube")
                 .unwrap()
                 .clone();
-            game.mobs.push(target);
+            game.entities.mobs.push(target);
             let mut first = ItemStack::new("minecraft:crossbow", 1);
             first.enchant("minecraft:piercing", 1);
             assert!(hit(game, &arrow(Some(first)), 1.0));
-            let target = game.mobs.iter_mut().find(|m| m.id == 70).unwrap();
+            let target = game.entities.mobs.iter_mut().find(|m| m.id == 70).unwrap();
             let committed = target.last_damage.unwrap();
             target.extra.set_body(Some("minecraft:stone".into()));
             assert!(hit(
@@ -78,7 +78,7 @@ fn death_weapon_immune_crossbow_cannot_replace_accepted_crossbow() {
                 &arrow(Some(ItemStack::new("minecraft:bow", 1))),
                 2.0
             ));
-            let mut dead = game.mobs.iter().find(|m| m.id == 70).unwrap().clone();
+            let mut dead = game.entities.mobs.iter().find(|m| m.id == 70).unwrap().clone();
             assert_eq!(dead.last_damage.unwrap().1, committed.1);
             dead.health = 0.0;
             game.mob_die(&dead);
@@ -99,10 +99,10 @@ fn death_weapon_refused_crossbow_cannot_replace_accepted_longbow() {
             .set_loot_name("minecraft:custom_name", &serde_json::json!("Longbow"));
         fixture(Some(bow.clone()), |game| {
             let new_victim = victim(game);
-            game.mobs.push(new_victim);
+            game.entities.mobs.push(new_victim);
             let first = arrow(Some(bow));
             assert!(hit(game, &first, 100.0));
-            let victim = game.mobs.iter().find(|mob| mob.id == 70).unwrap();
+            let victim = game.entities.mobs.iter().find(|mob| mob.id == 70).unwrap();
             assert_eq!(victim.health, 0.0);
             assert!(victim.invulnerable > 0);
             let committed = victim.last_damage;
@@ -111,7 +111,7 @@ fn death_weapon_refused_crossbow_cannot_replace_accepted_longbow() {
             let mut attempted = second.clone();
             game.shot_damage(&mut attempted, Some("minecraft:pig"), Who::Mob(70));
             assert!(!hit(game, &second, 1.0));
-            let dead = game.mobs.iter().find(|mob| mob.id == 70).unwrap();
+            let dead = game.entities.mobs.iter().find(|mob| mob.id == 70).unwrap();
             assert_eq!(dead.last_damage.unwrap().1, committed.unwrap().1);
         });
     });
@@ -125,19 +125,19 @@ fn death_weapon_dispenser_arrow_without_recorded_weapon_is_none() {
     }
     fixture(None, |game| {
         let new_victim = victim(game);
-        game.mobs.push(new_victim);
+        game.entities.mobs.push(new_victim);
         // First accept a recorded weapon, then accept an unrecorded arrow after cooldown.
         assert!(hit(
             game,
             &arrow(Some(ItemStack::new("minecraft:bow", 1))),
             1.0
         ));
-        game.mobs
+        game.entities.mobs
             .iter_mut()
             .find(|mob| mob.id == 70)
             .unwrap()
             .invulnerable = 0;
-        game.mobs.iter_mut().find(|mob| mob.id == 70).unwrap().age += 1;
+        game.entities.mobs.iter_mut().find(|mob| mob.id == 70).unwrap().age += 1;
         assert!(hit(game, &arrow(None), 100.0));
     });
 }
@@ -192,12 +192,12 @@ fn death_weapon_harming_potion_does_not_read_thrower_sword() {
         let mut target = victim(game);
         target.health = 1.0;
         let at = target.position;
-        game.mobs.push(target);
+        game.entities.mobs.push(target);
         let mut potion = ItemStack::new("minecraft:splash_potion", 1);
         potion.data_mut().potion = Some("minecraft:harming".into());
         let owner = game.potion_owner(Some(Who::Player));
         game.splash(&potion, at, Some(at), None, 3, 0, &owner, true, Vec3::ZERO);
-        let dead = game.mobs.iter().find(|mob| mob.id == 70).unwrap();
+        let dead = game.entities.mobs.iter().find(|mob| mob.id == 70).unwrap();
         assert_eq!(dead.health, 0.0);
         assert_eq!(dead.last_direct, Some("minecraft:splash_potion"));
     });
@@ -211,18 +211,18 @@ fn death_weapon_different_killing_source_discards_projectile() {
     }
     fixture(None, |game| {
         let new_victim = victim(game);
-        game.mobs.push(new_victim);
+        game.entities.mobs.push(new_victim);
         assert!(hit(
             game,
             &arrow(Some(ItemStack::new("minecraft:bow", 1))),
             1.0
         ));
-        assert!(game.mobs[0].accepted_hit.is_some());
-        let mut dead = game.mobs[0].clone();
+        assert!(game.entities.mobs[0].accepted_hit.is_some());
+        let mut dead = game.entities.mobs[0].clone();
         dead.last_damage = Some((Damage::of(DamageKind::Fall), i64::from(dead.age) + 1));
         dead.health = 0.0;
         game.mob_die(&dead);
-        assert!(game.mobs[0].accepted_hit.is_none());
+        assert!(game.entities.mobs[0].accepted_hit.is_none());
     });
 }
 
@@ -235,13 +235,13 @@ fn death_weapon_without_subscriber_does_not_capture() {
     sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
         mod_platform::testing::with_mods(Vec::<mod_api::ModEntry>::new().into(), || {
             let new_victim = victim(game);
-            game.mobs.push(new_victim);
+            game.entities.mobs.push(new_victim);
             assert!(hit(
                 game,
                 &arrow(Some(ItemStack::new("minecraft:bow", 1))),
                 1.0
             ));
-            assert!(game.mobs[0].accepted_hit.is_none());
+            assert!(game.entities.mobs[0].accepted_hit.is_none());
         });
     });
 }
@@ -254,36 +254,36 @@ fn death_weapon_removal_clears_capture_and_vehicle_transfer_keeps_its_owner() {
     }
     fixture(None, |game| {
         for transfer in [false, true] {
-            game.mobs.clear();
+            game.entities.mobs.clear();
             let new_victim = victim(game);
-            game.mobs.push(new_victim);
+            game.entities.mobs.push(new_victim);
             assert!(hit(
                 game,
                 &arrow(Some(ItemStack::new("minecraft:bow", 1))),
                 1.0
             ));
-            assert!(game.mobs[0].accepted_hit.is_some());
+            assert!(game.entities.mobs[0].accepted_hit.is_some());
             if transfer {
                 let mut state = game.take_transferred_entity_state(70);
                 game.detach_entity(70);
                 assert!(
-                    game.mobs[0].accepted_hit.is_none(),
+                    game.entities.mobs[0].accepted_hit.is_none(),
                     "the transfer token took ownership"
                 );
-                game.mobs[0].last_damage = None;
-                state.restore_mob(&mut game.mobs[0]);
+                game.entities.mobs[0].last_damage = None;
+                state.restore_mob(&mut game.entities.mobs[0]);
                 assert!(
-                    game.mobs[0]
+                    game.entities.mobs[0]
                         .accepted_hit
                         .as_ref()
                         .unwrap()
-                        .belongs_to(game.mobs[0].last_damage)
+                        .belongs_to(game.entities.mobs[0].last_damage)
                 );
                 game.adopt_transferred_entity_state(70, state);
             } else {
                 game.forget_entity(70);
             }
-            assert_eq!(game.mobs[0].accepted_hit.is_some(), transfer);
+            assert_eq!(game.entities.mobs[0].accepted_hit.is_some(), transfer);
         }
         let mut dead = victim(game);
         dead.health = 0.0;
@@ -301,15 +301,15 @@ fn death_weapon_same_tick_stronger_arrow_replaces_weapon() {
         let expected = ItemStack::new("minecraft:bow", 1);
         fixture(Some(expected.clone()), |game| {
             let new_victim = victim(game);
-            game.mobs.push(new_victim);
+            game.entities.mobs.push(new_victim);
             assert!(hit(
                 game,
                 &arrow(Some(ItemStack::new("minecraft:crossbow", 1))),
                 1.0
             ));
-            let first = game.mobs.iter().find(|m| m.id == 70).unwrap().last_damage;
+            let first = game.entities.mobs.iter().find(|m| m.id == 70).unwrap().last_damage;
             assert!(hit(game, &arrow(Some(expected.clone())), 2.0));
-            let mut dead = game.mobs.iter().find(|m| m.id == 70).unwrap().clone();
+            let mut dead = game.entities.mobs.iter().find(|m| m.id == 70).unwrap().clone();
             assert_eq!(
                 dead.last_damage, first,
                 "equal source values still commit a new hit"

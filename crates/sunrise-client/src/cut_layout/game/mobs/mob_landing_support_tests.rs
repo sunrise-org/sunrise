@@ -88,7 +88,7 @@ fn drop_pig(x: f64) -> (f32, Option<[i32; 3]>, f64) {
         game.tick_server(false).unwrap();
     }
     let pig = game
-        .mobs
+        .entities.mobs
         .iter()
         .find(|m| m.species() == sunrise_sim::mobs::Species::Pig)
         .expect("the pig");

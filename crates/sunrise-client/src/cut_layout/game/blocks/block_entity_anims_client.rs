@@ -154,7 +154,7 @@ pub(crate) mod conduit_target_tests {
             .test_conduit_target(CONDUIT)
             .expect("the window sees the hunted mob");
         let (position, eye_y) = {
-            let m = client.mobs.iter().find(|m| m.id == watched).unwrap();
+            let m = client.entities.mobs.iter().find(|m| m.id == watched).unwrap();
             (m.position, m.eye_y())
         };
         assert_eq!(target.eye_y, eye_y);

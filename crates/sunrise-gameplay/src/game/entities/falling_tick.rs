@@ -36,15 +36,15 @@ impl ServerGame<'_> {
         for (id, join) in ticked.drain(..) {
             let Some(i) = self
                 .common
-                .falling
+                .entities.falling
                 .locate(join)
-                .filter(|&i| self.common.falling[i].id == id)
+                .filter(|&i| self.common.entities.falling[i].id == id)
             else {
                 continue;
             };
             let (state, p) = (
-                self.common.falling[i].state,
-                self.common.falling[i].position,
+                self.common.entities.falling[i].state,
+                self.common.entities.falling[i].position,
             );
             let pos = BlockPos::new(p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
             self.native_falling_tick(state, pos, mod_api::EntityRef::new(epoch, id));

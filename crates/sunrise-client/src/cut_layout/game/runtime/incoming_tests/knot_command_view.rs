@@ -75,7 +75,7 @@ fn game<'a>(
 fn pig(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> usize {
     match game.target_with_uuid(sunrise_sim::save::uuid_from_text(PIG).unwrap()) {
         Some(sunrise_gameplay_common::game::commands_common::Target::Mob(id)) => {
-            game.mobs.iter().position(|m| m.id == id).unwrap()
+            game.entities.mobs.iter().position(|m| m.id == id).unwrap()
         }
         other => panic!("{other:?}"),
     }
@@ -91,10 +91,10 @@ fn commands_see_the_knot_a_restored_fence_leash_ties() {
     // explicit knot is found.
     let i = pig(&mut game);
     assert_eq!(
-        game.mobs[i].extra.leash_pending,
+        game.entities.mobs[i].extra.leash_pending,
         Some(Pending::Knot([8, 201, 0]))
     );
-    assert_eq!(game.mobs[i].extra.leash, None);
+    assert_eq!(game.entities.mobs[i].extra.leash, None);
     assert!(
         !game.run_command(&format!("execute if entity {NATURAL}")),
         "no knot yet"
@@ -107,7 +107,7 @@ fn commands_see_the_knot_a_restored_fence_leash_ties() {
     assert!(game.run_command("tick step 1"));
     game.tick_server(false).unwrap();
     let i = pig(&mut game);
-    let (leash, pending) = (game.mobs[i].extra.leash, game.mobs[i].extra.leash_pending);
+    let (leash, pending) = (game.entities.mobs[i].extra.leash, game.entities.mobs[i].extra.leash_pending);
     let at = knot_state([8, 201, 0]).position;
     eprintln!("tick-1 binding: leash={leash:?} pending={pending:?} knot at {at:?}");
     assert_eq!(

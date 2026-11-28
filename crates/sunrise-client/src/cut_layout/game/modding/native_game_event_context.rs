@@ -103,7 +103,7 @@ mod tests {
                 [0.0; 3],
                 0,
             );
-            let source = game.entity(game.dropped[0].id).unwrap();
+            let source = game.entity(game.entities.dropped[0].id).unwrap();
             let level = game.level(game.dim.id()).unwrap();
             let at = [3.5, 64.0, 1.5];
             assert!(game.level_game_event(

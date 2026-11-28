@@ -49,7 +49,7 @@ fn attachment_instruction_count() {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let mut holders = Vec::new();
             for id in 100..400 {
-                game.mobs.push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
                 holders.push(mod_api::Holder::Entity(id));
             }
             for z in (0..40).step_by(2) {

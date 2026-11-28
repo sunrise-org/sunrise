@@ -48,7 +48,7 @@ pub(crate) mod tests {
         super::super::native_entity_refs::tests::with_resident_game(|game| {
             for (id, entity) in [(55, "minecraft:pig"), (56, "minecraft:slime")] {
                 let ty = game.res.mob_types().get(entity).unwrap().clone();
-                game.mobs.push(Mob::new(id, ty, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, ty, Vec3::ZERO, 0.0));
                 let living = game.living(game.entity(id).unwrap()).unwrap();
                 assert!(game.living_set_attribute_base(living, "minecraft:max_health", 2000.0));
                 assert_eq!(
@@ -149,7 +149,7 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(21, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(21, kind, Vec3::ZERO, 0.0));
             let mob = game.living(game.entity(21).unwrap()).unwrap();
             let mut sword = ItemStack::new("minecraft:diamond_sword", 1);
             sword.damage = max - 1;
@@ -328,8 +328,8 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, zombie_kind, Vec3::ZERO, 0.0));
-            game.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, zombie_kind, Vec3::ZERO, 0.0));
+            game.entities.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
             let zombie = game.living(game.entity(12).unwrap()).unwrap();
             let stand = game.living(game.entity(13).unwrap()).unwrap();
 
@@ -449,7 +449,7 @@ pub(crate) mod tests {
             );
 
             // A worn helmet's modifier is read off the stand's live map.
-            game.armor_stands[0]
+            game.entities.armor_stands[0]
                 .equipment
                 .set(HEAD, Some(ItemStack::new("minecraft:diamond_helmet", 1)));
             game.refresh_stand_and_dragon_equipment_attributes();
@@ -474,8 +474,8 @@ pub(crate) mod tests {
             );
 
             // A stale handle refuses before calling either visitor.
-            game.mobs.clear();
-            game.armor_stands.clear();
+            game.entities.mobs.clear();
+            game.entities.armor_stands.clear();
             assert_eq!(
                 zombie.visit_attributes(game, &mut |_| panic!("stale attributes visited")),
                 Err(EntityReadError::Stale)
@@ -508,13 +508,13 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
-            game.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             // The eight dragon parts must not overlap the player at ID 20.
             dragon.id = 40;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             // The vanilla attribute defaults: a player and a zombie 20, an
@@ -532,16 +532,16 @@ pub(crate) mod tests {
             }
             // A dead dragon: isAlive is health above zero.
             let dragon_handle = game.living(game.entity(40).unwrap()).unwrap();
-            game.dragon.as_mut().unwrap().health = 0.0;
+            game.entities.dragon.as_mut().unwrap().health = 0.0;
             assert_eq!(dragon_handle.health(game), Some(0.0));
             assert_eq!(dragon_handle.alive(game), Some(false));
             // The entities gone: every read answers None.
             game.player = None;
             game.server.lan_acting_uuid = None;
             game.server.lan_acting_entity = None;
-            game.mobs[0].removed = true;
-            game.armor_stands.clear();
-            game.dragon.discard();
+            game.entities.mobs[0].removed = true;
+            game.entities.armor_stands.clear();
+            game.entities.dragon.discard();
             for id in [20u32, 12, 13, 40] {
                 let handle = game.entity(id).and_then(|er| game.living(er));
                 assert!(handle.is_none(), "handle of {id} after it is gone");
@@ -560,13 +560,13 @@ pub(crate) mod tests {
         super::super::native_guest_turn_tests::with_resident_guests(|game| {
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let wolf = game.res.mob_types().get("minecraft:wolf").unwrap().clone();
-            game.mobs.push(Mob::new(100, pig, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(100, pig, Vec3::ZERO, 0.0));
             let mut wolf = Mob::new(101, wolf, Vec3::ZERO, 0.0);
             wolf.extra.tame = true;
             wolf.extra.owner = Some(sunrise_sim::lan::playerdata::uuid_ints(12));
-            game.mobs.push(wolf);
-            game.mobs[0].ai.last_hurt_by = Some(Who::Mob(101));
-            game.mobs[0].ai.last_hurt_by_time = game.mobs[0].age as i32;
+            game.entities.mobs.push(wolf);
+            game.entities.mobs[0].ai.last_hurt_by = Some(Who::Mob(101));
+            game.entities.mobs[0].ai.last_hurt_by_time = game.entities.mobs[0].age as i32;
             let living = game.living(game.entity(100).unwrap()).unwrap();
             assert_eq!(living.kill_credit(game).map(|e| e.id()), Some(101));
 
@@ -604,10 +604,10 @@ pub(crate) mod tests {
             game.server.last_hurt_by_player.remove(&100);
             assert_eq!(living.kill_credit(game).map(|e| e.id()), Some(101));
             // A mob that has left this level is no longer resolvable by its old ID.
-            game.mobs[1].removed = true;
+            game.entities.mobs[1].removed = true;
             assert_eq!(living.kill_credit(game), None);
-            game.mobs[1].removed = false;
-            game.mobs[0].age += 101;
+            game.entities.mobs[1].removed = false;
+            game.entities.mobs[0].age += 101;
             assert_eq!(living.kill_credit(game), None);
         });
     }
@@ -637,7 +637,7 @@ pub(crate) mod tests {
             let nether = game.level("minecraft:the_nether");
             assert_eq!(credit.level(game), nether);
             // The same reads from a mod goal of the pig's own tick.
-            let mut actor = game.mobs.iter().find(|m| m.id == pig).unwrap().clone();
+            let mut actor = game.entities.mobs.iter().find(|m| m.id == pig).unwrap().clone();
             game.in_goal_view(&mut actor, |view| {
                 assert_eq!(living.kill_credit(view), Some(credit));
                 assert_eq!(
@@ -676,12 +676,12 @@ pub(crate) mod tests {
         super::super::native_entity_refs::tests::with_game(|game| {
             let (pig, zombie) = hurt_pig(game);
             send_to_the_nether(game, zombie);
-            let i = game.mobs.iter().position(|m| m.id == pig).unwrap();
+            let i = game.entities.mobs.iter().position(|m| m.id == pig).unwrap();
             let mut saved = |since: i32| {
-                let m = &mut game.mobs[i];
+                let m = &mut game.entities.mobs[i];
                 m.age = (m.ai.last_hurt_by_time + since) as u32;
                 let mut tag = Tag::Compound(Default::default());
-                game.put_last_hurt_by_mob(&game.mobs[i], &mut tag);
+                game.put_last_hurt_by_mob(&game.entities.mobs[i], &mut tag);
                 tag
             };
             let last = saved(100);
@@ -723,7 +723,7 @@ pub(crate) mod tests {
         let mut credited = 0;
         let heard = super::super::native_knockback_tests::heard(|game, _| {
             let (pig, zombie) = hurt_pig(game);
-            game.mobs
+            game.entities.mobs
                 .iter_mut()
                 .find(|m| m.id == zombie)
                 .unwrap()
@@ -735,8 +735,8 @@ pub(crate) mod tests {
             let plan =
                 game.prepare_knockback_credit(pig as i32, None, game.server.combat.0.attack());
             let mut credit = plan.lend(&mut game.server.last_hurt_by_player);
-            let i = game.mobs.iter().position(|m| m.id == pig).unwrap();
-            let mob = &mut game.mobs[i];
+            let i = game.entities.mobs.iter().position(|m| m.id == pig).unwrap();
+            let mob = &mut game.entities.mobs[i];
             mob.knockback(
                 sunrise_gameplay::game::server_side::entity_server::damage_level_of!(
                     game,
@@ -764,25 +764,25 @@ pub(crate) mod tests {
         use sunrise_sim::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_resident_game(|game| {
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(12, pig, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, pig, Vec3::ZERO, 0.0));
             let zombie = game
                 .res
                 .mob_types()
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(15, zombie, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(15, zombie, Vec3::ZERO, 0.0));
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player.as_mut().unwrap().entity_id = 20;
             // The host's own turn: the uuid is acting, no guest connection.
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let pig_living = game.living(game.entity(12).unwrap()).unwrap();
             // A mob's hit names the mob's own id.
-            game.mobs[0].ai.last_hurt_by = Some(Who::Mob(15));
-            game.mobs[0].ai.last_hurt_by_time = game.mobs[0].age as i32;
+            game.entities.mobs[0].ai.last_hurt_by = Some(Who::Mob(15));
+            game.entities.mobs[0].ai.last_hurt_by_time = game.entities.mobs[0].age as i32;
             assert_eq!(pig_living.last_attacker(game).map(|a| a.id()), Some(15));
             // The host's hit, read in the host's own turn: the host's handle.
-            game.mobs[0].ai.last_hurt_by = Some(Who::Player);
+            game.entities.mobs[0].ai.last_hurt_by = Some(Who::Player);
             game.server.last_hurt_by_player.insert(
                 12,
                 sunrise_gameplay_common::game::combat_common::PlayerCredit(123),
@@ -807,7 +807,7 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
             let living = game.living(game.entity(12).unwrap()).unwrap();
             assert!(living.set_health(game, 8.0));
             assert_eq!(living.health(game), Some(8.0));
@@ -827,8 +827,8 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
-            game.mobs[0].needs_sync = false;
+            game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities.mobs[0].needs_sync = false;
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player.as_mut().unwrap().entity_id = 20;
             super::super::native_entity_refs::tests::bind_local_player(game, 20, 123);
@@ -859,17 +859,17 @@ pub(crate) mod tests {
             assert_eq!((player.health(game), mob.health(game)), initial);
             assert_eq!(game.player.as_ref().unwrap().health.data.is_dirty(), dirty);
             assert_eq!(game.player.as_ref().unwrap().events.len(), events);
-            assert!(!game.mobs[0].needs_sync);
+            assert!(!game.entities.mobs[0].needs_sync);
             assert!(!game.player.as_ref().unwrap().health.dead);
-            assert!(!game.mobs[0].removed);
-            game.mobs[0].needs_sync = true;
+            assert!(!game.entities.mobs[0].removed);
+            game.entities.mobs[0].needs_sync = true;
             game.storage_scope(|game, _| {
                 assert!(mob.set_health(game, 0.0));
                 ((), false)
             });
             assert_eq!(mob.health(game), initial.1);
             assert!(
-                game.mobs[0].needs_sync,
+                game.entities.mobs[0].needs_sync,
                 "abort preserves preexisting sync dirtiness"
             );
             game.storage_scope(|game, _| {
@@ -881,7 +881,7 @@ pub(crate) mod tests {
                 (player.health(game), mob.health(game)),
                 (Some(0.0), Some(0.0))
             );
-            assert!(game.mobs[0].needs_sync);
+            assert!(game.entities.mobs[0].needs_sync);
             assert!(game.player.as_ref().unwrap().events.len() > events);
         });
     }
@@ -921,7 +921,7 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
             let living = game.living(game.entity(12).unwrap()).unwrap();
             assert!(living.set_health(game, 10.0));
             assert!(living.heal(game, 2.0));
@@ -944,7 +944,7 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(15, zombie, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(15, zombie, Vec3::ZERO, 0.0));
             let source = game
                 .motion
                 .health
@@ -1017,9 +1017,9 @@ pub(crate) mod tests {
         use sunrise_sim::motion::PlayerMotion;
         super::super::native_entity_refs::tests::with_resident_game(|game| {
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(12, pig, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, pig, Vec3::ZERO, 0.0));
             // Dying, mid death animation: not removed, but not alive.
-            game.mobs[0].health = 0.0;
+            game.entities.mobs[0].health = 0.0;
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player.as_mut().unwrap().entity_id = 20;
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
@@ -1094,7 +1094,7 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
             let zombie = game.living(game.entity(12).unwrap()).unwrap();
             assert!(
                 zombie
@@ -1109,7 +1109,7 @@ pub(crate) mod tests {
             );
             assert!(zombie.with_hand_item(game, Hand::Main, |_| ()).is_none());
 
-            game.mobs.clear();
+            game.entities.mobs.clear();
             assert!(
                 !zombie
                     .set_hand_item(game, Hand::Main, Some(sword.try_into_api().unwrap()))
@@ -1141,7 +1141,7 @@ pub(crate) mod tests {
                 (14, "minecraft:pillager"),
             ] {
                 let kind = game.res.mob_types().get(kind).unwrap().clone();
-                game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
             }
             let zombie = game.living(game.entity(12).unwrap()).unwrap();
             let horse = game.living(game.entity(13).unwrap()).unwrap();
@@ -1160,11 +1160,11 @@ pub(crate) mod tests {
             assert!(game.living_set_equipment(zombie, EquipmentSlot::Head, Some(helmet.clone())));
             let trim: gear::Trim = ("minecraft:gold".into(), "minecraft:coast".into());
             gear::set(
-                &mut game.mobs[0],
+                &mut game.entities.mobs[0],
                 gear::HEAD,
                 vec![("minecraft:protection".into(), 4)],
             );
-            gear::set_trim(&mut game.mobs[0], gear::HEAD, Some(trim.clone()));
+            gear::set_trim(&mut game.entities.mobs[0], gear::HEAD, Some(trim.clone()));
             let mut expected = helmet.clone();
             expected.data_mut().enchantments = vec![("minecraft:protection".into(), 4)];
             expected.data_mut().trim = Some(trim);
@@ -1175,7 +1175,7 @@ pub(crate) mod tests {
                 Some((2, 7, Some(expected.try_into_api().unwrap())))
             );
             assert_eq!(
-                game.mobs[0]
+                game.entities.mobs[0]
                     .extra
                     .slot_stack(sunrise_items::equipment::HEAD),
                 Some(&helmet),
@@ -1216,12 +1216,12 @@ pub(crate) mod tests {
             saddle.data_mut().custom_name = Some(sunrise_core::nbt::Tag::String("saddle".into()));
             assert!(game.living_set_equipment(horse, EquipmentSlot::Saddle, Some(saddle.clone())));
             expect_slot(game, horse, EquipmentSlot::Saddle, Some(&saddle));
-            sunrise_sim::mobs::raider::set_patrol_leader(&mut game.mobs[2], true);
-            sunrise_sim::mobs::raider::wear_banner(&mut game.mobs[2]);
-            assert!(sunrise_sim::mobs::raider::is_captain(&game.mobs[2]));
+            sunrise_sim::mobs::raider::set_patrol_leader(&mut game.entities.mobs[2], true);
+            sunrise_sim::mobs::raider::wear_banner(&mut game.entities.mobs[2]);
+            assert!(sunrise_sim::mobs::raider::is_captain(&game.entities.mobs[2]));
             assert!(game.living_set_equipment(captain, EquipmentSlot::Head, Some(helmet.clone())));
             expect_slot(game, captain, EquipmentSlot::Head, Some(&helmet));
-            assert!(!sunrise_sim::mobs::raider::is_captain(&game.mobs[2]));
+            assert!(!sunrise_sim::mobs::raider::is_captain(&game.entities.mobs[2]));
             assert!(game.living_set_equipment(
                 horse,
                 EquipmentSlot::Body,
@@ -1232,13 +1232,13 @@ pub(crate) mod tests {
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             // Reserve the dragon's eight consecutive part IDs away from the stand.
             dragon.id = 40;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let dragon = game.living(game.entity(40).unwrap()).unwrap();
             // The dragon and an armor stand store all eight slots, full
             // stacks included, and save them through the real codecs.
             let mut stand = sunrise_sim::entities::ArmorStand::new(16, Vec3::ZERO, 0.0);
             stand.id = 16;
-            game.armor_stands.push(stand);
+            game.entities.armor_stands.push(stand);
             let stand = game.living(game.entity(16).unwrap()).unwrap();
             for living in [dragon, stand] {
                 for slot in EquipmentSlot::ALL {
@@ -1251,14 +1251,14 @@ pub(crate) mod tests {
                 }
             }
             let saved = game
-                .dragon
+                .entities.dragon
                 .as_ref()
                 .unwrap()
                 .to_nbt([0; 4], None, &Default::default());
             let loaded =
                 sunrise_gameplay_common::game::dragon_common::Dragon::from_nbt(&saved, 0).unwrap();
-            assert_eq!(loaded.equipment, game.dragon.as_ref().unwrap().equipment);
-            let stored = game.armor_stands.last().unwrap();
+            assert_eq!(loaded.equipment, game.entities.dragon.as_ref().unwrap().equipment);
+            let stored = game.entities.armor_stands.last().unwrap();
             let saved = sunrise_sim::entity_nbt::armor_stand_to_nbt(
                 stored,
                 [0; 4],
@@ -1276,7 +1276,7 @@ pub(crate) mod tests {
                 assert!(game.living_set_equipment(dragon, slot, None));
             }
             let stale =
-                game.dragon
+                game.entities.dragon
                     .as_ref()
                     .unwrap()
                     .to_nbt([0; 4], Some(&saved), &Default::default());
@@ -1307,7 +1307,7 @@ pub(crate) mod tests {
             let wolf = game.living(game.entity(id).unwrap()).unwrap();
             assert_eq!(game.living_is_tamed(wolf), Some(false));
             assert_eq!(game.living_owner(wolf), None);
-            let m = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+            let m = game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
             (m.extra.tame, m.extra.owner) = (true, Some([1, 2, 3, 4]));
             assert_eq!(game.living_is_tamed(wolf), Some(true));
             assert_eq!(
@@ -1328,21 +1328,21 @@ pub(crate) mod tests {
                 Some("minecraft:item")
             );
             let wolf_uuid = game.uuid_for(id);
-            let thrown = game.dropped.last().unwrap();
-            let eye = game.mobs.iter().find(|m| m.id == id).unwrap().eye_y();
+            let thrown = game.entities.dropped.last().unwrap();
+            let eye = game.entities.mobs.iter().find(|m| m.id == id).unwrap().eye_y();
             assert_eq!(thrown.position.y, eye - f64::from(0.3f32));
             assert_eq!((thrown.pickup_delay, thrown.thrower), (40, Some(wolf_uuid)));
             // The drop swung: one tick on, that swing goes on.
-            let m = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+            let m = game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
             assert!(m.ai.swinging);
             m.ai.swing_time = 1;
             assert!(!game.living_swing(wolf, Hand::Main, true));
             let scattered = game.living_drop(wolf, bone, true, false).unwrap();
             assert_ne!(scattered, item);
-            assert_eq!(game.dropped.last().unwrap().velocity.y, f64::from(0.2f32));
-            assert_eq!(game.dropped.last().unwrap().thrower, None);
+            assert_eq!(game.entities.dropped.last().unwrap().velocity.y, f64::from(0.2f32));
+            assert_eq!(game.entities.dropped.last().unwrap().thrower, None);
 
-            game.armor_stands
+            game.entities.armor_stands
                 .push(ArmorStand::new(90, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let stand = game.living(game.entity(90).unwrap()).unwrap();
             assert_eq!(game.living_is_tamed(stand), None);
@@ -1370,7 +1370,7 @@ pub(crate) mod tests {
             let player_random = game.player.as_ref().unwrap().random.clone();
             let (_, seeds) =
                 sunrise_level::random_source::record_seeds(|| game.drop_held_item(true));
-            let key_velocity = game.dropped.last().unwrap().velocity;
+            let key_velocity = game.entities.dropped.last().unwrap().velocity;
             *game.world.random = sunrise_core::random::LegacyRandom::new(12345);
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 42, 123);
             let player = game.living(game.entity(42).unwrap()).unwrap();
@@ -1383,7 +1383,7 @@ pub(crate) mod tests {
                 "both drop routes allocate the same random streams"
             );
             let mod_velocity = game
-                .dropped
+                .entities.dropped
                 .iter()
                 .find(|entity| entity.id == id)
                 .unwrap()
@@ -1444,7 +1444,7 @@ pub(crate) mod tests {
                         ]
                     };
                     let level = game.world.random.state();
-                    let before = game.dropped.len();
+                    let before = game.entities.dropped.len();
                     let id = game.native_player_drop(
                         ItemStack::new("minecraft:apple", 1),
                         randomly,
@@ -1458,9 +1458,9 @@ pub(crate) mod tests {
                     assert_eq!(game.world.random.state(), level, "no level random draws");
                     if cancelled {
                         assert!(id.is_none());
-                        assert_eq!(game.dropped.len(), before);
+                        assert_eq!(game.entities.dropped.len(), before);
                     } else {
-                        let drop = game.dropped.iter().find(|d| Some(d.id) == id).unwrap();
+                        let drop = game.entities.dropped.iter().find(|d| Some(d.id) == id).unwrap();
                         assert_eq!(
                             [drop.velocity.x, drop.velocity.y, drop.velocity.z],
                             velocity
@@ -1474,7 +1474,7 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn armor_stand_drop_does_not_swing() {
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.armor_stands
+            game.entities.armor_stands
                 .push(sunrise_sim::entities::ArmorStand::new(
                     90,
                     sunrise_core::geometry::Vec3::ZERO,
@@ -1487,7 +1487,7 @@ pub(crate) mod tests {
                     .is_none()
             );
             assert_eq!(game.swings_started, before);
-            assert!(game.dropped.is_empty());
+            assert!(game.entities.dropped.is_empty());
         });
     }
     /// The living reads of #943 answer the engine's own decisions.
@@ -1506,11 +1506,11 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(30, zombie.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0));
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(31, zombie.clone(), Vec3::new(1.5, 64.0, 0.5), 0.0));
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(32, zombie, Vec3::new(5.5, 64.0, 0.5), 0.0));
             let near = game.living(game.entity(30).unwrap()).unwrap();
             let beside = game.entity(31).unwrap();
@@ -1521,12 +1521,12 @@ pub(crate) mod tests {
                 let host: &dyn Host = game;
                 assert_eq!(near.can_use_portal(host), Some(true));
             }
-            game.mobs[0].health = 0.0;
+            game.entities.mobs[0].health = 0.0;
             {
                 let host: &dyn Host = game;
                 assert_eq!(near.can_use_portal(host), Some(false));
             }
-            game.mobs[0].health = 20.0;
+            game.entities.mobs[0].health = 20.0;
 
             // `LivingEntity.canUsePortal`'s sleep half: a villager asleep in
             // its bed does not travel, awake again it does.
@@ -1536,15 +1536,15 @@ pub(crate) mod tests {
                 .get("minecraft:villager")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(35, villager, Vec3::new(11.5, 64.0, 0.5), 0.0));
             let sleeper = game.living(game.entity(35).unwrap()).unwrap();
-            game.mobs.last_mut().unwrap().extra.ints[1] = 1;
+            game.entities.mobs.last_mut().unwrap().extra.ints[1] = 1;
             {
                 let host: &dyn Host = game;
                 assert_eq!(sleeper.can_use_portal(host), Some(false));
             }
-            game.mobs.last_mut().unwrap().extra.ints[1] = 0;
+            game.entities.mobs.last_mut().unwrap().extra.ints[1] = 0;
             {
                 let host: &dyn Host = game;
                 assert_eq!(sleeper.can_use_portal(host), Some(true));
@@ -1560,7 +1560,7 @@ pub(crate) mod tests {
                 assert_eq!(near.can_freeze(host), Some(true));
                 assert_eq!(near.can_breathe_underwater(host), Some(true));
             }
-            game.mobs[0].extra.equipment.set(
+            game.entities.mobs[0].extra.equipment.set(
                 sunrise_items::equipment::FEET,
                 Some(sunrise_items::items::ItemStack::new(
                     "minecraft:leather_boots",
@@ -1595,7 +1595,7 @@ pub(crate) mod tests {
             }
 
             let squid = game.res.mob_types().get("minecraft:squid").unwrap().clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(33, squid, Vec3::new(7.5, 64.0, 0.5), 0.0));
             let squid = game.living(game.entity(33).unwrap()).unwrap();
             let golem_kind = game
@@ -1604,7 +1604,7 @@ pub(crate) mod tests {
                 .get("minecraft:copper_golem")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(34, golem_kind, Vec3::new(9.5, 64.0, 0.5), 0.0));
             let golem = game.living(game.entity(34).unwrap()).unwrap();
             {
@@ -1614,7 +1614,7 @@ pub(crate) mod tests {
                 assert_eq!(squid.can_breathe_underwater(host), Some(true));
                 assert_eq!(golem.can_breathe_underwater(host), Some(true));
             }
-            game.mobs.clear();
+            game.entities.mobs.clear();
             {
                 let host: &dyn Host = game;
                 assert_eq!(near.can_use_portal(host), None);
@@ -1665,7 +1665,7 @@ pub(crate) mod tests {
                 .get("minecraft:villager")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(30, villager, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let sleeper = game.living(game.entity(30).unwrap()).unwrap();
             let host: &dyn Host = game;
@@ -1673,13 +1673,13 @@ pub(crate) mod tests {
             assert_eq!(sleeper.bed_orientation(host), None);
             // Asleep in the bed: the block's own facing, the engine's own
             // sleeping position naming the bed.
-            game.mobs[0].extra.ints[1] = 1;
-            sunrise_sim::mobs::villager::ext_mut(&mut game.mobs[0]).sleeping_pos = Some([2, 63, 2]);
+            game.entities.mobs[0].extra.ints[1] = 1;
+            sunrise_sim::mobs::villager::ext_mut(&mut game.entities.mobs[0]).sleeping_pos = Some([2, 63, 2]);
             let host: &dyn Host = game;
             assert_eq!(sleeper.bed_orientation(host), Some(Direction::North));
             assert_eq!(sleeper.can_use_portal(host), Some(false));
             // A sleeping position that is not a bed answers none.
-            sunrise_sim::mobs::villager::ext_mut(&mut game.mobs[0]).sleeping_pos = Some([0, 63, 0]);
+            sunrise_sim::mobs::villager::ext_mut(&mut game.entities.mobs[0]).sleeping_pos = Some([0, 63, 0]);
             let host: &dyn Host = game;
             assert_eq!(sleeper.bed_orientation(host), None);
             // A player asleep in the same bed answers the same facing.
@@ -1703,8 +1703,8 @@ pub(crate) mod tests {
                     assert!(!sunrise_sim::mobs::mob_can_use_portal(&mob));
                 }
             }
-            assert!(!game.mob_portal_eligible(&game.mobs[0]));
-            game.mobs.clear();
+            assert!(!game.mob_portal_eligible(&game.entities.mobs[0]));
+            game.entities.mobs.clear();
             let host: &dyn Host = game;
             assert_eq!(sleeper.bed_orientation(host), None);
         });
@@ -1806,18 +1806,18 @@ pub(crate) mod tests {
                         sunrise_sim::entities::ArmorStand::new(18, Vec3::new(0.5, 70.0, 0.5), 0.0);
                     stand.no_gravity = true;
                     stand.equipment[0] = Some(ItemStack::new("minecraft:stone", 1));
-                    game.armor_stands.push(stand);
+                    game.entities.armor_stands.push(stand);
                     game.start_audio_capture();
                     sunrise_gameplay::game::server_side::dispense_fixture::start_recording();
                     game.tick_armor_stands().unwrap();
                     let events =
                         sunrise_gameplay::game::server_side::dispense_fixture::stop_recording();
                     assert_eq!(
-                        game.armor_stands[0].equipment[5],
+                        game.entities.armor_stands[0].equipment[5],
                         Some(ItemStack::new("minecraft:iron_helmet", 1)),
                         "real listener/handle write control",
                     );
-                    assert!(!game.armor_stands[0].first_tick);
+                    assert!(!game.entities.armor_stands[0].first_tick);
                     let sounds = game.server.pending_sounds.len();
                     let equips = events
                         .iter()
@@ -1840,7 +1840,7 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
             let living = game.living(game.entity(12).unwrap()).unwrap();
             game.start_audio_capture();
             sunrise_gameplay::game::server_side::dispense_fixture::start_recording();
@@ -1848,19 +1848,19 @@ pub(crate) mod tests {
             assert!(game.living_set_equipment(living, EquipmentSlot::Head, Some(helmet.clone())));
             assert!(game.living_set_equipment(living, EquipmentSlot::Head, None));
             assert!(game.server.pending_sounds.is_empty());
-            game.mobs[0].first_tick = false;
+            game.entities.mobs[0].first_tick = false;
             assert!(game.living_set_equipment(living, EquipmentSlot::Head, Some(helmet.clone())));
             assert_eq!(game.server.pending_sounds.len(), 1);
             assert!(game.living_set_equipment(living, EquipmentSlot::Head, Some(helmet)));
             assert_eq!(game.server.pending_sounds.len(), 1);
-            game.mobs[0].silent = true;
+            game.entities.mobs[0].silent = true;
             assert!(game.living_set_equipment(
                 living,
                 EquipmentSlot::Head,
                 Some(ItemStack::new("minecraft:diamond_helmet", 1))
             ));
             assert!(game.living_set_equipment(living, EquipmentSlot::Head, None));
-            game.mobs[0].silent = false;
+            game.entities.mobs[0].silent = false;
             assert!(game.living_set_equipment(
                 living,
                 EquipmentSlot::Chest,
@@ -1895,11 +1895,11 @@ pub(crate) mod tests {
             );
             let mut stand = sunrise_sim::entities::ArmorStand::new(16, Vec3::ZERO, 0.0);
             stand.id = 16;
-            game.armor_stands.push(stand);
+            game.entities.armor_stands.push(stand);
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = 17;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let stand = game.living(game.entity(16).unwrap()).unwrap();
             let dragon = game.living(game.entity(17).unwrap()).unwrap();
             game.start_audio_capture();
@@ -1909,7 +1909,7 @@ pub(crate) mod tests {
             assert!(game.living_set_equipment(stand, EquipmentSlot::Head, None));
             assert!(game.server.pending_sounds.is_empty());
             game.tick_armor_stands().unwrap();
-            game.dragon.as_mut().unwrap().ticks = 1;
+            game.entities.dragon.as_mut().unwrap().ticks = 1;
             for _ in 0..2 {
                 assert!(game.living_set_equipment(
                     stand,

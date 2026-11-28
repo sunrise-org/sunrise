@@ -562,10 +562,10 @@ pub fn datapack_active_world_entities_unobstructed<'g, G: SideGame<'g>>(
             cell.min_position().components(),
             cell.max_position().components(),
             &mut |entity| {
-                let Some(index) = common.mob_index.find_ref(&common.mobs, entity.id()) else {
+                let Some(index) = common.mob_index.find_ref(&common.entities.mobs, entity.id()) else {
                     return std::ops::ControlFlow::Continue(());
                 };
-                let mob = &common.mobs[index];
+                let mob = &common.entities.mobs[index];
                 if !mob.removed && !skip_mob(mob) && obstructs(mob.bounds()) {
                     mob_obstructs = true;
                     return std::ops::ControlFlow::Break(());
@@ -576,7 +576,7 @@ pub fn datapack_active_world_entities_unobstructed<'g, G: SideGame<'g>>(
         .map_err(|_| PlacementQueryError::Unavailable)?;
     if mob_obstructs
         || common
-            .dragon
+            .entities.dragon
             .as_ref()
             .is_some_and(|dragon| obstructs(dragon.body_bounds()))
     {
@@ -586,10 +586,10 @@ pub fn datapack_active_world_entities_unobstructed<'g, G: SideGame<'g>>(
     Ok(!entities
         .non_mob_building_blocker_boxes(
             common
-                .carts
+                .entities.carts
                 .iter()
                 .map(crate::game::minecarts::Minecart::bounds),
-            &common.crystals,
+            &common.entities.crystals,
         )
         .any(obstructs))
 }

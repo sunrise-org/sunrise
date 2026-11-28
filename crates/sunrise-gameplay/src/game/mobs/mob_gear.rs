@@ -75,7 +75,7 @@ impl ServerGame<'_> {
     pub fn enchant_item(&mut self, id: u32, slot: usize, special: f32) {
         let items = server_world_items!(self);
         let enchantments = &server_world_stations!(self).enchantments;
-        let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return;
         };
         let Some(stack) = sunrise_sim::mobs::finalize::item_stack(m, slot) else {
@@ -104,7 +104,7 @@ impl ServerGame<'_> {
     ) {
         let Some(pos) = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == id)
             .map(|m| [m.position.x, m.position.y, m.position.z])
@@ -114,7 +114,7 @@ impl ServerGame<'_> {
         let special = self.local_difficulty(pos).special();
         let items = server_world_items!(self);
         let enchantments = &server_world_stations!(self).enchantments;
-        let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return;
         };
         let enchant = m.random.next_float() <= odds;
@@ -226,7 +226,7 @@ mod tests {
                 .unwrap();
             // Wave 4 > num_groups(1) = 3; odds 1.0 guarantees enchanting.
             game.apply_raid_buffs(id, RaiderType::Pillager, 4, 1.0);
-            let m = game.common.mobs.iter().find(|m| m.id == id).unwrap();
+            let m = game.common.entities.mobs.iter().find(|m| m.id == id).unwrap();
             assert_eq!(gear::level(m, MAIN, "minecraft:multishot"), 1);
             assert_eq!(gear::level(m, MAIN, "minecraft:quick_charge"), 0);
         });

@@ -208,7 +208,7 @@ fn a_scope_transaction_aborts_subject_and_dropped_item_edits_together() {
             [0.0; 3],
             0,
         );
-        let drop_id = game.dropped[0].id;
+        let drop_id = game.entities.dropped[0].id;
         let item = game.item_entity(game.entity(drop_id).unwrap()).unwrap();
         let count = item.with_stack(game, |stack| stack.count()).unwrap();
         game.world.modified.clear();
@@ -492,7 +492,7 @@ pub(crate) fn check_edit_then_replace(commit: bool, observer: Option<ModEntry>) 
             assert_eq!(game.world.block(POS.0, POS.1, POS.2), replacement);
             assert!(game.world.block_entities.get(&POS).is_none());
             assert_eq!(game.inventory[0], Some(taken));
-            let [drop] = game.dropped.as_ref() else {
+            let [drop] = game.entities.dropped.as_ref() else {
                 panic!("expected exactly the item left in the replaced container");
             };
             assert_eq!(drop.stack, left);
@@ -503,7 +503,7 @@ pub(crate) fn check_edit_then_replace(commit: bool, observer: Option<ModEntry>) 
                 [Some(taken), Some(left)]
             );
             assert!(game.inventory[0].is_none());
-            assert!(game.dropped.is_empty());
+            assert!(game.entities.dropped.is_empty());
         }
     });
 }
@@ -645,13 +645,13 @@ fn reentrant_removal_does_not_spill_the_same_saved_pot_twice() {
 
             assert_eq!(game.world.block(POS.0, POS.1, POS.2), game.world.air);
             assert!(crate::game::spill_common::saved_entity(&game.world, AT).is_none());
-            assert!(game.dropped.len() > 1);
+            assert!(game.entities.dropped.len() > 1);
             assert!(
-                game.dropped
+                game.entities.dropped
                     .iter()
                     .all(|drop| drop.stack.item == stock.item)
             );
-            let spilled: u32 = game.dropped.iter().map(|drop| drop.stack.count).sum();
+            let spilled: u32 = game.entities.dropped.iter().map(|drop| drop.stack.count).sum();
             assert_eq!(spilled, 64);
         });
     });
@@ -777,7 +777,7 @@ fn spill_join_keeps_the_replacement_furnace_and_its_contents() {
             );
             assert_eq!(replacement.name(game).as_deref(), Some(LABEL));
             assert_eq!(replacement.lock(game), Some(&lock));
-            let [spilled_drop] = game.dropped.as_ref() else {
+            let [spilled_drop] = game.entities.dropped.as_ref() else {
                 panic!("expected exactly one drop, from the original chest");
             };
             assert_eq!(spilled_drop.stack, spilled);
@@ -872,7 +872,7 @@ fn strict_bulk_replacement_aborts_the_block_handle_and_inventory_together() {
             game.world.block_entities.get(&POS).unwrap().slots(),
             [Some(stack)]
         );
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         assert!(game.world.bulk_log.is_empty());
         assert!(game.world.modified.is_empty());
     });
@@ -921,7 +921,7 @@ fn strict_bulk_commit_publishes_whole_chunks_without_drops() {
             game.world.block_entities.get(&POS),
             Some(BlockEntity::Chest(_))
         ));
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         assert!(game.world.bulk_log.contains(&CHUNK));
         assert!(game.world.block_log.as_ref().unwrap().is_empty());
     });
@@ -1004,7 +1004,7 @@ fn ordinary_replacement_between_strict_edits_uses_its_own_resident_row() {
                 .all(Option::is_none)
         );
         assert!(game.world.bulk_log.contains(&CHUNK));
-        let [drop] = game.dropped.as_ref() else {
+        let [drop] = game.entities.dropped.as_ref() else {
             panic!("one ordinary spill, none from strict")
         };
         assert_eq!(

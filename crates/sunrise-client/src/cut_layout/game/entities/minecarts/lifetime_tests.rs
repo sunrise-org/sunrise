@@ -22,36 +22,36 @@ fn lifecycle_carts_keep_registrations_through_commands_unload_park_and_remote() 
     let mut identities = SlotIdentities::default();
     LifecycleFixture {
         seed: |game, entries| {
-            game.carts.clear();
+            game.entities.carts.clear();
             for &(id, at) in entries {
-                game.carts.push(Minecart::new(
+                game.entities.carts.push(Minecart::new(
                     id,
                     CartKind::Rideable,
                     Vec3::new(at[0], at[1], at[2]),
                 ));
             }
         },
-        ids: |game| game.carts.iter().map(|cart| cart.id).collect(),
+        ids: |game| game.entities.carts.iter().map(|cart| cart.id).collect(),
         target: sunrise_gameplay_common::game::commands_common::Target::Cart,
         unloads_with_chunk: true,
         remote: None,
     }
     .run_with(|game| {
         let epoch = game.native_lifecycle.epoch().unwrap();
-        identities.observe(&mut game.carts, epoch, |cart| cart.id)
+        identities.observe(&mut game.entities.carts, epoch, |cart| cart.id)
     });
     run_remote_lifecycle(
         |game, entries| {
-            game.carts.clear();
+            game.entities.carts.clear();
             for &(id, at) in entries {
-                game.carts.push(Minecart::new(
+                game.entities.carts.push(Minecart::new(
                     id,
                     CartKind::Rideable,
                     Vec3::new(at[0], at[1], at[2]),
                 ));
             }
         },
-        |game| game.carts.iter().map(|cart| cart.id).collect(),
+        |game| game.entities.carts.iter().map(|cart| cart.id).collect(),
         RemoteLifecycle {
             prepare: |game| {
                 let (client, _server) = Pipe::pair();
@@ -60,7 +60,7 @@ fn lifecycle_carts_keep_registrations_through_commands_unload_park_and_remote() 
             apply: |game, remove, update| {
                 game.remote_object_data(update as i32, &[(12, serializer::INT, Value::Int(19))]);
                 assert_eq!(
-                    game.carts
+                    game.entities.carts
                         .iter()
                         .find(|cart| cart.id == update)
                         .unwrap()
@@ -79,16 +79,16 @@ fn lifecycle_carts_keep_registrations_through_commands_unload_park_and_remote() 
 fn connecting_to_a_remote_level_clears_the_existing_cart_list() {
     use sunrise_protocol::connection::Pipe;
     sunrise_client_gameplay::game::native_entity_refs::tests::with_client_game(|game| {
-        game.carts.push(Minecart::new(
+        game.entities.carts.push(Minecart::new(
             71,
             CartKind::Rideable,
             Vec3::new(0.5, 70.0, 0.5),
         ));
-        assert_eq!(game.carts.len(), 1);
+        assert_eq!(game.entities.carts.len(), 1);
         let (client, _server) = Pipe::pair();
         game.connect_local(client, "Cart reset").unwrap();
         // Observe the production reset before any fixture reseeding or cleanup.
-        assert!(game.carts.is_empty());
+        assert!(game.entities.carts.is_empty());
     });
 }
 
@@ -96,13 +96,13 @@ fn connecting_to_a_remote_level_clears_the_existing_cart_list() {
 #[ignore = "daily"]
 fn exploding_a_cart_removes_only_its_owner_and_keeps_a_bound_survivor() {
     bound_cart_case(CartKind::Rideable, |game| {
-        game.carts
+        game.entities.carts
             .push(Minecart::new(72, CartKind::Tnt, Vec3::new(40.5, 70.0, 0.5)));
-        let mut doomed = game.carts[1].clone();
+        let mut doomed = game.entities.carts[1].clone();
         let index = Arc::new(Mutex::new(AttachmentIndex::default()));
         let mut values = Attachments::default();
         VALUE.set(&mut values, Holder::Entity(72), 99).unwrap();
-        game.carts.update(1, |cart| {
+        game.entities.carts.update(1, |cart| {
             cart.attachment_lifetime().bind(&mut values, &index, 72u32);
         });
         let key = ("test".into(), "cart_lifetime".into());
@@ -110,7 +110,7 @@ fn exploding_a_cart_removes_only_its_owner_and_keeps_a_bound_survivor() {
         assert_eq!(retained.len(), 1);
         game.explode_cart(&mut doomed, 0.0);
         assert_eq!(
-            game.carts.iter().map(|cart| cart.id).collect::<Vec<_>>(),
+            game.entities.carts.iter().map(|cart| cart.id).collect::<Vec<_>>(),
             [71]
         );
         assert!(index.lock().unwrap().snapshot(&key).is_empty());
@@ -200,7 +200,7 @@ fn exploding_driven_cart_does_not_reseat_a_player_moved_by_its_dismount_hook() {
             let mut cart = Minecart::new(71, CartKind::Tnt, Vec3::new(0.5, 200.0, 0.5));
             cart.no_gravity = true;
             cart.fuse = 0;
-            game.carts.push(cart);
+            game.entities.carts.push(cart);
             game.riding = Some(71);
             assert!(game.tick_cart_riding(Keys::default()));
             assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
@@ -258,7 +258,7 @@ fn activator_respects_canceled_player_dismount() {
             ));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 70, 70);
             let mut cart = Minecart::new(71, CartKind::Rideable, Vec3::ZERO);
-            game.carts.push(cart.clone());
+            game.entities.carts.push(cart.clone());
             game.riding = Some(71);
             game.activate_cart(&mut cart, true);
             assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
@@ -275,10 +275,10 @@ fn activator_respects_canceled_player_dismount() {
 #[ignore = "daily"]
 fn a_bound_cart_commits_the_normal_server_tick() {
     bound_cart_case(CartKind::Furnace, |game| {
-        game.carts.update(0, |cart| cart.fuel = 6);
+        game.entities.carts.update(0, |cart| cart.fuel = 6);
         game.tick_carts();
-        assert_eq!(game.carts[0].fuel, 5);
-        assert_eq!(game.carts[0].tick_count, 1);
+        assert_eq!(game.entities.carts[0].fuel, 5);
+        assert_eq!(game.entities.carts[0].tick_count, 1);
     });
 }
 
@@ -286,15 +286,15 @@ fn a_bound_cart_commits_the_normal_server_tick() {
 #[ignore = "daily"]
 fn a_bound_cart_commits_the_ridden_tick() {
     bound_cart_case(CartKind::Rideable, |game| {
-        game.carts.update(0, |cart| cart.in_water = true);
+        game.entities.carts.update(0, |cart| cart.in_water = true);
         game.player = Some(sunrise_sim::motion::PlayerMotion::new(
             game.motion,
             Vec3::new(0.5, 70.0 + SEAT, 0.5),
         ));
         game.riding = Some(71);
         assert!(game.tick_cart_riding(Keys::default()));
-        assert!(!game.carts[0].in_water);
-        assert_eq!(game.carts[0].tick_count, 1);
+        assert!(!game.entities.carts[0].in_water);
+        assert_eq!(game.entities.carts[0].tick_count, 1);
     });
 }
 
@@ -302,8 +302,8 @@ fn a_bound_cart_commits_the_ridden_tick() {
 #[ignore = "daily"]
 fn a_bound_ticked_cart_publishes_its_moved_position_before_pushing() {
     bound_cart_case(CartKind::Rideable, |game| {
-        game.carts.update(0, |cart| cart.velocity.x = 0.4);
-        game.carts.push(Minecart::new(
+        game.entities.carts.update(0, |cart| cart.velocity.x = 0.4);
+        game.entities.carts.push(Minecart::new(
             72,
             CartKind::Rideable,
             Vec3::new(1.75, 70.0, 0.5),
@@ -311,8 +311,8 @@ fn a_bound_ticked_cart_publishes_its_moved_position_before_pushing() {
         // Keep the other cart's own tick from masking the first cart's push.
         game.riding = Some(72);
         game.tick_carts();
-        assert!(game.carts[0].position.x > 0.5);
-        assert!(game.carts[1].velocity.x > 0.0);
+        assert!(game.entities.carts[0].position.x > 0.5);
+        assert!(game.entities.carts[1].velocity.x > 0.0);
     });
 }
 
@@ -327,7 +327,7 @@ fn a_bound_tnt_cart_passes_interaction_without_priming() {
             id: 71,
             location: [0.5, 70.0, 0.5],
         })));
-        assert_eq!(game.carts[0].fuse, -1);
+        assert_eq!(game.entities.carts[0].fuse, -1);
         assert_eq!(
             game.inventory[game.selected],
             Some(ItemStack::new("minecraft:fire_charge", 1))
@@ -340,20 +340,20 @@ fn a_bound_tnt_cart_passes_interaction_without_priming() {
 fn a_bound_cart_commits_valid_nbt_and_refuses_an_invalid_load() {
     bound_cart_case(CartKind::Furnace, |game| {
         let target = sunrise_gameplay_common::game::commands_common::Target::Cart(71);
-        game.carts.update(0, |cart| cart.fuel = 6);
+        game.entities.carts.update(0, |cart| cart.fuel = 6);
         let uuid = game.uuid_for(71);
         assert!(
             game.apply_entity_nbt(target, Tag::Compound(Default::default()))
                 .is_err()
         );
-        assert_eq!(game.carts[0].fuel, 6);
+        assert_eq!(game.entities.carts[0].fuel, 6);
         let (tag, _) = sunrise_core::nbt::parse_snbt(
             "{Pos:[0.5d,70.0d,0.5d],Fuel:13s,UUID:[I;9,8,7,6],DisplayState:{Name:\"test:missing\"}}",
         ).unwrap();
         game.apply_entity_nbt(target, tag).unwrap();
-        assert_eq!(game.carts[0].fuel, 13);
+        assert_eq!(game.entities.carts[0].fuel, 13);
         assert_eq!(game.uuid_for(71), uuid);
-        assert!(game.carts[0].custom_display.is_none());
+        assert!(game.entities.carts[0].custom_display.is_none());
     });
 }
 
@@ -364,13 +364,13 @@ pub(crate) use crate::game::server_side::minecarts_server::lifetime_tests::bound
 #[ignore = "daily"]
 fn a_bound_tnt_cart_keeps_its_join_when_damage_primes_it() {
     bound_cart_case(CartKind::Tnt, |game| {
-        game.carts.push(Minecart::new(
+        game.entities.carts.push(Minecart::new(
             72,
             CartKind::Rideable,
             Vec3::new(4.5, 70.0, 0.5),
         ));
-        let expected: Vec<_> = game.carts.iter().map(|c| (c.id, c.join)).collect();
-        let join = game.carts[0].join;
+        let expected: Vec<_> = game.entities.carts.iter().map(|c| (c.id, c.join)).collect();
+        let join = game.entities.carts[0].join;
         game.hurt_cart(
             0,
             5.0,
@@ -379,15 +379,15 @@ fn a_bound_tnt_cart_keeps_its_join_when_damage_primes_it() {
             sunrise_gameplay::game::server_side::minecarts_server::CartHit::default(),
         );
         assert_eq!(
-            game.carts
+            game.entities.carts
                 .iter()
                 .map(|c| (c.id, c.join))
                 .collect::<Vec<_>>(),
             expected
         );
-        assert_eq!(game.carts[0].join, join);
-        assert_eq!(game.carts.locate(join), Some(0));
-        assert!((0..=38).contains(&game.carts[0].fuse));
+        assert_eq!(game.entities.carts[0].join, join);
+        assert_eq!(game.entities.carts.locate(join), Some(0));
+        assert!((0..=38).contains(&game.entities.carts[0].fuse));
         assert_eq!(game.resident_entities.table.get_mut().end_tick(), Ok(()));
     });
 }

@@ -924,7 +924,7 @@ pub(in crate::game) mod families {
                 let kind = game.res.mob_types().get("minecraft:horse").unwrap().clone();
                 let mut horse = Mob::new(60, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
                 horse.extra.tame = true;
-                game.mobs.push(horse);
+                game.entities.mobs.push(horse);
                 game.lan_open_mount(12, 60);
                 let host = game.server.lan.as_ref().unwrap();
                 window.set(host.play[&12].mount_window.as_ref().unwrap().window);
@@ -1045,7 +1045,7 @@ pub(in crate::game) mod families {
                 let mut donkey = mount(game, 60, "minecraft:donkey");
                 donkey.extra.chested = true;
                 donkey.extra.items = vec![dirt.clone()];
-                game.mobs.push(donkey);
+                game.entities.mobs.push(donkey);
                 let window = open(game, 60);
                 game.world.modified.clear();
                 game.server.lan.as_mut().unwrap().hub.guests.update(0, |g| {
@@ -1055,7 +1055,7 @@ pub(in crate::game) mod families {
                 script(Script::default());
                 game.storage_scope(|game, _| {
                     game.lan_guest_packet(12, packet(window, 2));
-                    assert_eq!(game.mobs[0].extra.items[0], stone);
+                    assert_eq!(game.entities.mobs[0].extra.items[0], stone);
                     assert_eq!(guest_items(game), (None, dirt.clone()));
                     game.lan_guest_packet(12, packet(window, 17));
                     assert_eq!(guest_items(game), (dirt.clone(), None));
@@ -1065,7 +1065,7 @@ pub(in crate::game) mod families {
                     ((), false)
                 });
                 assert_eq!(
-                    game.mobs[0].extra.items.as_slice(),
+                    game.entities.mobs[0].extra.items.as_slice(),
                     std::slice::from_ref(&dirt)
                 );
                 assert_eq!(guest_items(game), (None, stone.clone()));
@@ -1106,7 +1106,7 @@ pub(in crate::game) mod families {
                     game.lan_guest_packet(12, packet(window, 2));
                     assert_eq!(dispatches(), 1, "an invalid answer was refused");
                     assert_eq!(
-                        game.mobs[0].extra.items.as_slice(),
+                        game.entities.mobs[0].extra.items.as_slice(),
                         std::slice::from_ref(&dirt)
                     );
                     assert_eq!(guest_items(game), (None, stone.clone()));
@@ -1123,8 +1123,8 @@ pub(in crate::game) mod families {
                 );
 
                 let tail = Some(ItemStack::new("minecraft:stick", 4));
-                game.mobs[0].extra.items.resize(15, None);
-                game.mobs[0].extra.items.push(tail.clone());
+                game.entities.mobs[0].extra.items.resize(15, None);
+                game.entities.mobs[0].extra.items.push(tail.clone());
                 script(Script {
                     cancel: true,
                     handled: true,
@@ -1136,14 +1136,14 @@ pub(in crate::game) mod families {
                 game.storage_scope(|game, _| {
                     game.lan_guest_packet(12, packet(window, 2));
                     assert_eq!(dispatches(), 1);
-                    assert_eq!(game.mobs[0].extra.items[0], emerald);
+                    assert_eq!(game.entities.mobs[0].extra.items[0], emerald);
                     assert_eq!(guest_items(game), (None, None));
                     assert!(menu_packets().is_empty());
                     ((), true)
                 });
-                assert_eq!(game.mobs[0].extra.items[0], emerald);
+                assert_eq!(game.entities.mobs[0].extra.items[0], emerald);
                 assert_eq!(
-                    game.mobs[0].extra.items[15], tail,
+                    game.entities.mobs[0].extra.items[15], tail,
                     "the menu owns only its exposed slots"
                 );
                 assert!(game.world.modified.contains(&(0, 0)));
@@ -1163,10 +1163,10 @@ pub(in crate::game) mod families {
                     .push(("minecraft:unbreaking".into(), 3));
                 horse.set_saddle(Some(saddle.clone()));
                 horse.extra.set_body_stack(Some(armor.clone()));
-                game.mobs.push(horse);
+                game.entities.mobs.push(horse);
                 let window = open(game, 61);
                 let equipment = |game: &crate::game::ServerGame<'_>| {
-                    let horse = &game.mobs[1];
+                    let horse = &game.entities.mobs[1];
                     (horse.saddle_item(), horse.extra.body_stack().cloned())
                 };
                 for (slot, expected) in [(0, &saddle), (1, &armor)] {
@@ -1178,7 +1178,7 @@ pub(in crate::game) mod families {
                         let (worn_saddle, worn_armor) = equipment(game);
                         assert_eq!(worn_saddle.as_ref(), (slot != 0).then_some(&saddle));
                         assert_eq!(worn_armor.as_ref(), (slot != 1).then_some(&armor));
-                        assert!(game.mobs[1].extra.items.is_empty(), "no chest slots");
+                        assert!(game.entities.mobs[1].extra.items.is_empty(), "no chest slots");
                         assert!(menu_packets().is_empty());
                         ((), false)
                     });
@@ -1234,11 +1234,11 @@ pub(in crate::game) mod families {
         family(
             |game| {
                 spawn(game, 61, "minecraft:villager");
-                game.mobs[0].extra.trade = Some(Box::new(Trader {
+                game.entities.mobs[0].extra.trade = Some(Box::new(Trader {
                     offers: vec![offer("minecraft:coal", "minecraft:diamond")],
                     ..Trader::default()
                 }));
-                game.mobs[0].extra.flag2 = true;
+                game.entities.mobs[0].extra.flag2 = true;
                 let session =
                     Session::new(vec![offer("minecraft:coal", "minecraft:diamond")], true);
                 game.lan_open_merchant(
@@ -2194,12 +2194,12 @@ pub mod item_part_tests {
                     };
 
                     spawn(game, 61, "minecraft:villager");
-                    game.mobs[0].position = sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5);
-                    game.mobs[0].extra.trade = Some(Box::new(Trader {
+                    game.entities.mobs[0].position = sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5);
+                    game.entities.mobs[0].extra.trade = Some(Box::new(Trader {
                         offers: vec![offer("minecraft:coal", "minecraft:diamond")],
                         ..Trader::default()
                     }));
-                    game.mobs[0].extra.flag2 = true;
+                    game.entities.mobs[0].extra.flag2 = true;
                     let session =
                         Session::new(vec![offer("minecraft:coal", "minecraft:diamond")], true);
                     game.lan_open_merchant(
@@ -2397,7 +2397,7 @@ pub mod item_part_tests {
                     let kind = game.res.mob_types().get("minecraft:horse").unwrap().clone();
                     let mut horse = Mob::new(62, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
                     horse.extra.tame = true;
-                    game.mobs.push(horse);
+                    game.entities.mobs.push(horse);
                     game.lan_open_mount(12, 62);
                     let mount_win = game.server.lan.as_ref().unwrap().play[&12]
                         .mount_window
@@ -2755,7 +2755,7 @@ pub mod item_part_tests {
 
                 // Local direct clear (`Set(None)`): empties output with NO XP and preserves recipes_used.
                 seed_furnace(game, pos);
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.carried = Some(ItemStack::new("minecraft:stick", 1));
                 set_part_script(PartScript {
                     cancel_carried: true,
@@ -2770,7 +2770,7 @@ pub mod item_part_tests {
                 );
                 assert!(game.world.block_entities.get(&pos).unwrap().slots()[2].is_none());
                 assert!(
-                    game.orbs.is_empty(),
+                    game.entities.orbs.is_empty(),
                     "local furnace direct clear Set(None) must spawn no XP orbs"
                 );
                 let BlockEntity::Furnace(f) = game.world.block_entities.get(&pos).unwrap() else {
@@ -2784,7 +2784,7 @@ pub mod item_part_tests {
 
                 // Local direct count reduction (`Set(Some(iron_ingot x2))`): NO XP and preserves recipes_used.
                 seed_furnace(game, pos);
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.carried = Some(ItemStack::new("minecraft:stick", 1));
                 set_part_script(PartScript {
                     cancel_carried: true,
@@ -2800,7 +2800,7 @@ pub mod item_part_tests {
                     Some(("minecraft:iron_ingot", 2))
                 );
                 assert!(
-                    game.orbs.is_empty(),
+                    game.entities.orbs.is_empty(),
                     "local furnace direct Set(Some) must spawn no XP orbs"
                 );
                 let BlockEntity::Furnace(f) = game.world.block_entities.get(&pos).unwrap() else {
@@ -2810,7 +2810,7 @@ pub mod item_part_tests {
 
                 // Local explicit full take (`Take(4)`): runs `safe_take` + `on_take`, spawns XP & clears recipes_used.
                 seed_furnace(game, pos);
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.carried = Some(ItemStack::new("minecraft:stick", 1));
                 set_part_script(PartScript {
                     cancel_carried: true,
@@ -2825,7 +2825,7 @@ pub mod item_part_tests {
                 );
                 assert!(game.world.block_entities.get(&pos).unwrap().slots()[2].is_none());
                 assert_eq!(
-                    game.orbs.iter().map(|o| o.points()).sum::<u32>(),
+                    game.entities.orbs.iter().map(|o| o.points()).sum::<u32>(),
                     7,
                     "local furnace explicit Take(4) must pop smelting XP orbs (10 * 0.7 = 7)"
                 );
@@ -2836,7 +2836,7 @@ pub mod item_part_tests {
 
                 // Local explicit partial take (`Take(2)`): runs `remove` + `on_take`, spawns XP & clears recipes_used.
                 seed_furnace(game, pos);
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.carried = Some(ItemStack::new("minecraft:stick", 1));
                 set_part_script(PartScript {
                     cancel_carried: true,
@@ -2852,7 +2852,7 @@ pub mod item_part_tests {
                     Some(("minecraft:iron_ingot", 2))
                 );
                 assert_eq!(
-                    game.orbs.iter().map(|o| o.points()).sum::<u32>(),
+                    game.entities.orbs.iter().map(|o| o.points()).sum::<u32>(),
                     7,
                     "local furnace explicit Take(2) must pop smelting XP orbs"
                 );
@@ -2863,7 +2863,7 @@ pub mod item_part_tests {
 
                 // A take of 0 records nothing: the cancelled click takes nothing from the slot, and the Part's host write stays.
                 seed_furnace(game, pos);
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.carried = Some(ItemStack::new("minecraft:stick", 1));
                 set_part_script(PartScript {
                     cancel_carried: true,
@@ -2878,13 +2878,13 @@ pub mod item_part_tests {
                         .map(|s| (&*s.item, s.count)),
                     Some(("minecraft:iron_ingot", 4))
                 );
-                assert!(game.orbs.is_empty());
+                assert!(game.entities.orbs.is_empty());
                 assert!(game.score.board.objective("part_pickup").is_some());
                 game.score.board.remove_objective("part_pickup");
 
                 // A take of 5 from 4 takes the 4 the slot holds (`Slot.safeTake` takes at most what is there), with the take's smelting experience.
                 seed_furnace(game, pos);
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.carried = Some(ItemStack::new("minecraft:stick", 1));
                 set_part_script(PartScript {
                     cancel_carried: true,
@@ -2893,7 +2893,7 @@ pub mod item_part_tests {
                 });
                 assert!(local_menu_ops(game, &[(Some(302), 0, Input::Pickup)]));
                 assert!(game.world.block_entities.get(&pos).unwrap().slots()[2].is_none());
-                assert_eq!(game.orbs.iter().map(|o| o.points()).sum::<u32>(), 7);
+                assert_eq!(game.entities.orbs.iter().map(|o| o.points()).sum::<u32>(), 7);
                 clear_local_furnace(game);
             });
         });
@@ -2955,7 +2955,7 @@ pub mod item_part_tests {
 
                 // LAN guest direct clear (`Set(None)`): clears output with NO XP, preserves
                 // `recipes_used`, and fires no `item_smelted`.
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.server
                     .lan
                     .as_mut()
@@ -2985,7 +2985,7 @@ pub mod item_part_tests {
                     Some(("minecraft:stick", 2))
                 );
                 assert!(
-                    game.orbs.is_empty(),
+                    game.entities.orbs.is_empty(),
                     "LAN guest direct clear Set(None) must spawn no XP orbs"
                 );
                 let BlockEntity::Furnace(f) = game.world.block_entities.get(&pos).unwrap() else {
@@ -3003,7 +3003,7 @@ pub mod item_part_tests {
 
                 // LAN guest direct count reduction (`Set(Some(iron_ingot x2))`): NO XP, NO hooks.
                 seed_furnace(game);
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.server
                     .lan
                     .as_mut()
@@ -3026,7 +3026,7 @@ pub mod item_part_tests {
                         .map(|s| (&*s.item, s.count)),
                     Some(("minecraft:iron_ingot", 2))
                 );
-                assert!(game.orbs.is_empty());
+                assert!(game.entities.orbs.is_empty());
                 let BlockEntity::Furnace(f) = game.world.block_entities.get(&pos).unwrap() else {
                     panic!("expected furnace");
                 };
@@ -3035,7 +3035,7 @@ pub mod item_part_tests {
 
                 // LAN guest explicit full take (`Take(4)`).
                 seed_furnace(game);
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.server
                     .lan
                     .as_mut()
@@ -3065,7 +3065,7 @@ pub mod item_part_tests {
                     Some(("minecraft:stick", 5))
                 );
                 assert_eq!(
-                    game.orbs.iter().map(|o| o.points()).sum::<u32>(),
+                    game.entities.orbs.iter().map(|o| o.points()).sum::<u32>(),
                     7,
                     "LAN guest furnace explicit Take(4) must spawn smelting XP orbs"
                 );
@@ -3081,7 +3081,7 @@ pub mod item_part_tests {
 
                 // LAN guest explicit partial take (`Take(2)`).
                 seed_furnace(game);
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.server
                     .lan
                     .as_mut()
@@ -3105,7 +3105,7 @@ pub mod item_part_tests {
                     Some(("minecraft:iron_ingot", 2))
                 );
                 assert_eq!(
-                    game.orbs.iter().map(|o| o.points()).sum::<u32>(),
+                    game.entities.orbs.iter().map(|o| o.points()).sum::<u32>(),
                     7,
                     "LAN guest furnace explicit Take(2) must spawn smelting XP orbs"
                 );
@@ -3122,7 +3122,7 @@ pub mod item_part_tests {
                 // Outer transaction abort on LAN guest furnace `Take(4)` restores furnace output
                 // and recipes_used without popping XP orbs or firing post-commit furnace hooks.
                 seed_furnace(game);
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.server
                     .lan
                     .as_mut()
@@ -3141,7 +3141,7 @@ pub mod item_part_tests {
                 game.storage_scope(|game, _| {
                     game.lan_guest_packet(12, click_output);
                     assert!(game.world.block_entities.get(&pos).unwrap().slots()[2].is_none());
-                    assert!(game.orbs.is_empty(), "XP orb award waits for root commit");
+                    assert!(game.entities.orbs.is_empty(), "XP orb award waits for root commit");
                     ((), false)
                 });
                 assert_eq!(
@@ -3154,7 +3154,7 @@ pub mod item_part_tests {
                     panic!("expected furnace");
                 };
                 assert_eq!(f.recipes_used.get(recipe), Some(&10));
-                assert!(game.orbs.is_empty());
+                assert!(game.entities.orbs.is_empty());
                 assert!(smelted_events().is_empty());
             });
         });

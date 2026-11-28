@@ -56,7 +56,7 @@ fn default_drop_rng_continues_identically_with_table_sequence_or_level_fallback(
                 assert!(b.destroy_block(level, ticks, BlockPos::new(4, 200, 4), true));
             });
             game.server_process_level_events().unwrap();
-            assert_eq!(game.dropped.len(), 1);
+            assert_eq!(game.entities.dropped.len(), 1);
             let pool = game.server.rand_sequences.to_nbt();
             let sequence_words = match pool
                 .get("sequences")
@@ -74,7 +74,7 @@ fn default_drop_rng_continues_identically_with_table_sequence_or_level_fallback(
             let mut random = game.world.random.clone();
             let continuation: Vec<i64> = (0..4).map(|_| random.next_long()).collect();
             let drops: Vec<_> = game
-                .dropped
+                .entities.dropped
                 .iter()
                 .map(|d| (d.stack.item.to_string(), d.stack.count))
                 .collect();

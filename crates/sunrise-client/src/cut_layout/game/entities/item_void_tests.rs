@@ -35,7 +35,7 @@ fn items_fall_to_each_dimensions_own_void_floor() {
         game.dim = dim;
         game.world.shape = dim.shape();
         for (y, survives) in [(floor + 0.5, true), (floor - 0.5, false)] {
-            game.dropped.clear();
+            game.entities.dropped.clear();
             game.spawn_item(
                 ItemStack::new("minecraft:stone", 1),
                 [8.5, y, 8.5],
@@ -45,7 +45,7 @@ fn items_fall_to_each_dimensions_own_void_floor() {
             game.server.ticked_entities_through = u32::MAX;
             game.tick_items();
             assert_eq!(
-                !game.dropped.is_empty(),
+                !game.entities.dropped.is_empty(),
                 survives,
                 "{dim:?}: an item at y {y}, against the floor {floor}"
             );

@@ -47,7 +47,7 @@ mod tests {
         held.filter(|s| &*s.item == item).map(|s| s.count).sum()
     }
     fn popped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) -> bool {
-        game.dropped.iter().any(|e| &*e.stack.item == item)
+        game.entities.dropped.iter().any(|e| &*e.stack.item == item)
     }
 
     /// Stone broken with a diamond pickaxe drops cobblestone, wears the
@@ -95,7 +95,7 @@ mod tests {
                 popped(game, "minecraft:iron_block"),
                 "selected pickaxe harvests"
             );
-            game.dropped.clear();
+            game.entities.dropped.clear();
             game.common.inventory[game.common.selected] = None;
             game.offhand = Some(pickaxe.clone());
             game.hand = sunrise_sim::first_person_sim::Hand::Off;
@@ -144,7 +144,7 @@ mod tests {
             );
             assert!(popped(game, "minecraft:iron_door"));
 
-            game.dropped.clear();
+            game.entities.dropped.clear();
             game.common.inventory[game.common.selected] = None;
             game.offhand = Some(pickaxe);
             game.hand = sunrise_sim::first_person_sim::Hand::Off;
@@ -186,7 +186,7 @@ mod tests {
             place(game, ore, "minecraft:diamond_ore");
             assert!(game.player_destroy_block(player, ore, true));
             assert_eq!(carried(game, "minecraft:diamond"), 1);
-            assert!(!game.orbs.is_empty(), "the ore's experience");
+            assert!(!game.entities.orbs.is_empty(), "the ore's experience");
         });
     }
 
@@ -222,7 +222,7 @@ mod tests {
                 Some(ItemStack::new("minecraft:diamond_sword", 1));
             assert!(!game.player_destroy_block(player, stone, false));
             assert_eq!(block(game, stone), "minecraft:stone");
-            assert!(game.dropped.is_empty());
+            assert!(game.entities.dropped.is_empty());
         });
     }
 
@@ -366,7 +366,7 @@ mod tests {
                     (0..3).all(|i| (at[i] - (f64::from(origin[i]) + 0.5)).abs() <= by)
                 };
                 let mut stacks: Vec<(String, u32)> = Vec::new();
-                for item in game.dropped.iter() {
+                for item in game.entities.dropped.iter() {
                     let at = [item.position.x, item.position.y, item.position.z];
                     assert!(near(at, 0.5), "every drop pops at the origin: {at:?}");
                     stacks.push((item.stack.item.to_string(), item.stack.count));
@@ -381,12 +381,12 @@ mod tests {
                     ]
                 );
                 // Each diamond ore gives 3 to 7 points, all of them awarded at the origin.
-                let points: u32 = game.orbs.iter().map(|o| o.points()).sum();
+                let points: u32 = game.entities.orbs.iter().map(|o| o.points()).sum();
                 assert!(
                     (3 * ores as u32..=7 * ores as u32).contains(&points),
                     "{points}"
                 );
-                assert!(game.orbs.iter().all(|o| {
+                assert!(game.entities.orbs.iter().all(|o| {
                     let p = o.position;
                     near([p.x, p.y, p.z], 0.01)
                 }));
@@ -447,7 +447,7 @@ mod tests {
                 assert_eq!(game.held().unwrap().damage, 10);
                 assert_eq!(carried(game, "minecraft:cobblestone"), 1);
                 assert_eq!(
-                    game.dropped
+                    game.entities.dropped
                         .iter()
                         .filter(|item| &*item.stack.item == "minecraft:cobblestone")
                         .map(|item| item.stack.count)

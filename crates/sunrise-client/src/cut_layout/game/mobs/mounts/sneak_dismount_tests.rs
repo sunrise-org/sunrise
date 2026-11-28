@@ -52,7 +52,7 @@ pub(crate) fn with_horse(
         game.options.dedicated = Some(Vec::new());
         assert!(game.run_command("summon horse 8.5 100 8.5 {NoAI:1b,Silent:1b,Tame:1b}"));
         let horse = game
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| &*m.kind.id == "minecraft:horse")
             .unwrap()
@@ -96,7 +96,7 @@ fn a_dead_mount_never_receives_input_even_when_dismount_is_cancelled() {
     with_horse(|game, horse, keep, leaves| {
         game.riding = Some(horse);
         let i = game.mount_index().unwrap();
-        game.mobs[i].health = 0.0;
+        game.entities.mobs[i].health = 0.0;
         for cancelled in [true, false] {
             keep.store(cancelled, Ordering::SeqCst);
             assert!(game.tick_mount_riding(Keys {

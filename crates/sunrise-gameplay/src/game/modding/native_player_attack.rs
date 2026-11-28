@@ -193,7 +193,7 @@ pub(in crate::game) mod tests {
             .unwrap()
             .clone();
         let [x, y, z] = at;
-        game.common.mobs.push(sunrise_sim::mobs::Mob::new(
+        game.common.entities.mobs.push(sunrise_sim::mobs::Mob::new(
             id,
             kind,
             sunrise_core::geometry::Vec3::new(x, y, z),
@@ -203,7 +203,7 @@ pub(in crate::game) mod tests {
     }
 
     fn mob<'a>(game: &'a ServerGame<'_>, id: u32) -> &'a sunrise_sim::mobs::Mob {
-        game.common.mobs.iter().find(|m| m.id == id).unwrap()
+        game.common.entities.mobs.iter().find(|m| m.id == id).unwrap()
     }
 
     /// A connected player's `attack` on a zombie, holding a Knockback II, Fire Aspect diamond

@@ -417,7 +417,7 @@ mod tests {
             // And the template's own entity is in the level, where vanilla's
             // placement of a relative (0.5, 0, 0.5) puts it.
             assert!(
-                game.mobs.iter().any(|mob| mob.species() == Species::Pig),
+                game.entities.mobs.iter().any(|mob| mob.species() == Species::Pig),
                 "the pig the template brought was spawned"
             );
         });

@@ -40,7 +40,7 @@ impl crate::game::ServerGame<'_> {
         }
         let Some(kind) = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == id)
             .map(sunrise_gameplay_common::game::native_hooks::mob_kind)

@@ -19,7 +19,7 @@ fn credited_push(hit: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) 
         credit_pig(game);
         sword_evoker(game);
         hit(game);
-        pushed = game.mobs[0].velocity;
+        pushed = game.entities.mobs[0].velocity;
     });
     assert_sword_credit_reached_the_push(&heard, pushed);
 }

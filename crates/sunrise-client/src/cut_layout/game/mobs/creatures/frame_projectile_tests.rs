@@ -73,7 +73,7 @@ fn shoot(game: &mut sunrise_gameplay::game::ServerGame<'_>, z: f64) {
 }
 
 fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) -> usize {
-    game.dropped
+    game.entities.dropped
         .iter()
         .filter(|d| &*d.stack.item == item)
         .count()
@@ -88,14 +88,14 @@ fn an_arrow_knocks_the_item_out_then_breaks_the_frame() {
     assert!(game.run_command(
         "summon minecraft:item_frame 3.5 64.5 6.5 {Facing:4b,Item:{id:\"minecraft:diamond\",count:1}}"
     ));
-    assert_eq!(game.item_frames.len(), 1);
+    assert_eq!(game.entities.item_frames.len(), 1);
     shoot(&mut game, 6.5);
-    assert_eq!(game.item_frames.len(), 1, "the first hit leaves the frame");
-    assert!(game.item_frames[0].item.is_none(), "the item came out");
+    assert_eq!(game.entities.item_frames.len(), 1, "the first hit leaves the frame");
+    assert!(game.entities.item_frames[0].item.is_none(), "the item came out");
     assert_eq!(dropped(&game, "minecraft:diamond"), 1);
     // The empty frame breaks and drops itself.
     shoot(&mut game, 6.5);
-    assert!(game.item_frames.is_empty());
+    assert!(game.entities.item_frames.is_empty());
     assert_eq!(dropped(&game, "minecraft:item_frame"), 1);
 }
 
@@ -108,17 +108,16 @@ fn a_fixed_frame_refuses_the_arrow() {
         "summon minecraft:item_frame 3.5 64.5 9.5 {Facing:4b,Fixed:1b,Item:{id:\"minecraft:diamond\",count:1}}"
     ));
     shoot(&mut game, 9.5);
-    assert_eq!(game.item_frames.len(), 1);
+    assert_eq!(game.entities.item_frames.len(), 1);
     assert!(
-        game.item_frames[0].item.is_some(),
+        game.entities.item_frames[0].item.is_some(),
         "a fixed frame keeps its item"
     );
     assert_eq!(dropped(&game, "minecraft:diamond"), 0);
     // The frame took the arrow's hit and refused it, so the arrow turned back
     // (`AbstractArrow.onHitEntity`'s deflection) instead of reaching the wall.
     assert!(
-        game.creatures
-            .projectiles
+        game.entities.projectiles
             .iter()
             .all(|p| p.position.x < 3.9),
         "the arrow went through the frame"

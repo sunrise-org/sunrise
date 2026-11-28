@@ -17,38 +17,38 @@ impl ClientGame<'_> {
             return Some((lo, hi, at(i.position)));
         }
         let id = u32::try_from(id).ok()?;
-        if let Some(b) = self.common.boats.iter().find(|b| b.id == id) {
+        if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id) {
             let (lo, hi) = corners(b.bounds());
             return Some((lo, hi, at(b.position)));
         }
-        if let Some(c) = self.common.carts.iter().find(|c| c.id == id) {
+        if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == id) {
             let (lo, hi) = corners(c.bounds());
             return Some((lo, hi, at(c.position)));
         }
-        if let Some(a) = self.common.armor_stands.iter().find(|a| a.id == id) {
+        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
             let (lo, hi) = corners(a.bounds());
             return Some((lo, hi, at(a.position)));
         }
-        if let Some(c) = self.common.cushions.iter().find(|c| c.id == id) {
+        if let Some(c) = self.common.entities.cushions.iter().find(|c| c.id == id) {
             let (lo, hi) = corners(Aabb::new(
                 Vec3::new(c.position.x - 0.5, c.position.y, c.position.z - 0.5),
                 Vec3::new(c.position.x + 0.5, c.position.y + 0.25, c.position.z + 0.5),
             ));
             return Some((lo, hi, at(c.position)));
         }
-        if let Some(f) = self.common.item_frames.iter().find(|f| f.id == id) {
+        if let Some(f) = self.common.entities.item_frames.iter().find(|f| f.id == id) {
             let (lo, hi) = f.bounds();
             return Some((lo, hi, centre(f.pos)));
         }
-        if let Some(p) = self.common.paintings.iter().find(|p| p.id == id) {
+        if let Some(p) = self.common.entities.paintings.iter().find(|p| p.id == id) {
             let (lo, hi) = p.bounds();
             return Some((lo, hi, centre(p.pos)));
         }
-        if let Some(t) = self.common.tnts.iter().find(|t| t.id == id) {
+        if let Some(t) = self.common.entities.tnts.iter().find(|t| t.id == id) {
             let (lo, hi) = corners(t.bounds());
             return Some((lo, hi, at(t.position)));
         }
-        if let Some(f) = self.common.falling.iter().find(|f| f.id == id) {
+        if let Some(f) = self.common.entities.falling.iter().find(|f| f.id == id) {
             let (lo, hi) = corners(f.bounds());
             return Some((lo, hi, at(f.position)));
         }
@@ -61,7 +61,7 @@ impl ClientGame<'_> {
         {
             return None;
         }
-        let row = self.common.resident_entities.general.row(id)?;
+        let row = self.common.entities.general.row(id)?;
         let (lo, hi) = corners(sunrise_gameplay_common::game::entity::Entity::bounds(row));
         Some((lo, hi, at(row.position)))
     }

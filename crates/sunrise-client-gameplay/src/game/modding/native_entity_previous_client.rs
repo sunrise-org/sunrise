@@ -11,24 +11,24 @@ use sunrise_sim::join_seq::JoinSeq;
 impl ClientGame<'_> {
     fn native_client_join(&self, target: Target) -> Option<JoinSeq> {
         match target {
-            Target::Mob(id) => list_join_by_id(&self.common.mobs, id),
-            Target::Item(id) => list_join_by_id(&self.common.dropped, id),
-            Target::Orb(id) => list_join_by_id(&self.common.orbs, id),
-            Target::Projectile(id) => list_join_by_id(&self.common.creatures.projectiles, id),
-            Target::Stand(id) => list_join_by_id(&self.common.armor_stands, id),
-            Target::Boat(id) => list_join_by_id(&self.common.boats, id),
-            Target::Cart(id) => list_join_by_id(&self.common.carts, id),
-            Target::Tnt(id) => list_join_by_id(&self.common.tnts, id),
-            Target::Falling(id) => list_join_by_id(&self.common.falling, id),
-            Target::Rocket(id) => list_join_by_id(&self.common.rockets, id),
-            Target::Trident(id) => list_join_by_id(&self.common.tridents, id),
+            Target::Mob(id) => list_join_by_id(&self.common.entities.mobs, id),
+            Target::Item(id) => list_join_by_id(&self.common.entities.dropped, id),
+            Target::Orb(id) => list_join_by_id(&self.common.entities.orbs, id),
+            Target::Projectile(id) => list_join_by_id(&self.common.entities.projectiles, id),
+            Target::Stand(id) => list_join_by_id(&self.common.entities.armor_stands, id),
+            Target::Boat(id) => list_join_by_id(&self.common.entities.boats, id),
+            Target::Cart(id) => list_join_by_id(&self.common.entities.carts, id),
+            Target::Tnt(id) => list_join_by_id(&self.common.entities.tnts, id),
+            Target::Falling(id) => list_join_by_id(&self.common.entities.falling, id),
+            Target::Rocket(id) => list_join_by_id(&self.common.entities.rockets, id),
+            Target::Trident(id) => list_join_by_id(&self.common.entities.tridents, id),
             Target::Crystal(id) => self
                 .common
-                .crystals
+                .entities.crystals
                 .iter()
                 .find(|crystal| crystal.id == id)
                 .map(|crystal| crystal.join),
-            Target::General(id) => list_join_by_id(&self.common.resident_entities.general.rows, id),
+            Target::General(id) => list_join_by_id(&self.common.entities.general.rows, id),
             _ => None,
         }
     }
@@ -54,7 +54,7 @@ impl ClientGame<'_> {
                 rotation: [self.client.rope_rot_old.0, self.client.rope_rot_old.1],
             }),
             Target::General(id) => join
-                .and_then(|join| list_old(&self.common.resident_entities.general.rows, join))
+                .and_then(|join| list_old(&self.common.entities.general.rows, join))
                 .or_else(|| {
                     // A client's copy of a row its server shows it.
                     let row = self

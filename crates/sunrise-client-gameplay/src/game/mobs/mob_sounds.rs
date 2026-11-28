@@ -16,7 +16,7 @@ impl ClientGame<'_> {
         let ridden = self
             .common
             .riding
-            .and_then(|id| self.common.mobs.iter().find(|m| m.id == id && !m.removed))
+            .and_then(|id| self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed))
             .map(|m| {
                 let species = m.species();
                 let sound = RiddenSound {
@@ -63,7 +63,7 @@ impl ClientGame<'_> {
         let mut mobs = Vec::new();
         let mut bee_indices = Vec::new();
 
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if m.removed {
                 continue;
             }
@@ -115,7 +115,7 @@ impl ClientGame<'_> {
     /// `ClientPacketListener.handleEntityEvent` 21 starts a fresh instance
     /// for every guardian attack event, even while an earlier one plays.
     pub(in crate::game::client_side) fn start_guardian_sound(&mut self, id: u32) {
-        let Some(m) = self.common.mobs.iter().find(|m| {
+        let Some(m) = self.common.entities.mobs.iter().find(|m| {
             m.id == id
                 && !m.removed
                 && matches!(m.species(), Species::Guardian | Species::ElderGuardian)
@@ -142,7 +142,7 @@ impl ClientGame<'_> {
     pub(in crate::game::client_side) fn start_sniffer_digging_sound(&mut self, id: u32) {
         let Some(m) = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == id && m.species() == Species::Sniffer)
         else {

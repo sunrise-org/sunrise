@@ -259,7 +259,7 @@ fn guest_tick_brackets_sleep_cooldowns_pickups_and_death() {
                 }
             );
             assert_eq!(observations.len(), 4);
-            assert_eq!(game.dropped.len(), 1);
+            assert_eq!(game.entities.dropped.len(), 1);
         })
     });
 }
@@ -300,7 +300,7 @@ pub(crate) fn tags_over_steve(mods: mod_api::Mods) -> Vec<String> {
             remote.level_players.insert(66, 789);
             remote.level_player_names.insert(66, "Steve".into());
             let kind = remote.player_type.as_ref().unwrap().clone();
-            game.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 66,
                 kind,
                 sunrise_core::geometry::Vec3::new(0.0, 64.0, 2.0),

@@ -310,7 +310,7 @@ impl ClientGame<'_> {
     ) {
         // The stands' models posed on the GPU path (`mobs::skin`), when it runs this frame.
         let skinning = self.skinning();
-        for a in self.common.armor_stands[run]
+        for a in self.common.entities.armor_stands[run]
             .iter()
             .filter(|a| !self.hides_as_camera(a.id))
         {
@@ -896,13 +896,13 @@ impl ClientGame<'_> {
             .iter()
             .map(|s| s.as_ref().map(EquipmentRead::resident))
             .zip(layers.into_iter().cycle())
-            .chain(self.common.mobs.iter().flat_map(|m| {
+            .chain(self.common.entities.mobs.iter().flat_map(|m| {
                 [Head, Chest, Legs, Feet]
                     .map(|slot| finalize::equipment_slot(m, slot))
                     .into_iter()
                     .zip(layers)
             }))
-            .chain(self.common.armor_stands.iter().flat_map(|a| {
+            .chain(self.common.entities.armor_stands.iter().flat_map(|a| {
                 [5usize, 4, 3, 2]
                     .map(|slot| a.equipment[slot].as_ref().map(EquipmentRead::resident))
                     .into_iter()

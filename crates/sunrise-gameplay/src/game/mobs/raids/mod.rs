@@ -301,7 +301,7 @@ impl crate::game::ServerGame<'_> {
     /// Every claimed village point of interest (job sites, beds, bells).
     pub(in crate::game::server_side) fn village_pois(&self) -> Vec<[i32; 3]> {
         let mut out: Vec<[i32; 3]> = Vec::new();
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if m.species() != Species::Villager || !m.alive() {
                 continue;
             }
@@ -592,7 +592,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn raid_glow(&mut self, id: i32) {
         let targets: Vec<u32> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| raider::state(m).is_some_and(|s| s.raid_id == Some(id)))
             .map(|m| m.id)
@@ -624,7 +624,7 @@ impl crate::game::ServerGame<'_> {
     }
     /// A raid's members (`groupRaiderMap`): the living raiders it counts.
     pub fn raid_members(&self, id: i32) -> impl Iterator<Item = &Mob> {
-        members(&self.common.mobs, id)
+        members(&self.common.entities.mobs, id)
     }
     /// `getHealthOfLivingRaiders`, leaving out one raider.
     pub(in crate::game::server_side) fn remaining_raider_health(
@@ -666,7 +666,7 @@ impl crate::game::ServerGame<'_> {
     /// The members of every raid, for `Raids.tick`.
     pub(in crate::game::server_side) fn raider_infos(&self) -> HashMap<i32, Vec<RaiderInfo>> {
         let mut out: HashMap<i32, Vec<RaiderInfo>> = HashMap::new();
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if !m.alive() || m.removed {
                 continue;
             }
@@ -695,7 +695,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn register_loaded_raiders(&mut self) {
         let pending: Vec<(u32, i32, i32, f32, bool)> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| m.alive() && !m.removed)
             .filter_map(|m| {
@@ -717,7 +717,7 @@ impl crate::game::ServerGame<'_> {
                 }
                 None => false,
             };
-            if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == mob) {
+            if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == mob) {
                 let s = raider::state_mut(m);
                 s.registered = true;
                 if !known {
@@ -798,14 +798,14 @@ impl crate::game::ServerGame<'_> {
             Action::Spawn { pos, wave, spawns } => self.spawn_wave(id, pos, wave, &spawns),
             Action::Horn { pos, seed } => self.raid_horn(id, pos, seed),
             Action::Remove { id: mob } => {
-                if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == mob) {
+                if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == mob) {
                     let s = raider::state_mut(m);
                     s.raid_id = None;
                     s.active_raid = false;
                 }
             }
             Action::SetOutside { id: mob, ticks } => {
-                if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == mob) {
+                if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == mob) {
                     raider::state_mut(m).ticks_outside_raid = ticks;
                 }
             }
@@ -955,7 +955,7 @@ impl crate::game::ServerGame<'_> {
             f64::from(pos[2]) + 0.5,
         ];
         let id = self.spawn_event_mob(kind.entity(), at, leader, raider::Reason::Event)?;
-        let m = self.common.mobs.iter_mut().find(|m| m.id == id)?;
+        let m = self.common.entities.mobs.iter_mut().find(|m| m.id == id)?;
         let s = raider::state_mut(m);
         s.raid_id = Some(raid_id);
         s.wave = wave;
@@ -1002,8 +1002,8 @@ impl crate::game::ServerGame<'_> {
             return None;
         }
         let id = mob.id;
-        self.common.mobs.push(mob);
-        self.admit_new_mobs(self.common.mobs.len() - 1);
+        self.common.entities.mobs.push(mob);
+        self.admit_new_mobs(self.common.entities.mobs.len() - 1);
         Some(id)
     }
 
@@ -1017,7 +1017,7 @@ impl crate::game::ServerGame<'_> {
         let now = self.common.world.game_time;
         let golems: HashSet<u32> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| m.species() == Species::IronGolem)
             .map(|m| m.id)
@@ -1026,7 +1026,7 @@ impl crate::game::ServerGame<'_> {
         let mut leaders: HashSet<(i32, i32)> = HashSet::new();
         let mut ridden: HashSet<u32> = HashSet::new();
         let mut positions: Vec<(u32, Vec3, bool)> = Vec::new();
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             let Some(s) = raider::state(m) else { continue };
             if !m.alive() {
                 continue;
@@ -1041,7 +1041,7 @@ impl crate::game::ServerGame<'_> {
         }
         let banners: Vec<(usize, u32, Vec3)> = self
             .common
-            .dropped
+            .entities.dropped
             .iter()
             .enumerate()
             .filter(|(_, e)| {
@@ -1057,7 +1057,7 @@ impl crate::game::ServerGame<'_> {
         let mut joins: Vec<(u32, i32, f32)> = Vec::new();
         let mut new_leaders: Vec<(i32, i32, u32)> = Vec::new();
         let homes = self.raid_homes();
-        for m in &mut self.common.mobs {
+        for m in &mut self.common.entities.mobs {
             let species = m.species();
             if !raider::is_raider(species) {
                 continue;
@@ -1176,7 +1176,7 @@ impl crate::game::ServerGame<'_> {
             }
         }
         for (i, mob) in collectors {
-            let item = self.common.dropped[i].clone();
+            let item = self.common.entities.dropped[i].clone();
             self.server_mob_take_item(&item, mob);
         }
         taken.sort_unstable();
@@ -1196,7 +1196,7 @@ impl crate::game::ServerGame<'_> {
                     && (p.x - at.x).abs() <= 16.0
                     && (p.y - at.y).abs() <= 16.0
                     && (p.z - at.z).abs() <= 16.0
-                    && let Some(m) = self.common.mobs.iter().find(|m| m.id == *mid)
+                    && let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == *mid)
                     && raider::state(m).is_some_and(|s| s.can_join_raid && s.raid_id != Some(id))
                     && m.alive()
                     && m.ai.no_action_time <= 2400
@@ -1223,7 +1223,7 @@ impl crate::game::ServerGame<'_> {
         else {
             return;
         };
-        let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == mob) else {
+        let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == mob) else {
             return;
         };
         let s = raider::state_mut(m);
@@ -1346,7 +1346,7 @@ impl crate::game::ServerGame<'_> {
             r.remove_from_raid(m.health, false, living);
             self.server.raiding.0.level.raids.dirty = true;
         }
-        if let Some(dead) = self.common.mobs.iter_mut().find(|x| x.id == m.id) {
+        if let Some(dead) = self.common.entities.mobs.iter_mut().find(|x| x.id == m.id) {
             raider::state_mut(dead).raid_id = None;
         }
     }
@@ -1360,7 +1360,7 @@ impl crate::game::ServerGame<'_> {
     ) {
         let raids = &self.server.raiding.0.level.raids;
         let mut ongoing = Vec::new();
-        for m in &mut self.common.mobs {
+        for m in &mut self.common.entities.mobs {
             if m.species() != Species::Villager {
                 continue;
             }
@@ -1412,7 +1412,7 @@ impl crate::game::ServerGame<'_> {
     /// Entity event 42 for villager `id`: the guests get the byte, and this
     /// game draws `AbstractVillager.addParticlesAroundSelf(SPLASH)` itself.
     pub(in crate::game::server_side) fn mob_raid_splash(&mut self, id: u32) {
-        let Some(m) = self.common.mobs.iter().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
             return;
         };
         let at = [m.position.x, m.position.y, m.position.z];
@@ -1479,7 +1479,7 @@ impl crate::game::ServerGame<'_> {
             false,
             &mut random_source::entity(),
         );
-        self.common.rockets.push(rocket);
+        self.common.entities.rockets.push(rocket);
     }
     /// `BehaviorUtils.throwItem`: a hero's gift tossed toward the player.
     pub(in crate::game::server_side) fn throw_gift(
@@ -1506,7 +1506,7 @@ impl crate::game::ServerGame<'_> {
     pub fn village_centers(&self) -> HashSet<(i32, i32, i32)> {
         let mut out = HashSet::new();
         let world = self.mob_world_base(&[]);
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if m.species() != Species::Villager || !m.alive() {
                 continue;
             }
@@ -1754,7 +1754,7 @@ impl crate::game::ServerGame<'_> {
             };
             let m = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == id && m.species() == Species::Villager)
                 .ok_or("raid observation: actor is not a villager")?;

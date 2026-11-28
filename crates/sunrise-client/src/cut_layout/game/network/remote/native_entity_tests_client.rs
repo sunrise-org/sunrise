@@ -157,7 +157,7 @@ fn a_client_reads_the_entities_and_menu_the_server_shows_it() {
     // player is exposed as a LivingRef.
     assert_eq!(game.living(stand), None);
     let head = &game
-        .armor_stands
+        .entities.armor_stands
         .iter()
         .find(|a| a.id == 20)
         .unwrap()
@@ -275,7 +275,7 @@ fn a_client_reads_the_entities_and_menu_the_server_shows_it() {
             .get("minecraft:entity.enderman.stare"),
         Some(&1)
     );
-    game.mobs.iter_mut().find(|mob| mob.id == 31).unwrap().age = 400;
+    game.entities.mobs.iter_mut().find(|mob| mob.id == 31).unwrap().age = 400;
     game.handle_packet(metadata(31, vec![creepy(false), stared(false)]))
         .unwrap();
     assert_eq!(

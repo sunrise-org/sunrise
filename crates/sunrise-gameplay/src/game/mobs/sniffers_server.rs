@@ -12,7 +12,7 @@ impl ServerGame<'_> {
             f64::from(pos[2]) + 0.5,
         ];
         if let Some(id) = self.spawn_mob_raw("minecraft:sniffer", at, true)
-            && let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id)
+            && let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id)
         {
             m.extra.age = sniffer::BABY_START_AGE;
             let yaw = self.common.world.random.next_float() * 360.0 - 180.0;
@@ -40,8 +40,8 @@ impl ServerGame<'_> {
         if players.is_empty() {
             return;
         }
-        for i in 0..self.common.mobs.len() {
-            let m = &self.common.mobs[i];
+        for i in 0..self.common.entities.mobs.len() {
+            let m = &self.common.entities.mobs[i];
             if m.species() != Species::Sniffer
                 || !m.alive()
                 || !players
@@ -64,7 +64,7 @@ impl ServerGame<'_> {
             }
             // GameEvent.ENTITY_ACTION for the whole dig, outside the dust window.
             if age.is_multiple_of(10) {
-                let head = sniffer::head_block(&self.common.mobs[i]);
+                let head = sniffer::head_block(&self.common.entities.mobs[i]);
                 self.post_block_game_event(
                     "minecraft:entity_action",
                     head,

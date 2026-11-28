@@ -71,7 +71,7 @@ fn game<'a>(
 fn index(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> usize {
     match game.target_with_uuid(sunrise_sim::save::uuid_from_text(SUPPLIED).unwrap()) {
         Some(sunrise_gameplay_common::game::commands_common::Target::Mob(id)) => {
-            game.mobs.iter().position(|m| m.id == id).unwrap()
+            game.entities.mobs.iter().position(|m| m.id == id).unwrap()
         }
         other => panic!("{other:?}"),
     }
@@ -92,7 +92,7 @@ fn an_allay_keeps_its_item_pickup_cooldown_memory() {
     let mut game = game(&mut resources);
     let i = index(&mut game);
     // The supplied memory is loaded into the pickup cooldown and saved back.
-    assert_eq!(allay::pickup_cooldown(&game.mobs[i]), Some(30), "loaded");
+    assert_eq!(allay::pickup_cooldown(&game.entities.mobs[i]), Some(30), "loaded");
     assert_eq!(
         saved(&mut game, i),
         Some(Tag::compound([("value", Tag::Int(30))])),
@@ -130,9 +130,9 @@ fn pickup_cooldown_saves_the_full_integer_value() {
         "item replace entity {SUPPLIED} weapon.mainhand with minecraft:diamond 1"
     )));
     for ticks in [i32::MIN, -1, 0, 1, i32::MAX] {
-        allay::set_pickup_cooldown(&mut game.mobs[i], Some(ticks));
+        allay::set_pickup_cooldown(&mut game.entities.mobs[i], Some(ticks));
         assert!(
-            !game.mobs[i].can_pick_up_loot(),
+            !game.entities.mobs[i].can_pick_up_loot(),
             "memory present at {ticks}"
         );
         assert_eq!(
@@ -144,7 +144,7 @@ fn pickup_cooldown_saves_the_full_integer_value() {
         let loaded = sunrise_sim::entity_nbt::mob_from_nbt(
             &tag,
             game.res.mob_types(),
-            game.mobs[i].id,
+            game.entities.mobs[i].id,
             None,
         )
         .unwrap();
@@ -154,8 +154,8 @@ fn pickup_cooldown_saves_the_full_integer_value() {
             "loaded {ticks}"
         );
     }
-    allay::set_pickup_cooldown(&mut game.mobs[i], None);
-    assert!(game.mobs[i].can_pick_up_loot(), "memory erased");
+    allay::set_pickup_cooldown(&mut game.entities.mobs[i], None);
+    assert!(game.entities.mobs[i].can_pick_up_loot(), "memory erased");
 }
 
 // Added controls (after the frozen baseline above).
@@ -184,7 +184,7 @@ fn the_saved_pickup_cooldown_follows_the_model() {
         .target_with_uuid([24726, 0, 0, tail as i32])
     {
         Some(sunrise_gameplay_common::game::commands_common::Target::Mob(id)) => {
-            game.mobs.iter().position(|m| m.id == id).unwrap()
+            game.entities.mobs.iter().position(|m| m.id == id).unwrap()
         }
         other => panic!("{other:?}"),
     };
@@ -193,10 +193,10 @@ fn the_saved_pickup_cooldown_follows_the_model() {
     assert_eq!(saved(&mut game, plain), None, "no raw memory");
     // A loaded memory the model has ended: no key (the raw copy is not echoed).
     let supplied = index(&mut game);
-    allay::set_pickup_cooldown(&mut game.mobs[supplied], None);
+    allay::set_pickup_cooldown(&mut game.entities.mobs[supplied], None);
     assert_eq!(saved(&mut game, supplied), None, "stale raw memory");
     // A model mutation, as a throw does (`allays.rs`): saved with its value.
-    allay::set_pickup_cooldown(&mut game.mobs[plain], Some(60));
+    allay::set_pickup_cooldown(&mut game.entities.mobs[plain], Some(60));
     let tag = saved(&mut game, plain);
     assert_eq!(
         tag,

@@ -107,7 +107,7 @@ impl crate::game::ServerGame<'_> {
         if !mod_api::__private::listened(mod_api::HookId::AnimalTame) {
             return false;
         }
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         let (entity, kind) = (m.id, mob_kind(m));
         let mut cancel = false;
         self.native_animal_tame(tamer, tamer_entity_id, entity, &kind, &mut cancel);
@@ -149,9 +149,9 @@ impl crate::game::ServerGame<'_> {
         } else if let Some(index) = self
             .common
             .mob_index
-            .find_ref(&self.common.mobs, attacker as u32)
+            .find_ref(&self.common.entities.mobs, attacker as u32)
         {
-            let mob = &self.common.mobs[index];
+            let mob = &self.common.entities.mobs[index];
             [main(mob.extra.main_hand_stack()), None]
         } else if let Some(guest) = self
             .server
@@ -212,15 +212,15 @@ impl crate::game::ServerGame<'_> {
         // Check removal before borrowing the victim and the lent attacker.
         let dragon_victim = self
             .common
-            .dragon
+            .entities.dragon
             .as_ref()
             .filter(|d| d.id as i32 == entity)
             .is_some_and(|d| !self.target_removed(&crate::game::commands::Target::Dragon(d.id)));
-        let victim_mob = self.common.mobs.iter().position(|m| m.id as i32 == entity);
+        let victim_mob = self.common.entities.mobs.iter().position(|m| m.id as i32 == entity);
         // The Post record exists only for a Post subscriber, and names an attacker only if the hit
         // lent one: it carries the setup's decision.
         let lend_mob = original_lend
-            .and_then(|id| self.common.mobs.iter().position(|m| m.id as i32 == id))
+            .and_then(|id| self.common.entities.mobs.iter().position(|m| m.id as i32 == id))
             .filter(|&index| Some(index) != victim_mob);
         // A parked guest the hit lent, lent again if its reads still answer from its record.
         let parked = original_lend
@@ -230,13 +230,13 @@ impl crate::game::ServerGame<'_> {
             (Some(v), Some(l)) => {
                 let [v, l] = self
                     .common
-                    .mobs
+                    .entities.mobs
                     .get_disjoint_mut([v, l])
                     .expect("two different mobs");
                 (Some(&*v), Some(l))
             }
-            (None, Some(l)) => (None, Some(&mut self.common.mobs[l])),
-            (Some(v), None) => (Some(&self.common.mobs[v]), None),
+            (None, Some(l)) => (None, Some(&mut self.common.entities.mobs[l])),
+            (Some(v), None) => (Some(&self.common.entities.mobs[v]), None),
             (None, None) => (None, None),
         };
         let player_victim = self
@@ -274,7 +274,7 @@ impl crate::game::ServerGame<'_> {
             };
             let victim = victim_mob.map(LivingBody::Mob).or_else(|| {
                 dragon_victim
-                    .then(|| self.common.dragon.as_ref())
+                    .then(|| self.common.entities.dragon.as_ref())
                     .flatten()
                     .map(sunrise_gameplay_common::game::native_living_body::dragon_body)
             });
@@ -310,7 +310,7 @@ impl crate::game::ServerGame<'_> {
         let against = self.common.world.block(pos[0], pos[1] - 1, pos[2]);
         let kind = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == mob)
             .map(|m| m.kind.id.clone());
@@ -493,7 +493,7 @@ impl crate::game::ServerGame<'_> {
     pub fn admit_new_mobs(&mut self, from: usize) {
         // Preserve saved or constructed UUIDs. Insertion paths without an
         // identity still need one before their join listeners run.
-        for mob in self.common.mobs.iter().skip(from) {
+        for mob in self.common.entities.mobs.iter().skip(from) {
             self.common
                 .persist
                 .uuids
@@ -746,7 +746,7 @@ impl crate::game::ServerGame<'_> {
         if !mod_api::__private::item_listens(mod_api::HookId::HurtEnemy, &stack.item) {
             return;
         }
-        let mob = &self.common.mobs[index];
+        let mob = &self.common.entities.mobs[index];
         let entity = mob.id;
         // MobTypes retains the canonical registry id for vanilla and content types alike.
         let kind = mob.kind.clone();
@@ -795,7 +795,7 @@ impl crate::game::ServerGame<'_> {
     }
     /// `entity_tame` for the pet at `index`, just tamed by its owner.
     pub(in crate::game) fn pet_tamed(&mut self, index: usize) {
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         let (entity, kind) = (m.id, mob_kind(m));
         let owner = m.extra.owner.map(sunrise_sim::lan::playerdata::ints_uuid);
         self.native_entity_tame(entity, &kind, owner);

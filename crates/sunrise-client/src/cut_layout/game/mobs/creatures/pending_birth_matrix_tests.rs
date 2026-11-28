@@ -75,7 +75,7 @@ pub(crate) fn matrix(mods: mod_api::Mods) {
             // Veto (mode 1): no child, both parents reset to age 6000 and in_love 0.
             let (parent, partner, child) = breed(game, 1);
             assert_eq!(child, None);
-            assert!(game.common.mobs.iter().all(|m| m.extra.age >= 0));
+            assert!(game.common.entities.mobs.iter().all(|m| m.extra.age >= 0));
             assert_eq!(find(game, parent).extra.age, 6000);
             assert_eq!(find(game, parent).extra.in_love, 0);
             assert_eq!(find(game, partner).extra.age, 6000);
@@ -83,7 +83,7 @@ pub(crate) fn matrix(mods: mod_api::Mods) {
             // Uncanceled empty slot (mode 3): no child, parents are NOT cooled down.
             let (parent, partner, child) = breed(game, 3);
             assert_eq!(child, None);
-            assert!(game.common.mobs.iter().all(|m| m.extra.age >= 0));
+            assert!(game.common.entities.mobs.iter().all(|m| m.extra.age >= 0));
             assert_eq!(find(game, parent).extra.age, 0);
             assert_eq!(find(game, parent).extra.in_love, 600);
             assert_eq!(find(game, partner).extra.age, 0);
@@ -103,7 +103,7 @@ pub(crate) fn matrix(mods: mod_api::Mods) {
                     .iter()
                     .any(|t| t == "replaced_pig")
             );
-            assert_eq!(game.common.mobs.len(), 3);
+            assert_eq!(game.common.entities.mobs.len(), 3);
             // A grown replacement is accepted: `Animal.spawnChildFromBreeding` calls
             // `setBaby(true)` on whatever child the event leaves.
             let (_, _, child) = breed(game, 4);

@@ -250,14 +250,14 @@ fn tnt_frame(
     id: u32,
     fuse: i32,
 ) -> Vec<Vertex> {
-    game.tnts.clear();
-    game.tnts.push(primed(id, fuse));
+    game.entities.tnts.clear();
+    game.entities.tnts.push(primed(id, fuse));
     let mut out = Vec::new();
     game.tnt_geometry(
         CAMERA,
         ALPHA,
         &mut out,
-        0..game.tnts.len(),
+        0..game.entities.tnts.len(),
         game.tnt_face_sprites(),
     );
     out
@@ -383,14 +383,14 @@ fn a_registered_tnt_draws_its_renderer_in_place_of_the_cube() {
             tnt.previous = Vec3::new(0.5, 64.0, 0.5);
             tnt.position = Vec3::new(1.5, 65.0, 2.5);
             tnt.ticks = 6;
-            game.tnts.clear();
-            game.tnts.push(tnt);
+            game.entities.tnts.clear();
+            game.entities.tnts.push(tnt);
             let mut drawn = Vec::new();
             game.tnt_geometry(
                 CAMERA,
                 ALPHA,
                 &mut drawn,
-                0..game.tnts.len(),
+                0..game.entities.tnts.len(),
                 game.tnt_face_sprites(),
             );
             assert_eq!(drawn.len(), 4, "one quad and no cube: {drawn:?}");

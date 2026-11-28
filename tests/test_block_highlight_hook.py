@@ -86,9 +86,11 @@ struct DetachedPlayerHud {
 struct ChatUi { hide_gui: bool }
 struct ClientState { chat_ui: ChatUi }
 
+struct EntityStore { mobs: Vec<Mob> }
+
 struct CommonGame {
     world: World,
-    mobs: Vec<Mob>,
+    entities: EntityStore,
     mob_index: MobIndex,
     spectator_mode: bool,
     local_held: Option<ItemStack>,
@@ -157,7 +159,7 @@ fn base_game() -> ClientGame {
     ClientGame {
         common: CommonGame {
             world: World,
-            mobs: Vec::new(),
+            entities: EntityStore { mobs: Vec::new() },
             mob_index: MobIndex,
             spectator_mode: false,
             local_held: None,

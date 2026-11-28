@@ -90,7 +90,7 @@ pub(crate) mod passenger_relation_tests {
                     actor(parent)
                 )));
                 assert_eq!(
-                    game.mobs
+                    game.entities.mobs
                         .iter()
                         .find(|m| m.id == ids[child - 1])
                         .unwrap()
@@ -158,7 +158,7 @@ pub(crate) mod passenger_relation_tests {
             }
             assert!(game.run_command(&format!("ride {} dismount", actor(2))));
             assert_eq!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|m| m.id == ids[1])
                     .unwrap()

@@ -187,7 +187,7 @@ impl ClientGame<'_> {
                 Some(Target::Dragon(id)) => {
                     let dragon = self
                         .common
-                        .dragon
+                        .entities.dragon
                         .as_ref()
                         .filter(|d| d.id == id)
                         .ok_or(GuiEntityError::NoEntity)?;
@@ -291,7 +291,7 @@ impl ClientGame<'_> {
     #[inline(always)]
     fn existing_gui_mob(&self, target: Target) -> Result<Mob, GuiEntityError> {
         let found = match target {
-            Target::Mob(id) => self.common.mobs.iter().find(|m| m.id == id && !m.removed),
+            Target::Mob(id) => self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed),
             Target::Player => self.client.player_model.as_ref(),
             _ => None,
         };

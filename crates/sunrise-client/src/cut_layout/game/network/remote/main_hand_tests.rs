@@ -91,7 +91,7 @@ fn a_client_receives_a_mannequins_main_hand() {
                         let packet = Clientbound::decode(id, reader.rest()).unwrap();
                         game.apply_packet(packet).unwrap();
                     }
-                    let seen = game.mobs.iter().find(|mob| mob.id == 30).unwrap();
+                    let seen = game.entities.mobs.iter().find(|mob| mob.id == 30).unwrap();
                     assert_eq!(seen.main_arm_left(), left);
                 }
             });

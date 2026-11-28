@@ -82,7 +82,7 @@ fn direct_edits_and_raii_drop_preserve_actual_mob_without_publishing() {
     with_game(|game| {
         let dim = game.dim.id();
         let before = (
-            game.mobs.len(),
+            game.entities.mobs.len(),
             game.common.persist.uuids.len(),
             game.entity_attachments.len(),
         );
@@ -139,7 +139,7 @@ fn direct_edits_and_raii_drop_preserve_actual_mob_without_publishing() {
                 .unwrap();
             assert_eq!(
                 (
-                    game.mobs.len(),
+                    game.entities.mobs.len(),
                     game.common.persist.uuids.len(),
                     game.entity_attachments.len()
                 ),

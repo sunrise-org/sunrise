@@ -85,9 +85,9 @@ impl crate::game::ServerGame<'_> {
         let Some(id) = self.common.riding else {
             return;
         };
-        if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
+        if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
             self.dismount(i);
-        } else if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
+        } else if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
             self.dismount_cart(i);
         } else {
             self.common.riding = None;

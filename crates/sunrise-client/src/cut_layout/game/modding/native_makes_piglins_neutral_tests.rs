@@ -206,7 +206,7 @@ fn targets_the_wearer(
         game.tick_server(false).unwrap();
     }
     let piglin = game
-        .mobs
+        .entities.mobs
         .iter()
         .find(|m| m.species() == Species::Piglin)
         .unwrap();

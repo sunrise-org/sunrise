@@ -123,7 +123,7 @@ mod interaction_saved_defaults_tests {
             assert!(marker_before.get(key).is_none());
         }
         let pig_id = game
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| game.persist.uuids.get(&m.id) == Some(&[109, 0, 0, 5]))
             .unwrap()
@@ -346,7 +346,7 @@ mod loaded_tag_tests {
             let Target::Mob(id) = target else {
                 panic!("actual pig target");
             };
-            let mob = game.mobs.iter().find(|m| m.id == id).unwrap();
+            let mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
             assert_eq!(mob.species(), Species::Pig);
             assert_eq!(mob.position, Vec3::new(x, 200.0, 4.5));
             assert_eq!(mob.health, 10.0);
@@ -429,7 +429,7 @@ mod loaded_tag_tests {
                 );
             }
             assert_eq!(
-                game.mobs.iter().find(|m| m.id == id).unwrap().position,
+                game.entities.mobs.iter().find(|m| m.id == id).unwrap().position,
                 Vec3::new(x, 200.0, 4.5)
             );
             assert_eq!(game.uuid_for(id), [252, 0, 0, n as i32]);
@@ -732,7 +732,7 @@ mod item_display_saved_transform_tests {
                 );
             }
             assert_eq!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|m| game.persist.uuid_of(m.id) == Some([132, 0, 0, 99]))
                     .unwrap()
@@ -772,8 +772,8 @@ mod baby_modifier_mutation_tests {
         });
     }
     fn zombie(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> usize {
-        let i: Vec<usize> = (0..game.mobs.len())
-            .filter(|&i| game.persist.uuid_of(game.mobs[i].id) == Some([235, 0, 0, n]))
+        let i: Vec<usize> = (0..game.entities.mobs.len())
+            .filter(|&i| game.persist.uuid_of(game.entities.mobs[i].id) == Some([235, 0, 0, n]))
             .collect();
         assert_eq!(i.len(), 1, "one live zombie with UUID {n}");
         i[0]
@@ -784,7 +784,7 @@ mod baby_modifier_mutation_tests {
         game: &sunrise_gameplay::game::ServerGame<'_>,
         n: i32,
     ) -> (f64, Option<f64>, Option<f64>) {
-        let m = &game.mobs[zombie(game, n)];
+        let m = &game.entities.mobs[zombie(game, n)];
         assert!(
             close(m.movement_speed(), finalize::value(m, Attr::MovementSpeed)),
             "gameplay speed must follow the effective movement attribute"
@@ -899,7 +899,7 @@ mod baby_modifier_mutation_tests {
                 "summon minecraft:zombie 4.5 200 8.5 {UUID:[I;235,0,0,9],NoAI:1b,NoGravity:1b,PersistenceRequired:1b,Silent:1b,Health:20f}"
             ));
             let i = zombie(game, 9);
-            let m = &mut game.mobs[i];
+            let m = &mut game.entities.mobs[i];
             finalize::add_modifier(
                 m,
                 Attr::MovementSpeed,
@@ -988,12 +988,12 @@ mod baby_modifier_mutation_tests {
                     failures.push("the removal did not last across reads".to_string());
                 }
             }
-            let copy = game.mobs[zombie(game, 11)].clone();
+            let copy = game.entities.mobs[zombie(game, 11)].clone();
             if finalize::transient(&copy, Attr::MovementSpeed).is_some() {
                 failures.push("a copy lost the removal".into());
             }
             let i = zombie(game, 11);
-            finalize::set_baby(&mut game.mobs[i], true);
+            finalize::set_baby(&mut game.entities.mobs[i], true);
             if removed(game, 11) {
                 failures.push("in-place setBaby(true) did not bring it back".into());
             }
@@ -1017,7 +1017,7 @@ mod baby_modifier_mutation_tests {
                 failures.push("adult: a removal succeeded".into());
             }
             let i = zombie(game, 12);
-            finalize::set_baby(&mut game.mobs[i], true);
+            finalize::set_baby(&mut game.entities.mobs[i], true);
             if state(game, 12).2 != Some(0.5) {
                 failures.push("adult made a baby: no transient one".into());
             }
@@ -1057,8 +1057,8 @@ mod attribute_instance_save_tests {
         });
     }
     fn mob(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> usize {
-        let i: Vec<usize> = (0..game.mobs.len())
-            .filter(|&i| game.persist.uuid_of(game.mobs[i].id) == Some([105, 0, 0, n]))
+        let i: Vec<usize> = (0..game.entities.mobs.len())
+            .filter(|&i| game.persist.uuid_of(game.entities.mobs[i].id) == Some([105, 0, 0, n]))
             .collect();
         assert_eq!(i.len(), 1, "one live mob with UUID {n}");
         i[0]
@@ -1066,7 +1066,7 @@ mod attribute_instance_save_tests {
     /// The ids of the attribute instances the mob's save holds, in order.
     fn saved_ids(game: &mut sunrise_gameplay::game::ServerGame<'_>, i: usize) -> Vec<String> {
         let tag = game
-            .command_target_nbt(Target::Mob(game.mobs[i].id))
+            .command_target_nbt(Target::Mob(game.entities.mobs[i].id))
             .expect("saved mob");
         match tag.get("attributes") {
             Some(Tag::List(l)) => l.iter().filter_map(|t| text(t.get("id"))).collect(),
@@ -1093,7 +1093,7 @@ mod attribute_instance_save_tests {
             // Before any tick, without the load's compound.
             for (kind, n) in [("pig", 1), ("allay", 2)] {
                 let i = mob(game, n);
-                game.common.persist.raw.remove(&game.common.mobs[i].id);
+                game.common.persist.raw.remove(&game.common.entities.mobs[i].id);
                 if !saved_ids(game, i).is_empty() {
                     failures.push(format!("{kind} before a tick: {:?}", saved_ids(game, i)));
                 }
@@ -1101,7 +1101,7 @@ mod attribute_instance_save_tests {
             game.tick_world(true).unwrap();
             for (kind, n) in [("pig", 1), ("allay", 2)] {
                 let i = mob(game, n);
-                game.common.persist.raw.remove(&game.common.mobs[i].id);
+                game.common.persist.raw.remove(&game.common.entities.mobs[i].id);
                 if saved_ids(game, i) != speed() {
                     failures.push(format!("{kind} after a tick: {:?}", saved_ids(game, i)));
                 }
@@ -1110,7 +1110,7 @@ mod attribute_instance_save_tests {
             // before the new pig's first tick.
             let i = mob(game, 1);
             let mut saved = game
-                .command_target_nbt(Target::Mob(game.mobs[i].id))
+                .command_target_nbt(Target::Mob(game.entities.mobs[i].id))
                 .unwrap();
             if let Tag::Compound(c) = &mut saved {
                 c.insert("UUID".into(), Tag::IntArray(vec![105, 0, 0, 3]));
@@ -1196,7 +1196,7 @@ mod attribute_instance_save_tests {
             }
             let i = mob(game, 11);
             let tag = game
-                .command_target_nbt(Target::Mob(game.mobs[i].id))
+                .command_target_nbt(Target::Mob(game.entities.mobs[i].id))
                 .unwrap();
             if tag.get("attributes") != Some(&Tag::List(Vec::new())) {
                 failures.push(format!(
@@ -1245,8 +1245,8 @@ mod mob_inventory_merge_tests {
         });
     }
     fn mob(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> usize {
-        let i: Vec<usize> = (0..game.mobs.len())
-            .filter(|&i| game.persist.uuid_of(game.mobs[i].id) == Some([138, 0, 0, n]))
+        let i: Vec<usize> = (0..game.entities.mobs.len())
+            .filter(|&i| game.persist.uuid_of(game.entities.mobs[i].id) == Some([138, 0, 0, n]))
             .collect();
         assert_eq!(i.len(), 1, "one live mob with UUID {n}");
         i[0]
@@ -1256,7 +1256,7 @@ mod mob_inventory_merge_tests {
         game: &sunrise_gameplay::game::ServerGame<'_>,
         i: usize,
     ) -> Vec<(String, u32, Option<i32>)> {
-        let m = &game.mobs[i];
+        let m = &game.entities.mobs[i];
         let stacks = if m.species() == sunrise_sim::mobs::Species::Villager {
             sunrise_sim::mobs::villager::ext(m)
                 .map(|e| e.inventory.clone())
@@ -1286,7 +1286,7 @@ mod mob_inventory_merge_tests {
         i: usize,
     ) -> Vec<(String, u32, Option<i32>)> {
         let tag = game
-            .command_target_nbt(Target::Mob(game.mobs[i].id))
+            .command_target_nbt(Target::Mob(game.entities.mobs[i].id))
             .expect("saved mob");
         let Some(Tag::List(list)) = tag.get("Inventory") else {
             return Vec::new();
@@ -1385,7 +1385,7 @@ mod mob_inventory_merge_tests {
                     )));
                     let i = mob(game, n);
                     // No raw echo: the load's compound is gone, only the model is left.
-                    game.common.persist.raw.remove(&game.common.mobs[i].id);
+                    game.common.persist.raw.remove(&game.common.entities.mobs[i].id);
                     if &live(game, i) != want {
                         failures.push(format!("{kind} {name}: live {:?}", live(game, i)));
                     }
@@ -1396,7 +1396,7 @@ mod mob_inventory_merge_tests {
             }
             // The model is what saves: a change to it shows in the next save.
             let i = mob(game, 1);
-            game.mobs[i].extra.inventory[0].count = 7;
+            game.entities.mobs[i].extra.inventory[0].count = 7;
             if saved(game, i) != vec![s("stone", 7, None)] {
                 failures.push(format!("piglin mutation: saved {:?}", saved(game, i)));
             }
@@ -1432,7 +1432,7 @@ mod invalid_passenger_tests {
     /// The mob in the level with UUID `n`.
     fn mob(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> u32 {
         let ids: Vec<u32> = game
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| game.persist.uuid_of(m.id) == Some([161, 0, 0, n]))
             .map(|m| m.id)
@@ -1441,7 +1441,7 @@ mod invalid_passenger_tests {
         ids[0]
     }
     fn mount(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Option<u32> {
-        game.mobs.iter().find(|m| m.id == id).unwrap().extra.mount
+        game.entities.mobs.iter().find(|m| m.id == id).unwrap().extra.mount
     }
     /// Each saved passenger of `id` as (id, UUID word 3, first tag), in order;
     /// `None` when the entity saves no Passengers.
@@ -1520,10 +1520,10 @@ mod invalid_passenger_tests {
                     failures.push(format!("{name}: saved Passengers {got:?}"));
                 }
             }
-            if game.mobs.len() != 3 {
+            if game.entities.mobs.len() != 3 {
                 failures.push(format!(
                     "invalid entries: {} mobs, expected 3",
-                    game.mobs.len()
+                    game.entities.mobs.len()
                 ));
             }
 
@@ -1726,12 +1726,12 @@ mod h262_enderman_absolute_anger_tests {
             .iter()
             .find_map(|(id, u)| (*u == [262, 1, 0, n]).then_some(*id))
             .unwrap();
-        let i = game.mobs.iter().position(|m| m.id == id).unwrap();
-        assert_eq!(game.mobs[i].species(), sunrise_sim::mobs::Species::Enderman);
-        assert!(game.mobs[i].no_ai);
-        assert_eq!(game.mobs[i].health, 40.0);
-        assert_eq!(game.mobs[i].position, Vec3::new(6.5, 200.0, 4.5));
-        assert_eq!(game.mobs[i].extra.anger_end, end.unwrap_or(-1));
+        let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
+        assert_eq!(game.entities.mobs[i].species(), sunrise_sim::mobs::Species::Enderman);
+        assert!(game.entities.mobs[i].no_ai);
+        assert_eq!(game.entities.mobs[i].health, 40.0);
+        assert_eq!(game.entities.mobs[i].position, Vec3::new(6.5, 200.0, 4.5));
+        assert_eq!(game.entities.mobs[i].extra.anger_end, end.unwrap_or(-1));
         (id, i)
     }
     fn check(
@@ -1751,7 +1751,7 @@ mod h262_enderman_absolute_anger_tests {
         assert_eq!(
             saved.get("UUID"),
             Some(&Tag::IntArray(
-                game.persist.uuids[&game.mobs[i].id].to_vec()
+                game.persist.uuids[&game.entities.mobs[i].id].to_vec()
             ))
         );
         // Tags follow the existing raw-field policy; a deliberately no-raw
@@ -1759,7 +1759,7 @@ mod h262_enderman_absolute_anger_tests {
         if let Some(tags) = game
             .persist
             .raw
-            .get(&game.mobs[i].id)
+            .get(&game.entities.mobs[i].id)
             .and_then(|raw| raw.get("Tags"))
         {
             assert_eq!(saved.get("Tags"), Some(tags));
@@ -1773,7 +1773,7 @@ mod h262_enderman_absolute_anger_tests {
             game.world.game_time = 100;
             assert!(game.run_command("gamerule spawn_mobs false"));
             let (id, i) = load(game, 1, Some(999999));
-            let age = game.mobs[i].age;
+            let age = game.entities.mobs[i].age;
             let mut failures = Vec::new();
             for tick in 0..=2 {
                 if tick > 0 {
@@ -1782,16 +1782,16 @@ mod h262_enderman_absolute_anger_tests {
                     assert!(game.entity_ticking_area()(6, 4));
                     game.tick_creature_entities().unwrap();
                 }
-                assert_eq!(game.mobs[i].id, id);
-                assert_eq!(game.mobs[i].age, age + tick);
+                assert_eq!(game.entities.mobs[i].id, id);
+                assert_eq!(game.entities.mobs[i].age, age + tick);
                 assert_eq!(game.world.game_time, 100 + i64::from(tick));
-                assert_eq!(game.mobs[i].position, Vec3::new(6.5, 200.0, 4.5));
-                assert_eq!(game.mobs[i].velocity, Vec3::ZERO);
+                assert_eq!(game.entities.mobs[i].position, Vec3::new(6.5, 200.0, 4.5));
+                assert_eq!(game.entities.mobs[i].velocity, Vec3::ZERO);
                 check(game, i, 999999, "loaded/ticked", &mut failures);
                 check(game, i, 999999, "repeated", &mut failures);
             }
             game.persist.raw.remove(&id);
-            game.mobs[i].extra.anger_end = 777777;
+            game.entities.mobs[i].extra.anger_end = 777777;
             check(game, i, 777777, "no raw/model mutation", &mut failures);
             game.persist.raw.insert(
                 id,
@@ -1800,7 +1800,7 @@ mod h262_enderman_absolute_anger_tests {
                     ("retained", Tag::Int(17)),
                 ]),
             );
-            game.mobs[i].extra.anger_end = 888888;
+            game.entities.mobs[i].extra.anger_end = 888888;
             check(
                 game,
                 i,
@@ -1840,16 +1840,16 @@ mod h262_enderman_absolute_anger_tests {
         with_game(|game| {
             game.world.game_time = 100;
             let (id, i) = load(game, 9, Some(999999));
-            let age = game.mobs[i].age;
+            let age = game.entities.mobs[i].age;
             assert!(game.run_command("data modify entity 00000106-0000-0001-0000-000000000009 anger_end_time set value 777777L"));
             assert_eq!(
-                game.mobs[i].extra.anger_end, 777777,
+                game.entities.mobs[i].extra.anger_end, 777777,
                 "actual adoption, before saved read"
             );
-            assert_eq!(game.mobs[i].id, id);
-            assert_eq!(game.mobs[i].age, age);
+            assert_eq!(game.entities.mobs[i].id, id);
+            assert_eq!(game.entities.mobs[i].age, age);
             assert_eq!(game.world.game_time, 100);
-            assert!(game.mobs[i].ai.target.is_none());
+            assert!(game.entities.mobs[i].ai.target.is_none());
             let mut failures = Vec::new();
             check(game, i, 777777, "live write", &mut failures);
             assert!(failures.is_empty(), "{failures:#?}");
@@ -1861,8 +1861,8 @@ mod h262_enderman_absolute_anger_tests {
         with_game(|game| {
             game.world.game_time = 100;
             let (_, i) = load(game, 20, Some(999999));
-            game.mobs[i].no_ai = false;
-            game.mobs[i].extra.anger = 50;
+            game.entities.mobs[i].no_ai = false;
+            game.entities.mobs[i].extra.anger = 50;
             assert_eq!(
                 game.mob_tree_nbt(i).get("anger_end_time"),
                 Some(&Tag::Long(150))
@@ -1873,11 +1873,11 @@ mod h262_enderman_absolute_anger_tests {
                 )
             );
             let i = game
-                .mobs
+                .entities.mobs
                 .iter()
                 .position(|m| m.species() == sunrise_sim::mobs::Species::Wolf)
                 .unwrap();
-            game.mobs[i].extra.anger = 50;
+            game.entities.mobs[i].extra.anger = 50;
             assert_eq!(
                 game.mob_tree_nbt(i).get("anger_end_time"),
                 Some(&Tag::Long(150))
@@ -2023,7 +2023,7 @@ mod sulfur_body_attribute_tests {
             let sel = "@e[type=minecraft:sulfur_cube,nbt={UUID:[I;192,0,0,9]},limit=1]";
             let cached = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 let m = game
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .find(|m| game.persist.uuid_of(m.id) == Some([192, 0, 0, 9]))
                     .unwrap();
@@ -2087,7 +2087,7 @@ mod sulfur_body_attribute_tests {
                 "attribute {sel} minecraft:knockback_resistance modifier add {id} 0.2 add_value"
             )));
             let mob = game
-                .mobs
+                .entities.mobs
                 .iter_mut()
                 .find(|m| m.species() == sunrise_sim::mobs::Species::SulfurCube)
                 .unwrap();
@@ -2105,7 +2105,7 @@ mod sulfur_body_attribute_tests {
             ));
             assert_eq!(read(game, 19, "knockback_resistance"), 600);
             let mob = game
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.species() == sunrise_sim::mobs::Species::SulfurCube)
                 .unwrap();
@@ -2131,7 +2131,7 @@ mod sulfur_body_attribute_tests {
             }
             game.tick_world(true).unwrap();
             let cached = |game: &sunrise_gameplay::game::ServerGame<'_>, n: i32| {
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|m| game.persist.uuid_of(m.id) == Some([192, 0, 0, n]))
                     .unwrap()
@@ -2367,7 +2367,7 @@ mod summoned_knot_tests {
                 marker_before
             );
             assert_eq!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|m| game.persist.uuid_of(m.id) == Some([129, 0, 0, 99]))
                     .unwrap()
@@ -2463,13 +2463,13 @@ mod summoned_knot_tests {
             assert!(game.run_command("item replace entity @s weapon.mainhand with lead"));
             assert!(game.run_command("setblock 14 200 2 oak_fence strict"));
             let pig = game
-                .mobs
+                .entities.mobs
                 .iter()
                 .position(|m| game.persist.uuid_of(m.id) == Some([129, 0, 0, 99]))
                 .unwrap();
             assert!(game.interact_leash(pig, "minecraft:lead"));
             assert!(game.use_knot([14, 200, 2], false));
-            assert_eq!(game.mobs[pig].extra.leash, Some(Holder::Knot([14, 200, 2])));
+            assert_eq!(game.entities.mobs[pig].extra.leash, Some(Holder::Knot([14, 200, 2])));
             game.lan_assign_ids();
             let natural = game.server.knot_state.knot_ids[&[14, 200, 2]];
             let ids = summon_knots(game);
@@ -2479,7 +2479,7 @@ mod summoned_knot_tests {
             game.lan_assign_ids();
             assert_eq!(game.server.knot_state.knot_ids[&[14, 200, 2]], natural);
             let pig = game
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| game.persist.uuid_of(m.id) == Some([129, 0, 0, 99]))
                 .unwrap();
@@ -2584,7 +2584,7 @@ mod camel_pose_saved_tests {
                 .unwrap_or_default();
             assert!(game.run_command(&format!("summon camel {} 200 4.5 {{UUID:[I;94,0,0,{number}],NoAI:1b,NoGravity:1b,PersistenceRequired:1b,Health:32f,Temper:17,Tags:[\"h094\"]{field}}}", 2.5 + n as f64 * 2.5)));
             let mob = game
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| game.persist.uuids.get(&m.id) == Some(&[94, 0, 0, number]))
                 .unwrap();
@@ -2595,8 +2595,8 @@ mod camel_pose_saved_tests {
         for elapsed in 0..=1 {
             assert_eq!(game.world.game_time, now + elapsed);
             for &(id, value) in &actors {
-                let index = game.mobs.iter().position(|m| m.id == id).unwrap();
-                let mob = &game.mobs[index];
+                let index = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
+                let mob = &game.entities.mobs[index];
                 assert!(mob.no_ai && mob.alive());
                 assert_eq!(mob.age, elapsed as u32, "actual entity tick admission");
                 assert_eq!(mob.health, 32.0);
@@ -2644,7 +2644,7 @@ mod camel_pose_saved_tests {
         for step in 0..8 {
             for number in 1..=cases.len() as i32 {
                 let index = game
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .position(|m| game.persist.uuids.get(&m.id) == Some(&[94, 0, 0, number]))
                     .unwrap();
@@ -2691,7 +2691,7 @@ mod mob_hurt_cooldown_tests {
     /// (`invulnerableTime`, `lastHurt`).
     fn pig(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> (f32, i32, f32) {
         let m = game
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| game.persist.uuid_of(m.id) == Some([0, 248, 0, n]))
             .unwrap();
@@ -2820,11 +2820,11 @@ mod restored_vehicle_transfer_tests {
                 runtime.set(&mut map, Holder::Level, 41).unwrap();
                 saved.set(&mut map, Holder::Level, 51).unwrap();
                 game.entity_attachments.insert(source, map);
-                let index = game.mobs.iter().position(|m| m.id == source).unwrap();
+                let index = game.entities.mobs.iter().position(|m| m.id == source).unwrap();
                 let incoming = game.mob_tree_nbt(index);
                 let tree = (!generic).then(|| game.capture_vehicle_tree_state(source).unwrap());
                 let state = generic.then(|| game.take_transferred_entity_state(source));
-                game.mobs
+                game.entities.mobs
                     .retain(|m| m.id != source && Some(m.id) != source_child);
                 game.detach_entity(source);
                 if let Some(child) = source_child {
@@ -2991,7 +2991,7 @@ mod trader_llama_discard_tests {
             }
             let present = |game: &sunrise_gameplay::game::ServerGame<'_>| -> [bool; 4] {
                 [1, 2, 3, 4].map(|n| {
-                    game.mobs.iter().any(|m| {
+                    game.entities.mobs.iter().any(|m| {
                         game.persist.uuid_of(m.id) == Some([0, 182, 0, n])
                             && &*m.kind.id == "minecraft:trader_llama"
                     })

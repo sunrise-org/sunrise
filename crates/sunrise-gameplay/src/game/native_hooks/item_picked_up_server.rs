@@ -6,7 +6,7 @@ use sunrise_sim::join_seq::{JoinList, Joined};
 /// Where a touching item entity lives during `ItemEntity.playerTouch`.
 ///
 /// The host player's pickup pass walks a lifted `JoinList` (`items`), while
-/// guest pickups walk `self.common.dropped` directly inside `as_guest` turns.
+/// guest pickups walk `self.common.entities.dropped` directly inside `as_guest` turns.
 enum PickupSlot<'a> {
     Lifted {
         items: &'a mut JoinList<ItemEntity>,
@@ -44,10 +44,10 @@ impl crate::game::ServerGame<'_> {
         rest.filter(|_| !self.common.creative)
     }
 
-    /// Runs `notice` with the lifted `items[index]` lent back into `self.common.dropped`
+    /// Runs `notice` with the lifted `items[index]` lent back into `self.common.entities.dropped`
     /// so mods can read and mutate the live entity handle. Preserves every
     /// in-place mutation on return, and never resurrects an item removed from
-    /// `self.common.dropped`. Returns `(result, still_present_in_items, removed)`.
+    /// `self.common.entities.dropped`. Returns `(result, still_present_in_items, removed)`.
     fn lend_lifted_item<R>(
         &mut self,
         items: &mut JoinList<ItemEntity>,
@@ -57,11 +57,11 @@ impl crate::game::ServerGame<'_> {
         let (id, join) = (items[index].id, items[index].join_seq());
         let lent = items.extract(join).expect("in its pass");
         self.common
-            .dropped
-            .put_back(self.common.dropped.len(), lent);
+            .entities.dropped
+            .put_back(self.common.entities.dropped.len(), lent);
         let result = notice(self);
         let removed = self.common.persist.removals.contains(&Target::Item(id));
-        if let Some(back) = self.common.dropped.extract(join) {
+        if let Some(back) = self.common.entities.dropped.extract(join) {
             items.put_back(index, back);
             (result, true, removed)
         } else {
@@ -124,7 +124,7 @@ impl crate::game::ServerGame<'_> {
     }
 
     /// `ItemEntity.playerTouch` for guest `conn` touching resident item `item_id`
-    /// in `self.common.dropped`: same Pre/insert/Post/stat/criterion sequence as the
+    /// in `self.common.entities.dropped`: same Pre/insert/Post/stat/criterion sequence as the
     /// host player, appending `(item_id, taken)` to `taken` when a take packet
     /// should be broadcast.
     pub(in crate::game) fn native_guest_pickup(
@@ -150,7 +150,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn native_touch_item_now(&mut self, id: u32) -> u32 {
         let Some(before) = self
             .common
-            .dropped
+            .entities.dropped
             .iter()
             .find(|d| d.id == id)
             .map(|d| d.stack.count)
@@ -188,7 +188,7 @@ impl crate::game::ServerGame<'_> {
             return 0;
         }
         let own = self.common.level.ensure_player_uuid();
-        let mut items = self.common.dropped.lift();
+        let mut items = self.common.entities.dropped.lift();
         let found = (0..items.len()).find(|&i| items[i].id == id);
         if let Some(mut index) = found {
             self.native_touch_item_entity(
@@ -202,7 +202,7 @@ impl crate::game::ServerGame<'_> {
         self.common.put_back_dropped(items);
         let after = self
             .common
-            .dropped
+            .entities.dropped
             .iter()
             .find(|d| d.id == id)
             .map_or(0, |d| d.stack.count);
@@ -236,10 +236,10 @@ impl crate::game::ServerGame<'_> {
                 if self.common.persist.removals.contains(&Target::Item(id)) {
                     return;
                 }
-                let Some(at) = self.common.dropped.iter().position(|d| d.id == id) else {
+                let Some(at) = self.common.entities.dropped.iter().position(|d| d.id == id) else {
                     return;
                 };
-                let item = &self.common.dropped[at];
+                let item = &self.common.entities.dropped[at];
                 if !listens_pre
                     && !Self::pickup_decision(
                         item.pickup_delay,
@@ -265,7 +265,7 @@ impl crate::game::ServerGame<'_> {
                     else {
                         return;
                     };
-                    let present = self.common.dropped.iter().any(|d| d.id == id);
+                    let present = self.common.entities.dropped.iter().any(|d| d.id == id);
                     let removed =
                         !present || self.common.persist.removals.contains(&Target::Item(id));
                     (answer, present, removed)
@@ -287,7 +287,7 @@ impl crate::game::ServerGame<'_> {
         let live = match &slot {
             PickupSlot::Lifted { items, index } => &items[**index],
             PickupSlot::Resident { .. } => {
-                let Some(live) = self.common.dropped.iter().find(|item| item.id == id) else {
+                let Some(live) = self.common.entities.dropped.iter().find(|item| item.id == id) else {
                     return;
                 };
                 live
@@ -335,8 +335,8 @@ impl crate::game::ServerGame<'_> {
                 match &mut slot {
                     PickupSlot::Lifted { items, index } => items[**index].stack = during,
                     PickupSlot::Resident { .. } => {
-                        if let Some(at) = self.common.dropped.iter().position(|d| d.id == id) {
-                            self.common.dropped[at].stack = during;
+                        if let Some(at) = self.common.entities.dropped.iter().position(|d| d.id == id) {
+                            self.common.entities.dropped[at].stack = during;
                         }
                     }
                 }
@@ -355,7 +355,7 @@ impl crate::game::ServerGame<'_> {
                     let told = self
                         .as_guest_here(*conn, |game| game.native_pickup_post(id, &captured, rest))
                         .unwrap_or_else(|| rest_before.clone());
-                    let present = self.common.dropped.iter().any(|d| d.id == id);
+                    let present = self.common.entities.dropped.iter().any(|d| d.id == id);
                     let removed =
                         !present || self.common.persist.removals.contains(&Target::Item(id));
                     (told, present, removed)
@@ -405,8 +405,8 @@ impl crate::game::ServerGame<'_> {
                 }
                 PickupSlot::Resident { taken, .. } => {
                     let mut amount = before;
-                    if let Some(at) = self.common.dropped.iter().position(|d| d.id == id) {
-                        if keeps_replacement(&self.common.dropped[at]) {
+                    if let Some(at) = self.common.entities.dropped.iter().position(|d| d.id == id) {
+                        if keeps_replacement(&self.common.entities.dropped[at]) {
                             amount = 0;
                         } else {
                             self.remove_dropped(at);
@@ -422,8 +422,8 @@ impl crate::game::ServerGame<'_> {
             match &mut slot {
                 PickupSlot::Lifted { items, index } => items[**index].stack = rem.clone(),
                 PickupSlot::Resident { .. } => {
-                    if let Some(at) = self.common.dropped.iter().position(|d| d.id == id) {
-                        self.common.dropped[at].stack = rem.clone();
+                    if let Some(at) = self.common.entities.dropped.iter().position(|d| d.id == id) {
+                        self.common.entities.dropped[at].stack = rem.clone();
                     }
                 }
             }

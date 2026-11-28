@@ -266,7 +266,7 @@ fn thorns_name_the_wearer_not_the_incoming_attacker() {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.mobs.push(Mob::new(42, kind, Vec3::ZERO, 0.0));
+        game.entities.mobs.push(Mob::new(42, kind, Vec3::ZERO, 0.0));
         // The mob's own hit on the player is in progress: its attack names it.
         let incoming = game.attack_of(42);
         game.with_attack(incoming, |game| {
@@ -293,7 +293,7 @@ fn zombie_at(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, at: Vec
         .get("minecraft:zombie")
         .unwrap()
         .clone();
-    game.mobs.push(Mob::new(id, kind, at, 0.0));
+    game.entities.mobs.push(Mob::new(id, kind, at, 0.0));
 }
 
 /// A player's melee hit goes `attack_mob` → `hurt_by_player` → `Mob::damage` → the hook:
@@ -397,7 +397,7 @@ fn next_draw_after_a_directionless_push(cancel: Option<bool>) -> i32 {
     let draw = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
         zombie_at(game, 42, Vec3::ZERO);
         let hit = Damage::of(DamageKind::Generic);
-        let mut mob = game.mobs.pop().unwrap();
+        let mut mob = game.entities.mobs.pop().unwrap();
         with_detached_credit(game, 42, |level| {
             mob.knockback(level, 0.4, 0.0, 0.0, &hit, 0.0)
         });
@@ -506,7 +506,7 @@ fn a_mobs_fireball_on_the_player_names_the_shooter_and_its_bow() {
         player_with_sword(game);
         game.set_game_mode(sunrise_command::args::GameMode::Survival);
         zombie_at(game, 42, Vec3::new(0.0, 0.0, 6.0));
-        game.mobs
+        game.entities.mobs
             .last_mut()
             .unwrap()
             .extra
@@ -549,7 +549,7 @@ fn short_and_full_knockback_entries_fire_one_event_with_same_semantics() {
     let heard = heard(|game, log| {
         let hit = Damage::of(DamageKind::Generic);
         zombie_at(game, 42, Vec3::ZERO);
-        let mut mob = game.mobs.pop().unwrap();
+        let mut mob = game.entities.mobs.pop().unwrap();
         mob.velocity = Vec3::ZERO;
         mob.ground.on_ground = false;
         with_detached_credit(game, 42, |level| {
@@ -629,7 +629,7 @@ fn a_sweep_launches_a_loaded_sulfur_cube_with_off_center_aim_without_the_living_
             .clone();
         let mut mob = Mob::new(42, kind, Vec3::new(0.0, 0.0, 2.0), 0.0);
         mob.extra.set_body(Some("minecraft:tnt".into()));
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         let area =
             sunrise_core::geometry::Aabb::new(Vec3::new(-1.0, -1.0, 1.0), Vec3::new(1.0, 2.0, 3.0));
         game.sweep_damage(
@@ -637,7 +637,7 @@ fn a_sweep_launches_a_loaded_sulfur_cube_with_off_center_aim_without_the_living_
             sunrise_gameplay::game::server_side::mace::Spared::Nothing,
             1.0,
         );
-        let mob = &game.mobs[0];
+        let mob = &game.entities.mobs[0];
         let expected = [
             -0.347_157_826_914_143_65,
             0.144_000_005_722_045_88,
@@ -702,28 +702,28 @@ fn callable_knockback_respects_the_hook_and_resistance_without_dealing_damage() 
             .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
         zombie_at(game, 42, Vec3::ZERO);
         let living = game.living(game.entity(42).unwrap()).unwrap();
-        game.mobs[0].attrs.knockback_resistance = 0.5;
-        game.mobs[0].velocity = Vec3::new(2.0, 0.25, 2.0);
-        game.mobs[0].ground.on_ground = true;
-        let health = game.mobs[0].health;
+        game.entities.mobs[0].attrs.knockback_resistance = 0.5;
+        game.entities.mobs[0].velocity = Vec3::new(2.0, 0.25, 2.0);
+        game.entities.mobs[0].ground.on_ground = true;
+        let health = game.entities.mobs[0].health;
         log.lock().unwrap().set_strength = Some(1.0);
 
         // The listener flips X and sets strength to 1. Resistance halves it to 0.5.
         assert!(living.knockback(game, 0.25, [1.0, 0.0]));
         let after = Vec3::new(1.5, 0.4, 1.0);
-        assert_eq!(game.mobs[0].velocity, after);
+        assert_eq!(game.entities.mobs[0].velocity, after);
 
         log.lock().unwrap().cancel = true;
         assert!(!living.knockback(game, 0.25, [0.0, 1.0]));
-        assert_eq!(game.mobs[0].velocity, after);
+        assert_eq!(game.entities.mobs[0].velocity, after);
 
         log.lock().unwrap().cancel = false;
-        game.mobs[0].attrs.knockback_resistance = 1.0;
+        game.entities.mobs[0].attrs.knockback_resistance = 1.0;
         assert!(!living.knockback(game, 0.25, [0.0, 1.0]));
-        assert_eq!(game.mobs[0].velocity, after);
+        assert_eq!(game.entities.mobs[0].velocity, after);
         assert!(!living.knockback(game, f64::NAN, [1.0, 0.0]));
-        assert_eq!(game.mobs[0].velocity, after);
-        assert_eq!(game.mobs[0].health, health);
+        assert_eq!(game.entities.mobs[0].velocity, after);
+        assert_eq!(game.entities.mobs[0].health, health);
     });
     assert_eq!(heard.knocks, vec![(0, None, None); 3]);
     assert_eq!(heard.credits, vec![(0, None); 3]);
@@ -754,8 +754,8 @@ fn callable_knockback_reads_resistance_written_this_tick() {
             .chunks
             .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
         zombie_at(game, 42, Vec3::ZERO);
-        game.mobs[0].ground.on_ground = true;
-        game.mobs[0].set_equipment_stack(
+        game.entities.mobs[0].ground.on_ground = true;
+        game.entities.mobs[0].set_equipment_stack(
             CHEST,
             Some(ItemStack::new("minecraft:netherite_chestplate", 1)),
         );
@@ -770,7 +770,7 @@ fn callable_knockback_reads_resistance_written_this_tick() {
             Some(true)
         );
         assert!(!living.knockback(game, 0.5, [1.0, 0.0]));
-        assert_eq!(game.mobs[0].velocity, Vec3::ZERO);
+        assert_eq!(game.entities.mobs[0].velocity, Vec3::ZERO);
     });
 }
 
@@ -797,14 +797,14 @@ pub(crate) fn credit_pig(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
     let mut pig = Mob::new(100, kind, Vec3::ZERO, 0.0);
     pig.no_ai = true;
     pig.no_gravity = true;
-    game.mobs.push(pig);
+    game.entities.mobs.push(pig);
 }
 
 #[cfg(any())]
 fn credit_push(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
     let plan = game.prepare_knockback_credit(100, None, game.server.combat.0.attack());
     let mut credit = plan.lend(&mut game.server.last_hurt_by_player);
-    let mob = &mut game.mobs[0];
+    let mob = &mut game.entities.mobs[0];
     mob.velocity = Vec3::ZERO;
     mob.ground.on_ground = false;
     mob.knockback(
@@ -831,7 +831,7 @@ fn accepted_wolf_hits_commit_owner_replacement_clearing_and_unresolved_precedenc
         wolf.extra.owner = Some(sunrise_sim::lan::playerdata::uuid_ints(12));
         wolf.extra
             .set_main_hand_stack(Some(ItemStack::new("minecraft:bone", 1)));
-        game.mobs.push(wolf);
+        game.entities.mobs.push(wolf);
         game.as_guest(13, |game| game.remember_mob_player_credit(100))
             .unwrap();
         game.as_guest(12, |game| {
@@ -840,16 +840,16 @@ fn accepted_wolf_hits_commit_owner_replacement_clearing_and_unresolved_precedenc
         })
         .unwrap();
         for (owner, strength) in [(Some(12), 0.2), (None, 0.4), (Some(999), 0.4)] {
-            game.mobs[1].extra.owner = owner.map(sunrise_sim::lan::playerdata::uuid_ints);
-            game.mobs[0].invulnerable = 0;
-            game.mobs[0].velocity = Vec3::ZERO;
+            game.entities.mobs[1].extra.owner = owner.map(sunrise_sim::lan::playerdata::uuid_ints);
+            game.entities.mobs[0].invulnerable = 0;
+            game.entities.mobs[0].velocity = Vec3::ZERO;
             assert!(game.mob_hits_mob(100, 1.0, Damage::mob(101, [1.0, 0.0, 0.0])));
             assert!(
-                (game.mobs[0].velocity.x - strength).abs() < 1e-7,
+                (game.entities.mobs[0].velocity.x - strength).abs() < 1e-7,
                 "the listener's credit-dependent strength edit did not apply"
             );
             if owner == Some(12) {
-                game.mobs[1].extra.owner = Some(sunrise_sim::lan::playerdata::uuid_ints(999));
+                game.entities.mobs[1].extra.owner = Some(sunrise_sim::lan::playerdata::uuid_ints(999));
                 assert!(!game.mob_hits_mob(100, 0.5, Damage::mob(101, [1.0, 0.0, 0.0])));
                 let credit = game.server.last_hurt_by_player[&100];
                 assert_eq!(
@@ -859,7 +859,7 @@ fn accepted_wolf_hits_commit_owner_replacement_clearing_and_unresolved_precedenc
                 );
             }
         }
-        assert_eq!(game.mobs[0].ai.last_hurt_by_player, 100);
+        assert_eq!(game.entities.mobs[0].ai.last_hurt_by_player, 100);
         assert_eq!(log.lock().unwrap().credits.len(), 3);
     });
     assert_eq!(
@@ -886,9 +886,9 @@ fn remembered_player_wins_after_forty_ticks_then_recent_mob_credit_expires_at_on
     let heard = guest_heard(|game, log| {
         credit_pig(game);
         zombie_at(game, 101, Vec3::new(1.0, 0.0, 0.0));
-        game.mobs[1].no_ai = true;
-        game.mobs[1].no_gravity = true;
-        game.mobs[1]
+        game.entities.mobs[1].no_ai = true;
+        game.entities.mobs[1].no_gravity = true;
+        game.entities.mobs[1]
             .extra
             .set_main_hand_stack(Some(ItemStack::new("minecraft:bone", 1)));
         game.as_guest(12, |game| {
@@ -900,7 +900,7 @@ fn remembered_player_wins_after_forty_ticks_then_recent_mob_credit_expires_at_on
         for _ in 0..40 {
             game.tick_creature_entities().unwrap();
         }
-        assert_eq!(game.mobs[0].ai.last_hurt_by_player, 60);
+        assert_eq!(game.entities.mobs[0].ai.last_hurt_by_player, 60);
         game.as_guest(12, |game| {
             game.common.inventory[game.common.selected] =
                 Some(ItemStack::new("minecraft:iron_axe", 1))
@@ -910,7 +910,7 @@ fn remembered_player_wins_after_forty_ticks_then_recent_mob_credit_expires_at_on
         for _ in 0..60 {
             game.tick_creature_entities().unwrap();
         }
-        assert_eq!(game.mobs[0].ai.last_hurt_by_player, 0);
+        assert_eq!(game.entities.mobs[0].ai.last_hurt_by_player, 0);
         credit_push(game);
         for _ in 0..40 {
             game.tick_creature_entities().unwrap();
@@ -946,10 +946,10 @@ fn queued_player_hurts_select_the_current_source_not_an_older_hit_of_the_same_ty
         game.set_game_mode(sunrise_command::args::GameMode::Survival);
         zombie_at(game, 42, Vec3::new(1.0, 0.0, 0.0));
         zombie_at(game, 43, Vec3::new(-1.0, 0.0, 0.0));
-        game.mobs[0]
+        game.entities.mobs[0]
             .extra
             .set_main_hand_stack(Some(ItemStack::new("minecraft:bone", 1)));
-        game.mobs[1]
+        game.entities.mobs[1]
             .extra
             .set_main_hand_stack(Some(ItemStack::new("minecraft:iron_axe", 1)));
         assert!(game.mob_hits_player_from(1.0, [1.0, 0.0, 0.0], "minecraft:mob_attack", false));
@@ -977,13 +977,13 @@ fn queued_player_hurts_select_the_current_source_not_an_older_hit_of_the_same_ty
 fn borrowed_rider_environmental_damage_never_dispatches_a_living_push() {
     let heard = heard(|game, _| {
         credit_pig(game);
-        game.mobs[0].fire_ticks = 40;
-        let health = game.mobs[0].health;
+        game.entities.mobs[0].fire_ticks = 40;
+        let health = game.entities.mobs[0].health;
         for _ in 0..20 {
             game.tick_creature_entities().unwrap();
         }
         assert!(
-            game.mobs[0].health < health,
+            game.entities.mobs[0].health < health,
             "the borrowed damage path was not exercised"
         );
     });
@@ -1005,7 +1005,7 @@ pub(crate) fn sword_evoker(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
     evoker
         .extra
         .set_main_hand_stack(Some(ItemStack::new("minecraft:iron_sword", 1)));
-    game.mobs.push(evoker);
+    game.entities.mobs.push(evoker);
 }
 
 /// The listener heard the evoker and its sword as the credit, and its halving reached the

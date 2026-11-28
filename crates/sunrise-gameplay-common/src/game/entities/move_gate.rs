@@ -40,10 +40,10 @@ pub trait MoveGateGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         let client_controlled = match who {
             MoveWho::Player | MoveWho::Guest(_) => true,
             MoveWho::Entity(EntityHandle::Mob(i)) => {
-                sunrise_sim::mobs::equine::controlled(&self.mobs[i])
+                sunrise_sim::mobs::equine::controlled(&self.entities.mobs[i])
             }
             MoveWho::Entity(EntityHandle::Boat(i)) => {
-                self.side_boat_client_controlled(self.boats[i].id)
+                self.side_boat_client_controlled(self.entities.boats[i].id)
             }
             MoveWho::Entity(_) => false,
         };

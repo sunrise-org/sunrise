@@ -65,7 +65,7 @@ impl ClientGame<'_> {
             return;
         }
         let spawned = {
-            let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id as u32) else {
+            let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id as u32) else {
                 return;
             };
             let from = [m.previous.x, m.previous.y, m.previous.z];

@@ -12,7 +12,7 @@ use sunrise_sim::entities::ArmorStand;
 fn identity(game: &mut crate::game::ServerGame<'_>) -> Identity {
     fixture_resident_column(&mut game.common.world, (0, 0));
     game.common
-        .armor_stands
+        .entities.armor_stands
         .push(ArmorStand::new(13, Vec3::ZERO, 0.0));
     let holder = game.entity(13).expect("fixture holder");
     Identity {
@@ -35,7 +35,7 @@ fn cancel_action_undoes_real_game_listener_block_and_deferred_drop() {
             .default_state("minecraft:stone")
             .unwrap();
         let before = game.world.block(0, 64, 0);
-        let drops = game.dropped.len();
+        let drops = game.entities.dropped.len();
         let menu = Menu::new(tests::state());
         game.storage_scope(|game, _| {
             let mut host = GameHost::new(game, identity);
@@ -58,10 +58,10 @@ fn cancel_action_undoes_real_game_listener_block_and_deferred_drop() {
             );
             assert_eq!(menu.read(Clone::clone), tests::state());
             assert_eq!(host.game.world.block(0, 64, 0), before);
-            assert_eq!(host.game.dropped.len(), drops);
+            assert_eq!(host.game.entities.dropped.len(), drops);
             ((), true)
         });
-        assert_eq!(game.dropped.len(), drops);
+        assert_eq!(game.entities.dropped.len(), drops);
         assert!(game.transactions.is_empty());
     });
 }
@@ -134,7 +134,7 @@ fn outer_real_game_abort_undoes_applied_menu_block_cost_rng_and_drops() {
             .default_state("minecraft:stone")
             .unwrap();
         let before = game.world.block(0, 64, 0);
-        let drops = game.dropped.len();
+        let drops = game.entities.dropped.len();
         let menu = Menu::new(tests::state());
         game.storage_scope(|game, _| {
             let mut host = GameHost::new(game, identity);
@@ -160,12 +160,12 @@ fn outer_real_game_abort_undoes_applied_menu_block_cost_rng_and_drops() {
                 Ok(Outcome::Applied)
             );
             assert_eq!(menu.read(|s| (s.cost, s.rng)), (2, 102));
-            assert_eq!(host.game.dropped.len(), drops);
+            assert_eq!(host.game.entities.dropped.len(), drops);
             ((), false)
         });
         assert_eq!(menu.read(Clone::clone), tests::state());
         assert_eq!(game.world.block(0, 64, 0), before);
-        assert_eq!(game.dropped.len(), drops);
+        assert_eq!(game.entities.dropped.len(), drops);
         assert!(game.transactions.is_empty());
     });
 }
@@ -209,7 +209,7 @@ fn only_root_commit_publishes_real_listener_and_plan_drops_in_order() {
     with_game(|game| {
         let identity = identity(game);
         let menu = Menu::new(tests::state());
-        let initial = game.dropped.len();
+        let initial = game.entities.dropped.len();
         game.storage_scope(|game, _| {
             let mut host = GameHost::new(game, identity);
             assert_eq!(
@@ -238,17 +238,17 @@ fn only_root_commit_publishes_real_listener_and_plan_drops_in_order() {
                             ));
                             ((), true)
                         });
-                        assert_eq!(host.game.dropped.len(), initial);
+                        assert_eq!(host.game.entities.dropped.len(), initial);
                         Reply::Allow
                     }
                 ),
                 Ok(Outcome::Applied)
             );
-            assert_eq!(host.game.dropped.len(), initial);
+            assert_eq!(host.game.entities.dropped.len(), initial);
             ((), true)
         });
         let stacks: Vec<_> = game
-            .dropped
+            .entities.dropped
             .iter()
             .skip(initial)
             .map(|item| item.stack.clone())
@@ -275,7 +275,7 @@ fn abandoned_token_releases_real_save_gate_and_publishes_nothing() {
     with_game(|game| {
         let identity = identity(game);
         let menu = Menu::new(tests::state());
-        let drops = game.dropped.len();
+        let drops = game.entities.dropped.len();
         assert!(sunrise_gameplay_common::game::CommonGame::admit_entity_save().is_ok());
         game.storage_scope(|game, _| {
             let mut host = GameHost::new(game, identity);
@@ -301,7 +301,7 @@ fn abandoned_token_releases_real_save_gate_and_publishes_nothing() {
             assert_eq!(menu.read(Clone::clone), tests::state());
             ((), true)
         });
-        assert_eq!(game.dropped.len(), drops);
+        assert_eq!(game.entities.dropped.len(), drops);
         assert!(game.transactions.is_empty());
     });
 }

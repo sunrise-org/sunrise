@@ -768,7 +768,7 @@ pub(crate) mod tests {
         assert!(pig.on_ground);
         let r = game.client.remote.as_ref().unwrap();
         assert!(r.tracked_entity(50).is_none(), "not in the player's world");
-        assert!(game.mobs.iter().all(|m| m.id != 50));
+        assert!(game.entities.mobs.iter().all(|m| m.id != 50));
         let gone = C::RemoveEntities(play::RemoveEntities { ids: vec![50] });
         game.handle_packet(run(1, &[gone])).unwrap();
         let nether = &game

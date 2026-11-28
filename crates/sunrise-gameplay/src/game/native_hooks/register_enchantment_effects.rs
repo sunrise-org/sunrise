@@ -305,7 +305,7 @@ mod tests {
                 game.player = Some(player);
                 bind_local_player(game, 7, 1);
                 let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                game.mobs
+                game.entities.mobs
                     .push(Mob::new(21, kind.clone(), Vec3::new(1.0, 64.0, 0.0), 0.0));
                 let mut victim = Mob::new(22, kind, Vec3::new(1.5, 64.0, 0.0), 0.0);
                 let mut boots = ItemStack::new("minecraft:stick", 1);
@@ -315,20 +315,20 @@ mod tests {
                     .extra
                     .set_slot_stack(sunrise_items::equipment::FEET, Some(boots));
                 let health = victim.health;
-                game.mobs.push(victim);
+                game.entities.mobs.push(victim);
                 let mut weapon = ItemStack::new("minecraft:stick", 1);
                 weapon.damage = 11;
                 weapon.enchant("damage_test:sweep", 1);
                 game.common.inventory[game.common.selected] = Some(weapon);
-                let primary = game.mobs[0].bounds();
+                let primary = game.entities.mobs[0].bounds();
 
                 cancel.store(true, Ordering::Relaxed);
                 game.sweep_damage(primary, Spared::Mob(21), 1.0);
-                assert_eq!(game.mobs[1].health, health);
+                assert_eq!(game.entities.mobs[1].health, health);
                 assert!(hits.lock().unwrap().is_empty());
                 cancel.store(false, Ordering::Relaxed);
                 game.sweep_damage(primary, Spared::Mob(21), 1.0);
-                assert_eq!(health - game.mobs[1].health, 2.0);
+                assert_eq!(health - game.entities.mobs[1].health, 2.0);
                 assert_eq!(*reads.lock().unwrap(), [(1, 1.0), (1, 1.0)]);
                 assert_eq!(
                     *hits.lock().unwrap(),
@@ -381,7 +381,7 @@ mod tests {
                     stack.enchant(id, 1);
                     mob.extra.set_slot_stack(slot, Some(stack));
                 }
-                game.mobs.push(mob);
+                game.entities.mobs.push(mob);
                 for _ in 0..2 {
                     game.tick_creature_entities().unwrap();
                     assert_eq!(
@@ -506,14 +506,14 @@ mod tests {
                         .unwrap()
                         .clone();
                     let mut damage_with = |levels: &[(&str, u32)]| {
-                        game.mobs.clear();
-                        game.mobs
+                        game.entities.mobs.clear();
+                        game.entities.mobs
                             .push(Mob::new(21, golem.clone(), Vec3::new(1.0, 64.0, 0.0), 0.0));
                         if levels.iter().any(|(id, _)| *id == "damage_test:force") {
                             let mut boots = ItemStack::new("minecraft:stick", 1);
                             boots.damage = 22;
                             boots.enchant("damage_test:equipment", 1);
-                            game.mobs[0]
+                            game.entities.mobs[0]
                                 .extra
                                 .set_slot_stack(sunrise_items::equipment::FEET, Some(boots));
                         }
@@ -525,9 +525,9 @@ mod tests {
                             .collect();
                         game.common.inventory[game.common.selected] = Some(weapon);
                         game.server.attack_ticks = 100;
-                        let before = game.mobs[0].health;
+                        let before = game.entities.mobs[0].health;
                         game.attack_mob(0);
-                        before - game.mobs[0].health
+                        before - game.entities.mobs[0].health
                     };
                     let sharpness = ("minecraft:sharpness", 3);
                     let force = ("damage_test:force", 2);

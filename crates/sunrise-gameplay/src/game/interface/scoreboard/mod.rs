@@ -189,7 +189,7 @@ impl crate::game::ServerGame<'_> {
             // It keeps its UUID with itself.
             Target::Spawner(id) => self
                 .common
-                .ominous_spawners
+                .entities.ominous_spawners
                 .iter()
                 .find(|s| s.id == id)
                 .map(|s| uuid_text(s.uuid)),
@@ -258,13 +258,13 @@ impl crate::game::ServerGame<'_> {
             Target::Guest(conn) => self.command_guest(conn).and_then(|g| g.saved.as_ref()),
             Target::Spawner(id) => self
                 .common
-                .ominous_spawners
+                .entities.ominous_spawners
                 .iter()
                 .find(|s| s.id == id)
                 .and_then(|s| s.raw.as_deref()),
             Target::Falling(id) => self
                 .common
-                .falling
+                .entities.falling
                 .iter()
                 .find(|f| f.id == id)
                 .and_then(|f| f.saved.as_ref().map(|s| &s.1)),
@@ -582,14 +582,14 @@ impl crate::game::ServerGame<'_> {
         // owner's team is the fallback.
         self.team_with_owner(id, || {
             self.common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == id)
                 .and_then(tame_owner)
         })
     }
     /// `mob_team_of` while the mob tick has lent its mobs out of `Game`.
-    /// The active mob and the disjoint live loan replace `self.mobs` for
+    /// The active mob and the disjoint live loan replace `self.entities.mobs` for
     /// resolving a tame owner's UUID; other live entities still use Game.
     pub(in crate::game::server_side) fn mob_team_scoped(
         &self,
@@ -631,7 +631,7 @@ impl crate::game::ServerGame<'_> {
                 return None;
             };
             self.common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|mob| mob.id == id)
                 .and_then(tame_owner)
@@ -662,7 +662,7 @@ impl crate::game::ServerGame<'_> {
         // One pass over the mobs, not one per mob.
         let tame_owners: HashMap<u32, [i32; 4]> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter_map(|m| Some((m.id, tame_owner(m)?)))
             .collect();

@@ -73,7 +73,7 @@ pub(crate) mod tests {
             [8.5, 66.0, 16.5],
         );
         let kind = game.res.mob_types()["minecraft:breeze"].clone();
-        game.mobs.push(Mob::new(13001, kind, feet, 0.0));
+        game.entities.mobs.push(Mob::new(13001, kind, feet, 0.0));
         game
     }
 }

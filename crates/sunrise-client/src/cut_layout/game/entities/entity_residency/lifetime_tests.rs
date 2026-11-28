@@ -70,22 +70,21 @@ fn resident_new_family_lifetimes_bind_move_and_retire() {
         check_list!(game, server.others.0);
 
         game.add_fangs([0.5, 70.0, 0.5], 0.0, 0, 0);
-        check_list!(game, fangs.list);
+        check_list!(game, entities.fangs.list);
 
         game.summon_with_nbt("minecraft:end_crystal", [0.5, 70.0, 0.5], "{}")
             .unwrap();
         game.lan_assign_ids();
-        check_list!(game, crystals);
+        check_list!(game, entities.crystals);
 
         game.summon_with_nbt("minecraft:tnt", [0.5, 70.0, 0.5], "{}")
             .unwrap();
         game.lan_assign_ids();
-        check_list!(game, tnts);
+        check_list!(game, entities.tnts);
 
         game.server.next_entity += 1;
         let id = game.server.next_entity;
-        game.resident_entities
-            .knots
+        game.entities.knots
             .push(sunrise_gameplay_common::leash_knot::Knot {
                 attachment_lifetime: Default::default(),
                 id,
@@ -97,7 +96,7 @@ fn resident_new_family_lifetimes_bind_move_and_retire() {
                 silent: false,
                 glowing: false,
             });
-        check_list!(game, resident_entities.knots);
+        check_list!(game, entities.knots);
 
         game.summon_with_nbt(
             "minecraft:firework_rocket",
@@ -106,25 +105,25 @@ fn resident_new_family_lifetimes_bind_move_and_retire() {
         )
         .unwrap();
         game.lan_assign_ids();
-        check_list!(game, rockets);
+        check_list!(game, entities.rockets);
 
         game.summon_with_nbt("minecraft:trident", [0.5, 70.0, 0.5], "{}")
             .unwrap();
         game.lan_assign_ids();
-        check_list!(game, tridents);
+        check_list!(game, entities.tridents);
 
         game.add_ominous_item_spawner(ItemStack::new("minecraft:stone", 1), [0.5, 70.0, 0.5], 60);
-        check_list!(game, ominous_spawners);
+        check_list!(game, entities.ominous_spawners);
 
         game.summon_with_nbt("minecraft:area_effect_cloud", [0.5, 70.0, 0.5], "{}")
             .unwrap();
         game.lan_assign_ids();
-        check_list!(game, breath_clouds);
+        check_list!(game, entities.breath_clouds);
 
         game.summon_with_nbt("minecraft:ender_dragon", [0.5, 70.0, 0.5], "{}")
             .unwrap();
         game.lan_assign_ids();
-        let id = NonZeroU32::new(game.dragon.as_ref().unwrap().id).unwrap();
+        let id = NonZeroU32::new(game.entities.dragon.as_ref().unwrap().id).unwrap();
         let holder = game.entity(id.get()).unwrap();
         let index = Arc::new(Mutex::new(AttachmentIndex::default()));
         let key = ("test".into(), "resident_family_lifetime".into());
@@ -143,7 +142,7 @@ fn resident_new_family_lifetimes_bind_move_and_retire() {
         assert!(
             registration.same_registration(
                 &game
-                    .dragon
+                    .entities.dragon
                     .as_mut()
                     .unwrap()
                     .attachment_lifetime()
@@ -153,19 +152,19 @@ fn resident_new_family_lifetimes_bind_move_and_retire() {
         );
         let before = index.lock().unwrap().snapshot(&key);
         assert_eq!(before.len(), 1);
-        let dragon = game.dragon.extract().unwrap();
+        let dragon = game.entities.dragon.extract().unwrap();
         assert_eq!(
             game.with_resident_slot(&DimensionKey::OVERWORLD, id, |_| ()),
             SlotAccess::Taken
         );
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
-        game.dragon.put_back(dragon);
+        game.entities.dragon.put_back(dragon);
         assert_eq!(
             game.with_resident_slot(&DimensionKey::OVERWORLD, id, |slot| registration
                 .same_registration(&slot.registration().unwrap())),
             SlotAccess::Done(true)
         );
-        game.dragon.discard();
+        game.entities.dragon.discard();
         assert!(index.lock().unwrap().snapshot(&key).is_empty());
         assert_eq!(before.len(), 1);
         assert_eq!(

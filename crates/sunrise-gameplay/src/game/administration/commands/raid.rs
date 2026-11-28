@@ -65,7 +65,7 @@ impl crate::game::ServerGame<'_> {
                     ),
                 ) {
                     Some(id) => {
-                        if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+                        if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
                             raider::set_patrol_leader(m, true);
                             raider::finalize(m, raider::Reason::Other);
                         }

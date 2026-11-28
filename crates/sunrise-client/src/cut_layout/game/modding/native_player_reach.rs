@@ -33,7 +33,7 @@ mod tests {
             let half = 0.44999998807907104;
             let pig_at = |game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, face: f64| {
                 let feet = Vec3::new(3.0 + face + half, eye_y - 0.45, 5.0);
-                game.mobs.push(Mob::new(id, kind.clone(), feet, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind.clone(), feet, 0.0));
                 let pig = game.entity(id).unwrap();
                 let [lo, _] = game.entity_bounding_box(pig).unwrap();
                 assert_eq!(lo[0], 3.0 + face, "pig {id}'s near face");

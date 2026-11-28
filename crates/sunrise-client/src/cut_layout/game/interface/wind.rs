@@ -53,12 +53,12 @@ pub(crate) mod tests {
             assert!(game.run_command("summon experience_orb 12.5 70.5 12.5 {Value:1}"));
             let at = Vec3::new(5.0, 70.5, 8.5);
             game.add_projectile(Projectile::new(ProjectileKind::BreezeWindCharge, at, None));
-            let charge = game.creatures.projectiles[0].clone();
+            let charge = game.entities.projectiles[0].clone();
             game.begin_ordered_ticks();
             game.run_ordered_ticks(charge.join_seq(), false).unwrap();
-            assert_eq!(game.server.ordered.done, Some(game.orbs[0].join_seq()));
-            assert_eq!(game.orbs[0].age, 1);
-            assert_eq!(game.tnts[0].fuse, 80);
+            assert_eq!(game.server.ordered.done, Some(game.entities.orbs[0].join_seq()));
+            assert_eq!(game.entities.orbs[0].age, 1);
+            assert_eq!(game.entities.tnts[0].fuse, 80);
 
             game.wind_charge_hit(
                 &charge,
@@ -70,17 +70,17 @@ pub(crate) mod tests {
             )
             .unwrap();
             game.run_ordered_ticks(JoinSeq::MAX, true).unwrap();
-            assert_eq!(game.tnts[0].fuse, 79);
-            assert_eq!(game.tnts[0].position.x, 8.25);
+            assert_eq!(game.entities.tnts[0].fuse, 79);
+            assert_eq!(game.entities.tnts[0].position.x, 8.25);
             game.apply_late_wind_pushes();
             // Three blocks from the centre, unobstructed: (1 - 3 / 6) due east.
-            assert_eq!(game.tnts[0].velocity.x, 0.5);
+            assert_eq!(game.entities.tnts[0].velocity.x, 0.5);
 
             game.server.ordered.announced = JoinSeq::upcoming();
             game.begin_ordered_ticks();
             game.run_ordered_ticks(charge.join_seq(), false).unwrap();
-            assert_eq!(game.tnts[0].fuse, 78);
-            assert_eq!(game.tnts[0].position.x, 8.75);
+            assert_eq!(game.entities.tnts[0].fuse, 78);
+            assert_eq!(game.entities.tnts[0].position.x, 8.75);
         });
     }
 
@@ -183,7 +183,7 @@ pub(crate) mod tests {
                     (SPARED, Vec3::new(5.25, 70.0, 9.25)),
                     (SECOND, Vec3::new(4.5, 70.0, 8.5)),
                 ] {
-                    game.mobs.push(Mob::new(id, zombie.clone(), pos, 0.0));
+                    game.entities.mobs.push(Mob::new(id, zombie.clone(), pos, 0.0));
                 }
 
                 let powered = |game: &sunrise_gameplay::game::ServerGame<'_>, pos: [i32; 3]| {
@@ -195,12 +195,12 @@ pub(crate) mod tests {
                         .and_then(|s| s.properties.get("powered").cloned())
                 };
                 let vel_of = |game: &sunrise_gameplay::game::ServerGame<'_>, id: u32| {
-                    game.mobs.iter().find(|m| m.id == id).unwrap().velocity
+                    game.entities.mobs.iter().find(|m| m.id == id).unwrap().velocity
                 };
 
                 let at = Vec3::new(5.0, 70.5, 8.5);
                 game.add_projectile(Projectile::new(ProjectileKind::WindCharge, at, None));
-                let player_charge = game.creatures.projectiles[0].clone();
+                let player_charge = game.entities.projectiles[0].clone();
                 game.wind_charge_hit(
                     &player_charge,
                     Hit::Block {
@@ -245,13 +245,13 @@ pub(crate) mod tests {
                     "mob_griefing",
                     sunrise_game_data::gamerules::Value::Bool(false),
                 ));
-                for m in &mut game.mobs {
+                for m in &mut game.entities.mobs {
                     m.velocity = Vec3::ZERO;
                 }
                 probe.knockback_order.lock().unwrap().clear();
                 probe.knockback_saw_edited_blocks.lock().unwrap().clear();
                 game.add_projectile(Projectile::new(ProjectileKind::BreezeWindCharge, at, None));
-                let breeze_charge = game.creatures.projectiles.last().unwrap().clone();
+                let breeze_charge = game.entities.projectiles.last().unwrap().clone();
                 game.wind_charge_hit(
                     &breeze_charge,
                     Hit::Block {

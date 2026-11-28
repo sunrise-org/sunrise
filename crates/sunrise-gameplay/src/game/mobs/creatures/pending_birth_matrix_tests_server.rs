@@ -18,19 +18,19 @@ pub fn breed_pair_credited(
     let kind = game.res.mob_types().get(kind).unwrap().clone();
     let base = game.server.next_entity;
     game.server.next_entity += 2;
-    game.mobs.push(Mob::new(
+    game.entities.mobs.push(Mob::new(
         base + 1,
         kind.clone(),
         Vec3::new(0.0, 64.0, 0.0),
         0.0,
     ));
-    game.mobs
+    game.entities.mobs
         .push(Mob::new(base + 2, kind, Vec3::new(1.0, 64.0, 0.0), 0.0));
     game.native_joins_skip();
     if credited {
         game.server.love_cause.insert(base + 1, None);
     }
-    let parent = game.mobs.iter_mut().find(|m| m.id == base + 1).unwrap();
+    let parent = game.entities.mobs.iter_mut().find(|m| m.id == base + 1).unwrap();
     parent.random = LegacyRandom::new(0);
     let live_baby = !matches!(
         parent.species(),
@@ -43,7 +43,7 @@ pub fn breed_pair_credited(
     } else {
         parent.extra.age = 6000;
     }
-    let partner = game.mobs.iter_mut().find(|m| m.id == base + 2).unwrap();
+    let partner = game.entities.mobs.iter_mut().find(|m| m.id == base + 2).unwrap();
     partner.extra.in_love = 600;
     let child = game.breed(
         base + 1,
@@ -78,7 +78,7 @@ pub fn cube(game: &mut crate::game::ServerGame<'_>, kind: &str, size: i32, seed:
 
 /// Two cows bred by the real route; the parent's id ends in `mode`.
 pub fn breed(game: &mut crate::game::ServerGame<'_>, mode: u32) -> (u32, u32, Option<u32>) {
-    game.common.mobs.clear();
+    game.common.entities.mobs.clear();
     game.server.next_entity = next_parent_id(game, mode) - 1;
     breed_pair(game, "minecraft:cow")
 }
@@ -93,10 +93,10 @@ pub(in crate::game::server_side) fn next_parent_id(
 
 /// A size-4 slime whose entity id ends in `mode`, split by the real route.
 pub fn split(game: &mut crate::game::ServerGame<'_>, mode: u32) -> Vec<Mob> {
-    game.common.mobs.clear();
+    game.common.entities.mobs.clear();
     let mut dying = cube(game, "minecraft:slime", 4, SEED);
     game.server.next_entity = next_parent_id(game, mode);
     dying.id = game.server.next_entity;
     game.split_cube_children(&mut dying);
-    game.common.mobs.to_vec()
+    game.common.entities.mobs.to_vec()
 }

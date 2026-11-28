@@ -37,17 +37,17 @@ fn a_merged_age_reaches_the_same_live_orb() {
         .unwrap()
         .0;
         game.load_orb(saved, Some([9, 0, 0, 1]));
-        assert_eq!(game.orbs.len(), 1);
+        assert_eq!(game.entities.orbs.len(), 1);
         // The live state a reload would lose: its id, join and tick count.
-        game.orbs[0].ticks = 17;
-        let (id, join) = (game.orbs[0].id, game.orbs[0].join);
+        game.entities.orbs[0].ticks = 17;
+        let (id, join) = (game.entities.orbs[0].id, game.entities.orbs[0].join);
         let modified = Some("Modified entity data of Experience Orb".to_owned());
         assert_eq!(
             run(game, &format!("data merge entity {ORB} {{Age:42s}}")),
             (true, modified.clone())
         );
-        assert_eq!(game.orbs.len(), 1, "the same orb, no second one");
-        let o = &game.orbs[0];
+        assert_eq!(game.entities.orbs.len(), 1, "the same orb, no second one");
+        let o = &game.entities.orbs[0];
         assert_eq!((o.id, o.join, o.ticks), (id, join, 17), "the same live orb");
         assert_eq!((o.age, o.value, o.count, o.health), (42, 3, 1, 5));
         assert_eq!(game.persist.uuids.get(&id), Some(&[9, 0, 0, 1]));
@@ -84,20 +84,20 @@ fn a_merged_age_reaches_the_same_live_orb() {
             ))
             .unwrap();
         assert_eq!(tag.get("UUID"), Some(&Tag::IntArray(vec![9, 0, 0, 1])));
-        assert_eq!(game.orbs[0].id, id);
+        assert_eq!(game.entities.orbs[0].id, id);
     });
 }
 
 /// Loads an orb from `snbt` with the UUID `[9, 0, 0, n]`; returns its id.
 fn load(game: &mut sunrise_gameplay::game::ServerGame<'_>, snbt: &str, n: i32) -> u32 {
     game.load_orb(parse_snbt(snbt).unwrap().0, Some([9, 0, 0, n]));
-    game.orbs.last().unwrap().id
+    game.entities.orbs.last().unwrap().id
 }
 fn orb<'a>(
     game: &'a sunrise_gameplay::game::ServerGame<'_>,
     id: u32,
 ) -> &'a sunrise_sim::entities::ExperienceOrb {
-    game.orbs.iter().find(|o| o.id == id).unwrap()
+    game.entities.orbs.iter().find(|o| o.id == id).unwrap()
 }
 
 /// Added controls (after the baseline): the merge changes only what the
@@ -117,7 +117,7 @@ fn the_merge_keeps_the_live_orb_and_its_portal_process() {
             1,
         );
         assert!(!game.persist.raw.contains_key(&id), "no raw compound yet");
-        game.orbs.iter_mut().find(|o| o.id == id).unwrap().ticks = 17;
+        game.entities.orbs.iter_mut().find(|o| o.id == id).unwrap().ticks = 17;
         let join = orb(game, id).join;
         assert!(run(game, &format!("data merge entity {ORB} {{Age:42s}}")).0);
         let o = orb(game, id);
@@ -129,7 +129,7 @@ fn the_merge_keeps_the_live_orb_and_its_portal_process() {
             (o.velocity.x, o.rotation, o.no_gravity),
             (0.1, [30.0, 10.0], false)
         );
-        assert_eq!(game.orbs.len(), 1);
+        assert_eq!(game.entities.orbs.len(), 1);
         // A merge that moves it changes the same orb.
         assert!(
             run(
@@ -211,7 +211,7 @@ fn the_merge_keeps_the_live_orb_and_its_portal_process() {
         );
         let state = game.server.portals.level.entities.get(&other).unwrap();
         assert_eq!((state.cooldown, state.process.is_none()), (120, true));
-        assert_eq!(game.orbs.len(), 2);
+        assert_eq!(game.entities.orbs.len(), 2);
     });
 }
 

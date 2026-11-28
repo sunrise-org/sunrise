@@ -92,7 +92,7 @@ fn robot(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> u32 {
     };
     game.load_listed("sync_route:robot", None, None, record.to_tag())
         .unwrap();
-    game.resident_entities.general.rows[0].id
+    game.entities.general.rows[0].id
 }
 
 fn value_of(changes: &[sunrise_mod_runtime::attachments::AttachmentSync]) -> Option<i32> {

@@ -208,7 +208,7 @@ impl crate::game::ServerGame<'_> {
             .world
             .modified
             .insert((pos[0] >> 4, pos[2] >> 4));
-        self.common.armor_stands.push(stand);
+        self.common.entities.armor_stands.push(stand);
         if !self.common.creative {
             self.consume_held();
         }
@@ -241,12 +241,12 @@ impl crate::game::ServerGame<'_> {
             // interactAt gets the packet's location, measured from the stand's
             // position, so getClickedSlot reads the height the client clicked.
             Some(t) => sunrise_gameplay_common::game::item_actions::named_entity(
-                &self.common.armor_stands,
+                &self.common.entities.armor_stands,
                 t.id,
                 |a| a.id,
             )
             .map(|i| {
-                let p = self.common.armor_stands[i].position;
+                let p = self.common.entities.armor_stands[i].position;
                 (
                     i,
                     0.0,
@@ -267,7 +267,7 @@ impl crate::game::ServerGame<'_> {
         }
         let held = self.common.held().cloned();
         if let Some(stack) = held.as_ref().filter(|h| &*h.item == "minecraft:name_tag") {
-            let stand = &mut self.common.armor_stands[i];
+            let stand = &mut self.common.entities.armor_stands[i];
             let alive = stand.health > 0.0;
             if !stand.name_with_tag(stack) {
                 return false;
@@ -294,7 +294,7 @@ impl crate::game::ServerGame<'_> {
             self.swing_arm();
             return true;
         }
-        let a = &self.common.armor_stands[i];
+        let a = &self.common.entities.armor_stands[i];
         let slot = match &held {
             Some(h) => {
                 let slot = self.equipment_slot(h);
@@ -340,7 +340,7 @@ impl crate::game::ServerGame<'_> {
         if a.swap_locked(slot) {
             return false;
         }
-        let current = self.common.armor_stands[i].equipment[slot].clone();
+        let current = self.common.entities.armor_stands[i].equipment[slot].clone();
         if held.is_none() && current.is_none() {
             return false;
         }
@@ -356,7 +356,7 @@ impl crate::game::ServerGame<'_> {
                 self.server.lan_acting_name.clone(),
             )
         {
-            let stand = self.common.armor_stands[i].id as i32;
+            let stand = self.common.entities.armor_stands[i].id as i32;
             let slot_name = ["mainhand", "offhand", "feet", "legs", "chest", "head"][slot];
             let mut cancel = false;
             self.native_armor_stand_manipulate(player, &name, stand, slot_name, &mut cancel);
@@ -366,13 +366,13 @@ impl crate::game::ServerGame<'_> {
             // The listener had the game in its hands: find the stand again by
             // its id and check the click's facts. A change spends the click.
             let Some(now) = sunrise_gameplay_common::game::item_actions::named_entity(
-                &self.common.armor_stands,
+                &self.common.entities.armor_stands,
                 stand,
                 |a| a.id,
             ) else {
                 return true;
             };
-            let stand = &self.common.armor_stands[now];
+            let stand = &self.common.entities.armor_stands[now];
             if !Self::same_item_and_count(stand.equipment[slot].as_ref(), current.as_ref())
                 || !Self::same_item_and_count(self.common.held(), held.as_ref())
                 || stand.swap_locked(slot)
@@ -386,13 +386,13 @@ impl crate::game::ServerGame<'_> {
             // A player with infinite materials puts a copy of one on an empty
             // slot and keeps the stack.
             Some(h) if self.common.creative && current.is_none() => {
-                self.common.armor_stands[i].equipment[slot] = Some(ItemStack { count: 1, ..h });
+                self.common.entities.armor_stands[i].equipment[slot] = Some(ItemStack { count: 1, ..h });
             }
             Some(h) if h.count > 1 => {
                 if current.is_some() {
                     return true;
                 }
-                self.common.armor_stands[i].equipment[slot] = Some(ItemStack {
+                self.common.entities.armor_stands[i].equipment[slot] = Some(ItemStack {
                     count: 1,
                     ..h.clone()
                 });
@@ -402,11 +402,11 @@ impl crate::game::ServerGame<'_> {
                 });
             }
             h => {
-                self.common.armor_stands[i].equipment[slot] = h;
+                self.common.entities.armor_stands[i].equipment[slot] = h;
                 *self.common.held_mut() = current;
             }
         }
-        let p = self.common.armor_stands[i].position;
+        let p = self.common.entities.armor_stands[i].position;
         self.common
             .world
             .modified
@@ -425,7 +425,7 @@ impl crate::game::ServerGame<'_> {
         let ((_, scale, crit, magic), admitted) = self.melee_damage_with_admission(
             "minecraft:armor_stand",
             true,
-            Some(self.common.armor_stands[i].id),
+            Some(self.common.entities.armor_stands[i].id),
         );
         let sweep = self.sweep_before_hit("minecraft:armor_stand", crit);
         let hurt = self.hit_armor_stand(i, |g, area, id| {
@@ -471,12 +471,12 @@ impl crate::game::ServerGame<'_> {
     ) -> bool {
         // The stand's box, id and place, before the hit may remove it.
         let (area, id) = (
-            self.common.armor_stands[i].bounds(),
-            self.common.armor_stands[i].id,
+            self.common.entities.armor_stands[i].bounds(),
+            self.common.entities.armor_stands[i].id,
         );
         let (center, on_ground) = (
-            self.common.armor_stands[i].position,
-            self.common.armor_stands[i].ground.on_ground,
+            self.common.entities.armor_stands[i].position,
+            self.common.entities.armor_stands[i].ground.on_ground,
         );
         let hurt = self.punch_armor_stand(i);
         if hurt {
@@ -493,7 +493,7 @@ impl crate::game::ServerGame<'_> {
         // the saved flag or window refuses the hit — past only for
         // #bypasses_invulnerability damage and a creative player's hit
         // (`DamageSource.isCreativePlayer`).
-        let id = self.common.armor_stands[i].id;
+        let id = self.common.entities.armor_stands[i].id;
         let attacker = self.own_entity_id();
         let vanilla =
             self.saved_refuses_damage(id, "minecraft:player_attack", self.common.creative);
@@ -542,7 +542,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn begin_armor_stand_ticks(&mut self) -> Result<()> {
         self.server.ordered.armor_stands.extend(
             self.common
-                .armor_stands
+                .entities.armor_stands
                 .iter()
                 .filter(|stand| stand.join < self.server.ordered.born)
                 .map(|stand| stand.join),
@@ -557,7 +557,7 @@ impl crate::game::ServerGame<'_> {
             .sort_unstable();
         let first_shulker = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|mob| !mob.removed && mob.species() == Species::Shulker)
             .map(|mob| mob.join)
@@ -588,7 +588,7 @@ impl crate::game::ServerGame<'_> {
     pub fn tick_armor_stands(&mut self) -> Result<()> {
         let joins: Vec<_> = self
             .common
-            .armor_stands
+            .entities.armor_stands
             .iter()
             .map(|stand| stand.join)
             .collect();
@@ -622,18 +622,18 @@ impl crate::game::ServerGame<'_> {
                 self.settle_armor_stand_turn(&mut drowned, &mut dead);
                 self.native_tick_post_one(&round, id, TYPE_ID);
             }
-            let Some(i) = self.common.armor_stands.locate(join) else {
+            let Some(i) = self.common.entities.armor_stands.locate(join) else {
                 continue;
             };
-            let at = self.common.armor_stands[i].position;
+            let at = self.common.entities.armor_stands[i].position;
             if !ticking(at.x.floor() as i32, at.z.floor() as i32) {
-                self.common.armor_stands[i].previous = at;
-                self.common.armor_stands[i].previous_yaw = self.common.armor_stands[i].yaw;
-                self.common.armor_stands[i].previous_body_yaw =
-                    self.common.armor_stands[i].previous_yaw;
+                self.common.entities.armor_stands[i].previous = at;
+                self.common.entities.armor_stands[i].previous_yaw = self.common.entities.armor_stands[i].yaw;
+                self.common.entities.armor_stands[i].previous_body_yaw =
+                    self.common.entities.armor_stands[i].previous_yaw;
                 continue;
             }
-            let id = self.common.armor_stands[i].id;
+            let id = self.common.entities.armor_stands[i].id;
             // ServerLevel.tick skips an entity that `isRemoved`, here one whose removal is queued.
             let target = super::commands::Target::Stand(id);
             if self.target_removed(&target) || !self.native_tick_pre_one(&mut round, id, TYPE_ID) {
@@ -643,22 +643,22 @@ impl crate::game::ServerGame<'_> {
             if self.target_removed(&target) {
                 continue;
             }
-            let Some(i) = self.common.armor_stands.locate(join) else {
+            let Some(i) = self.common.entities.armor_stands.locate(join) else {
                 continue;
             };
             told = Some(id);
-            self.common.armor_stands[i].enchantment_tick =
-                self.common.armor_stands[i].enchantment_tick.wrapping_add(1);
-            if !self.common.armor_stands[i].equipment.is_empty() {
+            self.common.entities.armor_stands[i].enchantment_tick =
+                self.common.entities.armor_stands[i].enchantment_tick.wrapping_add(1);
+            if !self.common.entities.armor_stands[i].equipment.is_empty() {
                 self.tick_equipment_enchantments(super::commands::Target::Stand(id), id);
             }
-            let Some(i) = self.common.armor_stands.locate(join) else {
+            let Some(i) = self.common.entities.armor_stands.locate(join) else {
                 continue;
             };
-            let target_dead = self.common.armor_stands[i]
+            let target_dead = self.common.entities.armor_stands[i]
                 .last_hurt_mob
                 .is_some_and(|(id, _)| !self.last_hurt_target_alive(id));
-            let stand = &mut self.common.armor_stands[i];
+            let stand = &mut self.common.entities.armor_stands[i];
             stand.tick_count = stand.tick_count.wrapping_add(1);
             stand.first_tick = false;
             if target_dead {
@@ -666,11 +666,11 @@ impl crate::game::ServerGame<'_> {
             }
             // Entity.baseTick: the saved invulnerability window counts down
             // (#916).
-            self.tick_saved_invulnerable_time(self.common.armor_stands[i].id);
+            self.tick_saved_invulnerable_time(self.common.entities.armor_stands[i].id);
             // LivingEntity.baseTick -> tickDeath: a stand at 0 health or less
             // is dead, and goes at a death time of 20 with no drops.
             let mut died_of_age = false;
-            let a = &mut self.common.armor_stands[i];
+            let a = &mut self.common.entities.armor_stands[i];
             if a.health <= 0.0 {
                 a.death_time = a.death_time.wrapping_add(1);
                 if a.death_time >= 20 {
@@ -681,11 +681,11 @@ impl crate::game::ServerGame<'_> {
             self.armor_stand_location_effects(i, false);
             // ArmorStand.travel: a marker or a NoGravity stand does not move.
             let travels =
-                !self.common.armor_stands[i].marker && !self.common.armor_stands[i].no_gravity;
+                !self.common.entities.armor_stands[i].marker && !self.common.entities.armor_stands[i].no_gravity;
             if travels && obstacles.is_none() {
                 obstacles = Some(self.stand_entity_collisions());
             }
-            let a = &mut self.common.armor_stands[i];
+            let a = &mut self.common.entities.armor_stands[i];
             a.previous = a.position;
             a.previous_yaw = a.yaw;
             a.previous_pitch = a.pitch;
@@ -693,7 +693,7 @@ impl crate::game::ServerGame<'_> {
             // aiStep's freezing step (removeFrost) makes the speed instance.
             a.speed_instance = true;
             // LivingEntity.aiStep -> EntityEquipment.tick, before movement.
-            let a = &mut self.common.armor_stands[i];
+            let a = &mut self.common.entities.armor_stands[i];
             super::inventory_tick::equipment_inventory_tick(
                 &self.common.world,
                 self.common.res.facts(),
@@ -756,10 +756,10 @@ impl crate::game::ServerGame<'_> {
                 } else {
                     Some(step.vanilla)
                 };
-                let Some(i) = self.common.armor_stands.locate(join) else {
+                let Some(i) = self.common.entities.armor_stands.locate(join) else {
                     continue;
                 };
-                let a = &mut self.common.armor_stands[i];
+                let a = &mut self.common.entities.armor_stands[i];
                 if let Some(breath) = answer
                     && a.air == step.air
                     && let Some(drowning) =
@@ -772,7 +772,7 @@ impl crate::game::ServerGame<'_> {
             } else {
                 i
             };
-            let a = &mut self.common.armor_stands[i];
+            let a = &mut self.common.entities.armor_stands[i];
             if a.hurt_time > 0 {
                 a.hurt_time -= 1;
             }
@@ -815,7 +815,7 @@ impl crate::game::ServerGame<'_> {
                 a.tick_settle(medium, step);
             }
             let section_step = (a.id, a.previous, a.position);
-            let a = &mut self.common.armor_stands[i];
+            let a = &mut self.common.entities.armor_stands[i];
             if in_water {
                 a.enchantment_fall_distance = 0.0;
             } else {
@@ -835,12 +835,12 @@ impl crate::game::ServerGame<'_> {
             }
             self.armor_stand_turtle_eggs(i, landed)?;
             if landed {
-                let stand = &self.common.armor_stands[i];
+                let stand = &self.common.entities.armor_stands[i];
                 let (position, bounds) = (stand.position, stand.bounds());
                 self.post_landing_event(position, bounds, true);
             }
-            if step.is_some() && !self.common.armor_stands[i].no_physics(None) {
-                let stand = &self.common.armor_stands[i];
+            if step.is_some() && !self.common.entities.armor_stands[i].no_physics(None) {
+                let stand = &self.common.entities.armor_stands[i];
                 let (id, footprint, ground, mut velocity) = (
                     stand.id,
                     (stand.position, stand.bounds()),
@@ -848,7 +848,7 @@ impl crate::game::ServerGame<'_> {
                     stand.velocity,
                 );
                 let writes = self.body_step_on((id, TYPE_ID), footprint, &ground, &mut velocity);
-                let stand = &mut self.common.armor_stands[i];
+                let stand = &mut self.common.entities.armor_stands[i];
                 // `ArmorStand.hurtServer` does not take generic damage; the stand
                 // has no stuck multiplier or active-effect list in its travel row.
                 super::entity::apply_contact_writes(
@@ -872,9 +872,9 @@ impl crate::game::ServerGame<'_> {
                     self.bubble_column_particles(pos);
                 }
             }
-            self.common.armor_stands[i]
+            self.common.entities.armor_stands[i]
                 .apply_honey_slide(&self.common.world, self.common.res.facts());
-            let a = &self.common.armor_stands[i];
+            let a = &self.common.entities.armor_stands[i];
             if !a.marker && !a.no_gravity {
                 self.entity_powder_snow_particles(
                     a.previous,
@@ -887,15 +887,15 @@ impl crate::game::ServerGame<'_> {
             // LivingEntity.aiStep calls pushEntities after travel. The stand's
             // own doPush is empty; only this shove runs.
             self.push_rideable_minecarts(i);
-            let id = self.common.armor_stands[i].id;
-            let prev_fire = self.common.armor_stands[i].fire_ticks;
+            let id = self.common.entities.armor_stands[i].id;
+            let prev_fire = self.common.entities.armor_stands[i].fire_ticks;
             let saved = ["minecraft:on_fire", "minecraft:in_fire"]
                 .map(|damage| self.saved_refuses_damage(id, damage, false));
             let tags = world_items!(self);
             let registry = self.common.pack.assets.registry;
             let block_registries = &self.common.pack.block_registries;
             let hooks = &self.common.damage_hooks;
-            if let Some(damage_type) = self.common.armor_stands[i].environment_tick_with_hook(
+            if let Some(damage_type) = self.common.entities.armor_stands[i].environment_tick_with_hook(
                 &mut self.common.world,
                 self.common.res.facts(),
                 registry,
@@ -929,21 +929,21 @@ impl crate::game::ServerGame<'_> {
             {
                 dead.push((id, Some(damage_type)));
             }
-            if self.common.armor_stands[i].fire_ticks > 0
-                && self.common.armor_stands[i].fire_ticks >= prev_fire
+            if self.common.entities.armor_stands[i].fire_ticks > 0
+                && self.common.entities.armor_stands[i].fire_ticks >= prev_fire
                 && let Some(sunrise_core::nbt::Tag::Compound(map)) =
                     self.common.persist.raw.get_mut(&id)
             {
                 map.remove(&"TicksFrozen".into());
             }
             // ArmorStand.tickHeadTurn copies the view angle to its body after aiStep.
-            let stand = &mut self.common.armor_stands[i];
+            let stand = &mut self.common.entities.armor_stands[i];
             stand.previous_body_yaw = stand.previous_yaw;
             stand.body_yaw = stand.yaw;
             let (id, from, to) = section_step;
             self.entity_section_step(id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
             // The end of LivingEntity.tick.
-            let a = &mut self.common.armor_stands[i];
+            let a = &mut self.common.entities.armor_stands[i];
             if a.impulse_grace > 0 {
                 a.impulse_grace -= 1;
             }
@@ -963,7 +963,7 @@ impl crate::game::ServerGame<'_> {
         for (id, bubbles) in drowned.drain(..) {
             let Some((at, v)) = self
                 .common
-                .armor_stands
+                .entities.armor_stands
                 .iter()
                 .find(|a| a.id == id)
                 .map(|a| {
@@ -986,13 +986,13 @@ impl crate::game::ServerGame<'_> {
         for (id, damage_type) in dead.drain(..) {
             match damage_type {
                 Some(damage_type) => {
-                    if let Some(i) = self.common.armor_stands.iter().position(|a| a.id == id) {
+                    if let Some(i) = self.common.entities.armor_stands.iter().position(|a| a.id == id) {
                         self.break_armor_stand_by_anything(i, damage_type, 0);
                     }
                 }
                 None => {
                     // Entity event 60 (the poof), then remove(KILLED).
-                    if let Some(a) = self.common.armor_stands.iter().find(|a| a.id == id) {
+                    if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
                         let at = a.position.components();
                         self.remove_armor_stand_after(id, |game| {
                             game.lan_entity_event(id as i32, 60, at);
@@ -1017,7 +1017,7 @@ impl crate::game::ServerGame<'_> {
     ) {
         let grid = grid.get_or_insert_with(|| self.stand_entity_collisions());
         let mut nearby = Vec::new();
-        let a = &mut self.common.armor_stands[i];
+        let a = &mut self.common.entities.armor_stands[i];
         // Entity.collide: the entities meeting the box stretched by the push.
         let reach = a.bounds().expand_towards(delta);
         let reach = reach.inflate(Vec3::new(1.0e-7, 1.0e-7, 1.0e-7));
@@ -1046,7 +1046,7 @@ impl crate::game::ServerGame<'_> {
         area: Aabb,
         from: [f64; 3],
     ) {
-        for a in self.common.armor_stands.iter_mut() {
+        for a in self.common.entities.armor_stands.iter_mut() {
             let (width, height) = stand_box(a);
             let half = f64::from(width) / 2.0;
             let p = a.position;
@@ -1073,7 +1073,7 @@ impl crate::game::ServerGame<'_> {
     /// physics (`Marker` or `NoGravity`, `ArmorStand.hasPhysics` / `noPhysics`)
     /// or one riding that cart does not shove it.
     pub(in crate::game::server_side) fn push_rideable_minecarts(&mut self, i: usize) {
-        let stand = &self.common.armor_stands[i];
+        let stand = &self.common.entities.armor_stands[i];
         if stand.marker || stand.no_gravity {
             return;
         }
@@ -1081,7 +1081,7 @@ impl crate::game::ServerGame<'_> {
         let stand_box = stand.bounds();
         let vehicle = stand.vehicle;
         let mut applied = Vec::new();
-        for (j, cart) in self.common.carts.iter().enumerate() {
+        for (j, cart) in self.common.entities.carts.iter().enumerate() {
             let Some(shove) = armor_stand_cart_shove(
                 stand_pos,
                 stand_box,
@@ -1097,7 +1097,7 @@ impl crate::game::ServerGame<'_> {
         let mut stand_x = 0.0;
         let mut stand_z = 0.0;
         for (j, shove) in applied {
-            self.common.carts.update(j, |cart| {
+            self.common.entities.carts.update(j, |cart| {
                 cart.velocity.x += shove.cart_x;
                 cart.velocity.z += shove.cart_z;
             });
@@ -1105,7 +1105,7 @@ impl crate::game::ServerGame<'_> {
             stand_z += shove.stand_z;
         }
         if stand_x != 0.0 || stand_z != 0.0 {
-            let stand = &mut self.common.armor_stands[i];
+            let stand = &mut self.common.entities.armor_stands[i];
             stand.velocity.x += stand_x;
             stand.velocity.z += stand_z;
         }
@@ -1121,7 +1121,7 @@ impl crate::game::ServerGame<'_> {
         i: usize,
         landed: bool,
     ) -> Result<()> {
-        let stand = &self.common.armor_stands[i];
+        let stand = &self.common.entities.armor_stands[i];
         if !stand.ground.on_ground || self.common.options.execution_role.is_client() {
             return Ok(());
         }
@@ -1231,8 +1231,8 @@ impl crate::game::ServerGame<'_> {
         effects: impl FnOnce(&mut Self),
     ) -> bool {
         self.with_vehicle_removal_effects(super::commands::Target::Stand(id), effects, |game| {
-            if let Some(i) = game.armor_stands.iter().position(|stand| stand.id == id) {
-                game.armor_stands.remove(i);
+            if let Some(i) = game.entities.armor_stands.iter().position(|stand| stand.id == id) {
+                game.entities.armor_stands.remove(i);
             }
         })
         .is_some()
@@ -1267,7 +1267,7 @@ impl crate::game::ServerGame<'_> {
         position: Option<[f64; 3]>,
     ) -> bool {
         use super::commands::Target;
-        if !self.common.armor_stands.iter().any(|a| a.id == id) {
+        if !self.common.entities.armor_stands.iter().any(|a| a.id == id) {
             return false;
         }
         let Some(kind) = self.common.health_resources.damage.id(damage_type) else {
@@ -1317,10 +1317,10 @@ impl crate::game::ServerGame<'_> {
             return false;
         }
         // Re-locate after invulnerability hooks may have removed or moved the stand.
-        let Some(i) = self.common.armor_stands.iter().position(|a| a.id == id) else {
+        let Some(i) = self.common.entities.armor_stands.iter().position(|a| a.id == id) else {
             return false;
         };
-        let a = &self.common.armor_stands[i];
+        let a = &self.common.entities.armor_stands[i];
         if (a.mod_fire_immune && tagged(self, "minecraft:is_fire"))
             || a.invisible
             || a.marker
@@ -1347,14 +1347,14 @@ impl crate::game::ServerGame<'_> {
             return false;
         }
         if ignites {
-            if self.common.armor_stands[i].mod_fire_immune {
+            if self.common.entities.armor_stands[i].mod_fire_immune {
                 return false;
             }
-            if self.common.armor_stands[i].is_on_fire() {
+            if self.common.entities.armor_stands[i].is_on_fire() {
                 self.cause_stand_damage(i, 0.15, damage_type, causing_id);
             } else {
                 // igniteForSeconds(5.0f): at least 100 ticks, and clearFreeze.
-                let a = &mut self.common.armor_stands[i];
+                let a = &mut self.common.entities.armor_stands[i];
                 a.fire_ticks = a.fire_ticks.max(100);
                 if let Some(sunrise_core::nbt::Tag::Compound(map)) =
                     self.common.persist.raw.get_mut(&id)
@@ -1364,7 +1364,7 @@ impl crate::game::ServerGame<'_> {
             }
             return false;
         }
-        if burns && self.common.armor_stands[i].health > 0.5 {
+        if burns && self.common.entities.armor_stands[i].health > 0.5 {
             self.cause_stand_damage(i, 4.0, damage_type, causing_id);
             return false;
         }
@@ -1394,7 +1394,7 @@ impl crate::game::ServerGame<'_> {
         causing: Option<super::commands::Target>,
     ) -> bool {
         let mut checks = Vec::new();
-        let equipment = &self.common.armor_stands[i].equipment;
+        let equipment = &self.common.entities.armor_stands[i].equipment;
         for (stack, slot) in equipment.iter().zip(ArmorStand::SLOTS) {
             let Some(stack) = stack else { continue };
             let armor = matches!(slot, "head" | "chest" | "legs" | "feet");
@@ -1441,12 +1441,12 @@ impl crate::game::ServerGame<'_> {
         damage_type: &str,
         causing: u32,
     ) {
-        let health = self.common.armor_stands[i].health - amount;
+        let health = self.common.entities.armor_stands[i].health - amount;
         if health <= 0.5 {
             self.break_armor_stand_by_anything(i, damage_type, causing);
         } else {
-            let at = self.common.armor_stands[i].position;
-            self.common.armor_stands[i].health = health;
+            let at = self.common.entities.armor_stands[i].position;
+            self.common.entities.armor_stands[i].health = health;
             self.stand_game_event(
                 "minecraft:entity_damage",
                 [at.x, at.y, at.z],
@@ -1461,7 +1461,7 @@ impl crate::game::ServerGame<'_> {
         damage_type: &str,
         causing: u32,
     ) -> bool {
-        let a = self.common.armor_stands[i].clone();
+        let a = self.common.entities.armor_stands[i].clone();
         let id = a.id;
         let at = a.position.components();
         let removed = self.remove_armor_stand_after(id, |game| {
@@ -1492,11 +1492,11 @@ impl crate::game::ServerGame<'_> {
         causing_id: u32,
     ) -> bool {
         let time = self.common.world.game_time;
-        let at = self.common.armor_stands[i].position;
+        let at = self.common.entities.armor_stands[i].position;
         let at = [at.x, at.y, at.z];
         if creative {
-            let id = self.common.armor_stands[i].id;
-            let (width, height) = stand_box(&self.common.armor_stands[i]);
+            let id = self.common.entities.armor_stands[i].id;
+            let (width, height) = stand_box(&self.common.entities.armor_stands[i]);
             if !self.remove_armor_stand_after(id, |game| {
                 game.server_play_sound("minecraft:entity.armor_stand.break", at, 1.0, 1.0);
                 game.show_breaking_particles(at, f64::from(width), f64::from(height));
@@ -1506,13 +1506,13 @@ impl crate::game::ServerGame<'_> {
             self.stand_game_event("minecraft:entity_die", at, by);
             return true;
         }
-        if time - self.common.armor_stands[i].last_hit > 5 && !always_kills {
+        if time - self.common.entities.armor_stands[i].last_hit > 5 && !always_kills {
             self.server_play_sound("minecraft:entity.armor_stand.hit", at, 0.3, 1.0);
             self.stand_game_event("minecraft:entity_damage", at, by);
-            self.common.armor_stands[i].last_hit = time;
+            self.common.entities.armor_stands[i].last_hit = time;
             return true;
         }
-        let a = self.common.armor_stands[i].clone();
+        let a = self.common.entities.armor_stands[i].clone();
         let removed = self.remove_armor_stand_after(a.id, |game| {
             let (width, height) = stand_box(&a);
             let center = [at[0], at[1] + if a.small { 0.4875 } else { 0.9875 }, at[2]];

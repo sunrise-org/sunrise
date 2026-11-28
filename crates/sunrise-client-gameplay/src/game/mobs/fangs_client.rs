@@ -43,7 +43,7 @@ impl ClientGame<'_> {
             return;
         };
         let partial = alpha as f32;
-        for f in &self.common.fangs.list {
+        for f in &self.common.entities.fangs.list {
             if !f.started || self.hides_as_camera(f.id) {
                 continue;
             }
@@ -99,12 +99,12 @@ impl ClientGame<'_> {
     pub(in crate::game::client_side) fn remote_fangs_event(&mut self, id: u32, event: i8) {
         let sound = self
             .common
-            .fangs
+            .entities.fangs
             .list
             .iter()
             .position(|f| f.id == id)
             .and_then(|i| {
-                self.common.fangs.list.update(i, |f| {
+                self.common.entities.fangs.list.update(i, |f| {
                     if event != 4 {
                         return None;
                     }
@@ -126,7 +126,7 @@ impl ClientGame<'_> {
     /// At life 14, twelve `crit` particles (`ATTACK_TRIGGER_TICKS`).
     pub(in crate::game::client_side) fn tick_remote_fangs(&mut self) {
         let mut bursts = Vec::new();
-        self.common.fangs.list.for_each_mut(|f| {
+        self.common.entities.fangs.list.for_each_mut(|f| {
             if f.started {
                 f.life -= 1;
                 if f.life == 14 {

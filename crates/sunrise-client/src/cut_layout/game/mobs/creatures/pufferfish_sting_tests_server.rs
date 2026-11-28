@@ -42,7 +42,7 @@ pub(crate) fn with_fish(
         let mut fish = Mob::new(9001, kind, Vec3::new(8.5, 66.0, 8.5), 0.0);
         fish.extra.size = 2;
         fish.silent = silent;
-        game.mobs.push(fish);
+        game.entities.mobs.push(fish);
         test(game);
     });
 }

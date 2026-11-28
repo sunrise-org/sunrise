@@ -94,9 +94,9 @@ fn saved_mob_binding_survives_store_back_and_retires_at_sweep() {
         let old = game.query_mut(value_key).unwrap();
         let row = old.iter().try_next().unwrap().unwrap();
         let work = index.lock().unwrap().work_count();
-        let replacement = game.mobs[0].clone();
-        sunrise_sim::join_seq::store_back(&mut game.mobs[0], replacement);
-        assert!(game.mobs[0].attachment_lifetime.is_bound());
+        let replacement = game.entities.mobs[0].clone();
+        sunrise_sim::join_seq::store_back(&mut game.entities.mobs[0], replacement);
+        assert!(game.entities.mobs[0].attachment_lifetime.is_bound());
         let after = index.lock().unwrap().work_count();
         assert_eq!(after, work);
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
@@ -117,7 +117,7 @@ fn saved_mob_binding_survives_store_back_and_retires_at_sweep() {
         game.native_removals_flush();
         game.server.chunk_ticking.tickets.update(None);
         game.tick_creature_entities().unwrap();
-        assert!(game.mobs.is_empty());
+        assert!(game.entities.mobs.is_empty());
         assert!(index.lock().unwrap().snapshot(&key).is_empty());
         assert_eq!(
             row.set(game, 9),
@@ -154,7 +154,7 @@ fn saved_mob_binding_tracks_serialized_transfer_and_parked_levels() {
         );
         // Serialized portals discard the source owner before destination load.
         let state = game.take_transferred_entity_state(id);
-        game.mobs.retain(|m| m.id != id);
+        game.entities.mobs.retain(|m| m.id != id);
         game.detach_entity(id);
         assert!(source.lock().unwrap().snapshot(&key).is_empty());
         game.enter_level(Dim::Nether).unwrap();
@@ -183,7 +183,7 @@ fn saved_mob_binding_tracks_serialized_transfer_and_parked_levels() {
                 .unwrap(),
             11
         );
-        game.mobs.clear();
+        game.entities.mobs.clear();
         assert!(
             game.attachment_indexes[&Dim::Nether]
                 .lock()
@@ -212,12 +212,12 @@ fn saved_mob_binding_rebinds_retained_id_with_a_new_generation() {
         let source = game.attachment_indexes[&Dim::Overworld].clone();
         let key = ("test".into(), "mana".into());
         // The retained-owner route retires before carrying the value to arrival.
-        let mut owner = game.mobs.remove(0);
+        let mut owner = game.entities.mobs.remove(0);
         owner.attachment_lifetime.retire();
         assert!(source.lock().unwrap().snapshot(&key).is_empty());
         game.enter_level(Dim::Nether).unwrap();
         game.rebind_transferred_entity(id, &mut owner);
-        game.mobs.push(owner);
+        game.entities.mobs.push(owner);
         let current = game.attachment_indexes[&Dim::Nether]
             .lock()
             .unwrap()
@@ -234,7 +234,7 @@ fn saved_mob_binding_rebinds_retained_id_with_a_new_generation() {
                 .unwrap(),
             13
         );
-        game.mobs.clear();
+        game.entities.mobs.clear();
         assert!(
             game.attachment_indexes[&Dim::Nether]
                 .lock()
@@ -263,7 +263,7 @@ fn mob_first_store_binds_and_nested_rollback_retires_authority() {
             value_key.get_existing(game, holder, |value| value.cloned()),
             Ok(None)
         );
-        assert!(!game.mobs[0].attachment_lifetime.is_bound());
+        assert!(!game.entities.mobs[0].attachment_lifetime.is_bound());
         let result: Result<(), AttachmentError> = game.storage_transaction(|host, _| {
             value_key.set(host, holder, 7)?;
             let index = host.attachment_indexes[&Dim::Overworld].clone();
@@ -292,7 +292,7 @@ fn mob_first_store_binds_and_nested_rollback_retires_authority() {
             Err(AttachmentError::MissingHolder)
         });
         assert!(result.is_err());
-        assert!(!game.mobs[0].attachment_lifetime.is_bound());
+        assert!(!game.entities.mobs[0].attachment_lifetime.is_bound());
         assert!(!game.entity_attachments[&id].has_index_binding());
         let index = game.attachment_indexes[&Dim::Overworld].clone();
         assert!(
@@ -303,7 +303,7 @@ fn mob_first_store_binds_and_nested_rollback_retires_authority() {
                 .is_empty()
         );
         value_key.set(game, holder, 11).unwrap();
-        assert!(game.mobs[0].attachment_lifetime.is_bound());
+        assert!(game.entities.mobs[0].attachment_lifetime.is_bound());
         assert_eq!(
             game.query(value_key)
                 .unwrap()
@@ -330,7 +330,7 @@ fn mob_taken_store_refuses_without_writing_and_missing_store_refuses() {
         };
         tag.remove(&sunrise_mod_runtime::attachments::ATTACHMENTS_KEY.into());
         let id = game.load_mob(Tag::Compound(tag), None).unwrap();
-        let taken = game.mobs.lift();
+        let taken = game.entities.mobs.lift();
         assert_eq!(
             value_key.set(game, Holder::Entity(id), 1),
             Err(AttachmentError::HolderBusy)
@@ -341,7 +341,7 @@ fn mob_taken_store_refuses_without_writing_and_missing_store_refuses() {
                 .get(&id)
                 .is_some_and(|map| map.has_index_binding())
         );
-        game.mobs
+        game.entities.mobs
             .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         assert_eq!(
             value_key.get_existing(game, Holder::Entity(id), |value| value.cloned()),
@@ -365,7 +365,7 @@ fn tnt_with_real_lifetime_accepts_first_store() {
         game.summon_with_nbt("minecraft:tnt", [0.5, 70.0, 0.5], "{}")
             .unwrap();
         game.lan_assign_ids();
-        let id = game.tnts[0].id;
+        let id = game.entities.tnts[0].id;
         assert_eq!(value_key.set(game, Holder::Entity(id), 7), Ok(()));
     });
 }
@@ -411,7 +411,7 @@ fn mob_inner_first_binding_commit_outer_abort_invalidates_retained_row() {
             Err(AttachmentError::MissingHolder)
         });
         assert!(result.is_err());
-        assert!(!game.mobs[0].attachment_lifetime.is_bound());
+        assert!(!game.entities.mobs[0].attachment_lifetime.is_bound());
         let batch = retained.unwrap();
         assert!(matches!(
             batch.iter().try_next(),

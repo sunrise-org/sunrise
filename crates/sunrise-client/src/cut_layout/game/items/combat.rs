@@ -27,11 +27,11 @@ pub(crate) mod pet_credit_tests {
                 (Arc::new(hound), false, None),
             ] {
                 game.server.combat.0.last_hurt_by_player = None;
-                game.mobs.clear();
+                game.entities.mobs.clear();
                 let mut pet = Mob::new(7, kind, Vec3::ZERO, 0.0);
                 pet.extra.tame = tame;
                 pet.extra.owner = Some(uuid_ints(12));
-                game.mobs.push(pet);
+                game.entities.mobs.push(pet);
                 game.resolve_player_responsible_for_player(7, None);
                 assert_eq!(
                     game.server.combat.0.last_hurt_by_player.map(|(c, _)| c.0),
@@ -60,7 +60,7 @@ pub(crate) mod guest_hit_tests {
                 (5, "minecraft:cave_spider", 100.0),
             ] {
                 let kind = game.res.mob_types().get(kind).cloned().unwrap();
-                game.mobs
+                game.entities.mobs
                     .push(Mob::new(id, kind, Vec3::new(1.5, y, 0.5), 0.0));
             }
             let from = [1.5, 100.0, 0.5];

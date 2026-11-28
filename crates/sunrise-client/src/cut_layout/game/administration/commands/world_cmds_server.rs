@@ -45,13 +45,13 @@ pub(crate) mod allay_owner_damage_tests {
             let before = game.world.game_time;
             for melee in [true, false] {
                 for liked in [Some(actual), None, Some(other)] {
-                    game.mobs.clear();
+                    game.entities.mobs.clear();
                     let mut mob = Mob::new(1, kind.clone(), Vec3::new(22.5, 101.0, 22.5), 0.0);
                     mob.no_ai = true;
                     mob.extra.tame = liked.is_some();
                     mob.extra.owner = liked;
                     assert_eq!((mob.health, mob.hurt_time), (20.0, 0));
-                    game.mobs.push(mob);
+                    game.entities.mobs.push(mob);
                     let source = Damage::player([20.5, 102.0, 20.5]);
                     let accepted = if melee {
                         game.hurt_by_player(0, 2.0, source).0
@@ -62,8 +62,8 @@ pub(crate) mod allay_owner_damage_tests {
                     };
                     let expected = liked != Some(actual);
                     assert_eq!(accepted, expected, "melee={melee}, liked={liked:?}");
-                    assert_eq!(game.mobs[0].health, if expected { 18.0 } else { 20.0 });
-                    assert_eq!(game.mobs[0].extra.owner, liked);
+                    assert_eq!(game.entities.mobs[0].health, if expected { 18.0 } else { 20.0 });
+                    assert_eq!(game.entities.mobs[0].extra.owner, liked);
                     assert_eq!(game.world.game_time, before);
                 }
             }
@@ -93,7 +93,7 @@ pub(crate) mod datapack_damage_tests {
             with_pack(game);
             let crystal = |game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32| {
                 game.server.next_entity = game.server.next_entity.max(id);
-                game.crystals
+                game.entities.crystals
                     .push(sunrise_gameplay_common::game::dragon_common::Crystal::new(
                         id,
                         Vec3::new(0.5, 64.0, 0.5),
@@ -104,13 +104,13 @@ pub(crate) mod datapack_damage_tests {
             pig(game, 1, Vec3::new(2.5, 64.0, 0.5));
             crystal(game, 50);
             assert!(game.hurt_target(Target::Crystal(50), 1.0, "dmgtest:boom", None, None, None));
-            assert!(game.crystals.is_empty());
-            assert_eq!(game.mobs[0].health, 10.0, "no blast");
+            assert!(game.entities.crystals.is_empty());
+            assert_eq!(game.entities.mobs[0].health, 10.0, "no blast");
             crystal(game, 51);
             assert!(game.hurt_target(Target::Crystal(51), 1.0, "dmgtest:zap", None, None, None));
-            assert!(game.crystals.is_empty());
+            assert!(game.entities.crystals.is_empty());
             assert!(
-                game.mobs.first().is_none_or(|pig| pig.health < 10.0),
+                game.entities.mobs.first().is_none_or(|pig| pig.health < 10.0),
                 "the crystal's blast"
             );
 
@@ -120,7 +120,7 @@ pub(crate) mod datapack_damage_tests {
                     sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                 )
                 .unwrap();
-            let before = game.dragon.as_ref().unwrap().health;
+            let before = game.entities.dragon.as_ref().unwrap().health;
             assert!(game.hurt_target(
                 Target::Dragon(dragon),
                 4.0,
@@ -129,7 +129,7 @@ pub(crate) mod datapack_damage_tests {
                 None,
                 None
             ));
-            assert!(game.dragon.as_ref().unwrap().health < before);
+            assert!(game.entities.dragon.as_ref().unwrap().health < before);
         });
     }
 }

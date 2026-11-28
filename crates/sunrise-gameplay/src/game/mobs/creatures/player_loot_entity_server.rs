@@ -23,7 +23,7 @@ impl crate::game::ServerGame<'_> {
         id: u32,
     ) -> Option<sunrise_world::loot::LootEntity> {
         use sunrise_world::loot::LootEntity;
-        if let Some(mob) = self.common.mobs.iter().find(|mob| mob.id == id) {
+        if let Some(mob) = self.common.entities.mobs.iter().find(|mob| mob.id == id) {
             let vehicle = mob
                 .extra
                 .mount
@@ -34,7 +34,7 @@ impl crate::game::ServerGame<'_> {
                 Some(self.world_variants()),
             ));
         }
-        if let Some(boat) = self.common.boats.iter().find(|boat| boat.id == id) {
+        if let Some(boat) = self.common.entities.boats.iter().find(|boat| boat.id == id) {
             return Some(LootEntity {
                 kind: boat.entity_type(),
                 on_fire: boat.fire_ticks > 0,
@@ -42,7 +42,7 @@ impl crate::game::ServerGame<'_> {
             });
         }
         self.common
-            .carts
+            .entities.carts
             .iter()
             .find(|cart| cart.id == id)
             .map(|cart| LootEntity {

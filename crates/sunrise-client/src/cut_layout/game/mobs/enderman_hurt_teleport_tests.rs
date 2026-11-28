@@ -97,9 +97,9 @@ fn an_explosion_teleports_endermen_before_it_returns() {
             center.z + 2.5 * angle.sin(),
         );
         let mob = enderman(&game, 500 + k as u32, at, 900 + i64::from(k));
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
     }
-    let before: Vec<Vec3> = game.mobs.iter().map(|m| m.position).collect();
+    let before: Vec<Vec3> = game.entities.mobs.iter().map(|m| m.position).collect();
     game.server_explode(
         [center.x, center.y, center.z],
         4.0,
@@ -108,7 +108,7 @@ fn an_explosion_teleports_endermen_before_it_returns() {
     )
     .unwrap();
     let pending: Vec<u32> = game
-        .mobs
+        .entities.mobs
         .iter()
         .filter(|m| m.extra.counter2 > 0)
         .map(|m| m.id)
@@ -118,7 +118,7 @@ fn an_explosion_teleports_endermen_before_it_returns() {
         "teleports left for the AI step: {pending:?}"
     );
     let moved = game
-        .mobs
+        .entities.mobs
         .iter()
         .zip(&before)
         .filter(|(m, b)| m.position.distance(**b) > 3.0)
@@ -159,15 +159,15 @@ fn an_infested_endermans_silverfish_come_out_where_it_was_hurt() {
                     .any(|e| matches!(e, MobEvent::Infested { .. }))
         })
         .expect("no seed spawns silverfish and teleports");
-    game.mobs.push(mob);
+    game.entities.mobs.push(mob);
     game.settle_hurt_teleports().unwrap();
-    let ender = game.mobs.iter().find(|m| m.id == 600).unwrap();
+    let ender = game.entities.mobs.iter().find(|m| m.id == 600).unwrap();
     assert!(
         ender.position.distance(at) > 3.0,
         "the enderman did not teleport"
     );
     let silverfish: Vec<Vec3> = game
-        .mobs
+        .entities.mobs
         .iter()
         .filter(|m| m.kind.id == "minecraft:silverfish")
         .map(|m| m.position)
@@ -209,7 +209,7 @@ fn a_shulker_bullets_hit_teleports_an_open_shulker_before_it_returns() {
         let mut mob = shulker(&game, id, at, seed);
         // Open: hitByShulkerBullet is for an open shell only.
         mob.extra.counter = 100;
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         let bullet = Projectile::new(
             ProjectileKind::ShulkerBullet {
                 target: None,
@@ -229,7 +229,7 @@ fn a_shulker_bullets_hit_teleports_an_open_shulker_before_it_returns() {
             },
         )
         .unwrap();
-        let m = game.mobs.iter().find(|m| m.id == id).unwrap();
+        let m = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
         assert!(
             !m.extra.flag && !m.extra.flag2,
             "seed {seed}: a teleport left for the AI step"
@@ -241,7 +241,7 @@ fn a_shulker_bullets_hit_teleports_an_open_shulker_before_it_returns() {
         if m.position.distance(at) > 0.5 {
             moved += 1;
         }
-        game.mobs.clear();
+        game.entities.mobs.clear();
     }
     assert!(moved > 0, "no shulker teleported");
 }
@@ -262,7 +262,7 @@ fn a_teleporting_shulker_leaves_its_rider_behind() {
         let mut mob = shulker(&game, id, at, seed);
         // What `after_hurt` leaves after a low-health roll.
         mob.extra.flag = true;
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         let mut zombie = enderman(&game, rider, at, 0);
         zombie.kind = game
             .res
@@ -270,11 +270,11 @@ fn a_teleporting_shulker_leaves_its_rider_behind() {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.mobs.push(zombie);
-        sunrise_sim::mobs::riders::link(&mut game.mobs, rider, id);
+        game.entities.mobs.push(zombie);
+        sunrise_sim::mobs::riders::link(&mut game.entities.mobs, rider, id);
         game.settle_hurt_teleports().unwrap();
-        let s = game.mobs.iter().find(|m| m.id == id).unwrap();
-        let z = game.mobs.iter().find(|m| m.id == rider).unwrap();
+        let s = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
+        let z = game.entities.mobs.iter().find(|m| m.id == rider).unwrap();
         if s.position.distance(at) > 0.5 {
             teleported += 1;
             assert_eq!(z.extra.mount, None, "seed {seed}: still riding");
@@ -291,7 +291,7 @@ fn a_teleporting_shulker_leaves_its_rider_behind() {
                 "seed {seed}: thrown off without a teleport"
             );
         }
-        game.mobs.clear();
+        game.entities.mobs.clear();
     }
     assert!(teleported > 0, "no shulker teleported");
 }
@@ -323,7 +323,7 @@ fn a_teleporting_shulker_posts_teleport_where_it_stood() {
         mob.extra.flag = true;
         let uuid = game.level.player_uuid;
         let others: Vec<_> = game
-            .mobs
+            .entities.mobs
             .iter()
             .map(|m| sunrise_gameplay_common::game::creatures::seen(m, uuid, game.items()))
             .collect();
@@ -371,7 +371,7 @@ fn a_teleporting_shulker_posts_teleport_where_it_stood() {
             sound < teleport && teleport < level,
             "seed {seed}: the game event is not between the sound and level event: {events:?}"
         );
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         sunrise_gameplay_common::game::side_ops::events::TEST_POSTED_EVENTS
             .with(|events| *events.borrow_mut() = Some(Vec::new()));
         game.handle_mob_events(events).unwrap();

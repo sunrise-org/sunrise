@@ -70,7 +70,7 @@ fn check_fangs_motion(
     let expected_tag = Some(Tag::List(want.into_iter().map(Tag::Double).collect()));
     let (live_motion, saved) = {
         let fangs = game
-            .fangs
+            .entities.fangs
             .list
             .iter()
             .find(|f| f.id == id)
@@ -225,13 +225,13 @@ pub(crate) fn run_fangs_in_a_current_are_pushed_and_fangs_in_still_water_are_not
         let mut spawned = Vec::with_capacity(cases.len());
         for (name, uuid, command) in cases {
             assert!(game.run_command(command), "{command}");
-            let id = game.fangs.list.last().expect("summoned fangs").id;
+            let id = game.entities.fangs.list.last().expect("summoned fangs").id;
             spawned.push((name, uuid, id));
         }
         assert!(game.run_command(
             "summon minecraft:evoker_fangs 326.5 200 3.5 {UUID:[I;2362,0,1,1],Warmup:100}"
         ));
-        let non_ticking_id = game.fangs.list.last().expect("non-ticking fangs").id;
+        let non_ticking_id = game.entities.fangs.list.last().expect("non-ticking fangs").id;
 
         for tick in 0..=2usize {
             if tick > 0 {
@@ -246,7 +246,7 @@ pub(crate) fn run_fangs_in_a_current_are_pushed_and_fangs_in_still_water_are_not
             }
             // Non-entity-ticking loaded chunk must never push or warm down fangs.
             let non_ticking = game
-                .fangs
+                .entities.fangs
                 .list
                 .iter()
                 .find(|f| f.id == non_ticking_id)
@@ -265,9 +265,9 @@ pub(crate) fn run_fangs_in_a_current_are_pushed_and_fangs_in_still_water_are_not
         // Fangs added during the current mob pass (id > ticked_entities_through) wait for next tick.
         game.server.ticked_entities_through = game.server.next_entity;
         game.add_fangs([6.5, 200.0, 3.5], 0.0, 100, 0);
-        let late_id = game.fangs.list.last().unwrap().id;
+        let late_id = game.entities.fangs.list.last().unwrap().id;
         game.tick_mobs().unwrap();
-        let late = game.fangs.list.iter().find(|f| f.id == late_id).unwrap();
+        let late = game.entities.fangs.list.iter().find(|f| f.id == late_id).unwrap();
         assert_eq!(
             motion_bits(late.motion),
             [0; 3],
@@ -280,7 +280,7 @@ pub(crate) fn run_fangs_in_a_current_are_pushed_and_fangs_in_still_water_are_not
 
         // Next full world tick admits them and pushes them to the exact tick-1 water_north bits.
         game.tick_world(true).unwrap();
-        let late = game.fangs.list.iter().find(|f| f.id == late_id).unwrap();
+        let late = game.entities.fangs.list.iter().find(|f| f.id == late_id).unwrap();
         assert_eq!(late.warmup, 99);
         assert_eq!(
             motion_bits(late.motion),
@@ -323,7 +323,7 @@ pub(crate) fn run_fangs_in_a_current_are_pushed_and_fangs_in_still_water_are_not
         let mut spawned = Vec::with_capacity(cases.len());
         for (name, uuid, command) in cases {
             assert!(game.run_command(command), "{command}");
-            let id = game.fangs.list.last().expect("summoned fangs").id;
+            let id = game.entities.fangs.list.last().expect("summoned fangs").id;
             spawned.push((name, uuid, id));
         }
         for tick in 0..=2usize {

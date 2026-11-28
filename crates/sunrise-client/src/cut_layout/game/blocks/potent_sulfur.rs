@@ -22,8 +22,8 @@ pub(crate) mod pass_tests {
     /// The mobs whose box meets `area`, by walking them all.
     #[cfg(feature = "client")]
     fn scan(game: &sunrise_gameplay::game::ServerGame<'_>, area: Aabb) -> Vec<u32> {
-        (0..game.mobs.len() as u32)
-            .filter(|&j| game.mobs[j as usize].bounds().intersects(area))
+        (0..game.entities.mobs.len() as u32)
+            .filter(|&j| game.entities.mobs[j as usize].bounds().intersects(area))
             .collect()
     }
     /// The same from the pass's grid.
@@ -34,7 +34,7 @@ pub(crate) mod pass_tests {
             game.mobs_in_pass(area, &mut near),
             "a small area reads the grid"
         );
-        near.retain(|&j| game.mobs[j as usize].bounds().intersects(area));
+        near.retain(|&j| game.entities.mobs[j as usize].bounds().intersects(area));
         near
     }
 
@@ -85,16 +85,16 @@ pub(crate) mod pass_tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(1, kind.clone(), Vec3::new(1.5, 64.0, 1.5), 0.0));
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(2, kind.clone(), Vec3::new(65.5, 64.0, 1.5), 0.0));
             // The six-block-wide nausea query, expanded by the zombie's width
             // plus SeenGrid's margin, spans 3 x 3 four-block grid columns.
             // Populate distinct distant columns so candidates uses the grid
             // rather than its small-population scan fallback. Keep mob 2 in slot 1.
             for i in 0..64u32 {
-                game.mobs.push(Mob::new(
+                game.entities.mobs.push(Mob::new(
                     i + 3,
                     kind.clone(),
                     Vec3::new(256.5 + f64::from(i) * 8.0, 64.0, 256.5),
@@ -107,8 +107,8 @@ pub(crate) mod pass_tests {
             mod_platform::testing::with_mods(mods, || {
                 game.server.pass_mobs = Some(PassMobs::default());
                 game.server_nausea_effect_ticker((1, 63, 1));
-                assert_eq!(game.mobs[1].position, Vec3::new(33.5, 64.0, 1.5));
-                assert!(game.mobs[1].extra.effects.is_empty());
+                assert_eq!(game.entities.mobs[1].position, Vec3::new(33.5, 64.0, 1.5));
+                assert!(game.entities.mobs[1].extra.effects.is_empty());
                 let second_area = nearby_living_area([33, 65, 1]);
                 assert_eq!(
                     from_grid(game, second_area),
@@ -117,7 +117,7 @@ pub(crate) mod pass_tests {
                 );
                 game.server_nausea_effect_ticker((33, 63, 1));
                 assert!(
-                    !game.mobs[1].extra.effects.is_empty(),
+                    !game.entities.mobs[1].extra.effects.is_empty(),
                     "the second geyser applies nausea"
                 );
             });
@@ -143,7 +143,7 @@ pub(crate) mod pass_tests {
             };
             for id in 0..60u32 {
                 let kind = kinds[id as usize % kinds.len()].clone();
-                game.mobs.push(Mob::new(id + 1, kind, place(&mut rng), 0.0));
+                game.entities.mobs.push(Mob::new(id + 1, kind, place(&mut rng), 0.0));
             }
             let areas: Vec<Aabb> = (0..40)
                 .map(|i| {
@@ -160,21 +160,21 @@ pub(crate) mod pass_tests {
                 }
             };
             check(game, "as built");
-            game.mobs[7].position = areas[0].center();
+            game.entities.mobs[7].position = areas[0].center();
             check(game, "a mob moved into a geyser");
             let kind = kinds[2].clone();
-            game.mobs
+            game.entities.mobs
                 .insert(0, Mob::new(100, kind, areas[1].center(), 0.0));
             check(game, "a mob added in front");
-            game.mobs.retain(|m| m.id % 5 != 0);
+            game.entities.mobs.retain(|m| m.id % 5 != 0);
             check(game, "some removed");
             // A geyser's own write leaves the boxes as they were.
-            game.mobs[3].velocity.y += 0.2;
+            game.entities.mobs[3].velocity.y += 0.2;
             game.server
                 .pass_mobs
                 .as_mut()
                 .unwrap()
-                .wrote(&game.common.mobs);
+                .wrote(&game.common.entities.mobs);
             check(game, "a push");
         });
     }

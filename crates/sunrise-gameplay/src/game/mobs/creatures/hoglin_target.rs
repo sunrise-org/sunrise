@@ -10,7 +10,7 @@ impl crate::game::ServerGame<'_> {
     ) {
         let places: Vec<(u32, Vec3)> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| m.alive())
             .map(|m| (m.id, m.position))
@@ -31,7 +31,7 @@ impl crate::game::ServerGame<'_> {
             }
         };
         let proposal =
-            self.common.mobs.iter().find(|m| m.id == mob).and_then(|m| {
+            self.common.entities.mobs.iter().find(|m| m.id == mob).and_then(|m| {
                 sunrise_sim::mobs::piglin::receive_attack_target(m, target, position)
             });
         if let Some(target) = proposal {

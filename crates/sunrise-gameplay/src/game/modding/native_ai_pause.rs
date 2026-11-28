@@ -20,7 +20,7 @@ impl crate::game::ServerGame<'_> {
         let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
             return None;
         };
-        let m = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let m = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed)?;
         Some(m.ai.ai_paused)
     }
 
@@ -34,7 +34,7 @@ impl crate::game::ServerGame<'_> {
         let id = self.ai_pause_target(mob.entity())?;
         let m = self
             .common
-            .mobs
+            .entities.mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
             .ok_or(MobAiPauseRefusal::Stale)?;

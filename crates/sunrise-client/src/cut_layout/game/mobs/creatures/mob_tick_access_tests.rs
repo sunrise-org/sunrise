@@ -127,11 +127,11 @@ fn a_removed_mob_handle_resolves_nothing_in_a_later_callback() {
                 "a removed mob's handle resolves nothing"
             );
             assert!(
-                !game.mobs.iter().any(|mob| mob.id == 71),
+                !game.entities.mobs.iter().any(|mob| mob.id == 71),
                 "the allowed mob was removed"
             );
             assert!(
-                game.mobs.iter().any(|mob| mob.id == 72),
+                game.entities.mobs.iter().any(|mob| mob.id == 72),
                 "the denied mob stayed"
             );
         });
@@ -170,11 +170,11 @@ fn mob_despawn_handles_resolve_the_ticking_mob_and_its_peers() {
             }
             // `Allow` removed 72 during the pass; 71 is still there.
             assert!(
-                game.mobs.iter().any(|mob| mob.id == 71),
+                game.entities.mobs.iter().any(|mob| mob.id == 71),
                 "the denied mob stayed"
             );
             assert!(
-                !game.mobs.iter().any(|mob| mob.id == 72),
+                !game.entities.mobs.iter().any(|mob| mob.id == 72),
                 "the allowed mob was removed"
             );
         });
@@ -203,7 +203,7 @@ fn entity_tick_pre_reads_and_moves_the_ticking_mob() {
                 &[Some([1.0, 80.0, 0.5])],
                 "the Pre handle read the mob's position once"
             );
-            let mob = game.mobs.iter().find(|mob| mob.id == 71).unwrap();
+            let mob = game.entities.mobs.iter().find(|mob| mob.id == 71).unwrap();
             assert_eq!(
                 mob.position.y, 90.0,
                 "the tick started from the position the handle wrote"
@@ -262,14 +262,14 @@ fn scoped_despawn_view_tracks_peer_turns_and_defers_mid_pass_spawns() {
     .into();
     mod_platform::testing::with_mods(mods, || {
         with_two_pigs(|game| {
-            game.mobs[1].position.x = 4.0;
-            game.mobs[1].velocity = Vec3::new(0.001, 0.0, 0.0);
+            game.entities.mobs[1].position.x = 4.0;
+            game.entities.mobs[1].velocity = Vec3::new(0.001, 0.0, 0.0);
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let mut observer = Mob::new(73, kind, Vec3::new(7.0, 80.0, 0.5), 0.0);
             observer.no_ai = true;
             observer.no_gravity = true;
             observer.ground.on_ground = true;
-            game.mobs.push(observer);
+            game.entities.mobs.push(observer);
             crate::game::server_side::entity_server::taken_pass_tests::with_spawn(
                 |game| {
                     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
@@ -277,7 +277,7 @@ fn scoped_despawn_view_tracks_peer_turns_and_defers_mid_pass_spawns() {
                     spawned.no_ai = true;
                     spawned.no_gravity = true;
                     spawned.ground.on_ground = true;
-                    game.mobs.push(spawned);
+                    game.entities.mobs.push(spawned);
                     // The ordinary host can already read the spawn buffer.
                     // Only the scoped view must keep it outside this pass.
                     let entity = game.entity(74).expect("spawn has a resident handle");
@@ -309,7 +309,7 @@ fn scoped_despawn_view_tracks_peer_turns_and_defers_mid_pass_spawns() {
                     },
                 ]
             );
-            let spawned = game.mobs.iter().find(|mob| mob.id == 74).unwrap();
+            let spawned = game.entities.mobs.iter().find(|mob| mob.id == 74).unwrap();
             assert_eq!(spawned.age, 0, "the mid-pass spawn has not taken a turn");
             records.lock().unwrap().clear();
             game.tick_creature_entities().unwrap();
@@ -393,8 +393,8 @@ fn a_tick_hook_discards_another_mob_nested() {
                 &[(72, true, true)],
                 "the nested discard ran, and the actor's handle still resolved"
             );
-            assert!(game.mobs.iter().any(|mob| mob.id == 71));
-            assert!(!game.mobs.iter().any(|mob| mob.id == 72));
+            assert!(game.entities.mobs.iter().any(|mob| mob.id == 71));
+            assert!(!game.entities.mobs.iter().any(|mob| mob.id == 72));
         });
     });
 }
@@ -447,8 +447,8 @@ pub(crate) fn pig_ticks(replace_cancels: bool) -> TickCalls {
     .into();
     mod_platform::testing::with_mods(mods, || {
         with_two_pigs(|game| {
-            let first = game.mobs.iter().position(|mob| mob.id == 71).unwrap();
-            game.mobs.update(first, |mob| {
+            let first = game.entities.mobs.iter().position(|mob| mob.id == 71).unwrap();
+            game.entities.mobs.update(first, |mob| {
                 mob.no_ai = false;
                 mob.no_gravity = false;
                 mob.ground.on_ground = false;
@@ -467,7 +467,7 @@ pub(crate) fn pig_ticks(replace_cancels: bool) -> TickCalls {
 fn lethal_burning_applies_totem_effects_before_the_effect_pass() {
     with_two_pigs(|game| {
         game.build_registries();
-        game.mobs.update(0, |mob| {
+        game.entities.mobs.update(0, |mob| {
             mob.health = 1.0;
             mob.fire_ticks = 20;
             mob.add_effect("minecraft:poison", 25, 0);
@@ -478,7 +478,7 @@ fn lethal_burning_applies_totem_effects_before_the_effect_pass() {
                 )));
         });
         game.tick_creature_entities().unwrap();
-        let mob = game.mobs.iter().find(|mob| mob.id == 71).unwrap();
+        let mob = game.entities.mobs.iter().find(|mob| mob.id == 71).unwrap();
         assert!(mob.alive());
         assert!(mob.extra.main_hand_stack().is_none());
         assert!(!mob.has_effect("minecraft:poison"));
@@ -513,20 +513,20 @@ fn trader_milk_finishes_before_its_own_entity_tick_post() {
                 .get("minecraft:wandering_trader")
                 .unwrap()
                 .clone();
-            let mut trader = Mob::new(71, kind, game.mobs[0].position, 0.0);
+            let mut trader = Mob::new(71, kind, game.entities.mobs[0].position, 0.0);
             trader.no_gravity = true;
             trader.ground.on_ground = true;
             trader.add_effect("minecraft:invisibility", 3600, 0);
-            game.mobs.remove(0);
-            game.mobs.push(trader);
+            game.entities.mobs.remove(0);
+            game.entities.mobs.push(trader);
             // Start the actual daylight drink goal, whose first tick still precedes completion.
             game.tick_creature_entities().unwrap();
-            let i = game.mobs.iter().position(|mob| mob.id == 71).unwrap();
+            let i = game.entities.mobs.iter().position(|mob| mob.id == 71).unwrap();
             assert_eq!(
-                game.mobs[i].extra.main_hand_id(),
+                game.entities.mobs[i].extra.main_hand_id(),
                 Some("minecraft:milk_bucket")
             );
-            game.mobs.update(i, |mob| mob.extra.using_item = 32);
+            game.entities.mobs.update(i, |mob| mob.extra.using_item = 32);
             game.tick_creature_entities().unwrap();
         });
     });
@@ -691,7 +691,7 @@ fn named_mobs_and_projectiles_yield_only_for_subscribed_phase() {
                 assert!(game.run_command(
                     "summon minecraft:arrow 1.5 80.5 5.5 {NoGravity:1b,Motion:[1.0d,0.0d,0.0d]}"
                 ));
-                arrow_id = game.common.creatures.projectiles[0].id;
+                arrow_id = game.common.entities.projectiles[0].id;
                 game.server.ticked_entities_through = u32::MAX;
                 BORROWED_MOB_YIELDS.with(|count| count.set(0));
                 PROJECTILE_HANDBACKS.with(|count| count.set(0));
@@ -801,7 +801,7 @@ fn mob_equipment_change_fires_before_post_and_skips_canceled_ticks() {
     mod_platform::testing::with_mods(mods, || {
         with_two_pigs(|game| {
             let api_helmet = Some(helmet.try_into_api().unwrap());
-            for mob in game.common.mobs.iter_mut() {
+            for mob in game.common.entities.mobs.iter_mut() {
                 assert!(
                     mob.set_equipment_stack(sunrise_items::equipment::HEAD, Some(helmet.clone()),)
                 );
@@ -823,7 +823,7 @@ fn mob_equipment_change_fires_before_post_and_skips_canceled_ticks() {
             );
             assert!(
                 game.common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .find(|m| m.id == 71)
                     .unwrap()
@@ -833,7 +833,7 @@ fn mob_equipment_change_fires_before_post_and_skips_canceled_ticks() {
             );
             assert!(
                 !game
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .find(|m| m.id == 72)
                     .unwrap()
@@ -869,12 +869,12 @@ fn mob_equipment_change_fires_before_post_and_skips_canceled_ticks() {
     mod_platform::testing::with_mods(mod_api::Mods::default(), || {
         with_two_pigs(|game| {
             assert!(
-                game.common.mobs[0]
+                game.common.entities.mobs[0]
                     .set_equipment_stack(sunrise_items::equipment::HEAD, Some(helmet.clone()),)
             );
             BORROWED_MOB_YIELDS.with(|count| count.set(0));
             game.tick_mobs().unwrap();
-            assert!(game.common.mobs[0].extra.live.has_worn());
+            assert!(game.common.entities.mobs[0].extra.live.has_worn());
             assert_eq!(BORROWED_MOB_YIELDS.with(std::cell::Cell::get), 0);
         });
     });
@@ -909,7 +909,7 @@ fn an_equipped_mob_discarded_by_despawn_does_not_report_equipment() {
     .into();
     mod_platform::testing::with_mods(mods, || {
         with_two_pigs(|game| {
-            for mob in game.common.mobs.iter_mut() {
+            for mob in game.common.entities.mobs.iter_mut() {
                 assert!(mob.set_equipment_stack(
                     sunrise_items::equipment::HEAD,
                     Some(sunrise_items::items::ItemStack::new(
@@ -920,7 +920,7 @@ fn an_equipped_mob_discarded_by_despawn_does_not_report_equipment() {
             }
             game.tick_creature_entities().unwrap();
             assert_eq!(
-                game.common.mobs.iter().map(|m| m.id).collect::<Vec<_>>(),
+                game.common.entities.mobs.iter().map(|m| m.id).collect::<Vec<_>>(),
                 [72]
             );
             assert_eq!(*heard.lock().unwrap(), [72]);

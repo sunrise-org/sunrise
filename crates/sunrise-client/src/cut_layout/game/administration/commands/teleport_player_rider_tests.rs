@@ -76,7 +76,7 @@ pub(crate) mod teleport_rider_tests {
                 .unwrap()
                 .clone();
             // A villager riding a horse, 30 degrees off it.
-            game.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 42,
                 horse,
                 Vec3::new(3.0, 64.0, 5.0),
@@ -85,7 +85,7 @@ pub(crate) mod teleport_rider_tests {
             let mut rider =
                 sunrise_sim::mobs::Mob::new(43, villager, Vec3::new(3.0, 64.5, 5.0), 30.0);
             rider.extra.mount = Some(42);
-            game.mobs.push(rider);
+            game.entities.mobs.push(rider);
             // Entity.teleportPassengers: the rider keeps its offset from the
             // vehicle and turns by what the vehicle turned.
             game.teleport_to_in_level(
@@ -95,9 +95,9 @@ pub(crate) mod teleport_rider_tests {
                 [false; 3],
                 true,
             );
-            let vehicle = game.mobs.iter().find(|m| m.id == 42).unwrap();
+            let vehicle = game.entities.mobs.iter().find(|m| m.id == 42).unwrap();
             assert_eq!(vehicle.position, Vec3::new(10.0, 70.0, -4.0));
-            let rider = game.mobs.iter().find(|m| m.id == 43).unwrap();
+            let rider = game.entities.mobs.iter().find(|m| m.id == 43).unwrap();
             assert_eq!(rider.position, Vec3::new(10.0, 70.5, -4.0));
             assert_eq!(rider.yaw, 120.0, "the rider keeps its angle to the vehicle");
             assert_eq!(
@@ -114,7 +114,7 @@ pub(crate) mod teleport_rider_tests {
                 [false; 3],
                 true,
             );
-            let rider = game.mobs.iter().find(|m| m.id == 43).unwrap();
+            let rider = game.entities.mobs.iter().find(|m| m.id == 43).unwrap();
             assert_eq!(rider.yaw, 210.0, "the rider turns by the vehicle's turn");
             // `facing` keeps the transition's rotation: the vehicle looks, the rider does not turn.
             game.teleport_to_in_level(
@@ -124,7 +124,7 @@ pub(crate) mod teleport_rider_tests {
                 [false; 3],
                 false,
             );
-            let rider = game.mobs.iter().find(|m| m.id == 43).unwrap();
+            let rider = game.entities.mobs.iter().find(|m| m.id == 43).unwrap();
             assert_eq!(
                 rider.yaw, 210.0,
                 "a vehicle turned by `facing` leaves its rider"
@@ -132,7 +132,7 @@ pub(crate) mod teleport_rider_tests {
             // Entity.teleport's stopRiding(): a target that is itself a passenger
             // leaves its vehicle, or the next sync seats it where it was.
             game.teleport_to_in_level(Target::Mob(43), [0.0, 64.0, 0.0], None, [false; 3], false);
-            let rider = game.mobs.iter().find(|m| m.id == 43).unwrap();
+            let rider = game.entities.mobs.iter().find(|m| m.id == 43).unwrap();
             assert_eq!(rider.extra.mount, None, "the teleported rider dismounted");
             assert_eq!(rider.position, Vec3::new(0.0, 64.0, 0.0));
             // #9335 (2): a rider keeps its angle to the vehicle through an
@@ -145,7 +145,7 @@ pub(crate) mod teleport_rider_tests {
                 .get("minecraft:villager")
                 .unwrap()
                 .clone();
-            game.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 50,
                 horse2,
                 Vec3::new(10.0, 64.0, 10.0),
@@ -154,7 +154,7 @@ pub(crate) mod teleport_rider_tests {
             let mut rider2 =
                 sunrise_sim::mobs::Mob::new(51, villager2, Vec3::new(10.0, 64.5, 10.0), 30.0);
             rider2.extra.mount = Some(50);
-            game.mobs.push(rider2);
+            game.entities.mobs.push(rider2);
             // Absolute turn: vehicle 0 -> 40, rider keeps its 30-degree offset.
             game.teleport_to_in_level(
                 Target::Mob(50),
@@ -163,7 +163,7 @@ pub(crate) mod teleport_rider_tests {
                 [false; 3],
                 true,
             );
-            let rider2 = game.mobs.iter().find(|m| m.id == 51).unwrap();
+            let rider2 = game.entities.mobs.iter().find(|m| m.id == 51).unwrap();
             assert_eq!(
                 rider2.yaw, 70.0,
                 "absolute turn keeps the rider's angle to the vehicle"
@@ -177,7 +177,7 @@ pub(crate) mod teleport_rider_tests {
                 [false; 3],
                 true,
             );
-            let rider2 = game.mobs.iter().find(|m| m.id == 51).unwrap();
+            let rider2 = game.entities.mobs.iter().find(|m| m.id == 51).unwrap();
             assert_eq!(
                 rider2.yaw, 80.0,
                 "relative turn shifts the rider by the delta"
@@ -190,7 +190,7 @@ pub(crate) mod teleport_rider_tests {
                 [false; 3],
                 false,
             );
-            let rider2 = game.mobs.iter().find(|m| m.id == 51).unwrap();
+            let rider2 = game.entities.mobs.iter().find(|m| m.id == 51).unwrap();
             assert_eq!(
                 rider2.yaw, 80.0,
                 "a vehicle turned by `facing` leaves its rider"
@@ -220,7 +220,7 @@ pub(crate) mod teleport_rider_tests {
             middle.extra.passenger = true;
             leaf.extra.mount = Some(middle.id);
             leaf.extra.passenger = true;
-            game.mobs.extend([root, middle, leaf]);
+            game.entities.mobs.extend([root, middle, leaf]);
 
             game.teleport_to_in_level(
                 Target::Mob(60),

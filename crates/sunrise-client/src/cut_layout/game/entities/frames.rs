@@ -58,7 +58,7 @@ pub(crate) mod map_limit_tests {
     #[ignore = "daily"]
     fn a_map_tracking_more_than_256_markers_stays_in_the_hand() {
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.item_frames.extend([frame(1), frame(2)]);
+            game.entities.item_frames.extend([frame(1), frame(2)]);
             game.maps.data.insert(7, map_tracking(257));
             game.maps.data.insert(8, map_tracking(256));
 
@@ -68,13 +68,13 @@ pub(crate) mod map_limit_tests {
                 game.interact_frame(at(1)),
                 "the refusal ends the interaction"
             );
-            assert!(game.item_frames[0].item.is_none());
+            assert!(game.entities.item_frames[0].item.is_none());
             assert_eq!(game.held().and_then(|s| s.data()?.map_id), Some(7));
 
             // At the limit (not over it) the map goes in.
             *game.held_mut() = Some(filled_map(8));
             assert!(game.interact_frame(at(2)));
-            let framed = game.item_frames[1].item.as_ref();
+            let framed = game.entities.item_frames[1].item.as_ref();
             assert_eq!(framed.and_then(|s| s.data()?.map_id), Some(8));
         });
     }
@@ -128,8 +128,8 @@ pub(crate) mod game_event_tests {
     fn putting_and_rotating_a_frame_item_posts_block_change() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
-        game.item_frames.clear();
-        game.item_frames.extend(vec![frame(1, [0, 64, 1], None)]);
+        game.entities.item_frames.clear();
+        game.entities.item_frames.extend(vec![frame(1, [0, 64, 1], None)]);
         let center = [0.5, 64.5, 1.03125];
         *game.held_mut() = Some(ItemStack::new("minecraft:stick", 3));
 
@@ -138,12 +138,12 @@ pub(crate) mod game_event_tests {
         assert!(game.interact_frame(at(1)));
         assert_eq!(posted(), expected);
         assert_eq!(game.held().map(|s| s.count), Some(2), "one goes in");
-        assert_eq!(game.item_frames[0].item.as_ref().map(|s| s.count), Some(1));
+        assert_eq!(game.entities.item_frames[0].item.as_ref().map(|s| s.count), Some(1));
 
         reset();
         assert!(game.interact_frame(at(1)));
         assert_eq!(posted(), expected);
-        assert_eq!(game.item_frames[0].rotation, 1);
+        assert_eq!(game.entities.item_frames[0].rotation, 1);
     }
 
     /// `ItemFrame.hurtServer`: the item coming out posts `BLOCK_CHANGE` from
@@ -153,8 +153,8 @@ pub(crate) mod game_event_tests {
     fn taking_a_frame_item_out_posts_block_change_from_the_player() {
         let mut resources = None;
         let mut game = server_game(&mut resources);
-        game.item_frames.clear();
-        game.item_frames.extend(vec![frame(
+        game.entities.item_frames.clear();
+        game.entities.item_frames.extend(vec![frame(
             1,
             [0, 64, 1],
             Some(ItemStack::new("minecraft:stick", 1)),
@@ -170,14 +170,14 @@ pub(crate) mod game_event_tests {
         let expected = [("minecraft:block_change", center, Some(Who::Player))];
         reset();
         assert!(game.attack_frame(), "the frame is in reach");
-        assert!(game.item_frames[0].item.is_none());
+        assert!(game.entities.item_frames[0].item.is_none());
         assert_eq!(posted(), expected);
 
         // The empty frame itself then breaks (`BlockAttachedEntity.hurtServer`
         // then `ItemFrame.dropItem`), with the same event.
         reset();
         assert!(game.attack_frame());
-        assert!(game.item_frames.is_empty());
+        assert!(game.entities.item_frames.is_empty());
         assert_eq!(
             posted(),
             [
@@ -197,13 +197,13 @@ pub(crate) mod game_event_tests {
         let mut f = frame(1, [0, 64, 1], None);
         // BlockAttachedEntity.tick checks every 100 ticks.
         f.check_interval = 99;
-        game.item_frames.clear();
-        game.item_frames.extend(vec![f]);
+        game.entities.item_frames.clear();
+        game.entities.item_frames.extend(vec![f]);
         let center = [0.5, 64.5, 1.03125];
 
         reset();
         game.tick_item_frames();
-        assert!(game.item_frames.is_empty(), "nothing holds the frame");
+        assert!(game.entities.item_frames.is_empty(), "nothing holds the frame");
         assert_eq!(posted(), [("minecraft:block_change", center, None)]);
     }
 }

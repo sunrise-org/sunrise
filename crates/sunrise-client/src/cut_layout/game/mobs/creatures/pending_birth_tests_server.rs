@@ -56,7 +56,7 @@ fn baby_slot_replacement_does_not_publish_on_engine_unwind() {
             assert!(observed.load(Ordering::Relaxed));
             assert_eq!(game.persist.uuids.len(), uuids, "the baby's UUID is gone");
             assert_eq!(game.entity_attachments.len(), attachments);
-            assert_eq!(game.mobs.len(), 2, "only the parents joined");
+            assert_eq!(game.entities.mobs.len(), 2, "only the parents joined");
         },
     );
 }
@@ -75,12 +75,12 @@ fn panicking_spawn_listeners_lose_cancellation_but_keep_direct_child_edits() {
             let mut dying = cube(game, "minecraft:slime", 4, SEED);
             game.split_cube_children(&mut dying);
             assert_eq!(
-                game.common.mobs.len(),
+                game.common.entities.mobs.len(),
                 2,
                 "the cancellation was not applied"
             );
-            assert_eq!(game.common.mobs[0].yaw, 1.0);
-            assert_eq!(game.common.mobs[1].yaw, YAWS[2]);
+            assert_eq!(game.common.entities.mobs[0].yaw, 1.0);
+            assert_eq!(game.common.entities.mobs[1].yaw, YAWS[2]);
         },
     );
     with_baby(
@@ -160,7 +160,7 @@ fn breeding_spawns_after_parent_host_edit_and_cancel_resets_both_parents() {
             let (parent, partner, child) = breed_pair(game, "minecraft:cow");
             assert_eq!(child, None);
             assert!(
-                game.common.mobs.iter().all(|m| m.extra.age >= 0),
+                game.common.entities.mobs.iter().all(|m| m.extra.age >= 0),
                 "no baby joined"
             );
             for id in [parent, partner] {
@@ -184,7 +184,7 @@ fn cancelled_split_spawns_nothing_but_keeps_the_construction_draws() {
             let next_id = game.server.next_entity;
             game.split_cube_children(&mut dying);
             assert!(
-                game.common.mobs.is_empty(),
+                game.common.entities.mobs.is_empty(),
                 "a cancelled split spawns no child"
             );
             assert_eq!(

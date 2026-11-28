@@ -49,7 +49,7 @@ pub(in crate::game) fn seat_of(m: &sunrise_sim::mobs::Mob, attachment: [f64; 3])
 impl crate::game::CommonGame<'_> {
     pub fn mount_index(&self) -> Option<usize> {
         let id = self.riding?;
-        self.mobs.iter().position(|m| m.id == id)
+        self.entities.mobs.iter().position(|m| m.id == id)
     }
 
     /// `PlayerRideableJumping`: horses, camels and nautili (the dash).
@@ -58,7 +58,7 @@ impl crate::game::CommonGame<'_> {
     }
 
     pub fn charge_mount_jump(&mut self, i: usize, keys: Keys) -> f32 {
-        let saddled = self.mobs[i].extra.saddled() && Self::jumps(self.mobs[i].species());
+        let saddled = self.entities.mobs[i].extra.saddled() && Self::jumps(self.entities.mobs[i].species());
         let mut jump = 0.0;
         if saddled {
             let st = &mut self.mount;
@@ -96,7 +96,7 @@ pub trait MountsCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             return;
         };
         let (mob_id, is_happy_ghast) = {
-            let m = &self.mobs[i];
+            let m = &self.entities.mobs[i];
             (m.id, m.species() == Species::HappyGhast)
         };
         let seat_index = if is_happy_ghast {
@@ -104,7 +104,7 @@ pub trait MountsCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         } else {
             0
         };
-        let m = &self.mobs[i];
+        let m = &self.entities.mobs[i];
         let mut at = if sunrise_sim::mobs::camel::is_camel(m.species()) {
             seat_of(m, sunrise_sim::mobs::camel::passenger_attachment(m))
         } else {

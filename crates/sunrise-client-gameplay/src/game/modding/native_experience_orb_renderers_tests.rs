@@ -124,9 +124,9 @@ fn orb_frame(game: &mut crate::game::ClientGame<'_>, id: u32) -> Vec<Vertex> {
 
 /// [`orb_frame`] for an orb that moved to its position from `previous`.
 fn orb_frame_from(game: &mut crate::game::ClientGame<'_>, id: u32, previous: Vec3) -> Vec<Vertex> {
-    game.common.orbs.clear();
-    game.common.orbs.push(hanging(id, previous));
-    let live = game.common.orbs.iter().map(|o| {
+    game.common.entities.orbs.clear();
+    game.common.entities.orbs.push(hanging(id, previous));
+    let live = game.common.entities.orbs.iter().map(|o| {
         let at = [
             o.previous.x + (o.position.x - o.previous.x) * f64::from(ALPHA),
             o.previous.y + (o.position.y - o.previous.y) * f64::from(ALPHA),

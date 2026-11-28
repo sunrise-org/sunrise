@@ -744,7 +744,7 @@ pub(in crate::game) fn run_camera_entity_hidden_in_first_person_for_all_kinds_an
             add_entity_with_data(game, id, kind, [5.5, 64.0, 5.5], 0.0, 0.0, 0);
             match kind {
                 "minecraft:creeper" => {
-                    game.mobs
+                    game.entities.mobs
                         .iter_mut()
                         .find(|m| m.id == id as u32)
                         .unwrap()
@@ -763,8 +763,8 @@ pub(in crate::game) fn run_camera_entity_hidden_in_first_person_for_all_kinds_an
                         ],
                     }))
                     .unwrap();
-                    if let Some(i) = game.dropped.iter().position(|d| d.id == id as u32) {
-                        game.dropped.update(i, |d| d.fire_ticks = 40);
+                    if let Some(i) = game.entities.dropped.iter().position(|d| d.id == id as u32) {
+                        game.entities.dropped.update(i, |d| d.fire_ticks = 40);
                     }
                 }
                 "minecraft:armor_stand" => {
@@ -1118,7 +1118,7 @@ pub(in crate::game) fn run_camera_player_fov_modifier_and_death_isolation_26_3()
                 values: vec![(9, serializer::FLOAT, EntityDataValue::Float(0.0))],
             }))
             .unwrap();
-            game.mobs
+            game.entities.mobs
                 .iter_mut()
                 .find(|m| m.id == 26)
                 .unwrap()
@@ -1636,7 +1636,7 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
             0.0,
             0.0,
         );
-        game.orbs
+        game.entities.orbs
             .iter_mut()
             .find(|o| o.id == 401)
             .unwrap()
@@ -1776,7 +1776,7 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
         for _ in 0..40 {
             game.tick_fov();
         }
-        if let Some(m) = game.mobs.iter_mut().find(|m| m.id == 407) {
+        if let Some(m) = game.entities.mobs.iter_mut().find(|m| m.id == 407) {
             m.previous = sunrise_core::geometry::Vec3::new(0.0, 64.0, 0.0);
             m.position = sunrise_core::geometry::Vec3::new(2.0, 64.0, 0.0);
         }
@@ -1851,7 +1851,7 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
         );
         game.handle_packet(C::SetCamera(play::SetCamera { camera_id: 410 }))
             .unwrap();
-        if let Some(a) = game.armor_stands.iter_mut().find(|a| a.id == 410) {
+        if let Some(a) = game.entities.armor_stands.iter_mut().find(|a| a.id == 410) {
             a.previous_pitch = 0.0;
             a.pitch = 30.0;
         }
@@ -1931,7 +1931,7 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
             yaw: 123.5,
         }))
         .unwrap();
-        if let Some(m) = game.mobs.iter_mut().find(|m| m.id == 451) {
+        if let Some(m) = game.entities.mobs.iter_mut().find(|m| m.id == 451) {
             m.invulnerable = 20;
         }
         game.tick_remote_entities(true);
@@ -1947,7 +1947,7 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
             hex_f32(&rf["watched_player_hurt"]["hurt_dir_bits"])
         );
         assert_eq!(
-            game.mobs.iter().find(|m| m.id == 451).unwrap().invulnerable,
+            game.entities.mobs.iter().find(|m| m.id == 451).unwrap().invulnerable,
             rf["watched_player_hurt"]["cooldown_after_base_tick"]
                 .as_i64()
                 .unwrap() as i32
@@ -1961,7 +1961,7 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
             .unwrap()
             .registry_id();
         add_entity(game, 452, "minecraft:pig", [0.0, 64.0, 0.0], 0.0, 0.0);
-        if let Some(m) = game.mobs.iter_mut().find(|m| m.id == 452) {
+        if let Some(m) = game.entities.mobs.iter_mut().find(|m| m.id == 452) {
             m.attrs.max_health = 20.0;
             m.health = 20.0;
         }
@@ -1978,7 +1978,7 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
         }
         game.tick_remote_entities(true);
         assert_eq!(
-            game.mobs
+            game.entities.mobs
                 .iter()
                 .find(|m| m.id == 452)
                 .unwrap()
@@ -1988,7 +1988,7 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
         );
 
         add_entity(game, 453, "minecraft:pig", [0.0, 64.0, 0.0], 0.0, 0.0);
-        if let Some(m) = game.mobs.iter_mut().find(|m| m.id == 453) {
+        if let Some(m) = game.entities.mobs.iter_mut().find(|m| m.id == 453) {
             m.attrs.max_health = 20.0;
             m.health = 20.0;
         }
@@ -2013,7 +2013,7 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
         .unwrap();
         game.tick_remote_entities(true);
         assert_eq!(
-            game.mobs
+            game.entities.mobs
                 .iter()
                 .find(|m| m.id == 453)
                 .unwrap()
@@ -2046,7 +2046,7 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
             )],
         }))
         .unwrap();
-        let v = game.mobs.iter().find(|m| m.id == 454).unwrap();
+        let v = game.entities.mobs.iter().find(|m| m.id == 454).unwrap();
         assert_eq!(
             [v.position.x, v.position.y, v.position.z].map(f64::to_bits),
             vec3_bits_expected(&rf["sleeping_mob_set_pos_to_bed"]["mob_pos_after_sleep_bits"])

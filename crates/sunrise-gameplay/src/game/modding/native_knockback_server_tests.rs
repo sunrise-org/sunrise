@@ -87,7 +87,7 @@ fn zombie_at(game: &mut ServerGame<'_>, id: u32, at: Vec3) {
         .get("minecraft:zombie")
         .unwrap()
         .clone();
-    game.mobs.push(Mob::new(id, kind, at, 0.0));
+    game.entities.mobs.push(Mob::new(id, kind, at, 0.0));
 }
 
 fn with_detached_credit<R>(
@@ -207,7 +207,7 @@ fn knockback_fires_and_lends_views_when_stacks_have_unprojectable_components_or_
         player_with_sword(game);
         bind_local_player(game, 7, 777);
         zombie_at(game, 42, Vec3::ZERO);
-        game.mobs[0].ai.last_hurt_by_player = 100;
+        game.entities.mobs[0].ai.last_hurt_by_player = 100;
         game.remember_mob_player_credit(42);
 
         let by_player = sunrise_sim::mobs::Damage {
@@ -219,7 +219,7 @@ fn knockback_fires_and_lends_views_when_stacks_have_unprojectable_components_or_
             let attack = game.attack_of(7);
             let plan = game.prepare_knockback_credit(42, None, &attack);
             let mut credit = plan.lend(&mut game.server.last_hurt_by_player);
-            let mob = &mut game.common.mobs[0];
+            let mob = &mut game.common.entities.mobs[0];
             mob.velocity = Vec3::ZERO;
             mob.ground.on_ground = false;
             mob.knockback(

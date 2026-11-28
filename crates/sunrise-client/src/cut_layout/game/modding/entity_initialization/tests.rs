@@ -188,7 +188,7 @@ fn borrowed_spawn_first_read_and_dimension_transfer_keep_one_initialization() {
             // A borrowed simulation pass can insert without running Game's spawn helper.
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
             let id = game.take_entity_id();
-            game.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 id,
                 kind,
                 sunrise_core::geometry::Vec3::new(1.0, 70.0, 3.0),
@@ -209,7 +209,7 @@ fn borrowed_spawn_first_read_and_dimension_transfer_keep_one_initialization() {
                 .unwrap();
             // Portals move a live entity using its saved representation, retaining its map.
             let state = game.take_transferred_entity_state(id);
-            game.mobs.retain(|mob| mob.id != id);
+            game.entities.mobs.retain(|mob| mob.id != id);
             game.detach_entity(id);
             game.enter_level(Dim::Nether).unwrap();
             fixture_resident_column(&mut game.world, (0, 0));
@@ -221,7 +221,7 @@ fn borrowed_spawn_first_read_and_dimension_transfer_keep_one_initialization() {
             );
             assert_eq!(calls.lock().unwrap().len(), 1);
             game.forget_entity(moved);
-            game.mobs.retain(|mob| mob.id != moved);
+            game.entities.mobs.retain(|mob| mob.id != moved);
             let replacement = game.load_mob(tag("minecraft:cow", uuid[0]), None).unwrap();
             assert_eq!(
                 value_key.get(game, Holder::Entity(replacement), Clone::clone),
@@ -912,7 +912,7 @@ fn a_loaded_entity_reads_its_saved_attachments_over_the_listeners_and_is_named_b
             let child_state = game.take_transferred_entity_state(ghost);
             let parent_state = game.take_transferred_entity_state(id);
             game.persist.off_level.remove(&ghost);
-            game.mobs.retain(|mob| mob.id != id);
+            game.entities.mobs.retain(|mob| mob.id != id);
             game.detach_entity(ghost);
             game.detach_entity(id);
             game.enter_level(Dim::Nether).unwrap();
@@ -958,7 +958,7 @@ fn a_loaded_entity_reads_its_saved_attachments_over_the_listeners_and_is_named_b
             assert!(rows.try_next().unwrap().is_some());
             assert!(rows.try_next().unwrap().is_none());
             game.forget_entity(arrived);
-            game.mobs.retain(|mob| mob.id != arrived);
+            game.entities.mobs.retain(|mob| mob.id != arrived);
             let rebuilt = game.load_mob(tag("minecraft:pig", 200), None).unwrap();
             assert_eq!(
                 saved_key.get(game, Holder::Entity(rebuilt), Clone::clone),
@@ -996,7 +996,7 @@ fn mob_constructor_first_store_binds_only_the_resident_lifetime() {
                 )
                 .unwrap();
             assert!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|mob| mob.id == id)
                     .unwrap()
@@ -1125,12 +1125,12 @@ fn dragon_part_constructor_first_read_indexes_payload_and_same_id_replacement_re
                 .clone()
                 .expect("Listener registered");
             let remove_dragon = |game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32| {
-                if game.dragon.as_ref().is_some_and(|d| d.id == id) {
+                if game.entities.dragon.as_ref().is_some_and(|d| d.id == id) {
                     for part in 0..8 {
                         game.forget_entity(id + 1 + part);
                     }
                     game.forget_entity(id);
-                    game.dragon.discard();
+                    game.entities.dragon.discard();
                 }
             };
             let spawn_dragon = |game: &mut sunrise_gameplay::game::ServerGame<'_>,
@@ -1146,10 +1146,10 @@ fn dragon_part_constructor_first_read_indexes_payload_and_same_id_replacement_re
                 d.id = id;
                 d.phase = sunrise_gameplay_common::game::dragon_common::Phase::from_id(10);
                 d.join = sunrise_sim::join_seq::JoinSeq::next();
-                if let Some(old) = game.dragon.as_ref().map(|d| d.id) {
+                if let Some(old) = game.entities.dragon.as_ref().map(|d| d.id) {
                     remove_dragon(game, old);
                 }
-                game.dragon.replace(d);
+                game.entities.dragon.replace(d);
                 game.place_dragon_parts();
             };
             game.options.dedicated = Some(Vec::new());
@@ -1163,7 +1163,7 @@ fn dragon_part_constructor_first_read_indexes_payload_and_same_id_replacement_re
                 value_key.get_existing(game, holder, |value| value.cloned()),
                 Ok(Some(41))
             );
-            assert!(game.dragon.as_mut().unwrap().parts[0].2.is_bound());
+            assert!(game.entities.dragon.as_mut().unwrap().parts[0].2.is_bound());
             let batch = game.query(&value_key).unwrap();
             let mut rows = batch.iter();
             let row = rows.try_next().unwrap().unwrap();

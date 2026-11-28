@@ -169,7 +169,7 @@ impl crate::game::ServerGame<'_> {
             .enumerate()
         {
             let (entity, target_motion) = match target {
-                Target::Mob(i) => (self.common.mobs[i].id, self.common.mob_speed(i)),
+                Target::Mob(i) => (self.common.entities.mobs[i].id, self.common.mob_speed(i)),
                 Target::Player(k) => {
                     let p = &self.server.stab_players[k];
                     (p.entity_id as u32, p.movement.scale(20.0))
@@ -223,12 +223,12 @@ impl crate::game::ServerGame<'_> {
     ) -> bool {
         let kind = format!(
             "minecraft:{}",
-            self.common.mobs[index]
+            self.common.entities.mobs[index]
                 .kind
                 .id
                 .trim_start_matches("minecraft:")
         );
-        let id = self.common.mobs[index].id;
+        let id = self.common.entities.mobs[index].id;
         let Some(p) = self.common.player.as_ref() else {
             return false;
         };
@@ -251,7 +251,7 @@ impl crate::game::ServerGame<'_> {
         } else {
             0.0
         };
-        let (old_health, join) = (self.common.mobs[index].health, self.common.mobs[index].join);
+        let (old_health, join) = (self.common.entities.mobs[index].health, self.common.entities.mobs[index].join);
         let (hurt, _) = if deals_damage {
             self.hurt_by_player(index, total, Damage::spear(from))
         } else {
@@ -260,8 +260,8 @@ impl crate::game::ServerGame<'_> {
         let Some(index) = self
             .common
             .mob_index
-            .find(&self.common.mobs, id)
-            .filter(|&i| self.common.mobs[i].join == join && !self.common.mobs[i].removed)
+            .find(&self.common.entities.mobs, id)
+            .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
         else {
             if hurt {
                 self.remember_player_target(Some(id));
@@ -275,27 +275,27 @@ impl crate::game::ServerGame<'_> {
             let aim = self.attacker_aim(source.attacker);
             let plan = self.prepare_knockback_credit(id as i32, None, &attack);
             let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
-            self.common.mobs[index].attacker_aim = aim;
+            self.common.entities.mobs[index].attacker_aim = aim;
             let level = crate::game::server_side::entity_server::damage_level_of!(
                 self,
                 &attack,
                 &mut credit,
                 None
             );
-            self.common.mobs[index].knockback_full(level, 0.4, xd, zd, &source, total, false);
-            self.common.mobs[index].attacker_aim = None;
+            self.common.entities.mobs[index].knockback_full(level, 0.4, xd, zd, &source, total, false);
+            self.common.entities.mobs[index].attacker_aim = None;
             let (strength, _) = self.extra_knockback(&kind, id, 0.0, Some("minecraft:spear"));
             if strength > 0.0 {
                 let plan = self.prepare_knockback_credit(id as i32, None, &attack);
                 let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
-                self.common.mobs[index].attacker_aim = aim;
+                self.common.entities.mobs[index].attacker_aim = aim;
                 let level = crate::game::server_side::entity_server::damage_level_of!(
                     self,
                     &attack,
                     &mut credit,
                     None
                 );
-                self.common.mobs[index].knockback_full(
+                self.common.entities.mobs[index].knockback_full(
                     level,
                     f64::from(strength),
                     xd,
@@ -304,16 +304,16 @@ impl crate::game::ServerGame<'_> {
                     total,
                     true,
                 );
-                self.common.mobs[index].attacker_aim = None;
+                self.common.entities.mobs[index].attacker_aim = None;
             }
             // ...and the attacker stops sprinting.
             self.common.stop_sprint_after_extra_knockback();
         }
         // `Player.stabAttack`: a type in `cannot_be_dismounted_by_item_usage` stays seated.
         let dismounted = dismounts
-            && self.common.mobs[index].extra.mount.is_some()
+            && self.common.entities.mobs[index].extra.mount.is_some()
             && !self.items().entity_type_tags.has_bit(
-                self.common.mobs[index].kind.flags.entity_tag_slot,
+                self.common.entities.mobs[index].kind.flags.entity_tag_slot,
                 sunrise_items::items::EntityTypeTags::CANNOT_BE_DISMOUNTED_BY_ITEM_USAGE,
             );
         if dismounted {
@@ -322,7 +322,7 @@ impl crate::game::ServerGame<'_> {
         if !hurt && !deals_knockback && !dismounted {
             return false;
         }
-        let mob = &self.common.mobs[index];
+        let mob = &self.common.entities.mobs[index];
         let actual = old_health - mob.health;
         let (feet, width, height) = (
             [mob.position.x, mob.position.y, mob.position.z],
@@ -368,7 +368,7 @@ impl crate::game::ServerGame<'_> {
         };
         let reach = (min, max, REACH.hitbox_margin);
         let clip = |from, to| self.clip_collider(from, to);
-        let mobs = self.common.mobs.len();
+        let mobs = self.common.entities.mobs.len();
         let mut boxes = self.common.hittable_mob_boxes();
         boxes.extend(
             (self.server.stab_players.iter().enumerate()).map(|(k, p)| (mobs + k, p.bounds)),

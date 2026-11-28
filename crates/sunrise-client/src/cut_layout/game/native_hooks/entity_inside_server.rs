@@ -172,9 +172,9 @@ pub(crate) mod sweep_tests {
                 );
                 assert_eq!(part.contacts.lock().unwrap().len(), 2);
                 assert_eq!(item.health, 0, "subtract 0.5 before truncating health");
-                assert_eq!(game.dropped.len(), 1);
-                assert_eq!(game.dropped[0].stack, diamonds);
-                assert_eq!(game.dropped[0].position, item.position);
+                assert_eq!(game.entities.dropped.len(), 1);
+                assert_eq!(game.entities.dropped[0].stack, diamonds);
+                assert_eq!(game.entities.dropped[0].position, item.position);
                 assert_eq!(
                     item.velocity.x.to_bits(),
                     before.to_bits(),
@@ -195,7 +195,7 @@ pub(crate) mod sweep_tests {
                 game.server.ticked_entities_through = u32::MAX;
                 for (health, count) in [(5, 3), (1, 2)] {
                     part.contacts.lock().unwrap().clear();
-                    game.dropped.clear();
+                    game.entities.dropped.clear();
                     for (x, count, ticks, health) in [(1.25, 1, 39, health), (0.75, 2, 0, 5)] {
                         game.spawn_item(
                             ItemStack::new("minecraft:stone", count),
@@ -203,21 +203,21 @@ pub(crate) mod sweep_tests {
                             [0.0; 3],
                             20,
                         );
-                        let item = game.dropped.last_mut().unwrap();
+                        let item = game.entities.dropped.last_mut().unwrap();
                         item.no_gravity = true;
                         item.health = health;
                         item.ticks = ticks;
                     }
-                    let neighbour = game.dropped[1].id;
+                    let neighbour = game.entities.dropped[1].id;
                     sunrise_sim::block_contact::in_level(
                         sunrise_sim::parallel::TickThread::mint(),
                         Some("minecraft:overworld"),
                         || game.tick_items(),
                     );
                     assert_eq!(*part.contacts.lock().unwrap(), [[1, 104, 0]]);
-                    assert_eq!(game.dropped.len(), 1);
-                    assert_eq!(game.dropped[0].id, neighbour);
-                    assert_eq!(game.dropped[0].stack.count, count);
+                    assert_eq!(game.entities.dropped.len(), 1);
+                    assert_eq!(game.entities.dropped[0].id, neighbour);
+                    assert_eq!(game.entities.dropped[0].stack.count, count);
                 }
             });
         });
@@ -371,7 +371,7 @@ pub(crate) mod sweep_tests {
                     invalid: invalid_api,
                 });
 
-                let drops_before = game.dropped.len();
+                let drops_before = game.entities.dropped.len();
                 sunrise_sim::block_contact::in_level(
                     sunrise_sim::parallel::TickThread::mint(),
                     Some("minecraft:overworld"),
@@ -409,11 +409,11 @@ pub(crate) mod sweep_tests {
                 assert_eq!(game.world.block(2, 100, 0), air);
                 assert_eq!(game.world.block(3, 100, 0), oak_planks);
                 assert_eq!(
-                    game.dropped.len(),
+                    game.entities.dropped.len(),
                     drops_before + 1,
                     "destroy_block with drop = true drops neighbor resources"
                 );
-                let dropped = &game.dropped[drops_before];
+                let dropped = &game.entities.dropped[drops_before];
                 assert_eq!(dropped.stack.item.as_ref(), "minecraft:dirt");
                 assert_eq!(dropped.position.x.floor() as i32, 2);
             });
@@ -514,12 +514,12 @@ pub(crate) mod sweep_tests {
                         [0.0; 3],
                         20,
                     );
-                    game.dropped.last_mut().unwrap().no_gravity = true;
+                    game.entities.dropped.last_mut().unwrap().no_gravity = true;
                 }
-                let ids = std::array::from_fn::<_, 3, _>(|i| game.dropped[i + 1].id);
+                let ids = std::array::from_fn::<_, 3, _>(|i| game.entities.dropped[i + 1].id);
                 let [direct, causing, stale] = ids.map(|id| game.entity(id).unwrap());
                 *part.sources.lock().unwrap() = Some([direct, causing, stale]);
-                game.dropped.remove(3);
+                game.entities.dropped.remove(3);
                 game.server.chunk_ticking.tickets.update(None);
                 game.server.ticked_entities_through = u32::MAX;
 
@@ -534,7 +534,7 @@ pub(crate) mod sweep_tests {
                     *hits.lock().unwrap(),
                     [(ids[0] as i32, ids[1] as i32, Some([5.5, 100.25, 0.5]))]
                 );
-                assert_eq!(game.dropped[0].health, 4);
+                assert_eq!(game.entities.dropped[0].health, 4);
                 assert_eq!(game.world.block(1, 100, 0), dirt);
             });
         });
@@ -947,7 +947,7 @@ pub(crate) mod sweep_tests {
                     let mut mob = Mob::new(id, pig.clone(), Vec3::new(x, 100.0, 0.5), 0.0);
                     mob.no_ai = true;
                     mob.no_gravity = true;
-                    game.mobs.push(mob);
+                    game.entities.mobs.push(mob);
                 }
                 *probe.source.lock().unwrap() =
                     Some((game.entity(200).unwrap(), game.entity(201).unwrap()));
@@ -1047,7 +1047,7 @@ pub(crate) mod sweep_tests {
                 mob.no_gravity = true;
                 mob.persistent = true;
                 mob.random = LegacyRandom::new(118);
-                game.mobs.push(mob);
+                game.entities.mobs.push(mob);
                 let _ = sunrise_sim::block_contact::HOOKS.set(BLOCK_CONTACT_HOOKS);
                 sunrise_sim::block_contact::in_level(
                     sunrise_sim::parallel::TickThread::mint(),
@@ -1065,7 +1065,7 @@ pub(crate) mod sweep_tests {
                 let (hurt, at_hurt_return) = part.0.lock().unwrap().unwrap();
                 assert!(hurt);
                 assert_eq!(at_hurt_return.map(f64::to_bits), expected);
-                let mob = game.mobs.iter().find(|m| m.id == 200).unwrap();
+                let mob = game.entities.mobs.iter().find(|m| m.id == 200).unwrap();
                 assert_eq!(mob.position.components().map(f64::to_bits), expected);
                 assert_eq!(mob.random.state(), 0xf46e_d8cd_4912);
             });
@@ -1114,13 +1114,13 @@ pub(crate) mod sweep_tests {
             mob.velocity = Vec3::new(0.25, 0.0, 0.0);
             mob.fire_ticks = 21;
             mob.random = LegacyRandom::new(1);
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             sunrise_sim::block_contact::in_level(
                 sunrise_sim::parallel::TickThread::mint(),
                 Some("minecraft:overworld"),
                 || game.tick_creatures().unwrap(),
             );
-            let mob = game.mobs.iter().find(|m| m.id == 200).unwrap();
+            let mob = game.entities.mobs.iter().find(|m| m.id == 200).unwrap();
             assert_eq!(game.world.block(8, 100, 8), air);
             assert_eq!((mob.fire_ticks, mob.ticks_frozen, mob.health), (0, 1, 10.0));
             // Java Random(seed=1) after the ambient nextInt(1000) and the two
@@ -1212,7 +1212,7 @@ pub(crate) mod sweep_tests {
                     0.0,
                 );
                 bundle_item.previous = sunrise_core::geometry::Vec3::new(1.2, 100.0, 0.5);
-                let dropped_before = game.dropped.len();
+                let dropped_before = game.entities.dropped.len();
                 sunrise_sim::block_contact::in_level(
                     sunrise_sim::parallel::TickThread::mint(),
                     Some("minecraft:overworld"),
@@ -1220,9 +1220,9 @@ pub(crate) mod sweep_tests {
                 );
                 assert!(bundle_item.health <= 0);
                 assert!(
-                    game.dropped.len() > dropped_before
+                    game.entities.dropped.len() > dropped_before
                         && game
-                            .dropped
+                            .entities.dropped
                             .iter()
                             .any(|d| d.stack.item.as_ref() == "minecraft:stick"
                                 && d.stack.count == 2),

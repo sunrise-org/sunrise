@@ -783,7 +783,7 @@ fn the_idle_close_keeps_a_runtime_level_open_until_its_unload() {
         game.enter_level(dim).unwrap();
         assert_eq!(game.world.block(1, 64, 1), stone);
         assert!(game.world.modified.contains(&(0, 0)));
-        assert_eq!(game.mobs.len(), 1);
+        assert_eq!(game.entities.mobs.len(), 1);
         game.server.save.0 = save.clone();
         game.enter_level(Dim::Overworld).unwrap();
 

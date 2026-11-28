@@ -241,7 +241,7 @@ impl ServerGame<'_> {
     /// `Player.itemAttackInteraction` applies trigger-only held-item effects
     /// after an EnderDragonPart is successfully hit.
     pub(in crate::game::server_side) fn post_attack_dragon_burst(&mut self) {
-        if let Some(id) = self.common.dragon.as_ref().map(|dragon| dragon.id) {
+        if let Some(id) = self.common.entities.dragon.as_ref().map(|dragon| dragon.id) {
             let held = self.common.held().cloned();
             let motion = self
                 .common
@@ -265,7 +265,7 @@ impl ServerGame<'_> {
     ) {
         let Some(d) = self
             .common
-            .dragon
+            .entities.dragon
             .as_ref()
             .filter(|d| self.server.combat.0.visits(d.id))
         else {
@@ -276,7 +276,7 @@ impl ServerGame<'_> {
         let exposure = self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z]);
         let Some((id, mut push)) = self
             .common
-            .dragon
+            .entities.dragon
             .as_ref()
             .and_then(|d| Some((d.id, d.explosion_knockback(center, radius, exposure)?)))
         else {
@@ -286,7 +286,7 @@ impl ServerGame<'_> {
             *component *= f64::from(multiplier);
         }
         self.native_explosion_knockback(self.common.dim.id(), center, blocks, Some(id), &mut push);
-        if let Some(d) = self.common.dragon.as_mut() {
+        if let Some(d) = self.common.entities.dragon.as_mut() {
             d.velocity = Vec3::new(
                 d.velocity.x + push[0],
                 d.velocity.y + push[1],
@@ -320,7 +320,7 @@ impl ServerGame<'_> {
         // The charge owner is the indirect source of the explosion.
         let owner = match p.owner {
             Some(Who::Player) => Some(self.own_entity_id() as u32),
-            Some(Who::Mob(id)) => self.common.mobs.iter().any(|m| m.id == id).then_some(id),
+            Some(Who::Mob(id)) => self.common.entities.mobs.iter().any(|m| m.id == id).then_some(id),
             None => None,
         };
         let cause = BurstCause {
@@ -354,8 +354,8 @@ impl ServerGame<'_> {
     /// The boats and minecarts of this tick's projectile pass.
     pub(in crate::game::server_side) fn vehicle_winds(&self) -> VehicleWinds {
         VehicleWinds {
-            vehicles: (self.common.boats.iter().map(|b| b.id))
-                .chain(self.common.carts.iter().map(|c| c.id))
+            vehicles: (self.common.entities.boats.iter().map(|b| b.id))
+                .chain(self.common.entities.carts.iter().map(|c| c.id))
                 .collect(),
             before: Vec::new(),
         }
@@ -364,7 +364,7 @@ impl ServerGame<'_> {
     /// discard, which leaves the vehicle row in place until commit.
     pub(in crate::game) fn wind_vehicle_broken(&self, hit: Hit) -> bool {
         matches!(hit, Hit::Entity { who: Who::Mob(id), .. }
-            if !self.boats.iter().any(|b| b.id == id) && !self.carts.iter().any(|c| c.id == id))
+            if !self.entities.boats.iter().any(|b| b.id == id) && !self.entities.carts.iter().any(|c| c.id == id))
     }
 
     /// AbstractWindCharge bursts above the world's top without hitting anything.
@@ -401,7 +401,7 @@ impl ServerGame<'_> {
     /// `AbstractWindCharge.onHitEntity`: one point of damage.
     pub(in crate::game::server_side) fn wind_charge_damage(&mut self, p: &Projectile, who: Who) {
         let owner_breeze = matches!(p.owner, Some(Who::Mob(id))
-            if self.mobs.iter().any(|m| m.id == id && m.species() == Species::Breeze));
+            if self.entities.mobs.iter().any(|m| m.id == id && m.species() == Species::Breeze));
         match who {
             Who::Player => {
                 if self.mob_hits_player(
@@ -439,7 +439,7 @@ impl ServerGame<'_> {
                 }
             }
             // Non-mob pickable target (stand, painting, frame, knot, cushion, vehicle, falling block).
-            Who::Mob(id) if !self.common.mobs.iter().any(|m| m.id == id) => {
+            Who::Mob(id) if !self.common.entities.mobs.iter().any(|m| m.id == id) => {
                 let info = sunrise_gameplay_common::game::creatures::projectile_targets::ProjectileHitInfo::from_projectile(
                     p,
                     "minecraft:wind_charge",
@@ -459,10 +459,10 @@ impl ServerGame<'_> {
                     attacker_species: owner_breeze
                         .then_some(sunrise_sim::mobs::species::vanilla_id(Species::Breeze)),
                 };
-                let Some(index) = self.common.mob_index.find(&self.common.mobs, id) else {
+                let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, id) else {
                     return;
                 };
-                let m = &self.common.mobs[index];
+                let m = &self.common.entities.mobs[index];
                 // Breeze.isInvulnerableTo: its own kind's charges. A refused hit does
                 // not get kill credit, but `wind_charge_hit` still makes the burst.
                 if (owner_breeze && m.species() == Species::Breeze)
@@ -982,8 +982,7 @@ impl ServerGame<'_> {
         }
         let breeze = self.server.combat.0.explosion_source.is_some_and(|id| {
             self.common
-                .creatures
-                .projectiles
+                .entities.projectiles
                 .iter()
                 .any(|p| p.id == id && p.kind == ProjectileKind::BreezeWindCharge)
         });

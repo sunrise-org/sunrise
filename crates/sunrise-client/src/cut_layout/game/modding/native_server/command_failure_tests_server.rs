@@ -32,7 +32,7 @@ fn tracked_executor_failure_survives_saved_depth_boundary() {
                             panic!("expected a command block");
                         };
                         block.set_command(command);
-                        game.carts
+                        game.entities.carts
                             .update(0, |cart| cart.command.set_command(command));
                         game.world.game_time += 1;
                         game.command_block_tick(BlockPos::new(pos.0, pos.1, pos.2));
@@ -43,7 +43,7 @@ fn tracked_executor_failure_survives_saved_depth_boundary() {
                         else {
                             panic!("expected a command block");
                         };
-                        for command_block in [&**block, &game.carts[0].command] {
+                        for command_block in [&**block, &game.entities.carts[0].command] {
                             assert_eq!(&command_block.last_output_string()[11..], expected);
                         }
                         game.world.modified.insert((0, 0));

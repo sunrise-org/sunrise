@@ -32,15 +32,15 @@ pub(crate) mod tests {
                 .clone();
             let mut zombie = Mob::new(40, kind, Vec3::ZERO, 0.0);
             zombie.fall_distance = 12.0;
-            game.mobs.push(zombie);
+            game.entities.mobs.push(zombie);
             let mut cart = Minecart::new(41, CartKind::Rideable, Vec3::ZERO);
             cart.fall_distance = 7.0;
-            game.carts.push(cart);
+            game.entities.carts.push(cart);
             let (zombie, cart) = (game.entity(40).unwrap(), game.entity(41).unwrap());
             assert!(game.entity_reset_fall_distance(zombie));
             assert!(game.entity_reset_fall_distance(cart));
-            assert_eq!(game.mobs[0].fall_distance, 0.0);
-            assert_eq!(game.carts[0].fall_distance, 0.0);
+            assert_eq!(game.entities.mobs[0].fall_distance, 0.0);
+            assert_eq!(game.entities.carts[0].fall_distance, 0.0);
             // A player: the fake guest's own motion.
             let level = game.level(game.dim.id()).unwrap();
             let fake = game.fake_player(level, 2, "fake").unwrap().entity();
@@ -48,7 +48,7 @@ pub(crate) mod tests {
             assert!(game.entity_reset_fall_distance(fake));
             assert_eq!(*fake_fall(game), 0.0);
             // An entity that is gone: nothing.
-            game.mobs.clear();
+            game.entities.mobs.clear();
             assert!(!game.entity_reset_fall_distance(zombie));
         });
     }
@@ -62,16 +62,16 @@ pub(crate) mod tests {
                 let kind = game.res.mob_types().get(name).unwrap().clone();
                 let mut m = Mob::new(id, kind, Vec3::ZERO, 0.0);
                 m.rider = Some(Rider::default());
-                game.mobs.push(m);
+                game.entities.mobs.push(m);
             }
             // A horse being broken in, unsaddled: its own speed (AbstractHorse.java:962).
             assert!(!game.native_steered(Target::Mob(30)));
-            game.mobs[0].extra.set_saddled(true);
+            game.entities.mobs[0].extra.set_saddled(true);
             assert!(game.native_steered(Target::Mob(30)));
             // A saddled pig whose rider holds no stick (Pig.java:97-100).
-            game.mobs[1].extra.set_saddled(true);
+            game.entities.mobs[1].extra.set_saddled(true);
             assert!(!game.native_steered(Target::Mob(31)));
-            game.mobs[1].rider.as_mut().unwrap().steer = true;
+            game.entities.mobs[1].rider.as_mut().unwrap().steer = true;
             assert!(game.native_steered(Target::Mob(31)));
         });
     }

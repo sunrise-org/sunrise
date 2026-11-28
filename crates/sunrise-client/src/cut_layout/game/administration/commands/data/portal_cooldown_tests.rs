@@ -97,13 +97,13 @@ pub(crate) fn run_a_mob_saves_its_live_portal_cooldown() {
         let Target::Mob(id) = pig else {
             panic!("{pig:?}")
         };
-        let i = game.mobs.iter().position(|m| m.id == id).unwrap();
+        let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
         let saved = game.mob_tree_nbt(i);
         assert_eq!(
             saved.get("PortalCooldown"),
             Some(&Tag::Int(expected.after_chunk_reload))
         );
-        game.mobs.retain(|m| m.id != id);
+        game.entities.mobs.retain(|m| m.id != id);
         game.forget_entity(id);
         let reloaded = Target::Mob(game.load_mob(saved, None).unwrap());
         assert_eq!(

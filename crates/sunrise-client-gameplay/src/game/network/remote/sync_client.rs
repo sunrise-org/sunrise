@@ -157,7 +157,7 @@ impl crate::game::ClientGame<'_> {
         let player_team = board.players_team(&r.profile_name);
         let mut push = Vec3::ZERO;
         let order = |id: u32| r.ticked_before_player.contains(&id) == before_player;
-        for m in self.common.mobs.iter().filter(|m| order(m.id)) {
+        for m in self.common.entities.mobs.iter().filter(|m| order(m.id)) {
             // Bats never push, nor passengers of one vehicle, nor a spectator; the
             // box test comes before the lookups that far mobs never need (#14053).
             if !m.alive()
@@ -205,7 +205,7 @@ impl crate::game::ClientGame<'_> {
         // A boat pushes from its own tick, in the same order as the mobs.
         for b in self
             .common
-            .boats
+            .entities.boats
             .iter()
             .filter(|b| order(b.id) && self.common.riding != Some(b.id))
         {
@@ -425,7 +425,7 @@ impl crate::game::ClientGame<'_> {
         let mob = self
             .common
             .mob_index
-            .get(&self.common.mobs, id as u32)
+            .get(&self.common.entities.mobs, id as u32)
             .map(|m| sunrise_game_data::sound_source::SoundEntityState {
                 position: [m.position.x, m.position.y, m.position.z],
                 silent: m.silent,
@@ -433,7 +433,7 @@ impl crate::game::ClientGame<'_> {
             });
         let dragon = self
             .common
-            .dragon
+            .entities.dragon
             .as_ref()
             .map(|d| (d.id as i32, [d.position.x, d.position.y, d.position.z]));
         let mut state = entity_sound_state(id, player, mob, &r.entities, dragon)?;

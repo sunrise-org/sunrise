@@ -82,9 +82,9 @@ impl ItemPart for Probe {
     }
 }
 fn setup(game: &mut sunrise_gameplay::game::ServerGame<'_>, probe: &Probe, kind: &str, id: u32) {
-    game.mobs.clear();
+    game.entities.mobs.clear();
     let kind = game.res.mob_types().get(kind).unwrap().clone();
-    game.mobs
+    game.entities.mobs
         .push(Mob::new(id, kind, Vec3::new(0.5, 64.0, 2.5), 0.0));
     game.station = None;
     game.inventory[0] = Some(ItemStack::new("minecraft:stick", 2));
@@ -186,7 +186,7 @@ fn actual_item_interact_mob_fallback_priority_and_filters_isolated() {
 
         // A custom item willing to own every mob still cannot preempt trading.
         setup(&mut game, &probe, "minecraft:villager", 42);
-        game.mobs[0].extra.trade = Some(Box::new(Trader {
+        game.entities.mobs[0].extra.trade = Some(Box::new(Trader {
             offers: vec![MerchantOffer {
                 base_cost_a: ItemCost {
                     stack: ItemStack::new("minecraft:emerald", 1),
@@ -205,7 +205,7 @@ fn actual_item_interact_mob_fallback_priority_and_filters_isolated() {
         }));
         assert!(game.interact_entity(target(42)).unwrap());
         assert!(probe.calls.lock().unwrap().is_empty());
-        assert!(!game.mobs[0].removed);
+        assert!(!game.entities.mobs[0].removed);
         assert_eq!(
             game.station
                 .as_ref()
@@ -239,8 +239,8 @@ fn actual_item_interact_mob_fallback_priority_and_filters_isolated() {
         setup(&mut game, &probe, "minecraft:blaze", 42);
         probe.discard.store(true, Ordering::Relaxed);
         assert!(game.interact_entity(None).unwrap());
-        assert!(game.mobs[0].removed);
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.mobs[0].removed);
+        assert!(game.entities.dropped.is_empty());
         assert_eq!(game.swings_started, 0);
         assert_eq!(probe.calls.lock().unwrap().len(), 1);
         assert_eq!(game.inventory[0].as_ref().unwrap().count, 2);
@@ -265,8 +265,8 @@ fn actual_item_interact_mob_fallback_priority_and_filters_isolated() {
         for invalid in ["dead", "removed", "riding", "wrong_id", "empty", "zero"] {
             setup(&mut game, &probe, "minecraft:zombie", 42);
             match invalid {
-                "dead" => game.mobs[0].health = 0.0,
-                "removed" => game.mobs[0].removed = true,
+                "dead" => game.entities.mobs[0].health = 0.0,
+                "removed" => game.entities.mobs[0].removed = true,
                 "riding" => game.riding = Some(42),
                 "empty" => game.inventory[0] = None,
                 "zero" => game.inventory[0].as_mut().unwrap().count = 0,
@@ -281,7 +281,7 @@ fn actual_item_interact_mob_fallback_priority_and_filters_isolated() {
             assert!(probe.calls.lock().unwrap().is_empty(), "{invalid}");
         }
         setup(&mut game, &probe, "minecraft:zombie", 42);
-        game.mobs[0].health = 0.0;
+        game.entities.mobs[0].health = 0.0;
         assert!(!game.interact_entity(None).unwrap());
         assert!(probe.calls.lock().unwrap().is_empty());
 

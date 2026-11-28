@@ -28,7 +28,7 @@ fn entering_hive_posts_block_change_from_bee() {
             .block_entities
             .insert((2, 4, 3), BlockEntity::Beehive(Box::default()));
         let kind = game.res.mob_types().get("minecraft:bee").unwrap().clone();
-        game.mobs
+        game.entities.mobs
             .push(Mob::new(42, kind, Vec3::new(2.0, 4.0, 3.0), 0.0));
         sunrise_gameplay_common::game::side_ops::events::TEST_POSTED_EVENTS
             .with(|events| *events.borrow_mut() = Some(Vec::new()));
@@ -82,9 +82,9 @@ fn tying_to_fence_and_knot_posts_block_attach_from_player() {
         let mut cow = Mob::new(42, kind, Vec3::new(2.5, 4.0, 3.5), 0.0);
         cow.extra.leash = Some(Holder::Player);
         cow.extra.leash_player = Some(game.acting_uuid());
-        game.mobs.push(cow);
+        game.entities.mobs.push(cow);
         for (knot_hit, expected) in [(false, [2.5, 4.5, 3.5]), (true, [2.5, 4.375, 3.5])] {
-            game.mobs[0].extra.leash = Some(Holder::Player);
+            game.entities.mobs[0].extra.leash = Some(Holder::Player);
             sunrise_gameplay_common::game::side_ops::events::TEST_POSTED_EVENTS
                 .with(|events| *events.borrow_mut() = Some(Vec::new()));
             assert!(game.use_knot([2, 4, 3], knot_hit));
@@ -134,7 +134,7 @@ fn saddling_a_pig_posts_equip_from_the_pig() {
         .chunks
         .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-    game.mobs
+    game.entities.mobs
         .push(Mob::new(42, kind, Vec3::new(2.5, 4.0, 3.5), 0.0));
     *game.held_mut() = Some(ItemStack::new("minecraft:saddle", 1));
     sunrise_gameplay_common::game::side_ops::events::TEST_POSTED_EVENTS

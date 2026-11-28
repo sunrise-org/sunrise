@@ -777,7 +777,7 @@ impl ClientGame<'_> {
                             } else {
                                 None
                             }),
-                            &self.common.mobs,
+                            &self.common.entities.mobs,
                             alpha as f32,
                         ),
                     }

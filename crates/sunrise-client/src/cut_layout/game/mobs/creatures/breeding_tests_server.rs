@@ -66,17 +66,17 @@ fn breeding_announces_the_orb_before_the_lower_id_child() {
             let cow = game.res.mob_types().get("minecraft:cow").unwrap().clone();
             let base = game.server.next_entity;
             game.server.next_entity += 2;
-            game.mobs.push(Mob::new(
+            game.entities.mobs.push(Mob::new(
                 base + 1,
                 cow.clone(),
                 Vec3::new(0.0, 64.0, 0.0),
                 0.0,
             ));
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(base + 2, cow, Vec3::new(1.0, 64.0, 0.0), 0.0));
             game.native_joins_skip();
             let warm = game.world_variants().cow.lookup("minecraft:warm").unwrap();
-            let parent = game.mobs.iter_mut().find(|mob| mob.id == base + 1).unwrap();
+            let parent = game.entities.mobs.iter_mut().find(|mob| mob.id == base + 1).unwrap();
             parent.extra.cow_variant = Some(warm);
             parent.random = sunrise_core::random::LegacyRandom::new(0);
             parent.extra.age = 6000;
@@ -91,7 +91,7 @@ fn breeding_announces_the_orb_before_the_lower_id_child() {
             );
             assert_eq!(child, Some(base + 3));
             assert_eq!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|mob| mob.id == base + 3)
                     .unwrap()
@@ -100,7 +100,7 @@ fn breeding_announces_the_orb_before_the_lower_id_child() {
                 -24000
             );
             assert_eq!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|mob| mob.id == base + 1)
                     .unwrap()
@@ -109,7 +109,7 @@ fn breeding_announces_the_orb_before_the_lower_id_child() {
                 6000
             );
             assert_eq!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|mob| mob.id == base + 2)
                     .unwrap()
@@ -125,7 +125,7 @@ fn breeding_announces_the_orb_before_the_lower_id_child() {
                 ]
             );
             assert_eq!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|mob| mob.id == base + 3)
                     .unwrap()
@@ -134,7 +134,7 @@ fn breeding_announces_the_orb_before_the_lower_id_child() {
                 Some(warm)
             );
             assert_eq!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|mob| mob.id == base + 1)
                     .unwrap()
@@ -146,13 +146,13 @@ fn breeding_announces_the_orb_before_the_lower_id_child() {
             let fox = game.res.mob_types().get("minecraft:fox").unwrap().clone();
             let fox_base = game.server.next_entity;
             game.server.next_entity += 2;
-            game.mobs.push(Mob::new(
+            game.entities.mobs.push(Mob::new(
                 fox_base + 1,
                 fox.clone(),
                 Vec3::new(0.0, 64.0, 0.0),
                 0.0,
             ));
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(fox_base + 2, fox, Vec3::new(1.0, 64.0, 0.0), 0.0));
             game.native_joins_skip();
             game.player = Some(sunrise_sim::motion::PlayerMotion::new(
@@ -171,7 +171,7 @@ fn breeding_announces_the_orb_before_the_lower_id_child() {
                 true,
             );
             assert_eq!(fox_child, Some(fox_base + 3));
-            let fox_child = game.mobs.iter().find(|mob| mob.id == fox_base + 3).unwrap();
+            let fox_child = game.entities.mobs.iter().find(|mob| mob.id == fox_base + 3).unwrap();
             assert!(sunrise_sim::mobs::fox::trusts(fox_child, feeder));
             assert_eq!(
                 *joins.lock().unwrap(),
@@ -182,7 +182,7 @@ fn breeding_announces_the_orb_before_the_lower_id_child() {
             );
             joins.lock().unwrap().clear();
             let next = game.server.next_entity;
-            let parent = game.mobs.iter_mut().find(|mob| mob.id == base + 1).unwrap();
+            let parent = game.entities.mobs.iter_mut().find(|mob| mob.id == base + 1).unwrap();
             let mut expected = parent.random.clone();
             let choice = parent.random.next_boolean();
             assert_eq!(choice, expected.next_boolean());
@@ -202,7 +202,7 @@ fn breeding_announces_the_orb_before_the_lower_id_child() {
             // veto keeps the number vanilla's constructor took but spawns nothing.
             assert_eq!(game.server.next_entity, next + 1);
             assert_eq!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|mob| mob.id == base + 1)
                     .unwrap()
@@ -222,7 +222,7 @@ pub(crate) fn tick_breeding(
     seed: i64,
     mob_drops: bool,
 ) -> Bred {
-    game.mobs.clear();
+    game.entities.mobs.clear();
     game.ui.rules.set(
         "mob_drops",
         sunrise_game_data::gamerules::Value::Bool(mob_drops),
@@ -305,16 +305,16 @@ pub(crate) fn tick_breeding(
     }
     let experience = experience.expect("the goal must breed");
     let tick_random = parent.random.state();
-    game.mobs.extend([parent, partner]);
+    game.entities.mobs.extend([parent, partner]);
     game.handle_mob_events(events).unwrap();
-    let parent = game.mobs.iter_mut().find(|m| m.id == base + 1).unwrap();
+    let parent = game.entities.mobs.iter_mut().find(|m| m.id == base + 1).unwrap();
     assert_eq!(
         parent.random.state(),
         tick_random,
         "Game must not redraw inheritance"
     );
     let next_random = parent.random.next_int();
-    let child = game.mobs.iter().find(|m| m.extra.age < 0).unwrap().clone();
+    let child = game.entities.mobs.iter().find(|m| m.extra.age < 0).unwrap().clone();
     Bred {
         child,
         next_random,

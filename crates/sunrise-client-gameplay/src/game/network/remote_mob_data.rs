@@ -542,7 +542,7 @@ impl ClientGame<'_> {
         if let Some(m) = self
             .common
             .mob_index
-            .get_mut(&mut self.common.mobs, id as u32)
+            .get_mut(&mut self.common.entities.mobs, id as u32)
         {
             let stare_sound = crate::game::client_side::villager_client_client::receive(
                 m,

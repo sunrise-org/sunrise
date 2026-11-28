@@ -746,8 +746,8 @@ pub(crate) mod tests {
                             );
                             assert_eq!(source.permission(), Permission::Gamemasters);
                             assert!(game.perform_cart_command(99));
-                            assert_eq!(game.carts[0].command.success_count, 1);
-                            assert!(game.carts[0].command.last_output.is_some());
+                            assert_eq!(game.entities.carts[0].command.success_count, 1);
+                            assert!(game.entities.carts[0].command.last_output.is_some());
                             assert!(
                                 matches!(heard.lock().unwrap().last().unwrap(), CommandSource::CommandBlockMinecart { entity, .. } if entity.id() == 99)
                             );

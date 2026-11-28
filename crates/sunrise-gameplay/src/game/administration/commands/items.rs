@@ -198,7 +198,7 @@ impl crate::game::ServerGame<'_> {
             Owner::Entity(Target::Cart(id)) => {
                 let size = self
                     .common
-                    .carts
+                    .entities.carts
                     .iter()
                     .find(|c| c.id == *id)
                     .map_or(0, |c| c.kind.slots());
@@ -456,7 +456,7 @@ impl crate::game::ServerGame<'_> {
     ) -> bool {
         use sunrise_items::equipment::{BODY, CHEST, FEET, LEGS, MAINHAND, SADDLE};
         let (index, stand) = match slot {
-            Slot::Stand(id, i) => (*i, self.common.armor_stands.iter().find(|a| a.id == *id)),
+            Slot::Stand(id, i) => (*i, self.common.entities.armor_stands.iter().find(|a| a.id == *id)),
             Slot::Dragon(_, i) => (*i, None),
             Slot::Guest(_, inner) => return self.equipment_slot_accepts(inner, stack),
             Slot::Armor(i @ 1..=3) => ([CHEST, LEGS, FEET][*i - 1], None),
@@ -484,7 +484,7 @@ impl crate::game::ServerGame<'_> {
         if let Slot::Mob(id, "body") = slot
             && self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == *id)
                 .is_some_and(|m| {

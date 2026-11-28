@@ -280,7 +280,7 @@ impl crate::game::ServerGame<'_> {
         if !cause.player {
             return self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .any(|m| m.id == cause.entity.0 && !m.removed);
         }
@@ -309,7 +309,7 @@ impl crate::game::ServerGame<'_> {
         // longer resolves for kill credit, unlike Sunrise's early exploders.
         if let Some(cause) = &cause
             && cause.species.is_some()
-            && !self.common.mobs.iter().any(|m| m.id == cause.entity.0)
+            && !self.common.entities.mobs.iter().any(|m| m.id == cause.entity.0)
             && !self
                 .server
                 .combat
@@ -459,7 +459,7 @@ impl crate::game::ServerGame<'_> {
                 {
                     fields = (Some(Who::Player), self.player_uuid_of(guest), guest);
                 } else {
-                    mob_cause = self.common.mobs.iter().any(|m| m.id == id && !m.removed);
+                    mob_cause = self.common.entities.mobs.iter().any(|m| m.id == id && !m.removed);
                 }
             }
         }
@@ -484,7 +484,7 @@ impl crate::game::ServerGame<'_> {
             // does not resolve, though the TNT still saves its UUID.
             return self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .any(|m| m.id == *id && !m.removed)
                 .then_some(Who::Mob(*id));
@@ -492,7 +492,7 @@ impl crate::game::ServerGame<'_> {
         if let Some(id) = self.server.combat.0.explosion_owner {
             return self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .any(|m| m.id == id && !m.removed)
                 .then_some(Who::Mob(id));
@@ -1185,7 +1185,7 @@ impl crate::game::ServerGame<'_> {
                     .0
                     .explosion_owner
                     .or(exploding)
-                    .and_then(|id| self.common.mobs.iter().find(|m| m.id == id))
+                    .and_then(|id| self.common.entities.mobs.iter().find(|m| m.id == id))
                     .map(|m| m.species())
             });
         // `ServerExplosion.hurtEntities`: every entity in reach, on the walk. Each
@@ -1311,7 +1311,7 @@ impl crate::game::ServerGame<'_> {
                 match handle {
                     _ if !hurts => {}
                     EntityHandle::Mob(i) => {
-                        let victim = self.common.mobs[i].id;
+                        let victim = self.common.entities.mobs[i].id;
                         let hurtable = teams_allow(self, self.mob_team(victim));
                         // The exploding mob is the damage source's entity, so
                         // victims it kills drop its charged-creeper loot
@@ -1426,7 +1426,7 @@ impl crate::game::ServerGame<'_> {
                     // blast with a source entity under `mobGriefing` off never
                     // reaches here (`items_ignore`).
                     EntityHandle::Item(i) => {
-                        let id = self.common.dropped[i].id as i32;
+                        let id = self.common.entities.dropped[i].id as i32;
                         let blocked = blocked_damage!(id, "minecraft:item");
                         let Some(EntityHandle::Item(i)) =
                             self.refresh_entity_handle(entity, handle)
@@ -1434,9 +1434,9 @@ impl crate::game::ServerGame<'_> {
                             continue;
                         };
                         let can_hurt = self
-                            .stack_can_be_hurt_by(&self.common.dropped[i].stack, damage_type)
+                            .stack_can_be_hurt_by(&self.common.entities.dropped[i].stack, damage_type)
                             .unwrap_or(true);
-                        let item = &mut self.common.dropped[i];
+                        let item = &mut self.common.entities.dropped[i];
                         if !blocked && can_hurt {
                             item.health = (item.health as f32 - amount) as i32;
                             destroyed = item.health <= 0;
@@ -1452,20 +1452,20 @@ impl crate::game::ServerGame<'_> {
                     }
                     // `ExperienceOrb.hurtServer` takes the damage off their 5 health.
                     EntityHandle::Orb(i) => {
-                        let id = self.common.orbs[i].id as i32;
+                        let id = self.common.entities.orbs[i].id as i32;
                         if !blocked_damage!(id, "minecraft:experience_orb") {
                             let Some(EntityHandle::Orb(i)) =
                                 self.refresh_entity_handle(entity, handle)
                             else {
                                 continue;
                             };
-                            destroyed = self.common.orbs[i].hurt(amount);
+                            destroyed = self.common.entities.orbs[i].hurt(amount);
                         }
                     }
                     // `VehicleEntity.hurtServer` (explosions ignite TNT carts);
                     // a destroyed one is gone before the push.
                     EntityHandle::Cart(i) => {
-                        let kind = self.common.carts[i].kind.id();
+                        let kind = self.common.entities.carts[i].kind.id();
                         if !blocked_damage!(entity as i32, kind) {
                             let Some(EntityHandle::Cart(i)) =
                                 self.refresh_entity_handle(entity, handle)
@@ -1483,7 +1483,7 @@ impl crate::game::ServerGame<'_> {
                     }
                     // `VehicleEntity.hurtServer`: damage * 10, broken past 40.
                     EntityHandle::Boat(i) => {
-                        let kind = self.common.boats[i].entity_type();
+                        let kind = self.common.entities.boats[i].entity_type();
                         if !blocked_damage!(entity as i32, &kind) {
                             let Some(EntityHandle::Boat(i)) =
                                 self.refresh_entity_handle(entity, handle)
@@ -1499,10 +1499,10 @@ impl crate::game::ServerGame<'_> {
                 if destroyed {
                     match self.refresh_entity_handle(entity, handle) {
                         Some(EntityHandle::Item(i)) => {
-                            self.common.dropped.remove(i);
+                            self.common.entities.dropped.remove(i);
                         }
                         Some(EntityHandle::Orb(i)) => {
-                            self.common.orbs.remove(i);
+                            self.common.entities.orbs.remove(i);
                         }
                         _ => {}
                     }
@@ -1524,15 +1524,15 @@ impl crate::game::ServerGame<'_> {
                     EntityHandle::Item(_) | EntityHandle::Orb(_) if destroyed => {}
                     EntityHandle::Cart(i) => self
                         .common
-                        .carts
+                        .entities.carts
                         .update(i, |cart| cart.push_from_explosion(push)),
                     EntityHandle::Boat(i) => self
                         .common
-                        .boats
+                        .entities.boats
                         .update(i, |boat| boat.push_from_explosion(push)),
                     EntityHandle::Projectile(i) => {
                         let redirectable = self.is_redirectable_projectile_type(
-                            self.common.creatures.projectiles[i].entity_type(),
+                            self.common.entities.projectiles[i].entity_type(),
                         );
                         // `ServerExplosion.hurtEntities`: the damage source's causing entity
                         // takes the redirectable projectiles in reach, and a source without
@@ -1542,7 +1542,7 @@ impl crate::game::ServerGame<'_> {
                         } else {
                             (None, None, None)
                         };
-                        self.common.creatures.projectiles.update(i, |p| {
+                        self.common.entities.projectiles.update(i, |p| {
                             p.push_from_explosion(push);
                             if redirectable {
                                 (p.owner, p.owner_uuid, p.guest) = owner;
@@ -1599,17 +1599,17 @@ impl crate::game::ServerGame<'_> {
         diameter: f64,
         interaction: BlockInteraction,
     ) {
-        if self.common.crystals.iter().any(|c| c.id == id)
-            || self.common.dragon.as_ref().is_some_and(|d| d.id == id)
+        if self.common.entities.crystals.iter().any(|c| c.id == id)
+            || self.common.entities.dragon.as_ref().is_some_and(|d| d.id == id)
         {
             self.explosion_hits_special(center, radius, blocks, damage_type, blast_direct);
         }
-        if self.common.item_frames.iter().any(|f| f.id == id) {
+        if self.common.entities.item_frames.iter().any(|f| f.id == id) {
             self.explosion_breaks_frames(center, diameter, interaction);
         }
-        if self.common.paintings.iter().any(|p| p.id == id)
-            || self.common.cushions.iter().any(|c| c.id == id)
-            || self.common.armor_stands.iter().any(|a| a.id == id)
+        if self.common.entities.paintings.iter().any(|p| p.id == id)
+            || self.common.entities.cushions.iter().any(|c| c.id == id)
+            || self.common.entities.armor_stands.iter().any(|a| a.id == id)
         {
             self.explosion_breaks_decorations(center, diameter, interaction);
         }
@@ -1725,8 +1725,8 @@ impl crate::game::ServerGame<'_> {
         let damage_type = self.blast_damage_type();
         let causing = cause.unwrap_or(0);
         let mut i = 0;
-        while i < self.common.armor_stands.len() {
-            let a = &self.common.armor_stands[i];
+        while i < self.common.entities.armor_stands.len() {
+            let a = &self.common.entities.armor_stands[i];
             let p = a.position;
             if !super::armor_stands::spared_by_blast(a)
                 && !self.target_removed(&super::commands::Target::Stand(a.id))
@@ -1759,14 +1759,14 @@ impl crate::game::ServerGame<'_> {
                 // The invulnerability callback can move or remove the stand.
                 let index = if self
                     .common
-                    .armor_stands
+                    .entities.armor_stands
                     .get(i)
                     .is_some_and(|stand| stand.id == id)
                 {
                     Some(i)
                 } else {
                     self.common
-                        .armor_stands
+                        .entities.armor_stands
                         .iter()
                         .position(|stand| stand.id == id)
                 };
@@ -1777,7 +1777,7 @@ impl crate::game::ServerGame<'_> {
                 // stayed, advance the cursor ourselves, even after a refusal.
                 if self
                     .common
-                    .armor_stands
+                    .entities.armor_stands
                     .get(i)
                     .is_some_and(|stand| stand.id == id)
                 {
@@ -1804,13 +1804,13 @@ impl crate::game::ServerGame<'_> {
     /// Paintings and cushions in reach (`BlockAttachedEntity.hurtServer`).
     fn explosion_breaks_hanging(&mut self, center: [f64; 3], diameter: f64) {
         let mut i = 0;
-        while i < self.common.paintings.len() {
+        while i < self.common.entities.paintings.len() {
             // HangingEntity.recalculateBoundingBox: a painting stands at the
             // centre of its box.
-            let (lo, hi) = self.common.paintings[i].bounds();
+            let (lo, hi) = self.common.entities.paintings[i].bounds();
             let at = [0, 1, 2].map(|k| (lo[k] + hi[k]) / 2.0);
             // A painting a mod keeps stays at `i`.
-            if !(self.server.combat.0.visits(self.common.paintings[i].id)
+            if !(self.server.combat.0.visits(self.common.entities.paintings[i].id)
                 && blast_reaches(center, diameter, at)
                 && self.break_painting_by(i, false, self.explosion_kill_credit()))
             {
@@ -1818,9 +1818,9 @@ impl crate::game::ServerGame<'_> {
             }
         }
         let mut i = 0;
-        while i < self.common.cushions.len() {
-            let p = self.common.cushions[i].position;
-            if !(self.server.combat.0.visits(self.common.cushions[i].id)
+        while i < self.common.entities.cushions.len() {
+            let p = self.common.entities.cushions[i].position;
+            if !(self.server.combat.0.visits(self.common.entities.cushions[i].id)
                 && blast_reaches(center, diameter, [p.x, p.y, p.z])
                 && self.break_cushion_by(i, self.explosion_kill_credit()))
             {
@@ -2338,12 +2338,12 @@ impl crate::game::ServerGame<'_> {
             serde_json::from_str(&std::fs::read_to_string(directory.join("inputs.json"))?)?;
         let mut output = Vec::new();
         for case in cases {
-            self.common.dropped.clear();
+            self.common.entities.dropped.clear();
             let stack =
                 sunrise_items::item_data::parse_stack(&case.stack)?.ok_or("empty fixture stack")?;
             self.spawn_item(stack, [0.0, 100.0, 0.0], [0.0; 3], 0);
-            self.common.dropped[0].health = case.health;
-            let original = self.common.dropped[0].id;
+            self.common.entities.dropped[0].health = case.health;
+            let original = self.common.entities.dropped[0].id;
             if case.sibling {
                 self.spawn_item(
                     ItemStack::new("minecraft:dirt", 1),
@@ -2354,7 +2354,7 @@ impl crate::game::ServerGame<'_> {
             }
             let mut steps = Vec::new();
             for distance in case.distances {
-                for item in &mut self.common.dropped {
+                for item in &mut self.common.entities.dropped {
                     item.position = Vec3::new(distance, 100.0, 0.0);
                 }
                 self.explosion_hurt_entities(
@@ -2367,13 +2367,13 @@ impl crate::game::ServerGame<'_> {
                 );
                 let mut remaining: Vec<_> = self
                     .common
-                    .dropped
+                    .entities.dropped
                     .iter()
                     .map(|item| (item.stack.item.to_string(), item.stack.count, item.health))
                     .collect();
                 remaining.sort();
                 steps.push(serde_json::json!(remaining));
-                if !self.common.dropped.iter().any(|item| item.id == original) {
+                if !self.common.entities.dropped.iter().any(|item| item.id == original) {
                     break;
                 }
             }
@@ -2572,7 +2572,7 @@ pub mod tests {
 
                 assert_eq!(hit, 3);
                 assert_eq!(watch.block_drops_calls.load(Ordering::Relaxed), 0);
-                assert_eq!(game.dropped.len(), 2);
+                assert_eq!(game.entities.dropped.len(), 2);
                 assert!(
                     replay.complete(),
                     "one constructor and one join probe seed per pile"
@@ -2596,7 +2596,7 @@ pub mod tests {
                     ),
                 ];
                 for (i, (name, count, pos, draw)) in expected.into_iter().enumerate() {
-                    let item = &game.dropped[i];
+                    let item = &game.entities.dropped[i];
                     let join = &joins[i];
                     assert_eq!((&*item.stack.item, item.stack.count), (name, count));
                     assert_eq!(join.pos, pos);
@@ -2694,8 +2694,8 @@ pub mod tests {
                 let dirt = registry.default_state("minecraft:dirt").unwrap();
                 let infested = registry.default_state("minecraft:infested_stone").unwrap();
                 for (x, state) in [(3, dirt), (4, infested), (6, infested)] {
-                    game.dropped.clear();
-                    game.orbs.clear();
+                    game.entities.dropped.clear();
+                    game.entities.orbs.clear();
                     game.world.set(x, 64, 1, state).unwrap();
                     game.handle_mob_events(vec![MobEvent::BreakBlock {
                         pos: [x, 64, 1],
@@ -2707,12 +2707,12 @@ pub mod tests {
                     assert_eq!(game.world.block(x, 64, 1), game.world.air);
                     match x {
                         4 => {
-                            assert!(game.dropped.is_empty() && game.orbs.is_empty());
-                            assert!(game.mobs.is_empty(), "cancel suppresses spawnAfterBreak");
+                            assert!(game.entities.dropped.is_empty() && game.entities.orbs.is_empty());
+                            assert!(game.entities.mobs.is_empty(), "cancel suppresses spawnAfterBreak");
                         }
                         _ => {
-                            assert_eq!(game.dropped.len(), 1);
-                            let item = &game.dropped[0];
+                            assert_eq!(game.entities.dropped.len(), 1);
+                            let item = &game.entities.dropped[0];
                             assert_eq!(
                                 (&*item.stack.item, item.stack.count),
                                 ("minecraft:emerald", 3)
@@ -2721,7 +2721,7 @@ pub mod tests {
                             assert_eq!(item.velocity, Vec3::new(0.1, 0.2, 0.3));
                             assert_eq!(item.pickup_delay, 42);
                             assert_eq!(
-                                game.orbs
+                                game.entities.orbs
                                     .iter()
                                     .map(|orb| orb.points() * orb.count)
                                     .sum::<u32>(),
@@ -2731,12 +2731,12 @@ pub mod tests {
                     }
                 }
                 assert_eq!(
-                    game.mobs.len(),
+                    game.entities.mobs.len(),
                     1,
                     "allowed spawnAfterBreak runs exactly once"
                 );
                 assert_eq!(
-                    game.mobs[0].species(),
+                    game.entities.mobs[0].species(),
                     sunrise_sim::mobs::Species::Silverfish
                 );
             });

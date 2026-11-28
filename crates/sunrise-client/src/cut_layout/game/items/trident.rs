@@ -65,7 +65,7 @@ pub(crate) mod tests {
         assert!(game.using.is_some());
         game.held_mut().as_mut().unwrap().damage = 9;
         game.release_trident(10);
-        assert!(game.tridents.is_empty());
+        assert!(game.entities.tridents.is_empty());
         assert_eq!(game.held().unwrap().damage, 9);
         game.using = None;
 
@@ -77,16 +77,16 @@ pub(crate) mod tests {
         assert!(game.use_trident(&stack));
         assert!(game.using.is_some());
         game.release_trident(9);
-        assert!(game.tridents.is_empty());
+        assert!(game.entities.tridents.is_empty());
         assert_eq!(game.held().unwrap().damage, 249);
         game.release_trident(10);
-        assert_eq!(game.tridents.len(), 1);
-        assert_eq!(game.tridents[0].stack.damage, 250);
+        assert_eq!(game.entities.tridents.len(), 1);
+        assert_eq!(game.entities.tridents[0].stack.damage, 250);
         assert!(game.held().is_none());
-        assert_eq!(game.tridents[0].pickup, Pickup::Allowed);
-        assert_eq!(game.tridents[0].owner_uuid, game.level.player_uuid);
-        assert!(!game.tridents[0].has_been_shot);
-        assert!(!game.tridents[0].left_owner);
+        assert_eq!(game.entities.tridents[0].pickup, Pickup::Allowed);
+        assert_eq!(game.entities.tridents[0].owner_uuid, game.level.player_uuid);
+        assert!(!game.entities.tridents[0].has_been_shot);
+        assert!(!game.entities.tridents[0].left_owner);
 
         game.creative = true;
         game.using = None;
@@ -94,7 +94,7 @@ pub(crate) mod tests {
         *game.held_mut() = Some(stack.clone());
         assert!(game.use_trident(&stack));
         game.release_trident(10);
-        assert_eq!(game.tridents[1].pickup, Pickup::CreativeOnly);
+        assert_eq!(game.entities.tridents[1].pickup, Pickup::CreativeOnly);
         assert!(game.held().is_some());
     }
     /// `TridentItem.releaseUsing` launches a Riptide III player along the float look vector

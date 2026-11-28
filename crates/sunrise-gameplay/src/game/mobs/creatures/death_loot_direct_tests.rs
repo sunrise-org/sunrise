@@ -140,7 +140,7 @@ fn a_blast_records_the_entity_that_went_off() {
     crate::game::native_entity_refs::tests::with_game(|game| {
         let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
         let blast = |game: &mut crate::game::ServerGame<'_>, source: ExplosionSource| {
-            game.common.mobs.clear();
+            game.common.entities.mobs.clear();
             let mut target = sunrise_sim::mobs::Mob::new(
                 70,
                 pig.clone(),
@@ -148,10 +148,10 @@ fn a_blast_records_the_entity_that_went_off() {
                 0.0,
             );
             target.health = 1000.0;
-            game.common.mobs.push(target);
+            game.common.entities.mobs.push(target);
             game.server_explode_from([0.5, 64.5, 2.0], 4.0, BlockInteraction::Keep, false, source)
                 .unwrap();
-            let hit = game.mobs.iter().find(|m| m.id == 70).unwrap();
+            let hit = game.entities.mobs.iter().find(|m| m.id == 70).unwrap();
             let (damage, _) = hit.last_damage.expect("the blast hurt the pig");
             seen(damage, None)
         };

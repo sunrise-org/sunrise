@@ -1237,7 +1237,7 @@ impl crate::game::ServerGame<'_> {
                     self.update_mob_spawning_flags();
                     self.common.sync_rules();
                     if self.common.ui.difficulty == 0 {
-                        self.common.mobs.retain(|m| !m.hostile());
+                        self.common.entities.mobs.retain(|m| !m.hostile());
                     }
                     let Some(host) = self.server.lan.as_mut() else {
                         return;

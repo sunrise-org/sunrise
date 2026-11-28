@@ -141,7 +141,7 @@ fn check_signs(game: &mut crate::game::ClientGame<'_>) {
                     assert!(game.start_using_item());
                 }
                 set_camera(game, player_id);
-                game.armor_stands.clear();
+                game.entities.armor_stands.clear();
                 if let Some(subject) = subject {
                     let at = Vec3::new(subject.x, subject.y, subject.z);
                     let mut stand = ArmorStand::new(SUBJECT as u32, at, 0.0);
@@ -149,7 +149,7 @@ fn check_signs(game: &mut crate::game::ClientGame<'_>) {
                     if name == "exact_distance" {
                         stand.previous = Vec3::new(NEAR.x, NEAR.y, NEAR.z);
                     }
-                    game.armor_stands.push(stand);
+                    game.entities.armor_stands.push(stand);
                     set_camera(game, SUBJECT);
                 }
                 let visual = match name {
@@ -171,7 +171,7 @@ fn check_signs(game: &mut crate::game::ClientGame<'_>) {
                     }
                     "scoping_without_subject" => {
                         // Loss of the held object before a new camera subject is available.
-                        game.armor_stands
+                        game.entities.armor_stands
                             .push(ArmorStand::new(SUBJECT as u32, Vec3::ZERO, 0.0));
                         set_camera(game, SUBJECT);
                         remove(game, SUBJECT);
@@ -311,7 +311,7 @@ fn check_signs(game: &mut crate::game::ClientGame<'_>) {
             check(game, true);
             remove(game, CART);
 
-            game.armor_stands.push(ArmorStand::new(
+            game.entities.armor_stands.push(ArmorStand::new(
                 SUBJECT as u32,
                 Vec3::new(2.5, 0.5, 0.5),
                 0.0,
@@ -319,11 +319,11 @@ fn check_signs(game: &mut crate::game::ClientGame<'_>) {
             set_camera(game, SUBJECT);
             check(game, true);
             // Move after selection: removal must keep the last base position, not the first.
-            game.armor_stands.last_mut().unwrap().position.x = FAR.x;
+            game.entities.armor_stands.last_mut().unwrap().position.x = FAR.x;
             check(game, false);
-            game.armor_stands.last_mut().unwrap().position.x = 4.5;
+            game.entities.armor_stands.last_mut().unwrap().position.x = 4.5;
             remove(game, SUBJECT);
-            assert!(game.armor_stands.is_empty());
+            assert!(game.entities.armor_stands.is_empty());
             assert_eq!(
                 game.camera_subject().unwrap().camera.position,
                 [4.5, 0.5, 0.5]

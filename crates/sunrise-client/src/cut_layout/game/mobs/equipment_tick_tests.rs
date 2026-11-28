@@ -90,7 +90,7 @@ fn a_mobs_compass_loses_a_broken_lodestone_and_keeps_the_others() {
             )));
         }
         let id = game
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| game.persist.uuid_of(m.id) == Some([UUID_HIGH, 0, 0, n]))
             .expect("the summoned zombie")
@@ -101,7 +101,7 @@ fn a_mobs_compass_loses_a_broken_lodestone_and_keeps_the_others() {
     assert!(game.entity_ticking_area()(2, 2));
     game.tick_creature_entities().unwrap();
     let slot = |id: u32, slot: usize| -> ItemStack {
-        let m = game.mobs.iter().find(|m| m.id == id).unwrap();
+        let m = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
         m.extra.equipment[slot]
             .clone()
             .expect("the zombie keeps its compass")

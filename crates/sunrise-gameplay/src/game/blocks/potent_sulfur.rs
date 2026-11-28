@@ -66,7 +66,7 @@ impl ServerGame<'_> {
         }
         let mut near = Vec::new();
         if !self.mobs_in_pass(area, &mut near) {
-            near.extend(0..self.common.mobs.len() as u32);
+            near.extend(0..self.common.entities.mobs.len() as u32);
         }
         let level = SulfurLevel::new(
             &self.common.world,
@@ -76,7 +76,7 @@ impl ServerGame<'_> {
         // The gas reads blocks only, so the mobs it reaches can be found
         // before any gets its effect.
         near.retain(|&j| {
-            let mob = &self.common.mobs[j as usize];
+            let mob = &self.common.entities.mobs[j as usize];
             mob.alive()
                 && mob.bounds().intersects(area)
                 && can_be_reached_by_noxious_gas(
@@ -90,7 +90,7 @@ impl ServerGame<'_> {
         }
         let reached: Vec<_> = near
             .into_iter()
-            .map(|j| self.common.mobs[j as usize].id)
+            .map(|j| self.common.entities.mobs[j as usize].id)
             .collect();
         for id in reached {
             let mut nausea = EffectInstance::new("nausea", EFFECT_DURATION_IN_TICKS, 0);
@@ -110,7 +110,7 @@ impl ServerGame<'_> {
         let Some(pass) = self.server.pass_mobs.as_mut() else {
             return false;
         };
-        pass.grid_for(&self.common.mobs).candidates(area, out)
+        pass.grid_for(&self.common.entities.mobs).candidates(area, out)
     }
 
     /// `PotentSulfurBlockEntity.applyNauseaEffect` on the player acting (a
@@ -232,15 +232,15 @@ impl ServerGame<'_> {
         let push = f64::from(0.2f32);
         let mut near = Vec::new();
         if !self.mobs_in_pass(area, &mut near) {
-            near.extend(0..self.common.mobs.len() as u32);
+            near.extend(0..self.common.entities.mobs.len() as u32);
         }
         near.retain(|&j| {
-            let m = &self.common.mobs[j as usize];
+            let m = &self.common.entities.mobs[j as usize];
             m.alive() && m.bounds().intersects(area)
         });
         let tags = self.items().entity_type_tags.clone();
         for &j in &near {
-            let mob = &mut self.common.mobs[j as usize];
+            let mob = &mut self.common.entities.mobs[j as usize];
             // Entity.checkFallDistanceAccumulation.
             if mob.velocity.y > -0.5 && mob.fall_distance > 1.0 {
                 mob.fall_distance = 1.0;
@@ -259,11 +259,11 @@ impl ServerGame<'_> {
         if !near.is_empty()
             && let Some(pass) = self.server.pass_mobs.as_mut()
         {
-            pass.wrote(&self.common.mobs);
+            pass.wrote(&self.common.entities.mobs);
         }
         for item in self
             .common
-            .dropped
+            .entities.dropped
             .iter_mut()
             .filter(|i| i.bounds().intersects(area))
         {
@@ -273,7 +273,7 @@ impl ServerGame<'_> {
         }
         for tnt in self
             .common
-            .tnts
+            .entities.tnts
             .iter_mut()
             .filter(|t| t.bounds().intersects(area))
         {
@@ -283,18 +283,18 @@ impl ServerGame<'_> {
         }
         // Every entity in the column is launched (`getEntitiesOfClass(Entity.class)`):
         // a projectile in flight or at rest, a boat and a minecart too.
-        self.common.creatures.projectiles.for_each_mut(|p| {
+        self.common.entities.projectiles.for_each_mut(|p| {
             if p.bounds().intersects(area) && p.velocity.y < limit {
                 p.velocity.y += push;
                 p.needs_sync = true;
             }
         });
-        self.common.boats.for_each_mut(|boat| {
+        self.common.entities.boats.for_each_mut(|boat| {
             if boat.bounds().intersects(area) && boat.velocity.y < limit {
                 boat.velocity.y += push;
             }
         });
-        self.common.carts.for_each_mut(|cart| {
+        self.common.entities.carts.for_each_mut(|cart| {
             if cart.bounds().intersects(area) && cart.velocity.y < limit {
                 cart.velocity.y += push;
             }

@@ -12,7 +12,7 @@ fn projectile_handle_pierce_level_changes_real_hits() {
             .unwrap()
             .clone();
         for (id, x) in [(11, 1.0), (12, 2.0), (13, 3.0)] {
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(id, zombie.clone(), Vec3::new(x, 64.0, 0.0), 0.0));
         }
         let mut shot = Projectile::new(
@@ -26,16 +26,16 @@ fn projectile_handle_pierce_level_changes_real_hits() {
         );
         shot.velocity = Vec3::new(4.0, 0.0, 0.0);
         game.add_projectile(shot);
-        let id = game.creatures.projectiles[0].id;
+        let id = game.entities.projectiles[0].id;
         let handle = game.projectile(game.entity(id).unwrap()).unwrap();
         assert_eq!(handle.pierce_level(game), Ok(0));
         assert_eq!(handle.set_pierce_level(game, 1), Ok(()));
-        let health: Vec<_> = game.mobs.iter().map(|m| m.health).collect();
+        let health: Vec<_> = game.entities.mobs.iter().map(|m| m.health).collect();
         game.tick_projectiles().unwrap();
-        assert!(game.mobs[0].health < health[0]);
+        assert!(game.entities.mobs[0].health < health[0]);
         game.tick_projectiles().unwrap();
-        assert!(game.mobs[1].health < health[1]);
-        assert_eq!(game.mobs[2].health, health[2]);
+        assert!(game.entities.mobs[1].health < health[1]);
+        assert_eq!(game.entities.mobs[2].health, health[2]);
     });
 }
 
@@ -49,15 +49,15 @@ fn breeze_deflection_does_not_draw_from_level_random() {
             .get("minecraft:breeze")
             .unwrap()
             .clone();
-        game.mobs
+        game.entities.mobs
             .push(Mob::new(1, breeze, Vec3::new(0.0, 64.0, 0.0), 0.0));
         let mut projectile =
             Projectile::new(ProjectileKind::Snowball, Vec3::new(-2.0, 64.5, 0.0), None);
         projectile.velocity = Vec3::new(3.0, 0.0, 0.0);
-        game.creatures.projectiles.push(projectile);
+        game.entities.projectiles.push(projectile);
         let before = game.world.random.state();
         game.tick_projectiles().unwrap();
-        assert!(game.creatures.projectiles[0].velocity.x < 0.0);
+        assert!(game.entities.projectiles[0].velocity.x < 0.0);
         assert_eq!(game.world.random.state(), before);
     });
 }

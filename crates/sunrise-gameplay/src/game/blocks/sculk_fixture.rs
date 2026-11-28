@@ -240,7 +240,7 @@ impl crate::game::ServerGame<'_> {
         };
         // A source entity that is gone reads as none (VibrationInfo.getEntity).
         let alive = |w: Option<Who>| match w {
-            Some(Who::Mob(id)) if !self.common.mobs.iter().any(|m| m.id == id && !m.removed) => {
+            Some(Who::Mob(id)) if !self.common.entities.mobs.iter().any(|m| m.id == id && !m.removed) => {
                 None
             }
             other => other,
@@ -373,12 +373,12 @@ impl crate::game::ServerGame<'_> {
         self.common.block_ticks = Ticks::new(0);
         self.server.tick_chunks.clear();
         self.sync_tick_chunks();
-        self.common.mobs.clear();
+        self.common.entities.mobs.clear();
         if s.trace_events {
-            self.common.creatures.projectiles.clear();
+            self.common.entities.projectiles.clear();
         }
-        self.common.dropped.clear();
-        self.common.orbs.clear();
+        self.common.entities.dropped.clear();
+        self.common.entities.orbs.clear();
         self.common.level_events.clear();
         self.common.ui.rules = Default::default();
         for (rule, value) in [
@@ -512,16 +512,16 @@ impl crate::game::ServerGame<'_> {
             }
             names.insert(id, format!("m{}", sources.len()));
             sources.push(id);
-            self.common.mobs.push(m);
+            self.common.entities.mobs.push(m);
         }
         self.server.next_entity = self.server.next_entity.max(200_000);
         self.common.world.day_time = 6000;
         self.common.world.random.set_seed(s.level_seed);
         self.start_audio_capture();
-        let mut known: HashSet<u32> = self.common.mobs.iter().map(|m| m.id).collect();
+        let mut known: HashSet<u32> = self.common.entities.mobs.iter().map(|m| m.id).collect();
         let mut seeded: HashSet<u32> = HashSet::new();
-        let mut known_items = self.common.dropped.len();
-        let mut known_orbs = self.common.orbs.len();
+        let mut known_items = self.common.entities.dropped.len();
+        let mut known_orbs = self.common.entities.orbs.len();
         let mut last: HashMap<[i32; 3], String> = HashMap::new();
         let mut region_last: HashMap<[i32; 3], String> = HashMap::new();
         let (mut last_player, mut last_rng) = (String::new(), String::new());
@@ -571,7 +571,7 @@ impl crate::game::ServerGame<'_> {
             }
             let mut fresh: Vec<&Mob> = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .filter(|m| !known.contains(&m.id))
                 .collect();
@@ -596,14 +596,14 @@ impl crate::game::ServerGame<'_> {
                 names.insert(id, format!("n{}", names.len()));
                 let seed = 0x5eed + names.len() as i64;
                 if seeded.insert(id)
-                    && let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id)
+                    && let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id)
                 {
                     seed_fresh(m, seed);
                 }
                 lines.push(line);
             }
-            for i in known_items..self.common.dropped.len() {
-                let d = &self.common.dropped[i];
+            for i in known_items..self.common.entities.dropped.len() {
+                let d = &self.common.entities.dropped[i];
                 names.insert(u32::MAX - i as u32, format!("n{}", names.len()));
                 lines.push(format!(
                     "new minecraft:item {},{},{}",
@@ -612,14 +612,14 @@ impl crate::game::ServerGame<'_> {
                     self::d(d.position.z)
                 ));
             }
-            known_items = self.common.dropped.len();
+            known_items = self.common.entities.dropped.len();
             // Where an orb flies comes from its own random: its value only.
-            for orb in &self.common.orbs[known_orbs.min(self.common.orbs.len())..] {
+            for orb in &self.common.entities.orbs[known_orbs.min(self.common.entities.orbs.len())..] {
                 lines.push(format!("new minecraft:experience_orb value={}", orb.value));
             }
-            known_orbs = self.common.orbs.len();
+            known_orbs = self.common.entities.orbs.len();
             if s.trace_events {
-                for m in &self.common.mobs {
+                for m in &self.common.entities.mobs {
                     if let Some(st) = &m.extra.warden {
                         let selected = st.vibration.selector.current().map(|(i, _)| {
                             serde_json::json!({"event": i.event, "pos": i.pos, "distance": i.distance})
@@ -630,7 +630,7 @@ impl crate::game::ServerGame<'_> {
                         ));
                     }
                 }
-                for p in &self.common.creatures.projectiles {
+                for p in &self.common.entities.projectiles {
                     lines.push(format!(
                         "projectile {}",
                         serde_json::json!({"kind": p.kind.id(),
@@ -715,10 +715,10 @@ impl crate::game::ServerGame<'_> {
                     let nbt = words[1..]
                         .join(" ")
                         .replace("$owner", &format!("[I;{owner}]"));
-                    let before = self.common.creatures.projectiles.len();
+                    let before = self.common.entities.projectiles.len();
                     self.summon_with_nbt("minecraft:snowball", [30.5, 205.0, 10.5], &nbt)
                         .map_err(|_| "fixture summon failed")?;
-                    if self.common.creatures.projectiles.len() != before + 1 {
+                    if self.common.entities.projectiles.len() != before + 1 {
                         return Err("fixture summon created no projectile".into());
                     }
                 }
@@ -780,8 +780,8 @@ impl crate::game::ServerGame<'_> {
                         &attack,
                     );
                     let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
-                    if let Some(index) = self.common.mob_index.find(&self.common.mobs, id) {
-                        self.common.mobs[index].damage(
+                    if let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, id) {
+                        self.common.entities.mobs[index].damage(
                             crate::game::server_side::entity_server::damage_level_of!(
                                 self,
                                 &attack,
@@ -802,7 +802,7 @@ impl crate::game::ServerGame<'_> {
                         .copied()
                         .ok_or("no such mob")?;
                     let mut events = Vec::new();
-                    if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+                    if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
                         if words[0] == "ignite" {
                             m.extra.flag = true;
                         } else {
@@ -829,7 +829,7 @@ impl crate::game::ServerGame<'_> {
         // after the tick.
         let mut born: Vec<u32> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .map(|m| m.id)
             .filter(|id| !known.contains(id))
@@ -837,7 +837,7 @@ impl crate::game::ServerGame<'_> {
         born.sort_unstable();
         for (i, id) in born.into_iter().enumerate() {
             if seeded.insert(id)
-                && let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id)
+                && let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id)
             {
                 seed_fresh(m, 0x5eed + (named + i + 1) as i64);
             }

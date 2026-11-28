@@ -39,28 +39,28 @@ impl crate::game::ServerGame<'_> {
     /// `Zombie.killedEntity`: a villager killed by a zombie may rise as a
     /// zombie villager keeping its profession, trades and gossip.
     pub(in crate::game) fn zombie_killed(&mut self, killer: u32, victim: u32) {
-        let Some(k) = self.common.mobs.iter().position(|m| m.id == killer) else {
+        let Some(k) = self.common.entities.mobs.iter().position(|m| m.id == killer) else {
             return;
         };
-        let Some(v) = self.common.mobs.iter().position(|m| m.id == victim) else {
+        let Some(v) = self.common.entities.mobs.iter().position(|m| m.id == victim) else {
             return;
         };
-        if !is_zombie(self.common.mobs[k].species())
-            || self.common.mobs[v].species() != Species::Villager
-            || self.common.mobs[v].alive()
-            || self.common.mobs[v].removed
+        if !is_zombie(self.common.entities.mobs[k].species())
+            || self.common.entities.mobs[v].species() != Species::Villager
+            || self.common.entities.mobs[v].alive()
+            || self.common.entities.mobs[v].removed
         {
             return;
         }
         let difficulty = self.common.world.health_rules.difficulty;
-        let random = &mut self.common.mobs[k].random;
+        let random = &mut self.common.entities.mobs[k].random;
         if !infects(difficulty, || random.next_boolean()) {
             return;
         }
         // The villager is gone without dying: no drops, no death animation.
-        let old = self.common.mobs[v].clone();
-        self.common.mobs[v].removed = true;
-        self.common.mobs[v].health = 0.0;
+        let old = self.common.entities.mobs[v].clone();
+        self.common.entities.mobs[v].removed = true;
+        self.common.entities.mobs[v].health = 0.0;
         let at = [old.position.x, old.position.y, old.position.z];
         let Some(id) = self.spawn_mob(
             "minecraft:zombie_villager",
@@ -72,16 +72,16 @@ impl crate::game::ServerGame<'_> {
         ) else {
             return;
         };
-        let ensure = self.common.mobs.iter().position(|m| m.id == victim);
+        let ensure = self.common.entities.mobs.iter().position(|m| m.id == victim);
         if let Some(i) = ensure {
             self.ensure_offers(i);
         }
-        let old = ensure.map_or(old, |i| self.common.mobs[i].clone());
-        let Some(z) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let old = ensure.map_or(old, |i| self.common.entities.mobs[i].clone());
+        let Some(z) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return;
         };
         convert_to_zombie_villager(&old, z);
-        for rider in self.common.mobs.iter_mut() {
+        for rider in self.common.entities.mobs.iter_mut() {
             if rider.extra.mount == Some(old.id) {
                 rider.extra.mount = Some(id);
             }
@@ -89,8 +89,8 @@ impl crate::game::ServerGame<'_> {
         if old.extra.mount.is_some() {
             self.position_riders();
         }
-        if !self.common.mobs[k].silent {
-            let at = self.common.mobs[k].position;
+        if !self.common.entities.mobs[k].silent {
+            let at = self.common.entities.mobs[k].position;
             self.server_level_event_at(
                 1026,
                 [
@@ -107,7 +107,7 @@ impl crate::game::ServerGame<'_> {
     /// villager starts the cure and is eaten; without weakness it does
     /// nothing. Returns whether the click was used.
     pub(in crate::game) fn interact_zombie_villager(&mut self, index: usize, item: &str) -> bool {
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         if m.species() != Species::ZombieVillager || item != "minecraft:golden_apple" {
             return false;
         }
@@ -118,17 +118,17 @@ impl crate::game::ServerGame<'_> {
         // `player.getUUID()`: the acting player, a server's guest included.
         let starter = Some(self.acting_player_uuid());
         let time = zombie_villager::WAIT_MIN
-            + self.common.mobs[index]
+            + self.common.entities.mobs[index]
                 .random
                 .next_int_bound(zombie_villager::WAIT_SPREAD)
                 .unwrap_or(0);
-        let id = self.common.mobs[index].id;
+        let id = self.common.entities.mobs[index].id;
         let at = [
-            self.common.mobs[index].position.x,
-            self.common.mobs[index].position.y,
-            self.common.mobs[index].position.z,
+            self.common.entities.mobs[index].position.x,
+            self.common.entities.mobs[index].position.y,
+            self.common.entities.mobs[index].position.z,
         ];
-        villager::ext_mut(&mut self.common.mobs[index]).cure =
+        villager::ext_mut(&mut self.common.entities.mobs[index]).cure =
             Some(zombie_villager::Cure { time, starter });
         if let Some(def) = sunrise_game_data::potions::effect("weakness") {
             self.remove_mob_effect_by_index(id, def.index);
@@ -147,14 +147,14 @@ impl crate::game::ServerGame<'_> {
     /// data, trades, experience and gossip, and the curing player earns the
     /// village's trust.
     pub(in crate::game) fn cure_zombie_villager(&mut self, id: u32) {
-        let Some(i) = self.common.mobs.iter().position(|m| m.id == id) else {
+        let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == id) else {
             return;
         };
-        if self.common.mobs[i].removed || zombie_villager::cure(&self.common.mobs[i]).is_none() {
+        if self.common.entities.mobs[i].removed || zombie_villager::cure(&self.common.entities.mobs[i]).is_none() {
             return;
         }
-        let old = self.common.mobs[i].clone();
-        self.common.mobs[i].removed = true;
+        let old = self.common.entities.mobs[i].clone();
+        self.common.entities.mobs[i].removed = true;
         let at = [old.position.x, old.position.y, old.position.z];
         let Some(vid) = self.spawn_mob(
             "minecraft:villager",
@@ -170,11 +170,11 @@ impl crate::game::ServerGame<'_> {
         // first, as in vanilla, on the fresh villager.
         let nausea =
             self.can_be_affected(Some(vid as i32), "minecraft:villager", "minecraft:nausea");
-        let Some(v) = self.common.mobs.iter_mut().find(|m| m.id == vid) else {
+        let Some(v) = self.common.entities.mobs.iter_mut().find(|m| m.id == vid) else {
             return;
         };
         let drops = convert_to_villager(&old, v, nausea);
-        for rider in self.common.mobs.iter_mut() {
+        for rider in self.common.entities.mobs.iter_mut() {
             if rider.extra.mount == Some(old.id) {
                 rider.extra.mount = Some(vid);
             }
@@ -195,7 +195,7 @@ impl crate::game::ServerGame<'_> {
         let starter = zombie_villager::cure(&old).and_then(|c| c.starter);
         let curer = starter.and_then(|uuid| Some((uuid, self.player_here(uuid)?)));
         // `Villager.onReputationEventFrom(ZOMBIE_VILLAGER_CURED)`.
-        let Some(v) = self.common.mobs.iter_mut().find(|m| m.id == vid) else {
+        let Some(v) = self.common.entities.mobs.iter_mut().find(|m| m.id == vid) else {
             return;
         };
         if let Some((uuid, _)) = curer {

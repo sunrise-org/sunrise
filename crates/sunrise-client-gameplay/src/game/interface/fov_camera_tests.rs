@@ -149,7 +149,7 @@ fn spectated_player_fov_uses_their_own_attributes_and_item_use() {
         let m = game
             .common
             .mob_index
-            .get_mut(&mut game.common.mobs, 31)
+            .get_mut(&mut game.common.entities.mobs, 31)
             .unwrap();
         m.extra.sprinting = true;
         m.extra.using_item = 11;

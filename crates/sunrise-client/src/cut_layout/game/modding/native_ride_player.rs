@@ -49,7 +49,7 @@ mod tests {
                     game.options.dedicated = Some(Vec::new());
                     fixture_resident_column(&mut game.world, (0, 0));
                     let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                    game.mobs.push(Mob::new(80, pig, Vec3::ZERO, 0.0));
+                    game.entities.mobs.push(Mob::new(80, pig, Vec3::ZERO, 0.0));
                     let player =
                         sunrise_gameplay::game::native_player_death::tests::add_guest(game)
                             .entity();
@@ -60,7 +60,7 @@ mod tests {
                     case(game, conn);
                     // The unload save takes the pig away with its chunk; every other case keeps it.
                     let mount = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-                        game.mobs
+                        game.entities.mobs
                             .iter()
                             .find(|m| m.id == 80 && !m.removed)
                             .map(|m| m.extra.mount)
@@ -189,7 +189,7 @@ mod tests {
             fixture_resident_column(&mut game.world, (0, 0));
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             for id in [80, 81] {
-                game.mobs.push(Mob::new(id, pig.clone(), Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, pig.clone(), Vec3::ZERO, 0.0));
             }
             let player =
                 sunrise_gameplay::game::native_player_death::tests::add_guest(game).entity();
@@ -208,7 +208,7 @@ mod tests {
                 Err(Refusal::SameEntity)
             );
             assert_eq!(game.entity_ride_player(first, player, false), Ok(()));
-            assert_eq!(game.mobs[0].extra.mount, Some(player.id()));
+            assert_eq!(game.entities.mobs[0].extra.mount, Some(player.id()));
             assert_eq!(game.entity_vehicle(first), Some(player));
             assert_eq!(
                 collect_entity_visit(|visit| player.visit_passengers(game, visit)),
@@ -227,7 +227,7 @@ mod tests {
             game.sync_riders();
             let [x, _, z] = game.entity_position(player).unwrap();
             let [low, high] = game.entity_bounding_box(player).unwrap();
-            let m = &game.mobs[0];
+            let m = &game.entities.mobs[0];
             let offset = riders::vehicle_attachment(m, (high[0] - low[0]) as f32);
             assert_eq!(
                 m.extra.mount,
@@ -249,7 +249,7 @@ mod tests {
             // Forced past the one-passenger limit, as vanilla's force is.
             assert_eq!(game.entity_ride_player(second, player, true), Ok(()));
             assert!(game.entity_stop_riding(first));
-            assert_eq!(game.mobs[0].extra.mount, None);
+            assert_eq!(game.entities.mobs[0].extra.mount, None);
             assert!(game.entity_eject_passengers(player));
             game.lan_riding(&[], &mut riding);
             assert!(riding.told_self.is_empty(), "told it carries nothing now");
@@ -296,7 +296,7 @@ mod tests {
                 });
             // The player left the level: its passenger gets off.
             game.sync_riders();
-            assert_eq!(game.mobs[0].extra.mount, None);
+            assert_eq!(game.entities.mobs[0].extra.mount, None);
         });
     }
 }

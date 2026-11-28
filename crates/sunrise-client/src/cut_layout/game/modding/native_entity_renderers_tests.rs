@@ -173,12 +173,12 @@ fn thrown_frame(
     kinds: &[&str],
 ) -> Vec<Vertex> {
     use sunrise_sim::projectiles::{Projectile, ProjectileKind, thrown_type};
-    game.creatures.projectiles.clear();
+    game.entities.projectiles.clear();
     for (i, kind) in kinds.iter().enumerate() {
         let t = thrown_type(kind).unwrap();
         let mut p = Projectile::new(ProjectileKind::Thrown(t), feet(), None);
         p.id = 90 + i as u32;
-        game.creatures.projectiles.push(p);
+        game.entities.projectiles.push(p);
     }
     let mut out = Vec::new();
     game.mob_geometry(CAMERA, 1.0, &mut out);
@@ -293,7 +293,7 @@ fn a_vanilla_boat_is_unchanged_by_a_registration_for_its_type() {
     in_scene(
         "a_vanilla_boat_is_unchanged_by_a_registration_for_its_type",
         |game, scene| {
-            game.boats
+            game.entities.boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     100,
                     "oak".into(),
@@ -301,7 +301,7 @@ fn a_vanilla_boat_is_unchanged_by_a_registration_for_its_type() {
                     0.0,
                 ));
             let mut boat = Vec::new();
-            game.boat_geometry(CAMERA, 1.0, &mut boat, 0..game.boats.len());
+            game.boat_geometry(CAMERA, 1.0, &mut boat, 0..game.entities.boats.len());
             assert!(!boat.is_empty(), "its vanilla model");
             assert!(
                 boat.iter().all(|v| above(v) < 2.0),

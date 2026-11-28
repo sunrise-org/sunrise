@@ -35,10 +35,10 @@ pub(crate) mod datapack_damage_tests {
             with_pack(game);
             pig(game, 1, Vec3::new(0.5, 64.0, 0.5));
             assert!(game.hurt_target(Target::Mob(1), 1.0, "dmgtest:zap", None, None, None));
-            assert_eq!(game.mobs[0].health, 9.0);
+            assert_eq!(game.entities.mobs[0].health, 9.0);
             // A type neither registry holds is still refused.
             assert!(!game.hurt_target(Target::Mob(1), 1.0, "dmgtest:missing", None, None, None));
-            assert_eq!(game.mobs[0].health, 9.0);
+            assert_eq!(game.entities.mobs[0].health, 9.0);
         });
     }
     /// A datapack type's tags in the world's registry decide as vanilla's do:
@@ -57,9 +57,9 @@ pub(crate) mod datapack_damage_tests {
             pig(game, 2, Vec3::new(4.5, 64.0, 0.5));
             assert!(game.hurt_target(Target::Mob(1), 1.0, "dmgtest:zap", None, None, None));
             assert!(!game.hurt_target(Target::Mob(1), 1.0, "dmgtest:zap", None, None, None));
-            assert_eq!(game.mobs[0].health, 9.0);
+            assert_eq!(game.entities.mobs[0].health, 9.0);
             assert!(game.hurt_target(Target::Mob(1), 1.0, "dmgtest:rush", None, None, None));
-            assert_eq!(game.mobs[0].health, 8.0);
+            assert_eq!(game.entities.mobs[0].health, 8.0);
             // A mob's hit names its attacker, unless the type is in `#no_anger`.
             pig(game, 3, Vec3::new(8.5, 64.0, 0.5));
             let attacker = Some(Target::Mob(1));
@@ -73,7 +73,7 @@ pub(crate) mod datapack_damage_tests {
             ));
             assert!(game.hurt_target(Target::Mob(3), 1.0, "dmgtest:zap", attacker, attacker, None));
             let last_hurt_by = |game: &sunrise_gameplay::game::ServerGame<'_>, id: u32| {
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|m| m.id == id)
                     .unwrap()
@@ -164,10 +164,10 @@ pub(crate) mod vehicle_damage_command_tests {
                     "summon {kind} 4.5 200 5.5 {{UUID:[I;500,0,0,{n}],NoGravity:1b}}"
                 )));
                 let id = game
-                    .boats
+                    .entities.boats
                     .iter()
                     .map(|b| b.id)
-                    .chain(game.carts.iter().map(|c| c.id))
+                    .chain(game.entities.carts.iter().map(|c| c.id))
                     .find(|id| game.persist.uuid_of(*id) == Some([500, 0, 0, n]))
                     .unwrap();
                 assert!(
@@ -175,16 +175,16 @@ pub(crate) mod vehicle_damage_command_tests {
                     "accepted small hit must reach vehicle"
                 );
                 let damage = if kind == "oak_boat" {
-                    game.boats.iter().find(|b| b.id == id).unwrap().damage
+                    game.entities.boats.iter().find(|b| b.id == id).unwrap().damage
                 } else {
-                    game.carts.iter().find(|c| c.id == id).unwrap().damage
+                    game.entities.carts.iter().find(|c| c.id == id).unwrap().damage
                 };
                 assert_eq!(damage, 10.0);
                 assert!(game.run_command(&format!("damage {uuid} 4 minecraft:generic")));
-                assert!(!game.boats.iter().any(|b| b.id == id));
-                assert!(!game.carts.iter().any(|c| c.id == id));
+                assert!(!game.entities.boats.iter().any(|b| b.id == id));
+                assert!(!game.entities.carts.iter().any(|c| c.id == id));
                 assert_eq!(
-                    game.dropped
+                    game.entities.dropped
                         .iter()
                         .filter(|d| d.stack.item.as_ref() == format!("minecraft:{kind}")
                             && d.stack.count == 1)
@@ -197,17 +197,17 @@ pub(crate) mod vehicle_damage_command_tests {
                     "summon {kind} 8.5 200 5.5 {{UUID:[I;500,0,0,{n}],NoGravity:1b}}"
                 )));
                 let id = game
-                    .boats
+                    .entities.boats
                     .iter()
                     .map(|b| b.id)
-                    .chain(game.carts.iter().map(|c| c.id))
+                    .chain(game.entities.carts.iter().map(|c| c.id))
                     .find(|id| game.persist.uuid_of(*id) == Some([500, 0, 0, n]))
                     .unwrap();
                 assert!(game.run_command(&format!("damage {uuid} 4 minecraft:generic")));
                 let damage = if kind == "oak_boat" {
-                    game.boats.iter().find(|b| b.id == id).unwrap().damage
+                    game.entities.boats.iter().find(|b| b.id == id).unwrap().damage
                 } else {
-                    game.carts.iter().find(|c| c.id == id).unwrap().damage
+                    game.entities.carts.iter().find(|c| c.id == id).unwrap().damage
                 };
                 assert_eq!(damage, 40.0, "exact threshold survives");
             }
@@ -216,17 +216,17 @@ pub(crate) mod vehicle_damage_command_tests {
                 let uuid = format!("000001f4-0000-0000-0000-{n:012x}");
                 assert!(game.run_command(&format!("summon {kind} 11.5 200 5.5 {{UUID:[I;500,0,0,{n}],NoGravity:1b,Invulnerable:1b}}")));
                 let id = game
-                    .boats
+                    .entities.boats
                     .iter()
                     .map(|b| b.id)
-                    .chain(game.carts.iter().map(|c| c.id))
+                    .chain(game.entities.carts.iter().map(|c| c.id))
                     .find(|id| game.persist.uuid_of(*id) == Some([500, 0, 0, n]))
                     .unwrap();
                 assert!(!game.run_command(&format!("damage {uuid} 4 minecraft:generic")));
                 let damage = if kind == "oak_boat" {
-                    game.boats.iter().find(|b| b.id == id).unwrap().damage
+                    game.entities.boats.iter().find(|b| b.id == id).unwrap().damage
                 } else {
-                    game.carts.iter().find(|c| c.id == id).unwrap().damage
+                    game.entities.carts.iter().find(|c| c.id == id).unwrap().damage
                 };
                 assert_eq!(damage, 0.0);
             }

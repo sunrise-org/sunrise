@@ -238,7 +238,7 @@ fn every_walk_family_of_the_entity_lists_fires_its_case() {
                 0.0,
             );
             trident.velocity = sunrise_core::geometry::Vec3::new(1.0, 0.0, 0.0);
-            game.tridents.push(trident);
+            game.entities.tridents.push(trident);
             // The general row: the declared type's own record, loaded as the
             // game loads one from a save.
             let record = sunrise_gameplay_common::game::general::GeneralEntityRecord {
@@ -416,7 +416,7 @@ fn the_off_walk_movers_fire_too() {
             // The dragon: off the walk, moved by its own physics-less step.
             spawn_remote_dragon(game, 605, [5.0, 30.0, 5.0], 0.0);
             let off_walk: std::collections::HashSet<u32> = game.entity_ids_off_walk().collect();
-            let dragon_id = game.dragon.as_ref().unwrap().id;
+            let dragon_id = game.entities.dragon.as_ref().unwrap().id;
             assert!(
                 off_walk.contains(&dragon_id),
                 "the dragon is an off-walk mover"
@@ -507,7 +507,7 @@ fn spawn_remote_dragon(
     dragon.join = sunrise_sim::join_seq::JoinSeq::next();
     game.replace_resident_dragon(dragon);
     game.common.place_dragon_parts();
-    if let Some(dragon) = game.dragon.as_mut() {
+    if let Some(dragon) = game.entities.dragon.as_mut() {
         for part in &mut dragon.parts {
             part.1 = part.0;
         }
@@ -548,7 +548,7 @@ fn a_drowning_dolphins_goal_move_fires_too() {
             game.summon_with_nbt("minecraft:dolphin", [5.5, 10.5, 5.5], "{NoAI:0b}")
                 .unwrap_or_else(|e| panic!("summon dolphin: {e:?}"));
             // The air supply low enough that BreathAirGoal takes over.
-            game.mobs[0].air = 0;
+            game.entities.mobs[0].air = 0;
             log.lock().unwrap().clear();
             let _ = game.tick_creatures();
             let heard: Vec<MoveCause> = std::mem::take(&mut *log.lock().unwrap())
@@ -629,8 +629,7 @@ fn a_general_rows_collided_move_writes_its_flags_for_every_cause() {
                 game.load_listed("mymod:robot", None, None, record.to_tag())
                     .unwrap();
                 let row = game
-                    .resident_entities
-                    .general
+                    .entities.general
                     .rows
                     .iter_mut()
                     .last()
@@ -640,7 +639,7 @@ fn a_general_rows_collided_move_writes_its_flags_for_every_cause() {
                 let moved = game
                     .entity_move_by(EntityRef::new(epoch, id), [0.0, -0.4, 0.0], cause)
                     .unwrap();
-                let row = game.resident_entities.general.row(id).unwrap();
+                let row = game.entities.general.row(id).unwrap();
                 assert!(!row.horizontal_collision, "{cause:?}");
                 assert_eq!(row.velocity.x, 0.3, "{cause:?}");
                 if no_physics {
@@ -718,7 +717,7 @@ fn load_general_row(
         base: Default::default(),
         on_ground: false,
         fall_distance,
-        uuid: [4, 5, 6, game.resident_entities.general.rows.len() as i32],
+        uuid: [4, 5, 6, game.entities.general.rows.len() as i32],
         envelope: sunrise_gameplay_common::game::general::GeneralTypeEnvelope {
             type_key: "mymod:robot".to_owned(),
             payload_version: 3,
@@ -728,8 +727,7 @@ fn load_general_row(
     };
     game.load_listed("mymod:robot", None, None, record.to_tag())
         .unwrap();
-    game.resident_entities
-        .general
+    game.entities.general
         .rows
         .iter()
         .last()
@@ -762,7 +760,7 @@ fn a_general_row_moving_through_a_fall_resetting_block_forgets_its_fall() {
                 MoveCause::SelfMovement,
             )
             .unwrap();
-            let row = game.resident_entities.general.row(id).unwrap();
+            let row = game.entities.general.row(id).unwrap();
             assert_eq!(row.fall_distance, 2.0, "reset, then the 2 blocks it went");
             // The same two blocks of open air beside the column keep the fall and add to it.
             let id = load_general_row(game, [9.5, 16.5, 9.5], [0.0; 3], 5.0);
@@ -772,7 +770,7 @@ fn a_general_row_moving_through_a_fall_resetting_block_forgets_its_fall() {
                 MoveCause::SelfMovement,
             )
             .unwrap();
-            let row = game.resident_entities.general.row(id).unwrap();
+            let row = game.entities.general.row(id).unwrap();
             assert_eq!(row.fall_distance, 7.0);
             // Less than a block never casts the ray: the web is crossed, the fall stays.
             let id = load_general_row(game, [5.5, 15.9, 5.5], [0.0; 3], 5.0);
@@ -782,7 +780,7 @@ fn a_general_row_moving_through_a_fall_resetting_block_forgets_its_fall() {
                 MoveCause::SelfMovement,
             )
             .unwrap();
-            let row = game.resident_entities.general.row(id).unwrap();
+            let row = game.entities.general.row(id).unwrap();
             assert!(
                 (row.fall_distance - 5.9).abs() < 1.0e-6,
                 "{}",
@@ -809,7 +807,7 @@ fn a_general_row_landing_on_slime_bounces_and_on_stone_stops() {
                 MoveCause::SelfMovement,
             )
             .unwrap();
-            let row = game.resident_entities.general.row(id).unwrap();
+            let row = game.entities.general.row(id).unwrap();
             assert!(row.on_ground && row.vertical_collision_below);
             if bounces {
                 // (gravity - old.y) * drag * bounce, with no gravity, the fraction 0.75 of an
@@ -844,7 +842,7 @@ fn a_general_row_moving_over_soul_sand_is_slowed() {
                 MoveCause::SelfMovement,
             )
             .unwrap();
-            let row = game.resident_entities.general.row(id).unwrap();
+            let row = game.entities.general.row(id).unwrap();
             assert!(
                 (row.velocity.x - 0.3 * factor).abs() < 1.0e-6,
                 "{floor}: {:?}",

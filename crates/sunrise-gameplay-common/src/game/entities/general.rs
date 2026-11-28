@@ -952,7 +952,7 @@ impl RiderIndex {
 
 impl crate::game::CommonGame<'_> {
     pub fn general_passengers(&self, vehicle: u32) -> impl Iterator<Item = &GeneralRow> {
-        let store = &self.resident_entities.general;
+        let store = &self.entities.general;
         let fresh = store.riders.is_fresh(&store.rows, store.mount_writes);
         // The vehicle's sibling chain while the index is current, else every row.
         let mut next = fresh
@@ -993,7 +993,7 @@ impl crate::game::CommonGame<'_> {
     /// The owning row through its removal callback, before the physical sweep. Through the rider
     /// index's place map while it is current (a miss then is final), else by scan.
     pub fn general_object(&self, id: u32) -> Option<&GeneralRow> {
-        let store = &self.resident_entities.general;
+        let store = &self.entities.general;
         if store.rows.is_empty() {
             return None;
         }

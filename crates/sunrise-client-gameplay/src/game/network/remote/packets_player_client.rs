@@ -559,11 +559,11 @@ impl crate::game::ClientGame<'_> {
                 // `ClientPacketListener.applyPlayerInfoUpdate` publishes its new mode.
                 if mode_change.is_some()
                     && let Some(id) = r.player_entity(e.uuid)
-                    && let Some(index) = self.common.mob_index.find(&self.common.mobs, id)
+                    && let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, id)
                 {
                     let spectator = r.remote_player_info_game_mode(id as i32) == Some(SPECTATOR);
                     self.common
-                        .mobs
+                        .entities.mobs
                         .update(index, |mob| mob.extra.spectator = spectator);
                 }
             }
@@ -670,10 +670,10 @@ impl crate::game::ClientGame<'_> {
         // level holds; a new level holds nothing yet.
         let before: std::collections::HashSet<u32> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .map(|m| m.id)
-            .chain(self.common.boats.iter().map(|b| b.id))
+            .chain(self.common.entities.boats.iter().map(|b| b.id))
             .collect();
         if let Some(r) = self.client.remote.as_mut() {
             r.ticked_before_player = before;

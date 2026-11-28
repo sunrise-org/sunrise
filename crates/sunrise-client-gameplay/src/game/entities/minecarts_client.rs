@@ -400,7 +400,7 @@ impl ClientGame<'_> {
         // Entity.shouldRenderAtSqrDistance: 64 times the bounding box's mean
         // edge, scaled by the view scale.
         let range = (WIDTH + HEIGHT + WIDTH) / 3.0 * 64.0 * self.view_scale();
-        for c in &self.common.carts[run] {
+        for c in &self.common.entities.carts[run] {
             if self.hides_as_camera(c.id) {
                 continue;
             }
@@ -648,11 +648,11 @@ impl ClientGame<'_> {
         }
         if let Some(i) = self
             .common
-            .carts
+            .entities.carts
             .iter()
             .position(|c| c.id == id as u32 && c.kind == CartKind::Tnt)
         {
-            self.common.carts.update(i, |c| c.fuse = 80);
+            self.common.entities.carts.update(i, |c| c.fuse = 80);
         }
     }
     /// The model of a block drawn by its block-entity renderer, as a chest
@@ -683,7 +683,7 @@ impl ClientGame<'_> {
         let improved = self.minecart_improvements();
         let carts: Vec<CartSound> = self
             .common
-            .carts
+            .entities.carts
             .iter()
             .map(|c| CartSound {
                 id: c.id,

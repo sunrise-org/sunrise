@@ -53,7 +53,7 @@ fn drop_stack(
     position: [f64; 3],
 ) -> u32 {
     game.spawn_item(stack(input), position, [0.0; 3], 100);
-    let item = game.dropped.last_mut().unwrap();
+    let item = game.entities.dropped.last_mut().unwrap();
     item.no_gravity = true;
     let id = item.id;
     game.server.ticked_entities_through = game.server.next_entity;
@@ -131,13 +131,13 @@ fn removed_netherite_resistance_dies_on_the_second_lava_hurt() {
         prepare(game);
         lava(game);
         let id = drop_stack(game, "netherite_sword[!damage_resistant]", [4.5, 64.0, 4.5]);
-        assert_eq!(game.dropped[0].health, 5);
+        assert_eq!(game.entities.dropped[0].health, 5);
         game.tick_items();
-        assert_eq!(game.dropped[0].id, id);
-        assert_eq!(game.dropped[0].health, 1);
-        assert_eq!(game.dropped[0].age, 1);
+        assert_eq!(game.entities.dropped[0].id, id);
+        assert_eq!(game.entities.dropped[0].health, 1);
+        assert_eq!(game.entities.dropped[0].age, 1);
         game.tick_items();
-        assert!(game.dropped.iter().all(|item| item.id != id));
+        assert!(game.entities.dropped.iter().all(|item| item.id != id));
     });
 }
 
@@ -154,10 +154,10 @@ fn environmental_tag_stone_keeps_five_health_for_forty_lava_ticks() {
         );
         for _ in 0..40 {
             game.tick_items();
-            assert_eq!(game.dropped[0].id, id);
-            assert_eq!(game.dropped[0].health, 5);
+            assert_eq!(game.entities.dropped[0].id, id);
+            assert_eq!(game.entities.dropped[0].health, 5);
         }
-        assert_eq!(game.dropped[0].age, 40);
+        assert_eq!(game.entities.dropped[0].age, 40);
     });
 }
 
@@ -173,13 +173,13 @@ fn tnt_destroys_an_unprotected_star_and_spares_an_explosion_resistant_diamond() 
             [4.5, 64.0, 4.5],
         );
         game.spawn_primed_tnt(BlockPos::new(4, 64, 4), false, None, None);
-        game.tnts[0].fuse = 1;
-        game.tnts[0].no_gravity = true;
-        game.tnts[0].velocity = Vec3::ZERO;
+        game.entities.tnts[0].fuse = 1;
+        game.entities.tnts[0].no_gravity = true;
+        game.entities.tnts[0].velocity = Vec3::ZERO;
         game.tick_one_tnt(0, &[]).unwrap();
-        assert!(game.tnts.is_empty(), "the primed TNT actually detonated");
-        assert!(game.dropped.iter().all(|item| item.id != star));
-        let survivor = game.dropped.iter().find(|item| item.id == diamond).unwrap();
+        assert!(game.entities.tnts.is_empty(), "the primed TNT actually detonated");
+        assert!(game.entities.dropped.iter().all(|item| item.id != star));
+        let survivor = game.entities.dropped.iter().find(|item| item.id == diamond).unwrap();
         assert_eq!(survivor.health, 5);
     });
 }
@@ -233,22 +233,22 @@ fn a_mod_items_default_cactus_resistance_keeps_five_health_for_ten_ticks() {
         game.world.set(4, 64, 4, cactus).unwrap();
         drop_stack(game, "minecraft:stone", [5.08, 64.0, 4.5]);
         game.tick_items();
-        assert_eq!(game.dropped[0].health, 4, "the tick really touches cactus");
-        game.dropped.clear();
+        assert_eq!(game.entities.dropped[0].health, 4, "the tick really touches cactus");
+        game.entities.dropped.clear();
         let id = drop_stack(game, "fixture:cactus_item", [5.08, 64.0, 4.5]);
         assert!(
-            game.dropped[0].stack.data().is_none(),
+            game.entities.dropped[0].stack.data().is_none(),
             "resistance comes from defaults"
         );
         for _ in 0..10 {
             // Keep the item touching the cactus block while outside its inset collision box.
-            game.dropped[0].position = Vec3::new(5.08, 64.0, 4.5);
-            game.dropped[0].velocity = Vec3::ZERO;
+            game.entities.dropped[0].position = Vec3::new(5.08, 64.0, 4.5);
+            game.entities.dropped[0].velocity = Vec3::ZERO;
             game.tick_items();
-            assert_eq!(game.dropped[0].id, id);
-            assert_eq!(game.dropped[0].health, 5);
+            assert_eq!(game.entities.dropped[0].id, id);
+            assert_eq!(game.entities.dropped[0].health, 5);
         }
-        assert_eq!(game.dropped[0].age, 10);
+        assert_eq!(game.entities.dropped[0].age, 10);
     });
 }
 
@@ -274,13 +274,13 @@ fn damage_command_uses_effective_item_resistance() {
                 5,
             ),
         ] {
-            game.dropped.clear();
+            game.entities.dropped.clear();
             drop_stack(game, input, [4.5, 64.0, 4.5]);
             let command = format!("damage @e[type=minecraft:item,limit=1] 4 minecraft:{damage}");
             let success = game.as_console(|game| game.run_command(&command));
             assert_eq!(success, expected_health == 1, "{input}: {command}");
             assert_eq!(
-                game.dropped[0].health, expected_health,
+                game.entities.dropped[0].health, expected_health,
                 "{input}: {command}"
             );
         }
@@ -318,13 +318,13 @@ fn dropped_item_hurt_uses_default_and_stack_fire_resistance() {
             ),
             ("stone", "hot_floor", 1),
         ] {
-            game.dropped.clear();
+            game.entities.dropped.clear();
             drop_stack(game, input, [4.5, 64.0, 4.5]);
             let command = format!("damage @e[type=minecraft:item,limit=1] 4 minecraft:{damage}");
             let success = game.as_console(|game| game.run_command(&command));
             assert_eq!(success, expected_health == 1, "{input}: {command}");
             assert_eq!(
-                game.dropped[0].health, expected_health,
+                game.entities.dropped[0].health, expected_health,
                 "{input}: {command}"
             );
         }

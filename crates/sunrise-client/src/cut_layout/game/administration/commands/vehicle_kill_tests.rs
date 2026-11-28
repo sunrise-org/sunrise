@@ -59,12 +59,12 @@ fn kill_spills_explicit_vehicle_contents_after_menu_writeback() {
         let boat = kind.contains("boat") || kind.contains("raft");
         let (id, mut slots) = if boat {
             game.load_boat(tag, Some(uuid), &format!("minecraft:{kind}"));
-            let b = game.boats.last().unwrap();
+            let b = game.entities.boats.last().unwrap();
             assert_eq!(b.position, Vec3::new(5.25, 200.0, 4.75));
             (b.id, b.items.clone())
         } else {
             game.load_cart(tag, Some(uuid), &format!("minecraft:{kind}"));
-            let c = game.carts.last().unwrap();
+            let c = game.entities.carts.last().unwrap();
             (c.id, c.items.clone())
         };
         let container = index < 4;
@@ -94,17 +94,17 @@ fn kill_spills_explicit_vehicle_contents_after_menu_writeback() {
                 .insert(key, BlockEntity::Chest(slots.clone()));
             game.container = Some(key);
         }
-        let old_len = game.dropped.len();
+        let old_len = game.entities.dropped.len();
         let actor = format!("00000033-0000-0000-0000-{:012x}", index + 1);
         assert!(
             game.run_command(&format!("kill {actor}")),
             "{kind}: actual command admitted"
         );
-        assert!(!game.boats.iter().any(|b| b.id == id));
-        assert!(!game.carts.iter().any(|c| c.id == id));
+        assert!(!game.entities.boats.iter().any(|b| b.id == id));
+        assert!(!game.entities.carts.iter().any(|c| c.id == id));
         assert!(!game.world.block_entities.contains_key(&key));
         assert_ne!(game.container, Some(key));
-        let dropped = &game.dropped[old_len..];
+        let dropped = &game.entities.dropped[old_len..];
         let expected: Vec<_> = slots.into_iter().flatten().collect();
         if dropped.len() != expected.len()
             || expected

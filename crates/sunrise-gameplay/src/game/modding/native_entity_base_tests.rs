@@ -47,7 +47,7 @@ fn a_boat_keeps_its_base_state() {
     with_game(|game| {
         open_chunk(game);
         game.common
-            .boats
+            .entities.boats
             .push(Boat::new(31, "oak".into(), Vec3::new(8.5, 65.0, 8.5), 0.0));
         let entity = game.entity(31).unwrap();
         write_and_read_back(game, entity);
@@ -62,7 +62,7 @@ fn a_boat_keeps_its_base_state() {
 fn a_minecart_keeps_its_base_state() {
     with_game(|game| {
         open_chunk(game);
-        game.common.carts.push(Minecart::new(
+        game.common.entities.carts.push(Minecart::new(
             32,
             CartKind::Rideable,
             Vec3::new(8.5, 65.0, 8.5),
@@ -83,7 +83,7 @@ fn a_projectile_keeps_its_base_state() {
         let mut shot = Projectile::new(ProjectileKind::Trident, Vec3::new(8.5, 65.0, 8.5), None);
         shot.id = game.take_entity_id();
         let id = shot.id;
-        game.common.creatures.projectiles.push(shot);
+        game.common.entities.projectiles.push(shot);
         let entity = game.entity(id).unwrap();
         write_and_read_back(game, entity);
         assert_eq!(entity.fire_immune(game), Some(false));
@@ -161,7 +161,7 @@ fn an_end_crystal_keeps_the_fire_ticks_it_was_given() {
         game.summon_with_nbt("minecraft:end_crystal", [8.5, 65.0, 8.5], "{}")
             .unwrap();
         game.lan_assign_ids();
-        let id = game.common.crystals[0].id;
+        let id = game.common.entities.crystals[0].id;
         let entity = game.entity(id).unwrap();
         assert!(entity.set_remaining_fire_ticks(game, 40_000));
         assert_eq!(entity.fire_ticks(game), Some(40_000));
@@ -190,7 +190,7 @@ fn a_skull_and_a_bullet_never_burn_but_are_not_fire_immune_and_a_crystal_is() {
             let mut shot = Projectile::new(kind, Vec3::new(8.5, 65.0, 8.5), None);
             shot.id = game.take_entity_id();
             let id = shot.id;
-            game.common.creatures.projectiles.push(shot);
+            game.common.entities.projectiles.push(shot);
             let entity = game.entity(id).unwrap();
             assert!(entity.set_remaining_fire_ticks(game, 60));
             assert_eq!(entity.fire_ticks(game), Some(60));
@@ -200,7 +200,7 @@ fn a_skull_and_a_bullet_never_burn_but_are_not_fire_immune_and_a_crystal_is() {
         game.summon_with_nbt("minecraft:end_crystal", [8.5, 65.0, 8.5], "{}")
             .unwrap();
         game.lan_assign_ids();
-        let id = game.common.crystals[0].id;
+        let id = game.common.entities.crystals[0].id;
         assert_eq!(game.entity(id).unwrap().fire_immune(game), Some(true));
     });
 }

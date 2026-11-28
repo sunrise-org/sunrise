@@ -9,12 +9,12 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn retire_vehicle_registration(&self, target: Target) {
         match target {
             Target::Boat(id) => {
-                if let Some(boat) = self.common.boats.iter().find(|boat| boat.id == id) {
+                if let Some(boat) = self.common.entities.boats.iter().find(|boat| boat.id == id) {
                     boat.attachment_lifetime.retire();
                 }
             }
             Target::Cart(id) => {
-                if let Some(cart) = self.common.carts.iter().find(|cart| cart.id == id) {
+                if let Some(cart) = self.common.entities.carts.iter().find(|cart| cart.id == id) {
                     cart.attachment_lifetime.retire();
                 }
             }
@@ -117,13 +117,13 @@ impl crate::game::ServerGame<'_> {
             c.kind.id().into()
         } else if let Some(vehicle) = self.common.persist.removed_vehicles.get(&id) {
             vehicle.kind()
-        } else if self.common.cushions.iter().any(|c| c.id == id) {
+        } else if self.common.entities.cushions.iter().any(|c| c.id == id) {
             "minecraft:cushion".into()
         } else if let Some(m) = self.common.mob_object(id) {
             mob_kind(m)
-        } else if self.common.tnts.iter().any(|t| t.id == id) {
+        } else if self.common.entities.tnts.iter().any(|t| t.id == id) {
             "minecraft:tnt".into()
-        } else if self.common.armor_stands.iter().any(|a| a.id == id) {
+        } else if self.common.entities.armor_stands.iter().any(|a| a.id == id) {
             self.target_type(Target::Stand(id))
         } else if self.server.others.0.iter().any(|o| o.id == id) {
             self.target_type(Target::Other(id))

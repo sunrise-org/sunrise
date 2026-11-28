@@ -66,7 +66,7 @@ impl crate::game::ServerGame<'_> {
         };
         let Some((species, navigation)) = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == id)
             .map(|m| (m.species(), m.ai.nav.kind))
@@ -76,7 +76,7 @@ impl crate::game::ServerGame<'_> {
         let Some(goal) = self.boxed_goal(species, navigation, goal) else {
             return false;
         };
-        let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return false;
         };
         m.ai.goals.add_boxed(priority, goal);
@@ -91,7 +91,7 @@ impl crate::game::ServerGame<'_> {
         };
         let Some((species, navigation)) = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == id)
             .map(|m| (m.species(), m.ai.nav.kind))
@@ -101,7 +101,7 @@ impl crate::game::ServerGame<'_> {
         let Some(goal) = self.boxed_goal(species, navigation, goal) else {
             return false;
         };
-        let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return false;
         };
         m.ai.targets.add_boxed(priority, goal);
@@ -118,7 +118,7 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Mob(entity)) = self.native_entity_target(mob.entity()) else {
             return None;
         };
-        let index = self.common.mobs.iter().position(|m| m.id == entity)?;
+        let index = self.common.entities.mobs.iter().position(|m| m.id == entity)?;
         Some(self.remove_from_selector(index, id, false))
     }
 
@@ -132,7 +132,7 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Mob(entity)) = self.native_entity_target(mob.entity()) else {
             return None;
         };
-        let index = self.common.mobs.iter().position(|m| m.id == entity)?;
+        let index = self.common.entities.mobs.iter().position(|m| m.id == entity)?;
         Some(self.remove_from_selector(index, id, true))
     }
 
@@ -144,7 +144,7 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
             return None;
         };
-        let m = self.common.mobs.iter().find(|m| m.id == id)?;
+        let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
         Some(
             m.ai.goals
                 .entries()
@@ -163,7 +163,7 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
             return None;
         };
-        let m = self.common.mobs.iter().find(|m| m.id == id)?;
+        let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
         Some(
             m.ai.targets
                 .entries()
@@ -183,7 +183,7 @@ impl crate::game::ServerGame<'_> {
     fn remove_from_selector(&mut self, index: usize, id: &str, targets: bool) -> usize {
         let snapshot: Vec<_> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .map(|m| {
                 sunrise_gameplay_common::game::creatures::seen(
@@ -193,7 +193,7 @@ impl crate::game::ServerGame<'_> {
                 )
             })
             .collect();
-        let mut mobs = self.common.mobs.lift();
+        let mut mobs = self.common.entities.mobs.lift();
         #[cfg(any(test, feature = "test-support"))]
         crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
         let mut lent = sunrise_sim::health::LentLevel::take(&mut self.common.world);
@@ -236,7 +236,7 @@ impl crate::game::ServerGame<'_> {
         drop(w);
         lent.give_back(&mut self.common.world);
         self.common
-            .mobs
+            .entities.mobs
             .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         self.handle_mob_events(events).ok();
         removed

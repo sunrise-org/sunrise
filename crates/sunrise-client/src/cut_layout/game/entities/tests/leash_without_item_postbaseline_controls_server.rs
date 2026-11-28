@@ -54,7 +54,7 @@ fn holder_detach_still_dispatches_the_actual_interaction_criterion() {
         "summon frog 4.5 100 6.5 {UUID:[I;9,9,9,8],NoAI:1b,variant:\"minecraft:temperate\"}"
     ));
     let id = game.mob_by_uuid([9, 9, 9, 8]).unwrap();
-    let index = game.mobs.iter().position(|m| m.id == id).unwrap();
+    let index = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
     assert!(game.run_command("item replace entity @s hotbar.0 with lead 4"));
     game.persist.raw.remove(&id);
     let target = || {
@@ -70,7 +70,7 @@ fn holder_detach_still_dispatches_the_actual_interaction_criterion() {
         "minecraft:husbandry/leash_all_frog_variants",
         "minecraft:temperate"
     ));
-    assert_eq!(game.mobs[index].extra.leash_player, Some([413, 0, 0, 2]));
+    assert_eq!(game.entities.mobs[index].extra.leash_player, Some([413, 0, 0, 2]));
     assert!(game.run_command("advancement revoke @s only leash_context:interaction used"));
     assert!(game.run_command(
         "advancement revoke @s only minecraft:husbandry/leash_all_frog_variants minecraft:temperate"
@@ -84,7 +84,7 @@ fn holder_detach_still_dispatches_the_actual_interaction_criterion() {
         "minecraft:husbandry/leash_all_frog_variants",
         "minecraft:temperate"
     ));
-    assert!(game.mobs[index].extra.leash.is_none());
+    assert!(game.entities.mobs[index].extra.leash.is_none());
     assert_eq!(game.held().unwrap().count, 3);
     assert_eq!(game.level.player_uuid, Some([413, 0, 0, 2]));
     assert_eq!(game.world.game_time, clock);

@@ -193,7 +193,7 @@ impl ServerGame<'_> {
             return;
         };
         let fully = outcome.fully_blocked;
-        let Some(m) = self.common.mobs.iter().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
             return;
         };
         let (mx, mz) = (m.position.x, m.position.z);
@@ -214,7 +214,7 @@ impl ServerGame<'_> {
             let roaring = m.extra.anim_ticks != 0;
             let stunned = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter_mut()
                 .find(|m| m.id == id)
                 .is_some_and(|m| sunrise_sim::mobs::ravager::blocked(m, &mut events));

@@ -87,9 +87,9 @@ pub(crate) fn breathing_tick(meddle: bool) -> (Vec<i32>, i32, i32) {
                         "minecraft:iron_sword",
                         1,
                     )));
-                game.mobs.push(mob);
+                game.entities.mobs.push(mob);
                 game.tick_creature_entities().unwrap();
-                let mob = game.mobs.iter().find(|m| m.id == 72).unwrap();
+                let mob = game.entities.mobs.iter().find(|m| m.id == 72).unwrap();
                 left = (mob.air, mob.extra.main_hand_stack().unwrap().damage);
             });
         },
@@ -135,10 +135,10 @@ fn retained_breathing_tail() {
                         "minecraft:iron_sword",
                         1,
                     )));
-                game.mobs.push(mob);
+                game.entities.mobs.push(mob);
                 game.tick_creature_entities().unwrap();
                 assert_eq!(calls.load(Ordering::SeqCst), 1);
-                let mob = game.mobs.iter().find(|m| m.id == 72).unwrap();
+                let mob = game.entities.mobs.iter().find(|m| m.id == 72).unwrap();
                 assert_eq!(mob.air, 100);
                 assert_eq!(mob.extra.main_hand_stack().unwrap().damage, 0);
                 assert_eq!(
@@ -151,7 +151,7 @@ fn retained_breathing_tail() {
                 // Next tick skips the poisoned listener and applies vanilla breathing (+4 air).
                 game.tick_creature_entities().unwrap();
                 assert_eq!(calls.load(Ordering::SeqCst), 1);
-                let mob = game.mobs.iter().find(|m| m.id == 72).unwrap();
+                let mob = game.entities.mobs.iter().find(|m| m.id == 72).unwrap();
                 assert_eq!(mob.air, 104);
                 assert_eq!(mob.extra.main_hand_stack().unwrap().damage, 0);
             });
@@ -181,10 +181,10 @@ fn retained_stale_push_target() {
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
         let mut mob = Mob::new(999, kind, Vec3::new(1.0, 80.0, 0.5), 0.0);
         mob.no_ai = true;
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         game.tick_creature_entities().unwrap();
         assert_eq!(
-            game.mobs[0].velocity.x, 0.0,
+            game.entities.mobs[0].velocity.x, 0.0,
             "obsolete target push reached a later occupant"
         );
     });
@@ -272,7 +272,7 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
             assert!(game.entity_ticking_area()(1, 0));
             if output == Output::Reset {
                 let old_chicken = fixture_mob(game, 71, family, output);
-                game.mobs.push(old_chicken);
+                game.entities.mobs.push(old_chicken);
                 queue_egg(game);
                 game.clear_entities();
             }
@@ -281,7 +281,7 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
                 dimension: game.dim.key(),
                 kind: Kind::Mob,
             };
-            game.mobs
+            game.entities.mobs
                 .bind_residency(&journal, owner, |m| (m.id, m.join));
             let ids: &[u32] = match output {
                 Output::Push => &[70, 71, 72],
@@ -290,7 +290,7 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
             };
             for &id in ids {
                 let mob = fixture_mob(game, id, family, output);
-                game.mobs.push(mob);
+                game.entities.mobs.push(mob);
             }
             if output == Output::Mixed {
                 // A guest action already queued in an older batch must beat the egg produced by 73.
@@ -309,7 +309,7 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
                 71,
                 sunrise_gameplay_common::game::combat_common::PlayerCredit(99),
             );
-            let rows: Vec<_> = game.mobs.iter().map(|m| (m.id, m.join)).collect();
+            let rows: Vec<_> = game.entities.mobs.iter().map(|m| (m.id, m.join)).collect();
             VALUE
                 .set(&mut game.world.attachments, Holder::Level, 42)
                 .unwrap();
@@ -343,9 +343,9 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
             game.world.random =
                 sunrise_core::random::LevelRandom::for_level(LegacyRandom::new(LEVEL_SEED));
             let guest_before = guests.then(|| guest_health(game));
-            let push_before = game.mobs[0].velocity.x;
+            let push_before = game.entities.mobs[0].velocity.x;
             let target = ids.iter().position(|&id| id == 72).unwrap();
-            let health_before = game.mobs[target].health;
+            let health_before = game.entities.mobs[target].health;
 
             let unwind = if family.is_goal() {
                 // Registered goals keep their own unwind contract; this is not hook dispatch.
@@ -401,17 +401,17 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
                 match family {
                     Family::Damage | Family::Shield | Family::Landing => {
                         assert!(
-                            game.mobs[target].health < health_before,
+                            game.entities.mobs[target].health < health_before,
                             "failed proposal stopped vanilla damage"
                         );
                     }
                     Family::Totem => {
                         assert!(
-                            game.mobs[target].health > 0.0,
+                            game.entities.mobs[target].health > 0.0,
                             "failed proposal vetoed the totem"
                         );
                         assert!(
-                            game.mobs[target].extra.main_hand_stack().is_none(),
+                            game.entities.mobs[target].extra.main_hand_stack().is_none(),
                             "totem was not consumed"
                         );
                     }
@@ -437,7 +437,7 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
             assert!(lifts > 0);
             assert_eq!(depth, 0, "borrowed region was not restored");
             assert_eq!(
-                game.mobs.iter().map(|m| (m.id, m.join)).collect::<Vec<_>>(),
+                game.entities.mobs.iter().map(|m| (m.id, m.join)).collect::<Vec<_>>(),
                 rows
             );
             assert!(
@@ -474,7 +474,7 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
             let mut table = EntityTable::new(journal);
             for &(id, join) in &rows {
                 let found = table.entity_lookup(&owner.dimension, id, |at| {
-                    let m = &game.mobs[game.mobs.locate(at.join)?];
+                    let m = &game.entities.mobs[game.entities.mobs.locate(at.join)?];
                     Some(SourceEntity {
                         id: m.id,
                         value: m.join,
@@ -488,24 +488,24 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
 
             if unwind.is_some() {
                 assert!(
-                    game.mobs[1].ai.targets.is_running("BorrowedTarget"),
+                    game.entities.mobs[1].ai.targets.is_running("BorrowedTarget"),
                     "actual native target selector was lost"
                 );
                 assert!(
-                    game.mobs[1].ai.goals.is_running("BorrowedProbe"),
+                    game.entities.mobs[1].ai.goals.is_running("BorrowedProbe"),
                     "actual native goal selector was lost"
                 );
                 if family == Family::MountedGoal {
                     assert_eq!(
-                        game.mobs[1].ai.nav.speed_modifier, 3.75,
+                        game.entities.mobs[1].ai.nav.speed_modifier, 3.75,
                         "private rider navigation not restored"
                     );
                     assert_eq!(
-                        game.mobs[0].ai.nav.speed_modifier, 1.25,
+                        game.entities.mobs[0].ai.nav.speed_modifier, 1.25,
                         "vehicle navigation lost requested progress (or routing never loaned)"
                     );
                     assert!(
-                        game.mobs[0].ai.nav.path.is_some(),
+                        game.entities.mobs[0].ai.nav.path.is_some(),
                         "vehicle lost successful native path"
                     );
                     eprintln!(
@@ -547,7 +547,7 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
             );
             if output == Output::Egg {
                 assert!(
-                    game.mobs[0].extra.egg_time > 1,
+                    game.entities.mobs[0].extra.egg_time > 1,
                     "laying did not advance the cooldown"
                 );
             }
@@ -558,7 +558,7 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
                     "guest 12 did not take the hit on the returning tick"
                 );
                 assert_eq!(after13, before13, "the hit reached the wrong guest");
-                game.mobs[0].no_ai = true;
+                game.entities.mobs[0].no_ai = true;
                 game.as_guest(12, |g| {
                     g.player.as_mut().unwrap().health.invulnerable_time = 0
                 })
@@ -567,17 +567,17 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
             });
             if output == Output::Push {
                 assert!(
-                    game.mobs[0].velocity.x > push_before,
+                    game.entities.mobs[0].velocity.x > push_before,
                     "completed push was lost"
                 );
-                game.mobs[1].no_ai = true;
-                game.mobs[1].position.x = 8.0;
+                game.entities.mobs[1].no_ai = true;
+                game.entities.mobs[1].position.x = 8.0;
                 // Isolate the old impulse from carry-over velocity and other contacts.
-                game.mobs[0].velocity.x = 0.0;
-                game.mobs[target].position.x = 4.0;
+                game.entities.mobs[0].velocity.x = 0.0;
+                game.entities.mobs[target].position.x = 4.0;
             }
 
-            prime_hook(&mut game.mobs[target], family);
+            prime_hook(&mut game.entities.mobs[target], family);
             tick_in_level(game).unwrap();
             assert_eq!(
                 probe.calls.load(Ordering::SeqCst),
@@ -611,7 +611,7 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
                 assert_eq!(guest_health(game), health, "guest action replayed");
             }
             if output == Output::Push {
-                assert_eq!(game.mobs[0].velocity.x, 0.0, "push replayed");
+                assert_eq!(game.entities.mobs[0].velocity.x, 0.0, "push replayed");
             }
         });
     });

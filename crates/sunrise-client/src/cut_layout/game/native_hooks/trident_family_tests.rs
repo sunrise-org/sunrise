@@ -84,7 +84,7 @@ pub(crate) fn victim(game: &mut sunrise_gameplay::game::ServerGame<'_>, name: &s
         mob.health = mob.attrs.max_health / 2.0;
     }
     let health = mob.health;
-    game.mobs.push(mob);
+    game.entities.mobs.push(mob);
     health
 }
 pub(crate) fn weapon() -> ItemStack {
@@ -105,11 +105,11 @@ pub(crate) fn throw_player(game: &mut sunrise_gameplay::game::ServerGame<'_>) ->
     game.inventory[selected] = Some(weapon());
     game.release_trident(10);
     assert_eq!(
-        game.tridents.len(),
+        game.entities.tridents.len(),
         1,
         "TridentItem.releaseUsing spawned the projectile"
     );
-    let shot = &mut game.tridents[0];
+    let shot = &mut game.entities.tridents[0];
     shot.position = Vec3::new(4.5, 80.5, 4.5);
     shot.previous = shot.position;
     shot.velocity = Vec3::new(4.0, 0.0, 0.0);
@@ -122,7 +122,7 @@ pub(crate) fn throw_mob(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> (u
     let mut owner = Mob::new(42, kind, Vec3::new(1.0, 80.0, 1.0), 0.0);
     owner.no_ai = true;
     owner.persistent = true;
-    game.mobs.push(owner);
+    game.entities.mobs.push(owner);
     let stack = weapon();
     let mut shot = Projectile::new(
         ProjectileKind::Trident,
@@ -133,7 +133,7 @@ pub(crate) fn throw_mob(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> (u
     shot.velocity = Vec3::new(4.0, 0.0, 0.0);
     shot.arrow.as_mut().unwrap().pickup_item = stack.clone();
     let id = shot.id;
-    game.creatures.projectiles.push(shot);
+    game.entities.projectiles.push(shot);
     (id, stack)
 }
 pub(crate) fn step(game: &mut sunrise_gameplay::game::ServerGame<'_>, player: bool) {
@@ -156,12 +156,12 @@ fn player_thrown_trident_is_refused_by_powered_wither_and_closed_shulker() {
                     throw_player(game);
                     step(game, true);
                     assert_eq!(
-                        game.mobs.iter().find(|m| m.id == 41).unwrap().health,
+                        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().health,
                         health,
                         "{kind}"
                     );
                     assert!(
-                        game.tridents[0].velocity.x < 0.0,
+                        game.entities.tridents[0].velocity.x < 0.0,
                         "a real collision bounced the trident"
                     );
                     let seen = seen.lock().unwrap();
@@ -188,12 +188,12 @@ fn mob_thrown_trident_is_refused_by_powered_wither_and_closed_shulker() {
                     throw_mob(game);
                     step(game, false);
                     assert_eq!(
-                        game.mobs.iter().find(|m| m.id == 41).unwrap().health,
+                        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().health,
                         health,
                         "{kind}"
                     );
                     assert!(
-                        game.creatures.projectiles[0].velocity.x < 0.0,
+                        game.entities.projectiles[0].velocity.x < 0.0,
                         "a real collision bounced the trident"
                     );
                     let seen = seen.lock().unwrap();
@@ -214,7 +214,7 @@ fn accepted_player_and_mob_tridents_keep_type_entities_position_and_full_weapon(
             for player in [true, false] {
                 fixture(|game, seen| {
                     victim(game, "minecraft:cow");
-                    game.mobs[0].health = 1.0;
+                    game.entities.mobs[0].health = 1.0;
                     let (id, stack) = if player {
                         throw_player(game)
                     } else {
@@ -224,7 +224,7 @@ fn accepted_player_and_mob_tridents_keep_type_entities_position_and_full_weapon(
                     let selected = game.selected;
                     game.inventory[selected] = Some(ItemStack::new("minecraft:stick", 1));
                     step(game, player);
-                    assert!(game.mobs.iter().find(|m| m.id == 41).unwrap().health <= 0.0);
+                    assert!(game.entities.mobs.iter().find(|m| m.id == 41).unwrap().health <= 0.0);
                     game.tick_creature_entities().unwrap();
                     let seen = seen.lock().unwrap();
                     assert_eq!(seen.incoming.len(), 1);
@@ -257,7 +257,7 @@ fn type_only_damage_trident_and_arrow_are_not_direct_abstract_arrows() {
                             game.run_command(&format!("damage @e[type={kind},limit=1] 2 {source}"))
                         );
                         assert!(
-                            game.mobs[0].health < health,
+                            game.entities.mobs[0].health < health,
                             "{kind} accepts type-only {source}"
                         );
                         let seen = seen.lock().unwrap();
@@ -288,15 +288,15 @@ fn actual_arrows_still_bounce_off_powered_wither_and_closed_shulker() {
                     game.inventory[selected] = Some(bow.clone());
                     game.inventory[9] = Some(ItemStack::new("minecraft:arrow", 8));
                     game.release_bow(&bow, 20);
-                    game.creatures.projectiles.update(0, |shot| {
+                    game.entities.projectiles.update(0, |shot| {
                         shot.position = Vec3::new(4.5, 80.5, 4.5);
                         shot.previous = shot.position;
                         shot.velocity = Vec3::new(4.0, 0.0, 0.0);
                     });
                     game.tick_projectiles().unwrap();
-                    assert_eq!(game.mobs[0].health, health, "{kind}");
+                    assert_eq!(game.entities.mobs[0].health, health, "{kind}");
                     assert!(
-                        game.creatures.projectiles[0].velocity.x < 0.0,
+                        game.entities.projectiles[0].velocity.x < 0.0,
                         "the actual arrow bounced"
                     );
                     assert!(seen.lock().unwrap().incoming.is_empty());
@@ -374,7 +374,7 @@ fn explicit_damage_by_actual_arrow_family_is_refused_even_with_generic_type() {
                         assert!(!game.run_command(&format!(
                             "damage @e[type={kind},limit=1] 2 minecraft:generic by @e[type={direct},limit=1] from @p",
                         )));
-                        assert_eq!(game.mobs[0].health, health);
+                        assert_eq!(game.entities.mobs[0].health, health);
                         assert!(seen.lock().unwrap().incoming.is_empty());
                     });
                 }
@@ -391,7 +391,7 @@ fn explicit_damage_by_trident_retains_its_weapon_with_independent_causing_entity
         || {
             fixture(|game, seen| {
                 victim(game, "minecraft:cow");
-                game.mobs[0].health = 1.0;
+                game.entities.mobs[0].health = 1.0;
                 let (id, stack) = throw_player(game);
                 let expected = stack.try_into_api().unwrap();
                 let selected = game.selected;

@@ -1690,16 +1690,16 @@ impl crate::game::ClientGame<'_> {
             "day_time": self.world.day_time,
             "music": self.client.music.current(&self.client.audio.0.engine),
             "sounds": self.client.audio.0.census(),
-            "tridents": self.tridents.len(),
-            "rockets": self.rockets.len(),
+            "tridents": self.entities.tridents.len(),
+            "rockets": self.entities.rockets.len(),
             // A client of a server (single player's server thread) knows the
             // carts it was sent.
-            "carts": self.remote_carts().unwrap_or_else(|| self.carts.iter().map(|c| serde_json::json!({"kind": c.kind.id(), "position": [c.position.x, c.position.y, c.position.z], "velocity": [c.velocity.x, c.velocity.y, c.velocity.z]})).collect::<Vec<_>>()),
+            "carts": self.remote_carts().unwrap_or_else(|| self.entities.carts.iter().map(|c| serde_json::json!({"kind": c.kind.id(), "position": [c.position.x, c.position.y, c.position.z], "velocity": [c.velocity.x, c.velocity.y, c.velocity.z]})).collect::<Vec<_>>()),
             "riding": self.riding,
             "using": self.using,
             "render_distance": self.client.streaming.radius,
             "chunks": self.world.chunks.len(),
-            "mobs": self.mobs.len(),
+            "mobs": self.entities.mobs.len(),
             "block_entities": self.world.block_entities.len(),
             "pending_chunks": self.client.streaming.pending() + self.client.pending_uploads.0.len() + self.remote_backlog(),
             "generated_chunks": self.client.streaming.generated_total,
@@ -1732,7 +1732,7 @@ impl crate::game::ClientGame<'_> {
                 (
                     self.common.hook_status(),
                     json!({
-                        "dragon": self.dragon.as_ref().map(|d| json!({
+                        "dragon": self.entities.dragon.as_ref().map(|d| json!({
                             "id": d.id,
                             "position": [d.position.x, d.position.y, d.position.z],
                             "health": d.health,
@@ -1741,12 +1741,12 @@ impl crate::game::ClientGame<'_> {
                             "strafing": Value::Null,
                         })),
                         "players": 0,
-                        "crystals": self.crystals.len(),
-                        "crystal_list": self.crystals.iter().map(|c| json!({
+                        "crystals": self.entities.crystals.len(),
+                        "crystal_list": self.entities.crystals.iter().map(|c| json!({
                             "id": c.id,
                             "position": [c.position.x, c.position.y, c.position.z],
                         })).collect::<Vec<_>>(),
-                        "alive_crystals": self.crystals.len(),
+                        "alive_crystals": self.entities.crystals.len(),
                         "killed": false,
                         "exit_portal": Value::Null,
                         "respawn": Value::Null,
@@ -1765,7 +1765,7 @@ impl crate::game::ClientGame<'_> {
         status["stopped_sounds"] = json!(self.client.audio.0.stopped);
         // Boats, minecarts, armor stands, item frames and paintings.
         status["objects"] = json!(self.objects_status());
-        status["lightning"] = json!({"bolts": self.bolts.len(), "struck": self.client.lightning_seen[0],
+        status["lightning"] = json!({"bolts": self.entities.bolts.len(), "struck": self.client.lightning_seen[0],
             "flashes": self.client.lightning_seen[1], "flash": self.flash});
         // Primed TNT, falling blocks, projectiles, tridents and end crystals.
         status["projectiles"] = json!(self.client_projectiles_status());

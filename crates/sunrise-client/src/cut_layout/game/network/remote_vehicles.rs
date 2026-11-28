@@ -50,12 +50,12 @@ pub(crate) mod tests {
         sunrise_client_gameplay::game::native_entity_refs::tests::with_client_game(|game| {
             use sunrise_gameplay_common::game::boats_common::Boat;
             use sunrise_gameplay_common::game::minecarts::{CartKind, Minecart};
-            game.carts.push(Minecart::new(
+            game.entities.carts.push(Minecart::new(
                 5,
                 CartKind::Rideable,
                 Vec3::new(0.5, 64.0, 0.5),
             ));
-            game.boats
+            game.entities.boats
                 .push(Boat::new(6, "oak".into(), Vec3::new(2.5, 64.0, 0.5), 0.0));
             for (riding, cart, boat) in [
                 (None, false, false),
@@ -96,8 +96,8 @@ pub(crate) mod tests {
             let pig = std::sync::Arc::new(types.types["minecraft:pig"].clone());
             let mut m = Mob::new(7, pig, Vec3::new(3.5, 64.0, 2.5), 0.0);
             m.set_saddle(Some(ItemStack::new("minecraft:saddle", 1)));
-            game.mobs.clear();
-            game.mobs.push(m);
+            game.entities.mobs.clear();
+            game.entities.mobs.push(m);
             game.common.inventory[game.common.selected] =
                 Some(ItemStack::new("minecraft:carrot_on_a_stick", 1));
             game.riding = Some(7);
@@ -116,7 +116,7 @@ pub(crate) mod tests {
             .unwrap();
             // The pig eases there (its SteppedInterpolationHandler) and reports the spot
             // it is going to.
-            assert_eq!(game.mobs[0].position, Vec3::new(3.5, 64.0, 2.5));
+            assert_eq!(game.entities.mobs[0].position, Vec3::new(3.5, 64.0, 2.5));
             match game.remote_vehicle_packets().first() {
                 Some(play::Serverbound::MoveVehicle(p)) => assert_eq!(p.position, [3.5, 64.0, 6.5]),
                 other => panic!("{other:?}"),
@@ -128,7 +128,7 @@ pub(crate) mod tests {
                 pitch: 0.0,
             }))
             .unwrap();
-            assert_eq!(game.mobs[0].position, Vec3::new(1.5, 64.0, 1.5));
+            assert_eq!(game.entities.mobs[0].position, Vec3::new(1.5, 64.0, 1.5));
             let mut answers = Vec::new();
             while let Ok((id, bytes)) = peer.recv() {
                 if let Ok(play::Serverbound::MoveVehicle(p)) = play::Serverbound::decode(id, &bytes)
@@ -223,8 +223,8 @@ pub(crate) mod tests {
                 _ => None,
             };
             game.offhand = (hand == "off").then(|| ItemStack::new(stick, 1));
-            game.mobs.clear();
-            game.mobs.push(m);
+            game.entities.mobs.clear();
+            game.entities.mobs.push(m);
             game.riding = Some(7);
             game.client.remote.as_mut().unwrap().first_passenger = row["first"].as_bool().unwrap();
             let controlled = row["controlled"].as_bool().unwrap();
@@ -233,9 +233,9 @@ pub(crate) mod tests {
             assert_eq!(packets.len(), usize::from(controlled), "{row}");
             if controlled {
                 assert!(matches!(packets[0], S::MoveVehicle(_)), "{row}");
-                let before = game.mobs[0].position;
+                let before = game.entities.mobs[0].position;
                 assert!(game.remote_ride(Keys::default()));
-                let m = &game.mobs[0];
+                let m = &game.entities.mobs[0];
                 assert_eq!(
                     f64::from(m.ai.zza),
                     row["forward"].as_f64().unwrap(),
@@ -304,25 +304,25 @@ pub(crate) mod tests {
                 _ => None,
             };
             server.offhand = (hand == "off").then(|| ItemStack::new(stick, 1));
-            server.mobs.clear();
-            server.mobs.push(m);
+            server.entities.mobs.clear();
+            server.entities.mobs.push(m);
             server.riding = Some(7);
             let controlled = row["controlled"].as_bool().unwrap();
             // The server reads the same held-item requirement, then waits for
             // this controlling client's MoveVehicle rather than traveling twice.
             if row["first"].as_bool().unwrap() {
                 assert!(server.tick_mount_riding(Keys::default()));
-                server.mobs[0].rider.as_mut().unwrap().client = true;
+                server.entities.mobs[0].rider.as_mut().unwrap().client = true;
             } else {
-                server.mobs[0].rider = None;
+                server.entities.mobs[0].rider = None;
             }
             assert_eq!(
-                equine::moved_by_client(&server.mobs[0]),
+                equine::moved_by_client(&server.entities.mobs[0]),
                 !row["server_simulates"].as_bool().unwrap(),
                 "{row}"
             );
             if controlled {
-                let mut server_mount = server.mobs[0].clone();
+                let mut server_mount = server.entities.mobs[0].clone();
                 let before = server_mount.position;
                 let mut test_level = sunrise_sim::health::TestLevel::new(0);
                 *test_level.random() = (*server.world.random).clone();
@@ -449,7 +449,7 @@ pub(crate) mod tests {
         let t = std::sync::Arc::new(types.types["minecraft:horse"].clone());
         let mut horse = Mob::new(7, t, Vec3::new(0.5, 300.0, 0.5), 0.0);
         horse.set_saddle(Some(ItemStack::new("minecraft:saddle", 1)));
-        game.mobs.push(horse);
+        game.entities.mobs.push(horse);
         game.riding = Some(7);
         let forward = Keys {
             forward: true,
@@ -457,7 +457,7 @@ pub(crate) mod tests {
         };
         let zza = |game: &mut sunrise_client_gameplay::game::ClientGame<'_>, keys| {
             assert!(game.remote_ride(keys));
-            game.mobs[0].ai.zza
+            game.entities.mobs[0].ai.zza
         };
         assert_eq!(zza(&mut game, forward), 0.0, "the press waits a tick");
         assert_eq!(zza(&mut game, forward), 0.98, "modifyInput's 0.98");
@@ -501,12 +501,12 @@ pub(crate) mod tests {
                         assert!(!camel::refuse_to_move(&mount));
                         assert_eq!(mount.extra.anim_ticks, 0);
                         let expected = mount.movement_speed() as f32 + 0.1_f32;
-                        game.mobs.push(mount);
+                        game.entities.mobs.push(mount);
                         game.apply_remote_passengers(7, &[42]);
-                        assert!(game.mobs[0].rider.is_none(), "before the first driven tick");
+                        assert!(game.entities.mobs[0].rider.is_none(), "before the first driven tick");
                         assert!(game.remote_ride(Keys::default()));
-                        assert_eq!(game.mobs[0].ai.speed.to_bits(), expected.to_bits());
-                        assert_eq!(game.mobs[0].ai.zza, 0.98, "the last walking input");
+                        assert_eq!(game.entities.mobs[0].ai.speed.to_bits(), expected.to_bits());
+                        assert_eq!(game.entities.mobs[0].ai.zza, 0.98, "the last walking input");
                         assert!(game.player.as_ref().unwrap().sprinting);
                     },
                 );
@@ -555,10 +555,10 @@ mod plugin_seat_tests {
             let mut horse_mob = Mob::new(7, kind, Vec3::new(8.5, 100.0, 8.5), 0.0);
             horse_mob.set_saddle(Some(ItemStack::new("minecraft:saddle", 1)));
             let horse = horse_mob.id;
-            game.mobs.push(horse_mob);
+            game.entities.mobs.push(horse_mob);
             game.riding = Some(horse);
             for shift in [true, false] {
-                let i = game.mobs.iter().position(|m| m.id == horse).unwrap();
+                let i = game.entities.mobs.iter().position(|m| m.id == horse).unwrap();
                 // Exercise client prediction itself, not the server input assignment.
                 game.drive_mount(
                     i,
@@ -568,7 +568,7 @@ mod plugin_seat_tests {
                     },
                     0.0,
                 );
-                let input = game.mobs[i]
+                let input = game.entities.mobs[i]
                     .rider
                     .expect("prediction stores next tick's input");
                 assert_eq!(input.sneak, shift);
@@ -627,7 +627,7 @@ mod plugin_seat_tests {
         game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
         let mut stand = sunrise_sim::entities::ArmorStand::new(42, Vec3::new(2.0, 64.0, 3.0), 0.0);
         stand.marker = true;
-        game.armor_stands.push(stand);
+        game.entities.armor_stands.push(stand);
         game.riding = Some(42);
         assert!(game.remote_ride(Keys::default()));
         let close = |actual: f64, expected: f64| {
@@ -635,20 +635,20 @@ mod plugin_seat_tests {
         };
         // EntityAttachments: zero-height marker minus Avatar's 0.6 attachment.
         close(game.player.as_ref().unwrap().position.y, 63.4);
-        game.armor_stands[0].marker = false;
-        game.armor_stands[0].small = true;
+        game.entities.armor_stands[0].marker = false;
+        game.entities.armor_stands[0].small = true;
         game.remote_ride(Keys::default());
         close(game.player.as_ref().unwrap().position.y, 64.3875);
-        game.armor_stands[0].small = false;
+        game.entities.armor_stands[0].small = false;
         game.remote_ride(Keys::default());
         close(game.player.as_ref().unwrap().position.y, 65.375);
         let kind = game.client_res().player_type().clone().unwrap();
-        game.mobs
+        game.entities.mobs
             .push(Mob::new(43, kind, Vec3::new(5.0, 70.0, 6.0), 0.0));
-        game.armor_stands[0].marker = true;
-        game.armor_stands[0].vehicle = Some(43);
+        game.entities.armor_stands[0].marker = true;
+        game.entities.armor_stands[0].vehicle = Some(43);
         for at in [Vec3::new(5.0, 70.0, 6.0), Vec3::new(12.0, 72.0, -4.0)] {
-            game.mobs[0].position = at;
+            game.entities.mobs[0].position = at;
             // No manual position_riders call: local ride must resolve the chain itself.
             game.remote_ride(Keys::default());
             let p = game.player.as_ref().unwrap().position;
@@ -658,11 +658,11 @@ mod plugin_seat_tests {
         }
         // Direct riding and a scaled avatar share the same attachment calculation.
         game.riding = Some(43);
-        game.mobs[0].extra.model_scale = 1.5;
+        game.entities.mobs[0].extra.model_scale = 1.5;
         game.remote_ride(Keys::default());
         close(game.player.as_ref().unwrap().position.y, 74.1);
-        game.mobs.clear();
-        game.armor_stands.clear();
+        game.entities.mobs.clear();
+        game.entities.armor_stands.clear();
         assert!(!game.remote_ride(Keys::default()));
         assert_eq!(game.riding, None);
     }

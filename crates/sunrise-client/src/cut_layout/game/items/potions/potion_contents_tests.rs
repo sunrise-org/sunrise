@@ -134,11 +134,11 @@ fn a_lingering_potion_of_custom_effects_makes_its_cloud() {
         Vec3::ZERO,
     );
     assert_eq!(
-        game.breath_clouds.len(),
+        game.entities.breath_clouds.len(),
         1,
         "a cloud for custom-only contents"
     );
-    let cloud = game.breath_clouds[0].potion.as_ref().unwrap();
+    let cloud = game.entities.breath_clouds[0].potion.as_ref().unwrap();
     assert_eq!(cloud.effects, vec![("poison", 900, 0)]);
     assert_eq!(cloud.settings.duration_scale, 1.0);
     let particle = cloud.particle();
@@ -166,7 +166,7 @@ fn a_water_potion_refills_an_axolotl_once() {
     assert!(game.run_command(
         "summon minecraft:axolotl 0.5 64 0.5 {NoAI:1b,PersistenceRequired:1b,Silent:1b}"
     ));
-    game.mobs[0].air = 0;
+    game.entities.mobs[0].air = 0;
     let water = ItemStack::new("minecraft:splash_potion", 1).with_potion("minecraft:water");
     game.splash(
         &water,
@@ -179,7 +179,7 @@ fn a_water_potion_refills_an_axolotl_once() {
         true,
         Vec3::ZERO,
     );
-    assert_eq!(game.mobs[0].air, 1800, "one rehydrate, capped at the max");
+    assert_eq!(game.entities.mobs[0].air, 1800, "one rehydrate, capped at the max");
 }
 
 /// `PotionContents.is(PotionTags.DOUSES_FIRE)` needs `isPotionWithoutCustomEffects`:

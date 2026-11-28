@@ -2,7 +2,7 @@ pub trait GeneralGameExt1<'__sg>: crate::game::SideGame<'__sg> {
     /// The declared type key of general row `id`: the level's own row, or on a client the
     /// one its server shows it.
     fn general_kind(&self, id: u32) -> Option<&'static str> {
-        let slot = match self.resident_entities.general.row(id) {
+        let slot = match self.entities.general.row(id) {
             Some(row) => row.type_slot,
             None => self.side_remote_general_type_slot(id)?,
         };

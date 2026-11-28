@@ -145,7 +145,7 @@ pub(crate) mod tests {
                 .unwrap();
             assert!(game.entity(old.id).is_none());
             assert!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|mob| mob.id == converted)
                     .unwrap()
@@ -155,7 +155,7 @@ pub(crate) mod tests {
             let pig_type = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             game.server.next_entity += 1;
             let pig_id = game.server.next_entity;
-            game.mobs.push(Mob::new(
+            game.entities.mobs.push(Mob::new(
                 pig_id,
                 pig_type.clone(),
                 Vec3::new(0.0, 64.0, 0.0),
@@ -174,7 +174,7 @@ pub(crate) mod tests {
             for (x, player) in [(5, true), (10, false)] {
                 game.server.next_entity += 1;
                 let id = game.server.next_entity;
-                game.mobs.push(Mob::new(
+                game.entities.mobs.push(Mob::new(
                     id,
                     mushroom_type.clone(),
                     Vec3::new(f64::from(x) + 0.5, 64.0, 0.5),
@@ -206,12 +206,12 @@ pub(crate) mod tests {
             game.server.next_entity += 1;
             let old_id = game.server.next_entity;
             let old = Mob::new(old_id, mushroom_type, Vec3::new(15.0, 64.0, 0.0), 0.0);
-            game.mobs.push(old.clone());
+            game.entities.mobs.push(old.clone());
             game.server.next_entity += 1;
             let rider_id = game.server.next_entity;
             let mut rider = Mob::new(rider_id, pig_type, Vec3::new(15.0, 64.0, 0.0), 0.0);
             rider.extra.mount = Some(old_id);
-            game.mobs.push(rider);
+            game.entities.mobs.push(rider);
             assert!(
                 game.convert_to(
                     &old,
@@ -223,7 +223,7 @@ pub(crate) mod tests {
                 .is_none()
             );
             assert_eq!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|m| m.id == rider_id)
                     .unwrap()
@@ -231,7 +231,7 @@ pub(crate) mod tests {
                     .mount,
                 Some(old_id)
             );
-            assert!(!game.mobs.iter().find(|m| m.id == old_id).unwrap().removed);
+            assert!(!game.entities.mobs.iter().find(|m| m.id == old_id).unwrap().removed);
             let seen = seen.lock().unwrap();
             assert_eq!(seen.len(), 4);
             assert_eq!(seen[0].old.as_deref(), Some("minecraft:piglin"));

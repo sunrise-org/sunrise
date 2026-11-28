@@ -34,7 +34,7 @@ impl ServerGame<'_> {
     pub fn settle_hurt_teleports(&mut self) -> Result<()> {
         let pending: Vec<u32> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| {
                 (m.species() == Species::Enderman && m.extra.counter2 > 0)
@@ -46,24 +46,24 @@ impl ServerGame<'_> {
             // What `LivingEntity.hurtServer` raised comes first, where the
             // mob was hurt and from its random's next draws: the hurt
             // sound, `InfestedMobEffect.onMobHurt`'s silverfish.
-            let Some(i) = self.common.mobs.iter().position(|m| m.id == id) else {
+            let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == id) else {
                 continue;
             };
-            let hurt = std::mem::take(&mut self.common.mobs[i].outbox);
+            let hurt = std::mem::take(&mut self.common.entities.mobs[i].outbox);
             if !hurt.is_empty() {
                 self.handle_mob_events(hurt)?;
             }
-            let Some(i) = self.common.mobs.iter().position(|m| m.id == id) else {
+            let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == id) else {
                 continue;
             };
-            let shulker = self.common.mobs[i].species() == Species::Shulker;
+            let shulker = self.common.entities.mobs[i].species() == Species::Shulker;
             // A shulker's teleport reads the mobs around it (`noCollision`,
             // the crowding count of `hitByShulkerBullet`), itself included as
             // in its own tick; an enderman's reads only blocks.
             let uuid = self.common.level.player_uuid;
             let others: Vec<_> = if shulker {
                 self.common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .map(|m| sunrise_gameplay_common::game::creatures::seen(m, uuid, self.items()))
                     .collect()
@@ -72,7 +72,7 @@ impl ServerGame<'_> {
             };
             // The world is read while the mob moves: take it out, then put it
             // back where it was (the mob order stays).
-            let mut mob = self.common.mobs.swap_remove(i);
+            let mut mob = self.common.entities.mobs.swap_remove(i);
             let from = mob.position;
             let mut events = Vec::new();
             // `hitByShulkerBullet` draws its crowding check from the level's random.
@@ -96,9 +96,9 @@ impl ServerGame<'_> {
             }
             self.common.world.random = level_random;
             let to = mob.position;
-            self.common.mobs.push(mob);
-            let last = self.common.mobs.len() - 1;
-            self.common.mobs.swap(i, last);
+            self.common.entities.mobs.push(mob);
+            let last = self.common.entities.mobs.len() - 1;
+            self.common.entities.mobs.swap(i, last);
             // The hurt's teleport (`teleportTo`) is one position update, told at once.
             self.entity_section_moved(id, Some([from.x, from.y, from.z]), [to.x, to.y, to.z]);
             self.handle_mob_events(events)?;
@@ -116,7 +116,7 @@ impl ServerGame<'_> {
     ) -> Result<()> {
         // Runtime ids identify the actual mob in this level. An obsolete attempt
         // must not clear another mob's hand or a subsequently changed stack.
-        if !self.common.mobs.iter().any(|m| {
+        if !self.common.entities.mobs.iter().any(|m| {
             m.id == mob
                 && m.alive()
                 && !m.removed
@@ -175,7 +175,7 @@ impl ServerGame<'_> {
         // stale attempt instead of overwriting its writes or normalizing twice.
         let kind = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| {
                 m.id == mob
@@ -207,7 +207,7 @@ impl ServerGame<'_> {
             Some(sunrise_sim::mobs::Who::Mob(mob)),
             Some(candidate.state),
         );
-        if let Some(m) = self.common.mobs.iter_mut().find(|m| {
+        if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| {
             m.id == mob
                 && !m.removed
                 && m.species() == Species::Enderman
@@ -251,11 +251,11 @@ impl ServerGame<'_> {
         met || player
             .into_iter()
             .chain(self.lan_block_trigger_boxes().into_iter().map(boxed))
-            .chain(self.common.item_frames.iter().map(|f| boxed(f.bounds())))
-            .chain(self.common.paintings.iter().map(|p| boxed(p.bounds())))
+            .chain(self.common.entities.item_frames.iter().map(|f| boxed(f.bounds())))
+            .chain(self.common.entities.paintings.iter().map(|p| boxed(p.bounds())))
             .chain(
                 self.common
-                    .crystals
+                    .entities.crystals
                     .iter()
                     .map(sunrise_gameplay_common::game::dragon_common::Crystal::bounds),
             )

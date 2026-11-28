@@ -165,8 +165,7 @@ pub(crate) mod entity_tick_tests {
                 }
                 game.tick_remote_projectiles(|_, at| at);
                 positions.extend(
-                    game.creatures
-                        .projectiles
+                    game.entities.projectiles
                         .iter()
                         .map(|p| [p.position.x, p.position.y, p.position.z]),
                 );
@@ -217,7 +216,7 @@ pub(crate) mod entity_tick_tests {
                 let _server = sunrise_client_gameplay::game::client_side::native_client_session::tests::logged_client(game);
                 add_arrow(game, 71, [3.5, 80.0, 3.5]);
                 game.tick_remote_projectiles(|_, at| at);
-                let arrow = game.creatures.projectiles.iter().find(|p| p.id == 71);
+                let arrow = game.entities.projectiles.iter().find(|p| p.id == 71);
                 let p = arrow.unwrap().position;
                 after = [p.x, p.y, p.z];
                 assert!(after[0] > 3.5, "the arrow flew on");
@@ -301,8 +300,8 @@ pub(crate) mod entity_tick_tests {
                     game.tick_remote_projectiles(|_, at| at);
                     handbacks =
                         sunrise_client_gameplay::game::ClientGame::remote_projectile_handbacks();
-                    arrow_x = game.creatures.projectiles[0].position.x;
-                    trident_x = game.tridents[0].position.x;
+                    arrow_x = game.entities.projectiles[0].position.x;
+                    trident_x = game.entities.tridents[0].position.x;
                 });
             });
             assert_eq!(

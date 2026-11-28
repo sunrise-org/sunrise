@@ -41,7 +41,7 @@ impl villager_brain::TradingPlayers for ServerGame<'_> {
 impl ServerGame<'_> {
     pub(in crate::game::server_side) fn villager_index(&self, id: u32) -> Option<usize> {
         self.common
-            .mobs
+            .entities.mobs
             .iter()
             .position(|m| m.id == id && m.species() == Species::Villager)
     }
@@ -55,7 +55,7 @@ impl ServerGame<'_> {
         let Some(i) = self.villager_index(id) else {
             return;
         };
-        let inventory = &villager::ext_mut(&mut self.common.mobs[i]).inventory;
+        let inventory = &villager::ext_mut(&mut self.common.entities.mobs[i]).inventory;
         let Some(slot) = inventory
             .iter()
             .position(|s| s.count > 0 && &*s.item == "minecraft:bone_meal")
@@ -75,7 +75,7 @@ impl ServerGame<'_> {
         let Some(i) = self.villager_index(id) else {
             return;
         };
-        let m = &mut self.common.mobs[i];
+        let m = &mut self.common.entities.mobs[i];
         let inventory = &mut villager::ext_mut(m).inventory;
         if slot < inventory.len() {
             if stack.count == 0 {
@@ -117,7 +117,7 @@ impl ServerGame<'_> {
     /// the villager holds at most 36 bread; what does not fit drops.
     pub(in crate::game::server_side) fn villager_make_bread(&mut self, i: usize) {
         let max_stack = self.item_max_stack("minecraft:bread");
-        let e = villager::ext_mut(&mut self.common.mobs[i]);
+        let e = villager::ext_mut(&mut self.common.entities.mobs[i]);
         if e.count_item("minecraft:bread") > 36 {
             return;
         }
@@ -129,7 +129,7 @@ impl ServerGame<'_> {
         let left = e.add_item(ItemStack::new("minecraft:bread", loaves), max_stack);
         if let Some(rest) = left {
             // spawnAtLocation(level, stack, 0.5F)
-            let p = self.common.mobs[i].position;
+            let p = self.common.entities.mobs[i].position;
             self.spawn_item(rest, [p.x, p.y + 0.5, p.z], [0.0, 0.2, 0.0], 10);
         }
     }
@@ -158,7 +158,7 @@ impl ServerGame<'_> {
         let now = self.common.world.game_time;
         let items = server_world_items!(self);
         let professions = self.stations().professions.clone();
-        let meeting = villager::meet(&mut self.common.mobs, ia, ib, now, items, &professions);
+        let meeting = villager::meet(&mut self.common.entities.mobs, ia, ib, now, items, &professions);
         for stack in meeting.thrown {
             self.villager_throw(meeting.from, meeting.eye, meeting.to, stack);
         }
@@ -174,12 +174,12 @@ impl ServerGame<'_> {
             return;
         };
         let now = self.common.world.game_time;
-        let Some(near) = villager::golem_summoners(&self.common.mobs, i, now, needed) else {
+        let Some(near) = villager::golem_summoners(&self.common.entities.mobs, i, now, needed) else {
             return;
         };
-        if self.try_spawn_iron_golem(block_of(self.common.mobs[i].position)) {
+        if self.try_spawn_iron_golem(block_of(self.common.entities.mobs[i].position)) {
             for j in near {
-                villager_brain::golem_detected(&mut self.common.mobs[j], now);
+                villager_brain::golem_detected(&mut self.common.entities.mobs[j], now);
             }
         }
     }
@@ -217,8 +217,8 @@ impl ServerGame<'_> {
             let at = golem.center();
             self.server_play_sound(&format!("minecraft:{sound}"), at, 1.0, 1.0);
         }
-        self.common.mobs.push(golem);
-        self.admit_new_mobs(self.common.mobs.len() - 1);
+        self.common.entities.mobs.push(golem);
+        self.admit_new_mobs(self.common.entities.mobs.len() - 1);
         true
     }
 
@@ -235,12 +235,12 @@ impl ServerGame<'_> {
         else {
             return;
         };
-        villager::ext_mut(&mut self.common.mobs[ib]).eat_and_digest(server_world_items!(self));
-        let from = self.common.mobs[ia].position;
+        villager::ext_mut(&mut self.common.entities.mobs[ib]).eat_and_digest(server_world_items!(self));
+        let from = self.common.entities.mobs[ia].position;
         let Some((bed, variant)) = child else {
             // VillagerMakeLove: entity event 13 for the partner, then the parent.
             for i in [ib, ia] {
-                let id = self.common.mobs[i].id;
+                let id = self.common.entities.mobs[i].id;
                 self.mob_event_particles(id, 13);
             }
             return;
@@ -253,7 +253,7 @@ impl ServerGame<'_> {
             );
             spawning::villager_type(&facts)
         });
-        self.common.mobs[ib].extra.age = 6000;
+        self.common.entities.mobs[ib].extra.age = 6000;
         let Some(id) = self.spawn_mob_raw("minecraft:villager", [from.x, from.y, from.z], true)
         else {
             // `VillagerMakeLove.tryToGiveBirth` releases the child's bed when
@@ -262,7 +262,7 @@ impl ServerGame<'_> {
             // no child to own it. Keep both parents' already-set breeding ages.
             return;
         };
-        if let Some(child) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+        if let Some(child) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
             child.extra.variant = variant;
             child.extra.profession = Default::default();
             child.extra.age = -24000;
@@ -276,7 +276,7 @@ impl ServerGame<'_> {
     /// love 18): the guests get the byte, and this game draws it as its own
     /// client would.
     pub(in crate::game) fn mob_event_particles(&mut self, id: u32, event: i8) {
-        let Some(m) = self.common.mobs.iter().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
             return;
         };
         let at = [m.position.x, m.position.y, m.position.z];
@@ -287,8 +287,8 @@ impl ServerGame<'_> {
     /// nearest dropped item within 32 blocks that `Villager.wantsToPickUp`
     /// accepts and the villager sees, or none.
     pub(in crate::game::server_side) fn villager_item_sense(&mut self) {
-        if self.common.dropped.is_empty() {
-            for m in &mut self.common.mobs {
+        if self.common.entities.dropped.is_empty() {
+            for m in &mut self.common.entities.mobs {
                 if m.species() == Species::Villager
                     && self.common.creatures.ticked.contains(&m.id)
                     && villager_brain::take_item_scan(m)
@@ -306,7 +306,7 @@ impl ServerGame<'_> {
             .get("minecraft:villager_picks_up")
             .cloned();
         let mut due = Vec::new();
-        for (i, m) in self.common.mobs.iter_mut().enumerate() {
+        for (i, m) in self.common.entities.mobs.iter_mut().enumerate() {
             if m.species() == Species::Villager
                 && self.common.creatures.ticked.contains(&m.id)
                 && villager_brain::take_item_scan(m)
@@ -320,12 +320,12 @@ impl ServerGame<'_> {
         // Reuse the existing item-cell index only for large, spread-out item
         // sets with many due sensors. Small and clustered scenes retain the
         // original full scan without building an index.
-        let mut nearby = super::item_areas::ItemAreas::worthwhile(&self.common.dropped, due.len())
+        let mut nearby = super::item_areas::ItemAreas::worthwhile(&self.common.entities.dropped, due.len())
             .then(super::item_areas::ItemAreas::default);
         let w = self.mob_world_base(&[]);
         let mut found = Vec::new();
         for i in due {
-            let m = &self.common.mobs[i];
+            let m = &self.common.entities.mobs[i];
             let area = m.bounds().inflate(Vec3::new(32.0, 16.0, 32.0));
             let professions = self.stations().professions.clone();
             let requested = villager::requested_items(m, &professions);
@@ -333,13 +333,13 @@ impl ServerGame<'_> {
             let mut best: Option<(f64, Vec3)> = None;
             let mut scan = nearby
                 .as_mut()
-                .map(|index| index.scan(&self.common.dropped, self.server.next_entity, area));
+                .map(|index| index.scan(&self.common.entities.dropped, self.server.next_entity, area));
             let mut j = 0;
             loop {
                 if let Some(indexed) = &mut scan {
-                    j = indexed.next_from(j, self.common.dropped.len());
+                    j = indexed.next_from(j, self.common.entities.dropped.len());
                 }
-                let Some(e) = self.common.dropped.get(j) else {
+                let Some(e) = self.common.entities.dropped.get(j) else {
                     break;
                 };
                 j += 1;
@@ -368,7 +368,7 @@ impl ServerGame<'_> {
             found.push((i, best.map(|(_, p)| [p.x, p.y, p.z])));
         }
         for (i, at) in found {
-            villager_brain::set_wanted_item(&mut self.common.mobs[i], at);
+            villager_brain::set_wanted_item(&mut self.common.entities.mobs[i], at);
         }
     }
     /// `Mob.aiStep` item pickup for villagers (`InventoryCarrier`): food,
@@ -379,7 +379,7 @@ impl ServerGame<'_> {
             .ui
             .rules
             .bool_at(sunrise_game_data::gamerules::vanilla::MOB_GRIEFING);
-        if self.common.dropped.is_empty() || (!griefing && !self.grief_hooked()) {
+        if self.common.entities.dropped.is_empty() || (!griefing && !self.grief_hooked()) {
             return;
         }
         let picks_up = self
@@ -394,8 +394,8 @@ impl ServerGame<'_> {
         // first: a server's villagers and dropped items each run into the
         // hundreds or thousands.
         let mut near_items = super::item_areas::ItemAreas::default();
-        for i in 0..self.common.mobs.len() {
-            let m = &self.common.mobs[i];
+        for i in 0..self.common.entities.mobs.len() {
+            let m = &self.common.entities.mobs[i];
             if m.species() != Species::Villager
                 || !m.alive()
                 || !self.common.creatures.ticked.contains(&m.id)
@@ -409,7 +409,7 @@ impl ServerGame<'_> {
                 Vec3::new(pos.x - half, pos.y - 0.25, pos.z - half),
                 Vec3::new(pos.x + half, pos.y + top, pos.z + half),
             );
-            let mut scan = near_items.scan(&self.common.dropped, self.server.next_entity, reach);
+            let mut scan = near_items.scan(&self.common.entities.dropped, self.server.next_entity, reach);
             if scan.is_empty() {
                 continue;
             }
@@ -417,8 +417,8 @@ impl ServerGame<'_> {
             let requested = villager::requested_items(m, &professions);
             let mut j = 0;
             loop {
-                j = scan.next_from(j, self.common.dropped.len());
-                let Some(e) = self.common.dropped.get(j) else {
+                j = scan.next_from(j, self.common.entities.dropped.len());
+                let Some(e) = self.common.entities.dropped.get(j) else {
                     break;
                 };
                 let near = (e.position.x - pos.x).abs() <= half
@@ -441,15 +441,15 @@ impl ServerGame<'_> {
                     continue;
                 }
                 let max = self.item_max_stack(&item);
-                let stack = self.common.dropped[j].stack.clone();
-                if !villager::ext_mut(&mut self.common.mobs[i]).can_add(&stack, max) {
+                let stack = self.common.entities.dropped[j].stack.clone();
+                if !villager::ext_mut(&mut self.common.entities.mobs[i]).can_add(&stack, max) {
                     j += 1;
                     continue;
                 }
-                let before = self.common.dropped[j].clone();
-                let rest = villager::ext_mut(&mut self.common.mobs[i]).add_item(stack, max);
+                let before = self.common.entities.dropped[j].clone();
+                let rest = villager::ext_mut(&mut self.common.entities.mobs[i]).add_item(stack, max);
                 if rest.as_ref().is_none_or(|r| r.count < before.stack.count) {
-                    let id = self.common.mobs[i].id;
+                    let id = self.common.entities.mobs[i].id;
                     self.server_mob_take_item(&before, id);
                 }
                 match rest {
@@ -458,7 +458,7 @@ impl ServerGame<'_> {
                         scan.removed(j);
                     }
                     Some(rest) => {
-                        self.common.dropped[j].stack.count = rest.count;
+                        self.common.entities.dropped[j].stack.count = rest.count;
                         j += 1;
                     }
                 }
@@ -480,7 +480,7 @@ impl ServerGame<'_> {
     /// `LivingEntity.hurtServer`, reputation and anger precede the damage
     /// broadcast, then `playHurtSound` and `playSecondaryHurtSound`.
     pub(in crate::game::server_side) fn settle_villager_hurt(&mut self, index: usize) {
-        let Some(mob) = self.common.mobs.get_mut(index) else {
+        let Some(mob) = self.common.entities.mobs.get_mut(index) else {
             return;
         };
         let Some(ext) = mob.extra.villager.as_mut() else {
@@ -530,14 +530,14 @@ impl ServerGame<'_> {
         };
         let snapshot: Vec<_> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .map(|m| m.seen(None, self.items()))
             .collect();
         let witnesses =
             villager_brain::murder_witnesses(&mut victim.clone(), &self.mob_world_base(&snapshot));
         for id in witnesses {
-            let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+            let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
                 continue;
             };
             villager::ext_mut(m).gossips.add(
@@ -556,14 +556,14 @@ impl ServerGame<'_> {
         let Some(i) = self.villager_index(id) else {
             return;
         };
-        villager::ext_mut(&mut self.common.mobs[i]).last_traded_player = Some(player);
+        villager::ext_mut(&mut self.common.entities.mobs[i]).last_traded_player = Some(player);
     }
     /// The TRADE reputation event from the player `uuid` (a guest's too).
     pub(in crate::game::server_side) fn villager_traded_by(&mut self, id: u32, uuid: [i32; 4]) {
         let Some(i) = self.villager_index(id) else {
             return;
         };
-        villager::ext_mut(&mut self.common.mobs[i]).gossips.add(
+        villager::ext_mut(&mut self.common.entities.mobs[i]).gossips.add(
             uuid,
             GossipType::Trading,
             gossip::REPUTATION_CHANGE_PER_TRADE,
@@ -621,7 +621,7 @@ impl ServerGame<'_> {
     /// `Villager.getPlayerReputation` of the player `uuid`.
     pub fn villager_reputation_of(&self, id: u32, uuid: [i32; 4]) -> i32 {
         self.villager_index(id)
-            .and_then(|i| villager::ext(&self.common.mobs[i]))
+            .and_then(|i| villager::ext(&self.common.entities.mobs[i]))
             .map_or(0, |e| e.gossips.reputation(uuid))
     }
     /// The Hero of the Village amplifier of the player, if any.
@@ -637,14 +637,14 @@ impl ServerGame<'_> {
     ) -> bool {
         let min = Vec3::new(f64::from(head[0]), f64::from(head[1]), f64::from(head[2]));
         let max = Vec3::new(min.x + 1.0, min.y + 1.0, min.z + 1.0);
-        let Some(i) = self.common.mobs.iter().position(|m| {
+        let Some(i) = self.common.entities.mobs.iter().position(|m| {
             m.species() == Species::Villager
                 && villager::sleeping(m)
                 && m.bounds().intersects_corners(min, max)
         }) else {
             return false;
         };
-        let id = self.common.mobs[i].id;
+        let id = self.common.entities.mobs[i].id;
         self.wake_villager(id);
         true
     }
@@ -656,7 +656,7 @@ impl ServerGame<'_> {
         {
             return;
         }
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         if !m.alive() || m.removed {
             return;
         }
@@ -670,28 +670,28 @@ impl ServerGame<'_> {
         let problem = self.sleep_problem(bed_exists, false);
         let mut may_continue = None;
         self.native_can_continue_sleeping(uuid, "", &kind, pos, problem, &mut may_continue);
-        villager::ext_mut(&mut self.common.mobs[index]).may_continue_sleeping =
+        villager::ext_mut(&mut self.common.entities.mobs[index]).may_continue_sleeping =
             Some(may_continue.unwrap_or(problem.is_none()));
     }
     /// `LivingEntity.stopSleeping` for the villager `id`, outside its own
     /// tick: it stands up and its bed is no longer occupied.
     pub(in crate::game::server_side) fn wake_villager(&mut self, id: u32) {
-        let Some(i) = self.common.mobs.iter().position(|m| m.id == id) else {
+        let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == id) else {
             return;
         };
-        let join = self.common.mobs[i].join;
-        if let Some(bed) = villager::sleeping_pos(&self.common.mobs[i]) {
+        let join = self.common.entities.mobs[i].join;
+        if let Some(bed) = villager::sleeping_pos(&self.common.entities.mobs[i]) {
             self.set_bed_occupied(bed, false);
         }
         let Some(i) = self
             .common
             .mob_index
-            .find(&self.common.mobs, id)
-            .filter(|&i| self.common.mobs[i].join == join && !self.common.mobs[i].removed)
+            .find(&self.common.entities.mobs, id)
+            .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
         else {
             return;
         };
-        let old = self.common.mobs[i].position;
+        let old = self.common.entities.mobs[i].position;
         let level = sunrise_sim::stand_up::StandUpLevel {
             world: &self.common.world,
             registry: self.common.pack.assets.registry,
@@ -701,13 +701,13 @@ impl ServerGame<'_> {
             border: Some(self.common.border.geometry()),
         };
         let woke = villager::wake(
-            &mut self.common.mobs[i],
+            &mut self.common.entities.mobs[i],
             self.common.world.game_time,
             Some(&level),
             None,
         );
         if woke.is_some() {
-            let new = self.common.mobs[i].position;
+            let new = self.common.entities.mobs[i].position;
             self.entity_section_moved(id, Some([old.x, old.y, old.z]), [new.x, new.y, new.z]);
         }
     }

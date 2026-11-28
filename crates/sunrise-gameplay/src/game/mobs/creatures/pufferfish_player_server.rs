@@ -22,7 +22,7 @@ impl crate::game::ServerGame<'_> {
         };
         let mut fish = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| m.species() == Species::Pufferfish && m.alive() && m.extra.size > 0)
             .peekable();

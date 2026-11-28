@@ -30,8 +30,7 @@ mod nested_spawn_tests {
                 dimension: game.dim.key(),
                 kind: Kind::Projectile,
             };
-            game.creatures
-                .projectiles
+            game.entities.projectiles
                 .bind_residency(&journal, owner, |p| (p.id, p.join));
             let mut shot = Projectile::new(
                 sunrise_sim::projectiles::ProjectileKind::Egg,
@@ -39,14 +38,14 @@ mod nested_spawn_tests {
                 None,
             );
             shot.id = 71;
-            game.creatures.projectiles.push(shot);
-            let join = game.creatures.projectiles[0].join;
-            let mut pass = game.creatures.projectiles.lift();
+            game.entities.projectiles.push(shot);
+            let join = game.entities.projectiles[0].join;
+            let mut pass = game.entities.projectiles.lift();
             let mut child = pass[0].clone();
             child.id = 72;
             child.join = sunrise_sim::join_seq::JoinSeq::UNJOINED;
-            game.creatures.projectiles.push(child);
-            let child_join = game.creatures.projectiles[0].join;
+            game.entities.projectiles.push(child);
+            let child_join = game.entities.projectiles[0].join;
             game.native_settle_impacts(
                 &mut pass,
                 Vec::new(),
@@ -55,8 +54,7 @@ mod nested_spawn_tests {
                 &mut Vec::new(),
             );
             assert_eq!(pass.iter().map(|p| p.id).collect::<Vec<_>>(), [71, 72]);
-            game.creatures
-                .projectiles
+            game.entities.projectiles
                 .restore(pass, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
             if park {
                 game.enter_level(sunrise_gameplay_common::game::Dim::Overworld)
@@ -79,8 +77,7 @@ mod nested_spawn_tests {
                     .unwrap();
             }
             assert_eq!(
-                game.creatures
-                    .projectiles
+                game.entities.projectiles
                     .iter()
                     .map(|p| (p.id, p.join))
                     .collect::<Vec<_>>(),
@@ -146,8 +143,8 @@ mod nested_spawn_tests {
             }
             let _ = taken.remove(1);
             let mut expected: Vec<_> = taken.iter().map(|p| (p.id, p.join)).collect();
-            game.creatures.projectiles.push(shot(72));
-            let join = game.creatures.projectiles[0].join;
+            game.entities.projectiles.push(shot(72));
+            let join = game.entities.projectiles[0].join;
             expected.push((72, join));
             game.native_settle_impacts(
                 &mut taken,
@@ -162,13 +159,11 @@ mod nested_spawn_tests {
             );
             assert_eq!(taken[2].age, 0);
             assert_eq!(taken[2].join, join);
-            game.creatures
-                .projectiles
+            game.entities.projectiles
                 .restore(taken, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
             game.tick_projectiles().unwrap();
             let spawned = game
-                .creatures
-                .projectiles
+                .entities.projectiles
                 .iter()
                 .find(|p| p.id == 72)
                 .unwrap();
@@ -218,7 +213,7 @@ mod pearl_hit_tests {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
             let mut dragon = Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = 225009;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let at = Vec3::new(1.5, 64.5, -0.5);
             let part = Hit::Entity {
                 who: Who::Mob(SPECIAL + 2),
@@ -268,7 +263,7 @@ mod pearl_hit_tests {
             sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
                 let mut dragon = Dragon::new(Vec3::ZERO, 0.0, 0);
                 dragon.id = 225009;
-                game.dragon.replace(dragon);
+                game.entities.dragon.replace(dragon);
                 let owner = mod_api::EntityRef::new(mod_api::WorldEpoch::new(1), 7);
                 let hit = Hit::Entity {
                     who: Who::Mob(SPECIAL + 2),

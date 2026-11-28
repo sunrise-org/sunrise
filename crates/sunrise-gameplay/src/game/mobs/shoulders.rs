@@ -36,7 +36,7 @@ impl ServerGame<'_> {
     /// owner: stored in the first free slot, the parrot gone from the world.
     pub fn parrot_to_shoulder(&mut self, mob: u32) {
         let Some(i) =
-            self.common.mobs.iter().position(|m| {
+            self.common.entities.mobs.iter().position(|m| {
                 m.id == mob && m.alive() && !m.removed && m.species() == Species::Parrot
             })
         else {
@@ -46,7 +46,7 @@ impl ServerGame<'_> {
             return;
         };
         // The acting player must be the saved owner (`getOwner`).
-        if !sunrise_sim::mobs::tame::owned_by(self.common.mobs[i].extra.owner, self.acting_uuid()) {
+        if !sunrise_sim::mobs::tame::owned_by(self.common.entities.mobs[i].extra.owner, self.acting_uuid()) {
             return;
         }
         if self.common.riding.is_some()
@@ -71,7 +71,7 @@ impl ServerGame<'_> {
         }
         let (uuid, now) = (self.acting_uuid(), self.common.world.game_time);
         self.common.creatures.shoulder_time.insert(uuid, now);
-        self.remove_mob_now(self.common.mobs[i].id, false);
+        self.remove_mob_now(self.common.entities.mobs[i].id, false);
     }
 
     /// `ServerPlayer.handleShoulderEntities`: the parrots leave the shoulder
@@ -140,7 +140,7 @@ impl ServerGame<'_> {
         let alive = !p.health.dead_or_dying();
         let nearby: Vec<_> = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| m.alive() && !m.removed && m.bounds().intersects(area))
             .map(|m| (m.kind.id.as_str(), m.silent))

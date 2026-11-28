@@ -233,7 +233,7 @@ pub mod tests {
         game.enter_level(Dim::Nether).unwrap();
         game.set_allow_commands(true);
         assert!(game.run_command(&format!("summon {entity} 648.5 130 648.5")));
-        let summoned = game.mobs.iter().find(|m| m.kind.id == entity).unwrap();
+        let summoned = game.entities.mobs.iter().find(|m| m.kind.id == entity).unwrap();
         summoned.id as i32
     }
 

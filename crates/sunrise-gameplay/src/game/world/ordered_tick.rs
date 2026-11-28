@@ -103,16 +103,16 @@ impl crate::game::ServerGame<'_> {
         falling_ticked.clear();
         let told = self.native_tick_told();
         let firsts = [
-            first_join(&self.common.armor_stands),
-            first_join(&self.common.boats),
-            first_join(&self.common.carts),
+            first_join(&self.common.entities.armor_stands),
+            first_join(&self.common.entities.boats),
+            first_join(&self.common.entities.carts),
             self.common.hook.as_ref().map(Joined::join_seq),
-            first_join(&self.common.tridents),
-            first_join(&self.common.rockets),
-            first_join(&self.common.dropped),
-            first_join(&self.common.mobs),
-            first_join(&self.common.creatures.projectiles),
-            first_join(&self.common.resident_entities.general.rows),
+            first_join(&self.common.entities.tridents),
+            first_join(&self.common.entities.rockets),
+            first_join(&self.common.entities.dropped),
+            first_join(&self.common.entities.mobs),
+            first_join(&self.common.entities.projectiles),
+            first_join(&self.common.entities.general.rows),
         ];
         // A batch ticks whole, so an entity of the three kinds goes after the
         // last batch that holds anything that joined before it.
@@ -171,18 +171,18 @@ impl crate::game::ServerGame<'_> {
             }
         };
         self.common
-            .orbs
+            .entities.orbs
             .iter()
             .for_each(|e| offer(e.join, Pending::Orb));
         self.common
-            .tnts
+            .entities.tnts
             .iter()
             .for_each(|e| offer(e.join, Pending::Tnt));
         self.common
-            .falling
+            .entities.falling
             .iter()
             .for_each(|e| offer(e.join, Pending::Falling));
-        if let Some(dragon) = self.common.dragon.as_ref() {
+        if let Some(dragon) = self.common.entities.dragon.as_ref() {
             offer(dragon.join, Pending::Dragon);
         }
         // Only while a mod hears entity ticks: otherwise none is offered.
@@ -211,14 +211,14 @@ impl crate::game::ServerGame<'_> {
             // ServerLevel.tick: only entities in entity-ticking chunks tick.
             match kind {
                 Pending::Dragon => {
-                    let Some(dragon) = self.common.dragon.as_ref().filter(|d| d.join == join)
+                    let Some(dragon) = self.common.entities.dragon.as_ref().filter(|d| d.join == join)
                     else {
                         continue;
                     };
                     let at = dragon.position;
                     if entity_ticking(at.x.floor() as i32, at.z.floor() as i32) {
                         self.tick_dragon();
-                        if let Some(dragon) = self.common.dragon.as_ref().filter(|d| d.join == join)
+                        if let Some(dragon) = self.common.entities.dragon.as_ref().filter(|d| d.join == join)
                         {
                             self.entity_section_step(
                                 dragon.id,
@@ -230,14 +230,14 @@ impl crate::game::ServerGame<'_> {
                     }
                 }
                 Pending::Tnt => {
-                    let Some(i) = self.common.tnts.locate(join) else {
+                    let Some(i) = self.common.entities.tnts.locate(join) else {
                         continue;
                     };
-                    let at = self.common.tnts[i].position;
+                    let at = self.common.entities.tnts[i].position;
                     if entity_ticking(at.x.floor() as i32, at.z.floor() as i32)
                         && self.entity_position_accessible([at.x, at.y, at.z])
                     {
-                        let t = &self.common.tnts[i];
+                        let t = &self.common.entities.tnts[i];
                         let area = t.bounds().expand_towards(t.velocity);
                         obstacles
                             .get_or_insert_with(|| {
@@ -246,25 +246,25 @@ impl crate::game::ServerGame<'_> {
                                 )
                             })
                             .near(area.inflate(Vec3::new(1.0, 1.0, 1.0)), &mut nearby);
-                        let count = self.common.tnts.len();
+                        let count = self.common.entities.tnts.len();
                         if let Err(e) = self.tick_one_tnt(i, &nearby) {
                             first_error.get_or_insert(e);
                         }
-                        if self.common.tnts.len() < count {
+                        if self.common.entities.tnts.len() < count {
                             obstacles = None;
                         }
                     }
                 }
                 Pending::Falling => {
-                    let Some(i) = self.common.falling.locate(join) else {
+                    let Some(i) = self.common.entities.falling.locate(join) else {
                         continue;
                     };
-                    let at = self.common.falling[i].position;
+                    let at = self.common.entities.falling[i].position;
                     if entity_ticking(at.x.floor() as i32, at.z.floor() as i32)
                         && self.entity_position_accessible([at.x, at.y, at.z])
                     {
                         events = true;
-                        let f = &self.common.falling[i];
+                        let f = &self.common.entities.falling[i];
                         let area = f.bounds().expand_towards(f.velocity);
                         obstacles
                             .get_or_insert_with(|| {
@@ -290,10 +290,10 @@ impl crate::game::ServerGame<'_> {
                     }
                 }
                 Pending::Orb => {
-                    let Some(i) = self.common.orbs.locate(join) else {
+                    let Some(i) = self.common.entities.orbs.locate(join) else {
                         continue;
                     };
-                    let at = self.common.orbs[i].position;
+                    let at = self.common.entities.orbs[i].position;
                     if !entity_ticking(at.x.floor() as i32, at.z.floor() as i32)
                         || !self.entity_position_accessible([at.x, at.y, at.z])
                     {
@@ -305,17 +305,17 @@ impl crate::game::ServerGame<'_> {
                     if self.common.is_logical_server() {
                         self.merge_orb(i);
                     }
-                    let Some(i) = self.common.orbs.locate(join) else {
+                    let Some(i) = self.common.entities.orbs.locate(join) else {
                         continue;
                     };
                     let followed = followed.get_or_insert_with(|| self.orb_followed());
                     let target = self.orb_target(i, followed);
-                    let Some(i) = self.common.orbs.locate(join) else {
+                    let Some(i) = self.common.entities.orbs.locate(join) else {
                         continue;
                     };
                     // A block of slack around the move: gravity and the pull
                     // towards a player change it before it is made.
-                    let o = &self.common.orbs[i];
+                    let o = &self.common.entities.orbs[i];
                     let area = o.bounds().expand_towards(o.velocity);
                     obstacles
                         .get_or_insert_with(|| {
@@ -324,7 +324,7 @@ impl crate::game::ServerGame<'_> {
                             )
                         })
                         .near(area.inflate(Vec3::new(1.0, 1.0, 1.0)), &mut nearby);
-                    let orb_id = self.common.orbs[i].id;
+                    let orb_id = self.common.entities.orbs[i].id;
                     let vanilla = self.saved_refuses_damage(orb_id, "minecraft:lava", false);
                     let server = self.common.is_logical_server();
                     let lava_random = &mut self.server.ordered.lava_random;
@@ -343,7 +343,7 @@ impl crate::game::ServerGame<'_> {
                         context: &self.common.loop_context,
                         side: Some(&side),
                     };
-                    let tick = self.common.orbs[i].move_before_fall(
+                    let tick = self.common.entities.orbs[i].move_before_fall(
                         motion,
                         target,
                         server,
@@ -355,21 +355,21 @@ impl crate::game::ServerGame<'_> {
                     if server {
                         self.orb_fall(i, tick.step, tick.movement.effect);
                     }
-                    let Some(i) = self.common.orbs.locate(join) else {
+                    let Some(i) = self.common.entities.orbs.locate(join) else {
                         continue;
                     };
-                    let response = self.common.orbs[i]
+                    let response = self.common.entities.orbs[i]
                         .move_restitution(self.common.body_motion(&game_side!(self)), tick);
                     let entity = (orb_id, "minecraft:experience_orb");
                     let mut velocity = self.finish_body_restitution(
                         entity,
-                        self.common.orbs[i].position,
+                        self.common.entities.orbs[i].position,
                         response,
                     );
-                    let Some(mut i) = self.common.orbs.locate(join) else {
+                    let Some(mut i) = self.common.entities.orbs.locate(join) else {
                         continue;
                     };
-                    let orb = &self.common.orbs[i];
+                    let orb = &self.common.entities.orbs[i];
                     let (footprint, ground) = ((orb.position, orb.bounds()), orb.ground);
                     self.common
                         .body_motion(&game_side!(self))
@@ -405,12 +405,12 @@ impl crate::game::ServerGame<'_> {
                                     let invulnerable = self.native_nonliving_invulnerable(
                                         orb_id, entity.1, source, vanilla,
                                     );
-                                    let Some(current) = self.common.orbs.locate(join) else {
+                                    let Some(current) = self.common.entities.orbs.locate(join) else {
                                         continue 'entity;
                                     };
                                     i = current;
-                                    if !invulnerable && self.common.orbs[i].hurt(amount) {
-                                        self.common.orbs.remove(i);
+                                    if !invulnerable && self.common.entities.orbs[i].hurt(amount) {
+                                        self.common.entities.orbs.remove(i);
                                         continue 'entity;
                                     }
                                 }
@@ -421,10 +421,10 @@ impl crate::game::ServerGame<'_> {
                                     velocity = Vec3::new(x, y, z)
                                 }
                                 mod_api::EntityWrite::ResetFallDistance => {
-                                    self.common.orbs[i].fall_distance = 0.0
+                                    self.common.entities.orbs[i].fall_distance = 0.0
                                 }
                                 mod_api::EntityWrite::SetFireTicks(ticks) => {
-                                    self.common.orbs[i].fire_ticks = ticks
+                                    self.common.entities.orbs[i].fire_ticks = ticks
                                 }
                                 _ => {}
                             }
@@ -435,7 +435,7 @@ impl crate::game::ServerGame<'_> {
                     let block_registries = &self.common.pack.block_registries;
                     let hooks = &self.common.damage_hooks;
                     let side = server_game_side!(self);
-                    let o = &mut self.common.orbs[i];
+                    let o = &mut self.common.entities.orbs[i];
                     o.velocity = velocity;
                     let pending_sounds = &mut self.server.pending_sounds;
                     let capture_active = self.server.audio_capture_active;
@@ -505,7 +505,7 @@ impl crate::game::ServerGame<'_> {
                     let (from, to) = (snow.0, snow.1);
                     self.entity_section_step(orb_id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
                     if !stays {
-                        self.common.orbs.remove(i);
+                        self.common.entities.orbs.remove(i);
                     }
                 }
             }
@@ -526,7 +526,7 @@ impl crate::game::ServerGame<'_> {
         if !self.server.ordered.landed.is_empty() {
             let landed = &mut self.server.ordered.landed;
             self.common
-                .falling
+                .entities.falling
                 .retain(|block| !landed.contains(&block.join));
             landed.clear();
         }
@@ -546,7 +546,7 @@ impl crate::game::ServerGame<'_> {
 impl crate::game::ServerGame<'_> {
     #[cfg(any(test, feature = "test-support"))]
     pub fn orb_moved(&mut self, i: usize, step: sunrise_sim::entities::OrbMove) {
-        let o = &self.common.orbs[i];
+        let o = &self.common.entities.orbs[i];
         let effect = self
             .common
             .body_motion(&game_side!(self))
@@ -561,7 +561,7 @@ impl crate::game::ServerGame<'_> {
         step: sunrise_sim::entities::OrbMove,
         effect: sunrise_sim::motion::BodyContact,
     ) {
-        let o = &self.common.orbs[i];
+        let o = &self.common.entities.orbs[i];
         let mut fall = self
             .common
             .vehicle_fall_reset(o.fall_distance, step.from, step.moved);
@@ -570,13 +570,13 @@ impl crate::game::ServerGame<'_> {
         }
         if o.ground.on_ground {
             let (id, position, bounds) = (o.id, o.position, o.bounds());
-            self.common.orbs[i].fall_distance = 0.0;
+            self.common.entities.orbs[i].fall_distance = 0.0;
             if fall > 0.0 {
                 self.nonliving_fall_on(id, position, effect);
                 self.post_landing_event(position, bounds, false);
             }
         } else {
-            self.common.orbs[i].fall_distance = fall;
+            self.common.entities.orbs[i].fall_distance = fall;
         }
     }
 }

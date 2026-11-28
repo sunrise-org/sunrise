@@ -8,7 +8,7 @@ impl ClientGame<'_> {
     /// `handleEntityEvent(event)`'s particles about mob `id`.
     #[sunrise_mod_api_macros::replaceable]
     pub(in crate::game) fn entity_event_particles(&mut self, id: u32, event: i8) {
-        let Some(m) = self.common.mobs.iter().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
             return;
         };
         if let Some((kind, burst)) = entity_event_burst(&m.kind.id, event as u8) {
@@ -18,7 +18,7 @@ impl ClientGame<'_> {
 
     #[sunrise_mod_api_macros::replaceable]
     fn particles_around_mob(&mut self, id: u32, kind: &'static str, burst: Burst) {
-        let Some(m) = self.common.mobs.iter().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
             return;
         };
         let feet = [m.position.x, m.position.y, m.position.z];

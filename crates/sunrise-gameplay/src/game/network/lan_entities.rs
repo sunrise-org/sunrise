@@ -230,7 +230,7 @@ impl ServerGame<'_> {
         for &(vehicle, guest) in guests {
             riding.add(vehicle as i32, guest);
         }
-        for m in self.common.mobs.iter().filter(|m| !m.removed) {
+        for m in self.common.entities.mobs.iter().filter(|m| !m.removed) {
             if let Some(vehicle) = m.extra.mount {
                 riding.add(vehicle as i32, m.id as i32);
             }
@@ -243,7 +243,7 @@ impl ServerGame<'_> {
             }
             if let Some(driver) = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.id == vehicle as u32)
                 .and_then(|m| m.extra.rider)
@@ -255,7 +255,7 @@ impl ServerGame<'_> {
             }
         }
         let mut mixed = sunrise_level::fast_hash::FxHashSet::default();
-        for row in &self.common.resident_entities.general.rows {
+        for row in &self.common.entities.general.rows {
             if let Some(vehicle) = row.mount
                 && !self
                     .common
@@ -267,7 +267,7 @@ impl ServerGame<'_> {
                 mixed.insert(vehicle);
             }
         }
-        for b in &self.common.bolts {
+        for b in &self.common.entities.bolts {
             if let Some(vehicle) = b.mount
                 && !self
                     .common
@@ -303,7 +303,7 @@ impl ServerGame<'_> {
             .filter(|g| hub.here(g))
             .map(|g| (g.uuid, g.entity_id))
             .collect();
-        for b in self.common.boats.iter().filter(|b| b.id > after) {
+        for b in self.common.entities.boats.iter().filter(|b| b.id > after) {
             let p = b.position;
             let leash = self.boat_leash_link(b, &guests);
             let e = add_state(
@@ -342,7 +342,7 @@ impl ServerGame<'_> {
             e.defaults.push((13, serializer::INT, Value::Int(0)));
         }
         let improvements = self.minecart_improvements();
-        self.common.carts.for_each_mut(|c| {
+        self.common.entities.carts.for_each_mut(|c| {
             if c.id <= after {
                 return;
             }
@@ -406,7 +406,7 @@ impl ServerGame<'_> {
                 _ => {}
             }
         });
-        for a in self.common.armor_stands.iter().filter(|a| a.id > after) {
+        for a in self.common.entities.armor_stands.iter().filter(|a| a.id > after) {
             let p = a.position;
             let e = add_state(
                 out,
@@ -480,7 +480,7 @@ impl ServerGame<'_> {
             }
             self.stand_attributes(&a.live, &mut e.attributes);
         }
-        for f in self.common.item_frames.iter().filter(|f| f.id > after) {
+        for f in self.common.entities.item_frames.iter().filter(|f| f.id > after) {
             // ItemFrame.getAddEntityPacket: the block it hangs in and its direction.
             let e = add_state(out, f.id, f.kind(), f.pos.map(f64::from), 0.0, false);
             e.pitch = match f.facing {
@@ -537,7 +537,7 @@ impl ServerGame<'_> {
                 false,
             );
         }
-        for p in self.common.paintings.iter().filter(|p| p.id > after) {
+        for p in self.common.entities.paintings.iter().filter(|p| p.id > after) {
             let e = add_state(
                 out,
                 p.id,
@@ -593,7 +593,7 @@ impl ServerGame<'_> {
                 ));
             }
         }
-        for c in self.common.cushions.iter().filter(|c| c.id > after) {
+        for c in self.common.entities.cushions.iter().filter(|c| c.id > after) {
             let p = c.position;
             let e = add_state(
                 out,
@@ -610,7 +610,7 @@ impl ServerGame<'_> {
             }
         }
         // DATA_ITEM, `ItemStack.EMPTY` by default.
-        for o in self.common.ominous_spawners.iter().filter(|o| o.id > after) {
+        for o in self.common.entities.ominous_spawners.iter().filter(|o| o.id > after) {
             let e = add_state(
                 out,
                 o.id,
@@ -675,22 +675,22 @@ impl ServerGame<'_> {
     /// tracking pass are taken.
     pub(in crate::game::server_side) fn lan_syncs_looked(&mut self) {
         self.common.persist.sync_body_position.clear();
-        for m in &mut self.common.mobs {
+        for m in &mut self.common.entities.mobs {
             m.needs_sync = false;
             m.sync_position = false;
         }
-        self.common.creatures.projectiles.for_each_mut(|p| {
+        self.common.entities.projectiles.for_each_mut(|p| {
             p.needs_sync = false;
             p.sync_velocity = false;
         });
         self.common
-            .falling
+            .entities.falling
             .for_each_mut(|f| f.sync_velocity = false);
-        for d in &mut self.common.dropped {
+        for d in &mut self.common.entities.dropped {
             d.needs_sync = false;
         }
         self.common
-            .tridents
+            .entities.tridents
             .iter_mut()
             .for_each(|t| t.needs_sync = false);
     }
@@ -704,19 +704,19 @@ impl ServerGame<'_> {
         self.forget_untied_knots();
         let next = &mut self.server.next_entity;
         use super::entity_residency::assign_resident_ids;
-        assign_resident_ids!(self.common.tnts, t, next, None);
-        assign_resident_ids!(self.common.falling, f, next, Some(&f.attachment_lifetime));
+        assign_resident_ids!(self.common.entities.tnts, t, next, None);
+        assign_resident_ids!(self.common.entities.falling, f, next, Some(&f.attachment_lifetime));
         assign_resident_ids!(
-            self.common.creatures.projectiles,
+            self.common.entities.projectiles,
             p,
             next,
             Some(&p.attachment_lifetime)
         );
-        assign_resident_ids!(self.common.tridents, t, next, None);
-        assign_resident_ids!(self.common.rockets, r, next, None);
-        assign_resident_ids!(self.common.crystals, c, next, None);
-        assign_resident_ids!(self.common.bolts, b, next, Some(&b.attachment_lifetime));
-        assign_resident_ids!(self.common.ominous_spawners, o, next, None);
+        assign_resident_ids!(self.common.entities.tridents, t, next, None);
+        assign_resident_ids!(self.common.entities.rockets, r, next, None);
+        assign_resident_ids!(self.common.entities.crystals, c, next, None);
+        assign_resident_ids!(self.common.entities.bolts, b, next, Some(&b.attachment_lifetime));
+        assign_resident_ids!(self.common.entities.ominous_spawners, o, next, None);
         crate::game::server_side::potions_server::thrown_ids(&mut self.common.potions).for_each(
             |id| {
                 assign_entity_id(next, id);
@@ -725,7 +725,7 @@ impl ServerGame<'_> {
         self.common.end.eye_ids().for_each(|id| {
             assign_entity_id(next, id);
         });
-        assign_resident_ids!(self.common.breath_clouds, b, next, None);
+        assign_resident_ids!(self.common.entities.breath_clouds, b, next, None);
     }
 
     /// A mod's general entity rows (#792), as the tracker reads them. Their type key is no
@@ -735,7 +735,7 @@ impl ServerGame<'_> {
     /// is no row and is tracked as an unknown kind (never paired).
     fn collect_lan_general_states(&self, out: &mut States, after: u32) {
         let catalog = super::general::general_type_catalog();
-        let rows = self.common.resident_entities.general.rows.iter();
+        let rows = self.common.entities.general.rows.iter();
         for row in rows.filter(|row| row.id > after) {
             let kind = catalog.key(row.type_slot);
             let e = out.add(
@@ -805,14 +805,14 @@ impl ServerGame<'_> {
             Some(sunrise_sim::mobs::Who::Player) | None => 0,
         };
         let at = |p: sunrise_core::geometry::Vec3| [p.x, p.y, p.z];
-        for f in self.common.fangs.list.iter().filter(|f| f.id > after) {
+        for f in self.common.entities.fangs.list.iter().filter(|f| f.id > after) {
             let e = add_state(out, f.id, "minecraft:evoker_fangs", f.pos, f.yaw, false);
             if f.synced_fire {
                 e.meta.push((0, serializer::BYTE, Value::Byte(1)));
             }
         }
         // LightningBolt: each client draws and flashes its own; sync inherited Entity data.
-        for b in self.common.bolts.iter().filter(|b| b.id > after) {
+        for b in self.common.entities.bolts.iter().filter(|b| b.id > after) {
             let e = add_state(
                 out,
                 b.id,
@@ -863,7 +863,7 @@ impl ServerGame<'_> {
                 .push((5, serializer::BOOLEAN, Value::Bool(false)));
             e.defaults.push((7, serializer::INT, Value::Int(0)));
         }
-        for t in self.common.tnts.iter().filter(|t| t.id > after) {
+        for t in self.common.entities.tnts.iter().filter(|t| t.id > after) {
             let e = add_state(
                 out,
                 t.id,
@@ -880,7 +880,7 @@ impl ServerGame<'_> {
             }
             e.precise = t.ground.on_ground;
         }
-        for f in self.common.falling.iter().filter(|f| f.id > after) {
+        for f in self.common.entities.falling.iter().filter(|f| f.id > after) {
             let e = add_state(
                 out,
                 f.id,
@@ -903,8 +903,7 @@ impl ServerGame<'_> {
         }
         for p in self
             .common
-            .creatures
-            .projectiles
+            .entities.projectiles
             .iter()
             .filter(|p| p.id > after)
         {
@@ -1063,7 +1062,7 @@ impl ServerGame<'_> {
             let e = add_state(out, id, "minecraft:eye_of_ender", position, 0.0, false);
             e.velocity = velocity;
         }
-        for t in self.common.tridents.iter().filter(|t| t.id > after) {
+        for t in self.common.entities.tridents.iter().filter(|t| t.id > after) {
             let data = match t.guest.and_then(|conn| hub.guest(conn)) {
                 Some(g) => g.entity_id,
                 None => owner(Some(sunrise_sim::mobs::Who::Player)),
@@ -1096,7 +1095,7 @@ impl ServerGame<'_> {
                 e.meta.push((12, serializer::BOOLEAN, Value::Bool(true)));
             }
         }
-        for r in self.common.rockets.iter().filter(|r| r.id > after) {
+        for r in self.common.entities.rockets.iter().filter(|r| r.id > after) {
             let plain = &*r.item.item == "minecraft:firework_rocket"
                 && r.item.count == 1
                 && r.item.extra.is_none();
@@ -1142,7 +1141,7 @@ impl ServerGame<'_> {
                 e.meta.push((10, serializer::BOOLEAN, Value::Bool(true)));
             }
         }
-        for c in self.common.crystals.iter().filter(|c| c.id > after) {
+        for c in self.common.entities.crystals.iter().filter(|c| c.id > after) {
             let e = add_state(
                 out,
                 c.id,
@@ -1173,7 +1172,7 @@ impl ServerGame<'_> {
             ),
             None,
         );
-        for b in self.common.breath_clouds.iter().filter(|b| b.id > after) {
+        for b in self.common.entities.breath_clouds.iter().filter(|b| b.id > after) {
             // The hub is out of `self.lan` while these states are built, so
             // the particle must be encoded through the hub passed in: going
             // through `network_particle` would drop it and leave the client
@@ -1278,7 +1277,7 @@ mod tests {
             let at = [3.0, 64.0, 5.0];
             let mut stand = ArmorStand::new(40, Vec3::new(at[0], at[1], at[2]), 45.0);
             stand.head_yaw = 90.0;
-            game.armor_stands.push(stand);
+            game.entities.armor_stands.push(stand);
             let packet = track_stands(game, &mut Entities::default(), &mut Tracker::default())
                 .into_iter()
                 .find_map(|packet| match packet {
@@ -1383,7 +1382,7 @@ mod tests {
                 "teleport" => ("teleport @e[tag=turn_me,limit=1] 4 64 5 135 0", [96, 96]),
                 "teleport_without_rotation" => {
                     // The head can be turned independently of view before /tp.
-                    game.armor_stands.iter_mut().next().unwrap().head_yaw = 90.0;
+                    game.entities.armor_stands.iter_mut().next().unwrap().head_yaw = 90.0;
                     ("teleport @e[tag=turn_me,limit=1] 4 64 5", [32, 32])
                 }
                 _ => unreachable!(),
@@ -1527,7 +1526,7 @@ mod vehicle_meta_tests {
                 );
                 rocket.attached = true;
                 rocket.guest = Some(conn);
-                game.common.rockets.push(rocket);
+                game.common.entities.rockets.push(rocket);
             }
             let mut states = States::default();
             game.lan_object_states(&mut states, false, 0);

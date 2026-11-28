@@ -63,10 +63,10 @@ fn entity_impact_includes_items_and_cancel_skips_hooking() {
                         0.0,
                         ItemStack::new("minecraft:stone", 1),
                     );
-                    (game.dropped[0].id, "minecraft:item", 2.875)
+                    (game.entities.dropped[0].id, "minecraft:item", 2.875)
                 } else {
                     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                    game.mobs
+                    game.entities.mobs
                         .push(Mob::new(72, kind, Vec3::new(3.0, 64.0, 0.5), 0.0));
                     (72, "minecraft:pig", 2.55)
                 };
@@ -111,7 +111,7 @@ fn bobbers_notify_before_entity_deflection_and_cancel_skips_it() {
                 .get("minecraft:breeze")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(72, kind, Vec3::new(3.0, 64.0, 0.5), 0.0));
             cast(game);
             game.tick_fishing();
@@ -174,8 +174,8 @@ fn removing_a_bobber_in_its_impact_clears_the_line_without_rewards() {
             assert!(game.entity(71).is_none());
             assert_eq!(game.entity_position(handle), None);
             assert!(game.hook.is_none(), "the owner's fishing line remains");
-            assert!(game.dropped.is_empty());
-            assert!(game.orbs.is_empty());
+            assert!(game.entities.dropped.is_empty());
+            assert!(game.entities.orbs.is_empty());
             assert_eq!(observed.catches.load(Ordering::Relaxed), 0);
             assert_eq!(game.stats.get("custom", "minecraft:fish_caught"), 0);
             assert_eq!(game.stats.get("custom", "minecraft:target_hit"), 0);

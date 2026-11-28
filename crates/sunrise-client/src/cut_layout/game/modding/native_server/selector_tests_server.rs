@@ -80,7 +80,7 @@ fn native_selectors_deliver_ordered_handles_once_and_refuse_invalid_selections()
                         let cow = game.res.mob_types().get("minecraft:cow").unwrap().clone();
                         // Deliberately neither ID order nor insertion order is distance order.
                         for (id, x) in [(101, 12.0), (103, 4.0), (102, 7.0)] {
-                            game.mobs
+                            game.entities.mobs
                                 .push(Mob::new(id, cow.clone(), Vec3::new(x, 64.0, 5.0), 0.0));
                         }
                         let near = game.entity(103).unwrap();

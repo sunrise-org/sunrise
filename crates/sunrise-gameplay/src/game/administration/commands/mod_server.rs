@@ -882,7 +882,7 @@ impl crate::game::ServerGame<'_> {
                     self.common.persist.uuids.insert(id, uuid);
                     let at = Vec3::new(pos[0], pos[1], pos[2]);
                     let orb = sunrise_sim::entities::ExperienceOrb::new(id, at, Vec3::ZERO, 0);
-                    self.common.orbs.push(orb);
+                    self.common.entities.orbs.push(orb);
                     // tryAddFreshEntityWithPassengers refused: ERROR_DUPLICATE_UUID.
                     if !self.native_joins_flush(false, id) {
                         return Err(err("commands.summon.failed.uuid", &[]));
@@ -912,7 +912,7 @@ impl crate::game::ServerGame<'_> {
                     let crystal = sunrise_gameplay_common::game::dragon_common::Crystal::new(
                         id, at, true, time,
                     );
-                    self.common.crystals.push(crystal);
+                    self.common.entities.crystals.push(crystal);
                     // tryAddFreshEntityWithPassengers refused: ERROR_DUPLICATE_UUID.
                     if !self.native_joins_flush(false, id) {
                         return Err(err("commands.summon.failed.uuid", &[]));
@@ -941,7 +941,7 @@ impl crate::game::ServerGame<'_> {
                         &mut sunrise_level::random_source::entity(),
                     );
                     self.common.persist.uuids.insert(id, uuid);
-                    self.common.carts.push(cart);
+                    self.common.entities.carts.push(cart);
                     if !self.native_joins_flush(false, id) {
                         return Err(err("commands.summon.failed.uuid", &[]));
                     }
@@ -1339,7 +1339,7 @@ impl crate::game::ServerGame<'_> {
             Target::Guest(conn) => self.command_guest(conn).is_some_and(|g| !g.dead),
             Target::Mob(id) => self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .any(|m| m.id == id && !m.removed && m.alive()),
             _ => self.target_position(t).is_some(),
@@ -1374,7 +1374,7 @@ impl crate::game::ServerGame<'_> {
         if let Target::Item(id) = t {
             context.dampens = self
                 .common
-                .dropped
+                .entities.dropped
                 .iter()
                 .find(|i| i.id == id)
                 .is_some_and(|i| {
@@ -1428,7 +1428,7 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Mob(id) => {
                 let mut killed = None;
-                if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+                if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
                     // LivingEntity.kill: a generic_kill hit of Float.MAX_VALUE,
                     // which its death message tells.
                     let alive = m.alive();
@@ -1451,7 +1451,7 @@ impl crate::game::ServerGame<'_> {
                 self.mob_die(&m);
                 if self
                     .common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .any(|m| m.id == id && !m.removed && (m.alive() || m.death_canceled))
                 {
@@ -1459,12 +1459,12 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Item(id) => {
-                if let Some(i) = self.common.dropped.iter().position(|i| i.id == id) {
+                if let Some(i) = self.common.entities.dropped.iter().position(|i| i.id == id) {
                     self.remove_dropped(i);
                 }
             }
             // Entity.kill removes the orb.
-            Target::Orb(id) => self.common.orbs.retain(|o| o.id != id),
+            Target::Orb(id) => self.common.entities.orbs.retain(|o| o.id != id),
             Target::Projectile(id) => self.remove_projectile(id),
             Target::Stand(id) => {
                 if !self.remove_armor_stand_after(id, |_| {}) {
@@ -1473,12 +1473,12 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Frame(id) => {
                 // ItemFrame.onKilled.
-                if let Some(frame) = self.common.item_frames.iter().find(|f| f.id == id).cloned() {
+                if let Some(frame) = self.common.entities.item_frames.iter().find(|f| f.id == id).cloned() {
                     self.remove_framed_map(&frame);
                 }
-                self.common.item_frames.retain(|f| f.id != id);
+                self.common.entities.item_frames.retain(|f| f.id != id);
             }
-            Target::Painting(id) => self.common.paintings.retain(|p| p.id != id),
+            Target::Painting(id) => self.common.entities.paintings.retain(|p| p.id != id),
             Target::Boat(_) | Target::Cart(_) => {
                 if !self.kill_vehicle_object(t) {
                     return false;
@@ -1495,7 +1495,7 @@ impl crate::game::ServerGame<'_> {
                     return false;
                 }
             }
-            Target::Fangs(id) => self.common.fangs.list.retain(|f| f.id != id),
+            Target::Fangs(id) => self.common.entities.fangs.list.retain(|f| f.id != id),
             Target::Crystal(id) => self.kill_crystal(id),
             Target::Dragon(id) => self.kill_dragon(id),
             Target::Tnt(id) => {
@@ -1508,9 +1508,9 @@ impl crate::game::ServerGame<'_> {
                     return false;
                 }
             }
-            Target::Falling(id) => self.common.falling.retain(|f| f.id != id),
-            Target::Rocket(id) => self.common.rockets.retain(|r| r.id != id),
-            Target::Trident(id) => self.common.tridents.retain(|t| t.id != id),
+            Target::Falling(id) => self.common.entities.falling.retain(|f| f.id != id),
+            Target::Rocket(id) => self.common.entities.rockets.retain(|r| r.id != id),
+            Target::Trident(id) => self.common.entities.tridents.retain(|t| t.id != id),
             Target::Spawner(id) => self.remove_ominous_spawner(id),
             Target::Cloud(id) => self.remove_breath_cloud(id),
             Target::Bolt(id) => self.remove_bolt(id),
@@ -1548,36 +1548,36 @@ impl crate::game::ServerGame<'_> {
                 candidates.extend(entity.selector_target());
             }
         });
-        candidates.extend(self.common.item_frames.iter().map(|f| Target::Frame(f.id)));
-        candidates.extend(self.common.paintings.iter().map(|p| Target::Painting(p.id)));
-        candidates.extend(self.common.cushions.iter().map(|c| Target::Cushion(c.id)));
+        candidates.extend(self.common.entities.item_frames.iter().map(|f| Target::Frame(f.id)));
+        candidates.extend(self.common.entities.paintings.iter().map(|p| Target::Painting(p.id)));
+        candidates.extend(self.common.entities.cushions.iter().map(|c| Target::Cushion(c.id)));
         candidates.extend(self.server.others.0.iter().map(|o| Target::Other(o.id)));
-        candidates.extend(self.common.fangs.list.iter().map(|f| Target::Fangs(f.id)));
+        candidates.extend(self.common.entities.fangs.list.iter().map(|f| Target::Fangs(f.id)));
         // The End crystals and the dragon (EndCrystal and EnderDragon
         // are entities of their own).
-        candidates.extend(self.common.crystals.iter().map(|c| Target::Crystal(c.id)));
+        candidates.extend(self.common.entities.crystals.iter().map(|c| Target::Crystal(c.id)));
         // EnderDragon.isAlive is its health's, through the dying flight too.
-        if let Some(d) = self.common.dragon.as_ref()
+        if let Some(d) = self.common.entities.dragon.as_ref()
             && (!alive_only || d.health > 0.0)
         {
             candidates.push(Target::Dragon(d.id));
         }
         candidates.extend(
             self.common
-                .ominous_spawners
+                .entities.ominous_spawners
                 .iter()
                 .map(|s| Target::Spawner(s.id)),
         );
         candidates.extend(
             self.common
-                .breath_clouds
+                .entities.breath_clouds
                 .iter()
                 .filter(|c| c.id != 0)
                 .map(|c| Target::Cloud(c.id)),
         );
         candidates.extend(
             self.common
-                .bolts
+                .entities.bolts
                 .iter()
                 .filter(|b| b.id != 0)
                 .map(|b| Target::Bolt(b.id)),
@@ -1840,7 +1840,7 @@ impl crate::game::ServerGame<'_> {
         };
         let tracks = self.in_origin_level(|g| match origin {
             Ok(pos) => g.command_block(pos).is_some_and(|c| c.track_output),
-            Err(id) => g.carts.iter().any(|c| {
+            Err(id) => g.entities.carts.iter().any(|c| {
                 c.id == id
                     && c.kind == super::minecarts::CartKind::CommandBlock
                     && c.command.track_output
@@ -1874,11 +1874,11 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn spawned_mark(&self) -> (u32, usize) {
         (
             self.server.next_entity,
-            self.common.tnts.len()
-                + self.common.falling.len()
-                + self.common.creatures.projectiles.len()
-                + self.common.rockets.len()
-                + self.common.tridents.len(),
+            self.common.entities.tnts.len()
+                + self.common.entities.falling.len()
+                + self.common.entities.projectiles.len()
+                + self.common.entities.rockets.len()
+                + self.common.entities.tridents.len(),
         )
     }
     /// The entries of a data pack tag of `registry`, nested tags expanded.
@@ -1997,7 +1997,7 @@ impl crate::game::ServerGame<'_> {
             target_entity_mut!(g, t, e => *e.velocity_mut() = Vec3::ZERO);
             // The dragon's flight builds on the motion it carries.
             if let Target::Dragon(id) = t
-                && let Some(d) = g.dragon.as_mut().filter(|d| d.id == id)
+                && let Some(d) = g.entities.dragon.as_mut().filter(|d| d.id == id)
             {
                 d.teleport_motion([false; 3]);
             }
@@ -2028,7 +2028,7 @@ impl crate::game::ServerGame<'_> {
         }
         let _ = self.in_target_level(t, |g| {
             if let Target::Mob(id) = t
-                && let Some(m) = g.mobs.iter_mut().find(|m| m.id == id)
+                && let Some(m) = g.entities.mobs.iter_mut().find(|m| m.id == id)
             {
                 m.nav_stop();
                 if m.extra.fall_flying {

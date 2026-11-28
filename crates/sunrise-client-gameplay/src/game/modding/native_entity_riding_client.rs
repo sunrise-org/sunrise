@@ -12,7 +12,7 @@ impl crate::game::ClientGame<'_> {
         let (remote, id) = self.native_client_entity_context(entity)?;
         if id == remote.entity_id
             || remote.tracked_entity(id).is_some()
-            || self.common.dragon.as_ref().is_some_and(|d| {
+            || self.common.entities.dragon.as_ref().is_some_and(|d| {
                 d.id != 0
                     && id != 0
                     && sunrise_gameplay_common::game::dragon_common::dragon_part_index(

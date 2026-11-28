@@ -145,11 +145,11 @@ fn check(
             game.set_game_mode(GameMode::Survival);
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             for id in [300, 301, 302] {
-                game.mobs.push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
             }
             if attacker != 7 && !(300..=302).contains(&(attacker as u32)) {
                 // The level allocates unsigned ids; one above `i32::MAX` still names this body.
-                game.mobs
+                game.entities.mobs
                     .push(Mob::new(attacker as u32, kind.clone(), Vec3::ZERO, 0.0));
             }
             let epoch = game.entity(7).unwrap().epoch();
@@ -168,7 +168,7 @@ fn check(
             let mut attacker_random = if attacker == 7 {
                 (*game.player.as_ref().unwrap().random).clone()
             } else {
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .find(|m| m.id as i32 == attacker)
                     .unwrap()
@@ -206,7 +206,7 @@ fn check(
             let after = if attacker == 7 {
                 game.player.as_mut().unwrap().random.next_int()
             } else {
-                game.mobs
+                game.entities.mobs
                     .iter_mut()
                     .find(|m| m.id as i32 == attacker)
                     .unwrap()

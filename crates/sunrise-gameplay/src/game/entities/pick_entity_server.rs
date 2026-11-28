@@ -22,53 +22,53 @@ pub(in crate::game) fn visit_server_section_members(
     visit: &mut impl FnMut(PickKind, usize, u32, [f64; 3]),
 ) {
     use sunrise_gameplay_common::game::entity::Entity as _;
-    for (slot, e) in game.mobs.iter().enumerate() {
+    for (slot, e) in game.entities.mobs.iter().enumerate() {
         let p = e.position();
         visit(PickKind::Mob, slot, e.id(), [p.x, p.y, p.z]);
     }
-    for (slot, e) in game.boats.iter().enumerate() {
+    for (slot, e) in game.entities.boats.iter().enumerate() {
         let p = e.position();
         visit(PickKind::Boat, slot, e.id(), [p.x, p.y, p.z]);
     }
-    for (slot, e) in game.carts.iter().enumerate() {
+    for (slot, e) in game.entities.carts.iter().enumerate() {
         let p = e.position();
         visit(PickKind::Cart, slot, e.id(), [p.x, p.y, p.z]);
     }
-    for (slot, e) in game.armor_stands.iter().enumerate() {
+    for (slot, e) in game.entities.armor_stands.iter().enumerate() {
         let p = e.position();
         visit(PickKind::ArmorStand, slot, e.id(), [p.x, p.y, p.z]);
     }
-    for (slot, e) in game.tnts.iter().enumerate() {
+    for (slot, e) in game.entities.tnts.iter().enumerate() {
         let p = e.position();
         visit(PickKind::Tnt, slot, e.id(), [p.x, p.y, p.z]);
     }
-    for (slot, e) in game.falling.iter().enumerate() {
+    for (slot, e) in game.entities.falling.iter().enumerate() {
         let p = e.position();
         visit(PickKind::Falling, slot, e.id(), [p.x, p.y, p.z]);
     }
-    for (slot, e) in game.creatures.projectiles.iter().enumerate() {
+    for (slot, e) in game.entities.projectiles.iter().enumerate() {
         let p = e.position();
         visit(PickKind::Projectile, slot, e.id(), [p.x, p.y, p.z]);
     }
-    for (slot, e) in game.tridents.iter().enumerate() {
+    for (slot, e) in game.entities.tridents.iter().enumerate() {
         let p = e.position();
         visit(PickKind::Trident, slot, e.id(), [p.x, p.y, p.z]);
     }
-    for (slot, e) in game.rockets.iter().enumerate() {
+    for (slot, e) in game.entities.rockets.iter().enumerate() {
         let p = e.position();
         visit(PickKind::Rocket, slot, e.id(), [p.x, p.y, p.z]);
     }
-    for (slot, e) in game.resident_entities.general.rows.iter().enumerate() {
+    for (slot, e) in game.entities.general.rows.iter().enumerate() {
         let p = e.position();
         visit(PickKind::General, slot, e.id(), [p.x, p.y, p.z]);
     }
-    for (slot, p) in game.paintings.iter().enumerate() {
+    for (slot, p) in game.entities.paintings.iter().enumerate() {
         visit(PickKind::Painting, slot, p.id, hanging_center(p.bounds()));
     }
-    for (slot, f) in game.item_frames.iter().enumerate() {
+    for (slot, f) in game.entities.item_frames.iter().enumerate() {
         visit(PickKind::ItemFrame, slot, f.id, hanging_center(f.bounds()));
     }
-    for (slot, c) in game.cushions.iter().enumerate() {
+    for (slot, c) in game.entities.cushions.iter().enumerate() {
         visit(
             PickKind::Cushion,
             slot,
@@ -76,10 +76,10 @@ pub(in crate::game) fn visit_server_section_members(
             [c.position.x, c.position.y, c.position.z],
         );
     }
-    for (slot, k) in game.resident_entities.knots.iter().enumerate() {
+    for (slot, k) in game.entities.knots.iter().enumerate() {
         visit(PickKind::LocalKnot, slot, k.id, knot_position(k.fence));
     }
-    for (slot, c) in game.crystals.iter().enumerate() {
+    for (slot, c) in game.entities.crystals.iter().enumerate() {
         if c.id != 0 {
             visit(
                 PickKind::Crystal,
@@ -89,13 +89,13 @@ pub(in crate::game) fn visit_server_section_members(
             );
         }
     }
-    for (slot, e) in game.dropped.iter().enumerate() {
+    for (slot, e) in game.entities.dropped.iter().enumerate() {
         visit(PickKind::Item, slot, e.id(), e.position().components());
     }
-    for (slot, e) in game.orbs.iter().enumerate() {
+    for (slot, e) in game.entities.orbs.iter().enumerate() {
         visit(PickKind::Orb, slot, e.id(), e.position().components());
     }
-    if let Some(d) = game.dragon.as_ref().filter(|d| d.id != 0) {
+    if let Some(d) = game.entities.dragon.as_ref().filter(|d| d.id != 0) {
         visit(PickKind::Dragon, 0, d.id, d.position.components());
     }
 }

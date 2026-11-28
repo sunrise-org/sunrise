@@ -39,7 +39,7 @@ pub(crate) mod tests {
                         probe.dispenser_changes.load(Ordering::Relaxed),
                         notices + writes
                     );
-                    assert!(game.dropped.is_empty());
+                    assert!(game.entities.dropped.is_empty());
                     assert!(game.server.pending_sounds.is_empty());
                     assert_eq!(game.server.pending_particles.len(), particles);
                 }
@@ -79,7 +79,7 @@ pub(crate) mod tests {
                             notices + writes
                         );
                         assert!(
-                            game.dropped.is_empty(),
+                            game.entities.dropped.is_empty(),
                             "vanilla must not run a second behaviour"
                         );
                         assert!(game.server.pending_sounds.is_empty());

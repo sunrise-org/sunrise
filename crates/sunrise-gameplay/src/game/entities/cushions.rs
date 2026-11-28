@@ -29,7 +29,7 @@ impl crate::game::ServerGame<'_> {
         let (from, to) = super::pick_ray::pick_ray_segment(eye, dir, reach);
         let mut pick = super::pick_ray::PickAccumulator::new(reach * reach);
         let mut best: Option<(usize, f64, [f64; 3])> = None;
-        for (i, c) in self.common.cushions.iter().enumerate() {
+        for (i, c) in self.common.entities.cushions.iter().enumerate() {
             if pick.consider_box(self, c.id, from, to, aabb(c.bounds())) {
                 let hit = pick.hovered.unwrap();
                 best = Some((i, hit.distance_sq.sqrt(), hit.point));
@@ -85,7 +85,7 @@ impl crate::game::ServerGame<'_> {
         // `getEntitiesOfClass(Cushion.class, spawnAABB).isEmpty()`.
         if self
             .common
-            .cushions
+            .entities.cushions
             .iter()
             .any(|c| overlaps(aabb(c.bounds()), bounds))
         {
@@ -99,7 +99,7 @@ impl crate::game::ServerGame<'_> {
             position.y.floor() as i32,
             position.z.floor() as i32,
         ];
-        self.common.cushions.push(Cushion {
+        self.common.entities.cushions.push(Cushion {
             attachment_lifetime: Default::default(),
             join: Default::default(),
             id,
@@ -117,8 +117,8 @@ impl crate::game::ServerGame<'_> {
             .modified
             .insert((attached[0] >> 4, attached[2] >> 4));
         // `destroyIfInFire`: placed into fire, it breaks at once.
-        let placed = self.common.cushions.len() - 1;
-        if self.cushion_in_fire(&self.common.cushions[placed]) {
+        let placed = self.common.entities.cushions.len() - 1;
+        if self.cushion_in_fire(&self.common.entities.cushions[placed]) {
             self.break_cushion(placed, false);
         }
         self.server_play_sound(
@@ -201,8 +201,8 @@ impl crate::game::ServerGame<'_> {
         id: u32,
     ) -> Option<Cushion> {
         self.with_destroying_vehicle(super::commands::Target::Cushion(id), |game| {
-            let i = game.cushions.iter().position(|c| c.id == id)?;
-            let c = game.cushions.remove(i);
+            let i = game.entities.cushions.iter().position(|c| c.id == id)?;
+            let c = game.entities.cushions.remove(i);
             game.world.modified.insert((c.pos[0] >> 4, c.pos[2] >> 4));
             Some(c)
         })?
@@ -261,7 +261,7 @@ impl crate::game::ServerGame<'_> {
     pub fn interact_cushion(&mut self, target: Option<InteractTarget>) -> bool {
         let Some((i, d, _)) = (match target {
             Some(t) => sunrise_gameplay_common::game::item_actions::named_entity(
-                &self.common.cushions,
+                &self.common.entities.cushions,
                 t.id,
                 |c| c.id,
             )
@@ -278,7 +278,7 @@ impl crate::game::ServerGame<'_> {
         if self.server_acting_sneak() {
             return false;
         }
-        let id = self.common.cushions[i].id;
+        let id = self.common.entities.cushions[i].id;
         let occupied = self.common.riding == Some(id)
             || self
                 .server
@@ -297,7 +297,7 @@ impl crate::game::ServerGame<'_> {
         // After each hook the cushion is found again by its id: a listener
         // may have removed it, and the click is then spent.
         if sunrise_gameplay_common::game::item_actions::named_entity(
-            &self.common.cushions,
+            &self.common.entities.cushions,
             id as i32,
             |c| c.id,
         )
@@ -312,14 +312,14 @@ impl crate::game::ServerGame<'_> {
             return true;
         }
         let Some(i) = sunrise_gameplay_common::game::item_actions::named_entity(
-            &self.common.cushions,
+            &self.common.entities.cushions,
             id as i32,
             |c| c.id,
         ) else {
             return true;
         };
         self.start_riding(id);
-        let p = self.common.cushions[i].position;
+        let p = self.common.entities.cushions[i].position;
         self.server_play_sound("minecraft:entity.cushion.sit", [p.x, p.y, p.z], 1.0, 1.0);
         self.swing_arm();
         true
@@ -333,7 +333,7 @@ impl crate::game::ServerGame<'_> {
         source: Option<super::commands::Target>,
         killed: bool,
     ) -> bool {
-        let id = self.common.cushions[index].id;
+        let id = self.common.entities.cushions[index].id;
         if self.target_removed(&super::commands::Target::Cushion(id)) {
             return false;
         }
@@ -367,19 +367,19 @@ impl crate::game::ServerGame<'_> {
     pub fn tick_cushions(&mut self) {
         let ticking = self.entity_ticking_area();
         let mut i = 0;
-        while i < self.common.cushions.len() {
-            let p = self.common.cushions[i].position;
+        while i < self.common.entities.cushions.len() {
+            let p = self.common.entities.cushions[i].position;
             if !ticking(p.x.floor() as i32, p.z.floor() as i32) {
                 i += 1;
                 continue;
             }
-            let previous = self.common.cushions[i].check_interval;
-            self.common.cushions[i].check_interval += 1;
+            let previous = self.common.entities.cushions[i].check_interval;
+            self.common.entities.cushions[i].check_interval += 1;
             if previous < 100 {
                 i += 1;
                 continue;
             }
-            self.common.cushions[i].check_interval = 0;
+            self.common.entities.cushions[i].check_interval = 0;
             if !self.check_cushion(i) {
                 i += 1;
             }
@@ -388,7 +388,7 @@ impl crate::game::ServerGame<'_> {
 
     /// `Cushion.tickAtCheckInterval` plus the survive check; true when the cushion broke.
     pub(in crate::game::server_side) fn check_cushion(&mut self, i: usize) -> bool {
-        let c = self.common.cushions[i].clone();
+        let c = self.common.entities.cushions[i].clone();
         let p = c.position;
         let (x, y, z) = (p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32);
         // collidedWithFluid: the fluid box of the cushion's own block against its box.
@@ -449,7 +449,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn tick_cushion_riding(&mut self, keys: Keys) -> bool {
         let Some(c) = self
             .common
-            .cushions
+            .entities.cushions
             .iter()
             .find(|c| Some(c.id) == self.common.riding)
             .cloned()

@@ -54,8 +54,8 @@ fn saved_orb_uuid_comes_from_registered_identity_without_or_despite_raw() {
         ("NoGravity", Tag::Byte(1)),
     ]);
     game.load_orb(tag, Some(uuid));
-    assert_eq!(game.orbs.len(), 1);
-    let id = game.orbs[0].id;
+    assert_eq!(game.entities.orbs.len(), 1);
+    let id = game.entities.orbs[0].id;
     assert_eq!(game.persist.uuids.get(&id), Some(&uuid));
     let time = game.world.game_time;
     for raw in [

@@ -84,7 +84,7 @@ pub(crate) use crate::game::server_side::creatures_server::pending_birth_tests::
 
 /// The mobs the split added, in order (the fixture world starts with none).
 pub(crate) fn spawned(game: &sunrise_gameplay::game::ServerGame<'_>) -> Vec<Mob> {
-    game.mobs.to_vec()
+    game.entities.mobs.to_vec()
 }
 
 pub(crate) fn assert_vanilla_children(children: &[Mob], kind: &str, first_id: u32) {
@@ -168,26 +168,26 @@ fn sulfur_cube_splits_two_babies_unless_primed_and_size_one_asks_nobody() {
             );
             // Primed, size 4: NeoForge's AbstractCubeMob.remove still posts MobSplitEvent with
             // an empty list. Leaving it empty spawns nothing.
-            game.mobs.clear();
+            game.entities.mobs.clear();
             let mut dying = cube(game, "minecraft:sulfur_cube", 4, 0);
             dying.extra.sulfur_fuse = sunrise_sim::mobs::sulfur_cube::Fuse::set(40);
             assert!(sunrise_sim::mobs::sulfur_cube::primed(&dying));
             game.split_dead_cube(dying);
-            assert!(game.mobs.is_empty());
+            assert!(game.entities.mobs.is_empty());
             // Populating the initially empty list on a primed sulfur cube spawns the added child.
             *push_when_empty.lock().unwrap() = true;
             let mut dying = cube(game, "minecraft:sulfur_cube", 4, 0);
             dying.extra.sulfur_fuse = sunrise_client::mobs::sulfur_cube::Fuse::set(40);
             assert!(sunrise_client::mobs::sulfur_cube::primed(&dying));
             game.split_dead_cube(dying);
-            assert_eq!(game.mobs.len(), 1);
-            assert_eq!(game.mobs[0].kind.id, "minecraft:slime");
-            assert_eq!(game.mobs[0].extra.size, 2);
+            assert_eq!(game.entities.mobs.len(), 1);
+            assert_eq!(game.entities.mobs[0].kind.id, "minecraft:slime");
+            assert_eq!(game.entities.mobs[0].extra.size, 2);
             // A size-1 parent never splits and never asks listeners.
-            game.mobs.clear();
+            game.entities.mobs.clear();
             let dying = cube(game, "minecraft:slime", 1, 0);
             game.split_dead_cube(dying);
-            assert!(game.mobs.is_empty());
+            assert!(game.entities.mobs.is_empty());
         },
     );
     assert_eq!(
@@ -341,11 +341,11 @@ fn invalid_input_fails_before_mutation_and_the_valid_list_stands() {
             let mut dying = cube(game, "minecraft:slime", 4, SEED);
             game.split_cube_children(&mut dying);
             assert_eq!(
-                game.common.mobs.len(),
+                game.common.entities.mobs.len(),
                 70,
                 "unbounded list grows past 64 and stands intact after refused operations"
             );
-            assert!(game.common.mobs[0].position.x.is_finite());
+            assert!(game.common.entities.mobs[0].position.x.is_finite());
         },
     );
     assert_eq!(
@@ -406,7 +406,7 @@ fn split_edits_do_not_publish_on_engine_unwind() {
                 game.split_cube_children(&mut dying);
             });
             assert_eq!(edits.load(Ordering::Relaxed), 1);
-            assert!(game.mobs.is_empty(), "no child joined");
+            assert!(game.entities.mobs.is_empty(), "no child joined");
             assert_eq!(
                 game.server.next_entity,
                 next_id + 4,
@@ -427,9 +427,9 @@ fn split_edits_do_not_publish_on_engine_unwind() {
             // Subsequent splits work cleanly from a fresh stack frame.
             let mut again = cube(game, "minecraft:slime", 4, SEED);
             game.split_cube_children(&mut again);
-            assert_eq!(game.mobs.len(), 3);
-            assert_eq!(game.mobs[0].yaw, 1.0);
-            assert_eq!(game.mobs[1].kind.id, "minecraft:magma_cube");
+            assert_eq!(game.entities.mobs.len(), 3);
+            assert_eq!(game.entities.mobs[0].yaw, 1.0);
+            assert_eq!(game.entities.mobs[1].kind.id, "minecraft:magma_cube");
         },
     );
 }
@@ -444,7 +444,7 @@ pub(crate) use sunrise_gameplay::game::server_side::creatures_server::pending_bi
 pub(crate) use crate::game::server_side::creatures_server::pending_birth_tests::breed_pair_credited;
 
 pub(crate) fn find(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Mob {
-    game.mobs.iter().find(|m| m.id == id).unwrap().clone()
+    game.entities.mobs.iter().find(|m| m.id == id).unwrap().clone()
 }
 
 #[test]
@@ -520,7 +520,7 @@ fn breeding_replaces_the_cow_baby_with_a_pig_baby() {
             );
             assert_eq!(
                 game.common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .filter(|m| m.kind.id == "minecraft:cow")
                     .count(),
@@ -529,7 +529,7 @@ fn breeding_replaces_the_cow_baby_with_a_pig_baby() {
             );
             assert_eq!(
                 game.common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .filter(|m| m.kind.id == "minecraft:pig")
                     .count(),
@@ -559,18 +559,18 @@ fn breeding_veto_leaves_no_baby_orb_or_statistic_and_the_parents_resting() {
     with_baby(
         |_, _| Flow::Cancel,
         |game| {
-            let before = game.common.mobs.len();
+            let before = game.common.entities.mobs.len();
             let (parent, partner, child) = breed_pair(game, "minecraft:cow");
             assert_eq!(child, None);
             assert_eq!(
-                game.common.mobs.len(),
+                game.common.entities.mobs.len(),
                 before + 2,
                 "only the two parents exist"
             );
-            assert!(game.common.mobs.iter().all(|m| m.extra.age >= 0), "no baby");
+            assert!(game.common.entities.mobs.iter().all(|m| m.extra.age >= 0), "no baby");
             assert!(
                 !game
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .any(|m| m.kind.id == "minecraft:experience_orb"),
                 "no experience"
@@ -623,12 +623,12 @@ fn clearing_the_baby_without_cancel_leaves_parents_and_credit_untouched() {
                 if id == parent {
                     mob.ai.goals.add(2, Breed::new(1.0));
                 }
-                game.common.mobs.push(mob);
+                game.common.entities.mobs.push(mob);
             }
             game.native_joins_skip();
             game.server.love_cause.insert(parent, None);
             for _ in 0..100 {
-                for (i, mob) in game.common.mobs.iter_mut().enumerate() {
+                for (i, mob) in game.common.entities.mobs.iter_mut().enumerate() {
                     mob.position = Vec3::new(0.5 + i as f64, 80.0, 0.5);
                     mob.velocity = Vec3::ZERO;
                     mob.extra.in_love = 600;
@@ -645,8 +645,8 @@ fn clearing_the_baby_without_cancel_leaves_parents_and_credit_untouched() {
             );
             assert_eq!(animals_bred(game), 0);
             assert!(game.server.love_cause.contains_key(&parent));
-            assert_eq!(game.common.mobs.len(), 2, "only the parents remain");
-            for mob in &game.common.mobs {
+            assert_eq!(game.common.entities.mobs.len(), 2, "only the parents remain");
+            for mob in &game.common.entities.mobs {
                 assert_eq!(mob.extra.age, 0);
                 assert_eq!(mob.extra.in_love, 599);
             }
@@ -666,11 +666,11 @@ fn egg_layers_never_ask_baby_entity_spawn() {
         },
         |game| {
             for kind in ["minecraft:turtle", "minecraft:frog", "minecraft:sniffer"] {
-                game.mobs.clear();
+                game.entities.mobs.clear();
                 let _ = breed_pair(game, kind);
             }
             // A live baby, by contrast, is asked once.
-            game.mobs.clear();
+            game.entities.mobs.clear();
             let _ = breed_pair(game, "minecraft:cow");
         },
     );
@@ -711,13 +711,13 @@ fn turtle_hatching_spawns_its_turtle_without_asking_baby_entity_spawn() {
                 .registry
                 .default_state("minecraft:turtle_egg")
                 .unwrap();
-            game.mobs.clear();
+            game.entities.mobs.clear();
             game.hatch_turtles([5, 64, 5], egg);
             // One egg: one baby turtle, its home the egg, and no birth hook.
-            assert_eq!(game.mobs.len(), 1);
-            assert_eq!(game.mobs[0].kind.id, "minecraft:turtle");
-            assert_eq!(game.mobs[0].extra.age, -24000);
-            assert_eq!(game.mobs[0].extra.home, Some([5, 64, 5]));
+            assert_eq!(game.entities.mobs.len(), 1);
+            assert_eq!(game.entities.mobs[0].kind.id, "minecraft:turtle");
+            assert_eq!(game.entities.mobs[0].extra.age, -24000);
+            assert_eq!(game.entities.mobs[0].extra.home, Some([5, 64, 5]));
         },
     );
     assert_eq!(*calls.lock().unwrap(), 0);
@@ -868,8 +868,8 @@ fn a_breeding_constructor_engine_fault_retires_only_the_unpublished_child() {
             });
             assert_eq!(baby_hook_ran.load(Ordering::Relaxed), during_orb);
             assert_eq!(orb_joined.load(Ordering::Relaxed), during_orb);
-            assert!(game.orbs.is_empty());
-            assert_eq!(game.mobs.len(), 2);
+            assert!(game.entities.orbs.is_empty());
+            assert_eq!(game.entities.mobs.len(), 2);
             assert!(!game.persist.uuids.contains_key(&proposed_id));
             assert!(!game.entity_attachments.contains_key(&proposed_id));
             assert!(
@@ -975,7 +975,7 @@ fn mob_split_constructs_all_children_before_any_join_and_cleans_up_on_unwind() {
             let mut dying = cube(game, "minecraft:slime", 4, SEED);
             let first = game.server.next_entity + 1;
             game.split_cube_children(&mut dying);
-            assert_eq!(game.mobs.len(), 2);
+            assert_eq!(game.entities.mobs.len(), 2);
             assert_eq!(
                 *trace.lock().unwrap(),
                 vec![
@@ -990,14 +990,14 @@ fn mob_split_constructs_all_children_before_any_join_and_cleans_up_on_unwind() {
             assert_eq!(marker.get(game, Holder::Entity(first), |&v| v), Ok(7));
             assert!(!game.entity_attachments.contains_key(&(first + 1)));
 
-            game.mobs.clear();
+            game.entities.mobs.clear();
             trace.lock().unwrap().clear();
             *mode.lock().unwrap() = Mode::Cancel;
             marker.set(game, Holder::Level, 0).unwrap();
             let mut dying = cube(game, "minecraft:slime", 4, SEED);
             let first = game.server.next_entity + 1;
             game.split_cube_children(&mut dying);
-            assert!(game.mobs.is_empty());
+            assert!(game.entities.mobs.is_empty());
             assert_eq!(
                 *trace.lock().unwrap(),
                 vec![
@@ -1026,7 +1026,7 @@ fn mob_split_constructs_all_children_before_any_join_and_cleans_up_on_unwind() {
                 [("construct", first), ("construct", first + 1)]
             );
             assert_eq!(marker.get(game, Holder::Level, |&v| v), Ok(23));
-            assert!(game.mobs.is_empty());
+            assert!(game.entities.mobs.is_empty());
             assert!(game.entity_initialization.active.is_none());
             for id in [first, first + 1] {
                 assert!(!game.persist.uuids.contains_key(&id));
@@ -1059,10 +1059,10 @@ fn mob_split_constructs_all_children_before_any_join_and_cleans_up_on_unwind() {
             );
             game.native_joins_flush(false, 0);
             assert!(game.entity_initialization.active.is_none());
-            assert!(game.mobs.iter().any(|m| m.id == first));
+            assert!(game.entities.mobs.iter().any(|m| m.id == first));
             assert_eq!(marker.get(game, Holder::Entity(first), |&v| v), Ok(7));
             for id in [first + 1, first + 2] {
-                assert!(!game.mobs.iter().any(|m| m.id == id));
+                assert!(!game.entities.mobs.iter().any(|m| m.id == id));
                 assert!(!game.entity_attachments.contains_key(&id));
                 assert!(!game.persist.uuids.contains_key(&id));
                 assert!(
@@ -1115,7 +1115,7 @@ fn add_ready_pair(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> u32 {
                 .goals
                 .add(2, ReadyBreed(sunrise_sim::mobs::goals::Breed::new(1.0)));
         }
-        game.common.mobs.push(mob);
+        game.common.entities.mobs.push(mob);
     }
     game.common
         .world
@@ -1135,7 +1135,7 @@ fn a_noop_birth_listener_leaves_goal_position_age_and_random_unchanged() {
         let parent = add_ready_pair(game);
         game.tick_creature_entities().unwrap();
         let m = find(game, parent);
-        let baby = game.common.mobs.iter().find(|m| m.extra.age < 0).unwrap();
+        let baby = game.common.entities.mobs.iter().find(|m| m.extra.age < 0).unwrap();
         assert_eq!(baby.position, Vec3::new(0.5, 80.0, 0.5));
         assert_eq!(m.extra.age, 5999);
         m.random.state()
@@ -1163,18 +1163,18 @@ fn breeding_dispatches_when_proposed_child_is_none_and_accepts_replacement() {
         let kind = Arc::new(sterile);
         let base = game.server.next_entity;
         game.server.next_entity += 2;
-        game.common.mobs.push(Mob::new(
+        game.common.entities.mobs.push(Mob::new(
             base + 1,
             kind.clone(),
             Vec3::new(3.0, 64.0, 4.0),
             0.0,
         ));
         game.common
-            .mobs
+            .entities.mobs
             .push(Mob::new(base + 2, kind, Vec3::new(4.0, 64.0, 4.0), 0.0));
         game.native_joins_skip();
         for id in [base + 1, base + 2] {
-            let m = game.common.mobs.iter_mut().find(|m| m.id == id).unwrap();
+            let m = game.common.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
             m.random = LegacyRandom::new(0);
             m.extra.age = 0;
             m.extra.in_love = 600;
@@ -1443,15 +1443,15 @@ fn a_later_birth_unwind_does_not_lose_or_replay_a_cube_removal() {
                     200,
                     0,
                 ));
-            game.mobs.push(dying);
+            game.entities.mobs.push(dying);
             let parent = add_ready_pair(game);
             escaping_fault::expect(At::BabyDispatched, parent, || {
                 game.tick_creature_entities().unwrap();
             });
             assert_eq!(calls.load(Ordering::Relaxed), 1);
-            assert!(!game.mobs.iter().any(|m| m.id == cube_id));
+            assert!(!game.entities.mobs.iter().any(|m| m.id == cube_id));
             let slime_counts = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-                let slimes = game.mobs.iter().filter(|m| m.species() == Species::Slime);
+                let slimes = game.entities.mobs.iter().filter(|m| m.species() == Species::Slime);
                 let (mut splits, mut oozing) = (0, 0);
                 for slime in slimes {
                     if slime.position.x == 10.0 && slime.position.z == 10.0 {
@@ -1463,7 +1463,7 @@ fn a_later_birth_unwind_does_not_lose_or_replay_a_cube_removal() {
                 (splits, oozing)
             };
             assert_eq!(slime_counts(game), (3, 2));
-            for mob in &mut game.common.mobs {
+            for mob in &mut game.common.entities.mobs {
                 if mob.id == parent || mob.id == parent + 1 {
                     mob.no_ai = true;
                 }
@@ -1471,7 +1471,7 @@ fn a_later_birth_unwind_does_not_lose_or_replay_a_cube_removal() {
             game.tick_creature_entities().unwrap();
             assert_eq!(calls.load(Ordering::Relaxed), 1);
             assert_eq!(
-                game.mobs
+                game.entities.mobs
                     .iter()
                     .filter(|m| m.species() == Species::Slime)
                     .count(),
@@ -1515,9 +1515,9 @@ fn split_listener_can_remove_the_live_parents_oozing() {
                     0,
                 ));
             let first = game.server.next_entity + 1;
-            game.mobs.push(dying);
+            game.entities.mobs.push(dying);
             game.native_joins_skip();
-            let join = game.mobs[0].join;
+            let join = game.entities.mobs[0].join;
             game.complete_mob_removal_for_test(join, true);
             assert!(removed.load(Ordering::Relaxed));
             assert_vanilla_children(&spawned(game), "minecraft:slime", first);
@@ -1642,7 +1642,7 @@ fn detached_constructed_baby_preserves_attachments_and_reattaches_across_worlds_
         with_game(|game| {
             let sheep_kind = game.res.mob_types().get("minecraft:sheep").unwrap().clone();
             game.server.next_entity = old_reserved_id;
-            game.common.mobs.push(Mob::new(
+            game.common.entities.mobs.push(Mob::new(
                 old_reserved_id,
                 sheep_kind,
                 Vec3::new(1.0, 64.0, 1.0),
@@ -1668,7 +1668,7 @@ fn detached_constructed_baby_preserves_attachments_and_reattaches_across_worlds_
             // Reattached cow received a fresh ID, kept its constructor attachment (41),
             // and was NOT double-constructed.
             let cow = game
-                .mobs
+                .entities.mobs
                 .iter()
                 .find(|m| m.kind.id == "minecraft:cow")
                 .expect("reattached cow joined World 2")
@@ -1799,8 +1799,8 @@ fn split_and_detached_construction_precede_admission() {
                     ("construct", kept),
                     ("join", kept),
                 ]);
-                assert_eq!(game.common.mobs.len(), 1);
-                assert_eq!(game.common.mobs[0].kind.id, "minecraft:pig");
+                assert_eq!(game.common.entities.mobs.len(), 1);
+                assert_eq!(game.common.entities.mobs[0].kind.id, "minecraft:pig");
                 assert_eq!(
                     marker.lock().unwrap().clone().unwrap().get(
                         game,
@@ -1819,7 +1819,7 @@ fn split_and_detached_construction_precede_admission() {
                 );
             } else {
                 expected.extend([("join", first), ("join", first + 1), ("join", first + 2)]);
-                assert_eq!(game.common.mobs.len(), 3);
+                assert_eq!(game.common.entities.mobs.len(), 3);
             }
             assert_eq!(*calls.lock().unwrap(), expected);
         });

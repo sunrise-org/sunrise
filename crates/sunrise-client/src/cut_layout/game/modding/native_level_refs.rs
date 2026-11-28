@@ -2282,7 +2282,7 @@ mod tests {
                 !game.world.inhabited.contains_key(&(8, 7)),
                 "without the flag it is no spawning chunk"
             );
-            assert!(game.mobs.is_empty(), "the local cap refuses");
+            assert!(game.entities.mobs.is_empty(), "the local cap refuses");
             // The cap itself: no player within 128 blocks of the chunk.
             let players: Vec<SpawnPlayer> = game
                 .level_players()

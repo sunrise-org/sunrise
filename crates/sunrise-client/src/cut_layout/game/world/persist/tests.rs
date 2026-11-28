@@ -382,7 +382,7 @@ fn neutral_load_restores_only_the_saved_live_target_with_or_without_listeners() 
             .load_mob(saved_neutral("minecraft:enderman", uuid), None)
             .unwrap();
         assert_eq!(
-            game.mobs
+            game.entities.mobs
                 .iter()
                 .find(|mob| mob.id == live)
                 .unwrap()
@@ -391,7 +391,7 @@ fn neutral_load_restores_only_the_saved_live_target_with_or_without_listeners() 
             Some(sunrise_sim::mobs::Who::Mob(zombie))
         );
         assert_eq!(
-            game.mobs
+            game.entities.mobs
                 .iter()
                 .find(|mob| mob.id == absent)
                 .unwrap()
@@ -400,7 +400,7 @@ fn neutral_load_restores_only_the_saved_live_target_with_or_without_listeners() 
             None,
             "an offline UUID must never become a different player"
         );
-        let enderman_state = game.mobs.iter().find(|mob| mob.id == enderman).unwrap();
+        let enderman_state = game.entities.mobs.iter().find(|mob| mob.id == enderman).unwrap();
         assert_eq!(
             enderman_state.ai.target,
             Some(sunrise_sim::mobs::Who::Mob(zombie))
@@ -440,7 +440,7 @@ fn neutral_load_restores_only_the_saved_live_target_with_or_without_listeners() 
 fn resident_other_and_fangs_load_tick_and_reset() {
     super::super::native_entity_refs::tests::with_game(|game| {
         game.server.others.0.clear();
-        game.fangs.list.clear();
+        game.entities.fangs.list.clear();
         let tag = |kind| {
             let mut tag = entity(kind);
             if let Tag::Compound(c) = &mut tag {
@@ -470,19 +470,19 @@ fn resident_other_and_fangs_load_tick_and_reset() {
             tag("minecraft:evoker_fangs"),
         )
         .unwrap();
-        let survivor = game.fangs.list[0].id;
+        let survivor = game.entities.fangs.list[0].id;
         game.insert_fangs(survivor + 1, [0.0, 80.0, 0.0], 0.0, -30, 0);
-        game.fangs.list.update(1, |f| {
+        game.entities.fangs.list.update(1, |f| {
             f.life = 0;
             f.started = true;
         });
         game.tick_fangs();
-        assert_eq!(game.fangs.list.len(), 1);
-        assert_eq!(game.fangs.list[0].id, survivor);
-        assert_eq!(game.fangs.list[0].warmup, 39);
+        assert_eq!(game.entities.fangs.list.len(), 1);
+        assert_eq!(game.entities.fangs.list[0].id, survivor);
+        assert_eq!(game.entities.fangs.list[0].warmup, 39);
         game.server.others.0.clear();
-        game.fangs.list.clear();
-        assert!(game.server.others.0.is_empty() && game.fangs.list.is_empty());
+        game.entities.fangs.list.clear();
+        assert!(game.server.others.0.is_empty() && game.entities.fangs.list.is_empty());
     });
 }
 
@@ -797,7 +797,7 @@ fn deferred_zombie_finalization_keeps_unknown_profession_through_save_and_cure()
             );
         }
         let id = game.load_mob(tag, None).unwrap();
-        let zombie = game.mobs.iter().find(|m| m.id == id).unwrap();
+        let zombie = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
         assert_eq!(zombie.extra.profession.id(), "example:engineer");
         let saved = entity_nbt::mob_to_nbt(
             zombie,
@@ -1138,7 +1138,7 @@ fn an_older_save_loads_its_entities_attachments_back_onto_them() {
         .iter()
         .find(|(_, u)| **u == zombie)
         .map(|(id, _)| *id);
-    game.mobs.retain(|mob| Some(mob.id) != zombie_id);
+    game.entities.mobs.retain(|mob| Some(mob.id) != zombie_id);
     game.prune_entity_attachments();
     for (kind, uuid, _) in uuids {
         let kept = game
@@ -1204,7 +1204,7 @@ fn a_lingering_cloud_leaves_with_its_chunk() {
         ),
     ]);
     let clouds = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-        game.breath_clouds
+        game.entities.breath_clouds
             .iter()
             .filter(|c| c.potion.is_some())
             .count()
@@ -1334,10 +1334,10 @@ fn anger_at_a_mob_not_saved_yet_names_it() {
         Vec3::new(3.0, 0.0, 0.0),
         0.0,
     );
-    game.mobs.push(golem);
-    game.mobs.push(zombie);
-    game.mobs[0].extra.anger = 400;
-    game.mobs[0].extra.angry_at = Some(sunrise_sim::mobs::Who::Mob(2));
+    game.entities.mobs.push(golem);
+    game.entities.mobs.push(zombie);
+    game.entities.mobs[0].extra.anger = 400;
+    game.entities.mobs[0].extra.angry_at = Some(sunrise_sim::mobs::Who::Mob(2));
     assert_eq!(game.persist.uuid_of(2), None);
     let tag = game.mob_tree_nbt(0);
     let Some(Tag::IntArray(named)) = tag.get("angry_at") else {
@@ -1400,7 +1400,7 @@ fn an_orb_saves_its_live_portal_cooldown() {
             .0,
             Some([9, 0, 0, 1]),
         );
-        let id = game.orbs[0].id;
+        let id = game.entities.orbs[0].id;
         // One tick: the orb's own (ordered) tick, then Entity.handlePortal's
         // pass over the entities.
         game.server.ordered.announced = sunrise_sim::join_seq::JoinSeq::MAX;
@@ -1409,8 +1409,8 @@ fn an_orb_saves_its_live_portal_cooldown() {
         game.run_ordered_ticks(sunrise_sim::join_seq::JoinSeq::MAX, false)
             .unwrap();
         game.handle_entity_portals();
-        assert_eq!(game.orbs[0].fire_ticks, 39, "one tick of Fire");
-        assert_eq!(game.orbs[0].air, 299, "the stored air does not tick");
+        assert_eq!(game.entities.orbs[0].fire_ticks, 39, "one tick of Fire");
+        assert_eq!(game.entities.orbs[0].air, 299, "the stored air does not tick");
         assert_eq!(
             game.server
                 .portals
@@ -1432,11 +1432,11 @@ fn an_orb_saves_its_live_portal_cooldown() {
         assert_eq!(written.len(), 1, "the orb leaves with its chunk");
         game.world.queue_entity_nbt((0, 0), written);
         game.spawn_loaded_entities();
-        assert_eq!(game.orbs[0].fire_ticks, 39, "the reload keeps the fire");
-        assert_eq!(game.orbs[0].air, 299, "and the air");
+        assert_eq!(game.entities.orbs[0].fire_ticks, 39, "the reload keeps the fire");
+        assert_eq!(game.entities.orbs[0].air, 299, "and the air");
         let read = game
             .command_target_nbt(sunrise_gameplay_common::game::commands_common::Target::Orb(
-                game.orbs[0].id,
+                game.entities.orbs[0].id,
             ))
             .unwrap();
         assert_eq!(read.get("PortalCooldown"), Some(&Tag::Int(19)));
@@ -1451,7 +1451,7 @@ fn an_orb_saves_its_live_portal_cooldown() {
             game.run_command_quietly(&format!("data merge entity {sel} {{Fire:40s,Air:275s}}")),
             "the merge runs"
         );
-        let orb = &game.orbs[0];
+        let orb = &game.entities.orbs[0];
         assert_eq!(
             (orb.fire_ticks, orb.air),
             (40, 275),
@@ -1461,7 +1461,7 @@ fn an_orb_saves_its_live_portal_cooldown() {
             game.run_command_quietly(&format!("data merge entity {sel} {{Invulnerable:1b}}")),
             "the unrelated merge runs"
         );
-        let orb = &game.orbs[0];
+        let orb = &game.entities.orbs[0];
         assert_eq!(
             (orb.fire_ticks, orb.air),
             (40, 275),
@@ -1469,7 +1469,7 @@ fn an_orb_saves_its_live_portal_cooldown() {
         );
         let read = game
             .command_target_nbt(sunrise_gameplay_common::game::commands_common::Target::Orb(
-                game.orbs[0].id,
+                game.entities.orbs[0].id,
             ))
             .unwrap();
         assert_eq!(read.get("Invulnerable"), Some(&Tag::Byte(1)));

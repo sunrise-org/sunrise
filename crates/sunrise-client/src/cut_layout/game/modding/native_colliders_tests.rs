@@ -151,7 +151,7 @@ fn a_collider_is_set_read_refused_saved_and_loaded() {
 fn drop_item(game: &mut sunrise_gameplay::game::ServerGame<'_>, at: [f64; 3]) -> u32 {
     game.server.next_entity += 1;
     let id = game.server.next_entity;
-    game.dropped.push(ItemEntity::new(
+    game.entities.dropped.push(ItemEntity::new(
         id,
         ItemStack::new("minecraft:stone", 1),
         Vec3::new(at[0], at[1] + 2.0, at[2]),
@@ -162,7 +162,7 @@ fn drop_item(game: &mut sunrise_gameplay::game::ServerGame<'_>, at: [f64; 3]) ->
 }
 
 fn item_y(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Option<f64> {
-    game.dropped
+    game.entities.dropped
         .iter()
         .find(|i| i.id == id)
         .map(|i| i.position.y)
@@ -424,7 +424,7 @@ fn an_item_falls_through_its_own_collider_and_a_stranger_lands_on_it() {
     with_world(|game| {
         // A holder that stays where it is, with the deck's top at y = 70, and a stranger over it.
         let fixed = drop_item(game, [1.5, 70.0, 1.5]);
-        game.dropped
+        game.entities.dropped
             .iter_mut()
             .find(|i| i.id == fixed)
             .unwrap()
@@ -539,7 +539,7 @@ fn two_hundred_items_over_a_capped_collider_rest_and_the_tick_is_timed() {
         let before = items(game);
         let open = time(game, 40, None);
         for id in &before {
-            game.dropped.retain(|i| i.id != *id);
+            game.entities.dropped.retain(|i| i.id != *id);
         }
         // A large collider: a 32 x 32 x 32 lump, its top at the holder's feet.
         let boxes = (0..SIDE * SIDE * SIDE)
@@ -567,9 +567,9 @@ fn two_hundred_items_over_a_capped_collider_rest_and_the_tick_is_timed() {
         let still = time(game, 40, None);
         assert_eq!(rests(game), 200);
         // The collider moves every tick: its placement is rebuilt each time.
-        let index = game.mobs.iter().position(|m| m.id == holder).unwrap();
+        let index = game.entities.mobs.iter().position(|m| m.id == holder).unwrap();
         let mut step = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
-            game.mobs.update(index, |m| m.position.x += 0.001);
+            game.entities.mobs.update(index, |m| m.position.x += 0.001);
         };
         let moving = time(game, 40, Some(&mut step));
         assert_eq!(rests(game), 200, "and they still rest on it while it moves");
@@ -579,7 +579,7 @@ fn two_hundred_items_over_a_capped_collider_rest_and_the_tick_is_timed() {
         let began = Instant::now();
         for _ in 0..40 {
             tick_level_moving(game, |g| {
-                g.mobs.update(index, |m| m.position.x += 0.05);
+                g.entities.mobs.update(index, |m| m.position.x += 0.05);
             });
         }
         let carried = began.elapsed().as_secs_f64() * 1000.0 / 40.0;
@@ -601,7 +601,7 @@ fn two_hundred_items_over_a_capped_collider_rest_and_the_tick_is_timed() {
 
 /// Where an item is.
 fn item_at(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Vec3 {
-    game.dropped
+    game.entities.dropped
         .iter()
         .find(|i| i.id == id)
         .map(|i| i.position)
@@ -612,7 +612,7 @@ fn item_at(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Vec3 {
 fn drop_dirt(game: &mut sunrise_gameplay::game::ServerGame<'_>, at: [f64; 3]) -> u32 {
     game.server.next_entity += 1;
     let id = game.server.next_entity;
-    game.dropped.push(ItemEntity::new(
+    game.entities.dropped.push(ItemEntity::new(
         id,
         ItemStack::new("minecraft:dirt", 1),
         Vec3::new(at[0], at[1] + 2.0, at[2]),
@@ -624,8 +624,8 @@ fn drop_dirt(game: &mut sunrise_gameplay::game::ServerGame<'_>, at: [f64; 3]) ->
 
 /// Moves the pig that holds a collider, as a mod's own tick would.
 fn shift_stand(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, by: Vec3) {
-    let index = game.mobs.iter().position(|m| m.id == id).expect("a pig");
-    game.mobs.update(index, |m| {
+    let index = game.entities.mobs.iter().position(|m| m.id == id).expect("a pig");
+    game.entities.mobs.update(index, |m| {
         m.position = Vec3::new(
             m.position.x + by.x,
             m.position.y + by.y,
@@ -795,7 +795,7 @@ fn a_carried_body_stops_at_a_wall_and_the_collider_goes_on() {
         assert!(at.x < 10.0, "never through the wall: {at:?}");
         assert!(at.x > 9.8, "carried up to it: {at:?}");
         let moved = game
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == holder)
             .unwrap()
@@ -944,15 +944,15 @@ fn a_carried_vehicle_takes_its_passengers_and_theirs_with_it() {
         let update = |game: &mut sunrise_gameplay::game::ServerGame<'_>,
                       id: u32,
                       f: &dyn Fn(&mut sunrise_sim::mobs::Mob)| {
-            let at = game.mobs.iter().position(|m| m.id == id).expect("a pig");
-            game.mobs.update(at, |m| f(m));
+            let at = game.entities.mobs.iter().position(|m| m.id == id).expect("a pig");
+            game.entities.mobs.update(at, |m| f(m));
         };
         update(game, vehicle, &|m| m.ground.on_ground = true);
         update(game, middle, &|m| m.extra.mount = Some(vehicle));
         update(game, top, &|m| m.extra.mount = Some(middle));
         game.position_riders();
         let position = |game: &sunrise_gameplay::game::ServerGame<'_>, id: u32| {
-            game.mobs
+            game.entities.mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| m.position)
@@ -985,7 +985,7 @@ fn the_level_records_its_colliders_as_each_tick_begins() {
         let (holder, holder_ref) = stand_with_id(game, [8.0, 70.0, 8.0]);
         holder_ref.set_collider(game, Some(deck())).unwrap();
         let x_of = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-            game.mobs
+            game.entities.mobs
                 .iter()
                 .find(|m| m.id == holder)
                 .map(|m| m.position.x)
@@ -1049,7 +1049,7 @@ fn a_body_standing_on_a_collider_turning_about_a_far_pivot_is_carried_along_the_
                     .unwrap();
             });
         }
-        let item = game.dropped.iter().find(|i| i.id == rider).unwrap();
+        let item = game.entities.dropped.iter().find(|i| i.id == rider).unwrap();
         let item_bounds = item.bounds();
         assert!(
             near(item.position, Vec3::new(8.0, 70.0, 7.5), 0.1),
@@ -1087,7 +1087,7 @@ fn a_tilting_collider_with_a_step_height_zero_body_does_not_embed_it() {
         let placed = game.placed_moving_colliders();
         let collider = &placed.placed().find(|p| p.id == holder).unwrap().collider;
         for id in [on_edge, at_pivot] {
-            let item = game.dropped.iter().find(|i| i.id == id).unwrap();
+            let item = game.entities.dropped.iter().find(|i| i.id == id).unwrap();
             assert!(
                 !collider.intersects(item.bounds()),
                 "step-height-0 item {id} must not be embedded: {:?}",
@@ -1130,14 +1130,14 @@ fn teleport_to_and_set_collider_pose_in_one_tick_sweep_and_carry_in_either_order
             // Bystander sitting in the swept volume of the shifting + turning deck (not on top).
             let bystander = game.server.next_entity + 1;
             game.server.next_entity = bystander;
-            game.dropped.push(ItemEntity::new(
+            game.entities.dropped.push(ItemEntity::new(
                 bystander,
                 ItemStack::new("minecraft:dirt", 1),
                 Vec3::new(5.6, 69.5, 4.8),
                 Vec3::ZERO,
                 0.0,
             ));
-            game.dropped
+            game.entities.dropped
                 .iter_mut()
                 .find(|i| i.id == bystander)
                 .unwrap()
@@ -1155,8 +1155,8 @@ fn teleport_to_and_set_collider_pose_in_one_tick_sweep_and_carry_in_either_order
 
             let placed = game.placed_moving_colliders();
             let collider = &placed.placed().find(|p| p.id == holder).unwrap().collider;
-            let after_rider = game.dropped.iter().find(|i| i.id == rider).unwrap();
-            let after_bystander = game.dropped.iter().find(|i| i.id == bystander).unwrap();
+            let after_rider = game.entities.dropped.iter().find(|i| i.id == rider).unwrap();
+            let after_bystander = game.entities.dropped.iter().find(|i| i.id == bystander).unwrap();
 
             // Expected rider contact position from the exact combined frame transform.
             let before_frame = sunrise_core::geometry::oriented::Frame::from_pose(

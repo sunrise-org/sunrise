@@ -366,7 +366,7 @@ fn a_players_move_by_stops_at_a_boat() {
             .unwrap();
         game.server.next_entity += 1;
         let id = game.server.next_entity;
-        game.boats
+        game.entities.boats
             .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                 id,
                 "oak".into(),
@@ -452,7 +452,7 @@ fn a_players_move_by_falls_through_a_happy_ghast_that_is_not_held_still() {
             .get("minecraft:happy_ghast")
             .unwrap()
             .clone();
-        game.mobs.push(Mob::new(id, kind, Vec3::new(x, y, z), 0.0));
+        game.entities.mobs.push(Mob::new(id, kind, Vec3::new(x, y, z), 0.0));
         let up = game
             .entity_move_by(b.entity(), [0.0, 6.0, 0.0], MoveCause::SelfMovement)
             .unwrap();
@@ -993,11 +993,11 @@ fn another_guests_live_merchant_session_is_visible_during_a_turn() {
         let mut live = offer("minecraft:coal", "minecraft:diamond");
         // Opening the screen recomputes the special price for this guest.
         live.special_price_diff = 0;
-        game.mobs[0].extra.trade = Some(Box::new(Trader {
+        game.entities.mobs[0].extra.trade = Some(Box::new(Trader {
             offers: vec![old],
             ..Trader::default()
         }));
-        game.mobs[0].extra.flag2 = true;
+        game.entities.mobs[0].extra.flag2 = true;
         let mut session = Session::new(vec![live.clone()], true);
         session.xp = 17;
         session.level = 2;
@@ -1040,7 +1040,7 @@ fn another_guest_follows_a_vehicle_teleported_during_a_turn() {
             .update_guest(13, |guest| guest.vehicle = Some(42))
             .unwrap();
         let horse = game.res.mob_types().get("minecraft:horse").unwrap().clone();
-        game.mobs
+        game.entities.mobs
             .push(Mob::new(42, horse, Vec3::new(3.0, 64.0, 5.0), 0.0));
         // Boarding publishes the seat back to the hub after positioning the body.
         game.guest_boarded(13, None);
@@ -1078,7 +1078,7 @@ fn a_mounted_guests_turn_publishes_its_teleport_without_dismounting() {
 
     with_guests(|game| {
         let horse = game.res.mob_types().get("minecraft:horse").unwrap().clone();
-        game.mobs
+        game.entities.mobs
             .push(Mob::new(42, horse, Vec3::new(3.0, 64.0, 5.0), 0.0));
         // Ordinary seating sends no teleport. A passenger transition does,
         // even to the same position; both carry the transition's relative axes.
@@ -1577,13 +1577,13 @@ fn a_vetoed_drop_gives_the_stack_back() {
         with_guests(|game| {
             let player = NativeServerGameExt1::player(game, 13).unwrap();
             let stone = ItemStack::new("minecraft:stone", 3);
-            let before = game.dropped.len();
+            let before = game.entities.dropped.len();
             assert_eq!(
                 player.drop_stack(game, stone.try_into_api().unwrap(), true),
                 Ok(Some(stone.try_into_api().unwrap())),
                 "a vetoed toss comes back whole"
             );
-            assert_eq!(game.dropped.len(), before, "and makes no item entity");
+            assert_eq!(game.entities.dropped.len(), before, "and makes no item entity");
             let empty = ItemStack::new("minecraft:stone", 0);
             assert_eq!(
                 game.player_drop_stack(player, empty.clone(), false),

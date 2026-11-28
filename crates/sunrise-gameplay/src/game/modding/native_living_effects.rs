@@ -91,7 +91,7 @@ impl ServerGame<'_> {
         };
         let Some(amplifier) = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|m| m.id == id && !m.removed)
             .and_then(|m| {
@@ -147,7 +147,7 @@ impl ServerGame<'_> {
             Some(Target::Mob(id)) => {
                 let held: Vec<(usize, i32)> = self
                     .common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .find(|m| m.id == id && !m.removed)
                     .map(|m| {

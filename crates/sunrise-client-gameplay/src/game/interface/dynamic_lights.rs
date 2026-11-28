@@ -73,7 +73,7 @@ impl ClientGame<'_> {
                 });
             let mobs = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .filter(|m| !m.removed)
                 .filter_map(move |m| {
@@ -94,7 +94,7 @@ impl ClientGame<'_> {
                         item,
                     ))
                 });
-            let dropped = self.common.dropped.iter().filter_map(move |dropped| {
+            let dropped = self.common.entities.dropped.iter().filter_map(move |dropped| {
                 let (level, item) = brighter(
                     lum,
                     [Some(&*dropped.stack.item), None],

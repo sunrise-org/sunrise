@@ -73,7 +73,7 @@ fn spawn_batches_refuse_saves_until_all_rows_are_published() {
             });
             assert_eq!(calls.load(Ordering::SeqCst), 2);
             assert_eq!(succeeded.load(Ordering::SeqCst), 0);
-            assert_eq!(game.mobs.len(), 2);
+            assert_eq!(game.entities.mobs.len(), 2);
             game.server.save.0.flush().unwrap();
             assert!(game.server.save.0.load_entities(0, 0).unwrap().is_empty());
             game.save_game().unwrap();

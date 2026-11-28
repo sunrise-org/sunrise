@@ -19,12 +19,12 @@ impl ServerGame<'_> {
     /// the world and is gone.
     pub fn boat_below_world(&mut self, i: usize) -> bool {
         if !below_world(
-            self.common.boats[i].position.y,
+            self.common.entities.boats[i].position.y,
             self.common.world.shape.min_y,
         ) {
             return false;
         }
-        self.kill_vehicle_object(crate::game::commands::Target::Boat(self.common.boats[i].id));
+        self.kill_vehicle_object(crate::game::commands::Target::Boat(self.common.entities.boats[i].id));
         true
     }
 
@@ -38,9 +38,9 @@ impl ServerGame<'_> {
         round: &TickRound,
         kind: &str,
     ) -> Option<usize> {
-        let i = cart_at(&self.common.carts, id, slot)?;
+        let i = cart_at(&self.common.entities.carts, id, slot)?;
         if !below_world(
-            self.common.carts[i].position.y,
+            self.common.entities.carts[i].position.y,
             self.common.world.shape.min_y,
         ) {
             return Some(i);

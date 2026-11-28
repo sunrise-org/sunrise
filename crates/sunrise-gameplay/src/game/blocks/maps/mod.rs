@@ -571,7 +571,7 @@ impl ServerGame<'_> {
         if now % 10 == 0 && host.hub.here(g) {
             let framed: Vec<(i32, Framed, bool)> = self
                 .common
-                .item_frames
+                .entities.item_frames
                 .iter()
                 // ServerEntity.sendChanges: only a framed MapItem (a filled
                 // map), not any stack that carries a map id.

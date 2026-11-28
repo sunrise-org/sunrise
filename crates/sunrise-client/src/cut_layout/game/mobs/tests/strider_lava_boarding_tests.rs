@@ -12,10 +12,10 @@ use sunrise_sim::mobs::Mob;
 fn scan_fluids(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
     let fluids = {
         let w = game.mob_world_base(&[]);
-        let m = &game.mobs[0];
+        let m = &game.entities.mobs[0];
         w.fluids(m.bounds(), m.eye_y())
     };
-    game.mobs[0].fluids = fluids;
+    game.entities.mobs[0].fluids = fluids;
 }
 
 #[test]
@@ -41,8 +41,8 @@ fn a_strider_with_its_eyes_in_lava_refuses_a_rider() {
         .clone();
     let mut strider = Mob::new(42, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
     strider.set_saddle(Some(ItemStack::new("minecraft:saddle", 1)));
-    game.mobs.clear();
-    game.mobs.push(strider);
+    game.entities.mobs.clear();
+    game.entities.mobs.push(strider);
     *game.held_mut() = None;
 
     // Lava over the strider's feet and its eye (y + 1.445, 0.85 of its 1.7).
@@ -50,8 +50,8 @@ fn a_strider_with_its_eyes_in_lava_refuses_a_rider() {
         game.world.set(0, y, 0, lava).unwrap();
     }
     scan_fluids(&mut game);
-    assert!(game.mobs[0].fluids.in_lava, "the strider stands in lava");
-    assert!(game.mobs[0].fluids.eye_in_lava, "its eye is in the lava");
+    assert!(game.entities.mobs[0].fluids.in_lava, "the strider stands in lava");
+    assert!(game.entities.mobs[0].fluids.eye_in_lava, "its eye is in the lava");
     assert!(
         game.interact_mount(0, ""),
         "Strider.mobInteract still consumes the click"
@@ -65,8 +65,8 @@ fn a_strider_with_its_eyes_in_lava_refuses_a_rider() {
     // the body in lava, is what closes the seat.
     game.world.set(0, 65, 0, air).unwrap();
     scan_fluids(&mut game);
-    assert!(game.mobs[0].fluids.in_lava);
-    assert!(!game.mobs[0].fluids.eye_in_lava);
+    assert!(game.entities.mobs[0].fluids.in_lava);
+    assert!(!game.entities.mobs[0].fluids.eye_in_lava);
     assert!(game.interact_mount(0, ""));
     assert_eq!(game.riding, Some(42));
 
@@ -76,8 +76,8 @@ fn a_strider_with_its_eyes_in_lava_refuses_a_rider() {
         game.world.set(0, y, 0, water).unwrap();
     }
     scan_fluids(&mut game);
-    assert!(game.mobs[0].fluids.eye_in_water);
-    assert!(!game.mobs[0].fluids.eye_in_lava);
+    assert!(game.entities.mobs[0].fluids.eye_in_water);
+    assert!(!game.entities.mobs[0].fluids.eye_in_lava);
     assert!(game.interact_mount(0, ""));
     assert_eq!(game.riding, Some(42));
 }

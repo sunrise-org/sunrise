@@ -430,45 +430,45 @@ impl crate::game::ServerGame<'_> {
     /// `Player.getVehicle().getBoundingBox()` for the local player's vehicle (`riding`).
     pub(in crate::game) fn riding_box(&self) -> Option<Aabb> {
         let id = self.common.riding?;
-        if let Some(m) = self.common.mobs.iter().find(|m| m.id == id) {
+        if let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) {
             return Some(m.bounds());
         }
-        if let Some(b) = self.common.boats.iter().find(|b| b.id == id) {
+        if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id) {
             return Some(b.bounds());
         }
-        if let Some(c) = self.common.carts.iter().find(|c| c.id == id) {
+        if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == id) {
             return Some(c.bounds());
         }
-        if let Some(a) = self.common.armor_stands.iter().find(|a| a.id == id) {
+        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
             return Some(a.bounds());
         }
-        if let Some(c) = self.common.cushions.iter().find(|c| c.id == id) {
+        if let Some(c) = self.common.entities.cushions.iter().find(|c| c.id == id) {
             return Some(Aabb::new(
                 Vec3::new(c.position.x - 0.5, c.position.y, c.position.z - 0.5),
                 Vec3::new(c.position.x + 0.5, c.position.y + 0.25, c.position.z + 0.5),
             ));
         }
-        if let Some(f) = self.common.item_frames.iter().find(|f| f.id == id) {
+        if let Some(f) = self.common.entities.item_frames.iter().find(|f| f.id == id) {
             let (lo, hi) = f.bounds();
             return Some(Aabb::new(
                 Vec3::new(lo[0], lo[1], lo[2]),
                 Vec3::new(hi[0], hi[1], hi[2]),
             ));
         }
-        if let Some(p) = self.common.paintings.iter().find(|p| p.id == id) {
+        if let Some(p) = self.common.entities.paintings.iter().find(|p| p.id == id) {
             let (lo, hi) = p.bounds();
             return Some(Aabb::new(
                 Vec3::new(lo[0], lo[1], lo[2]),
                 Vec3::new(hi[0], hi[1], hi[2]),
             ));
         }
-        if let Some(t) = self.common.tnts.iter().find(|t| t.id == id) {
+        if let Some(t) = self.common.entities.tnts.iter().find(|t| t.id == id) {
             return Some(t.bounds());
         }
-        if let Some(f) = self.common.falling.iter().find(|f| f.id == id) {
+        if let Some(f) = self.common.entities.falling.iter().find(|f| f.id == id) {
             return Some(f.bounds());
         }
-        if let Some(row) = self.common.resident_entities.general.row(id) {
+        if let Some(row) = self.common.entities.general.row(id) {
             return Some(entity::Entity::bounds(row));
         }
         self.tracked_special_box(id as i32)

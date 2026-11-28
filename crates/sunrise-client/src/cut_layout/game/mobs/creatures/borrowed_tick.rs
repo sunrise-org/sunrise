@@ -33,7 +33,7 @@ pub(crate) mod off_level_tests {
             let mut rider = Mob::new(72, skeleton, at, 0.0);
             rider.extra.mount = Some(71);
             rider.age = 19;
-            game.mobs.push(vehicle);
+            game.entities.mobs.push(vehicle);
             game.persist.off_level.insert(
                 72,
                 sunrise_gameplay_common::game::entity_memory::OffLevel::Mob(rider),
@@ -44,7 +44,7 @@ pub(crate) mod off_level_tests {
                 MOVE | JUMP | LOOK
             );
             assert_eq!(game.mob_object(72).unwrap().age, 19);
-            assert_eq!(game.mobs.len(), 1);
+            assert_eq!(game.entities.mobs.len(), 1);
         });
     }
 
@@ -69,7 +69,7 @@ pub(crate) mod off_level_tests {
                 72,
                 sunrise_gameplay_common::game::entity_memory::OffLevel::Mob(parent),
             );
-            game.mobs.push(child);
+            game.entities.mobs.push(child);
             game.tick_creature_entities().unwrap();
             let child = game.mob_object(73).unwrap();
             assert_eq!(child.age, 19);

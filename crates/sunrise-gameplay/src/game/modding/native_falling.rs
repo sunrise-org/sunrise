@@ -85,42 +85,42 @@ mod tests {
                 start_pos: BlockPos::new(4, 70, 0),
                 position: at,
                 previous: at,
-                ..game.falling[0].clone()
+                ..game.entities.falling[0].clone()
             };
-            game.falling.push(second);
-            let expected: Vec<_> = game.falling.iter().map(|f| (f.id, f.join)).collect();
+            game.entities.falling.push(second);
+            let expected: Vec<_> = game.entities.falling.iter().map(|f| (f.id, f.join)).collect();
             game.tick_one_falling(0, &[]).unwrap();
             assert_eq!(
-                game.falling
+                game.entities.falling
                     .iter()
                     .map(|f| (f.id, f.join))
                     .collect::<Vec<_>>(),
                 expected
             );
-            assert_eq!(game.falling[0].age, 1);
-            assert!(game.falling[0].position.y < 70.0);
+            assert_eq!(game.entities.falling[0].age, 1);
+            assert!(game.entities.falling[0].position.y < 70.0);
             game.tick_one_falling(1, &[]).unwrap();
             assert_eq!(
-                game.falling
+                game.entities.falling
                     .iter()
                     .map(|f| (f.id, f.join))
                     .collect::<Vec<_>>(),
                 expected
             );
-            assert_eq!([game.falling[0].age, game.falling[1].age], [1, 1]);
+            assert_eq!([game.entities.falling[0].age, game.entities.falling[1].age], [1, 1]);
             // A corrupt resident palette makes the real collision lookup fail.
             Arc::make_mut(game.world.chunks.get_mut(&(0, 0)).unwrap()).set(0, 69, 0, 65_535);
-            let position = game.falling[0].position;
+            let position = game.entities.falling[0].position;
             assert!(game.tick_one_falling(0, &[]).is_err());
             assert_eq!(
-                game.falling
+                game.entities.falling
                     .iter()
                     .map(|f| (f.id, f.join))
                     .collect::<Vec<_>>(),
                 expected
             );
-            assert_eq!(game.falling[0].position, position);
-            assert_eq!(game.falling[0].age, 1);
+            assert_eq!(game.entities.falling[0].position, position);
+            assert_eq!(game.entities.falling[0].age, 1);
         });
     }
 
@@ -137,14 +137,14 @@ mod tests {
                     sunrise_protocol::entity_data::Value::Pos([8, 90, -4]),
                 )],
             );
-            assert_eq!(game.falling[0].start_pos, BlockPos::new(8, 90, -4));
+            assert_eq!(game.entities.falling[0].start_pos, BlockPos::new(8, 90, -4));
             for age in 1..=3 {
-                let previous = game.falling[0].position;
+                let previous = game.entities.falling[0].position;
                 game.tick_remote_projectiles(|_, at| at);
-                assert_eq!(game.falling[0].age, age);
-                assert_eq!(game.falling[0].previous, previous);
-                assert!(game.falling[0].position.y < previous.y);
-                assert!(game.falling[0].velocity.y < 0.0);
+                assert_eq!(game.entities.falling[0].age, age);
+                assert_eq!(game.entities.falling[0].previous, previous);
+                assert!(game.entities.falling[0].position.y < previous.y);
+                assert!(game.entities.falling[0].velocity.y < 0.0);
             }
         });
     }
@@ -155,9 +155,9 @@ mod tests {
         bound_falling_server(|game, index| {
             let home = game.dim;
             game.tick_one_falling(0, &[]).unwrap();
-            let position = game.falling[0].position;
+            let position = game.entities.falling[0].position;
             game.enter_level(super::super::Dim::Nether).unwrap();
-            assert!(game.falling.is_empty());
+            assert!(game.entities.falling.is_empty());
             assert_eq!(
                 index
                     .lock()
@@ -167,10 +167,10 @@ mod tests {
                 1
             );
             game.enter_level(home).unwrap();
-            assert_eq!(game.falling.len(), 1);
-            assert_eq!(game.falling[0].id, 71);
-            assert_eq!(game.falling[0].age, 1);
-            assert_eq!(game.falling[0].position, position);
+            assert_eq!(game.entities.falling.len(), 1);
+            assert_eq!(game.entities.falling[0].id, 71);
+            assert_eq!(game.entities.falling[0].age, 1);
+            assert_eq!(game.entities.falling[0].position, position);
         });
     }
 
@@ -187,7 +187,7 @@ mod tests {
         let mut identities = SlotIdentities::default();
         LifecycleFixture {
             seed: |game, entries| {
-                game.falling.clear();
+                game.entities.falling.clear();
                 let state = game
                     .pack
                     .assets
@@ -196,7 +196,7 @@ mod tests {
                     .unwrap();
                 for &(id, at) in entries {
                     let pos = Vec3::new(at[0], at[1], at[2]);
-                    game.falling.push(FallingBlock {
+                    game.entities.falling.push(FallingBlock {
                         size_answer: None,
                         ground: Default::default(),
                         fire_ticks: 0,
@@ -226,7 +226,7 @@ mod tests {
                     });
                 }
             },
-            ids: |game| game.falling.iter().map(|f| f.id).collect(),
+            ids: |game| game.entities.falling.iter().map(|f| f.id).collect(),
             target: Target::Falling,
             unloads_with_chunk: true,
             remote: Some(RemoteLifecycle {
@@ -236,7 +236,7 @@ mod tests {
         }
         .run_with(|game| {
             identities.observe(
-                &mut game.falling,
+                &mut game.entities.falling,
                 game.native_lifecycle.epoch().unwrap(),
                 |f| f.id,
             );
@@ -261,7 +261,7 @@ mod tests {
             .default_state("minecraft:sand")
             .unwrap();
         let at = Vec3::new(0.5, 70.0, 0.5);
-        game.falling.push(FallingBlock {
+        game.entities.falling.push(FallingBlock {
             size_answer: None,
             ground: Default::default(),
             fire_ticks: 0,
@@ -285,12 +285,12 @@ mod tests {
             damage: Default::default(),
             saved: None,
         });
-        let id = game.falling[0].id;
+        let id = game.entities.falling[0].id;
         let holder = mod_api::EntityRef::new(game.native_lifecycle.epoch().unwrap(), id);
         let index = Arc::new(Mutex::new(AttachmentIndex::default()));
         let mut values = Attachments::default();
         VALUE.set(&mut values, Holder::Entity(id), 10).unwrap();
-        let original = game.falling.update(0, |f| {
+        let original = game.entities.falling.update(0, |f| {
             f.attachment_lifetime().bind(&mut values, &index, holder);
             f.attachment_lifetime().registration().unwrap()
         });
@@ -299,14 +299,14 @@ mod tests {
         assert_eq!(before.len(), 1);
         exercise(game, &index);
         let current = game
-            .falling
+            .entities.falling
             .update(0, |f| f.attachment_lifetime().registration().unwrap());
         assert!(original.same_registration(&current));
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
         assert_eq!(VALUE.get(&mut values, Holder::Entity(id)), Ok(10));
         // Exercise the production clear before any fixture cleanup can mask it.
         clear(game);
-        assert!(game.falling.is_empty());
+        assert!(game.entities.falling.is_empty());
         assert!(index.lock().unwrap().snapshot(&key).is_empty());
         assert_eq!(before[0].entry.read(&VALUE), Ok(&10));
     }
@@ -330,7 +330,7 @@ mod tests {
         ),
     ) {
         super::super::native_entity_refs::tests::with_game(|game| {
-            run_bound_falling(game, exercise, |game| game.falling.clear());
+            run_bound_falling(game, exercise, |game| game.entities.falling.clear());
         });
     }
 
@@ -413,7 +413,7 @@ mod tests {
                     );
                     assert_eq!(game.entity_position(thrown), Some([1.5, 70.0, 2.5]));
                     assert_eq!(game.entity_velocity(thrown), Some([0.5, 9.0, -9.0]));
-                    let block = game.falling.iter().find(|f| f.id == thrown.id()).unwrap();
+                    let block = game.entities.falling.iter().find(|f| f.id == thrown.id()).unwrap();
                     assert_eq!(block.state, sand);
                     assert_eq!(block.start_pos, BlockPos::new(1, 70, 2));
                     assert_eq!(block.velocity, Vec3::new(0.5, 9.0, -9.0));
@@ -434,7 +434,7 @@ mod tests {
                         .unwrap()
                         .unwrap();
                     let anvil_row = game
-                        .falling
+                        .entities.falling
                         .iter()
                         .find(|f| f.id == anvil_ref.id())
                         .unwrap();
@@ -455,13 +455,13 @@ mod tests {
                         .unwrap()
                         .unwrap();
                     let air_index = game
-                        .falling
+                        .entities.falling
                         .iter()
                         .position(|f| f.id == air_ref.id())
                         .unwrap();
-                    assert_eq!(game.falling[air_index].state, air);
+                    assert_eq!(game.entities.falling[air_index].state, air);
                     game.tick_one_falling(air_index, &[]).unwrap();
-                    assert!(!game.falling.iter().any(|f| f.id == air_ref.id()));
+                    assert!(!game.entities.falling.iter().any(|f| f.id == air_ref.id()));
 
                     // No 1,024 per-level quota.
                     for i in 0..1030 {
@@ -476,10 +476,10 @@ mod tests {
                             .unwrap();
                         assert!(spawned.is_some(), "falling block {i} should spawn");
                     }
-                    assert!(game.falling.len() >= 1030);
+                    assert!(game.entities.falling.len() >= 1030);
 
                     // Stale handles and non-finite coordinates or velocity leave no new entity.
-                    let count = game.falling.len();
+                    let count = game.entities.falling.len();
                     let stale = LevelRef::new(WorldEpoch::new(0), game.dim.key());
                     assert_eq!(
                         stale.spawn_falling_block(
@@ -503,7 +503,7 @@ mod tests {
                             "pos={pos:?} vel={vel:?}"
                         );
                     }
-                    assert_eq!(game.falling.len(), count);
+                    assert_eq!(game.entities.falling.len(), count);
                 });
                 // Client side refuses statically: ClientGame has no level_spawn_falling_block.
             },
@@ -589,7 +589,7 @@ mod tests {
                     );
                     game.begin_ordered_ticks();
                     game.run_ordered_ticks(JoinSeq::MAX, true).unwrap();
-                    let row = game.falling.iter().find(|f| f.id == hidden.id()).unwrap();
+                    let row = game.entities.falling.iter().find(|f| f.id == hidden.id()).unwrap();
                     assert_eq!(
                         row.age, 0,
                         "an admitted entity in a non-ticking section does not tick"
@@ -747,7 +747,7 @@ mod tests {
                         .unwrap();
                     game.save_entities(true).unwrap();
                     assert_eq!(
-                        game.mobs.len(),
+                        game.entities.mobs.len(),
                         1,
                         "saving admitted the prior section records"
                     );
@@ -787,9 +787,9 @@ mod tests {
                     }
                     game.spawn_loaded_entities();
                     game.native_removals_flush();
-                    assert_eq!(game.falling.len(), 1);
+                    assert_eq!(game.entities.falling.len(), 1);
                     assert_eq!(game.entity_position(hidden), Some(moved_pos));
-                    assert_eq!(game.mobs.len(), 1);
+                    assert_eq!(game.entities.mobs.len(), 1);
                 });
 
                 // Reopen and admit the old columns first: neither may resurrect a fall.
@@ -806,10 +806,10 @@ mod tests {
                         game.world.queue_entity_nbt(key, tags);
                     }
                     game.spawn_loaded_entities();
-                    assert_eq!(game.mobs.len(), 1);
-                    let mob_id = game.mobs[0].id;
+                    assert_eq!(game.entities.mobs.len(), 1);
+                    let mob_id = game.entities.mobs[0].id;
                     assert_eq!(game.uuid_for(mob_id), existing_uuid);
-                    assert_eq!(game.falling.len(), 1);
+                    assert_eq!(game.entities.falling.len(), 1);
                     let sand = game
                         .pack
                         .assets
@@ -817,7 +817,7 @@ mod tests {
                         .default_state("minecraft:sand")
                         .unwrap();
                     let restored_id = {
-                        let restored = &game.falling[0];
+                        let restored = &game.entities.falling[0];
                         assert_eq!(restored.state, sand);
                         assert_eq!(
                             [
@@ -913,10 +913,10 @@ mod tests {
                             .unwrap()
                             .unwrap();
                         assert!(first.discard(game));
-                        // Deferred removal keeps the row in `self.falling` until the
+                        // Deferred removal keeps the row in `self.entities.falling` until the
                         // sweep; a join flush or another spawn before that sweep must
                         // never re-announce the discarded entity.
-                        assert!(game.falling.iter().any(|f| f.id == first.id()));
+                        assert!(game.entities.falling.iter().any(|f| f.id == first.id()));
                         game.native_joins_flush(false, 0);
                         let second = level
                             .spawn_falling_block(
@@ -934,8 +934,8 @@ mod tests {
 
                         assert_eq!(*joins.lock().unwrap(), vec![first.id(), second.id()]);
                         assert_eq!(*leaves.lock().unwrap(), vec![first.id()]);
-                        assert_eq!(game.falling.len(), 1);
-                        assert_eq!(game.falling[0].id, second.id());
+                        assert_eq!(game.entities.falling.len(), 1);
+                        assert_eq!(game.entities.falling[0].id, second.id());
                     });
                 });
             },
@@ -986,13 +986,13 @@ mod tests {
                                 .unwrap()
                                 .unwrap();
                             assert_eq!(game.dim, Dim::Nether);
-                            assert!(game.falling.is_empty());
+                            assert!(game.entities.falling.is_empty());
                             assert!(heard.lock().unwrap().is_empty());
                             game.enter_level(home).unwrap();
                             assert_eq!(game.entity_position(pending), Some(at));
                             ((), false)
                         });
-                        assert!(game.falling.is_empty());
+                        assert!(game.entities.falling.is_empty());
 
                         game.enter_level(Dim::Nether).unwrap();
                         let joined = game.storage_scope(|game, _| {
@@ -1001,13 +1001,13 @@ mod tests {
                                 .unwrap()
                                 .unwrap();
                             assert_eq!(game.dim, Dim::Nether);
-                            assert!(game.falling.is_empty());
+                            assert!(game.entities.falling.is_empty());
                             assert_eq!(*heard.lock().unwrap(), [home.id()]);
                             (joined, false)
                         });
                         game.enter_level(home).unwrap();
                         assert_eq!(game.entity_position(joined), Some(at));
-                        assert_eq!(game.falling.len(), 1);
+                        assert_eq!(game.entities.falling.len(), 1);
                     });
                 });
             },
@@ -1198,7 +1198,7 @@ mod tests {
                         assert_eq!(game.world.block(FIRST.x, FIRST.y, FIRST.z), air);
                         assert_eq!(game.world.block(SECOND.x, SECOND.y, SECOND.z), sand);
                         assert_eq!(game.world.block(SECOND.x, SECOND.y - 1, SECOND.z), stone);
-                        assert!(game.falling.is_empty());
+                        assert!(game.entities.falling.is_empty());
                         game.native_joins_flush(false, 0);
                         assert_eq!(*joins.lock().unwrap(), [[1.5, 70.0, 1.5]]);
                     });
@@ -1266,7 +1266,7 @@ mod tests {
                         let item = sunrise_items::items::ItemStack::new("minecraft:dirt", 1);
                         let tossed = game.toss_item(item, [0.5, 70.0, 0.5], [0.0; 3], None);
                         assert!(tossed.is_some());
-                        assert!(game.falling.is_empty());
+                        assert!(game.entities.falling.is_empty());
                         game.native_joins_flush(false, 0);
                         assert_eq!(
                             *order.lock().unwrap(),
@@ -1360,7 +1360,7 @@ mod tests {
                             )
                             .unwrap()
                             .unwrap();
-                        assert!(game.falling.iter().any(|f| f.id == kept.id()));
+                        assert!(game.entities.falling.iter().any(|f| f.id == kept.id()));
                         game.native_joins_flush(false, 0);
                         assert_eq!(
                             *heard.lock().unwrap(),
@@ -1373,7 +1373,7 @@ mod tests {
 
                         // Cancelled join removes the falling block and returns Ok(None).
                         cancel.store(true, Ordering::Relaxed);
-                        let count = game.falling.len();
+                        let count = game.entities.falling.len();
                         assert_eq!(
                             game.level_spawn_falling_block(
                                 level,
@@ -1384,7 +1384,7 @@ mod tests {
                             ),
                             Ok(None)
                         );
-                        assert_eq!(game.falling.len(), count);
+                        assert_eq!(game.entities.falling.len(), count);
                         assert_eq!(
                             *heard.lock().unwrap(),
                             [
@@ -1407,14 +1407,14 @@ mod tests {
                                 )
                                 .unwrap()
                                 .unwrap();
-                            assert!(game.falling.iter().any(|f| f.id == aborted.id()));
+                            assert!(game.entities.falling.iter().any(|f| f.id == aborted.id()));
                             assert_eq!(
                                 *heard.lock().unwrap(),
                                 ["construct minecraft:falling_block"]
                             );
                             (aborted, false)
                         });
-                        assert!(!game.falling.iter().any(|f| f.id == aborted.id()));
+                        assert!(!game.entities.falling.iter().any(|f| f.id == aborted.id()));
                         assert_eq!(
                             *heard.lock().unwrap(),
                             ["construct minecraft:falling_block"]
@@ -1439,7 +1439,7 @@ mod tests {
                             );
                             (committed, true)
                         });
-                        assert!(game.falling.iter().any(|f| f.id == committed.id()));
+                        assert!(game.entities.falling.iter().any(|f| f.id == committed.id()));
                         assert_eq!(
                             *heard.lock().unwrap(),
                             [

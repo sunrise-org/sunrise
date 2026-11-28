@@ -128,7 +128,7 @@ pub(crate) mod tests {
             // play_bound_sound: players in range get a SoundEntity packet.
             fixture_resident_column(&mut game.world, (0, 0));
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-            game.mobs
+            game.entities.mobs
                 .push(Mob::new(40, kind, Vec3::new(2.0, 64.0, 2.0), 0.0));
             let cow = game.entity(40).unwrap();
             assert!(game.entity_play_bound_sound(cow, sound, SoundSource::Neutral, 1.0, 1.0));

@@ -16,7 +16,7 @@ pub(in crate::game) mod tests {
             let mut stand =
                 sunrise_sim::entities::ArmorStand::new(40, sunrise_core::geometry::Vec3::ZERO, 0.0);
             stand.first_tick = false;
-            game.armor_stands.push(stand);
+            game.entities.armor_stands.push(stand);
             game.start_audio_capture();
             let items = game
                 .entity(40)
@@ -34,7 +34,7 @@ pub(in crate::game) mod tests {
                 Err::<(), ()>(())
             });
             assert_eq!(result, Err(()));
-            assert!(game.armor_stands[0].equipment.get(4).is_none());
+            assert!(game.entities.armor_stands[0].equipment.get(4).is_none());
             assert!(
                 game.server.pending_sounds.is_empty(),
                 "aborted stand equip emitted sound"
@@ -51,7 +51,7 @@ pub(in crate::game) mod tests {
                 Err::<(), ()>(())
             });
             assert_eq!(result, Err(()));
-            assert!(game.armor_stands[0].equipment.get(4).is_none());
+            assert!(game.entities.armor_stands[0].equipment.get(4).is_none());
             assert!(game.server.pending_sounds.is_empty());
             assert!(super::super::dispense_fixture::stop_recording().is_empty());
 
@@ -73,7 +73,7 @@ pub(in crate::game) mod tests {
                 Ok::<(), ()>(())
             });
             assert_eq!(result, Ok(()));
-            assert_eq!(game.armor_stands[0].equipment.get(4).unwrap().count, 1);
+            assert_eq!(game.entities.armor_stands[0].equipment.get(4).unwrap().count, 1);
             assert_eq!(game.server.pending_sounds.len(), 1);
             let events = super::super::dispense_fixture::stop_recording();
             assert_eq!(events.len(), 1, "only one event at root commit: {events:?}");

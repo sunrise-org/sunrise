@@ -54,7 +54,7 @@ impl crate::game::ServerGame<'_> {
         }
         let is_brain = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .find(|mob| mob.id == id)
             .is_some_and(|mob| sunrise_sim::mobs::ai::brain_target(mob).is_some());
@@ -110,7 +110,7 @@ impl crate::game::ServerGame<'_> {
                 }
             }
         }
-        let Some(mob) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(mob) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return false;
         };
         if !is_brain || !sunrise_sim::mobs::ai::set_brain_target(mob, chosen, player_id) {
@@ -173,7 +173,7 @@ impl crate::game::ServerGame<'_> {
         let key = (at[0], at[1], at[2]);
         if !self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .any(|m| m.id == mob && m.alive() && !m.removed)
         {
@@ -192,15 +192,15 @@ impl crate::game::ServerGame<'_> {
         self.break_leash(mob, true, false);
         let Some(i) = self
             .common
-            .mobs
+            .entities.mobs
             .iter()
             .position(|m| m.id == mob && !m.removed)
         else {
             return;
         };
         let tag = self.mob_own_nbt(i);
-        let flower = bee::get(&self.common.mobs[i]).and_then(|b| b.flower);
-        let kind = self.common.mobs[i].kind.id.clone();
+        let flower = bee::get(&self.common.entities.mobs[i]).and_then(|b| b.flower);
+        let kind = self.common.entities.mobs[i].kind.id.clone();
         let Some((lease, BlockEntity::Beehive(mut hive))) =
             self.common.world.block_entities.take(&key)
         else {
@@ -270,14 +270,14 @@ impl crate::game::ServerGame<'_> {
         if let Some(p) = self.player_view().map(|p| p.position) {
             let ids: Vec<u32> = self
                 .common
-                .mobs
+                .entities.mobs
                 .iter()
                 .filter(|m| released.contains(&m.id) && m.distance_sqr(p) <= 16.0)
                 .map(|m| m.id)
                 .collect();
             for id in ids {
                 if sedated {
-                    if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+                    if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
                         bee::set_stay_out_of_hive_countdown(m);
                     }
                 } else {
@@ -389,7 +389,7 @@ impl crate::game::ServerGame<'_> {
             if let Some(p) = self.player_view().map(|p| p.position) {
                 let ids: Vec<u32> = self
                     .common
-                    .mobs
+                    .entities.mobs
                     .iter()
                     .filter(|m| released.contains(&m.id) && m.distance_sqr(p) <= 16.0)
                     .map(|m| m.id)
@@ -433,15 +433,15 @@ impl crate::game::ServerGame<'_> {
         if players.is_empty() {
             return;
         }
-        let mut bees: Vec<usize> = (0..self.common.mobs.len())
+        let mut bees: Vec<usize> = (0..self.common.entities.mobs.len())
             .filter(|&i| {
-                let m = &self.common.mobs[i];
+                let m = &self.common.entities.mobs[i];
                 m.species() == sunrise_sim::mobs::Species::Bee
                     && !m.removed
                     && m.bounds().intersects(area)
             })
             .collect();
-        bees.retain(|&i| self.common.mobs[i].ai.target.is_none());
+        bees.retain(|&i| self.common.entities.mobs[i].ai.target.is_none());
         for i in bees {
             // Util.getRandom over the players.
             let pick = self
@@ -450,7 +450,7 @@ impl crate::game::ServerGame<'_> {
                 .random
                 .next_int_bound(players.len() as i32)
                 .unwrap_or(0) as usize;
-            self.set_event_ai_target(self.common.mobs[i].id, Some(Who::Player), players[pick]);
+            self.set_event_ai_target(self.common.entities.mobs[i].id, Some(Who::Player), players[pick]);
         }
     }
 }

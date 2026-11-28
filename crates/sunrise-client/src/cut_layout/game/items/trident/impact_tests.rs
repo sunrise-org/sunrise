@@ -22,7 +22,7 @@ pub(crate) fn aim_trident_at_wall(
     t.owner = 7;
     t.left_owner = true;
     t.has_been_shot = false;
-    game.tridents.push(t);
+    game.entities.tridents.push(t);
     game.native_joins_skip();
     game.entity(71).unwrap()
 }
@@ -45,17 +45,17 @@ fn an_already_discarded_trident_is_not_ticked_before_sweep() {
         let actor = &mut *scope.game;
         assert!(actor.entity_discard(handle));
         assert!(actor.entity(71).is_none());
-        let (age, at) = (actor.tridents[0].age, actor.tridents[0].position);
+        let (age, at) = (actor.entities.tridents[0].age, actor.entities.tridents[0].position);
         actor.tick_tridents();
         assert_eq!(
-            (actor.tridents[0].age, actor.tridents[0].position),
+            (actor.entities.tridents[0].age, actor.entities.tridents[0].position),
             (age, at)
         );
         assert!(observed.hits.lock().unwrap().is_empty());
         assert_eq!(observed.lands.load(Ordering::Relaxed), 0);
         scope.close(true);
         game.native_removals_flush();
-        assert!(game.tridents.is_empty());
+        assert!(game.entities.tridents.is_empty());
         assert_eq!(*observed.leaves.lock().unwrap(), [71]);
     });
 }

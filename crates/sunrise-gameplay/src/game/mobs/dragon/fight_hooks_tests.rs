@@ -100,7 +100,7 @@ fn the_end_fight_hooks_cancel_answer_and_hear_the_fight() {
             }
             assert_eq!(log.lock().unwrap().ticks, 20);
             assert!(
-                game.common.dragon.is_none(),
+                game.common.entities.dragon.is_none(),
                 "a canceled fight makes no dragon"
             );
             // `updatePlayers` every 20 ticks, then `findOrCreateDragon`.
@@ -108,7 +108,7 @@ fn the_end_fight_hooks_cancel_answer_and_hear_the_fight() {
             for _ in 0..20 {
                 game.tick_fight();
             }
-            assert!(game.common.dragon.is_some(), "the fight made its dragon");
+            assert!(game.common.entities.dragon.is_some(), "the fight made its dragon");
             let fight = level.dragon_fight(game).unwrap();
             assert!(!fight.won && !fight.previously_won);
             assert_eq!(fight.respawn_stage, None);
@@ -161,7 +161,7 @@ fn the_end_fight_hooks_cancel_answer_and_hear_the_fight() {
                     f64::from(origin[2] + dz * 3) + 0.5,
                 );
                 game.common
-                    .crystals
+                    .entities.crystals
                     .push(Crystal::new(game.server.next_entity, at, false, 0));
             }
             assert!(level.dragon_fight_try_respawn(game));
@@ -189,7 +189,7 @@ fn the_end_fight_hooks_cancel_answer_and_hear_the_fight() {
             game.server.next_entity += 1;
             let stray = game.server.next_entity;
             game.common
-                .crystals
+                .entities.crystals
                 .push(Crystal::new(stray, Vec3::new(0.5, 64.0, 0.5), false, 0));
             game.kill_crystal(stray);
             assert_eq!(log.lock().unwrap().crystals.len(), 1);

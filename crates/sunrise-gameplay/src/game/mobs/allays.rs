@@ -31,7 +31,7 @@ impl crate::game::ServerGame<'_> {
         index: usize,
         item: Option<&ItemStack>,
     ) -> bool {
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         if m.species() != Species::Allay || !m.alive() {
             return false;
         }
@@ -44,14 +44,14 @@ impl crate::game::ServerGame<'_> {
         });
         if m.extra.flag && shard && m.extra.egg_time == 0 {
             let pos = at;
-            self.common.mobs[index].extra.egg_time = 6000;
+            self.common.entities.mobs[index].extra.egg_time = 6000;
             if let Some(id) = self.spawn_mob_raw("minecraft:allay", pos, true)
-                && let Some(c) = self.common.mobs.iter_mut().find(|m| m.id == id)
+                && let Some(c) = self.common.entities.mobs.iter_mut().find(|m| m.id == id)
             {
                 c.extra.egg_time = 6000;
             }
             // Allay.duplicateAllay: entity event 18, three spawnHeartParticle.
-            let id = self.common.mobs[index].id;
+            let id = self.common.entities.mobs[index].id;
             self.mob_event_particles(id, 18);
             self.play_allay_sound("minecraft:block.amethyst_block.chime", at, id);
             self.consume_held();
@@ -60,7 +60,7 @@ impl crate::game::ServerGame<'_> {
         let acting = self.acting_uuid();
         let holds = m.extra.main_hand_id().is_some();
         if !holds && let Some(mut given) = item.cloned() {
-            let m = &mut self.common.mobs[index];
+            let m = &mut self.common.entities.mobs[index];
             // `Allay.mobInteract` hands over one item, its components and all.
             given.count = 1;
             m.extra.set_main_hand_stack(Some(given));
@@ -74,7 +74,7 @@ impl crate::game::ServerGame<'_> {
         }
         // Allay.mobInteract takes the item back only through an empty main hand.
         if holds && item.is_none() && self.common.hand == Hand::Main {
-            let m = &mut self.common.mobs[index];
+            let m = &mut self.common.entities.mobs[index];
             // The hand's stack keeps the components (a potion) the items came with.
             let held = m
                 .extra
@@ -88,7 +88,7 @@ impl crate::game::ServerGame<'_> {
             self.play_allay_sound("minecraft:entity.allay.item_taken", at, id);
 
             // Allay.mobInteract ends with swing(MAIN_HAND, ...).
-            self.common.mobs[index].swing();
+            self.common.entities.mobs[index].swing();
             if let Some(stack) = carried {
                 self.spawn_item(stack, at, [0.0, 0.2, 0.0], 40);
             }
@@ -153,8 +153,8 @@ impl AllayLevel for ServerGame<'_> {
     fn with_sight_view<R>(&self, scan: impl FnOnce(SightView<'_>) -> R) -> R {
         let w = self.mob_world_base(&[]);
         scan(SightView {
-            mobs: &self.common.mobs,
-            dropped: &self.common.dropped,
+            mobs: &self.common.entities.mobs,
+            dropped: &self.common.entities.dropped,
             line_of_sight: &|from_eye, to| w.line_of_sight(from_eye, to),
         })
     }
