@@ -1012,6 +1012,14 @@ mod tests {
         dir
     }
 
+    /// The launcher's Clear action deletes the rebuildable cache files by name, this one among
+    /// them. Changing `FILE_NAME` (with a `VERSION` bump) needs the launcher updated in step, or
+    /// Clear leaves the new file behind (#6638).
+    #[test]
+    fn the_behaviours_cache_keeps_the_file_name_the_launcher_clears() {
+        assert_eq!(FILE_NAME, "behaviours-v8.bin");
+    }
+
     /// The key is the format version and the resource bytes: no resources needed.
     #[test]
     fn key_follows_the_format_version_and_the_resource_bytes() {
