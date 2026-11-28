@@ -1847,26 +1847,13 @@ impl<'a> ServerGame<'a> {
         // A scoped hook on this thread asks this game's parts.
         mod_api::__private::mark_game_thread();
         let root = options.resources.clone();
-        let role = options.execution_role;
-        let loop_side = role.loop_side();
-        let item_data = res.core.item_data.context();
         let inventory = sunrise_mod_package::enabled::EnabledMods::read(&root)?;
-        let server_owners: std::collections::BTreeSet<_> = inventory.server_ids().collect();
-        let loop_context = if item_data.origin() == role.data_load_origin() {
-            item_data.captured_loop_context(loop_side)
-        } else {
-            let registered =
-                sunrise_gameplay_common::game::native_hooks::mod_settings::registered_setting_keys(
-                )
-                .filter(|(owner, _)| server_owners.contains(owner));
-            item_data.loop_context_with_registered(loop_side, [], registered)
-        };
-        let _ = options
-            .mods
-            .settings
-            .lock()
-            .unwrap_or_else(std::sync::PoisonError::into_inner)
-            .sync_from_loop_context(&loop_context, |owner| server_owners.contains(owner));
+        sync_server_construct_settings(
+            &inventory,
+            res.core.item_data.context(),
+            options.execution_role,
+            &options.mods.settings,
+        );
         let registry = pack.assets.registry;
         let level = Level::default();
         let save = Arc::new(SaveDir::new(
@@ -1952,5 +1939,142 @@ impl<'a> ServerGame<'a> {
         };
         game.reset_entity_residency();
         game
+    }
+}
+
+fn sync_server_construct_settings(
+    inventory: &sunrise_mod_package::enabled::EnabledMods,
+    item_data: &sunrise_world::native_load_context::LoadContext,
+    role: sunrise_gameplay_common::execution_role::ExecutionRole,
+    settings: &std::sync::Mutex<
+        sunrise_gameplay_common::game::native_hooks::mod_settings::NativeSettings,
+    >,
+) {
+    let loop_side = role.loop_side();
+    let server_owners: std::collections::BTreeSet<_> = inventory.server_ids().collect();
+    let loop_context = if item_data.origin() == role.data_load_origin() {
+        item_data.captured_loop_context(loop_side)
+    } else {
+        let registered =
+            sunrise_gameplay_common::game::native_hooks::mod_settings::registered_setting_keys()
+                .filter(|(owner, _)| server_owners.contains(owner));
+        item_data.loop_context_with_registered(loop_side, [], registered)
+    };
+    let _ = settings
+        .lock()
+        .unwrap_or_else(std::sync::PoisonError::into_inner)
+        .sync_from_loop_context(&loop_context, |owner| server_owners.contains(owner));
+}
+
+#[cfg(test)]
+mod construct_settings_tests {
+    use super::sync_server_construct_settings;
+    use mod_api::{
+        Hooks, ModEntry, Registrar, RegistrationContext, SettingSpec, SettingValue, Side,
+    };
+    use std::collections::BTreeMap;
+    use std::fs;
+    use std::sync::{Arc, Mutex};
+    use sunrise_gameplay_common::execution_role::ExecutionRole;
+    use sunrise_gameplay_common::game::native_hooks::mod_settings::{
+        NativeSettings, registered_setting_keys,
+    };
+    use sunrise_mod_package::enabled::EnabledMods;
+    use sunrise_world::native_load_context::{DataLoadOrigin, LoadContext, LoadInputs, LoopSide};
+
+    struct FlagMod;
+
+    #[mod_api::__subscriptions]
+    impl Hooks for FlagMod {
+        fn register(&self, r: &mut dyn Registrar, _: &RegistrationContext) {
+            r.register_setting(SettingSpec::toggle("flag", "test.flag", false))
+                .unwrap();
+        }
+    }
+
+    #[test]
+    fn server_construct_settings_uses_one_inventory_for_cross_and_matching_origin() {
+        let dir = tempfile::tempdir().unwrap();
+        let settings_root = dir.path().join("settings");
+        for owner in ["srv", "both", "cli"] {
+            fs::create_dir_all(settings_root.join(owner)).unwrap();
+            fs::write(settings_root.join(owner).join("flag"), "true").unwrap();
+        }
+
+        let inventory = EnabledMods::new([
+            ("srv".into(), Side::Server),
+            ("both".into(), Side::Both),
+            ("cli".into(), Side::Client),
+        ]);
+        let mods: mod_api::Mods = vec![
+            ModEntry::new("srv", Box::new(FlagMod)),
+            ModEntry::new("both", Box::new(FlagMod)),
+            ModEntry::new("cli", Box::new(FlagMod)),
+        ]
+        .into();
+
+        mod_platform::testing::with_mods(mods.clone(), || {
+            mod_platform::__private::part_tests::install_parts_fixture(&mods).unwrap();
+            let srv_spec = mod_api::__private::setting("srv", "flag").unwrap();
+            let both_spec = mod_api::__private::setting("both", "flag").unwrap();
+            let cli_spec = mod_api::__private::setting("cli", "flag").unwrap();
+
+            // Cross-origin capture (ClientPreload -> IntegratedServer): server-visible owners
+            // capture and sync from the single inventory while client-only live state stays intact.
+            let client_load = LoadContext::new_with_registered(
+                DataLoadOrigin::ClientPreload,
+                Arc::new(LoadInputs::new(BTreeMap::new(), settings_root.clone())),
+                ["cli"],
+                registered_setting_keys().filter(|(owner, _)| *owner == "cli"),
+            );
+            let cross_settings = Mutex::new(NativeSettings::default());
+            cross_settings.lock().unwrap().sync_from_loop_context(
+                &client_load.captured_loop_context(LoopSide::Client),
+                |owner| owner == "cli",
+            );
+            fs::write(settings_root.join("cli/flag"), "false").unwrap();
+
+            sync_server_construct_settings(
+                &inventory,
+                &client_load,
+                ExecutionRole::IntegratedServer,
+                &cross_settings,
+            );
+            {
+                let guard = cross_settings.lock().unwrap();
+                assert_eq!(guard.value("srv", srv_spec), SettingValue::Toggle(true));
+                assert_eq!(guard.value("both", both_spec), SettingValue::Toggle(true));
+                assert_eq!(guard.value("cli", cli_spec), SettingValue::Toggle(true));
+            }
+
+            // Matching-origin capture (ServerDataLoad -> DedicatedServer): reuses the load's
+            // already-captured snapshot for server-visible owners and leaves client-only owners alone.
+            let matching_settings = Mutex::new(NativeSettings::default());
+            matching_settings.lock().unwrap().sync_from_loop_context(
+                &client_load.captured_loop_context(LoopSide::Client),
+                |owner| owner == "cli",
+            );
+            let server_load = LoadContext::new_with_registered(
+                DataLoadOrigin::ServerDataLoad,
+                Arc::new(LoadInputs::new(BTreeMap::new(), settings_root.clone())),
+                ["srv", "both"],
+                registered_setting_keys().filter(|(owner, _)| *owner != "cli"),
+            );
+            fs::write(settings_root.join("srv/flag"), "false").unwrap();
+            fs::write(settings_root.join("both/flag"), "false").unwrap();
+
+            sync_server_construct_settings(
+                &inventory,
+                &server_load,
+                ExecutionRole::DedicatedServer,
+                &matching_settings,
+            );
+            {
+                let guard = matching_settings.lock().unwrap();
+                assert_eq!(guard.value("srv", srv_spec), SettingValue::Toggle(true));
+                assert_eq!(guard.value("both", both_spec), SettingValue::Toggle(true));
+                assert_eq!(guard.value("cli", cli_spec), SettingValue::Toggle(true));
+            }
+        });
     }
 }
