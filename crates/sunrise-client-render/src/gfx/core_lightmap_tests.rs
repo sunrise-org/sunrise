@@ -350,11 +350,9 @@ fn vanillas_lightmap_shaders_draw_vanillas_light_texture() {
         return;
     };
     if !stores_the_nearest_byte(&device, &queue) {
-        assert!(
-            !crate::gfx::test_gpu::require_adapter(),
-            "the required adapter does not store a unorm byte as the nearest one"
+        crate::gfx::test_gpu::skip_or_fail(
+            "this adapter does not store a unorm byte as the nearest one",
         );
-        eprintln!("skipped: this adapter does not store a unorm byte as the nearest one");
         return;
     }
     let mut core = CoreLightmap::new(&device, &program, &[]).expect("the lightmap pipeline");

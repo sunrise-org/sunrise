@@ -1505,6 +1505,9 @@ mod tests {
         let needed =
             wgpu::Features::TIMESTAMP_QUERY | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES;
         if !adapter.features().contains(needed) {
+            crate::test_gpu::skip_or_fail(
+                "pass timing fixture needs timestamp queries inside passes",
+            );
             return None;
         }
         eprintln!("pass parts on {}", adapter.get_info().name);
@@ -1597,7 +1600,6 @@ mod tests {
     fn the_heavy_part_of_a_pass_has_the_largest_time() {
         let _gpu = crate::test_gpu::lock();
         let Some((device, queue)) = device() else {
-            eprintln!("no GPU with timestamps inside passes: skipped");
             return;
         };
         for mode in [None, Some(PartsMode::SeparatePasses)] {
@@ -1630,6 +1632,9 @@ mod tests {
         if adapter.get_info().backend != wgpu::Backend::Vulkan
             || !adapter.features().contains(needed)
         {
+            crate::test_gpu::skip_or_fail(
+                "pipeline statistics fixture needs Vulkan with timestamp queries, pipeline statistics and early depth testing",
+            );
             return None;
         }
         eprintln!("pass counters on {}", adapter.get_info().name);
@@ -1785,7 +1790,6 @@ mod tests {
     fn counters_see_the_overdraw_that_draw_order_makes() {
         let _gpu = crate::test_gpu::lock();
         let Some((device, queue)) = stats_device() else {
-            eprintln!("no GPU with pipeline statistics: skipped");
             return;
         };
         device.on_uncaptured_error(std::sync::Arc::new(|e| panic!("{e}")));
@@ -1884,7 +1888,9 @@ mod tests {
             | wgpu::Features::TIMESTAMP_QUERY_INSIDE_PASSES
             | wgpu::Features::SHADER_EARLY_DEPTH_TEST;
         if !adapter.features().contains(needed) {
-            eprintln!("no GPU with timestamps inside passes: skipped");
+            crate::test_gpu::skip_or_fail(
+                "render-stage timing fixture needs timestamp queries inside passes and early depth testing",
+            );
             return;
         }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {

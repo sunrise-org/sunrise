@@ -241,7 +241,9 @@ fn hdr10s_dither_keeps_both_ends_exact_and_leans_to_them_in_their_last_code() {
     };
     // Software adapters need not preserve the sub-code precision this dither check measures.
     if gpu.0.adapter_info().device_type == wgpu::DeviceType::Cpu {
-        eprintln!("skipped: software adapter");
+        crate::gfx::test_gpu::skip_or_fail(
+            "HDR10 dither precision test requires a hardware adapter",
+        );
         return;
     }
     let mut hdr = float_hdr(&gpu, Output::Pq);

@@ -1,7 +1,8 @@
-// The GPU tests' `wgpu::Instance` and adapters. The shader pack crate's `test_gpu` keeps its
-// own copy of the helpers its tests call, with the same missing-adapter policy.
+//! The renderer GPU tests' instances and adapters, with the shared GPU skip policy.
 
 use std::sync::{Mutex, MutexGuard};
+
+pub use sunrise_render_shaderpack::test_gpu::skip_or_fail;
 
 static GPU_TEST: Mutex<()> = Mutex::new(());
 
@@ -45,17 +46,9 @@ pub(crate) fn request_adapter(
     }
 }
 
-/// Whether the daily GPU lane asks every GPU test to run (`SUNRISE_GPU_TESTS_REQUIRE_ADAPTER=1`),
-/// so a test that cannot run there fails instead of skipping.
-#[cfg(test)]
-pub(crate) fn require_adapter() -> bool {
-    std::env::var_os("SUNRISE_GPU_TESTS_REQUIRE_ADAPTER").is_some_and(|value| value == "1")
-}
-
 #[cfg(test)]
 pub(crate) fn missing_adapter(reason: impl std::fmt::Display) {
-    assert!(!require_adapter(), "no GPU adapter: {reason}");
-    eprintln!("skipped: no adapter: {reason}");
+    skip_or_fail(format_args!("no GPU adapter: {reason}"));
 }
 
 #[cfg(test)]
@@ -67,11 +60,7 @@ pub(crate) fn optional_device_with(
     match pollster::block_on(adapter.request_device(descriptor)) {
         Ok(pair) => Some(pair),
         Err(error) => {
-            assert!(
-                !require_adapter(),
-                "GPU test device creation failed: {error}"
-            );
-            eprintln!("skipped: no GPU device: {error}");
+            skip_or_fail(format_args!("GPU test device creation failed: {error}"));
             None
         }
     }
@@ -83,10 +72,10 @@ pub(crate) fn oit_device() -> Option<(wgpu::Device, wgpu::Queue)> {
     let adapter = adapter()?;
     let features = crate::gfx::oit::features(&adapter);
     if !features.contains(wgpu::Features::FLOAT32_BLENDABLE) {
-        eprintln!(
-            "skipped: no Improved Transparency on {:?}",
+        skip_or_fail(format_args!(
+            "Improved Transparency needs FLOAT32_BLENDABLE and blendable Rgba32Float on {:?}",
             adapter.get_info()
-        );
+        ));
         return None;
     }
     eprintln!("adapter {:?}", adapter.get_info());
@@ -114,10 +103,10 @@ pub(crate) fn supports_texture_usage(
         return true;
     }
     let info = adapter.get_info();
-    eprintln!(
-        "skipped: {} / {:?} lacks {format:?} {usage:?}",
+    skip_or_fail(format_args!(
+        "{} / {:?} lacks {format:?} {usage:?}",
         info.name, info.backend
-    );
+    ));
     false
 }
 
@@ -180,4 +169,14 @@ pub(crate) fn each_adapter() -> impl Iterator<Item = (wgpu::Adapter, &'static st
         missing_adapter("neither Vulkan nor DirectX 12 found a device");
     }
     adapters
+}
+
+#[cfg(test)]
+#[test]
+#[should_panic(expected = "GPU test could not run: missing required capability")]
+fn a_gpu_capability_can_only_be_skipped_when_not_required() {
+    use sunrise_render_shaderpack::test_gpu::skip_or_fail_with;
+
+    skip_or_fail_with(false, "missing optional capability");
+    skip_or_fail_with(true, "missing required capability");
 }

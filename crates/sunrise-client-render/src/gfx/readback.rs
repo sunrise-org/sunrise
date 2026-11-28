@@ -353,6 +353,9 @@ mod tests {
         let wide = wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
             | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES;
         if !adapter.features().contains(wide) {
+            crate::gfx::test_gpu::skip_or_fail(
+                "swapchain readback fixture needs 16-bit UNORM render targets",
+            );
             return;
         }
         let descriptor = wgpu::DeviceDescriptor {

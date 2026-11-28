@@ -252,7 +252,7 @@ fn vanillas_text_shader_makes_every_world_text_pipeline() {
     assert!(text.see_through.is_some());
     // `OIT_TEXT`'s three stages, where the device has Improved Transparency.
     if !crate::gfx::oit::supported(&device) {
-        eprintln!("skipped: no Improved Transparency on this adapter");
+        // `oit_device` already reported why this fixture fell back to the classic device.
         return;
     }
     // Each stage gives its own samplers (`OitRenderPassProvider`).

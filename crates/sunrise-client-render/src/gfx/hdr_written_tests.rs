@@ -849,7 +849,7 @@ fn actual_opaque_writers_match_the_legacy_non_float_oracle() {
         wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
             | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
     ) {
-        eprintln!("opaque oracle GPU skipped: 16-bit UNORM unavailable");
+        crate::gfx::test_gpu::skip_or_fail("opaque oracle needs 16-bit UNORM render targets");
         return;
     }
     let mut hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
@@ -995,7 +995,7 @@ fn lit_surfaces_stay_at_their_sdr_light() {
         wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
             | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
     ) {
-        eprintln!("lit surface GPU skipped: 16-bit UNORM unavailable");
+        crate::gfx::test_gpu::skip_or_fail("lit surface oracle needs 16-bit UNORM render targets");
         return;
     }
     let mut hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
@@ -1057,7 +1057,7 @@ fn unmarked_entity_users_keep_their_source_gain() {
         wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
             | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
     ) {
-        eprintln!("legacy oracle GPU skipped: 16-bit UNORM unavailable");
+        crate::gfx::test_gpu::skip_or_fail("legacy oracle needs 16-bit UNORM render targets");
         return;
     }
     let mut hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
@@ -1103,7 +1103,7 @@ fn additive_texels_below_the_mark_cutoff_keep_their_gain() {
         wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
             | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
     ) {
-        eprintln!("legacy oracle GPU skipped: 16-bit UNORM unavailable");
+        crate::gfx::test_gpu::skip_or_fail("legacy oracle needs 16-bit UNORM render targets");
         return;
     }
     let mut hdr = Hdr::with_debug(&device, &queue, F::Rgba16Float, Output::Pq, true, None);
@@ -1143,7 +1143,10 @@ fn check_oit_writer(terrain: bool, kind: &str, overlay: u32, tier: u32, alphas: 
         .features()
         .contains(wgpu::Features::FLOAT32_BLENDABLE)
     {
-        eprintln!("OIT unsupported on {:?}", adapter.get_info());
+        crate::gfx::test_gpu::skip_or_fail(format_args!(
+            "HDR OIT writer needs FLOAT32_BLENDABLE on {:?}",
+            adapter.get_info()
+        ));
         return;
     }
     eprintln!(

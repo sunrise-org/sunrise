@@ -147,7 +147,9 @@ impl Gpu {
             adapter.get_downlevel_capabilities().flags,
             adapter.get_texture_format_features(hud_coverage::FORMAT),
         ) {
-            eprintln!("skipping HUD coverage: adapter lacks independent blending or R8 rendering");
+            crate::gfx::test_gpu::skip_or_fail(
+                "HUD coverage requires two color attachments, independent blending and R8 rendering",
+            );
             return None;
         }
         let (device, queue) =

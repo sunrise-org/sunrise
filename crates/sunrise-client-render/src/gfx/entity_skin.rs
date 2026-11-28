@@ -726,7 +726,7 @@ mod tests {
             return;
         };
         let Some(mut skin) = EntitySkin::new(&device, true) else {
-            eprintln!("no compute shaders: skipped");
+            crate::gfx::test_gpu::skip_or_fail("GPU entity skinning compute pipeline unavailable");
             return;
         };
         let model: Vec<SkinVertex> = cube(0).into_iter().chain(cube(1)).collect();

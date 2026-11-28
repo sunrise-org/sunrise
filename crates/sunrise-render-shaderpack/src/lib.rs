@@ -33,5 +33,6 @@ pub enum CelestialBody {
     EndFlash,
 }
 
-#[cfg(test)]
-pub(crate) mod test_gpu;
+#[cfg(any(test, feature = "test-support"))]
+#[doc(hidden)]
+pub mod test_gpu;

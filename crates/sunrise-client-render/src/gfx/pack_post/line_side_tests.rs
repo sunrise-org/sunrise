@@ -505,10 +505,7 @@ fn a_line_program_that_writes_an_image_is_widened_by_the_game() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some(gpu) = Fixture::new() else { return };
         if !gpu.adapter.features().contains(VERTEX_STORAGE) {
-            eprintln!(
-                "a_line_program_that_writes_an_image_is_widened_by_the_game skipped: \
-                 no vertex writable storage"
-            );
+            crate::gfx::test_gpu::skip_or_fail("line image writes require vertex writable storage");
             return;
         }
     }

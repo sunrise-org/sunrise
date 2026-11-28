@@ -181,12 +181,11 @@ impl Fixture {
     }
 
     fn on(adapter: Option<wgpu::Adapter>, features: wgpu::Features) -> Option<Self> {
-        let Some(adapter) = adapter else {
-            eprintln!("Post destination test skipped: no GPU adapter");
-            return None;
-        };
+        let adapter = adapter?;
         if !adapter.features().contains(features) {
-            eprintln!("Post destination test skipped: the adapter lacks {features:?}");
+            crate::gfx::test_gpu::skip_or_fail(format_args!(
+                "post destination fixture needs {features:?}"
+            ));
             return None;
         }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {

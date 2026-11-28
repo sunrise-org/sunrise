@@ -63,7 +63,6 @@ fn drawn(gpu: &mut Gpu) -> Vec<[u8; 4]> {
 fn a_pack_gui_text_reads_its_expression_uniform() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some(mut gpu) = Gpu::new() else {
-        eprintln!("skipped: no adapter");
         return;
     };
     let fsh = "#version 330\nlayout(std140) uniform Tint {\n    float value;\n};\n\
@@ -87,7 +86,6 @@ fn a_pack_gui_text_reads_its_expression_uniform() {
 fn a_pack_gui_text_reads_poly_globals() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some(mut gpu) = Gpu::new() else {
-        eprintln!("skipped: no adapter");
         return;
     };
     let fsh = "#version 330\n#moj_import <polytone_globals.glsl>\n\
@@ -128,7 +126,6 @@ fn a_pack_gui_text_reads_poly_globals() {
 fn a_pack_gui_text_samples_the_atlas_in_its_fragment_stage() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some(mut gpu) = Gpu::new() else {
-        eprintln!("skipped: no adapter");
         return;
     };
     let fsh = "#version 330\nuniform sampler2D Sampler0;\nlayout(location = 0) out vec4 fragColor;\n\
@@ -147,7 +144,6 @@ fn a_pack_gui_text_samples_the_atlas_in_its_fragment_stage() {
 fn a_gui_text_shader_with_an_older_larger_block_draws() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some(mut gpu) = Gpu::new() else {
-        eprintln!("skipped: no adapter");
         return;
     };
     let fsh = "#version 330\nlayout(std140) uniform DynamicTransforms {\n    mat4 ModelViewMat;\n    \
@@ -169,7 +165,6 @@ fn a_gui_text_shader_with_an_older_larger_block_draws() {
 fn a_gui_text_pipeline_the_device_refuses_fails_the_load() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some(mut gpu) = Gpu::new() else {
-        eprintln!("skipped: no adapter");
         return;
     };
     let program = |dimension: &str, at: &str, location: u32| {
@@ -225,7 +220,6 @@ fn gui_program(vsh: &str, fsh: &str) -> std::sync::Arc<sunrise_glsl::Translated>
 fn a_gui_text_shader_is_taken_or_left_the_same_in_every_coverage_mode() {
     let _gpu = crate::gfx::test_gpu::lock();
     let Some(gpu) = Gpu::new() else {
-        eprintln!("skipped: no adapter");
         return;
     };
     let atlas = gpu.device.create_texture(&wgpu::TextureDescriptor {
