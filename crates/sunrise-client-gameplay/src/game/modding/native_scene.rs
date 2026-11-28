@@ -57,6 +57,18 @@ fn step(direction: sunrise_assets::model::Direction) -> [i32; 3] {
     sunrise_core::geometry::Direction::ALL[direction as usize].normal()
 }
 
+/// Whether a face of the scene block at `pos` that culls toward `toward` is hidden: its
+/// neighbour that way is a solid block of the scene. A neighbour past the edge of the `i32`
+/// positions does not exist and is not solid, so the face is kept; the mod-supplied position
+/// never overflows (#6416).
+fn face_culled(pos: [i32; 3], toward: [i32; 3], solid: impl Fn([i32; 3]) -> bool) -> bool {
+    let [x, y, z] = [0, 1, 2].map(|i| pos[i].checked_add(toward[i]));
+    match (x, y, z) {
+        (Some(x), Some(y), Some(z)) => solid([x, y, z]),
+        _ => false,
+    }
+}
+
 /// How bright a face is with `normal` (world space, unit), as blocks are
 /// shaded: 1 for the top, 0.5 underneath, 0.8 north and south, 0.6 east and
 /// west, in between for a slanted face.
@@ -162,11 +174,10 @@ impl ClientGame<'_> {
                 continue;
             };
             for face in models.iter().flat_map(|(_, model)| &model.faces) {
-                if let Some(cull) = face.quad.cull {
-                    let [dx, dy, dz] = step(cull);
-                    if solid([block.pos[0] + dx, block.pos[1] + dy, block.pos[2] + dz]) {
-                        continue;
-                    }
+                if let Some(cull) = face.quad.cull
+                    && face_culled(block.pos, step(cull), solid)
+                {
+                    continue;
                 }
                 let Some(sprite) = self
                     .client
@@ -290,6 +301,27 @@ pub(in crate::game::client_side) fn project_quads(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// #6416: a block at either `i32` edge keeps the face that culls past the edge, with no
+    /// overflow, though every position there would be solid; inside, a solid neighbour hides it.
+    #[test]
+    fn a_face_culled_past_the_i32_edge_is_kept() {
+        let all_solid = |_: [i32; 3]| true;
+        for (pos, toward) in [
+            ([i32::MAX, 0, 0], [1, 0, 0]),
+            ([0, i32::MIN, 0], [0, -1, 0]),
+            ([0, 0, i32::MAX], [0, 0, 1]),
+        ] {
+            assert!(
+                !face_culled(pos, toward, all_solid),
+                "{pos:?} toward {toward:?}"
+            );
+        }
+        assert!(face_culled([i32::MAX, 0, 0], [-1, 0, 0], all_solid));
+        let only = |at: [i32; 3]| at == [1, 2, 3];
+        assert!(face_culled([0, 2, 3], [1, 0, 0], only));
+        assert!(!face_culled([0, 2, 3], [-1, 0, 0], only));
+    }
 
     fn view(yaw: f32, pitch: f32) -> SceneView {
         SceneView::new([0.5, 0.5, 0.5], yaw, pitch, 20.0)
