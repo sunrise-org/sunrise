@@ -100,11 +100,18 @@ impl Category {
             Self::Misc => "misc",
         }
     }
+    #[inline]
     pub fn from_name(name: &str) -> Self {
-        Self::ALL
-            .into_iter()
-            .find(|c| c.name() == name)
-            .unwrap_or(Self::Misc)
+        match name {
+            "monster" => Self::Monster,
+            "creature" => Self::Creature,
+            "ambient" => Self::Ambient,
+            "axolotls" => Self::Axolotls,
+            "underground_water_creature" => Self::UndergroundWaterCreature,
+            "water_creature" => Self::WaterCreature,
+            "water_ambient" => Self::WaterAmbient,
+            _ => Self::Misc,
+        }
     }
     fn index(self) -> usize {
         self as usize
@@ -131,6 +138,14 @@ impl Category {
     }
     pub fn despawn_distance(self) -> i32 {
         if self == Self::WaterAmbient { 64 } else { 128 }
+    }
+}
+
+impl MobType {
+    /// Parsed [`Category`] of `self.category`.
+    #[inline]
+    pub fn spawn_category(&self) -> Category {
+        Category::from_name(&self.category)
     }
 }
 
@@ -1519,9 +1534,7 @@ impl SpawnCluster {
                     continue;
                 };
                 self.max = sample_count(&entry, random) as i32;
-                let type_category = l
-                    .mob_type(&entry.entity)
-                    .map(|t| Category::from_name(&t.category));
+                let type_category = l.mob_type(&entry.entity).map(MobType::spawn_category);
                 self.current = Some((entry, type_category, [x, y, z]));
             }
             let (entry, type_category, picked_at) =
@@ -2290,5 +2303,26 @@ mod tests {
                 );
             }
         }
+    }
+
+    #[test]
+    fn mob_type_spawn_category_follows_category_string() {
+        for category in Category::ALL {
+            assert_eq!(Category::from_name(category.name()), category);
+        }
+        assert_eq!(Category::from_name("unknown"), Category::Misc);
+
+        let mut kind = (*super::super::sensor_scan_tests::kind()).clone();
+        for category in Category::ALL {
+            kind.category = category.name().into();
+            assert_eq!(kind.spawn_category(), category);
+        }
+        kind.category = "unknown".into();
+        assert_eq!(kind.spawn_category(), Category::Misc);
+
+        kind.category = "creature".into();
+        assert_eq!(kind.spawn_category(), Category::Creature);
+        kind.category = "monster".into();
+        assert_eq!(kind.spawn_category(), Category::Monster);
     }
 }

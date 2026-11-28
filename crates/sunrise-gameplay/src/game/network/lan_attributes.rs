@@ -27,6 +27,58 @@ pub struct SpeedByType(
     >,
 );
 
+#[derive(Clone, Copy, PartialEq)]
+struct AttributeInputs {
+    speed: Option<(i32, u64)>,
+    jump: Option<(i32, u64)>,
+    baby_speed: Option<u64>,
+    sprinting: bool,
+}
+
+struct AttributeRow {
+    id: i32,
+    base: u64,
+    modifiers: Vec<sunrise_world::attributes::Modifier>,
+}
+
+#[derive(Default)]
+pub(super) struct MobAttributeCache {
+    inputs: Option<AttributeInputs>,
+    rows: Vec<AttributeRow>,
+    output: Vec<AttributeSnapshot>,
+}
+
+impl MobAttributeCache {
+    fn same_rows(&self, live: &sunrise_sim::living_attributes::Live) -> bool {
+        let mut rows = self.rows.iter();
+        syncable_instances(live).all(|(id, instance)| {
+            rows.next().is_some_and(|row| {
+                row.id == id
+                    && row.base == instance.base_value().to_bits()
+                    && row.modifiers.len() == instance.modifiers().len()
+                    && row
+                        .modifiers
+                        .iter()
+                        .zip(instance.modifiers())
+                        .all(|(old, now)| old.same_identity(now))
+            })
+        }) && rows.next().is_none()
+    }
+}
+
+fn syncable_instances(
+    live: &sunrise_sim::living_attributes::Live,
+) -> impl Iterator<Item = (i32, &sunrise_world::attributes::Instance)> {
+    let catalog = live.catalog();
+    live.instances().filter_map(move |(_, key, instance)| {
+        let id = key.attribute();
+        catalog
+            .attribute(id)
+            .syncable
+            .then_some((id.registry_id(), instance))
+    })
+}
+
 fn slot_in_group(group: &str, slot: &str) -> bool {
     group == slot
         || group == "any"
@@ -225,6 +277,88 @@ impl ServerGame<'_> {
                     operation: 2,
                 },
             );
+        }
+    }
+
+    #[inline(always)]
+    pub(super) fn mob_attribute_state(
+        &self,
+        m: &Mob,
+        speeds: &mut SpeedByType,
+        out: &mut Vec<AttributeSnapshot>,
+        cache: &mut MobAttributeCache,
+    ) {
+        let kind = m.kind.id.as_str();
+        let (synced, default) = *speeds.0.entry(Arc::as_ptr(&m.kind)).or_insert_with(|| {
+            (
+                self.synced_attribute(kind, Attr::MovementSpeed.id()),
+                finalize::default_value(m, Attr::MovementSpeed),
+            )
+        });
+        let inputs = AttributeInputs {
+            speed: synced.map(|id| {
+                let base = finalize::base_value_with(m, Attr::MovementSpeed, || default);
+                (id, base.to_bits())
+            }),
+            jump: self.mob_jump_input(m),
+            baby_speed: match finalize::transient(m, Attr::MovementSpeed) {
+                Some((amount, Op::AddMultipliedBase)) => Some(amount.to_bits()),
+                _ => None,
+            },
+            sprinting: m.extra.sprinting,
+        };
+
+        if let (Some(id), Some(live)) = (synced, m.extra.live.built())
+            && Arc::ptr_eq(live.catalog(), &self.common.motion.attributes)
+            && cache.inputs == Some(inputs)
+            && cache.same_rows(live)
+        {
+            // The computed read can clear the live movement instance's dirty bit.
+            if let Some((_, _, movement)) = live
+                .instances()
+                .find(|(_, key, _)| key.attribute().registry_id() == id)
+                && movement.is_dirty()
+            {
+                let _ = movement.value();
+            }
+            out.extend_from_slice(&cache.output);
+            return;
+        }
+
+        self.mob_attributes(m, speeds, out);
+        cache.inputs = Some(inputs);
+        cache.rows.clear();
+        cache.rows.extend(
+            m.extra
+                .live
+                .built()
+                .into_iter()
+                .flat_map(syncable_instances)
+                .map(|(id, instance)| AttributeRow {
+                    id,
+                    base: instance.base_value().to_bits(),
+                    modifiers: instance.modifiers().to_vec(),
+                }),
+        );
+        cache.output.clone_from(out);
+    }
+
+    #[inline(always)]
+    fn mob_jump_input(&self, m: &Mob) -> Option<(i32, u64)> {
+        if matches!(
+            m.species(),
+            Species::Horse | Species::SkeletonHorse | Species::ZombieHorse
+        ) && m.extra.vector[0] > 0.0
+            && !m
+                .extra
+                .attributes
+                .as_deref()
+                .is_some_and(|s| s.bases.iter().any(|(a, _)| *a == Attr::JumpStrength))
+        {
+            self.synced_attribute(m.kind.id.as_str(), Attr::JumpStrength.id())
+                .map(|id| (id, m.extra.vector[0].to_bits()))
+        } else {
+            None
         }
     }
 

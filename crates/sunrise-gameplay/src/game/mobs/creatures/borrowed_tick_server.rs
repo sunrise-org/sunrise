@@ -1457,6 +1457,7 @@ impl crate::game::ServerGame<'_> {
             resume_air_answer = air_answer;
             retried_rider = retry_rider;
             sunrise_sim::mobs::living::section_writes::set_enabled(capture_sections);
+            laps.lap("creature_loop");
         }
         laps.lap("creature_loop");
         if dispatch_panic.is_none() && state.stand_result.is_ok() {

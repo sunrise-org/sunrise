@@ -11,10 +11,6 @@ use std::sync::atomic::{AtomicU8, AtomicUsize, Ordering};
 use std::sync::{Mutex, OnceLock, PoisonError};
 use sunrise_level::tick_mode::ParallelTickMode;
 
-/// Typed gameplay dispatch owns mutable residency and damage contexts, so Sunrise Fork keeps
-/// every tick serial whatever the setting or `SUNRISE_PARALLEL_TICK` says (Diverges from upstream).
-const FORK_PARALLEL_TICK_ENABLED: bool = false;
-
 /// `SUNRISE_PARALLEL_TICK`, whatever the setting says: `0` keeps every tick serial, `1` turns the
 /// server tick's parallel phases on, and `verify` does too, also checking the phases that can be
 /// checked against the serial code. Unset, the setting decides.
@@ -26,6 +22,72 @@ fn forced() -> Option<u8> {
         Ok("verify") => Some(2),
         _ => None,
     })
+}
+
+#[cfg(any(test, feature = "test-support"))]
+/// Execution counts of [`par_map_on`] on the current thread, for tests asserting which path ran.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct ParMapStats {
+    pub serial: usize,
+    pub parallel: usize,
+    pub worker_parts: usize,
+}
+
+#[cfg(any(test, feature = "test-support"))]
+thread_local! {
+    static TEST_MODE: std::cell::Cell<Option<u8>> = const { std::cell::Cell::new(None) };
+    static VERIFY_PANIC: std::cell::Cell<bool> = const { std::cell::Cell::new(false) };
+    static PAR_MAP_STATS: std::cell::Cell<ParMapStats> = const {
+        std::cell::Cell::new(ParMapStats {
+            serial: 0,
+            parallel: 0,
+            worker_parts: 0,
+        })
+    };
+}
+
+/// Runs `f` with `parallel_tick()` returning `mode` (`0` serial, `1` parallel, `2` verify) on this
+/// thread, restoring the previous override on return or unwind. In mode `2`, verify mismatches panic
+/// unless [`with_verify_panic`] overrides the policy inside `f`.
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_test_mode<R>(mode: u8, f: impl FnOnce() -> R) -> R {
+    struct Reset(Option<u8>, bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            TEST_MODE.with(|cell| cell.set(self.0));
+            VERIFY_PANIC.with(|cell| cell.set(self.1));
+        }
+    }
+    let prev_mode = TEST_MODE.with(|cell| cell.replace(Some(mode)));
+    let prev_panic = VERIFY_PANIC.with(|cell| cell.replace(mode == 2));
+    let _reset = Reset(prev_mode, prev_panic);
+    f()
+}
+
+/// Runs `f` with the scoped verify-mismatch panic policy set to `panic_on_mismatch`.
+#[cfg(any(test, feature = "test-support"))]
+pub fn with_verify_panic<R>(panic_on_mismatch: bool, f: impl FnOnce() -> R) -> R {
+    struct Reset(bool);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            VERIFY_PANIC.with(|cell| cell.set(self.0));
+        }
+    }
+    let previous = VERIFY_PANIC.with(|cell| cell.replace(panic_on_mismatch));
+    let _reset = Reset(previous);
+    f()
+}
+
+/// Whether verify mode should panic on mismatch on this thread (false outside a test scope).
+#[cfg(any(test, feature = "test-support"))]
+pub fn verify_panics() -> bool {
+    VERIFY_PANIC.with(std::cell::Cell::get)
+}
+
+/// Returns and clears this thread's [`par_map_on`] execution counts.
+#[cfg(any(test, feature = "test-support"))]
+pub fn take_par_map_stats() -> ParMapStats {
+    PAR_MAP_STATS.with(|cell| cell.replace(ParMapStats::default()))
 }
 
 /// The Parallel Tick setting, as the window last applied it; Off until it does (a dedicated
@@ -40,14 +102,9 @@ static AUTO: Mutex<Auto> = Mutex::new(Auto::new());
 /// Whether this tick's phases share their work: 0 serial, 1 shared, 2 shared and checked against
 /// the serial code (`SUNRISE_PARALLEL_TICK=verify`). Each phase gives the serial result either way.
 pub fn parallel_tick() -> u8 {
-    if !FORK_PARALLEL_TICK_ENABLED {
-        static NOTICE: std::sync::Once = std::sync::Once::new();
-        NOTICE.call_once(|| {
-            if forced().is_some_and(|mode| mode > 0) {
-                eprintln!("warning: parallel tick is disabled in Sunrise Fork while typed hook dispatch is integrated; using serial tick");
-            }
-        });
-        return 0;
+    #[cfg(any(test, feature = "test-support"))]
+    if let Some(mode) = TEST_MODE.with(std::cell::Cell::get) {
+        return mode;
     }
     forced().unwrap_or_else(|| SHARED.load(Ordering::Relaxed))
 }
@@ -70,10 +127,7 @@ pub fn set_setting(mode: ParallelTickMode) {
 /// system tells): decides whether the next tick shares its phases' work. Only Auto has something
 /// to decide.
 pub fn after_tick(ms: f32, cpu_ms: Option<f32>) {
-    if !FORK_PARALLEL_TICK_ENABLED
-        || forced().is_some()
-        || SETTING.load(Ordering::Relaxed) != ParallelTickMode::Auto as u8
-    {
+    if forced().is_some() || SETTING.load(Ordering::Relaxed) != ParallelTickMode::Auto as u8 {
         return;
     }
     let mut auto = AUTO.lock().unwrap_or_else(PoisonError::into_inner);
@@ -241,14 +295,27 @@ impl Auto {
     }
 }
 
-/// How many threads a phase may share its work among: `sunrise-threads`' count (at most 8) while
-/// the parallel tick is on, else 1.
-pub fn lanes() -> usize {
-    if parallel_tick() > 0 {
-        sunrise_threads::worker_count().clamp(1, 8)
+fn resolve_lanes(mode: u8, serial_all: bool, worker_count: usize, min_lanes: usize) -> usize {
+    if mode > 0 && !serial_all {
+        worker_count.clamp(min_lanes, 8)
     } else {
         1
     }
+}
+
+/// How many threads a phase may share its work among: `sunrise-threads`' count (at most 8) while
+/// the parallel tick is on and `SUNRISE_SERIAL_TICK=all` is not set, else 1.
+pub fn lanes() -> usize {
+    let mode = parallel_tick();
+    #[cfg(any(test, feature = "test-support"))]
+    let (serial_all, min_lanes) = match TEST_MODE.with(std::cell::Cell::get) {
+        Some(test_mode) if test_mode > 0 => (false, 2),
+        Some(_) => (true, 1),
+        None => (sunrise_threads::serial_tick_all(), 1),
+    };
+    #[cfg(not(any(test, feature = "test-support")))]
+    let (serial_all, min_lanes) = (sunrise_threads::serial_tick_all(), 1);
+    resolve_lanes(mode, serial_all, sunrise_threads::worker_count(), min_lanes)
 }
 
 /// The pool: one thread fewer than a phase's lanes (the server thread takes parts too).
@@ -463,6 +530,12 @@ pub fn par_map_on<T: Sync, R: Send>(
     f: impl Fn(&[T], &mut Vec<R>) + Sync,
 ) -> Vec<R> {
     if lanes <= 1 || items.len() < min.max(2) {
+        #[cfg(any(test, feature = "test-support"))]
+        PAR_MAP_STATS.with(|cell| {
+            let mut stats = cell.get();
+            stats.serial += 1;
+            cell.set(stats);
+        });
         let mut out = Vec::with_capacity(items.len());
         f(items, &mut out);
         return out;
@@ -471,11 +544,19 @@ pub fn par_map_on<T: Sync, R: Send>(
     let count = items.len().div_ceil(size);
     let next = AtomicUsize::new(0);
     let slots: Vec<Mutex<Vec<R>>> = (0..count).map(|_| Mutex::new(Vec::new())).collect();
+    #[cfg(any(test, feature = "test-support"))]
+    let caller = std::thread::current().id();
+    #[cfg(any(test, feature = "test-support"))]
+    let worker_parts = AtomicUsize::new(0);
     let work = || {
         loop {
             let k = next.fetch_add(1, Ordering::Relaxed);
             if k >= count {
                 break;
+            }
+            #[cfg(any(test, feature = "test-support"))]
+            if std::thread::current().id() != caller {
+                worker_parts.fetch_add(1, Ordering::Relaxed);
             }
             let part = &items[k * size..((k + 1) * size).min(items.len())];
             let mut done = Vec::with_capacity(part.len());
@@ -488,6 +569,13 @@ pub fn par_map_on<T: Sync, R: Send>(
             s.spawn(|_| work());
         }
         work();
+    });
+    #[cfg(any(test, feature = "test-support"))]
+    PAR_MAP_STATS.with(|cell| {
+        let mut stats = cell.get();
+        stats.parallel += 1;
+        stats.worker_parts += worker_parts.load(Ordering::Relaxed);
+        cell.set(stats);
     });
     let mut out = Vec::with_capacity(items.len());
     for slot in slots {
@@ -670,5 +758,83 @@ mod tests {
             })
         });
         assert!(caught.is_err());
+    }
+
+    #[test]
+    fn test_mode_switches_between_serial_parallel_and_verify() {
+        let items: Vec<u32> = (0..256).collect();
+        assert!(!verify_panics());
+        with_test_mode(0, || {
+            assert_eq!(parallel_tick(), 0);
+            assert_eq!(lanes(), 1);
+            assert!(!verify_panics());
+            let _ = take_par_map_stats();
+            let out = par_map(&items, 64, |part, out| out.extend(part.iter().copied()));
+            assert_eq!(out, items);
+            assert_eq!(
+                take_par_map_stats(),
+                ParMapStats {
+                    serial: 1,
+                    parallel: 0,
+                    worker_parts: 0,
+                }
+            );
+        });
+        for mode in [1u8, 2u8] {
+            with_test_mode(mode, || {
+                assert_eq!(parallel_tick(), mode);
+                assert!(lanes() >= 2);
+                assert_eq!(verify_panics(), mode == 2);
+                with_verify_panic(false, || assert!(!verify_panics()));
+                assert_eq!(verify_panics(), mode == 2);
+                let _ = take_par_map_stats();
+                let out = par_map(&items, 64, |part, out| out.extend(part.iter().copied()));
+                assert_eq!(out, items);
+                let stats = take_par_map_stats();
+                assert_eq!(stats.serial, 0);
+                assert_eq!(stats.parallel, 1);
+            });
+        }
+        assert!(!verify_panics());
+    }
+
+    #[test]
+    fn serial_tick_all_overrides_parallel_modes() {
+        for mode in [0u8, 1, 2] {
+            for workers in [1usize, 4, 16] {
+                assert_eq!(resolve_lanes(mode, true, workers, 1), 1);
+            }
+        }
+        assert_eq!(resolve_lanes(0, false, 8, 1), 1);
+        assert_eq!(resolve_lanes(1, false, 1, 1), 1);
+        assert_eq!(resolve_lanes(1, false, 4, 1), 4);
+        assert_eq!(resolve_lanes(2, false, 16, 1), 8);
+    }
+
+    #[test]
+    fn par_map_runs_parts_on_helper_threads() {
+        use std::sync::atomic::AtomicBool;
+        use std::time::{Duration, Instant};
+        let active = AtomicUsize::new(0);
+        let overlapped = AtomicBool::new(false);
+        let deadline = Instant::now() + Duration::from_secs(10);
+        let items: Vec<usize> = (0..64).collect();
+        let _ = take_par_map_stats();
+        let out = par_map_on(&items, 2, 2, |part, out| {
+            if active.fetch_add(1, Ordering::SeqCst) >= 1 {
+                overlapped.store(true, Ordering::SeqCst);
+            }
+            while !overlapped.load(Ordering::SeqCst) && Instant::now() < deadline {
+                std::thread::sleep(Duration::from_millis(1));
+            }
+            out.extend(part.iter().copied());
+            active.fetch_sub(1, Ordering::SeqCst);
+        });
+        let stats = take_par_map_stats();
+        assert_eq!(out, items);
+        assert!(overlapped.load(Ordering::SeqCst), "no two parts overlapped");
+        assert_eq!(stats.serial, 0);
+        assert_eq!(stats.parallel, 1);
+        assert!(stats.worker_parts > 0, "no part ran on a helper thread");
     }
 }

@@ -192,6 +192,8 @@ pub struct Waypoints {
     /// Connections by receiver, then source.
     connections: HashMap<u128, Row>,
     memo: HashMap<u128, Memo>,
+    moves: Vec<Move>,
+    move_jobs: Vec<MoveJob>,
     /// The `locator_bar` game rule as last seen.
     enabled: Option<bool>,
 }
@@ -459,6 +461,14 @@ struct Move {
     receives: bool,
     /// Its view's new centre, when it changed chunk.
     new_view: View,
+}
+
+struct MoveJob {
+    receiver: u128,
+    listed: bool,
+    view: View,
+    row: Row,
+    out: Vec<(u32, C)>,
 }
 
 /// Players at which the moves are worked out on several threads, a share of the receivers each.
@@ -764,7 +774,8 @@ impl Waypoints {
     /// players. So each receiver meets the moves in the loop's order on its own, on several
     /// threads, and its packets come out as the loop sends them.
     fn moves_by_receiver(&mut self, t: &mut Tick, players: &[Player]) {
-        let mut moves = Vec::new();
+        self.moves.clear();
+        self.move_jobs.clear();
         for player in players {
             let memo = self
                 .memo
@@ -778,7 +789,7 @@ impl Waypoints {
             if moved_view {
                 memo.view_center = player.chunk();
             }
-            moves.push(Move {
+            self.moves.push(Move {
                 uuid: player.uuid,
                 ticked: !player.first_tick,
                 transmits: memo.transmitting && self.waypoints.contains(&player.uuid),
@@ -786,38 +797,27 @@ impl Waypoints {
                 new_view: moved_view.then(|| (player.chunk(), player.view_distance)),
             });
         }
-        if moves.is_empty() {
+        if self.moves.is_empty() {
             return;
         }
         // Every row a move reaches: the receivers', and those of movers who receive but aren't
         // listed as receivers (`updatePlayer` runs on their own row all the same).
-        struct Job {
-            receiver: u128,
-            listed: bool,
-            view: View,
-            row: Row,
-            out: Vec<(u32, C)>,
-        }
-        let mut jobs: Vec<Job> = self
-            .players
-            .iter()
-            .map(|&receiver| (receiver, true))
-            .chain(
-                moves
-                    .iter()
-                    .filter(|m| m.receives && !self.players.contains(&m.uuid))
-                    .map(|m| (m.uuid, false)),
-            )
-            .map(|(receiver, listed)| Job {
+        let receivers = self.players.iter().map(|&receiver| (receiver, true)).chain(
+            self.moves
+                .iter()
+                .filter(|m| m.receives && !self.players.contains(&m.uuid))
+                .map(|m| (m.uuid, false)),
+        );
+        self.move_jobs
+            .extend(receivers.map(|(receiver, listed)| MoveJob {
                 receiver,
                 listed,
                 view: t.view.get(&receiver).copied(),
                 row: self.connections.remove(&receiver).unwrap_or_default(),
                 out: Vec::new(),
-            })
-            .collect();
-        let (s, waypoints, moves) = (&t.s, &self.waypoints, &moves);
-        sunrise_threads::par_chunks_mut(&mut jobs, 8, |jobs| {
+            }));
+        let (s, waypoints, moves) = (&t.s, &self.waypoints, &self.moves);
+        crate::parallel::par_chunks_mut(&mut self.move_jobs, 8, |jobs| {
             for job in jobs {
                 let mut to = Receiving {
                     receiver: job.receiver,
@@ -850,7 +850,7 @@ impl Waypoints {
                 }
             }
         });
-        for job in jobs {
+        for job in self.move_jobs.drain(..) {
             t.out.extend(job.out);
             self.connections.insert(job.receiver, job.row);
         }
@@ -1054,6 +1054,36 @@ mod tests {
             by.entry(*conn).or_default().push(packet.encode());
         }
         by
+    }
+
+    #[test]
+    fn pooled_waypoint_moves_match_serial_packets() {
+        let mut players: Vec<_> = (0..10u32)
+            .map(|i| player(u128::from(i) + 1, i + 1, [f64::from(i * 16), 64.0, 0.0]))
+            .collect();
+        let (mut serial, mut pooled) = (Waypoints::default(), Waypoints::default());
+        let mut moved_packets = 0;
+        for tick in 0..5 {
+            if tick == 3 {
+                players.pop().unwrap();
+            }
+            if tick != 2 {
+                for p in &mut players {
+                    p.position[0] += f64::from(tick * 16);
+                    p.position[2] += f64::from(p.conn.unwrap() % 3 * tick);
+                }
+            }
+            let serial = serial.tick_with(&players, &[], &[], true, usize::MAX);
+            let pooled = pooled.tick_with(&players, &[], &[], true, 0);
+            assert_eq!(by_conn(&serial), by_conn(&pooled), "tick {tick}");
+            if tick == 2 {
+                assert!(pooled.is_empty());
+            }
+            if tick == 1 || tick == 4 {
+                moved_packets += pooled.len();
+            }
+        }
+        assert!(moved_packets > 0);
     }
 
     /// The moves worked out by receiver give every connection the bytes the one loop gives,

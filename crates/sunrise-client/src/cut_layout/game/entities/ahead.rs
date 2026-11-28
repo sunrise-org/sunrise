@@ -2,14 +2,28 @@
 
 #[cfg(test)]
 mod tests {
+    use std::cell::Cell;
     use std::sync::Arc;
     use sunrise_core::{geometry::Vec3, random::RandomSource};
     use sunrise_gameplay::game::game_tests::tests::server_game;
-    use sunrise_gameplay::game::server_side::ahead::{AHEAD, TAKEN};
+    use sunrise_gameplay::game::server_side::ahead::{AHEAD, TAKEN, VERIFIED};
     use sunrise_gameplay_common::game::GameGameExt1;
     use sunrise_gameplay_common::game::collision_source::CollisionSourceGameExt1;
     use sunrise_items::items::ItemStack;
     use sunrise_level::chunk::Chunk;
+    use sunrise_sim::parallel::{ParMapStats, take_par_map_stats, with_test_mode};
+
+    fn with_ahead<R>(choice: Option<bool>, f: impl FnOnce() -> R) -> R {
+        struct Reset(Option<bool>);
+        impl Drop for Reset {
+            fn drop(&mut self) {
+                AHEAD.with(|a| a.set(self.0));
+            }
+        }
+        let previous = AHEAD.with(|a| a.replace(choice));
+        let _reset = Reset(previous);
+        f()
+    }
 
     /// One item tick with the moves worked out ahead leaves every item, and the level's random,
     /// as the tick that moves each item at its turn: items escaping a block (their own random),
@@ -114,93 +128,161 @@ mod tests {
         let (items, random) = (game.dropped.clone(), game.world.random.clone());
         // Each merge-written field independently invalidates a prepared move.
         // Rejecting it must not overwrite the merge or advance the item's RNG.
-        AHEAD.with(|a| a.set(Some(true)));
+        let planned_idx = items
+            .iter()
+            .position(|item| !escaping.contains(&item.id))
+            .unwrap();
         let obstacles = sunrise_sim::entities::ObstacleGrid::new(boxes);
-        for changed in 0..3 {
-            let mut moves = sunrise_gameplay::game::server_side::ahead::Moves::work_out(
-                &game,
-                &items,
-                &obstacles,
-                &sunrise_gameplay_common::game::native_ticks::TickRound::default(),
-                |_| true,
-            );
-            let mut item = items[0].clone();
-            match changed {
-                0 => item.stack.count += 1,
-                1 => item.age += 1,
-                _ => item.pickup_delay += 1,
-            }
-            let before = format!("{item:?}");
-            assert!(
-                moves
-                    .take(0, &mut item, game.world.revision, |_| {
-                        panic!("invalidated move was verified")
-                    })
-                    .is_none()
-            );
-            assert_eq!(format!("{item:?}"), before);
-        }
-        let mut runs = Vec::new();
-        // First use the real environment switch, then serial/ahead/serial
-        // overrides. This also checks switch-off behavior above the threshold.
-        for ahead in [None, Some(false), Some(true), Some(false)] {
-            game.dropped = items.clone();
-            game.world.random = random.clone();
-            AHEAD.with(|a| a.set(ahead));
-            TAKEN.with(|t| t.set((0, 0)));
-            game.tick_items();
-            // Independently advance just the escaping items' starting randoms.
-            // The helper copy must consume exactly one float and return that
-            // state at the turn; ordinary moves must consume none of it.
-            for item in game.dropped.iter() {
-                let before = items.iter().find(|i| i.id == item.id).unwrap();
-                let mut expected = before.random.clone();
-                if escaping.contains(&item.id) {
-                    expected.next_float();
-                }
-                assert_eq!(
-                    item.random.clone().next_int(),
-                    expected.next_int(),
-                    "item {}",
-                    item.id
+        with_test_mode(1, || {
+            with_ahead(None, || {
+                let mut moves = sunrise_gameplay::game::server_side::ahead::Moves::work_out(
+                    &game,
+                    &items,
+                    &obstacles,
+                    &sunrise_gameplay_common::game::native_ticks::TickRound::default(),
+                    |_| true,
                 );
-            }
-            let landed = game.dropped.iter().find(|i| i.id == landing).unwrap();
-            assert_eq!(landed.position.y, boat_top);
-            assert!(landed.ground.on_ground);
-            assert_eq!(format!("{:?}", game.world.random), format!("{random:?}"));
-            let left: Vec<String> = game.dropped.iter().map(|i| format!("{i:?}")).collect();
-            runs.push((
-                left,
-                format!("{:?}", game.world.random),
-                TAKEN.with(|t| t.get()),
-            ));
+                let mut unchanged = items[planned_idx].clone();
+                assert!(
+                    moves
+                        .take(planned_idx, &mut unchanged, game.world.revision, |_| {
+                            panic!("mode 1 must not run verify oracle")
+                        })
+                        .is_some(),
+                    "target item must have a planned move before invalidation checks"
+                );
+                for changed in 0..3 {
+                    let mut moves = sunrise_gameplay::game::server_side::ahead::Moves::work_out(
+                        &game,
+                        &items,
+                        &obstacles,
+                        &sunrise_gameplay_common::game::native_ticks::TickRound::default(),
+                        |_| true,
+                    );
+                    let mut item = items[planned_idx].clone();
+                    match changed {
+                        0 => item.stack.count += 1,
+                        1 => item.age += 1,
+                        _ => item.pickup_delay += 1,
+                    }
+                    let before = format!("{item:?}");
+                    TAKEN.with(|t| t.set((0, 0)));
+                    assert!(
+                        moves
+                            .take(planned_idx, &mut item, game.world.revision, |_| {
+                                panic!("invalidated move was verified")
+                            })
+                            .is_none()
+                    );
+                    assert_eq!(TAKEN.with(Cell::get), (0, 1));
+                    assert_eq!(format!("{item:?}"), before);
+                }
+            });
+        });
+
+        struct TickRun {
+            left: Vec<String>,
+            world_random: String,
+            taken: (usize, usize),
+            verified: usize,
+            stats: ParMapStats,
         }
-        AHEAD.with(|a| a.set(None));
-        assert!(runs[0].0.len() < items.len(), "some items merged");
-        assert_eq!(runs[0].0, runs[1].0);
-        assert_eq!(runs[0].1, runs[1].1);
-        assert_eq!(runs[0].0, runs[2].0);
-        assert_eq!(runs[0].1, runs[2].1);
-        assert_eq!(runs[0].0, runs[3].0);
-        assert_eq!(runs[0].1, runs[3].1);
-        assert_eq!(runs[1].2, (0, 0));
-        assert_eq!(runs[3].2, (0, 0));
-        if sunrise_sim::parallel::lanes() > 1 {
-            assert_eq!(runs[0].2, runs[2].2);
-        } else {
-            assert_eq!(runs[0].2, (0, 0));
-        }
+
+        let mut run_tick = |mode: u8, ahead: Option<bool>| -> TickRun {
+            with_test_mode(mode, || {
+                with_ahead(ahead, || {
+                    game.dropped = items.clone();
+                    game.world.random = random.clone();
+                    TAKEN.with(|t| t.set((0, 0)));
+                    VERIFIED.with(|v| v.set(0));
+                    let _ = take_par_map_stats();
+                    game.tick_items();
+                    let stats = take_par_map_stats();
+                    let taken = TAKEN.with(Cell::get);
+                    let verified = VERIFIED.with(Cell::get);
+                    // Independently advance just the escaping items' starting randoms.
+                    // Escaping items stay at their turn and consume one float on the
+                    // tick thread; ordinary moves must consume none of it.
+                    for item in game.dropped.iter() {
+                        let before = items.iter().find(|i| i.id == item.id).unwrap();
+                        let mut expected = before.random.clone();
+                        if escaping.contains(&item.id) {
+                            expected.next_float();
+                        }
+                        assert_eq!(
+                            item.random.clone().next_int(),
+                            expected.next_int(),
+                            "mode {mode} item {}",
+                            item.id
+                        );
+                    }
+                    let landed = game.dropped.iter().find(|i| i.id == landing).unwrap();
+                    assert_eq!(landed.position.y, boat_top);
+                    assert!(landed.ground.on_ground);
+                    let world_random = format!("{:?}", game.world.random);
+                    assert_eq!(world_random, format!("{random:?}"));
+                    let left: Vec<String> = game.dropped.iter().map(|i| format!("{i:?}")).collect();
+                    TickRun {
+                        left,
+                        world_random,
+                        taken,
+                        verified,
+                        stats,
+                    }
+                })
+            })
+        };
+
+        // Drive serial (0), parallel (1), and verify (2) modes, plus explicit
+        // switch-off above the threshold.
+        let serial = run_tick(0, None);
+        let parallel = run_tick(1, None);
+        let verify = run_tick(2, None);
+        let switched_off = run_tick(1, Some(false));
+
+        assert!(serial.left.len() < items.len(), "some items merged");
+        assert_eq!(serial.stats, ParMapStats::default());
+        assert_eq!(serial.taken, (0, 0));
+        assert_eq!(serial.verified, 0);
+
+        assert_eq!(parallel.left, serial.left);
+        assert_eq!(parallel.world_random, serial.world_random);
+        assert_eq!(parallel.stats.serial, 0);
+        assert_eq!(parallel.stats.parallel, 1);
+        assert!(
+            parallel.stats.worker_parts > 0,
+            "parallel mode must execute parts on helper threads"
+        );
         // The path under test ran: most moves were put in place, and a merge refused some.
-        let (taken, refused) = runs[2].2;
+        let (taken, refused) = parallel.taken;
         assert!(
             taken >= 200 && refused > 0,
             "{taken} put in place, {refused} refused"
         );
+        assert_eq!(parallel.verified, 0);
+
+        assert_eq!(verify.left, serial.left);
+        assert_eq!(verify.world_random, serial.world_random);
+        assert_eq!(verify.stats.serial, 0);
+        assert_eq!(verify.stats.parallel, 1);
+        assert!(
+            verify.stats.worker_parts > 0,
+            "verify mode must execute parts on helper threads"
+        );
+        assert_eq!(verify.taken, parallel.taken);
+        assert_eq!(verify.verified, taken);
+
+        assert_eq!(switched_off.left, serial.left);
+        assert_eq!(switched_off.world_random, serial.world_random);
+        assert_eq!(switched_off.stats, ParMapStats::default());
+        assert_eq!(switched_off.taken, (0, 0));
+        assert_eq!(switched_off.verified, 0);
+
         eprintln!(
-            "item work-ahead proof: {} inputs, {} escaping; {taken} taken, {refused} invalidated",
+            "item work-ahead proof: {} inputs, {} escaping; {taken} taken, {refused} invalidated, {} verified",
             items.len(),
-            escaping.len()
+            escaping.len(),
+            verify.verified
         );
     }
 }

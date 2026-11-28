@@ -103,10 +103,6 @@ pub struct ChunkEncoder {
     pub(super) items: Arc<crate::items::Items>,
     /// What encoding a section needs, shared with the warm-up threads.
     coder: Arc<SectionCoder>,
-    /// Block entity type id per state (-1 for none).
-    entity_types: Vec<i32>,
-    /// A native state's declared type, sent only for a matching instance.
-    mod_entities: Vec<Option<Arc<str>>>,
     /// The mods' update tags (`native_block_entity_update_tag`).
     pub mod_update_tag: Option<ModUpdateTag>,
     /// The states with `trial_spawner_state=active`, whose trial spawner
@@ -120,6 +116,7 @@ pub struct ChunkEncoder {
     cache: std::sync::Mutex<FxHashMap<usize, Encoded>>,
     /// Each column's heightmaps, with the sections they were made from.
     heights: std::sync::Mutex<HashMap<(i32, i32), Heights>>,
+    cache_sweep: usize,
     /// The level's sections among a column's: all of them in the Overworld,
     /// y 0 to 255 in the Nether and the End (`DimensionType` min_y and height).
     sections: std::ops::Range<usize>,
@@ -129,9 +126,13 @@ pub struct ChunkEncoder {
     sky: bool,
 }
 
-/// Per-state flags and biome ids: all a section's encoding reads.
+/// Per-state facts, block entity types and biome ids: all a section's encoding reads.
 struct SectionCoder {
     flags: Vec<u8>,
+    /// Block entity type id per state (-1 for none).
+    entity_types: Vec<i32>,
+    /// A native state's declared type, sent only for a matching instance.
+    mod_entities: Vec<Option<Arc<str>>>,
     /// Network biome id per internal biome index.
     biome_ids: Vec<i32>,
     /// Plains' network id, sent for an index past `biome_ids`: a placeholder for a saved
@@ -171,10 +172,11 @@ fn keep_heights(
     key: (i32, i32),
     sections: &[Arc<Section>],
     maps: &ColumnHeightmaps,
+    cache_sweep: usize,
 ) {
-    if heights.len() >= CACHE_SWEEP / 4 {
+    if heights.len() >= cache_sweep / 4 {
         heights.retain(|_, h| h.sections.iter().all(|w| w.strong_count() > 0));
-        if heights.len() >= CACHE_SWEEP / 8 {
+        if heights.len() >= cache_sweep / 8 {
             heights.clear();
         }
     }
@@ -197,6 +199,7 @@ struct Encoded {
     non_air: bool,
     /// LevelChunkSection.write, and its block entity blocks.
     wire: Option<(Arc<[u8]>, Entities)>,
+    wire_bits: u8,
 }
 
 /// A section's blocks that have a block entity type, as (index, state) in
@@ -231,15 +234,50 @@ fn network_palette(list: &[u32], raw: &[u16]) -> (Vec<i32>, Vec<u32>, Vec<i16>) 
 }
 
 impl SectionCoder {
-    /// LevelChunkSection.write, and its block entity blocks.
-    fn wire(&self, section: &Section) -> (Arc<[u8]>, Entities) {
-        let (encoded, entities) = self.section(section);
-        let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
-        encoded.write(&mut w);
-        (w.data.into(), entities.into())
+    /// LevelChunkSection.hasOnlyAir, negated.
+    fn non_air(&self, section: &Section) -> bool {
+        let non_air = |v: u32| self.flags.get(v as usize).copied().unwrap_or(0) & NON_AIR != 0;
+        // The palette first: most sections are all air, or one block.
+        if !section.blocks.maybe_has(non_air) {
+            false
+        } else if let Some(v) = section.blocks.uniform() {
+            non_air(v)
+        } else {
+            // Stops at the first block, usually near the bottom.
+            (0..BLOCKS).any(|i| non_air(section.blocks.get(i)))
+        }
     }
 
-    fn section(&self, section: &Section) -> (sunrise_protocol::chunk::Section, Vec<(u16, u32)>) {
+    fn entity_type(&self, state: u32) -> Option<i32> {
+        self.entity_types
+            .get(state as usize)
+            .filter(|t| **t >= 0)
+            .copied()
+    }
+
+    fn mod_entity(&self, state: u32) -> Option<&str> {
+        self.mod_entities
+            .get(state as usize)
+            .and_then(Option::as_deref)
+    }
+
+    /// LevelChunkSection.write, its block entity blocks, and whether it holds any non-air block.
+    fn wire_with_non_air(&self, section: &Section, global_bits: u8) -> Warmed {
+        let (encoded, entities) = self.section(section, global_bits);
+        let non_air = encoded.non_empty > 0;
+        let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
+        encoded.write(&mut w);
+        Warmed {
+            wire: (w.data.into(), entities.into()),
+            non_air,
+        }
+    }
+
+    fn section(
+        &self,
+        section: &Section,
+        global_bits: u8,
+    ) -> (sunrise_protocol::chunk::Section, Vec<(u16, u32)>) {
         let (mut non_empty, mut fluids, mut entities) = (0i16, 0i16, Vec::new());
         let mut count = |state: u32, n: i16| {
             let f = self.flags.get(state as usize).copied().unwrap_or(0);
@@ -251,7 +289,6 @@ impl SectionCoder {
             }
             f & ENTITY != 0
         };
-        let global_bits = crate::chunk::block_strategy().global_bits;
         // One block everywhere (all air, mostly): what from_values would give.
         let uniform = section.blocks.uniform();
         let mut raw = [0u16; BLOCKS];
@@ -330,6 +367,78 @@ impl SectionCoder {
 /// Sections kept before the ones no longer resident are dropped.
 const CACHE_SWEEP: usize = 1 << 15;
 
+fn sweep_cache(cache: &mut FxHashMap<usize, Encoded>, cache_sweep: usize) {
+    if cache.len() >= cache_sweep {
+        cache.retain(|_, e| e.section.strong_count() > 0);
+        if cache.len() >= cache_sweep / 2 {
+            cache.clear();
+        }
+    }
+}
+
+fn insert_non_air(
+    cache: &mut FxHashMap<usize, Encoded>,
+    section: &Arc<Section>,
+    non_air: bool,
+    cache_sweep: usize,
+) {
+    sweep_cache(cache, cache_sweep);
+    cache
+        .entry(Arc::as_ptr(section) as usize)
+        .or_insert_with(|| Encoded {
+            section: Arc::downgrade(section),
+            non_air,
+            wire: None,
+            wire_bits: 0,
+        });
+}
+
+fn insert_wire(
+    cache: &mut FxHashMap<usize, Encoded>,
+    section: &Arc<Section>,
+    non_air: bool,
+    wire: &(Arc<[u8]>, Entities),
+    global_bits: u8,
+    cache_sweep: usize,
+) {
+    sweep_cache(cache, cache_sweep);
+    let entry = cache
+        .entry(Arc::as_ptr(section) as usize)
+        .or_insert_with(|| Encoded {
+            section: Arc::downgrade(section),
+            non_air,
+            wire: None,
+            wire_bits: 0,
+        });
+    if entry.wire.is_none() || entry.wire_bits != global_bits {
+        entry.wire = Some(wire.clone());
+        entry.wire_bits = global_bits;
+    }
+}
+
+/// Replay `section_wire`'s two-step lookup and install so sweeps trigger at the same points.
+fn replay_section_wire(
+    cache: &mut FxHashMap<usize, Encoded>,
+    section: &Arc<Section>,
+    non_air: bool,
+    wire: &(Arc<[u8]>, Entities),
+    global_bits: u8,
+    cache_sweep: usize,
+) {
+    sweep_cache(cache, cache_sweep);
+    let entry = cache
+        .entry(Arc::as_ptr(section) as usize)
+        .or_insert_with(|| Encoded {
+            section: Arc::downgrade(section),
+            non_air,
+            wire: None,
+            wire_bits: 0,
+        });
+    if entry.wire.is_none() || entry.wire_bits != global_bits {
+        insert_wire(cache, section, non_air, wire, global_bits, cache_sweep);
+    }
+}
+
 /// Listed uncached section occurrences below which a batch is encoded on the tick's thread
 /// alone: waking the warm-up threads costs more than a few sections.
 const WARM_MIN: usize = 16;
@@ -340,6 +449,7 @@ const WARM_MIN: usize = 16;
 /// varying light, its layers).
 struct Warm {
     coder: Arc<SectionCoder>,
+    global_bits: u8,
     /// The heightmaps' tables, the column's min_y and the level's (min_y,
     /// height).
     heightmaps: Option<(Arc<crate::save::SaveTables>, i32, i32, i32)>,
@@ -349,7 +459,10 @@ struct Warm {
     next: AtomicUsize,
     done: Vec<OnceLock<Warmed>>,
 }
-type Warmed = (Arc<[u8]>, Entities);
+struct Warmed {
+    wire: (Arc<[u8]>, Entities),
+    non_air: bool,
+}
 impl Warm {
     /// Take work until none is left.
     fn run(&self) {
@@ -372,7 +485,7 @@ impl Warm {
             let Some(s) = self.sections.get(i) else {
                 return;
             };
-            let _ = self.done[i].set(self.coder.wire(s));
+            let _ = self.done[i].set(self.coder.wire_with_non_air(s, self.global_bits));
         }
     }
 }
@@ -404,62 +517,441 @@ impl Prepared {
     /// The body as `Clientbound::encode` gives it for LevelChunkWithLight,
     /// written once into a buffer of its final size.
     fn write(&self) -> Vec<u8> {
-        let lights = light_sections(
+        write_body(
+            self.x,
+            self.z,
+            &self.heightmaps,
+            &self.wires,
+            &self.tags,
             &self.sections,
             &self.outside,
-            self.around,
             self.stored,
             self.first_section,
+            self.around,
             self.sky,
-        );
-        let buffer: usize = self.wires.iter().map(|w| w.len()).sum();
-        let layers = lights.payloads[0].len() + lights.payloads[1].len();
-        // Four bitsets with a word count each; the other packet headers fit in 32 bytes.
-        let size = 32
-            + 4 * (1 + SectionMask::CAPACITY / 8)
-            + self
-                .heightmaps
-                .iter()
-                .map(|(_, h)| 10 + 8 * h.len())
-                .sum::<usize>()
-            + buffer
-            + self.tags.len()
-            + layers * (2048 + 3);
-        let mut w = Writer {
-            data: Vec::with_capacity(size),
-        };
-        w.varint(sunrise_protocol::ids::play::clientbound::LEVEL_CHUNK_WITH_LIGHT);
-        w.i32(self.x);
-        w.i32(self.z);
-        Heightmaps::write(&*self.heightmaps, &mut w);
-        w.varint(buffer as i32);
-        for wire in &self.wires {
-            w.bytes(wire);
-        }
-        w.bytes(&self.tags);
-        lights.write(&mut w);
-        w.data
+        )
     }
 }
 
-/// Bodies to finish, each taken by whichever thread is free first. A body
-/// another thread is still writing is waited for (`OnceLock::get_or_init`).
+#[allow(clippy::too_many_arguments)]
+fn write_body(
+    x: i32,
+    z: i32,
+    heightmaps: &ColumnHeightmaps,
+    wires: &[Arc<[u8]>],
+    tags: &[u8],
+    sections: &[Arc<Section>],
+    outside: &[Option<Arc<Section>>; 2],
+    stored: Option<StoredLight>,
+    first_section: usize,
+    around: SectionMask,
+    sky: bool,
+) -> Vec<u8> {
+    let lights = light_sections(sections, outside, around, stored, first_section, sky);
+    let buffer: usize = wires.iter().map(|w| w.len()).sum();
+    let layers = lights.payloads[0].len() + lights.payloads[1].len();
+    // Four bitsets with a word count each; the other packet headers fit in 32 bytes.
+    let size = 32
+        + 4 * (1 + SectionMask::CAPACITY / 8)
+        + heightmaps
+            .iter()
+            .map(|(_, h)| 10 + 8 * h.len())
+            .sum::<usize>()
+        + buffer
+        + tags.len()
+        + layers * (2048 + 3);
+    let mut w = Writer {
+        data: Vec::with_capacity(size),
+    };
+    w.varint(sunrise_protocol::ids::play::clientbound::LEVEL_CHUNK_WITH_LIGHT);
+    w.i32(x);
+    w.i32(z);
+    Heightmaps::write(&**heightmaps, &mut w);
+    w.varint(buffer as i32);
+    for wire in wires {
+        w.bytes(wire);
+    }
+    w.bytes(tags);
+    lights.write(&mut w);
+    w.data
+}
+
+fn outside_sections(sections: &std::ops::Range<usize>, chunk: &Chunk) -> [Option<Arc<Section>>; 2] {
+    [
+        match sections.start {
+            0 => chunk.pad_below.clone(),
+            start => Some(chunk.sections[start - 1].clone()),
+        },
+        match chunk.sections.get(sections.end) {
+            None => chunk.pad_above.clone(),
+            section => section.cloned(),
+        },
+    ]
+}
+
+/// Per-position block entity outcome resolved on the tick thread for a column.
+enum ColumnEntity {
+    Matched(Option<Tag>),
+    Rejected,
+}
+
+type ColumnEntities = FxHashMap<(i32, i32, i32), ColumnEntity>;
+
+struct NeighbourWork {
+    chunk: Arc<Chunk>,
+    known: SectionMask,
+    pending: SectionMask,
+    occupied: OnceLock<SectionMask>,
+}
+
+impl NeighbourWork {
+    fn resolve(&self, coder: &SectionCoder, sections: &std::ops::Range<usize>) -> SectionMask {
+        if self.pending.is_empty() {
+            return self.known;
+        }
+        *self.occupied.get_or_init(|| {
+            let mut mask = self.known;
+            for i in self.pending.iter() {
+                if coder.non_air(&self.chunk.sections[sections.start + i]) {
+                    mask.insert(i);
+                }
+            }
+            mask
+        })
+    }
+}
+
+struct SectionWork {
+    section: Arc<Section>,
+    done: OnceLock<Warmed>,
+}
+
+impl SectionWork {
+    fn resolve(&self, coder: &SectionCoder, global_bits: u8) -> &Warmed {
+        self.done
+            .get_or_init(|| coder.wire_with_non_air(&self.section, global_bits))
+    }
+}
+
+enum SectionRef {
+    Cached {
+        wire: (Arc<[u8]>, Entities),
+        non_air: bool,
+    },
+    Pending(usize),
+}
+
+struct ColumnWork {
+    chunk: Arc<Chunk>,
+    cached_heightmaps: Option<ColumnHeightmaps>,
+    section_refs: Vec<SectionRef>,
+    entities: ColumnEntities,
+    proto_around: SectionMask,
+    loaded_neighbours: [Option<u32>; 9],
+    encode_groups: bool,
+}
+
+pub(in crate::lan) type EncodedColumn = (sunrise_protocol::Result<Vec<u8>>, Vec<Vec<u8>>);
+
+struct ColumnOutput {
+    body: sunrise_protocol::Result<Vec<u8>>,
+    groups: Vec<Vec<u8>>,
+    computed_heightmaps: Option<ColumnHeightmaps>,
+}
+
+/// Active worker count for a job so the tick thread waits until workers release snapshots.
+struct Workers {
+    count: std::sync::Mutex<usize>,
+    done: std::sync::Condvar,
+}
+
+impl Workers {
+    fn new() -> Self {
+        Self {
+            count: std::sync::Mutex::new(0),
+            done: std::sync::Condvar::new(),
+        }
+    }
+
+    fn enter(&self) {
+        *self.count.lock().unwrap() += 1;
+    }
+
+    fn leave(&self) {
+        let mut count = self.count.lock().unwrap();
+        *count -= 1;
+        if *count == 0 {
+            self.done.notify_all();
+        }
+    }
+
+    fn wait_all(&self) {
+        let mut count = self.count.lock().unwrap();
+        while *count > 0 {
+            count = self.done.wait(count).unwrap();
+        }
+    }
+
+    #[cfg(test)]
+    fn wait_all_timeout(&self, timeout: std::time::Duration) -> bool {
+        let deadline = std::time::Instant::now() + timeout;
+        let mut count = self.count.lock().unwrap();
+        while *count > 0 {
+            let remaining = deadline.saturating_duration_since(std::time::Instant::now());
+            if remaining.is_zero() {
+                return false;
+            }
+            let (next, result) = self.done.wait_timeout(count, remaining).unwrap();
+            count = next;
+            if result.timed_out() && *count > 0 {
+                return false;
+            }
+        }
+        true
+    }
+}
+
+struct WorkerGuard(Option<Arc<Workers>>);
+
+impl Drop for WorkerGuard {
+    fn drop(&mut self) {
+        if let Some(workers) = self.0.take() {
+            workers.leave();
+        }
+    }
+}
+
 struct Bodies {
-    columns: Vec<Prepared>,
+    coder: Arc<SectionCoder>,
+    global_bits: u8,
+    heightmaps: Option<(Arc<crate::save::SaveTables>, i32, i32)>,
+    sections: std::ops::Range<usize>,
+    sky: bool,
+    neighbours: Vec<NeighbourWork>,
+    pending_neighbours: Vec<usize>,
+    uncached_sections: Vec<SectionWork>,
+    columns: Vec<ColumnWork>,
     next: AtomicUsize,
-    done: Vec<OnceLock<std::sync::Mutex<Vec<u8>>>>,
+    done: Vec<OnceLock<std::sync::Mutex<Option<ColumnOutput>>>>,
+    workers: Arc<Workers>,
+    #[cfg(test)]
+    after_worker_run: Option<Arc<dyn Fn() + Send + Sync>>,
 }
 impl Bodies {
-    /// Take work until none is left.
+    fn run(&self) {
+        let n_neighbours = self.pending_neighbours.len();
+        let n_sections = self.uncached_sections.len();
+        let col_start = n_neighbours + n_sections;
+        loop {
+            let i = self.next.fetch_add(1, Ordering::Relaxed);
+            if i < n_neighbours {
+                let ni = self.pending_neighbours[i];
+                let _ = self.neighbours[ni].resolve(&self.coder, &self.sections);
+                continue;
+            }
+            if i < col_start {
+                let _ =
+                    self.uncached_sections[i - n_neighbours].resolve(&self.coder, self.global_bits);
+                continue;
+            }
+            let col = i - col_start;
+            if col >= self.columns.len() {
+                return;
+            }
+            let _ = self.finish_column(col);
+        }
+    }
+
+    fn finish_column(&self, col: usize) -> &std::sync::Mutex<Option<ColumnOutput>> {
+        self.done[col].get_or_init(|| std::sync::Mutex::new(Some(self.build_column(col))))
+    }
+
+    fn build_column(&self, col: usize) -> ColumnOutput {
+        let work = &self.columns[col];
+        let chunk = &*work.chunk;
+        let around = if chunk.stored_light().is_some() {
+            SectionMask::EMPTY
+        } else {
+            let mut around = work.proto_around;
+            for ni in work.loaded_neighbours.into_iter().flatten() {
+                around |= self.neighbours[ni as usize].resolve(&self.coder, &self.sections);
+            }
+            around
+        };
+        let mut wires = Vec::with_capacity(self.sections.len());
+        let mut entity_infos = Vec::new();
+        for (offset, s_ref) in work.section_refs.iter().enumerate() {
+            let (encoded, entities) = match s_ref {
+                SectionRef::Cached { wire, .. } => wire,
+                SectionRef::Pending(si) => {
+                    &self.uncached_sections[*si]
+                        .resolve(&self.coder, self.global_bits)
+                        .wire
+                }
+            };
+            let i = self.sections.start + offset;
+            for &(index, state) in entities.iter() {
+                let Some(kind) = self.coder.entity_type(state) else {
+                    continue;
+                };
+                let (x, y, z) = (
+                    i32::from(index & 15),
+                    i32::from(index >> 8),
+                    i32::from(index >> 4 & 15),
+                );
+                let wy = chunk.min_y() + (i as i32) * 16 + y;
+                let pos = (chunk.x * 16 + x, wy, chunk.z * 16 + z);
+                let is_mod_state = self.coder.mod_entity(state).is_some();
+                let entity_tag = match work.entities.get(&pos) {
+                    Some(ColumnEntity::Matched(tag)) => tag.clone(),
+                    Some(ColumnEntity::Rejected) => continue,
+                    None if is_mod_state => continue,
+                    None => None,
+                };
+                entity_infos.push(BlockEntityInfo {
+                    packed_xz: ((x << 4) | z) as i8,
+                    y: wy as i16,
+                    kind,
+                    // BlockEntityInfo.create: an empty update tag is not sent.
+                    tag: entity_tag
+                        .or_else(|| pot_tag(chunk, pos))
+                        .filter(|t| !matches!(t, Tag::Compound(c) if c.is_empty()))
+                        .unwrap_or(Tag::End),
+                });
+            }
+            wires.push(encoded.clone());
+        }
+        if let Some(order) = chunk.saved.as_ref().map(|s| &s.block_entity_order)
+            && !order.is_empty()
+        {
+            let at = |e: &BlockEntityInfo| {
+                let pos = (
+                    chunk.x * 16 + i32::from(e.packed_xz as u8 >> 4),
+                    i32::from(e.y),
+                    chunk.z * 16 + i32::from(e.packed_xz as u8 & 15),
+                );
+                order.iter().position(|p| *p == pos).unwrap_or(usize::MAX)
+            };
+            entity_infos.sort_by_key(at);
+        }
+        java_hash_order(&mut entity_infos, |e| {
+            (
+                chunk.x * 16 + i32::from(e.packed_xz as u8 >> 4),
+                i32::from(e.y),
+                chunk.z * 16 + i32::from(e.packed_xz as u8 & 15),
+            )
+        });
+        let (heightmaps, computed_heightmaps) = match &work.cached_heightmaps {
+            Some(maps) => (maps.clone(), None),
+            None => match &self.heightmaps {
+                Some((tables, min_y, height)) => {
+                    let maps = Arc::new(crate::save::client_heightmaps_in(
+                        &chunk.sections,
+                        chunk.min_y(),
+                        tables,
+                        *min_y,
+                        *height,
+                    ));
+                    (maps.clone(), Some(maps))
+                }
+                None => (ColumnHeightmaps::default(), None),
+            },
+        };
+        let body = match List::<BlockEntityInfo>::validate(&entity_infos) {
+            Ok(()) => {
+                let mut tags = Writer::new();
+                List::<BlockEntityInfo>::write(&entity_infos, &mut tags);
+                let outside = outside_sections(&self.sections, chunk);
+                Ok(write_body(
+                    chunk.x,
+                    chunk.z,
+                    &heightmaps,
+                    &wires,
+                    &tags.data,
+                    &chunk.sections[self.sections.clone()],
+                    &outside,
+                    chunk.stored_light(),
+                    self.sections.start,
+                    around,
+                    self.sky,
+                ))
+            }
+            Err(error) => Err(error),
+        };
+        let groups = if work.encode_groups && body.is_ok() {
+            super::hub::block_changes::encode_chunk_connection_groups(chunk)
+        } else {
+            Vec::new()
+        };
+        ColumnOutput {
+            body,
+            groups,
+            computed_heightmaps,
+        }
+    }
+}
+
+struct PreparedColumn {
+    prepared: Prepared,
+    groups_chunk: Option<Arc<Chunk>>,
+}
+
+struct PreparedBodies {
+    columns: Vec<PreparedColumn>,
+    next: AtomicUsize,
+    done: Vec<OnceLock<std::sync::Mutex<Option<(Vec<u8>, Vec<Vec<u8>>)>>>>,
+    workers: Arc<Workers>,
+}
+
+impl PreparedBodies {
     fn run(&self) {
         loop {
             let i = self.next.fetch_add(1, Ordering::Relaxed);
-            let Some(column) = self.columns.get(i) else {
+            if i >= self.columns.len() {
                 return;
-            };
-            self.done[i].get_or_init(|| std::sync::Mutex::new(column.write()));
+            }
+            let _ = self.finish_column(i);
         }
     }
+
+    fn finish_column(&self, i: usize) -> &std::sync::Mutex<Option<(Vec<u8>, Vec<Vec<u8>>)>> {
+        self.done[i].get_or_init(|| {
+            let col = &self.columns[i];
+            let body = col.prepared.write();
+            let groups = col.groups_chunk.as_deref().map_or_else(
+                Vec::new,
+                super::hub::block_changes::encode_chunk_connection_groups,
+            );
+            std::sync::Mutex::new(Some((body, groups)))
+        })
+    }
+}
+
+#[cfg(test)]
+#[derive(Clone, Copy, PartialEq, Eq)]
+pub(in crate::lan) enum BodiesTestMode {
+    Normal,
+    Serial,
+    ReverseWorkerOrder,
+}
+
+#[cfg(test)]
+thread_local! {
+    static BODIES_TEST_MODE: std::cell::Cell<BodiesTestMode> =
+        const { std::cell::Cell::new(BodiesTestMode::Normal) };
+}
+
+#[cfg(test)]
+pub(in crate::lan) fn with_bodies_test_mode<R>(mode: BodiesTestMode, f: impl FnOnce() -> R) -> R {
+    struct Reset(BodiesTestMode);
+    impl Drop for Reset {
+        fn drop(&mut self) {
+            BODIES_TEST_MODE.with(|slot| slot.set(self.0));
+        }
+    }
+    let previous = BODIES_TEST_MODE.with(|slot| slot.replace(mode));
+    let _reset = Reset(previous);
+    f()
 }
 
 /// What the warm-up threads take.
@@ -467,12 +959,29 @@ impl Bodies {
 enum Job {
     Warm(Arc<Warm>),
     Bodies(Arc<Bodies>),
+    PreparedBodies(Arc<PreparedBodies>),
 }
 impl Job {
     fn run(&self) {
         match self {
             Self::Warm(job) => job.run(),
             Self::Bodies(job) => job.run(),
+            Self::PreparedBodies(job) => job.run(),
+        }
+    }
+    fn workers(&self) -> Option<Arc<Workers>> {
+        match self {
+            Self::Warm(_) => None,
+            Self::Bodies(job) => Some(job.workers.clone()),
+            Self::PreparedBodies(job) => Some(job.workers.clone()),
+        }
+    }
+    #[cfg(test)]
+    fn after_worker_run(&self) {
+        if let Self::Bodies(job) = self
+            && let Some(hook) = &job.after_worker_run
+        {
+            hook();
         }
     }
     /// Whether this is the job behind `ptr`.
@@ -480,6 +989,7 @@ impl Job {
         match self {
             Self::Warm(job) => Arc::as_ptr(job).cast::<()>() == ptr,
             Self::Bodies(job) => Arc::as_ptr(job).cast::<()>() == ptr,
+            Self::PreparedBodies(job) => Arc::as_ptr(job).cast::<()>() == ptr,
         }
     }
 }
@@ -491,6 +1001,50 @@ struct WarmPool {
     ready: std::sync::Condvar,
 }
 impl WarmPool {
+    fn start(threads: usize) -> Option<Arc<Self>> {
+        let pool = Arc::new(Self {
+            job: Default::default(),
+            ready: Default::default(),
+        });
+        let started = (0..threads)
+            .filter(|i| {
+                let pool = pool.clone();
+                std::thread::Builder::new()
+                    .name(format!("sunrise-chunk-encode-{i}"))
+                    .spawn(move || {
+                        let mut done = 0;
+                        loop {
+                            let taken = {
+                                let mut slot = pool.job.lock().unwrap();
+                                while slot.0 == done {
+                                    slot = pool.ready.wait(slot).unwrap();
+                                }
+                                done = slot.0;
+                                slot.1.clone().map(|job| {
+                                    let workers = job.workers();
+                                    if let Some(ref workers) = workers {
+                                        workers.enter();
+                                    }
+                                    (job, workers)
+                                })
+                            };
+                            if let Some((job, workers)) = taken {
+                                let _guard = WorkerGuard(workers);
+                                // Drop `job` inside this block so worker snapshots release before `leave()`.
+                                {
+                                    let job = job;
+                                    job.run();
+                                    #[cfg(test)]
+                                    job.after_worker_run();
+                                }
+                            }
+                        }
+                    })
+                    .is_ok()
+            })
+            .count();
+        (started > 0).then_some(pool)
+    }
     /// Hand `job` to the threads.
     fn post(&self, job: Job) {
         {
@@ -513,39 +1067,8 @@ impl WarmPool {
 /// when no thread could start.
 fn warm_pool() -> Option<&'static WarmPool> {
     static POOL: OnceLock<Option<Arc<WarmPool>>> = OnceLock::new();
-    POOL.get_or_init(|| {
-        let threads = sunrise_threads::worker_count() - 1;
-        let pool = Arc::new(WarmPool {
-            job: Default::default(),
-            ready: Default::default(),
-        });
-        let started = (0..threads)
-            .filter(|i| {
-                let pool = pool.clone();
-                std::thread::Builder::new()
-                    .name(format!("sunrise-chunk-encode-{i}"))
-                    .spawn(move || {
-                        let mut done = 0;
-                        loop {
-                            let job = {
-                                let mut slot = pool.job.lock().unwrap();
-                                while slot.0 == done {
-                                    slot = pool.ready.wait(slot).unwrap();
-                                }
-                                done = slot.0;
-                                slot.1.clone()
-                            };
-                            if let Some(job) = job {
-                                job.run();
-                            }
-                        }
-                    })
-                    .is_ok()
-            })
-            .count();
-        (started > 0).then_some(pool)
-    })
-    .as_deref()
+    POOL.get_or_init(|| WarmPool::start(sunrise_threads::worker_count() - 1))
+        .as_deref()
 }
 impl ChunkEncoder {
     /// `biome_names`: the internal biome list in order; `biome_registry`:
@@ -638,6 +1161,8 @@ impl ChunkEncoder {
             items,
             coder: Arc::new(SectionCoder {
                 flags,
+                entity_types,
+                mod_entities,
                 biome_ids,
                 biome_fallback: biome_registry
                     .iter()
@@ -645,14 +1170,13 @@ impl ChunkEncoder {
                     .map_or(0, |i| i as i32),
                 biome_bits: ceil_log2(biome_registry.len()),
             }),
-            entity_types,
-            mod_entities,
             mod_update_tag: None,
             trial_active: Vec::new(),
             block_ids,
             tables: None,
             cache: Default::default(),
             heights: Default::default(),
+            cache_sweep: CACHE_SWEEP,
             sections: 0..ColumnLayout::VANILLA.sections(),
             column: ColumnLayout::VANILLA,
             sky: true,
@@ -684,7 +1208,13 @@ impl ChunkEncoder {
             min_y,
             height,
         ));
-        keep_heights(&mut heights, (chunk.x, chunk.z), &chunk.sections, &maps);
+        keep_heights(
+            &mut heights,
+            (chunk.x, chunk.z),
+            &chunk.sections,
+            &maps,
+            self.cache_sweep,
+        );
         maps
     }
 
@@ -742,44 +1272,42 @@ impl ChunkEncoder {
         cache: &'a mut FxHashMap<usize, Encoded>,
         section: &Arc<Section>,
     ) -> &'a mut Encoded {
-        if cache.len() >= CACHE_SWEEP {
-            cache.retain(|_, e| e.section.strong_count() > 0);
-            if cache.len() >= CACHE_SWEEP / 2 {
-                cache.clear();
-            }
-        }
+        sweep_cache(cache, self.cache_sweep);
         cache
             .entry(Arc::as_ptr(section) as usize)
             .or_insert_with(|| Encoded {
                 section: Arc::downgrade(section),
                 non_air: self.non_air(section),
                 wire: None,
+                wire_bits: 0,
             })
     }
 
     /// LevelChunkSection.hasOnlyAir, negated.
     fn non_air(&self, section: &Section) -> bool {
-        let non_air =
-            |v: u32| self.coder.flags.get(v as usize).copied().unwrap_or(0) & NON_AIR != 0;
-        // The palette first: most sections are all air, or one block.
-        if !section.blocks.maybe_has(non_air) {
-            false
-        } else if let Some(v) = section.blocks.uniform() {
-            non_air(v)
-        } else {
-            // Stops at the first block, usually near the bottom.
-            (0..BLOCKS).any(|i| non_air(section.blocks.get(i)))
-        }
+        self.coder.non_air(section)
     }
 
     /// A section on the wire, from the cache or encoded now.
     fn section_wire(&self, section: &Arc<Section>) -> (Arc<[u8]>, Entities) {
-        if let Some(wire) = self.cached(section, |e| e.wire.clone()) {
+        let global_bits = crate::chunk::block_strategy().global_bits;
+        if let Some(wire) = self.cached(section, |e| {
+            (e.wire_bits == global_bits)
+                .then(|| e.wire.clone())
+                .flatten()
+        }) {
             return wire;
         }
-        let wire = self.coder.wire(section);
-        self.cached(section, |e| e.wire = Some(wire.clone()));
-        wire
+        let warmed = self.coder.wire_with_non_air(section, global_bits);
+        insert_wire(
+            &mut self.cache.lock().unwrap(),
+            section,
+            warmed.non_air,
+            &warmed.wire,
+            global_bits,
+            self.cache_sweep,
+        );
+        warmed.wire
     }
     /// Encode for a level of `shape`: its chunks hold `shape.column()`, of
     /// which the level's own sections go on the wire.
@@ -794,18 +1322,11 @@ impl ChunkEncoder {
         self.heights.get_mut().unwrap().clear();
     }
     pub fn entity_type(&self, state: u32) -> Option<i32> {
-        self.entity_types
-            .get(state as usize)
-            .filter(|t| **t >= 0)
-            .copied()
+        self.coder.entity_type(state)
     }
     /// Native entities must match the state's declared type, for chunks and updates alike.
     pub fn entity_matches(&self, state: u32, entity: Option<&BlockEntity>) -> bool {
-        match self
-            .mod_entities
-            .get(state as usize)
-            .and_then(Option::as_deref)
-        {
+        match self.coder.mod_entity(state) {
             Some(kind) => matches!(entity, Some(BlockEntity::Mod(m)) if m.id() == kind),
             None => !matches!(entity, Some(BlockEntity::Mod(_))),
         }
@@ -969,14 +1490,13 @@ impl ChunkEncoder {
         Self {
             items: self.items.clone(),
             coder: self.coder.clone(),
-            entity_types: self.entity_types.clone(),
-            mod_entities: self.mod_entities.clone(),
             mod_update_tag: self.mod_update_tag,
             trial_active: self.trial_active.clone(),
             block_ids: self.block_ids.clone(),
             tables: self.tables.clone(),
             cache: Default::default(),
             heights: Default::default(),
+            cache_sweep: self.cache_sweep,
             sections: self.sections.clone(),
             column: self.column,
             sky: self.sky,
@@ -1019,6 +1539,7 @@ impl ChunkEncoder {
             }
             None => Vec::new(),
         };
+        let global_bits = crate::chunk::block_strategy().global_bits;
         let mut sections: Vec<Arc<Section>> = {
             let cache = self.cache.lock().unwrap();
             columns
@@ -1027,7 +1548,7 @@ impl ChunkEncoder {
                 .filter(|s| {
                     cache
                         .get(&(Arc::as_ptr(s) as usize))
-                        .is_none_or(|e| e.wire.is_none())
+                        .is_none_or(|e| e.wire.is_none() || e.wire_bits != global_bits)
                 })
                 .cloned()
                 .collect()
@@ -1040,6 +1561,7 @@ impl ChunkEncoder {
         let (min_y, height) = self.level();
         Some(Warm {
             coder: self.coder.clone(),
+            global_bits,
             heightmaps: self
                 .tables
                 .clone()
@@ -1058,14 +1580,21 @@ impl ChunkEncoder {
             let mut heights = self.heights.lock().unwrap();
             for ((key, sections), done) in job.columns.iter().zip(&job.heights) {
                 if let Some(maps) = done.get() {
-                    keep_heights(&mut heights, *key, sections, maps);
+                    keep_heights(&mut heights, *key, sections, maps, self.cache_sweep);
                 }
             }
         }
         let mut cache = self.cache.lock().unwrap();
         for (s, done) in job.sections.iter().zip(&job.done) {
-            if let Some(wire) = done.get() {
-                self.entry(&mut cache, s).wire = Some(wire.clone());
+            if let Some(warmed) = done.get() {
+                insert_wire(
+                    &mut cache,
+                    s,
+                    warmed.non_air,
+                    &warmed.wire,
+                    job.global_bits,
+                    self.cache_sweep,
+                );
             }
         }
     }
@@ -1107,63 +1636,536 @@ impl ChunkEncoder {
         })
     }
 
-    /// [`Self::body_with`] for each of `chunks`, in their order. What reads
-    /// the level is done here, column by column as `body_with` does; the
-    /// light layers and the writing, most of a body's cost, go to the warm-up
-    /// threads too when there are enough columns. This thread takes bodies
-    /// as well and waits only for the ones still being written.
-    pub fn bodies_with(
+    /// Resolve a column's live block entities on the tick thread so mod update hooks stay on it.
+    fn snapshot_column_entities(
+        &self,
+        chunk: &Chunk,
+        block_entities: &crate::block_entities::BlockEntities,
+    ) -> ColumnEntities {
+        let mut out = ColumnEntities::default();
+        let mut mod_positions: Vec<(i32, i32, i32)> = Vec::new();
+        for &pos in block_entities.in_chunk((chunk.x, chunk.z)) {
+            let Some(entity) = block_entities.get(&pos) else {
+                continue;
+            };
+            let Some(sec_i) = chunk.section_index(pos.1) else {
+                continue;
+            };
+            if !self.sections.contains(&sec_i) {
+                continue;
+            }
+            let state = chunk.sections[sec_i].get(crate::chunk::index(pos.0, pos.1, pos.2));
+            if self.entity_type(state).is_none() {
+                continue;
+            }
+            match entity {
+                BlockEntity::Mod(_) => mod_positions.push(pos),
+                _ => {
+                    if self.entity_matches(state, Some(entity))
+                        && let Some(tag) =
+                            entity_tag(entity, self.trial_active.contains(&state), &self.items)
+                    {
+                        out.insert(pos, ColumnEntity::Matched(Some(tag)));
+                    }
+                }
+            }
+        }
+        if !mod_positions.is_empty() {
+            // Invoke mod update hooks in section/block scan order `(y, z, x)`.
+            mod_positions.sort_unstable_by_key(|&(x, y, z)| (y, z, x));
+            for pos in mod_positions {
+                let Some(entity) = block_entities.get(&pos) else {
+                    continue;
+                };
+                let Some(sec_i) = chunk.section_index(pos.1) else {
+                    continue;
+                };
+                let state = chunk.sections[sec_i].get(crate::chunk::index(pos.0, pos.1, pos.2));
+                if self.entity_matches(state, Some(entity)) {
+                    let tag = self.update_tag(pos, state, entity);
+                    out.insert(pos, ColumnEntity::Matched(tag));
+                } else if self.coder.mod_entity(state).is_none() {
+                    out.insert(pos, ColumnEntity::Rejected);
+                }
+            }
+        }
+        out
+    }
+
+    fn has_active_mod_hooks(
+        &self,
+        chunks: &[&Chunk],
+        block_entities: &crate::block_entities::BlockEntities,
+    ) -> bool {
+        self.mod_update_tag.is_some()
+            && chunks.iter().any(|c| {
+                block_entities.mods_in((c.x, c.z)).any(|&pos| {
+                    let Some(entity) = block_entities.get(&pos) else {
+                        return false;
+                    };
+                    let Some(sec_i) = c.section_index(pos.1) else {
+                        return false;
+                    };
+                    if !self.sections.contains(&sec_i) {
+                        return false;
+                    }
+                    let state = c.sections[sec_i].get(crate::chunk::index(pos.0, pos.1, pos.2));
+                    self.entity_type(state).is_some() && self.entity_matches(state, Some(entity))
+                })
+            })
+    }
+
+    /// Build the immutable inputs for preparing and writing `chunks` on `WarmPool`.
+    fn bodies_job(
         &self,
         chunks: &[&Chunk],
         world: &crate::world::World,
         protos: &dyn Fn(i32, i32) -> Option<SectionMask>,
-    ) -> Vec<sunrise_protocol::Result<Vec<u8>>> {
+        encode_groups: bool,
+    ) -> Bodies {
+        let global_bits = crate::chunk::block_strategy().global_bits;
+        let mut loaded_neighbour_map: FxHashMap<(i32, i32), u32> = FxHashMap::default();
+        let mut neighbours: Vec<NeighbourWork> = Vec::new();
+        let mut col_inputs = Vec::with_capacity(chunks.len());
+        for &c in chunks {
+            let chunk_arc = world
+                .chunks
+                .get(&(c.x, c.z))
+                .filter(|arc| std::ptr::eq(Arc::as_ptr(arc), c))
+                .cloned()
+                .unwrap_or_else(|| Arc::new(c.clone()));
+            let mut proto_around = SectionMask::EMPTY;
+            let mut loaded_neighbours = [None; 9];
+            if c.stored_light().is_none() {
+                let mut slot_i = 0;
+                for dz in -1..=1 {
+                    for dx in -1..=1 {
+                        let key = (c.x + dx, c.z + dz);
+                        if let Some(nc) = world.chunks.get(&key) {
+                            let ni = *loaded_neighbour_map.entry(key).or_insert_with(|| {
+                                let ni = neighbours.len() as u32;
+                                neighbours.push(NeighbourWork {
+                                    chunk: nc.clone(),
+                                    known: SectionMask::EMPTY,
+                                    pending: SectionMask::EMPTY,
+                                    occupied: OnceLock::new(),
+                                });
+                                ni
+                            });
+                            loaded_neighbours[slot_i] = Some(ni);
+                        } else if let Some(sections) = protos(key.0, key.1) {
+                            for i in sections.iter() {
+                                if self.sections.contains(&i) {
+                                    proto_around.insert(i - self.sections.start);
+                                }
+                            }
+                        }
+                        slot_i += 1;
+                    }
+                }
+            }
+            let entities = self.snapshot_column_entities(c, &world.block_entities);
+            let want_groups = encode_groups && !c.connection_groups.is_empty();
+            col_inputs.push((
+                chunk_arc,
+                entities,
+                proto_around,
+                loaded_neighbours,
+                want_groups,
+            ));
+        }
+        let cached_heights_list: Vec<Option<ColumnHeightmaps>> = match &self.tables {
+            Some(_) => {
+                let heights = self.heights.lock().unwrap();
+                chunks.iter().map(|c| cached_heights(&heights, c)).collect()
+            }
+            None => vec![None; chunks.len()],
+        };
+        let mut pending_neighbours: Vec<usize> = Vec::new();
+        let mut uncached_map: FxHashMap<usize, usize> = FxHashMap::default();
+        let mut uncached_sections: Vec<SectionWork> = Vec::new();
+        let mut columns: Vec<ColumnWork> = Vec::with_capacity(chunks.len());
+        {
+            let cache = self.cache.lock().unwrap();
+            for (ni, n) in neighbours.iter_mut().enumerate() {
+                for (i, s) in n.chunk.sections[self.sections.clone()].iter().enumerate() {
+                    if s.blocks.bits() == 0 {
+                        if !self.is_air(s.blocks.get(0)) {
+                            n.known.insert(i);
+                        }
+                    } else if let Some(entry) = cache.get(&(Arc::as_ptr(s) as usize)) {
+                        if entry.non_air {
+                            n.known.insert(i);
+                        }
+                    } else {
+                        n.pending.insert(i);
+                    }
+                }
+                if !n.pending.is_empty() {
+                    pending_neighbours.push(ni);
+                }
+            }
+            for ((chunk, entities, proto_around, loaded_neighbours, encode_groups), cached_h) in
+                col_inputs.into_iter().zip(cached_heights_list)
+            {
+                let mut section_refs = Vec::with_capacity(self.sections.len());
+                for s in &chunk.sections[self.sections.clone()] {
+                    let ptr = Arc::as_ptr(s) as usize;
+                    if let Some(entry) = cache.get(&ptr)
+                        && entry.wire_bits == global_bits
+                        && let Some(wire) = &entry.wire
+                    {
+                        section_refs.push(SectionRef::Cached {
+                            wire: wire.clone(),
+                            non_air: entry.non_air,
+                        });
+                    } else {
+                        let si = *uncached_map.entry(ptr).or_insert_with(|| {
+                            let si = uncached_sections.len();
+                            uncached_sections.push(SectionWork {
+                                section: s.clone(),
+                                done: OnceLock::new(),
+                            });
+                            si
+                        });
+                        section_refs.push(SectionRef::Pending(si));
+                    }
+                }
+                columns.push(ColumnWork {
+                    chunk,
+                    cached_heightmaps: cached_h,
+                    section_refs,
+                    entities,
+                    proto_around,
+                    loaded_neighbours,
+                    encode_groups,
+                });
+            }
+        }
+        let (min_y, height) = self.level();
+        Bodies {
+            coder: self.coder.clone(),
+            global_bits,
+            heightmaps: self.tables.clone().map(|t| (t, min_y, height)),
+            sections: self.sections.clone(),
+            sky: self.sky,
+            neighbours,
+            pending_neighbours,
+            uncached_sections,
+            done: columns.iter().map(|_| OnceLock::new()).collect(),
+            columns,
+            next: AtomicUsize::new(0),
+            workers: Arc::new(Workers::new()),
+            #[cfg(test)]
+            after_worker_run: None,
+        }
+    }
+
+    /// Publish newly computed cache entries and heightmaps on the tick thread in column order.
+    fn publish_bodies(&self, job: &Bodies, computed_heights: &[Option<ColumnHeightmaps>]) {
+        if self.tables.is_some() && computed_heights.iter().any(Option::is_some) {
+            let mut heights = self.heights.lock().unwrap();
+            for (work, computed) in job.columns.iter().zip(computed_heights) {
+                let chunk = &*work.chunk;
+                if cached_heights(&heights, chunk).is_none()
+                    && let Some(maps) = computed.as_ref().or(work.cached_heightmaps.as_ref())
+                {
+                    keep_heights(
+                        &mut heights,
+                        (chunk.x, chunk.z),
+                        &chunk.sections,
+                        maps,
+                        self.cache_sweep,
+                    );
+                }
+            }
+        }
+        let mut cache = self.cache.lock().unwrap();
+        let max_new = job.uncached_sections.len()
+            + job
+                .pending_neighbours
+                .iter()
+                .map(|&ni| job.neighbours[ni].pending.len())
+                .sum::<usize>();
+        if cache.len() + max_new < self.cache_sweep {
+            for &ni in &job.pending_neighbours {
+                let n = &job.neighbours[ni];
+                let occupied = n.resolve(&self.coder, &self.sections);
+                for i in n.pending.iter() {
+                    let s = &n.chunk.sections[self.sections.start + i];
+                    cache
+                        .entry(Arc::as_ptr(s) as usize)
+                        .or_insert_with(|| Encoded {
+                            section: Arc::downgrade(s),
+                            non_air: occupied.contains(i),
+                            wire: None,
+                            wire_bits: 0,
+                        });
+                }
+            }
+            for sw in &job.uncached_sections {
+                let warmed = sw.resolve(&self.coder, job.global_bits);
+                let entry = cache
+                    .entry(Arc::as_ptr(&sw.section) as usize)
+                    .or_insert_with(|| Encoded {
+                        section: Arc::downgrade(&sw.section),
+                        non_air: warmed.non_air,
+                        wire: None,
+                        wire_bits: 0,
+                    });
+                if entry.wire.is_none() || entry.wire_bits != job.global_bits {
+                    entry.wire = Some(warmed.wire.clone());
+                    entry.wire_bits = job.global_bits;
+                }
+            }
+        } else {
+            for work in &job.columns {
+                if work.chunk.stored_light().is_none() {
+                    for ni in work.loaded_neighbours.into_iter().flatten() {
+                        let n = &job.neighbours[ni as usize];
+                        let occupied = n.resolve(&self.coder, &self.sections);
+                        for (i, s) in n.chunk.sections[self.sections.clone()].iter().enumerate() {
+                            if s.blocks.bits() != 0 {
+                                insert_non_air(
+                                    &mut cache,
+                                    s,
+                                    occupied.contains(i),
+                                    self.cache_sweep,
+                                );
+                            }
+                        }
+                    }
+                }
+                for (offset, s_ref) in work.section_refs.iter().enumerate() {
+                    let s = &work.chunk.sections[self.sections.start + offset];
+                    let (wire, non_air) = match s_ref {
+                        SectionRef::Cached { wire, non_air } => (wire, *non_air),
+                        SectionRef::Pending(si) => {
+                            let w =
+                                job.uncached_sections[*si].resolve(&self.coder, job.global_bits);
+                            (&w.wire, w.non_air)
+                        }
+                    };
+                    replay_section_wire(
+                        &mut cache,
+                        s,
+                        non_air,
+                        wire,
+                        job.global_bits,
+                        self.cache_sweep,
+                    );
+                }
+            }
+        }
+    }
+
+    fn finish_bodies(&self, job: &Bodies) -> Vec<EncodedColumn> {
+        let mut results = Vec::with_capacity(job.columns.len());
+        let mut computed_heights = Vec::with_capacity(job.columns.len());
+        for col in 0..job.columns.len() {
+            let slot = job.finish_column(col);
+            let output = slot
+                .lock()
+                .unwrap()
+                .take()
+                .expect("column output taken once");
+            computed_heights.push(output.computed_heightmaps);
+            results.push((output.body, output.groups));
+        }
+        self.publish_bodies(job, &computed_heights);
+        results
+    }
+
+    fn run_bodies_on_pool(&self, pool: &WarmPool, job: Arc<Bodies>) -> Vec<EncodedColumn> {
+        let workers = job.workers.clone();
+        pool.post(Job::Bodies(job.clone()));
+        job.run();
+        pool.clear(Arc::as_ptr(&job).cast());
+        let results = self.finish_bodies(&job);
+        drop(job);
+        workers.wait_all();
+        results
+    }
+
+    /// Original prepare-all-then-write path so active mod hooks keep their exact interleaving.
+    fn bodies_with_prepared(
+        &self,
+        chunks: &[&Chunk],
+        world: &crate::world::World,
+        protos: &dyn Fn(i32, i32) -> Option<SectionMask>,
+        encode_groups: bool,
+        reverse_worker_order: bool,
+    ) -> Vec<EncodedColumn> {
         let prepared: Vec<sunrise_protocol::Result<Prepared>> = chunks
             .iter()
             .map(|c| self.prepare(c, &world.block_entities, self.around(c, world, protos)))
             .collect();
         let mut valid_indices = Vec::new();
         let mut columns = Vec::new();
-        let mut results: Vec<Option<sunrise_protocol::Result<Vec<u8>>>> =
-            (0..prepared.len()).map(|_| None).collect();
-        for (idx, item) in prepared.into_iter().enumerate() {
+        let mut results: Vec<Option<EncodedColumn>> = (0..prepared.len()).map(|_| None).collect();
+        for (idx, (item, &c)) in prepared.into_iter().zip(chunks).enumerate() {
             match item {
                 Ok(column) => {
+                    let groups_chunk =
+                        (encode_groups && !c.connection_groups.is_empty()).then(|| {
+                            world
+                                .chunks
+                                .get(&(c.x, c.z))
+                                .filter(|arc| std::ptr::eq(Arc::as_ptr(arc), c))
+                                .cloned()
+                                .unwrap_or_else(|| Arc::new(c.clone()))
+                        });
                     valid_indices.push(idx);
-                    columns.push(column);
+                    columns.push(PreparedColumn {
+                        prepared: column,
+                        groups_chunk,
+                    });
                 }
-                Err(error) => results[idx] = Some(Err(error)),
+                Err(error) => results[idx] = Some((Err(error), Vec::new())),
             }
         }
-        let pool = if columns.len() >= BODIES_MIN {
-            warm_pool()
-        } else {
-            None
-        };
-        if let Some(pool) = pool {
-            let job = Arc::new(Bodies {
+        if reverse_worker_order {
+            let job = Arc::new(PreparedBodies {
                 done: columns.iter().map(|_| OnceLock::new()).collect(),
                 columns,
                 next: AtomicUsize::new(0),
+                workers: Arc::new(Workers::new()),
             });
-            pool.post(Job::Bodies(job.clone()));
+            std::thread::scope(|s| {
+                s.spawn(|| {
+                    for col in (0..job.columns.len()).rev() {
+                        let _ = job.finish_column(col);
+                    }
+                });
+            });
+            for (slot, col) in valid_indices.into_iter().enumerate() {
+                let (body, groups) = job
+                    .finish_column(slot)
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("prepared output taken once");
+                results[col] = Some((Ok(body), groups));
+            }
+        } else if columns.len() >= BODIES_MIN
+            && let Some(pool) = warm_pool()
+        {
+            let workers = Arc::new(Workers::new());
+            let job = Arc::new(PreparedBodies {
+                done: columns.iter().map(|_| OnceLock::new()).collect(),
+                columns,
+                next: AtomicUsize::new(0),
+                workers: workers.clone(),
+            });
+            pool.post(Job::PreparedBodies(job.clone()));
             job.run();
             pool.clear(Arc::as_ptr(&job).cast());
-            for (slot, (c, done)) in valid_indices
-                .into_iter()
-                .zip(job.columns.iter().zip(&job.done))
-            {
-                let body = done.get_or_init(|| std::sync::Mutex::new(c.write()));
-                results[slot] = Some(Ok(std::mem::take(&mut *body.lock().unwrap())));
+            for (slot, col) in valid_indices.into_iter().enumerate() {
+                let (body, groups) = job
+                    .finish_column(slot)
+                    .lock()
+                    .unwrap()
+                    .take()
+                    .expect("prepared output taken once");
+                results[col] = Some((Ok(body), groups));
             }
+            drop(job);
+            workers.wait_all();
         } else {
-            for (slot, column) in valid_indices.into_iter().zip(&columns) {
-                results[slot] = Some(Ok(column.write()));
+            for (slot, col) in valid_indices.into_iter().zip(&columns) {
+                let body = col.prepared.write();
+                let groups = col.groups_chunk.as_deref().map_or_else(
+                    Vec::new,
+                    super::hub::block_changes::encode_chunk_connection_groups,
+                );
+                results[slot] = Some((Ok(body), groups));
             }
         }
         results
             .into_iter()
             .map(|item| item.expect("every column has a result"))
+            .collect()
+    }
+
+    fn bodies_with_serial(
+        &self,
+        chunks: &[&Chunk],
+        world: &crate::world::World,
+        protos: &dyn Fn(i32, i32) -> Option<SectionMask>,
+        encode_groups: bool,
+    ) -> Vec<EncodedColumn> {
+        chunks
+            .iter()
+            .map(|c| {
+                let body = self
+                    .prepare(c, &world.block_entities, self.around(c, world, protos))
+                    .map(|p| p.write());
+                let groups = if encode_groups && body.is_ok() && !c.connection_groups.is_empty() {
+                    super::hub::block_changes::encode_chunk_connection_groups(c)
+                } else {
+                    Vec::new()
+                };
+                (body, groups)
+            })
+            .collect()
+    }
+
+    /// [`Self::body_with`] for each of `chunks`, in order, with optional group packets.
+    pub(in crate::lan) fn bodies_with_groups(
+        &self,
+        chunks: &[&Chunk],
+        world: &crate::world::World,
+        protos: &dyn Fn(i32, i32) -> Option<SectionMask>,
+        encode_groups: bool,
+    ) -> Vec<EncodedColumn> {
+        let active_mod_hooks = self.has_active_mod_hooks(chunks, &world.block_entities);
+        #[cfg(test)]
+        match BODIES_TEST_MODE.with(std::cell::Cell::get) {
+            BodiesTestMode::Serial => {
+                return self.bodies_with_serial(chunks, world, protos, encode_groups);
+            }
+            BodiesTestMode::ReverseWorkerOrder => {
+                if active_mod_hooks {
+                    return self.bodies_with_prepared(chunks, world, protos, encode_groups, true);
+                }
+                let job = Arc::new(self.bodies_job(chunks, world, protos, encode_groups));
+                std::thread::scope(|s| {
+                    s.spawn(|| {
+                        for col in (0..job.columns.len()).rev() {
+                            let _ = job.finish_column(col);
+                        }
+                    });
+                });
+                return self.finish_bodies(&job);
+            }
+            BodiesTestMode::Normal => {}
+        }
+        if active_mod_hooks {
+            return self.bodies_with_prepared(chunks, world, protos, encode_groups, false);
+        }
+        let pool = if chunks.len() >= BODIES_MIN {
+            warm_pool()
+        } else {
+            None
+        };
+        if let Some(pool) = pool {
+            let job = Arc::new(self.bodies_job(chunks, world, protos, encode_groups));
+            self.run_bodies_on_pool(pool, job)
+        } else {
+            self.bodies_with_serial(chunks, world, protos, encode_groups)
+        }
+    }
+
+    /// [`Self::body_with`] for each of `chunks`, in their order.
+    pub fn bodies_with(
+        &self,
+        chunks: &[&Chunk],
+        world: &crate::world::World,
+        protos: &dyn Fn(i32, i32) -> Option<SectionMask>,
+    ) -> Vec<sunrise_protocol::Result<Vec<u8>>> {
+        self.bodies_with_groups(chunks, world, protos, false)
+            .into_iter()
+            .map(|(body, _)| body)
             .collect()
     }
 
@@ -1336,16 +2338,7 @@ impl ChunkEncoder {
 
     /// The sections that light layers just past the level's range come from.
     fn outside(&self, chunk: &Chunk) -> [Option<Arc<Section>>; 2] {
-        [
-            match self.sections.start {
-                0 => chunk.pad_below.clone(),
-                start => Some(chunk.sections[start - 1].clone()),
-            },
-            match chunk.sections.get(self.sections.end) {
-                None => chunk.pad_above.clone(),
-                section => section.cloned(),
-            },
-        ]
+        outside_sections(&self.sections, chunk)
     }
 }
 
@@ -2185,7 +3178,11 @@ mod tests {
     /// The bytes on the wire for a section, encoded afresh.
     fn fresh(encoder: &ChunkEncoder, section: &Section) -> Vec<u8> {
         let mut w = ::sunrise_core::vanilla_bytes::Writer::new();
-        encoder.coder.section(section).0.write(&mut w);
+        encoder
+            .coder
+            .section(section, crate::chunk::block_strategy().global_bits)
+            .0
+            .write(&mut w);
         w.data
     }
 
@@ -2977,5 +3974,994 @@ mod tests {
             Some(Tag::Long(7))
         );
         assert_eq!(encoder.update_tag(at, 1, &spawner(7)), None);
+    }
+
+    #[test]
+    fn prepared_and_encoded_columns_match_serial_reference_and_caches() {
+        use crate::block_entity_types::BlockEntityTypes;
+        use crate::chunk::ChunkExtras;
+        use crate::containers::Beacon;
+        use std::cell::RefCell;
+        use sunrise_world::registry::BlockStateId;
+
+        thread_local! {
+            static MOD_TAG_CALLS: RefCell<Vec<[i32; 3]>> = const { RefCell::new(Vec::new()) };
+        }
+        fn record_mod_tag(pos: [i32; 3], entity: &ModBlockEntity) -> Option<Compound> {
+            MOD_TAG_CALLS.with(|calls| calls.borrow_mut().push(pos));
+            let mut tag = Compound::new();
+            tag.insert("pos_x".into(), Tag::Int(pos[0]));
+            if let Some(v) = entity.nbt.get(&JavaString::from("power")) {
+                tag.insert("power".into(), v.clone());
+            }
+            Some(tag)
+        }
+
+        let builtin = Builtin::parse(
+            r#"{"minecraft:block_entity_type": {"entries": {
+                "minecraft:chest": {"protocol_id": 1},
+                "minecraft:sign": {"protocol_id": 7},
+                "minecraft:beacon": {"protocol_id": 14},
+                "minecraft:decorated_pot": {"protocol_id": 42},
+                "minecraft:trial_spawner": {"protocol_id": 43},
+                "test:machine": {"protocol_id": 49}}}}"#,
+        )
+        .unwrap();
+        let types = BlockEntityTypes::new(
+            [("test:machine".into(), "test:machine".into())].into(),
+            builtin
+                .get("minecraft:block_entity_type")
+                .unwrap()
+                .names
+                .clone(),
+            ["test:machine".into()],
+        );
+        let states = [
+            ("minecraft:air", false),
+            ("minecraft:stone", false),
+            ("minecraft:water", true),
+            ("minecraft:chest", false),
+            ("minecraft:oak_sign", false),
+            ("minecraft:beacon", false),
+            ("minecraft:decorated_pot", false),
+            ("minecraft:trial_spawner", false),
+            ("minecraft:trial_spawner", false),
+            ("test:machine", false),
+        ];
+        let tables = Arc::new(crate::save::SaveTables::for_heightmaps(
+            crate::assets::Properties::for_tests(&[
+                (true, false, false, false),
+                (false, false, true, true),
+                (false, true, true, true),
+                (false, false, true, true),
+                (false, false, false, false),
+                (false, false, true, true),
+                (false, false, true, true),
+                (false, false, true, true),
+                (false, false, true, true),
+                (false, false, true, true),
+            ]),
+        ));
+        let make_encoder = || {
+            let mut enc = ChunkEncoder::with_types(
+                states
+                    .iter()
+                    .map(|&(name, fluid)| (Arc::<str>::from(name), fluid, None)),
+                &builtin,
+                &[],
+                &[],
+                Some(&types),
+                Default::default(),
+            );
+            enc.tables = Some(tables.clone());
+            enc.trial_active = vec![8];
+            enc.mod_update_tag = Some(record_mod_tag);
+            enc
+        };
+
+        let mut world = crate::world::World::new(BlockStateId(0), 0);
+        let loaded_coords = [
+            (0, 0),
+            (1, 0),
+            (0, 1),
+            (1, 1),
+            (2, 0),
+            (0, 2),
+            (3, 3),
+            (-1, 0),
+        ];
+        for &(cx, cz) in &loaded_coords {
+            let mut chunk = Chunk::empty(cx, cz);
+            chunk.lit = (cx, cz) != (3, 3);
+            let seed = (cx * 17 + cz * 31).rem_euclid(11);
+            for i in 0..32 {
+                let bx = (i * 5 + seed) % 16;
+                let bz = (i * 7 + seed * 3) % 16;
+                let by = MIN_Y + ((i * 29 + seed * 19) % 320);
+                chunk.set(bx, by, bz, 1 + (i % 2) as u32);
+            }
+            if (cx, cz) == (0, 0) {
+                chunk.set(1, 64, 2, 3);
+                chunk.set(2, 64, 3, 4);
+                chunk.set(3, 64, 4, 5);
+                chunk.set(4, 64, 5, 6);
+                chunk.set(5, 64, 6, 7);
+                chunk.set(6, 64, 7, 8);
+                chunk.set(7, 64, 8, 9);
+                chunk.set(8, 64, 9, 9);
+                chunk.set(9, 64, 10, 3);
+                let mut sign = sunrise_level::signs_data::SignData::default();
+                sign.front.lines[0] = "Equivalence".into();
+                world
+                    .block_entities
+                    .insert((1, 64, 2), BlockEntity::Chest(Vec::new()));
+                world
+                    .block_entities
+                    .insert((2, 64, 3), BlockEntity::Sign(sign));
+                world.block_entities.insert(
+                    (3, 64, 4),
+                    BlockEntity::Beacon(Box::new(Beacon {
+                        levels: 3,
+                        primary: Some("minecraft:haste".into()),
+                        ..Default::default()
+                    })),
+                );
+                world.block_entities.insert(
+                    (5, 64, 6),
+                    BlockEntity::TrialSpawner(Box::new(crate::chunk::block_entity::TrialSpawner {
+                        next_mob_spawns_at: 42,
+                        ..Default::default()
+                    })),
+                );
+                world.block_entities.insert(
+                    (6, 64, 7),
+                    BlockEntity::TrialSpawner(Box::new(crate::chunk::block_entity::TrialSpawner {
+                        next_mob_spawns_at: 99,
+                        ..Default::default()
+                    })),
+                );
+                let mut machine = ModBlockEntity::new("test:machine".into(), Default::default());
+                machine.nbt.insert("power".into(), Tag::Int(15));
+                world
+                    .block_entities
+                    .insert((7, 64, 8), BlockEntity::Mod(Box::new(machine)));
+                world.block_entities.insert(
+                    (9, 64, 10),
+                    BlockEntity::Mod(Box::new(ModBlockEntity::new(
+                        "test:machine".into(),
+                        Default::default(),
+                    ))),
+                );
+                let mut pot = Compound::new();
+                pot.insert("id".into(), Tag::String("minecraft:decorated_pot".into()));
+                pot.insert("x".into(), Tag::Int(4));
+                pot.insert("y".into(), Tag::Int(64));
+                pot.insert("z".into(), Tag::Int(5));
+                pot.insert(
+                    "sherds".into(),
+                    Tag::List(vec![Tag::String("minecraft:arms_up_pottery_sherd".into())]),
+                );
+                chunk.saved = Some(Arc::new(ChunkExtras {
+                    block_entities: vec![Tag::Compound(pot)],
+                    block_entity_order: vec![(6, 64, 7), (4, 64, 5), (2, 64, 3)],
+                    ..Default::default()
+                }));
+            }
+            if (cx, cz) == (1, 1) {
+                let mut saved = vec![(None, None); SECTIONS + 2];
+                saved[1].1 = Some([0x22; 2048]);
+                saved[5].0 = Some([0x99; 2048]);
+                crate::light::light_from_saved_layers(&mut chunk, &saved, true);
+            } else {
+                let mut light = Box::new([0u8; 4096]);
+                for (i, v) in light.iter_mut().enumerate() {
+                    *v = ((i * 23 + seed as usize * 7) % 256) as u8;
+                }
+                Arc::make_mut(&mut chunk.sections[(seed as usize) % SECTIONS]).light =
+                    Light::Full(light);
+            }
+            world.chunks.insert((cx, cz), Arc::new(chunk));
+        }
+
+        let batch_keys = [(0, 0), (1, 0), (0, 1), (1, 1), (2, 0), (0, 2), (3, 3)];
+        assert!(batch_keys.len() >= BODIES_MIN);
+        let chunks: Vec<&Chunk> = batch_keys
+            .iter()
+            .map(|k| &**world.chunks.get(k).unwrap())
+            .collect();
+
+        let mut proto_a = SectionMask::EMPTY;
+        proto_a.insert(0);
+        proto_a.insert(10);
+        let mut proto_b = SectionMask::EMPTY;
+        proto_b.insert(5);
+        proto_b.insert(18);
+        let protos = |x: i32, z: i32| match (x, z) {
+            (2, 1) => Some(proto_a),
+            (4, 3) => Some(proto_b),
+            _ => None,
+        };
+
+        let assert_caches_match = |lhs: &ChunkEncoder, rhs: &ChunkEncoder, label: &str| {
+            let lc = lhs.cache.lock().unwrap();
+            let rc = rhs.cache.lock().unwrap();
+            assert_eq!(lc.len(), rc.len(), "{label}: section cache len");
+            for (ptr, le) in lc.iter() {
+                let re = rc.get(ptr).expect("matching section cache key");
+                assert_eq!(le.non_air, re.non_air, "{label}: section non_air");
+                assert_eq!(
+                    le.wire.as_ref().map(|(b, e)| (&**b, &**e)),
+                    re.wire.as_ref().map(|(b, e)| (&**b, &**e)),
+                    "{label}: section wire"
+                );
+            }
+            let lh = lhs.heights.lock().unwrap();
+            let rh = rhs.heights.lock().unwrap();
+            assert_eq!(lh.len(), rh.len(), "{label}: heights cache len");
+            for (k, lv) in lh.iter() {
+                let rv = rh.get(k).expect("matching heights key");
+                assert_eq!(*lv.maps, *rv.maps, "{label}: heights maps for {k:?}");
+            }
+        };
+
+        for shape in [LevelShape::OVERWORLD, LevelShape::NETHER] {
+            let mut serial = make_encoder();
+            let mut pooled = make_encoder();
+            let mut reversed = make_encoder();
+            for enc in [&mut serial, &mut pooled, &mut reversed] {
+                enc.set_dimension(shape);
+            }
+
+            MOD_TAG_CALLS.with(|c| c.borrow_mut().clear());
+            let expected: Vec<Vec<u8>> = serial
+                .bodies_with_serial(&chunks, &world, &protos, false)
+                .into_iter()
+                .map(|(r, _)| r.unwrap())
+                .collect();
+            let serial_calls = MOD_TAG_CALLS.with(|c| c.borrow().clone());
+            assert_eq!(serial_calls, vec![[7, 64, 8]]);
+
+            MOD_TAG_CALLS.with(|c| c.borrow_mut().clear());
+            let got_pool: Vec<Vec<u8>> = pooled
+                .bodies_with(&chunks, &world, &protos)
+                .into_iter()
+                .map(Result::unwrap)
+                .collect();
+            let pool_calls = MOD_TAG_CALLS.with(|c| c.borrow().clone());
+            assert_eq!(got_pool, expected);
+            assert_eq!(pool_calls, serial_calls);
+            assert_caches_match(&serial, &pooled, "cold pool");
+
+            MOD_TAG_CALLS.with(|c| c.borrow_mut().clear());
+            let got_rev: Vec<Vec<u8>> =
+                with_bodies_test_mode(BodiesTestMode::ReverseWorkerOrder, || {
+                    reversed
+                        .bodies_with(&chunks, &world, &protos)
+                        .into_iter()
+                        .map(Result::unwrap)
+                        .collect()
+                });
+            let rev_calls = MOD_TAG_CALLS.with(|c| c.borrow().clone());
+            assert_eq!(got_rev, expected);
+            assert_eq!(rev_calls, serial_calls);
+            assert_caches_match(&serial, &reversed, "cold reversed");
+
+            let mut warmed = make_encoder();
+            warmed.set_dimension(shape);
+            warmed.warm(&chunks);
+            let got_warmed: Vec<Vec<u8>> = warmed
+                .bodies_with(&chunks, &world, &protos)
+                .into_iter()
+                .map(Result::unwrap)
+                .collect();
+            assert_eq!(got_warmed, expected);
+            assert_caches_match(&serial, &warmed, "warmed");
+
+            let got_cached: Vec<Vec<u8>> = pooled
+                .bodies_with(&chunks, &world, &protos)
+                .into_iter()
+                .map(Result::unwrap)
+                .collect();
+            assert_eq!(got_cached, expected);
+            assert_caches_match(&serial, &pooled, "cached");
+        }
+
+        // Second tick: edit a streamed block, its light, and an adjacent neighbour's occupancy.
+        let mut edited_world = crate::world::World::new(BlockStateId(0), 0);
+        for (&k, c) in world.chunks.iter() {
+            edited_world.chunks.insert(k, c.clone());
+        }
+        let edited_keys = [(1, 0), (0, 1), (2, 0), (0, 2), (3, 3)];
+        let mut serial = make_encoder();
+        let mut pooled = make_encoder();
+        serial.mod_update_tag = None;
+        pooled.mod_update_tag = None;
+        let before_chunks: Vec<&Chunk> = edited_keys
+            .iter()
+            .map(|k| &**edited_world.chunks.get(k).unwrap())
+            .collect();
+        let before_serial: Vec<Vec<u8>> = serial
+            .bodies_with_serial(&before_chunks, &edited_world, &protos, false)
+            .into_iter()
+            .map(|(r, _)| r.unwrap())
+            .collect();
+        let before_pool: Vec<Vec<u8>> = pooled
+            .bodies_with(&before_chunks, &edited_world, &protos)
+            .into_iter()
+            .map(Result::unwrap)
+            .collect();
+        assert_eq!(before_pool, before_serial);
+
+        let mut moved = (**edited_world.chunks.get(&(1, 0)).unwrap()).clone();
+        moved.set(5, 100, 5, 2);
+        Arc::make_mut(&mut moved.sections[10]).light = Light::Uniform(0x7B);
+        edited_world.chunks.insert((1, 0), Arc::new(moved));
+        let mut nbr = (**edited_world.chunks.get(&(0, 0)).unwrap()).clone();
+        nbr.set(2, MIN_Y + 22 * 16 + 1, 2, 1);
+        edited_world.chunks.insert((0, 0), Arc::new(nbr));
+
+        let after_chunks: Vec<&Chunk> = edited_keys
+            .iter()
+            .map(|k| &**edited_world.chunks.get(k).unwrap())
+            .collect();
+        let after_serial: Vec<Vec<u8>> = serial
+            .bodies_with_serial(&after_chunks, &edited_world, &protos, false)
+            .into_iter()
+            .map(|(r, _)| r.unwrap())
+            .collect();
+        let after_pool: Vec<Vec<u8>> = pooled
+            .bodies_with(&after_chunks, &edited_world, &protos)
+            .into_iter()
+            .map(Result::unwrap)
+            .collect();
+        assert_ne!(after_serial[0], before_serial[0]);
+        assert_eq!(after_pool, after_serial);
+        assert_caches_match(&serial, &pooled, "edited second tick");
+    }
+
+    #[test]
+    fn mod_update_tag_hooks_keep_interleaved_cache_and_heightmap_order() {
+        use crate::block_entity_types::BlockEntityTypes;
+        use std::cell::RefCell;
+        use sunrise_world::registry::BlockStateId;
+
+        type Trace = Vec<([i32; 3], usize, usize)>;
+        thread_local! {
+            static ACTIVE_ENC: RefCell<Option<Arc<ChunkEncoder>>> = const { RefCell::new(None) };
+            static TRACE: RefCell<Trace> = const { RefCell::new(Vec::new()) };
+        }
+        fn record(pos: [i32; 3], entity: &ModBlockEntity) -> Option<Compound> {
+            let (cache_len, heights_len) = ACTIVE_ENC.with(|slot| {
+                let enc = slot.borrow();
+                let enc = enc.as_ref().expect("active encoder");
+                (
+                    enc.cache.lock().unwrap().len(),
+                    enc.heights.lock().unwrap().len(),
+                )
+            });
+            TRACE.with(|t| t.borrow_mut().push((pos, cache_len, heights_len)));
+            let mut tag = Compound::new();
+            tag.insert("y".into(), Tag::Int(pos[1]));
+            if let Some(v) = entity.nbt.get(&JavaString::from("tag")) {
+                tag.insert("tag".into(), v.clone());
+            }
+            Some(tag)
+        }
+
+        let builtin = Builtin::parse(
+            r#"{"minecraft:block_entity_type": {"entries": {"test:machine": {"protocol_id": 49}}}}"#,
+        )
+        .unwrap();
+        let types = BlockEntityTypes::new(
+            [("test:machine".into(), "test:machine".into())].into(),
+            builtin
+                .get("minecraft:block_entity_type")
+                .unwrap()
+                .names
+                .clone(),
+            ["test:machine".into()],
+        );
+        let tables = Arc::new(crate::save::SaveTables::for_heightmaps(
+            crate::assets::Properties::for_tests(&[
+                (true, false, false, false),
+                (false, false, true, true),
+                (false, false, true, true),
+            ]),
+        ));
+        let make_encoder = || {
+            let states = ["minecraft:air", "minecraft:stone", "test:machine"]
+                .map(|name| (Arc::<str>::from(name), false, None));
+            let mut enc = ChunkEncoder::with_types(
+                states,
+                &builtin,
+                &[],
+                &[],
+                Some(&types),
+                Default::default(),
+            );
+            enc.tables = Some(tables.clone());
+            enc.mod_update_tag = Some(record);
+            Arc::new(enc)
+        };
+
+        let mut world = crate::world::World::new(BlockStateId(0), 0);
+        for cx in 0..4 {
+            let mut chunk = Chunk::empty(cx, 0);
+            chunk.lit = true;
+            for sy in [1, 2, 3, 8, 9] {
+                chunk.set(cx, MIN_Y + sy * 16, 1, 1);
+            }
+            if cx == 0 {
+                chunk.set(2, MIN_Y + 2 * 16 + 1, 3, 2);
+                chunk.set(4, MIN_Y + 8 * 16 + 2, 5, 2);
+            } else if cx == 1 {
+                chunk.set(1, MIN_Y + 3 * 16 + 1, 2, 2);
+                chunk.set(3, MIN_Y + 9 * 16 + 2, 4, 2);
+            }
+            world.chunks.insert((cx, 0), Arc::new(chunk));
+        }
+        for (i, pos) in [
+            (2, MIN_Y + 2 * 16 + 1, 3),
+            (4, MIN_Y + 8 * 16 + 2, 5),
+            (16 + 1, MIN_Y + 3 * 16 + 1, 2),
+            (16 + 3, MIN_Y + 9 * 16 + 2, 4),
+        ]
+        .into_iter()
+        .enumerate()
+        {
+            let mut m = ModBlockEntity::new("test:machine".into(), Default::default());
+            m.nbt.insert("tag".into(), Tag::Int(i as i32));
+            world
+                .block_entities
+                .insert(pos, BlockEntity::Mod(Box::new(m)));
+        }
+
+        let keys = [(0, 0), (1, 0), (2, 0), (3, 0)];
+        let chunks: Vec<&Chunk> = keys
+            .iter()
+            .map(|k| &**world.chunks.get(k).unwrap())
+            .collect();
+        let no_protos = |_: i32, _: i32| -> Option<SectionMask> { None };
+
+        fn run_trace(
+            enc: &Arc<ChunkEncoder>,
+            run: impl FnOnce() -> Vec<Vec<u8>>,
+        ) -> (Vec<Vec<u8>>, Trace) {
+            ACTIVE_ENC.with(|s| *s.borrow_mut() = Some(enc.clone()));
+            TRACE.with(|t| t.borrow_mut().clear());
+            let bodies = run();
+            let trace = TRACE.with(|t| t.borrow().clone());
+            ACTIVE_ENC.with(|s| *s.borrow_mut() = None);
+            (bodies, trace)
+        }
+
+        let serial = make_encoder();
+        let (expected, expected_trace) = run_trace(&serial, || {
+            serial
+                .bodies_with_serial(&chunks, &world, &no_protos, false)
+                .into_iter()
+                .map(|(r, _)| r.unwrap())
+                .collect()
+        });
+        assert_eq!(expected_trace.len(), 4);
+        assert_eq!(expected_trace[0].2, 0);
+        assert_eq!(expected_trace[1].2, 0);
+        assert_eq!(expected_trace[2].2, 1);
+        assert_eq!(expected_trace[3].2, 1);
+
+        let pooled = make_encoder();
+        let (got_pool, pool_trace) = run_trace(&pooled, || {
+            pooled
+                .bodies_with(&chunks, &world, &no_protos)
+                .into_iter()
+                .map(Result::unwrap)
+                .collect()
+        });
+        assert_eq!(got_pool, expected);
+        assert_eq!(pool_trace, expected_trace);
+
+        let reversed = make_encoder();
+        let (got_rev, rev_trace) = run_trace(&reversed, || {
+            with_bodies_test_mode(BodiesTestMode::ReverseWorkerOrder, || {
+                reversed
+                    .bodies_with(&chunks, &world, &no_protos)
+                    .into_iter()
+                    .map(Result::unwrap)
+                    .collect()
+            })
+        });
+        assert_eq!(got_rev, expected);
+        assert_eq!(rev_trace, expected_trace);
+    }
+
+    #[test]
+    fn saved_light_wire_miss_sweeps_at_original_point() {
+        use sunrise_world::registry::BlockStateId;
+
+        let make_encoder = |sweep: usize| {
+            let mut enc = encoder();
+            enc.cache_sweep = sweep;
+            enc
+        };
+        let make_section = |block_x: i32| {
+            let mut c = Chunk::empty(0, 0);
+            c.set(block_x, MIN_Y, 0, 1);
+            c.sections[0].clone()
+        };
+        let s0 = make_section(0);
+        let s1 = make_section(1);
+        let s2 = make_section(2);
+        let s3 = make_section(3);
+        let s4 = make_section(4);
+
+        let saved_chunk = |cx: i32, last: &Arc<Section>, extra: Option<&Arc<Section>>| {
+            let mut chunk = Chunk::empty(cx, 0);
+            let saved: Vec<(Option<[u8; 2048]>, Option<[u8; 2048]>)> =
+                vec![(None, None); SECTIONS + 2];
+            crate::light::light_from_saved_layers(&mut chunk, &saved, true);
+            for s in &mut chunk.sections {
+                *s = s0.clone();
+            }
+            chunk.sections[0] = s0.clone();
+            chunk.sections[1] = s1.clone();
+            chunk.sections[2] = s2.clone();
+            if let Some(e) = extra {
+                chunk.sections[SECTIONS - 2] = last.clone();
+                chunk.sections[SECTIONS - 1] = e.clone();
+            } else {
+                chunk.sections[SECTIONS - 1] = last.clone();
+            }
+            assert!(chunk.stored_light().is_some());
+            Arc::new(chunk)
+        };
+
+        let assert_caches_match = |lhs: &ChunkEncoder, rhs: &ChunkEncoder, label: &str| {
+            let lc = lhs.cache.lock().unwrap();
+            let rc = rhs.cache.lock().unwrap();
+            assert_eq!(lc.len(), rc.len(), "{label}: section cache len");
+            for (ptr, le) in lc.iter() {
+                let re = rc.get(ptr).expect("matching section cache key");
+                assert_eq!(le.non_air, re.non_air, "{label}: section non_air");
+                assert_eq!(
+                    le.wire.as_ref().map(|(b, e)| (&**b, &**e)),
+                    re.wire.as_ref().map(|(b, e)| (&**b, &**e)),
+                    "{label}: section wire"
+                );
+            }
+        };
+
+        for (with_subsequent, expected_len) in [(false, 1usize), (true, 2usize)] {
+            let mut world = crate::world::World::new(BlockStateId(0), 0);
+            for cx in 0..3 {
+                world.chunks.insert((cx, 0), saved_chunk(cx, &s2, None));
+            }
+            world
+                .chunks
+                .insert((3, 0), saved_chunk(3, &s3, with_subsequent.then_some(&s4)));
+            let keys = [(0, 0), (1, 0), (2, 0), (3, 0)];
+            let chunks: Vec<&Chunk> = keys
+                .iter()
+                .map(|k| &**world.chunks.get(k).unwrap())
+                .collect();
+            let no_protos = |_: i32, _: i32| -> Option<SectionMask> { None };
+
+            let serial = make_encoder(4);
+            let pooled = make_encoder(4);
+            let reversed = make_encoder(4);
+
+            let expected: Vec<Vec<u8>> = serial
+                .bodies_with_serial(&chunks, &world, &no_protos, false)
+                .into_iter()
+                .map(|(r, _)| r.unwrap())
+                .collect();
+            let got_pool: Vec<Vec<u8>> = pooled
+                .bodies_with(&chunks, &world, &no_protos)
+                .into_iter()
+                .map(Result::unwrap)
+                .collect();
+            let got_rev: Vec<Vec<u8>> =
+                with_bodies_test_mode(BodiesTestMode::ReverseWorkerOrder, || {
+                    reversed
+                        .bodies_with(&chunks, &world, &no_protos)
+                        .into_iter()
+                        .map(Result::unwrap)
+                        .collect()
+                });
+
+            assert_eq!(got_pool, expected);
+            assert_eq!(got_rev, expected);
+            assert_eq!(serial.cache.lock().unwrap().len(), expected_len);
+            assert!(
+                serial
+                    .cache
+                    .lock()
+                    .unwrap()
+                    .contains_key(&(Arc::as_ptr(&s3) as usize))
+            );
+            assert_caches_match(&serial, &pooled, "saved-light miss pool");
+            assert_caches_match(&serial, &reversed, "saved-light miss reversed");
+        }
+    }
+
+    #[test]
+    fn proto_callback_is_invoked_per_missing_neighbour_occurrence() {
+        use std::cell::Cell;
+        use sunrise_world::registry::BlockStateId;
+
+        let mut world = crate::world::World::new(BlockStateId(0), 0);
+        for &(cx, cz) in &[(0, 0), (1, 0), (1, 1), (0, 1)] {
+            let mut chunk = Chunk::empty(cx, cz);
+            chunk.lit = true;
+            chunk.set(0, MIN_Y, 0, 1);
+            world.chunks.insert((cx, cz), Arc::new(chunk));
+        }
+        let keys = [(0, 0), (1, 0), (1, 1), (0, 1)];
+        let chunks: Vec<&Chunk> = keys
+            .iter()
+            .map(|k| &**world.chunks.get(k).unwrap())
+            .collect();
+        let mut tall = SectionMask::EMPTY;
+        tall.insert(10);
+
+        fn run_with_cell(
+            tall: SectionMask,
+            f: impl FnOnce(&dyn Fn(i32, i32) -> Option<SectionMask>) -> Vec<Vec<u8>>,
+        ) -> (Vec<Vec<u8>>, usize) {
+            let calls = Cell::new(0usize);
+            let protos = |x: i32, z: i32| {
+                if (x, z) == (2, 1) {
+                    let n = calls.get();
+                    calls.set(n + 1);
+                    (n > 0).then_some(tall)
+                } else {
+                    None
+                }
+            };
+            let out = f(&protos);
+            (out, calls.get())
+        }
+
+        let serial = encoder();
+        let (expected, serial_calls) = run_with_cell(tall, |protos| {
+            serial
+                .bodies_with_serial(&chunks, &world, protos, false)
+                .into_iter()
+                .map(|(r, _)| r.unwrap())
+                .collect()
+        });
+        assert_eq!(serial_calls, 2);
+        assert_ne!(expected[1], expected[2]);
+
+        let pooled = encoder();
+        let (got_pool, pool_calls) = run_with_cell(tall, |protos| {
+            pooled
+                .bodies_with(&chunks, &world, protos)
+                .into_iter()
+                .map(Result::unwrap)
+                .collect()
+        });
+        assert_eq!(pool_calls, 2);
+        assert_eq!(got_pool, expected);
+
+        let reversed = encoder();
+        let (got_rev, rev_calls) = run_with_cell(tall, |protos| {
+            with_bodies_test_mode(BodiesTestMode::ReverseWorkerOrder, || {
+                reversed
+                    .bodies_with(&chunks, &world, protos)
+                    .into_iter()
+                    .map(Result::unwrap)
+                    .collect()
+            })
+        });
+        assert_eq!(rev_calls, 2);
+        assert_eq!(got_rev, expected);
+    }
+
+    #[test]
+    fn worker_releases_neighbour_snapshots_before_bodies_returns() {
+        use std::sync::{Condvar, Mutex};
+        use std::time::{Duration, Instant};
+        use sunrise_world::registry::BlockStateId;
+
+        const WAIT_TIMEOUT: Duration = Duration::from_secs(5);
+
+        let pool = WarmPool::start(1).expect("local worker thread");
+        let mut world = crate::world::World::new(BlockStateId(0), 0);
+        let mut nbr = Chunk::empty(-1, 0);
+        nbr.lit = true;
+        for sy in 1..=4 {
+            nbr.set(1, MIN_Y + sy * 16, 1, 1);
+        }
+        world.chunks.insert((-1, 0), Arc::new(nbr));
+        for cx in 0..4 {
+            let mut chunk = Chunk::empty(cx, 0);
+            chunk.lit = true;
+            world.chunks.insert((cx, 0), Arc::new(chunk));
+        }
+        let nbr_ptr = Arc::as_ptr(&world.chunks[&(-1, 0)].sections[1]) as usize;
+        let weak_chunk = Arc::downgrade(&world.chunks[&(-1, 0)]);
+        let weak_nbr = Arc::downgrade(&world.chunks[&(-1, 0)].sections[1]);
+
+        let keys = [(0, 0), (1, 0), (2, 0), (3, 0)];
+        let chunks: Vec<&Chunk> = keys
+            .iter()
+            .map(|k| &**world.chunks.get(k).unwrap())
+            .collect();
+        let no_protos = |_: i32, _: i32| -> Option<SectionMask> { None };
+
+        let mut serial = encoder();
+        let mut enc = encoder();
+        serial.cache_sweep = 6;
+        enc.cache_sweep = 6;
+        let _ = serial.bodies_with_serial(&chunks, &world, &no_protos, false);
+
+        let mut job = enc.bodies_job(&chunks, &world, &no_protos, false);
+        let gate = Arc::new((Mutex::new((false, false)), Condvar::new()));
+        let worker_gate = gate.clone();
+        job.after_worker_run = Some(Arc::new(move || {
+            let (lock, cv) = &*worker_gate;
+            let deadline = Instant::now() + WAIT_TIMEOUT;
+            let mut state = lock.lock().unwrap();
+            state.0 = true;
+            cv.notify_all();
+            while !state.1 {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                if remaining.is_zero() {
+                    drop(state);
+                    panic!("timed out waiting for releaser to release paused worker gate");
+                }
+                let (next, result) = cv.wait_timeout(state, remaining).unwrap();
+                state = next;
+                if result.timed_out() && !state.1 {
+                    drop(state);
+                    panic!("timed out waiting for releaser to release paused worker gate");
+                }
+            }
+        }));
+
+        let job = Arc::new(job);
+        let workers = job.workers.clone();
+        pool.post(Job::Bodies(job.clone()));
+        // Wait until the worker finished `job.run()` and is paused holding `Arc<Bodies>`.
+        {
+            let (lock, cv) = &*gate;
+            let deadline = Instant::now() + WAIT_TIMEOUT;
+            let mut state = lock.lock().unwrap();
+            while !state.0 {
+                let remaining = deadline.saturating_duration_since(Instant::now());
+                assert!(
+                    !remaining.is_zero(),
+                    "timed out waiting for worker to pause in after_worker_run"
+                );
+                let (next, result) = cv.wait_timeout(state, remaining).unwrap();
+                state = next;
+                assert!(
+                    !result.timed_out() || state.0,
+                    "timed out waiting for worker to pause in after_worker_run"
+                );
+            }
+        }
+        pool.clear(Arc::as_ptr(&job).cast());
+        let _ = enc.finish_bodies(&job);
+        drop(job);
+
+        let (done_tx, done_rx) = std::sync::mpsc::channel();
+        let releaser_gate = gate.clone();
+        let releaser_chunk = weak_chunk.clone();
+        let releaser_section = weak_nbr.clone();
+        std::thread::spawn(move || {
+            struct Release<'a>(&'a (Mutex<(bool, bool)>, Condvar));
+            impl Drop for Release<'_> {
+                fn drop(&mut self) {
+                    let (lock, cv) = self.0;
+                    let mut state = lock.lock().unwrap_or_else(|e| e.into_inner());
+                    state.1 = true;
+                    cv.notify_all();
+                }
+            }
+            let _release = Release(&releaser_gate);
+            std::thread::sleep(Duration::from_millis(10));
+            let counts = (
+                releaser_chunk.strong_count(),
+                releaser_section.strong_count(),
+            );
+            drop(_release);
+            let _ = done_tx.send(counts);
+        });
+        assert!(
+            workers.wait_all_timeout(WAIT_TIMEOUT),
+            "timed out waiting for WarmPool worker to finish and release snapshots"
+        );
+        let (chunk_refs_while_paused, section_refs_while_paused) = done_rx
+            .recv_timeout(WAIT_TIMEOUT)
+            .expect("timed out waiting for releaser thread to report strong counts");
+        assert_eq!(chunk_refs_while_paused, 2);
+        assert_eq!(section_refs_while_paused, 1);
+        assert_eq!(weak_chunk.strong_count(), 1);
+
+        assert!(enc.cache.lock().unwrap().contains_key(&nbr_ptr));
+        world.unload_chunk((-1, 0)).unwrap();
+        assert_eq!(weak_chunk.strong_count(), 0);
+        assert_eq!(weak_nbr.strong_count(), 0);
+
+        // Next sweep must retain live entries and drop the 4 unloaded neighbour-only sections.
+        let mut extra = Chunk::empty(10, 0);
+        extra.lit = true;
+        extra.set(2, MIN_Y + 32, 2, 1);
+        extra.set(3, MIN_Y + 48, 3, 1);
+        world.chunks.insert((10, 0), Arc::new(extra));
+        let next_keys = [(0, 0), (1, 0), (2, 0), (10, 0)];
+        let next_chunks: Vec<&Chunk> = next_keys
+            .iter()
+            .map(|k| &**world.chunks.get(k).unwrap())
+            .collect();
+        let _ = serial.bodies_with_serial(&next_chunks, &world, &no_protos, false);
+        let next_job = Arc::new(enc.bodies_job(&next_chunks, &world, &no_protos, false));
+        let _ = enc.run_bodies_on_pool(&pool, next_job);
+        assert!(!serial.cache.lock().unwrap().contains_key(&nbr_ptr));
+        assert!(!enc.cache.lock().unwrap().contains_key(&nbr_ptr));
+        assert_eq!(enc.cache.lock().unwrap().len(), 3);
+        assert_eq!(
+            enc.cache.lock().unwrap().len(),
+            serial.cache.lock().unwrap().len()
+        );
+    }
+
+    #[test]
+    fn cache_eviction_and_replay_match_serial_reference() {
+        use sunrise_world::registry::BlockStateId;
+
+        let tables = Arc::new(crate::save::SaveTables::for_heightmaps(
+            crate::assets::Properties::for_tests(&[
+                (true, false, false, false),
+                (false, false, true, true),
+                (false, true, true, true),
+            ]),
+        ));
+        let make_encoder = |sweep: usize| {
+            let mut enc = encoder();
+            enc.tables = Some(tables.clone());
+            enc.cache_sweep = sweep;
+            enc
+        };
+
+        let mut world = crate::world::World::new(BlockStateId(0), 0);
+        for cx in 0..6 {
+            let mut chunk = Chunk::empty(cx, 0);
+            chunk.lit = true;
+            for sy in 0..3 {
+                chunk.set(cx, MIN_Y + sy * 16 + 1, sy, 1);
+                chunk.set(cx + 1, MIN_Y + sy * 16 + 2, sy, 2);
+            }
+            world.chunks.insert((cx, 0), Arc::new(chunk));
+        }
+        let keys: Vec<(i32, i32)> = (0..6).map(|cx| (cx, 0)).collect();
+        let chunks: Vec<&Chunk> = keys
+            .iter()
+            .map(|k| &**world.chunks.get(k).unwrap())
+            .collect();
+        let no_protos = |_: i32, _: i32| -> Option<SectionMask> { None };
+
+        let assert_caches_match = |lhs: &ChunkEncoder, rhs: &ChunkEncoder, label: &str| {
+            let lc = lhs.cache.lock().unwrap();
+            let rc = rhs.cache.lock().unwrap();
+            assert_eq!(lc.len(), rc.len(), "{label}: section cache len");
+            for (ptr, le) in lc.iter() {
+                let re = rc.get(ptr).expect("matching section cache key");
+                assert_eq!(le.non_air, re.non_air, "{label}: section non_air");
+                assert_eq!(
+                    le.wire.as_ref().map(|(b, e)| (&**b, &**e)),
+                    re.wire.as_ref().map(|(b, e)| (&**b, &**e)),
+                    "{label}: section wire"
+                );
+            }
+            let lh = lhs.heights.lock().unwrap();
+            let rh = rhs.heights.lock().unwrap();
+            assert_eq!(lh.len(), rh.len(), "{label}: heights cache len");
+            for (k, lv) in lh.iter() {
+                let rv = rh.get(k).expect("matching heights key");
+                assert_eq!(*lv.maps, *rv.maps, "{label}: heights maps for {k:?}");
+            }
+        };
+
+        // Live-entry mid-batch clear for `cache` and `heights`, with column 4 re-inserted after.
+        {
+            let sweep = 16;
+            let serial = make_encoder(sweep);
+            let pooled = make_encoder(sweep);
+            let reversed = make_encoder(sweep);
+            for enc in [&serial, &pooled, &reversed] {
+                let _ = enc.body_in(chunks[0], &world).unwrap();
+                let _ = enc.body_in(chunks[4], &world).unwrap();
+            }
+
+            let expected: Vec<Vec<u8>> = serial
+                .bodies_with_serial(&chunks, &world, &no_protos, false)
+                .into_iter()
+                .map(|(r, _)| r.unwrap())
+                .collect();
+            let got_pool: Vec<Vec<u8>> = pooled
+                .bodies_with(&chunks, &world, &no_protos)
+                .into_iter()
+                .map(Result::unwrap)
+                .collect();
+            let got_rev: Vec<Vec<u8>> =
+                with_bodies_test_mode(BodiesTestMode::ReverseWorkerOrder, || {
+                    reversed
+                        .bodies_with(&chunks, &world, &no_protos)
+                        .into_iter()
+                        .map(Result::unwrap)
+                        .collect()
+                });
+
+            assert_eq!(got_pool, expected);
+            assert_eq!(got_rev, expected);
+            assert!(serial.cache.lock().unwrap().len() < sweep);
+            let serial_heights: Vec<(i32, i32)> =
+                serial.heights.lock().unwrap().keys().copied().collect();
+            assert!(serial_heights.len() < chunks.len());
+            assert!(serial_heights.contains(&(4, 0)));
+            assert_caches_match(&serial, &pooled, "live clear pool");
+            assert_caches_match(&serial, &reversed, "live clear reversed");
+        }
+
+        // Dead-entry retain (no clear) for both `cache` and `heights`.
+        {
+            let sweep = 32;
+            let serial = make_encoder(sweep);
+            let pooled = make_encoder(sweep);
+            let reversed = make_encoder(sweep);
+            let mut dead_world = crate::world::World::new(BlockStateId(0), 0);
+            for dx in 0..6 {
+                let mut dead = Chunk::empty(100 + dx, 0);
+                for sy in 0..3 {
+                    dead.set(dx, MIN_Y + sy * 16 + 3, sy, 1);
+                }
+                dead_world.chunks.insert((100 + dx, 0), Arc::new(dead));
+            }
+            for enc in [&serial, &pooled, &reversed] {
+                for dx in 0..6 {
+                    let _ = enc
+                        .body_in(&dead_world.chunks[&(100 + dx, 0)], &dead_world)
+                        .unwrap();
+                }
+                let _ = enc.body_in(chunks[0], &world).unwrap();
+            }
+            drop(dead_world);
+
+            let expected: Vec<Vec<u8>> = serial
+                .bodies_with_serial(&chunks, &world, &no_protos, false)
+                .into_iter()
+                .map(|(r, _)| r.unwrap())
+                .collect();
+            let got_pool: Vec<Vec<u8>> = pooled
+                .bodies_with(&chunks, &world, &no_protos)
+                .into_iter()
+                .map(Result::unwrap)
+                .collect();
+            let got_rev: Vec<Vec<u8>> =
+                with_bodies_test_mode(BodiesTestMode::ReverseWorkerOrder, || {
+                    reversed
+                        .bodies_with(&chunks, &world, &no_protos)
+                        .into_iter()
+                        .map(Result::unwrap)
+                        .collect()
+                });
+
+            assert_eq!(got_pool, expected);
+            assert_eq!(got_rev, expected);
+            assert_eq!(serial.cache.lock().unwrap().len(), 19);
+            assert_eq!(serial.heights.lock().unwrap().len(), chunks.len());
+            assert!(
+                serial
+                    .cache
+                    .lock()
+                    .unwrap()
+                    .values()
+                    .all(|e| e.section.strong_count() > 0)
+            );
+            assert_caches_match(&serial, &pooled, "dead retain pool");
+            assert_caches_match(&serial, &reversed, "dead retain reversed");
+        }
     }
 }

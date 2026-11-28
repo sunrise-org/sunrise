@@ -5,7 +5,7 @@ use super::Dim;
 use mod_api::{SpawnCheck, SpawnFlags, SpawnLimits};
 use std::collections::HashMap;
 use sunrise_core::{
-    geometry::{Aabb, COLLISION_EPSILON, Vec3, VoxelShape},
+    geometry::{Aabb, Axis, COLLISION_EPSILON, Vec3, VoxelShape},
     position::BlockPos,
     random::{LegacyRandom, LevelRandom, RandomSource, WorldgenRandom, XoroshiroRandom},
 };
@@ -15,11 +15,10 @@ use sunrise_level::{
     biome::{BiomeInfo, SpawnEntry},
     collisions::{SceneCollisions, no_collision_empty},
 };
-use sunrise_sim::join_seq::JoinSeq;
+use sunrise_sim::join_seq::{JoinSeq, ListStamp};
 use sunrise_sim::mobs::{
     Mob, MobType, MobWorld, Species,
     data::{self, MobData},
-    seen_grid::SeenGrid,
     spawn_rules::{Reason, SpawnLevel},
     spawn_selection::{
         self, Category, Counted, Heightmap, NaturalLevel, PlayerSquares, SpawnBuffers,
@@ -80,8 +79,11 @@ pub struct SpawnScratch {
 #[derive(Default)]
 struct NaturalPassScratch {
     players: SearchPlayers,
+    boxes: MobBoxes,
     costed: Vec<String>,
     ids: HashMap<u32, u32>,
+    #[cfg(test)]
+    force_linear_scan: bool,
 }
 
 impl SpawnScratch {
@@ -387,11 +389,11 @@ pub struct GameLevel<'g, 'a> {
     /// How many provisional ids the pass has handed out (`u32::MAX - n`),
     /// mapped to real ones by [`Game::add_spawned`].
     pub(in crate::game) provisional: std::cell::Cell<u32>,
-    /// The game's mobs by box, built once a pass has asked more than
-    /// [`SCANNED_QUERIES`] box queries (the mobs do not change while it
-    /// holds the game); the first ones scan, as the build costs a few scans.
-    pub(in crate::game) boxes: std::cell::OnceCell<MobBoxes>,
+    /// The game's mobs by box, built once a pass exceeds `scan_limit` queries
+    /// or carried across admissions in a natural spawning pass.
+    pub(in crate::game) boxes: std::cell::RefCell<MobBoxes>,
     pub(in crate::game) box_queries: std::cell::Cell<u32>,
+    scan_limit: u32,
     /// The entity types some biome of the level gives a spawn cost (the
     /// nether's few): for any other the cost is none wherever it stands, and
     /// spawning asks for one for every loaded mob each tick.
@@ -449,33 +451,233 @@ fn mob_collidable_for_spawn(mob: &Mob) -> bool {
             _ => false,
         }
 }
-/// The boxes of the game's mobs not removed, and a grid over them.
+/// The boxes of the game's mobs not removed, and a 4-block column grid over them.
+#[derive(Default)]
 pub(in crate::game) struct MobBoxes {
     entries: Vec<MobBox>,
-    grid: SeenGrid,
+    /// Next entry slot in the same 4-block column (ascending), or `u32::MAX`.
+    next: Vec<u32>,
+    /// `(head, tail)` entry slots for each occupied 4-block column.
+    cells: sunrise_level::fast_hash::FxHashMap<(i32, i32), (u32, u32)>,
+    unindexed: Vec<u32>,
+    reach: f64,
+    stamp: Option<ListStamp>,
 }
 impl MobBoxes {
-    fn new(mobs: &[Mob]) -> Self {
-        let entries: Vec<_> = mobs
-            .iter()
-            .enumerate()
-            .filter(|(_, m)| !m.removed)
-            .map(|(i, m)| mob_box(i, m))
-            .collect();
-        let grid = SeenGrid::new(entries.iter().map(|e| e.1));
-        Self { entries, grid }
+    const CELL: f64 = 4.0;
+    const FAR: f64 = 1.0e9;
+
+    fn column(x: f64, z: f64) -> (i32, i32) {
+        (
+            (x / Self::CELL).floor() as i32,
+            (z / Self::CELL).floor() as i32,
+        )
     }
-    /// The entries whose boxes meet `area` (and possibly a few more).
-    fn near(&self, area: Aabb) -> impl Iterator<Item = MobBox> + '_ {
-        let mut near = Vec::new();
-        let indexed = self.grid.candidates(area, &mut near);
-        let all = (!indexed).then(|| self.entries.iter());
-        near.into_iter()
-            .map(|i| self.entries[i as usize])
-            .chain(all.into_iter().flatten().copied())
+    fn is_gridable(b: Aabb) -> bool {
+        let (min_x, min_z) = (b.min(Axis::X), b.min(Axis::Z));
+        let (max_x, max_z) = (b.max(Axis::X), b.max(Axis::Z));
+        min_x.is_finite()
+            && min_z.is_finite()
+            && max_x.is_finite()
+            && max_z.is_finite()
+            && min_x.abs() < Self::FAR
+            && min_z.abs() < Self::FAR
+            && max_x.abs() < Self::FAR
+            && max_z.abs() < Self::FAR
+    }
+    fn width(b: Aabb) -> f64 {
+        (b.max(Axis::X) - b.min(Axis::X))
+            .max(b.max(Axis::Z) - b.min(Axis::Z))
+            .max(0.0)
+    }
+    fn is_valid(&self, stamp: ListStamp) -> bool {
+        self.stamp == Some(stamp)
+    }
+    fn invalidate(&mut self) {
+        self.stamp = None;
+    }
+    fn rebuild(&mut self, mobs: &[Mob], stamp: Option<ListStamp>) {
+        self.entries.clear();
+        self.next.clear();
+        self.cells.clear();
+        self.unindexed.clear();
+        self.reach = 0.0;
+        for (i, m) in mobs.iter().enumerate() {
+            if !m.removed {
+                self.push_box(mob_box(i, m));
+            }
+        }
+        self.stamp = stamp;
+    }
+    fn extend_from(&mut self, mobs: &[Mob], from: usize, stamp: ListStamp) {
+        let Some(added) = mobs.get(from..) else {
+            self.invalidate();
+            return;
+        };
+        for (offset, m) in added.iter().enumerate() {
+            if !m.removed {
+                self.push_box(mob_box(from + offset, m));
+            }
+        }
+        self.stamp = Some(stamp);
+    }
+    fn push_box(&mut self, entry: MobBox) {
+        let slot = self.entries.len() as u32;
+        self.next.push(u32::MAX);
+        let b = entry.1;
+        if Self::is_gridable(b) {
+            self.reach = self.reach.max(Self::width(b));
+            let at = Self::column(b.min(Axis::X), b.min(Axis::Z));
+            match self.cells.entry(at) {
+                std::collections::hash_map::Entry::Vacant(v) => {
+                    v.insert((slot, slot));
+                }
+                std::collections::hash_map::Entry::Occupied(mut o) => {
+                    let tail = o.get().1;
+                    self.next[tail as usize] = slot;
+                    o.get_mut().1 = slot;
+                }
+            }
+        } else {
+            self.unindexed.push(slot);
+        }
+        self.entries.push(entry);
+    }
+    fn cell_range(&self, area: Aabb) -> Option<((i32, i32), (i32, i32))> {
+        let margin = self.reach + 1.0;
+        let min_x = area.min(Axis::X) - margin;
+        let min_z = area.min(Axis::Z) - margin;
+        let max_x = area.max(Axis::X);
+        let max_z = area.max(Axis::Z);
+        if !min_x.is_finite()
+            || !min_z.is_finite()
+            || !max_x.is_finite()
+            || !max_z.is_finite()
+            || min_x.abs() >= Self::FAR
+            || min_z.abs() >= Self::FAR
+            || max_x.abs() >= Self::FAR
+            || max_z.abs() >= Self::FAR
+        {
+            return None;
+        }
+        let lo = Self::column(min_x, min_z);
+        let hi = Self::column(max_x, max_z);
+        let span = |a: i32, b: i32| i64::from(b) - i64::from(a) + 1;
+        let (nx, nz) = (span(lo.0, hi.0), span(lo.1, hi.1));
+        let max_cells = (self.entries.len() as i64).max(64);
+        if nx < 1 || nz < 1 || nx.saturating_mul(nz) > max_cells {
+            return None;
+        }
+        Some((lo, hi))
+    }
+    fn visit_near(&self, area: Aabb, mut f: impl FnMut(MobBox) -> bool) -> bool {
+        if self.entries.is_empty() {
+            return false;
+        }
+        let Some((lo, hi)) = self.cell_range(area) else {
+            return self.entries.iter().copied().any(f);
+        };
+        let mut heads = [u32::MAX; 16];
+        let mut n_heads = 0usize;
+        let mut overflow = Vec::new();
+        let mut overflowed = false;
+        for x in lo.0..=hi.0 {
+            for z in lo.1..=hi.1 {
+                if let Some(&(head, _)) = self.cells.get(&(x, z)) {
+                    if !overflowed && n_heads < heads.len() {
+                        heads[n_heads] = head;
+                        n_heads += 1;
+                    } else {
+                        if !overflowed {
+                            overflowed = true;
+                            for &h in &heads[..n_heads] {
+                                let mut slot = h;
+                                while slot != u32::MAX {
+                                    overflow.push(slot);
+                                    slot = self.next[slot as usize];
+                                }
+                            }
+                            overflow.extend_from_slice(&self.unindexed);
+                        }
+                        let mut slot = head;
+                        while slot != u32::MAX {
+                            overflow.push(slot);
+                            slot = self.next[slot as usize];
+                        }
+                    }
+                }
+            }
+        }
+        if overflowed {
+            overflow.sort_unstable();
+            return overflow
+                .into_iter()
+                .any(|slot| f(self.entries[slot as usize]));
+        }
+        if self.unindexed.is_empty() {
+            match n_heads {
+                0 => return false,
+                1 => {
+                    let mut slot = heads[0];
+                    while slot != u32::MAX {
+                        if f(self.entries[slot as usize]) {
+                            return true;
+                        }
+                        slot = self.next[slot as usize];
+                    }
+                    return false;
+                }
+                _ => {}
+            }
+        }
+        let mut unidx = 0usize;
+        loop {
+            let mut best_slot = self.unindexed.get(unidx).copied().unwrap_or(u32::MAX);
+            let mut best_head = usize::MAX;
+            for (k, &h) in heads[..n_heads].iter().enumerate() {
+                if h < best_slot {
+                    best_slot = h;
+                    best_head = k;
+                }
+            }
+            if best_slot == u32::MAX {
+                return false;
+            }
+            if best_head == usize::MAX {
+                unidx += 1;
+            } else {
+                let next = self.next[best_slot as usize];
+                if next == u32::MAX {
+                    n_heads -= 1;
+                    heads[best_head] = heads[n_heads];
+                } else {
+                    heads[best_head] = next;
+                }
+            }
+            if f(self.entries[best_slot as usize]) {
+                return true;
+            }
+        }
+    }
+    fn any_near(&self, area: Aabb, f: impl FnMut(MobBox) -> bool) -> bool {
+        self.visit_near(area, f)
+    }
+    fn count_near(&self, area: Aabb, mut f: impl FnMut(MobBox) -> bool) -> usize {
+        let mut total = 0;
+        self.visit_near(area, |entry| {
+            if f(entry) {
+                total += 1;
+            }
+            false
+        });
+        total
     }
 }
 impl<'g> GameLevel<'g, '_> {
+    fn use_pass_boxes(&mut self, boxes: MobBoxes) {
+        self.boxes = std::cell::RefCell::new(boxes);
+        self.scan_limit = 0;
+    }
     /// Every player in the level ([`Game::level_players`]).
     pub(in crate::game) fn players(&self) -> &[LevelPlayer] {
         &self.search.players
@@ -492,25 +694,46 @@ impl<'g> GameLevel<'g, '_> {
         self.last_chunk.set(Some((key, chunk)));
         chunk
     }
-    /// The mobs not removed whose boxes may meet `area` (callers test them).
-    fn mobs_near(&self, area: Aabb) -> Box<dyn Iterator<Item = MobBox> + '_> {
+    fn any_mob_near(&self, area: Aabb, f: impl FnMut(MobBox) -> bool) -> bool {
         let asked = self.box_queries.get() + 1;
         self.box_queries.set(asked);
-        if asked <= SCANNED_QUERIES && self.boxes.get().is_none() {
-            return Box::new(
-                self.game
-                    .mobs
-                    .iter()
-                    .enumerate()
-                    .filter(|(_, m)| !m.removed)
-                    .map(|(i, m)| mob_box(i, m)),
-            );
+        let stamp = self.game.mobs.stamp();
+        if asked <= self.scan_limit && !self.boxes.borrow().is_valid(stamp) {
+            return self
+                .game
+                .mobs
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| !m.removed)
+                .map(|(i, m)| mob_box(i, m))
+                .any(f);
         }
-        Box::new(
-            self.boxes
-                .get_or_init(|| MobBoxes::new(&self.game.mobs))
-                .near(area),
-        )
+        let mut boxes = self.boxes.borrow_mut();
+        if !boxes.is_valid(stamp) {
+            boxes.rebuild(&self.game.mobs, Some(stamp));
+        }
+        boxes.any_near(area, f)
+    }
+    fn count_mobs_near(&self, area: Aabb, mut f: impl FnMut(MobBox) -> bool) -> usize {
+        let asked = self.box_queries.get() + 1;
+        self.box_queries.set(asked);
+        let stamp = self.game.mobs.stamp();
+        if asked <= self.scan_limit && !self.boxes.borrow().is_valid(stamp) {
+            return self
+                .game
+                .mobs
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| !m.removed)
+                .map(|(i, m)| mob_box(i, m))
+                .filter(|&e| f(e))
+                .count();
+        }
+        let mut boxes = self.boxes.borrow_mut();
+        if !boxes.is_valid(stamp) {
+            boxes.rebuild(&self.game.mobs, Some(stamp));
+        }
+        boxes.count_near(area, f)
     }
     /// Vanilla adds the mob before checking another position, even when our
     /// pass defers insertion. Keep its current box and collision predicate.
@@ -1094,13 +1317,13 @@ impl NaturalLevel for GameLevel<'_, '_> {
     #[inline]
     fn no_collision(&self, bounds: Aabb) -> bool {
         self.game.no_spawn_collision(bounds, |query| {
-            self.mobs_near(query)
-                .any(|(_, b, collidable)| collidable && b.intersects(query))
-                || self
-                    .pending
-                    .borrow()
-                    .iter()
-                    .any(|mob| mob.collidable && mob.bounds.intersects(query))
+            self.any_mob_near(query, |(_, b, collidable)| {
+                collidable && b.intersects(query)
+            }) || self
+                .pending
+                .borrow()
+                .iter()
+                .any(|mob| mob.collidable && mob.bounds.intersects(query))
         })
     }
     /// `EntityGetter.isUnobstructed`: the fresh mob cannot already have a
@@ -1125,7 +1348,7 @@ impl NaturalLevel for GameLevel<'_, '_> {
                 .borrow()
                 .iter()
                 .any(|mob| obstructs(mob.bounds))
-            && !self.mobs_near(query).any(|(_, b, _)| obstructs(b))
+            && !self.any_mob_near(query, |(_, b, _)| obstructs(b))
             // The parent is a LivingEntity; its separate parts do not block building.
             && !self.game.dragon.as_ref().is_some_and(|dragon| obstructs(dragon.body_bounds()))
             && !entities
@@ -1200,10 +1423,9 @@ impl sunrise_sim::mobs::spawner::SpawnerLevel for GameLevel<'_, '_> {
     }
     #[inline]
     fn count_entities(&self, id: &str, bounds: Aabb) -> usize {
-        let mobs = self
-            .mobs_near(bounds)
-            .filter(|&(i, b, ..)| self.game.mobs[i].kind.id == id && b.intersects(bounds))
-            .count();
+        let mobs = self.count_mobs_near(bounds, |(i, b, ..)| {
+            self.game.mobs[i].kind.id == id && b.intersects(bounds)
+        });
         let pending = self
             .pending
             .borrow()
@@ -1329,6 +1551,7 @@ impl<'a> crate::game::ServerGame<'a> {
             provisional: Default::default(),
             boxes: Default::default(),
             box_queries: Default::default(),
+            scan_limit: SCANNED_QUERIES,
             costed,
             spawner: None,
             spawner_active: None,
@@ -1602,8 +1825,12 @@ impl<'a> crate::game::ServerGame<'a> {
         let mut scratch = std::mem::take(&mut self.server.spawn_scratch);
         let spawnable = self.spawning_chunks(&players, &mut scratch);
         laps.lap("sn_candidates");
+        let inhabited = &mut self.common.world.inhabited;
+        if inhabited.len() < scratch.candidates.len() {
+            inhabited.reserve(scratch.candidates.len() - inhabited.len());
+        }
         for &key in &scratch.candidates {
-            *self.common.world.inhabited.entry(key).or_insert(0) += 1;
+            *inhabited.entry(key).or_insert(0) += 1;
         }
         laps.lap("sn_inhabited");
         let mut random = std::mem::replace(
@@ -1633,7 +1860,7 @@ impl<'a> crate::game::ServerGame<'a> {
                 .iter()
                 .map(|m| Counted {
                     entity: &m.kind.id,
-                    category: Category::from_name(&m.kind.category),
+                    category: m.kind.spawn_category(),
                     block: [
                         m.position.x.floor() as i32,
                         m.position.y.floor() as i32,
@@ -1717,10 +1944,18 @@ impl<'a> crate::game::ServerGame<'a> {
         let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();
         loop {
             let next = {
-                let level = self.natural_search_level(
+                let mut level = self.natural_search_level(
                     std::mem::take(&mut scratch.players),
                     Some(&scratch.costed),
                 );
+                #[cfg(test)]
+                if scratch.force_linear_scan {
+                    level.scan_limit = u32::MAX;
+                } else {
+                    level.use_pass_boxes(std::mem::take(&mut scratch.boxes));
+                }
+                #[cfg(not(test))]
+                level.use_pass_boxes(std::mem::take(&mut scratch.boxes));
                 level.provisional.set(provisional);
                 let next = loop {
                     if let Some(search) = cluster.as_mut() {
@@ -1756,12 +1991,18 @@ impl<'a> crate::game::ServerGame<'a> {
                     }
                 };
                 scratch.players = level.search;
+                scratch.boxes = level.boxes.into_inner();
                 let rides = level.rides.into_inner();
                 next.map(|(candidate, spawn)| (candidate, spawn, rides))
             };
             let Some((candidate, spawn, rides)) = next else {
                 break;
             };
+            let before_len = self.common.mobs.len();
+            let before_stamp = self.common.mobs.stamp();
+            let before_dim = self.common.dim;
+            let before_last_join = self.common.mobs.last().map(|m| m.join);
+            let expected_pushed = usize::from(!spawn.veto_admission) + spawn.passengers.len();
             self.complete_natural_spawn(
                 cluster.as_mut().unwrap(),
                 candidate,
@@ -1772,6 +2013,24 @@ impl<'a> crate::game::ServerGame<'a> {
                 state,
                 &scratch.costed,
             );
+            #[cfg(test)]
+            let skip_cache = scratch.force_linear_scan;
+            #[cfg(not(test))]
+            let skip_cache = false;
+            let append_only = !skip_cache
+                && mod_api::__private::mods().is_empty()
+                && self.common.dim == before_dim
+                && self.common.mobs.len() == before_len + expected_pushed
+                && (before_len == 0
+                    || self.common.mobs.get(before_len - 1).map(|m| m.join) == before_last_join)
+                && scratch.boxes.is_valid(before_stamp);
+            if append_only {
+                scratch
+                    .boxes
+                    .extend_from(&self.common.mobs, before_len, self.common.mobs.stamp());
+            } else {
+                scratch.boxes.invalidate();
+            }
             if may_edit_players {
                 scratch.players.refresh(self);
             }
@@ -4222,6 +4481,1090 @@ mod tests {
                     }
                 })
             });
+        }
+    }
+
+    fn test_state_facts(name: &str, full: bool) -> sunrise_items::blocks::StateFacts {
+        use std::sync::Arc;
+        use sunrise_items::blocks::{Fluid, RenderShape, StateFacts};
+        let sound = mod_api::SoundEventKey::parse("").unwrap();
+        StateFacts {
+            name: Arc::from(name),
+            emission: 0,
+            dynamic_light: false,
+            dampening: 0,
+            skylight_down: true,
+            shape_occlusion: false,
+            can_occlude: full,
+            solid_render: full,
+            hardness: 1.0,
+            requires_tool: false,
+            replaceable: !full,
+            random_ticks: false,
+            block_entity: false,
+            render_shape: RenderShape::Model,
+            spawn_terrain_particles: true,
+            destroy_overlay: true,
+            full_collision: full,
+            friction: 0.6,
+            explosion_resistance: 1.0,
+            item: Arc::from(name),
+            pick_item: Arc::from(name),
+            sounds: mod_api::BlockSoundType {
+                identity: mod_api::BlockSoundTypeIdentity::Other,
+                volume: 1.0,
+                pitch: 1.0,
+                break_sound: sound.clone(),
+                step: sound.clone(),
+                place: sound.clone(),
+                hit: sound.clone(),
+                fall: sound,
+            },
+            fluid: Fluid::None,
+            fluid_level: 0,
+            fluid_falling: false,
+            waterlogged: false,
+            random_offset: false,
+            offset_limits: None,
+            outline_offset: false,
+            legacy_solid: full,
+            sturdy_full: 0,
+            classes: Arc::from([]),
+            outline: Arc::from([]),
+            outline_edges: Arc::from([]),
+            map_color: 0,
+        }
+    }
+
+    fn test_mob_kind(
+        id: &str,
+        species: Species,
+        width: f64,
+        height: f64,
+        category: Category,
+    ) -> std::sync::Arc<MobType> {
+        let mut kind = (*sunrise_sim::mobs::sensor_scan_tests::kind()).clone();
+        kind.id = id.into();
+        kind.species = species;
+        kind.width = width;
+        kind.height = height;
+        kind.category = category.name().into();
+        std::sync::Arc::new(kind)
+    }
+
+    fn open_sideways_shulker(
+        id: u32,
+        kind: std::sync::Arc<MobType>,
+        pos: Vec3,
+        attach_face: u8,
+    ) -> Mob {
+        let mut mob = Mob::new(id, kind, pos, 0.0);
+        mob.extra.variant3 = attach_face;
+        mob.anim.v[sunrise_sim::mobs::shulker::PEEK] = 1.0;
+        mob
+    }
+
+    #[derive(Debug, PartialEq, Eq)]
+    enum OwnedEvent {
+        Categories(Vec<Category>),
+        Local(Category, bool),
+        Start(Category, [i32; 3]),
+        Try(i32, i32),
+        Test(String, [i32; 3], bool),
+        Spawn(String, [u64; 3], u32),
+    }
+
+    impl OwnedEvent {
+        fn from_event(e: spawn_selection::Event<'_>) -> Self {
+            match e {
+                spawn_selection::Event::Categories(c) => Self::Categories(c),
+                spawn_selection::Event::Local(c, ok) => Self::Local(c, ok),
+                spawn_selection::Event::Start(c, pos) => Self::Start(c, pos),
+                spawn_selection::Event::Try(x, z) => Self::Try(x, z),
+                spawn_selection::Event::Test(id, pos, ok) => Self::Test(id.to_owned(), pos, ok),
+                spawn_selection::Event::Spawn(id, pos, yaw) => {
+                    Self::Spawn(id.to_owned(), pos.map(f64::to_bits), yaw.to_bits())
+                }
+            }
+        }
+    }
+
+    struct PassTestLevel<'a> {
+        facts: &'a BlockFacts,
+        data: &'a MobData,
+        spawns: &'a HashMap<String, Vec<SpawnEntry>>,
+        structures: &'a StructureSpawns,
+        types: &'a HashMap<String, std::sync::Arc<MobType>>,
+        players: &'a [[f64; 3]],
+        mobs: std::cell::RefCell<sunrise_sim::join_seq::ResidentList<Mob>>,
+        boxes: std::cell::RefCell<MobBoxes>,
+        use_index: bool,
+        initial_mobs: usize,
+        queries: std::cell::RefCell<Vec<bool>>,
+        self_obstructed: std::cell::Cell<usize>,
+        existing_obstructed: std::cell::Cell<usize>,
+        shulker_blocked: std::cell::Cell<usize>,
+        unobstructed_true: std::cell::Cell<usize>,
+        unobstructed_false: std::cell::Cell<usize>,
+    }
+
+    impl SpawnLevel for PassTestLevel<'_> {
+        fn state(&self, _x: i32, y: i32, _z: i32) -> BlockStateId {
+            if y <= 63 {
+                BlockStateId(1)
+            } else {
+                BlockStateId(0)
+            }
+        }
+        fn facts(&self) -> &BlockFacts {
+            self.facts
+        }
+        fn mob_data(&self) -> &MobData {
+            self.data
+        }
+        fn block_tag(&self, _tag: &str, _block: &str) -> bool {
+            false
+        }
+        fn biome_tag(&self, _tag: &str, _x: i32, _y: i32, _z: i32) -> bool {
+            false
+        }
+        fn sky_light(&self, _x: i32, _y: i32, _z: i32) -> i32 {
+            0
+        }
+        fn block_light(&self, _x: i32, _y: i32, _z: i32) -> i32 {
+            0
+        }
+        fn sky_darken(&self) -> i32 {
+            0
+        }
+        fn thundering(&self) -> bool {
+            false
+        }
+        fn sea_level(&self) -> i32 {
+            63
+        }
+        fn world_surface(&self, _x: i32, _z: i32) -> i32 {
+            64
+        }
+        fn peaceful(&self) -> bool {
+            false
+        }
+        fn dimension_type(&self) -> &DimensionFacts {
+            DimensionFacts::vanilla("minecraft:overworld").unwrap()
+        }
+        fn surface_slime_chance(&self, _x: i32, _y: i32, _z: i32) -> f32 {
+            0.0
+        }
+        fn world_seed(&self) -> i64 {
+            0
+        }
+        fn player_near(&self, _x: f64, _y: f64, _z: f64, _distance: f64) -> bool {
+            false
+        }
+    }
+
+    impl NaturalLevel for PassTestLevel<'_> {
+        fn min_y(&self) -> i32 {
+            63
+        }
+        fn max_y(&self) -> i32 {
+            65
+        }
+        fn ambient_light(&self) -> f32 {
+            0.0
+        }
+        fn has_ceiling(&self) -> bool {
+            false
+        }
+        fn mob_type(&self, entity: &str) -> Option<&MobType> {
+            self.types.get(entity).map(|t| t.as_ref())
+        }
+        fn biome_spawns(
+            &self,
+            _x: i32,
+            _y: i32,
+            _z: i32,
+        ) -> Option<&HashMap<String, Vec<SpawnEntry>>> {
+            Some(self.spawns)
+        }
+        fn spawn_cost(&self, _entity: &str, _x: i32, _y: i32, _z: i32) -> Option<SpawnCost> {
+            None
+        }
+        fn creature_probability(&self, _x: i32, _y: i32, _z: i32) -> f32 {
+            0.1
+        }
+        fn structures_at(
+            &self,
+            _x: i32,
+            _y: i32,
+            _z: i32,
+            _wanted: &dyn Fn(&str) -> bool,
+        ) -> Vec<StructureAt> {
+            Vec::new()
+        }
+        fn structure_spawns(&self) -> &StructureSpawns {
+            self.structures
+        }
+        fn nearest_player_positions(&self) -> &[[f64; 3]] {
+            self.players
+        }
+        fn respawn(&self) -> Option<[i32; 3]> {
+            None
+        }
+        fn can_spawn_in_chunk(&self, cx: i32, cz: i32) -> bool {
+            (-1..=2).contains(&cx) && (-1..=2).contains(&cz)
+        }
+        fn no_collision(&self, bounds: Aabb) -> bool {
+            let query = bounds.inflate(Vec3::new(
+                COLLISION_EPSILON,
+                COLLISION_EPSILON,
+                COLLISION_EPSILON,
+            ));
+            let blocked = if self.use_index {
+                self.boxes.borrow().any_near(query, |(_, b, collidable)| {
+                    collidable && b.intersects(query)
+                })
+            } else {
+                self.mobs
+                    .borrow()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| !m.removed)
+                    .map(|(i, m)| mob_box(i, m))
+                    .any(|(_, b, collidable)| collidable && b.intersects(query))
+            };
+            if blocked {
+                self.shulker_blocked.set(self.shulker_blocked.get() + 1);
+            }
+            self.queries.borrow_mut().push(!blocked);
+            !blocked
+        }
+        fn unobstructed(&self, bounds: Aabb) -> bool {
+            let Ok(shape) = VoxelShape::from_box(bounds) else {
+                self.queries.borrow_mut().push(false);
+                return false;
+            };
+            let Some(query) = shape.bounds() else {
+                self.queries.borrow_mut().push(true);
+                return true;
+            };
+            let obstructs = |b| spawn_selection::blocks_spawn_shape(&shape, query, b);
+            let mut hit_self = false;
+            let mut hit_existing = false;
+            let mut check = |(i, b, _): MobBox| {
+                if obstructs(b) {
+                    if i >= self.initial_mobs {
+                        hit_self = true;
+                    } else {
+                        hit_existing = true;
+                    }
+                    true
+                } else {
+                    false
+                }
+            };
+            let blocked = if self.use_index {
+                self.boxes.borrow().any_near(query, &mut check)
+            } else {
+                self.mobs
+                    .borrow()
+                    .iter()
+                    .enumerate()
+                    .filter(|(_, m)| !m.removed)
+                    .map(|(i, m)| mob_box(i, m))
+                    .any(&mut check)
+            };
+            if blocked {
+                self.unobstructed_false
+                    .set(self.unobstructed_false.get() + 1);
+                if hit_self {
+                    self.self_obstructed.set(self.self_obstructed.get() + 1);
+                } else if hit_existing {
+                    self.existing_obstructed
+                        .set(self.existing_obstructed.get() + 1);
+                }
+            } else {
+                self.unobstructed_true.set(self.unobstructed_true.get() + 1);
+            }
+            self.queries.borrow_mut().push(!blocked);
+            !blocked
+        }
+        fn spawn_mobs(&self) -> bool {
+            true
+        }
+        fn heightmap(&self, _kind: Heightmap, _x: i32, _z: i32) -> i32 {
+            64
+        }
+        fn pathfindable_land(&self, _x: i32, y: i32, _z: i32) -> bool {
+            y >= 64
+        }
+    }
+
+    #[test]
+    fn obstruction_index_matches_linear_scan_across_spawning_pass() {
+        use sunrise_sim::join_seq::ResidentList;
+        use sunrise_sim::mobs::data::Placement;
+
+        let facts = BlockFacts {
+            states: vec![
+                test_state_facts("minecraft:air", false),
+                test_state_facts("minecraft:stone", true),
+            ],
+            air: BlockStateId(0),
+            woods: Default::default(),
+            sign_texts: Default::default(),
+        };
+        let mut data = MobData::fallback(&facts);
+        data.vanilla_spawn_placements = Some(
+            [
+                "minecraft:zombie".to_owned(),
+                "minecraft:shulker".to_owned(),
+            ]
+            .into(),
+        );
+        data.placements
+            .insert("minecraft:zombie".to_owned(), Placement::OnGround);
+        data.placements
+            .insert("minecraft:shulker".to_owned(), Placement::NoRestrictions);
+
+        let zombie = test_mob_kind(
+            "minecraft:zombie",
+            Species::Zombie,
+            1.4,
+            1.95,
+            Category::Monster,
+        );
+        let shulker = test_mob_kind(
+            "minecraft:shulker",
+            Species::Shulker,
+            1.0,
+            1.0,
+            Category::Monster,
+        );
+        let mut types = HashMap::new();
+        types.insert("minecraft:zombie".to_owned(), zombie.clone());
+        types.insert("minecraft:shulker".to_owned(), shulker.clone());
+
+        let mut spawns = HashMap::new();
+        spawns.insert(
+            "monster".to_owned(),
+            vec![SpawnEntry {
+                entity: "minecraft:zombie".to_owned(),
+                weight: 1,
+                min: 4,
+                max: 4,
+                constant: true,
+            }],
+        );
+
+        let build_mobs = || {
+            let mut list: ResidentList<Mob> = ResidentList::default();
+            let mut next_id = 1u32;
+            for x in 0..32 {
+                for z in 0..32 {
+                    let pos = Vec3::new(f64::from(x) + 0.5, 64.0, f64::from(z) + 0.5);
+                    if (x * 7 + z * 13) % 11 == 0 {
+                        list.push(Mob::new(next_id, zombie.clone(), pos, 0.0));
+                        next_id += 1;
+                    } else if (x * 11 + z * 5) % 19 == 0 {
+                        list.push(Mob::new(next_id, shulker.clone(), pos, 0.0));
+                        next_id += 1;
+                    } else if (x * 3 + z * 17) % 13 == 0 {
+                        let mut removed = Mob::new(next_id, zombie.clone(), pos, 0.0);
+                        removed.removed = true;
+                        list.push(removed);
+                        next_id += 1;
+                    }
+                }
+            }
+            // Opened sideways shulkers spanning the x=16 column and chunk boundary.
+            for z in [4.5, 12.5, 20.5, 28.5] {
+                list.push(open_sideways_shulker(
+                    next_id,
+                    shulker.clone(),
+                    Vec3::new(15.5, 64.0, z),
+                    4,
+                ));
+                next_id += 1;
+                list.push(open_sideways_shulker(
+                    next_id,
+                    shulker.clone(),
+                    Vec3::new(16.5, 64.0, z + 2.0),
+                    5,
+                ));
+                next_id += 1;
+            }
+            list
+        };
+
+        let structures = StructureSpawns::default();
+        let player_positions = [[-20.0, 64.0, 16.0]];
+        let chunks = [(0, 0), (1, 0), (0, 1), (1, 1)];
+        let run_pass = |seed: i64, use_index: bool| {
+            let mobs = build_mobs();
+            let initial_mobs = mobs.len();
+            let mut boxes = MobBoxes::default();
+            if use_index {
+                boxes.rebuild(&mobs, Some(mobs.stamp()));
+            }
+            let level = PassTestLevel {
+                facts: &facts,
+                data: &data,
+                spawns: &spawns,
+                structures: &structures,
+                types: &types,
+                players: &player_positions,
+                mobs: std::cell::RefCell::new(mobs),
+                boxes: std::cell::RefCell::new(boxes),
+                use_index,
+                initial_mobs,
+                queries: std::cell::RefCell::new(Vec::new()),
+                self_obstructed: std::cell::Cell::new(0),
+                existing_obstructed: std::cell::Cell::new(0),
+                shulker_blocked: std::cell::Cell::new(0),
+                unobstructed_true: std::cell::Cell::new(0),
+                unobstructed_false: std::cell::Cell::new(0),
+            };
+            let players = vec![SpawnPlayer {
+                position: [-20.0, 64.0, 16.0],
+                spectator: false,
+            }];
+            let mut state = SpawnState::new(&level, 289, players, &[], |_, _| true);
+            let mut random = LegacyRandom::new(seed);
+            let mut events = Vec::new();
+            let mut admitted = Vec::new();
+            let mut cross_chunk_spawns = 0usize;
+            for chunk in chunks {
+                let mut spawn = |l: &PassTestLevel<'_>, r: &SpawnRequest, _: &mut LegacyRandom| {
+                    let kind = l.types.get(r.entity)?.clone();
+                    let before_len = l.mobs.borrow().len();
+                    let id = 10_000 + before_len as u32;
+                    let mob = Mob::new(
+                        id,
+                        kind,
+                        Vec3::new(r.position[0], r.position[1], r.position[2]),
+                        r.yaw,
+                    );
+                    l.mobs.borrow_mut().push(mob);
+                    if l.use_index {
+                        let mobs = l.mobs.borrow();
+                        l.boxes
+                            .borrow_mut()
+                            .extend_from(&mobs, before_len, mobs.stamp());
+                    }
+                    let spawn_chunk = (
+                        (r.position[0].floor() as i32) >> 4,
+                        (r.position[2].floor() as i32) >> 4,
+                    );
+                    if spawn_chunk != chunk {
+                        cross_chunk_spawns += 1;
+                    }
+                    admitted.push((
+                        r.entity.to_owned(),
+                        r.position.map(f64::to_bits),
+                        r.yaw.to_bits(),
+                        r.group_index,
+                    ));
+                    Some(spawn_selection::Spawned { school: true })
+                };
+                let mut trace = |e: spawn_selection::Event<'_>| {
+                    events.push(OwnedEvent::from_event(e));
+                };
+                spawn_selection::spawn_for_chunk(
+                    &level,
+                    &mut random,
+                    &mut state,
+                    &[Category::Monster],
+                    chunk,
+                    &mut spawn,
+                    &mut |_, _, vanilla| vanilla,
+                    &mut trace,
+                );
+            }
+            let rng_tail = [
+                random.next_long(),
+                random.next_long(),
+                random.next_long(),
+                random.next_long(),
+            ];
+            let stats = (
+                level.self_obstructed.get(),
+                level.existing_obstructed.get(),
+                level.shulker_blocked.get(),
+                level.unobstructed_true.get(),
+                level.unobstructed_false.get(),
+                cross_chunk_spawns,
+            );
+            (
+                (
+                    events,
+                    level.queries.into_inner(),
+                    admitted,
+                    state.counts(),
+                    rng_tail,
+                ),
+                stats,
+            )
+        };
+
+        let mut max_admitted = 0usize;
+        let mut total_self = 0usize;
+        let mut total_existing = 0usize;
+        let mut total_shulker = 0usize;
+        let mut total_true = 0usize;
+        let mut total_false = 0usize;
+        let mut total_cross_chunk = 0usize;
+
+        for seed in 0..16 {
+            let (scan, stats) = run_pass(seed, false);
+            let (indexed, _) = run_pass(seed, true);
+            assert_eq!(indexed, scan, "seed {seed}");
+            max_admitted = max_admitted.max(scan.2.len());
+            total_self += stats.0;
+            total_existing += stats.1;
+            total_shulker += stats.2;
+            total_true += stats.3;
+            total_false += stats.4;
+            total_cross_chunk += stats.5;
+        }
+
+        assert!(
+            max_admitted >= 4,
+            "expected multi-admission pass, max={max_admitted}"
+        );
+        assert!(total_self > 0, "pass must observe its own admitted spawns");
+        assert!(total_existing > 0, "pass must test pre-existing mobs");
+        assert!(total_shulker > 0, "pass must test collidable shulkers");
+        assert!(total_true > 0 && total_false > 0);
+        assert!(total_cross_chunk > 0, "pack must cross a chunk border");
+    }
+
+    #[test]
+    fn mob_boxes_grid_matches_linear_scan_on_edge_cases() {
+        use sunrise_sim::join_seq::ResidentList;
+
+        let zombie = test_mob_kind(
+            "minecraft:zombie",
+            Species::Zombie,
+            0.6,
+            1.95,
+            Category::Monster,
+        );
+        let shulker = test_mob_kind(
+            "minecraft:shulker",
+            Species::Shulker,
+            1.0,
+            1.0,
+            Category::Monster,
+        );
+        let ghast = test_mob_kind(
+            "minecraft:ghast",
+            Species::Ghast,
+            4.0,
+            4.0,
+            Category::Monster,
+        );
+
+        let mut mobs: ResidentList<Mob> = ResidentList::default();
+        let mut id = 1u32;
+        for &(x, z) in &[
+            (-16.1, -0.01),
+            (-4.0, 4.0),
+            (-0.001, 3.999),
+            (0.0, 0.0),
+            (3.999, 15.999),
+            (16.0, 16.0),
+            (1.5e9, 0.0),
+        ] {
+            mobs.push(Mob::new(id, zombie.clone(), Vec3::new(x, 64.0, z), 0.0));
+            id += 1;
+        }
+        mobs.push(open_sideways_shulker(
+            id,
+            shulker.clone(),
+            Vec3::new(15.5, 64.0, 15.5),
+            4,
+        ));
+        id += 1;
+        let mut dead_shulker = Mob::new(id, shulker.clone(), Vec3::new(16.5, 64.0, 15.5), 0.0);
+        dead_shulker.health = 0.0;
+        mobs.push(dead_shulker);
+        id += 1;
+        let mut removed = Mob::new(id, zombie.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0);
+        removed.removed = true;
+        mobs.push(removed);
+        id += 1;
+        mobs.push(Mob::new(
+            id,
+            ghast.clone(),
+            Vec3::new(10.0, 64.0, 10.0),
+            0.0,
+        ));
+        id += 1;
+
+        let mut boxes = MobBoxes::default();
+        assert!(!boxes.is_valid(mobs.stamp()));
+        boxes.rebuild(&mobs, Some(mobs.stamp()));
+        assert!(boxes.is_valid(mobs.stamp()));
+
+        let before = mobs.len();
+        mobs.push(Mob::new(
+            id,
+            zombie.clone(),
+            Vec3::new(16.2, 64.0, 16.2),
+            0.0,
+        ));
+        assert!(!boxes.is_valid(mobs.stamp()));
+        boxes.extend_from(&mobs, before, mobs.stamp());
+        assert!(boxes.is_valid(mobs.stamp()));
+
+        let probes = [
+            Aabb::new(Vec3::new(-0.5, 63.0, -0.5), Vec3::new(0.5, 66.0, 0.5)),
+            Aabb::new(Vec3::new(15.0, 63.0, 15.0), Vec3::new(17.0, 66.0, 17.0)),
+            // Strictly inside column x>=16, hit only by the opened sideways shulker at x=15.5.
+            Aabb::new(Vec3::new(16.1, 64.0, 15.2), Vec3::new(16.4, 65.0, 15.8)),
+            Aabb::new(Vec3::new(7.5, 63.0, 7.5), Vec3::new(12.5, 68.0, 12.5)),
+            Aabb::new(
+                Vec3::new(1.5e9 - 1.0, 63.0, -1.0),
+                Vec3::new(1.5e9 + 1.0, 66.0, 1.0),
+            ),
+            Aabb::new(
+                Vec3::new(f64::NEG_INFINITY, 0.0, 0.0),
+                Vec3::new(f64::INFINITY, 100.0, 100.0),
+            ),
+            Aabb::new(Vec3::new(50.0, 63.0, 50.0), Vec3::new(52.0, 66.0, 52.0)),
+        ];
+
+        for query in probes {
+            let mut visited = Vec::new();
+            let mut indexed_hits = Vec::new();
+            boxes.visit_near(query, |(i, b, _)| {
+                visited.push(i);
+                if b.intersects(query) {
+                    indexed_hits.push(i);
+                }
+                false
+            });
+            assert!(
+                visited.windows(2).all(|w| w[0] < w[1]),
+                "candidates must be visited in strictly ascending resident order: {visited:?}"
+            );
+            let scan_hits: Vec<usize> = mobs
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| !m.removed)
+                .map(|(i, m)| mob_box(i, m))
+                .filter(|&(_, b, _)| b.intersects(query))
+                .map(|(i, _, _)| i)
+                .collect();
+            assert_eq!(indexed_hits, scan_hits);
+
+            let scan_any = !scan_hits.is_empty();
+            assert_eq!(
+                boxes.any_near(query, |(_, b, _)| b.intersects(query)),
+                scan_any
+            );
+
+            let scan_col = mobs
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| !m.removed)
+                .map(|(i, m)| mob_box(i, m))
+                .any(|(_, b, c)| c && b.intersects(query));
+            assert_eq!(
+                boxes.any_near(query, |(_, b, c)| c && b.intersects(query)),
+                scan_col
+            );
+
+            let scan_count = mobs
+                .iter()
+                .enumerate()
+                .filter(|(_, m)| !m.removed)
+                .map(|(i, m)| mob_box(i, m))
+                .filter(|&(i, b, _)| mobs[i].kind.id == "minecraft:zombie" && b.intersects(query))
+                .count();
+            assert_eq!(
+                boxes.count_near(query, |(i, b, _)| {
+                    mobs[i].kind.id == "minecraft:zombie" && b.intersects(query)
+                }),
+                scan_count
+            );
+        }
+
+        // The opened sideways shulker at x=15.5 must obstruct the probe in x=16.1..16.4.
+        assert!(boxes.any_near(probes[2], |(_, b, c)| c && b.intersects(probes[2])));
+
+        // Out-of-bounds `from` invalidates cleanly instead of panicking.
+        boxes.extend_from(&mobs, mobs.len() + 1, mobs.stamp());
+        assert!(!boxes.is_valid(mobs.stamp()));
+
+        boxes.rebuild(&mobs, Some(mobs.stamp()));
+        boxes.invalidate();
+        assert!(!boxes.is_valid(mobs.stamp()));
+    }
+
+    #[test]
+    fn spawning_pass_observes_category_change_after_type_creation() {
+        use sunrise_sim::join_seq::ResidentList;
+        use sunrise_sim::mobs::data::Placement;
+
+        let facts = BlockFacts {
+            states: vec![
+                test_state_facts("minecraft:air", false),
+                test_state_facts("minecraft:stone", true),
+            ],
+            air: BlockStateId(0),
+            woods: Default::default(),
+            sign_texts: Default::default(),
+        };
+        let mut data = MobData::fallback(&facts);
+        data.vanilla_spawn_placements = Some(["minecraft:zombie".to_owned()].into());
+        data.placements
+            .insert("minecraft:zombie".to_owned(), Placement::OnGround);
+
+        let mut mutable_kind = (*test_mob_kind(
+            "minecraft:zombie",
+            Species::Zombie,
+            0.6,
+            1.95,
+            Category::Creature,
+        ))
+        .clone();
+        assert_eq!(mutable_kind.spawn_category(), Category::Creature);
+
+        // Mutate the category string after creation: Monster must now be counted and spawned.
+        mutable_kind.category = "monster".into();
+        let monster_kind = std::sync::Arc::new(mutable_kind.clone());
+        assert_eq!(monster_kind.spawn_category(), Category::Monster);
+
+        let mut spawns = HashMap::new();
+        spawns.insert(
+            "monster".to_owned(),
+            vec![SpawnEntry {
+                entity: "minecraft:zombie".to_owned(),
+                weight: 1,
+                min: 4,
+                max: 4,
+                constant: true,
+            }],
+        );
+        let structures = StructureSpawns::default();
+        let player_positions = [[-20.0, 64.0, 16.0]];
+
+        let run_with_kind = |kind: std::sync::Arc<MobType>| {
+            let mut types = HashMap::new();
+            types.insert("minecraft:zombie".to_owned(), kind.clone());
+            let level = PassTestLevel {
+                facts: &facts,
+                data: &data,
+                spawns: &spawns,
+                structures: &structures,
+                types: &types,
+                players: &player_positions,
+                mobs: std::cell::RefCell::new(ResidentList::default()),
+                boxes: std::cell::RefCell::new(MobBoxes::default()),
+                use_index: true,
+                initial_mobs: 0,
+                queries: std::cell::RefCell::new(Vec::new()),
+                self_obstructed: std::cell::Cell::new(0),
+                existing_obstructed: std::cell::Cell::new(0),
+                shulker_blocked: std::cell::Cell::new(0),
+                unobstructed_true: std::cell::Cell::new(0),
+                unobstructed_false: std::cell::Cell::new(0),
+            };
+            let existing = [Counted {
+                entity: &kind.id,
+                category: kind.spawn_category(),
+                block: [8, 64, 8],
+                is_mob: true,
+                persistent: false,
+            }];
+            let players = vec![SpawnPlayer {
+                position: [-20.0, 64.0, 16.0],
+                spectator: false,
+            }];
+            let mut state = SpawnState::new(&level, 289, players, &existing, |_, _| true);
+            let before = state.counts().1;
+            let mut random = LegacyRandom::new(3);
+            let mut spawned = 0usize;
+            for chunk in [(0, 0), (1, 0), (0, 1), (1, 1)] {
+                spawn_selection::spawn_for_chunk(
+                    &level,
+                    &mut random,
+                    &mut state,
+                    &[Category::Monster],
+                    chunk,
+                    &mut |_, _, _| {
+                        spawned += 1;
+                        Some(spawn_selection::Spawned { school: true })
+                    },
+                    &mut |_, _, vanilla| vanilla,
+                    &mut |_| {},
+                );
+            }
+            (before, state.counts().1, spawned)
+        };
+
+        let (before_monster, after_monster, spawned_monster) = run_with_kind(monster_kind);
+        assert_eq!(before_monster[0], 1, "counted as Monster, not Creature");
+        assert_eq!(before_monster[1], 0, "Creature slot stays zero");
+        assert!(spawned_monster > 0, "Monster-categorised type spawns");
+        assert_eq!(after_monster[0] as usize, 1 + spawned_monster);
+
+        // Mutating to Misc must drop it from both counting and spawning.
+        mutable_kind.category = "misc".into();
+        let misc_kind = std::sync::Arc::new(mutable_kind);
+        let (before_misc, after_misc, spawned_misc) = run_with_kind(misc_kind);
+        assert_eq!(before_misc, [0; 8]);
+        assert_eq!(after_misc, [0; 8]);
+        assert_eq!(spawned_misc, 0);
+    }
+
+    struct BlockerMovePack {
+        blocker: std::sync::Arc<std::sync::atomic::AtomicU32>,
+        moved: std::sync::Arc<std::sync::atomic::AtomicBool>,
+        destination: [f64; 3],
+    }
+
+    #[mod_api::__subscriptions]
+    impl mod_api::Hooks for BlockerMovePack {
+        fn potential_spawns(
+            &self,
+            _: &dyn mod_api::Host,
+            event: &mut mod_api::PotentialSpawnsEvent<'_>,
+        ) -> mod_api::Flow {
+            if event.category == "monster" {
+                *event.entries = vec![SpawnEntry {
+                    entity: SILVERFISH.into(),
+                    weight: 1,
+                    min: 4,
+                    max: 4,
+                    constant: true,
+                }];
+            }
+            mod_api::Flow::Continue
+        }
+
+        fn entity_join_level(
+            &self,
+            host: &mut dyn mod_api::ServerHost,
+            event: &mut mod_api::EntityJoinLevelEvent<'_>,
+        ) -> mod_api::Flow {
+            if event.kind == SILVERFISH
+                && !self.moved.swap(true, std::sync::atomic::Ordering::Relaxed)
+            {
+                let id = self.blocker.load(std::sync::atomic::Ordering::Relaxed);
+                let blocker = host.entity(id).unwrap();
+                assert!(blocker.teleport_to(host, self.destination, None));
+            }
+            mod_api::Flow::Continue
+        }
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn run_natural_spawn_pass_index_matches_linear_scan_and_invalidates_on_join_hook() {
+        use crate::game::native_entity_refs::tests::{run_fresh_cases, with_game};
+        use sunrise_gameplay_common::game::creatures::SpawnSite;
+        if run_fresh_cases(
+            &format!(
+                "{}::run_natural_spawn_pass_index_matches_linear_scan_and_invalidates_on_join_hook",
+                module_path!().split_once("::").unwrap().1
+            ),
+            "SUNRISE_TEST_SEEDS",
+            &["1"],
+        ) {
+            return;
+        }
+
+        // Part 1: unmodded production `run_natural_spawn_pass` with opened sideways shulker.
+        let run_unmodded = |force_linear_scan: bool| {
+            let mut out = None;
+            with_game(|game| {
+                let player = [0.5, 64.0, 0.5];
+                spawn_check_world(game, Vec3::new(player[0], player[1], player[2]));
+                let stone = game
+                    .pack
+                    .assets
+                    .registry
+                    .default_state("minecraft:stone")
+                    .unwrap();
+                for x in 24..68 {
+                    for z in 24..64 {
+                        game.world.set(x, 63, z, stone).unwrap();
+                    }
+                }
+                for pos in [
+                    [36.5, 64.0, 36.5],
+                    [44.5, 64.0, 38.5],
+                    [48.5, 64.0, 42.5],
+                    [52.5, 64.0, 36.5],
+                ] {
+                    game.spawn_mob("minecraft:zombie", pos, false, SpawnSite::Plain)
+                        .unwrap();
+                }
+                let shulker_id = game
+                    .spawn_mob(
+                        "minecraft:shulker",
+                        [47.5, 64.0, 39.5],
+                        false,
+                        SpawnSite::Plain,
+                    )
+                    .unwrap();
+                let shulker_idx = game.mobs.iter().position(|m| m.id == shulker_id).unwrap();
+                game.mobs.update(shulker_idx, |m| {
+                    m.extra.variant3 = 4;
+                    m.anim.v[sunrise_sim::mobs::shulker::PEEK] = 1.0;
+                });
+                let removed_id = game
+                    .spawn_mob(
+                        "minecraft:zombie",
+                        [40.5, 64.0, 40.5],
+                        false,
+                        SpawnSite::Plain,
+                    )
+                    .unwrap();
+                let removed_idx = game.mobs.iter().position(|m| m.id == removed_id).unwrap();
+                game.mobs.update(removed_idx, |m| m.removed = true);
+
+                let before_mobs = game.mobs.len();
+                let players = vec![SpawnPlayer {
+                    position: player,
+                    spectator: false,
+                }];
+                let mut state =
+                    SpawnState::new(&game.natural_level(), 289, players, &[], |_, _| true);
+                let mut scratch = NaturalPassScratch {
+                    force_linear_scan,
+                    ..Default::default()
+                };
+                scratch.players.refresh(game);
+                let mut random = LevelRandom::for_level(LegacyRandom::new(1099));
+                sunrise_level::random_source::set_thread_uniquifier(12345).unwrap();
+                game.run_natural_spawn_pass(
+                    &[Category::Monster],
+                    [(2, 2), (3, 2)].into_iter(),
+                    &mut random,
+                    &mut state,
+                    &mut scratch,
+                );
+                if !force_linear_scan {
+                    assert!(
+                        scratch.boxes.is_valid(game.mobs.stamp()),
+                        "unmodded pass should retain valid MobBoxes across admissions"
+                    );
+                }
+                let spawned: Vec<_> = game.mobs[before_mobs..]
+                    .iter()
+                    .map(|m| {
+                        (
+                            m.id,
+                            m.kind.id.clone(),
+                            [
+                                m.position.x.to_bits(),
+                                m.position.y.to_bits(),
+                                m.position.z.to_bits(),
+                            ],
+                            m.yaw.to_bits(),
+                            m.random.state(),
+                        )
+                    })
+                    .collect();
+                out = Some((spawned, state.counts(), random.next_long()));
+            });
+            out.unwrap()
+        };
+        assert_eq!(run_unmodded(false), run_unmodded(true));
+
+        // Part 2: join hook moving a pre-existing blocker out of or into the 4th attempt's spot.
+        const FOURTH_SPOT: [f64; 3] = [45.5, 64.0, 38.5];
+        const FAR_SPOT: [f64; 3] = [100.5, 64.0, 100.5];
+        for move_out in [true, false] {
+            let run_hooked = |force_linear_scan: bool| {
+                let blocker = std::sync::Arc::new(std::sync::atomic::AtomicU32::new(0));
+                let moved = std::sync::Arc::new(std::sync::atomic::AtomicBool::new(false));
+                let mods = vec![mod_api::ModEntry::new(
+                    "blocker-move-pack",
+                    Box::new(BlockerMovePack {
+                        blocker: blocker.clone(),
+                        moved: moved.clone(),
+                        destination: if move_out { FAR_SPOT } else { FOURTH_SPOT },
+                    }),
+                )];
+                let mut out = None;
+                mod_platform::testing::with_mods(mods.into(), || {
+                    with_game(|game| {
+                        let player = [0.5, 64.0, 0.5];
+                        spawn_check_world(game, Vec3::new(player[0], player[1], player[2]));
+                        let stone = game
+                            .pack
+                            .assets
+                            .registry
+                            .default_state("minecraft:stone")
+                            .unwrap();
+                        for x in 24..64 {
+                            for z in 24..64 {
+                                game.world.set(x, 63, z, stone).unwrap();
+                            }
+                        }
+                        let start = if move_out { FOURTH_SPOT } else { FAR_SPOT };
+                        let id = game
+                            .spawn_mob("minecraft:zombie", start, false, SpawnSite::Plain)
+                            .unwrap();
+                        blocker.store(id, std::sync::atomic::Ordering::Relaxed);
+                        let players = vec![SpawnPlayer {
+                            position: player,
+                            spectator: false,
+                        }];
+                        let mut state =
+                            SpawnState::new(&game.natural_level(), 289, players, &[], |_, _| true);
+                        let mut scratch = NaturalPassScratch {
+                            force_linear_scan,
+                            ..Default::default()
+                        };
+                        scratch.players.refresh(game);
+                        let mut random = LevelRandom::for_level(LegacyRandom::new(1099));
+                        sunrise_level::random_source::set_thread_uniquifier(12345).unwrap();
+                        game.run_natural_spawn_pass(
+                            &[Category::Monster],
+                            std::iter::once((2, 2)),
+                            &mut random,
+                            &mut state,
+                            &mut scratch,
+                        );
+                        let spawned: Vec<_> = game
+                            .mobs
+                            .iter()
+                            .filter(|m| m.kind.id == SILVERFISH)
+                            .map(|m| {
+                                (
+                                    [
+                                        m.position.x.to_bits(),
+                                        m.position.y.to_bits(),
+                                        m.position.z.to_bits(),
+                                    ],
+                                    m.yaw.to_bits(),
+                                    m.random.state(),
+                                )
+                            })
+                            .collect();
+                        out = Some((spawned, state.counts(), random.next_long()));
+                    });
+                });
+                assert!(moved.load(std::sync::atomic::Ordering::Relaxed));
+                out.unwrap()
+            };
+            let indexed = run_hooked(false);
+            let linear = run_hooked(true);
+            assert_eq!(indexed, linear, "move_out={move_out}");
+            let spawned_at_fourth = indexed
+                .0
+                .iter()
+                .any(|(pos, _, _)| *pos == FOURTH_SPOT.map(f64::to_bits));
+            assert_eq!(
+                spawned_at_fourth, move_out,
+                "join hook blocker move must decide whether FOURTH_SPOT spawns"
+            );
         }
     }
 }

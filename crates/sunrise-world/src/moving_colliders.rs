@@ -309,6 +309,11 @@ pub fn mover() -> u64 {
     MOVER.with(Cell::get)
 }
 
+/// Whether a transient shove or historical-age override is active on this thread.
+pub fn has_active_override() -> bool {
+    SHOVE.with(Cell::get).is_some() || AGE.with(Cell::get).is_some()
+}
+
 /// Appends to `out` the colliders meeting `bounds` that `entity` collides with. An identity of
 /// 0 is the move [`as_mover`] names; with none named (a ray, a projectile's path) it is exempt
 /// from nothing and meets every collider.
@@ -555,5 +560,19 @@ mod tests {
             in_level(Prepared::empty(), || assert_eq!(found(5, 0.0), 0));
             assert_eq!(found(5, 0.0), 1);
         });
+    }
+
+    #[test]
+    fn active_override_tracks_shove_and_at_age() {
+        assert!(!has_active_override());
+        {
+            let _shove = Shove::enter(5, 1);
+            assert!(has_active_override());
+        }
+        assert!(!has_active_override());
+        at_age(0.5, || {
+            assert!(has_active_override());
+        });
+        assert!(!has_active_override());
     }
 }

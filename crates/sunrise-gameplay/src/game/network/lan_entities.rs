@@ -642,15 +642,78 @@ impl ServerGame<'_> {
     }
 }
 
+fn next_tracker_mob<'a>(
+    mobs: &'a [sunrise_sim::mobs::Mob],
+    cursor: &mut usize,
+    id: u32,
+) -> Option<&'a sunrise_sim::mobs::Mob> {
+    // Mob states are emitted first and filtering preserves their order.
+    let found = (*cursor..mobs.len()).find(|&i| mobs[i].id == id);
+    *cursor = found.map_or(mobs.len(), |i| i + 1);
+    found.map(|i| &mobs[i])
+}
+
 impl ServerGame<'_> {
     /// `ClientboundAddEntityPacket(Entity, ServerEntity, int)`: the entity's
     /// own UUID (`Entity.getUUID`), the one `/data`, saves and UUID
     /// selectors use, so a client can name it back (the crosshair UUID that
     /// `ClientSuggestionProvider.getSelectedEntities` suggests).
     pub fn lan_entity_uuids(&mut self, states: &mut States) {
-        // A bare state is never paired: its UUID is never read.
-        for e in states.as_mut_slice().iter_mut().filter(|e| !e.bare) {
-            e.uuid = ints_uuid(self.uuid_for(e.id as u32));
+        self.resolve_lan_entity_uuids(states, mod_api::__private::mods().is_empty());
+    }
+
+    #[inline(always)]
+    pub(super) fn resolve_lan_entity_uuids(&mut self, states: &mut States, direct_mobs: bool) {
+        use sunrise_sim::join_seq::{
+            Joined,
+            residency::{
+                Kind, Owner, Source,
+                table::{Location, SourceEntity},
+            },
+        };
+
+        let dim = self.common.dim.key();
+        let mut next_mob = 0;
+        for e in states.as_mut_slice() {
+            let id = e.id as u32;
+            let mob = direct_mobs
+                .then(|| {
+                    let mob = next_tracker_mob(&self.common.mobs, &mut next_mob, id)?;
+                    Some(Location {
+                        owner: Owner {
+                            dimension: dim,
+                            kind: Kind::Mob,
+                        },
+                        join: mob.join_seq(),
+                        source: Source::Ordinary,
+                    })
+                })
+                .flatten();
+            if e.bare {
+                continue;
+            }
+            let uuid = if let (Some(mob), Some(&saved)) = (mob, self.common.persist.uuids.get(&id))
+            {
+                let mut table = self.common.resident_entities.table.borrow_mut();
+                let identity = table.server_admitted_identity(id, |at| {
+                    if at == mob {
+                        Some(SourceEntity { id, value: () })
+                    } else {
+                        self.locate_server_resident_owner(at)
+                            .map(|source| SourceEntity {
+                                id: source.id,
+                                value: (),
+                            })
+                    }
+                });
+                identity
+                    .filter(|(at, _, _)| at.owner.dimension == dim)
+                    .and_then(|(_, _, details)| details.known_uuid)
+                    .unwrap_or(saved)
+            } else {
+                self.uuid_for(id)
+            };
+            e.uuid = ints_uuid(uuid);
             if !self.common.persist.sync_body_position.is_empty() {
                 e.sync_position |= self
                     .common
@@ -1215,6 +1278,25 @@ mod tests {
     use super::*;
 
     // NBT constructors assign ids. Reinstall unbound owners to exercise delayed tracking.
+
+    #[test]
+    fn tracker_uuid_cursor_advances_across_filtered_mobs() {
+        use sunrise_core::geometry::Vec3;
+        use sunrise_sim::mobs::Mob;
+
+        let kinds = sunrise_gameplay_common::game::mods::living_mod_types();
+        let kind = &kinds["minecraft:zombie"];
+        let mobs: Vec<_> = (1..=12)
+            .map(|id| Mob::new(id, kind.clone(), Vec3::ZERO, 0.0))
+            .collect();
+        let mut cursor = 0;
+        for id in [1, 10, 12] {
+            assert_eq!(next_tracker_mob(&mobs, &mut cursor, id).unwrap().id, id);
+            assert_eq!(cursor, id as usize);
+        }
+        assert!(next_tracker_mob(&mobs, &mut cursor, 13).is_none());
+        assert_eq!(cursor, mobs.len());
+    }
 
     #[test]
     fn summoned_ids_are_unique_and_survive_the_tracking_pass() {

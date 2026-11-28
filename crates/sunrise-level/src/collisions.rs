@@ -114,6 +114,11 @@ pub fn with_piston_noclip<T>(
     f()
 }
 
+/// The direction an active [`with_piston_noclip`] scope suppresses on this thread, if any.
+pub fn piston_noclip() -> Option<sunrise_core::geometry::Direction> {
+    PISTON_NOCLIP.with(std::cell::Cell::get)
+}
+
 pub struct SceneCollisions<'w, 'r> {
     pub world: &'w World,
     pub binding: &'w BlockCollisionRegistry<'r>,
