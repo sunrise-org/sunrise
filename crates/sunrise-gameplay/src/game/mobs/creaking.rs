@@ -149,7 +149,8 @@ impl crate::game::ServerGame<'_> {
         self.common.mob_index = index;
         mobs.extend(added);
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         self.common.persist.uuids = uuids;
         self.server.next_entity = next_entity;
@@ -225,7 +226,8 @@ impl crate::game::ServerGame<'_> {
             && live_heart(self)
             && let Some(mob) = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == id && m.join == join && !m.removed)
         {

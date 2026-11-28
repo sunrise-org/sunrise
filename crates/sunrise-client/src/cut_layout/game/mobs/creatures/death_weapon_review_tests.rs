@@ -78,7 +78,13 @@ fn death_weapon_immune_crossbow_cannot_replace_accepted_crossbow() {
                 &arrow(Some(ItemStack::new("minecraft:bow", 1))),
                 2.0
             ));
-            let mut dead = game.entities.mobs.iter().find(|m| m.id == 70).unwrap().clone();
+            let mut dead = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == 70)
+                .unwrap()
+                .clone();
             assert_eq!(dead.last_damage.unwrap().1, committed.1);
             dead.health = 0.0;
             game.mob_die(&dead);
@@ -132,12 +138,18 @@ fn death_weapon_dispenser_arrow_without_recorded_weapon_is_none() {
             &arrow(Some(ItemStack::new("minecraft:bow", 1))),
             1.0
         ));
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|mob| mob.id == 70)
             .unwrap()
             .invulnerable = 0;
-        game.entities.mobs.iter_mut().find(|mob| mob.id == 70).unwrap().age += 1;
+        game.entities
+            .mobs
+            .iter_mut()
+            .find(|mob| mob.id == 70)
+            .unwrap()
+            .age += 1;
         assert!(hit(game, &arrow(None), 100.0));
     });
 }
@@ -307,9 +319,21 @@ fn death_weapon_same_tick_stronger_arrow_replaces_weapon() {
                 &arrow(Some(ItemStack::new("minecraft:crossbow", 1))),
                 1.0
             ));
-            let first = game.entities.mobs.iter().find(|m| m.id == 70).unwrap().last_damage;
+            let first = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == 70)
+                .unwrap()
+                .last_damage;
             assert!(hit(game, &arrow(Some(expected.clone())), 2.0));
-            let mut dead = game.entities.mobs.iter().find(|m| m.id == 70).unwrap().clone();
+            let mut dead = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == 70)
+                .unwrap()
+                .clone();
             assert_eq!(
                 dead.last_damage, first,
                 "equal source values still commit a new hit"

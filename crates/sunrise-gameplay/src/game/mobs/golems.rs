@@ -100,7 +100,8 @@ impl ServerGame<'_> {
         let id = self.create_triggered(kind, at, 0.0);
         // CarvedPumpkinBlock.trySpawnGolem: setPlayerCreated(true) on the iron golem.
         if kind == "minecraft:iron_golem"
-            && let Some(m) = id.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id))
+            && let Some(m) =
+                id.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id))
         {
             m.extra.player_created = true;
         }
@@ -163,7 +164,8 @@ impl ServerGame<'_> {
                     .insert((below[0], below[1], below[2]), entity);
             }
         }
-        if let Some(m) = id.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id)) {
+        if let Some(m) = id.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id))
+        {
             m.extra.variant = weather;
             let p = [m.position.x, m.position.y, m.position.z];
             self.server_play_sound("minecraft:entity.copper_golem.spawn", p, 1.0, 1.0);
@@ -475,7 +477,10 @@ mod golem_heads_tests {
     }
 
     fn built(game: &ServerGame<'_>, kind: &str) -> bool {
-        game.entities.mobs.iter().any(|m| m.kind.id == kind && !m.removed)
+        game.entities
+            .mobs
+            .iter()
+            .any(|m| m.kind.id == kind && !m.removed)
     }
 
     fn head_stands(game: &ServerGame<'_>, at: [i32; 3]) -> bool {

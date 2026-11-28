@@ -95,12 +95,14 @@ pub trait PickEntityCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             .resident_dragon_part(id)
             .map_or(id, |(dragon, _)| dragon.id);
         let mob_kind = self
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id)
             .map(|m| m.kind.id.as_str())
             .or_else(|| {
-                self.entities.dragon
+                self.entities
+                    .dragon
                     .as_ref()
                     .is_some_and(|d| d.id == id && (d.id != 0 || self.side_has_remote()))
                     .then_some("minecraft:ender_dragon")
@@ -148,7 +150,8 @@ pub trait PickEntityCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             .or_else(|| {
                 let uid = id as u32;
                 let bounds = self
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == uid)
                     .map(|m| m.bounds())

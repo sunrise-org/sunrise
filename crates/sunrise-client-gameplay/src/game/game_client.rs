@@ -716,7 +716,8 @@ impl crate::game::ClientGame<'_> {
                     // A dragon summoned outside the End draws at its join slot too.
                     if let Some(dragon) = self
                         .common
-                        .entities.dragon
+                        .entities
+                        .dragon
                         .as_ref()
                         .filter(|d| !self.hides_as_camera(d.id))
                     {
@@ -908,7 +909,8 @@ impl crate::game::ClientGame<'_> {
             let mut casters: Vec<(glam::DVec3, glam::DVec3, f32, f32)> =
                 sunrise_client::shadows::mob_casters(
                     self.common
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .filter(|m| !self.hides_as_camera(m.id)),
                     self.client_res().client_mob_models(),
@@ -919,7 +921,8 @@ impl crate::game::ClientGame<'_> {
             let item = sunrise_client::shadows::shadow_params("minecraft:item");
             casters.extend(
                 self.common
-                    .entities.dropped
+                    .entities
+                    .dropped
                     .iter()
                     .filter(|i| !self.hides_as_camera(i.id))
                     .map(|i| {
@@ -930,7 +933,8 @@ impl crate::game::ClientGame<'_> {
             let orb = sunrise_client::shadows::shadow_params("minecraft:experience_orb");
             casters.extend(
                 self.common
-                    .entities.orbs
+                    .entities
+                    .orbs
                     .iter()
                     .filter(|o| !self.hides_as_camera(o.id))
                     .map(|o| {
@@ -3634,21 +3638,30 @@ impl crate::game::ClientGame<'_> {
             let body = self.common.entities.dropped[i].bounds();
             if body.intersects(bounds) {
                 let dy = lift_dy(body);
-                self.common.entities.dropped.update(i, |item| item.position.y += dy);
+                self.common
+                    .entities
+                    .dropped
+                    .update(i, |item| item.position.y += dy);
             }
         }
         for i in 0..self.common.entities.boats.len() {
             let body = self.common.entities.boats[i].bounds();
             if body.intersects(bounds) {
                 let dy = lift_dy(body);
-                self.common.entities.boats.update(i, |boat| boat.position.y += dy);
+                self.common
+                    .entities
+                    .boats
+                    .update(i, |boat| boat.position.y += dy);
             }
         }
         for i in 0..self.common.entities.carts.len() {
             let body = self.common.entities.carts[i].bounds();
             if body.intersects(bounds) {
                 let dy = lift_dy(body);
-                self.common.entities.carts.update(i, |cart| cart.position.y += dy);
+                self.common
+                    .entities
+                    .carts
+                    .update(i, |cart| cart.position.y += dy);
             }
         }
         for i in 0..self.common.entities.armor_stands.len() {
@@ -3656,7 +3669,8 @@ impl crate::game::ClientGame<'_> {
             if body.intersects(bounds) {
                 let dy = lift_dy(body);
                 self.common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .update(i, |stand| stand.position.y += dy);
             }
         }

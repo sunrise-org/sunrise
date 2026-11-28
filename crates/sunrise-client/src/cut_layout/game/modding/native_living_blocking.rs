@@ -73,7 +73,9 @@ mod tests {
             game.entities.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
             let zombie = game.living(game.entity(12).unwrap()).unwrap();
             let mob = game.entities.mobs.len() - 1;
-            game.entities.mobs[mob].extra.set_slot_stack(OFFHAND, Some(shield));
+            game.entities.mobs[mob]
+                .extra
+                .set_slot_stack(OFFHAND, Some(shield));
             assert_eq!(game.living_is_blocking(zombie), Some(false));
             assert!(game.living_start_using_item(zombie, Hand::Off));
             game.entities.mobs[mob].extra.using_item = 5;

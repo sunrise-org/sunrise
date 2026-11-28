@@ -44,7 +44,8 @@ pub(in crate::game) fn finish(game: &mut crate::game::ServerGame<'_>, mut steps:
             live.clear();
             live.extend(
                 game.common
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .map(|projectile| projectile.id),
             );

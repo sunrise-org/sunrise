@@ -246,7 +246,8 @@ pub(crate) fn open(
         sunrise_gameplay_common::game::trading_common::MerchantState,
     };
     spawn(game, 40, "minecraft:villager");
-    game.entities.mobs[0].extra.profession = sunrise_sim::mobs::villager::ProfessionState::from_index(5);
+    game.entities.mobs[0].extra.profession =
+        sunrise_sim::mobs::villager::ProfessionState::from_index(5);
     let mut offer = offer("minecraft:wheat", "minecraft:emerald");
     offer.base_cost_a.stack.count = 1;
     offer.uses = 0;
@@ -650,7 +651,10 @@ fn a_silent_trade_edit_keeps_the_mob_clock_and_rng_when_the_threshold_wraps() {
                 let result = work_screen(game).slots[2].as_ref().unwrap();
                 assert_eq!(result.item.as_ref(), "minecraft:diamond");
                 assert_eq!(game.entities.mobs[0].ambient_timer, 17);
-                assert_eq!(<(u64, Option<f64>)>::from(&game.entities.mobs[0].random), random);
+                assert_eq!(
+                    <(u64, Option<f64>)>::from(&game.entities.mobs[0].random),
+                    random
+                );
                 assert!(!packets(&rx).iter().any(|packet| matches!(
                     packet,
                     Clientbound::Sound(_) | Clientbound::SoundEntity(_)
@@ -1313,7 +1317,10 @@ fn an_outer_abort_undoes_an_accepted_trade() {
             game.storage_scope(|game, _| {
                 assert!(game.lan_merchant_click(12, &click));
                 assert_eq!((result(game), dirt(game), stat(game)), (1, 0, 1));
-                assert!(game.entities.orbs.is_empty(), "orb creation waits for root commit");
+                assert!(
+                    game.entities.orbs.is_empty(),
+                    "orb creation waits for root commit"
+                );
                 assert!(packets(&rx).is_empty());
                 ((), false)
             });

@@ -23,7 +23,9 @@ mod tests {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let journal = game.resident_entities.table.borrow().producer();
             for id in 800..820 {
-                game.entities.mobs.push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
             }
             game.tick().unwrap();
             let mut remaining = Vec::new();

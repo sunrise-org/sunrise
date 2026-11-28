@@ -16,7 +16,8 @@ const PIG: u32 = 913;
 fn with_scene(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
     with_game(|game| {
         game.options.dedicated = Some(Vec::new());
-        game.entities.armor_stands
+        game.entities
+            .armor_stands
             .push(ArmorStand::new(STAND, Vec3::new(0.5, 64.0, 0.5), 0.0));
         game.entities.item_frames.push(ItemFrame {
             attachment_lifetime: Default::default(),

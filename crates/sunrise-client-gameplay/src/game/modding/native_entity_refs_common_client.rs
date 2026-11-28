@@ -94,7 +94,12 @@ impl crate::game::ClientGame<'_> {
         }
         match self.client_level_entity(id) {
             Some(Target::Mob(mob))
-                if !self.common.entities.mobs.iter().any(|m| m.id == mob && !m.removed) =>
+                if !self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .any(|m| m.id == mob && !m.removed) =>
             {
                 Err(EntityReadError::Unavailable)
             }
@@ -106,7 +111,13 @@ impl crate::game::ClientGame<'_> {
     /// Resolve a tracked client entity's typed target across every body store a client holds.
     pub(in crate::game::client_side) fn client_level_entity(&self, id: i32) -> Option<Target> {
         let uid = u32::try_from(id).ok()?;
-        if self.common.entities.dragon.as_ref().is_some_and(|d| d.id == uid) {
+        if self
+            .common
+            .entities
+            .dragon
+            .as_ref()
+            .is_some_and(|d| d.id == uid)
+        {
             return Some(Target::Dragon(uid));
         }
         if self.common.entities.mobs.iter().any(|m| m.id == uid) {
@@ -124,7 +135,13 @@ impl crate::game::ClientGame<'_> {
         if self.common.entities.carts.iter().any(|e| e.id == uid) {
             return Some(Target::Cart(uid));
         }
-        if self.common.entities.armor_stands.iter().any(|e| e.id == uid) {
+        if self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .any(|e| e.id == uid)
+        {
             return Some(Target::Stand(uid));
         }
         if self.common.entities.tnts.iter().any(|e| e.id == uid) {
@@ -133,12 +150,7 @@ impl crate::game::ClientGame<'_> {
         if self.common.entities.falling.iter().any(|e| e.id == uid) {
             return Some(Target::Falling(uid));
         }
-        if self
-            .common
-            .entities.projectiles
-            .iter()
-            .any(|e| e.id == uid)
-        {
+        if self.common.entities.projectiles.iter().any(|e| e.id == uid) {
             return Some(Target::Projectile(uid));
         }
         if self.common.entities.rockets.iter().any(|e| e.id == uid) {
@@ -165,10 +177,22 @@ impl crate::game::ClientGame<'_> {
         if self.common.entities.bolts.iter().any(|b| b.id == uid) {
             return Some(Target::Bolt(uid));
         }
-        if self.common.entities.breath_clouds.iter().any(|e| e.id == uid) {
+        if self
+            .common
+            .entities
+            .breath_clouds
+            .iter()
+            .any(|e| e.id == uid)
+        {
             return Some(Target::Cloud(uid));
         }
-        if self.common.entities.ominous_spawners.iter().any(|s| s.id == uid) {
+        if self
+            .common
+            .entities
+            .ominous_spawners
+            .iter()
+            .any(|s| s.id == uid)
+        {
             return Some(Target::Spawner(uid));
         }
         if self.client.interactions.contains_key(&id) {

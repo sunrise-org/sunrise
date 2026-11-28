@@ -285,7 +285,8 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn mob_drown(&mut self, mob: u32, at: [f64; 3], bubbles: i32) {
         let v = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == mob)
             .map_or([0.0; 3], |m| [m.velocity.x, m.velocity.y, m.velocity.z]);
@@ -1026,17 +1027,20 @@ impl crate::game::ServerGame<'_> {
         match self.last_hurt_living_target(id) {
             Some((Target::Mob(_), join)) => self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .locate(join)
                 .is_some_and(|i| self.common.entities.mobs[i].alive()),
             Some((Target::Stand(_), join)) => self
                 .common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .locate(join)
                 .is_some_and(|i| self.common.entities.armor_stands[i].health > 0.0),
             Some((Target::Dragon(id), _)) => self
                 .common
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .is_some_and(|d| d.id == id && d.health > 0.0),
             _ => self.parked_living_alive(id),
@@ -1105,7 +1109,9 @@ impl crate::game::ServerGame<'_> {
         };
         self.server.combat.0.hit_landed = landed;
         if !landed {
-            if let Some(b) = mob.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id)) {
+            if let Some(b) =
+                mob.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id))
+            {
                 sunrise_sim::mobs::bee::sting_refused(b);
             }
             return;

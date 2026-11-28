@@ -937,13 +937,15 @@ impl crate::game::ServerGame<'_> {
         let entity_kind = match target {
             Target::Boat(_) => self
                 .common
-                .entities.boats
+                .entities
+                .boats
                 .iter()
                 .find(|b| b.id == id)
                 .map(|b| b.entity_type()),
             Target::Cart(_) => self
                 .common
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.kind.id().to_owned()),
@@ -1614,7 +1616,8 @@ macro_rules! causer_decision {
             .then(|| {
                 $game
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .position(|m| m.id as i32 == causing)
             })
@@ -1645,7 +1648,8 @@ macro_rules! victim_and_causer {
             Some(other) if other != index => {
                 let [victim, causer] = $game
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .get_disjoint_mut([index, other])
                     .expect("the victim and its causer are two mobs");
                 (victim, sunrise_sim::health::HitLend::mob(causer))
@@ -1686,7 +1690,8 @@ macro_rules! player_victim_causer {
             // row must still be the causer.
             Some(index) => $game
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .get_mut(index)
                 .filter(|m| m.id as i32 == causing)
                 .and_then(|mob| sunrise_sim::health::HitLend::mob(mob)),
@@ -1958,7 +1963,8 @@ impl crate::game::ServerGame<'_> {
     /// The ids of the entities that are not on the walk of `entity_lists!`.
     pub fn entity_ids_off_walk(&self) -> impl Iterator<Item = u32> + '_ {
         self.common
-            .entities.cushions
+            .entities
+            .cushions
             .iter()
             .map(|e| e.id)
             .chain(self.common.entities.item_frames.iter().map(|e| e.id))
@@ -1971,7 +1977,8 @@ impl crate::game::ServerGame<'_> {
             .chain(self.common.entities.dragon.iter().map(|e| e.id))
             .chain(
                 self.common
-                    .entities.dragon
+                    .entities
+                    .dragon
                     .iter()
                     .filter(|dragon| dragon.id != 0)
                     .flat_map(|dragon| {

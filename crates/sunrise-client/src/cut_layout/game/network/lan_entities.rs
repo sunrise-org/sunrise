@@ -112,7 +112,8 @@ pub(crate) mod tests {
                     crate::game::entity_server::taken_pass_tests::SlotIdentities::default();
                 if kind == "minecraft:arrow" {
                     pending!(game.entities.projectiles);
-                    game.entities.projectiles
+                    game.entities
+                        .projectiles
                         .for_each_mut(|p| slots.observe_one(p, epoch, 0));
                 } else {
                     pending!(game.entities.falling);
@@ -171,7 +172,8 @@ pub(crate) mod tests {
             assert_eq!(game.entities.projectiles[0].id, 0);
             game.lan_assign_ids();
             assert_eq!(
-                game.entities.projectiles
+                game.entities
+                    .projectiles
                     .iter()
                     .map(|p| p.id)
                     .collect::<Vec<_>>(),
@@ -211,7 +213,11 @@ pub(crate) mod tests {
                 game.assign_dragon_and_crystal_ids();
                 assert_eq!(game.entities.dragon.as_ref().unwrap().id, base + 1);
                 assert_eq!(
-                    game.entities.crystals.iter().map(|c| c.id).collect::<Vec<_>>(),
+                    game.entities
+                        .crystals
+                        .iter()
+                        .map(|c| c.id)
+                        .collect::<Vec<_>>(),
                     [base + 10, base + 11]
                 );
                 assert_eq!(game.server.next_entity, base + 11);

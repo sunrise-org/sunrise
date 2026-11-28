@@ -27,7 +27,8 @@ fn death_drops(game: &mut ServerGame<'_>, victim: &Mob) -> Vec<String> {
     game.common.entities.dropped.clear();
     game.mob_die(victim);
     game.common
-        .entities.dropped
+        .entities
+        .dropped
         .iter()
         .map(|item| item.stack.item.to_string())
         .collect()
@@ -76,9 +77,11 @@ fn a_boat_mount_reaches_the_death_loot_vehicle_predicate() {
             .server_loot
             .0
             .set(Some(std::sync::Arc::new(loot)));
-        game.entities.boats
+        game.entities
+            .boats
             .push(Boat::new(70, "oak".into(), Vec3::ZERO, 0.0));
-        game.entities.boats
+        game.entities
+            .boats
             .push(Boat::new(72, "birch".into(), Vec3::ZERO, 0.0));
         let mut victim = Mob::new(71, zombie, Vec3::ZERO, 0.0);
         victim.extra.mount = Some(70);
@@ -102,7 +105,9 @@ fn a_boat_mount_reaches_the_death_loot_vehicle_predicate() {
         );
 
         victim.extra.mount = Some(72);
-        game.entities.mobs.update(0, |mob| mob.extra.mount = Some(72));
+        game.entities
+            .mobs
+            .update(0, |mob| mob.extra.mount = Some(72));
         let projected = game.target_loot_entity(crate::game::commands::Target::Mob(71));
         assert_eq!(
             projected.vehicle.as_deref().unwrap().kind,
@@ -147,7 +152,8 @@ fn the_target_projection_is_the_entity_the_roll_reads() {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.entities.boats
+        game.entities
+            .boats
             .push(Boat::new(70, "oak".into(), Vec3::ZERO, 0.0));
         let mut victim = Mob::new(71, zombie, Vec3::ZERO, 0.0);
         victim.extra.mount = Some(70);

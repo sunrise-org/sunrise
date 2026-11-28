@@ -319,11 +319,19 @@ pub(crate) mod tests {
             assert_eq!(game.server.next_entity, base);
             game.find_entity_portals();
             assert_eq!(
-                game.entities.tridents.iter().map(|t| t.id).collect::<Vec<_>>(),
+                game.entities
+                    .tridents
+                    .iter()
+                    .map(|t| t.id)
+                    .collect::<Vec<_>>(),
                 [base + 1, 0, base + 2]
             );
             assert_eq!(
-                game.entities.rockets.iter().map(|r| r.id).collect::<Vec<_>>(),
+                game.entities
+                    .rockets
+                    .iter()
+                    .map(|r| r.id)
+                    .collect::<Vec<_>>(),
                 [base + 3, 0, 0]
             );
             game.find_entity_portals();
@@ -439,7 +447,9 @@ pub(crate) mod tests {
                 let sheep = game.res.mob_types().get("minecraft:sheep").unwrap().clone();
                 let child = Mob::new(base + 1, cow.clone(), Vec3::ZERO, 0.0);
                 game.server.next_entity += 2;
-                game.entities.mobs.push(Mob::new(base + 2, cow, Vec3::ZERO, 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(base + 2, cow, Vec3::ZERO, 0.0));
                 game.native_joins_flush(false, 0);
                 game.entities.mobs.push(child);
                 game.native_joins_flush(false, 0);
@@ -452,7 +462,9 @@ pub(crate) mod tests {
                     ]
                 );
                 game.server.next_entity += 1;
-                game.entities.mobs.push(Mob::new(base + 3, sheep, Vec3::ZERO, 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(base + 3, sheep, Vec3::ZERO, 0.0));
                 assert!(!game.native_joins_flush(true, base + 3));
                 assert!(!game.entities.mobs.iter().any(|mob| mob.id == base + 3));
                 game.native_entity_left(base + 3);
@@ -462,13 +474,14 @@ pub(crate) mod tests {
                     Some(&(base + 3, "minecraft:sheep".into(), true))
                 );
 
-                game.entities.crystals
-                    .push(sunrise_gameplay_common::game::dragon_common::Crystal::new(
+                game.entities.crystals.push(
+                    sunrise_gameplay_common::game::dragon_common::Crystal::new(
                         base + 4,
                         Vec3::ZERO,
                         true,
                         0,
-                    ));
+                    ),
+                );
                 game.entities.cushions.push(sunrise_sim::entities::Cushion {
                     attachment_lifetime: Default::default(),
                     join: Default::default(),
@@ -480,36 +493,40 @@ pub(crate) mod tests {
                     check_interval: 0,
                     custom_name: None,
                 });
-                game.entities.paintings.push(sunrise_sim::entities::Painting {
-                    attachment_lifetime: Default::default(),
-                    join: Default::default(),
-                    id: base + 6,
-                    pos: [0; 3],
-                    facing: 0,
-                    variant: "minecraft:kebab".into(),
-                    asset: None,
-                    width: 1,
-                    height: 1,
-                    check_interval: 0,
-                    ticks: 0,
-                });
-                game.entities.item_frames.push(sunrise_sim::entities::ItemFrame {
-                    attachment_lifetime: Default::default(),
-                    join: Default::default(),
-                    id: base + 7,
-                    pos: [0; 3],
-                    facing: 0,
-                    glow: false,
-                    item: None,
-                    rotation: 0,
-                    drop_chance: 1.0,
-                    fixed: false,
-                    invisible: false,
-                    custom_name: None,
-                    random: sunrise_core::random::LegacyRandom::new(0),
-                    check_interval: 0,
-                    ticks: 0,
-                });
+                game.entities
+                    .paintings
+                    .push(sunrise_sim::entities::Painting {
+                        attachment_lifetime: Default::default(),
+                        join: Default::default(),
+                        id: base + 6,
+                        pos: [0; 3],
+                        facing: 0,
+                        variant: "minecraft:kebab".into(),
+                        asset: None,
+                        width: 1,
+                        height: 1,
+                        check_interval: 0,
+                        ticks: 0,
+                    });
+                game.entities
+                    .item_frames
+                    .push(sunrise_sim::entities::ItemFrame {
+                        attachment_lifetime: Default::default(),
+                        join: Default::default(),
+                        id: base + 7,
+                        pos: [0; 3],
+                        facing: 0,
+                        glow: false,
+                        item: None,
+                        rotation: 0,
+                        drop_chance: 1.0,
+                        fixed: false,
+                        invisible: false,
+                        custom_name: None,
+                        random: sunrise_core::random::LegacyRandom::new(0),
+                        check_interval: 0,
+                        ticks: 0,
+                    });
                 let mut dragon =
                     sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
                 dragon.id = base + 8;
@@ -530,7 +547,8 @@ pub(crate) mod tests {
                     ]
                 );
                 drop(seen);
-                game.entities.tnts
+                game.entities
+                    .tnts
                     .push(sunrise_gameplay_common::game::tnt_common::PrimedTnt {
                         size_answer: None,
                         attachment_lifetime: Default::default(),

@@ -18,7 +18,8 @@ pub(crate) mod tests {
     fn rejected_boat_passengers_fill_actual_capacity_without_becoming_resident() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.entities.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     71,
                     "oak".into(),
@@ -59,7 +60,8 @@ pub(crate) mod tests {
                 .enumerate()
             {
                 let at = Vec3::new(x, 64.0, z);
-                game.entities.carts
+                game.entities
+                    .carts
                     .push(Minecart::new(100 + i as u32, CartKind::Chest, at));
             }
             // 0.5 west of the second cart (boxes 0.9 and 0.98 wide), in the middle of them
@@ -68,12 +70,25 @@ pub(crate) mod tests {
             let crowd = (0..crowd).map(|i| (40.5 + 3.0 * f64::from(i), 40.5));
             for (i, (x, z)) in spots.chain(crowd).enumerate() {
                 let at = Vec3::new(x, 64.0, z);
-                game.entities.mobs.push(Mob::new(1 + i as u32, pig.clone(), at, 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(1 + i as u32, pig.clone(), at, 0.0));
             }
             game.tick_carts();
-            let velocity = |id| game.entities.mobs.iter().find(|m| m.id == id).unwrap().velocity;
+            let velocity = |id| {
+                game.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .unwrap()
+                    .velocity
+            };
             assert!(velocity(1).x < 0.0, "pushed back west: {:?}", velocity(1));
-            let idle = game.entities.mobs.iter().filter(|m| m.velocity == Vec3::ZERO);
+            let idle = game
+                .entities
+                .mobs
+                .iter()
+                .filter(|m| m.velocity == Vec3::ZERO);
             assert_eq!(idle.count(), game.entities.mobs.len() - 1);
             velocity(1)
         });
@@ -112,7 +127,8 @@ pub(crate) mod tests {
                 game.entities.mobs[j].position = area.center();
             }
             let walked: Vec<Aabb> = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .map(Mob::bounds)
                 .filter(|b| b.intersects(area))
@@ -128,7 +144,8 @@ pub(crate) mod tests {
             );
             if round % 100 == 99 {
                 // The last comparisons ran against the grid: it stands, for the list as it is.
-                let fresh = |(stamp, _): &(ListStamp, SeenGrid)| *stamp == game.entities.mobs.stamp();
+                let fresh =
+                    |(stamp, _): &(ListStamp, SeenGrid)| *stamp == game.entities.mobs.stamp();
                 assert!(
                     game.server
                         .vehicle_mobs
@@ -153,7 +170,9 @@ pub(crate) mod tests {
         let mut game = super::super::game_tests::tests::server_game(&mut resources);
         let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
         for id in 1..=4 {
-            game.entities.mobs.push(Mob::new(id, pig.clone(), Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(id, pig.clone(), Vec3::ZERO, 0.0));
         }
         let riders = |game: &sunrise_gameplay::game::ServerGame<'_>| {
             [100, 101, 102].map(|id| (game.has_seated_passengers(id), game.boat_mobs(id)))
@@ -268,7 +287,8 @@ mod boat_callback_review_tests {
                     (0, 0),
                 );
                 game.options.dedicated = Some(Vec::new());
-                game.entities.boats
+                game.entities
+                    .boats
                     .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                         71,
                         "oak".into(),
@@ -317,7 +337,8 @@ mod boat_callback_review_tests {
                     (0, 0),
                 );
                 game.options.dedicated = Some(Vec::new());
-                game.entities.boats
+                game.entities
+                    .boats
                     .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                         71,
                         "oak".into(),

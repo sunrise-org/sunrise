@@ -177,7 +177,8 @@ impl ServerGame<'_> {
         let (pitch, yaw) = (self.common.pitch, self.common.yaw);
         let (guest, owner_uuid) = (self.server.lan_acting, Some(self.acting_player_uuid()));
         self.common
-            .entities.projectiles
+            .entities
+            .projectiles
             .update(i, |p| attack_deflect(p, pitch, yaw, owner_uuid, guest))
     }
 }

@@ -52,8 +52,10 @@ impl ServerGame<'_> {
             let id = self.common.entities.mobs[index].id;
             // `startRiding` without `force` asks `canAddPassenger`: a fifth rider is refused.
             let aboard = self.seated_passengers(id).len();
-            if !sunrise_sim::mobs::riders::can_add_passenger(&self.common.entities.mobs[index], aboard)
-                || !self.native_may_board(id)
+            if !sunrise_sim::mobs::riders::can_add_passenger(
+                &self.common.entities.mobs[index],
+                aboard,
+            ) || !self.native_may_board(id)
             {
                 return true;
             }

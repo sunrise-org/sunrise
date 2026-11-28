@@ -359,7 +359,8 @@ fn actual_dragon_admits_exactly_eight_checked_parts_with_independent_uuids() {
                 sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
             )
             .unwrap();
-        let uuids = std::array::from_fn::<_, 8, _>(|i| game.entities.dragon.as_ref().unwrap().parts[i].3);
+        let uuids =
+            std::array::from_fn::<_, 8, _>(|i| game.entities.dragon.as_ref().unwrap().parts[i].3);
         let parts: Vec<_> = game
             .resident_entities
             .table

@@ -187,7 +187,10 @@ fn a_creative_player_hurts_an_invulnerable_mob() {
     let mut resources = None;
     let mut game = game(&mut resources, false);
     summon_pig(&mut game, ",Invulnerable:1b");
-    assert!(game.entities.mobs[0].invulnerable_flag, "the pig is Invulnerable");
+    assert!(
+        game.entities.mobs[0].invulnerable_flag,
+        "the pig is Invulnerable"
+    );
     aim_at_mob(&mut game);
     assert!(game.attack(), "the attack reached the pig");
     assert_eq!(

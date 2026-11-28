@@ -184,7 +184,8 @@ pub(crate) mod mob_equipment_command_tests {
         let lines = std::mem::replace(&mut game.server.chat_capture, prev).unwrap_or_default();
         assert!(ok, "{kind}/{n}: {lines:?}");
         let mob = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| game.persist.uuid_of(m.id) == Some([25, 0, 0, n]))
             .unwrap();
@@ -322,7 +323,8 @@ pub(crate) mod mob_equipment_command_tests {
             assert!(game.run_command("summon sulfur_cube 4.5 200 4.5 {NoAI:1b,Tags:[\"cube\"]}"));
             let body = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 let m = game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.kind.id == "minecraft:sulfur_cube");
                 m.and_then(|m| {
@@ -504,7 +506,8 @@ pub(crate) mod mob_equipment_stack_tests {
         let lines = std::mem::replace(&mut game.server.chat_capture, prev).unwrap_or_default();
         assert!(ok, "{kind}/{n}: {lines:?}");
         let mob = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| game.persist.uuid_of(m.id) == Some([23, 0, 0, n]))
             .unwrap();

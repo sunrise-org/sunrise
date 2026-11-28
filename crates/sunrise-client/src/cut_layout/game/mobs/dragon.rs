@@ -89,7 +89,10 @@ pub(crate) mod tests {
                 cancel.store(true, Ordering::Relaxed);
                 // The dispenser calls the shared constructor directly.
                 assert!(game.spawn_dragon_spawned(at, dispenser).is_none());
-                assert!(game.entities.dragon.is_none(), "a refused dragon never stays loaded");
+                assert!(
+                    game.entities.dragon.is_none(),
+                    "a refused dragon never stays loaded"
+                );
                 game.native_joins_flush(false, 0);
                 assert_eq!(*joins.lock().unwrap(), vec![(id, false), (id + 9, false)]);
             });
@@ -314,7 +317,9 @@ pub(crate) mod tests {
         .into();
         mod_platform::testing::with_mods(mods, || {
             super::super::native_entity_refs::tests::with_game(|game| {
-                game.entities.dragon.replace(dragon(Phase::Scanning { time: 0 }));
+                game.entities
+                    .dragon
+                    .replace(dragon(Phase::Scanning { time: 0 }));
                 let arrow = ProjectileKind::Trident;
                 let hit = |game: &mut sunrise_gameplay::game::ServerGame<'_>, counts, direct| {
                     game.hurt_dragon_part_at(

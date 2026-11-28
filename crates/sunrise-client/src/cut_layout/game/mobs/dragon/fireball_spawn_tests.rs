@@ -69,7 +69,8 @@ fn end_game<'a>(
 
 /// The level's dragon fireballs: its projectiles of that kind.
 fn dragon_fireballs<'a>(game: &'a ServerGame<'_>) -> Vec<&'a sunrise_sim::projectiles::Projectile> {
-    game.entities.projectiles
+    game.entities
+        .projectiles
         .iter()
         .filter(|p| p.kind == sunrise_sim::projectiles::ProjectileKind::DragonFireball)
         .collect()

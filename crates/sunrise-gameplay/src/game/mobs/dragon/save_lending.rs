@@ -8,7 +8,13 @@ impl crate::game::ServerGame<'_> {
     /// first dragon's egg, and no new dragon. No experience: `tickDeath`
     /// drops it, and a killed dragon never gets there.
     pub fn kill_dragon(&mut self, id: u32) {
-        if self.common.entities.dragon.as_ref().is_some_and(|d| d.id == id) {
+        if self
+            .common
+            .entities
+            .dragon
+            .as_ref()
+            .is_some_and(|d| d.id == id)
+        {
             // Only the fight's own dragon (`dragonFight`) ends it.
             let fight = self.is_fight_dragon();
             let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();

@@ -111,7 +111,9 @@ fn rejected_mounts_preserve_the_previous_client_menu_without_sending_close() {
                     .get("minecraft:zombie")
                     .unwrap()
                     .clone();
-                game.entities.mobs.push(Mob::new(41, zombie, Vec3::ZERO, 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(41, zombie, Vec3::ZERO, 0.0));
                 let previous = (7, "minecraft:generic_9x3".to_owned());
                 let remote = game.client.remote.as_mut().unwrap();
                 remote.menu.set(Some(previous.clone()));
@@ -192,7 +194,9 @@ fn remote_mount_is_installed_before_screen_init_and_keeps_all_columns() {
                                 species,
                                 columns| {
                         let ty = game.res.mob_types().get(species).unwrap().clone();
-                        game.entities.mobs.push(Mob::new(entity as u32, ty, Vec3::ZERO, 0.0));
+                        game.entities
+                            .mobs
+                            .push(Mob::new(entity as u32, ty, Vec3::ZERO, 0.0));
                         game.handle_packet(C::MountScreenOpen(MountScreenOpen {
                             container,
                             columns,

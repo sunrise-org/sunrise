@@ -439,7 +439,13 @@ impl crate::game::ServerGame<'_> {
         if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == id) {
             return Some(c.bounds());
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == id)
+        {
             return Some(a.bounds());
         }
         if let Some(c) = self.common.entities.cushions.iter().find(|c| c.id == id) {

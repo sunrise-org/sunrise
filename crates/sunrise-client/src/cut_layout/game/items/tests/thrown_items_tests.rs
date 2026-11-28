@@ -59,7 +59,11 @@ fn a_thrown_item_takes_the_throwers_random_not_the_levels() {
     game.common.inventory[game.common.selected] = Some(ItemStack::new("minecraft:stone", 4));
     let level = game.world.random.state();
     game.drop_held_item(false);
-    let thrown = game.entities.dropped.last().expect("the drop key threw the stack");
+    let thrown = game
+        .entities
+        .dropped
+        .last()
+        .expect("the drop key threw the stack");
     let velocity = thrown.velocity;
     assert!(
         (velocity.z - 0.3).abs() <= 0.02,
@@ -200,7 +204,9 @@ fn a_client_pickup_sound_takes_the_listeners_random() {
             Vec3::ZERO,
             0.0,
         ));
-        game.entities.orbs.push(ExperienceOrb::new(10, at, Vec3::ZERO, 1));
+        game.entities
+            .orbs
+            .push(ExperienceOrb::new(10, at, Vec3::ZERO, 1));
         let take = |item: i32| {
             C::TakeItemEntity(play::TakeItemEntity {
                 item,

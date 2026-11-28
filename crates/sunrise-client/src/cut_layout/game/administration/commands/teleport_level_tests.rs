@@ -32,13 +32,15 @@ fn a_mod_sends_an_item_and_an_arrow_to_another_level_with_their_motion() {
         let thrower = Some([1, 2, 3, 4]);
         let owner = Some([5, 6, 7, 8]);
         let item = game
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .find(|e| e.thrower == thrower)
             .unwrap()
             .id;
         let arrow = game
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| p.owner_uuid == owner)
             .unwrap()
@@ -51,19 +53,26 @@ fn a_mod_sends_an_item_and_an_arrow_to_another_level_with_their_motion() {
         assert!(!game.entities.dropped.iter().any(|e| e.thrower == thrower));
         assert!(
             !game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .any(|p| p.owner_uuid == owner)
         );
         assert!(!game.entity_teleport_to_level(item, nether, [0.5, 70.0, 0.5], None));
 
         game.enter_level(Dim::Nether).unwrap();
-        let e = game.entities.dropped.iter().find(|e| e.thrower == thrower).unwrap();
+        let e = game
+            .entities
+            .dropped
+            .iter()
+            .find(|e| e.thrower == thrower)
+            .unwrap();
         assert_eq!((&*e.stack.item, e.stack.count), ("minecraft:diamond", 7));
         assert_eq!(e.position, Vec3::new(3.5, 70.0, -2.5));
         assert_eq!(e.velocity, Vec3::new(0.1, 0.2, -0.3));
         let p = game
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| p.owner_uuid == owner)
             .unwrap();
@@ -216,7 +225,10 @@ fn a_mod_sends_an_armor_stand_to_another_level() {
         assert!(game.entities.armor_stands.is_empty());
         game.enter_level(Dim::Nether).unwrap();
         assert_eq!(game.entities.armor_stands.len(), 1);
-        assert_eq!(game.entities.armor_stands[0].position, Vec3::new(3.5, 70.0, -2.5));
+        assert_eq!(
+            game.entities.armor_stands[0].position,
+            Vec3::new(3.5, 70.0, -2.5)
+        );
     });
 }
 

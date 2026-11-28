@@ -296,7 +296,8 @@ impl crate::game::ServerGame<'_> {
     ) -> Context {
         let dampens = self
             .common
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .find(|item| item.id == id)
             .is_some_and(|item| {
@@ -496,8 +497,13 @@ impl crate::game::ServerGame<'_> {
         self.tick_player_sculk_events();
         self.tick_mob_sculk_events();
         if !self.server.sculk.falling_items.is_empty() {
-            let present: std::collections::HashSet<u32> =
-                self.common.entities.dropped.iter().map(|item| item.id).collect();
+            let present: std::collections::HashSet<u32> = self
+                .common
+                .entities
+                .dropped
+                .iter()
+                .map(|item| item.id)
+                .collect();
             self.server
                 .sculk
                 .falling_items
@@ -508,7 +514,8 @@ impl crate::game::ServerGame<'_> {
         let ticking = self.entity_ticking_area();
         let items: Vec<[f64; 3]> = self
             .common
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .filter(|i| {
                 i.ground.on_ground
@@ -533,7 +540,8 @@ impl crate::game::ServerGame<'_> {
             bool,
         )> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| m.alive())
             .map(|m| {
@@ -556,7 +564,8 @@ impl crate::game::ServerGame<'_> {
         }
         let listeners = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .enumerate()
             .filter(|(_, m)| matches!(m.species(), Species::Warden | Species::Allay))
@@ -808,7 +817,8 @@ impl crate::game::ServerGame<'_> {
                 // Let every warden's minute of calm run out.
                 for m in self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter_mut()
                     .filter(|m| m.species() == Species::Warden)
                 {
@@ -1257,7 +1267,8 @@ impl crate::game::ServerGame<'_> {
             slots.clear();
             slots.extend(
                 self.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .enumerate()
                     .filter(|(_, m)| matches!(m.species(), Species::Warden | Species::Allay))
@@ -1301,10 +1312,14 @@ impl crate::game::ServerGame<'_> {
         pos: [f64; 3],
         ctx: &Context,
     ) {
-        if self.common.entities.mobs[index].species() == Species::Warden && self.common.entities.mobs[index].alive() {
+        if self.common.entities.mobs[index].species() == Species::Warden
+            && self.common.entities.mobs[index].alive()
+        {
             self.warden_listen(index, event, pos, ctx);
         }
-        if self.common.entities.mobs[index].species() == Species::Allay && self.common.entities.mobs[index].alive() {
+        if self.common.entities.mobs[index].species() == Species::Allay
+            && self.common.entities.mobs[index].alive()
+        {
             self.allay_listen(index, event, pos, ctx);
             // Allay.JukeboxListener, its own listener beside the vibrations'.
             let playing = match event {
@@ -1970,7 +1985,8 @@ impl crate::game::ServerGame<'_> {
         if player_blocks
             || self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .any(|m| !m.removed && m.alive() && m.bounds().intersects(bounds))
         {
@@ -2332,7 +2348,12 @@ impl crate::game::ServerGame<'_> {
         } else if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == id) {
             c.position
         } else {
-            self.common.entities.cushions.iter().find(|c| c.id == id)?.position
+            self.common
+                .entities
+                .cushions
+                .iter()
+                .find(|c| c.id == id)?
+                .position
         };
         Some([p.x, p.y, p.z])
     }

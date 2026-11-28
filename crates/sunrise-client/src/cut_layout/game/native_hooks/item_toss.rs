@@ -50,7 +50,11 @@ pub(crate) mod item_toss_tests {
                 let stone = ItemStack::new("minecraft:stone", 1);
                 assert!(game.throw_from_eyes(stone, eye, false, true).is_none());
                 assert_eq!(*heard.lock().unwrap(), 1);
-                assert_eq!(game.entities.dropped.len(), before, "a canceled toss leaves no item");
+                assert_eq!(
+                    game.entities.dropped.len(),
+                    before,
+                    "a canceled toss leaves no item"
+                );
                 let dirt = ItemStack::new("minecraft:dirt", 1);
                 let id = game.throw_from_eyes(dirt, eye, false, true).unwrap();
                 assert_eq!(*heard.lock().unwrap(), 2);

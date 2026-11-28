@@ -52,7 +52,8 @@ impl crate::game::ServerGame<'_> {
             self.hot_mobs(128, 2)?;
             let holders: Vec<_> = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .map(|mob| mod_api::Holder::Entity(mob.id))
                 .collect();

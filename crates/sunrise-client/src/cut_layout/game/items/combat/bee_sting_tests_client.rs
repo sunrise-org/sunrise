@@ -59,7 +59,8 @@ fn a_refused_sting_leaves_the_bee_alone() {
     game.start_audio_capture();
     let bee = spawn(&mut game, 41, "minecraft:bee", Vec3::new(1.5, 64.0, 0.5));
     let pig = spawn(&mut game, 42, "minecraft:pig", Vec3::new(0.5, 64.0, 0.5));
-    game.entities.mobs
+    game.entities
+        .mobs
         .iter_mut()
         .find(|m| m.id == pig)
         .unwrap()

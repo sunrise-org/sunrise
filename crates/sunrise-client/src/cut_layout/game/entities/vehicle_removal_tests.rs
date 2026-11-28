@@ -56,7 +56,9 @@ fn nested_blast_skips_the_stand_or_cushion_already_being_removed() {
                 push_pig(game, 72);
                 game.mob_object_mut(72).unwrap().extra.mount = Some(71);
                 if stand {
-                    game.entities.armor_stands.push(ArmorStand::new(71, AT, 0.0));
+                    game.entities
+                        .armor_stands
+                        .push(ArmorStand::new(71, AT, 0.0));
                 } else {
                     game.entities.cushions.push(Cushion {
                         attachment_lifetime: Default::default(),
@@ -146,9 +148,15 @@ fn stand_equipment_and_below_world_spills_are_visible_at_dismount() {
                 }
                 assert!(gate.fired(), "{case}");
                 assert_eq!(game.mob_object(72).unwrap().extra.mount, None);
-                assert_eq!(game.entities.dropped[0].stack.item.as_ref(), "minecraft:diamond");
+                assert_eq!(
+                    game.entities.dropped[0].stack.item.as_ref(),
+                    "minecraft:diamond"
+                );
                 if case == "boat" {
-                    assert_eq!(game.entities.dropped[1].stack.item.as_ref(), "minecraft:lead");
+                    assert_eq!(
+                        game.entities.dropped[1].stack.item.as_ref(),
+                        "minecraft:lead"
+                    );
                 }
             },
         );
@@ -301,7 +309,8 @@ fn mob_removal_order_witness() {
 pub(crate) fn run_mob_removal_order_witness() {
     let observation = Arc::new(Observation::default());
     with_removal_test_hooks(Observe(observation.clone()), |game| {
-        game.entities.boats
+        game.entities
+            .boats
             .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                 70,
                 "oak".into(),

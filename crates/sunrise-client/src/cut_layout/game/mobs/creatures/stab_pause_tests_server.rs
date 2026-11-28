@@ -77,7 +77,12 @@ fn a_mob_stab_slows_the_attacker_before_it_moves() {
                 game.entities.mobs.push(target);
                 game.tick_mobs().unwrap();
                 let mob = |game: &ServerGame<'_>, id| {
-                    game.entities.mobs.iter().find(|m| m.id == id).unwrap().clone()
+                    game.entities
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .unwrap()
+                        .clone()
                 };
                 let (attacker, target) = (mob(game, 71), mob(game, 72));
                 assert!(target.health < 20.0, "the stab hurt the villager");

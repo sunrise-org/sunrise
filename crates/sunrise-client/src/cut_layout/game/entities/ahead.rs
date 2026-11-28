@@ -165,11 +165,21 @@ mod tests {
                     item.id
                 );
             }
-            let landed = game.entities.dropped.iter().find(|i| i.id == landing).unwrap();
+            let landed = game
+                .entities
+                .dropped
+                .iter()
+                .find(|i| i.id == landing)
+                .unwrap();
             assert_eq!(landed.position.y, boat_top);
             assert!(landed.ground.on_ground);
             assert_eq!(format!("{:?}", game.world.random), format!("{random:?}"));
-            let left: Vec<String> = game.entities.dropped.iter().map(|i| format!("{i:?}")).collect();
+            let left: Vec<String> = game
+                .entities
+                .dropped
+                .iter()
+                .map(|i| format!("{i:?}"))
+                .collect();
             runs.push((
                 left,
                 format!("{:?}", game.world.random),

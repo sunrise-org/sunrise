@@ -175,12 +175,14 @@ pub(crate) fn with_batch(
             assert_eq!(index.lock().unwrap().snapshot(&key).len(), 2);
             for (id, original) in ids[..2].iter().zip(&bound.registrations) {
                 let i = game
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .position(|p| p.id == *id)
                     .unwrap();
                 let current = game
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .update(i, |p| p.attachment_lifetime().registration().unwrap());
                 assert!(original.same_registration(&current));
             }
@@ -188,13 +190,15 @@ pub(crate) fn with_batch(
             assert_eq!(observed.impacts, [ids[0], ids[1]]);
             assert!(observed.spawned && observed.buffered);
             let spawned = game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| p.position.x == 8.5)
                 .unwrap()
                 .id;
             let buffered = game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| p.position.x == 9.5)
                 .unwrap();
@@ -237,7 +241,8 @@ fn no_impact_expiration_retires_only_the_expired_owner() {
         assert_eq!(before.len(), 2);
         game.tick_projectiles().unwrap();
         assert_eq!(
-            game.entities.projectiles
+            game.entities
+                .projectiles
                 .iter()
                 .map(|p| p.id)
                 .collect::<Vec<_>>(),
@@ -245,7 +250,8 @@ fn no_impact_expiration_retires_only_the_expired_owner() {
         );
         assert_eq!(game.entities.projectiles[0].age, 1);
         let current = game
-            .entities.projectiles
+            .entities
+            .projectiles
             .update(0, |p| p.attachment_lifetime().registration().unwrap());
         assert!(bound.registrations[1].same_registration(&current));
         let after = bound.index.lock().unwrap().snapshot(&key);
@@ -309,7 +315,8 @@ fn a_projectile_removed_in_its_impact_hook_stays_removed_after_replay() {
     with_batch(true, |game, ids, joins, spawned, buffered| {
         assert!(game.entity(ids[1]).is_none());
         let discarded = game
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| p.id == ids[1])
             .unwrap();
@@ -571,7 +578,8 @@ fn wind_charges_retrace_only_after_gameplay_breaks_a_vehicle() {
             .into_iter()
             .take(if case == "miss" { 1 } else { 2 })
         {
-            game.entities.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     id,
                     Arc::from("oak"),
@@ -592,7 +600,8 @@ fn wind_charges_retrace_only_after_gameplay_breaks_a_vehicle() {
         }
         game.native_joins_skip();
         let joins = game
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .map(|p| p.join)
             .collect::<Vec<_>>();
@@ -616,7 +625,8 @@ fn wind_charges_retrace_only_after_gameplay_breaks_a_vehicle() {
             assert_eq!(game.entities.boats[0].damage, 0.0);
         }
         assert_eq!(
-            game.entities.dropped
+            game.entities
+                .dropped
                 .iter()
                 .filter(|drop| &*drop.stack.item == "minecraft:oak_boat")
                 .map(|drop| drop.stack.count)
@@ -879,7 +889,12 @@ pub(crate) fn assert_boat_matches_witness(
     tick: usize,
     tag: &str,
 ) {
-    let actual = game.entities.boats.iter().find(|b| b.id == 71).map(|b| b.damage);
+    let actual = game
+        .entities
+        .boats
+        .iter()
+        .find(|b| b.id == 71)
+        .map(|b| b.damage);
     let expected = wind_continuation_boat_witness_26_3(witness, tick, tag);
     assert_eq!(
         actual.map(f32::to_bits),

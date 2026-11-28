@@ -129,7 +129,8 @@ pub(crate) mod item_collision_tests {
                 game.tick_world(true).unwrap();
             }
             let rest = |x: f64| {
-                game.entities.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .find(|d| (d.position.x - x).abs() < 0.5)
                     .map(|d| d.position.y)

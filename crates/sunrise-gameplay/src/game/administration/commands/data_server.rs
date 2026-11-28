@@ -80,7 +80,8 @@ impl crate::game::ServerGame<'_> {
                 let uuid = self.uuid_for(id);
                 let kind = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id)
                     .map(|m| m.kind.id.clone());
@@ -233,7 +234,14 @@ impl crate::game::ServerGame<'_> {
             Target::Fangs(id) => {
                 let owner = self.loaded_fangs_owner(&tag);
                 let at = entity_nbt::position(&tag).ok_or_else(stale)?;
-                if let Some(i) = self.common.entities.fangs.list.iter().position(|e| e.id == id) {
+                if let Some(i) = self
+                    .common
+                    .entities
+                    .fangs
+                    .list
+                    .iter()
+                    .position(|e| e.id == id)
+                {
                     self.common.entities.fangs.list.update(i, |f| {
                         f.pos = [at.x, at.y, at.z];
                         f.motion = entity_nbt::loaded_motion(&tag);
@@ -247,7 +255,13 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Stand(id) => {
                 let mut new = entity_nbt::armor_stand_from_nbt(&tag, id).ok_or_else(stale)?;
-                if let Some(slot) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id) {
+                if let Some(slot) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter_mut()
+                    .find(|a| a.id == id)
+                {
                     // Entity.load keeps the existing entity's firstTick state
                     // and its place in the level's join order.
                     new.first_tick = slot.first_tick;
@@ -260,7 +274,13 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Frame(id) => {
                 let mut new = entity_nbt::item_frame_from_nbt(&tag, id).ok_or_else(stale)?;
-                if let Some(i) = self.common.entities.item_frames.iter().position(|f| f.id == id) {
+                if let Some(i) = self
+                    .common
+                    .entities
+                    .item_frames
+                    .iter()
+                    .position(|f| f.id == id)
+                {
                     let old = &self.common.entities.item_frames[i];
                     // Entity.load cannot change the runtime type; saveWithoutId
                     // deliberately omitted the decoder's type discriminator.
@@ -280,7 +300,10 @@ impl crate::game::ServerGame<'_> {
                     }
                     let item = new.item.take();
                     new.set_item(item);
-                    sunrise_sim::join_seq::store_back(&mut self.common.entities.item_frames[i], new);
+                    sunrise_sim::join_seq::store_back(
+                        &mut self.common.entities.item_frames[i],
+                        new,
+                    );
                 }
             }
             Target::Boat(id) => {
@@ -291,7 +314,8 @@ impl crate::game::ServerGame<'_> {
                 let uuid = self.uuid_for(id);
                 let i = self
                     .common
-                    .entities.boats
+                    .entities
+                    .boats
                     .iter()
                     .position(|b| b.id == id)
                     .ok_or_else(stale)?;
@@ -330,7 +354,8 @@ impl crate::game::ServerGame<'_> {
                 let uuid = self.uuid_for(id);
                 let index = self
                     .common
-                    .entities.falling
+                    .entities
+                    .falling
                     .iter()
                     .position(|f| f.id == id)
                     .ok_or_else(stale)?;
@@ -367,7 +392,8 @@ impl crate::game::ServerGame<'_> {
                     .and_then(|v| entity_nbt::state_from_nbt(self.common.pack.assets.registry, v));
                 let tnt = self
                     .common
-                    .entities.tnts
+                    .entities
+                    .tnts
                     .iter_mut()
                     .find(|tnt| tnt.id == id)
                     .ok_or_else(stale)?;
@@ -395,7 +421,8 @@ impl crate::game::ServerGame<'_> {
                 let uuid = self.uuid_for(id);
                 let orb = self
                     .common
-                    .entities.orbs
+                    .entities
+                    .orbs
                     .iter_mut()
                     .find(|o| o.id == id)
                     .ok_or_else(stale)?;
@@ -428,7 +455,8 @@ impl crate::game::ServerGame<'_> {
                 let loaded = entity_nbt::trident_from_nbt(&tag).ok_or_else(stale)?;
                 let uuid = self.uuid_for(id);
                 self.common
-                    .entities.tridents
+                    .entities
+                    .tridents
                     .iter_mut()
                     .find(|trident| trident.id == id)
                     .ok_or_else(stale)?
@@ -441,7 +469,8 @@ impl crate::game::ServerGame<'_> {
                     entity_nbt::firework_rocket_from_nbt(&tag, player).ok_or_else(stale)?;
                 let uuid = self.uuid_for(id);
                 self.common
-                    .entities.rockets
+                    .entities
+                    .rockets
                     .iter_mut()
                     .find(|r| r.id == id)
                     .ok_or_else(stale)?
@@ -452,7 +481,8 @@ impl crate::game::ServerGame<'_> {
                 let uuid = self.uuid_for(id);
                 let i = self
                     .common
-                    .entities.carts
+                    .entities
+                    .carts
                     .iter()
                     .position(|c| c.id == id)
                     .ok_or_else(stale)?;
@@ -479,7 +509,8 @@ impl crate::game::ServerGame<'_> {
                     .and_then(|(_, _, v)| world_paintings!(self).get(&v?).cloned());
                 let p = self
                     .common
-                    .entities.paintings
+                    .entities
+                    .paintings
                     .iter_mut()
                     .find(|p| p.id == id)
                     .ok_or_else(stale)?;
@@ -493,7 +524,8 @@ impl crate::game::ServerGame<'_> {
                 let uuid = self.uuid_for(id);
                 let index = self
                     .common
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .position(|p| p.id == id)
                     .ok_or_else(stale)?;
@@ -542,7 +574,8 @@ impl crate::game::ServerGame<'_> {
                 Self::normalize_loaded_mob_tags(&mut tag);
                 let i = self
                     .common
-                    .entities.bolts
+                    .entities
+                    .bolts
                     .iter()
                     .position(|b| b.id == id)
                     .ok_or_else(stale)?;
@@ -672,7 +705,12 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Stand(id) => {
                 let uuid = self.uuid_for(id);
-                let a = self.common.entities.armor_stands.iter().find(|a| a.id == id)?;
+                let a = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter()
+                    .find(|a| a.id == id)?;
                 let mut tag = entity_nbt::armor_stand_tag(
                     a,
                     uuid,
@@ -685,7 +723,12 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Frame(id) => {
                 let uuid = self.uuid_for(id);
-                let f = self.common.entities.item_frames.iter().find(|f| f.id == id)?;
+                let f = self
+                    .common
+                    .entities
+                    .item_frames
+                    .iter()
+                    .find(|f| f.id == id)?;
                 entity_nbt::item_frame_to_nbt(
                     f,
                     uuid,
@@ -728,7 +771,13 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Fangs(id) => {
                 let uuid = self.uuid_for(id);
-                let f = self.common.entities.fangs.list.iter().find(|f| f.id == id)?;
+                let f = self
+                    .common
+                    .entities
+                    .fangs
+                    .list
+                    .iter()
+                    .find(|f| f.id == id)?;
                 self.fangs_to_nbt(f, uuid)
             }
             Target::Other(id) => {
@@ -738,8 +787,10 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Orb(id) => {
                 let uuid = self.uuid_for(id);
-                let tag =
-                    entity_nbt::orb_to_nbt(self.common.entities.orbs.iter().find(|o| o.id == id)?, uuid);
+                let tag = entity_nbt::orb_to_nbt(
+                    self.common.entities.orbs.iter().find(|o| o.id == id)?,
+                    uuid,
+                );
                 // Entity.saveWithoutId: the live fire, air and portal cooldown.
                 let mut tag = crate::game::persist::with_raw_over(
                     tag,
@@ -755,7 +806,8 @@ impl crate::game::ServerGame<'_> {
                 // compound's, as `save_projectile` writes it.
                 let who = self
                     .common
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .find(|p| p.id == id)
                     .and_then(|p| match &p.kind {
@@ -768,7 +820,8 @@ impl crate::game::ServerGame<'_> {
                 let target = who.and_then(|who| self.save_who_uuid(who));
                 let p = self
                     .common
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .find(|p| p.id == id)?;
                 let owner = if p.owner == Some(sunrise_sim::mobs::Who::Player) {
@@ -809,7 +862,12 @@ impl crate::game::ServerGame<'_> {
                 self.crystal_nbt(c)
             }
             Target::Dragon(id) => {
-                let d = self.common.entities.dragon.as_ref().filter(|d| d.id == id)?;
+                let d = self
+                    .common
+                    .entities
+                    .dragon
+                    .as_ref()
+                    .filter(|d| d.id == id)?;
                 let raw = self.persist_anon("minecraft:ender_dragon", d.position);
                 let uuid = self.common.persist.uuids.get(&id).copied();
                 let tag = d.to_nbt(
@@ -829,7 +887,13 @@ impl crate::game::ServerGame<'_> {
                 entity_nbt::cushion_to_nbt(c, uuid, self.common.persist.raw.get(&id))
             }
             Target::Falling(id) => {
-                let f = self.common.entities.falling.iter().find(|f| f.id == id)?.clone();
+                let f = self
+                    .common
+                    .entities
+                    .falling
+                    .iter()
+                    .find(|f| f.id == id)?
+                    .clone();
                 let (uuid, raw) = match &f.saved {
                     Some(saved) => (saved.0, Some(&saved.1)),
                     None => (self.uuid_for(id), None),
@@ -865,7 +929,12 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Cloud(id) => {
                 let uuid = self.uuid_for(id);
-                let c = self.common.entities.breath_clouds.iter().find(|c| c.id == id)?;
+                let c = self
+                    .common
+                    .entities
+                    .breath_clouds
+                    .iter()
+                    .find(|c| c.id == id)?;
                 let [x, y, z] = c.at;
                 let [yaw, pitch] = self
                     .common
@@ -963,7 +1032,12 @@ impl crate::game::ServerGame<'_> {
                 )
             }
             Target::Spawner(id) => {
-                let s = self.common.entities.ominous_spawners.iter().find(|s| s.id == id)?;
+                let s = self
+                    .common
+                    .entities
+                    .ominous_spawners
+                    .iter()
+                    .find(|s| s.id == id)?;
                 let [x, y, z] = s.position;
                 entity_nbt::ominous_item_spawner_to_nbt(
                     &s.item,
@@ -1223,7 +1297,8 @@ impl crate::game::ServerGame<'_> {
         let id = before + 1;
         if self
             .common
-            .entities.general
+            .entities
+            .general
             .rows
             .iter()
             .any(|row| row.id == id)
@@ -1257,7 +1332,13 @@ impl crate::game::ServerGame<'_> {
             Some(Target::Rocket(id))
         } else if self.common.entities.tridents.iter().any(|t| t.id == id) {
             Some(Target::Trident(id))
-        } else if self.common.entities.ominous_spawners.iter().any(|s| s.id == id) {
+        } else if self
+            .common
+            .entities
+            .ominous_spawners
+            .iter()
+            .any(|s| s.id == id)
+        {
             Some(Target::Spawner(id))
         } else if self.common.entities.bolts.iter().any(|b| b.id == id) {
             Some(Target::Bolt(id))
@@ -1267,9 +1348,21 @@ impl crate::game::ServerGame<'_> {
             Some(Target::Orb(id))
         } else if self.common.entities.fangs.list.iter().any(|f| f.id == id) {
             Some(Target::Fangs(id))
-        } else if self.common.entities.breath_clouds.iter().any(|c| c.id == id) {
+        } else if self
+            .common
+            .entities
+            .breath_clouds
+            .iter()
+            .any(|c| c.id == id)
+        {
             Some(Target::Cloud(id))
-        } else if self.common.entities.dragon.as_ref().is_some_and(|d| d.id == id) {
+        } else if self
+            .common
+            .entities
+            .dragon
+            .as_ref()
+            .is_some_and(|d| d.id == id)
+        {
             Some(Target::Dragon(id))
         } else {
             None

@@ -77,7 +77,10 @@ pub trait NativeEntityPreviousCommonGameExt<'__sg>: crate::game::SideGame<'__sg>
                 })
             }
             Target::Crystal(_) => {
-                let crystal = self.entities.crystals.get(self.entities.crystals.locate(join?)?)?;
+                let crystal = self
+                    .entities
+                    .crystals
+                    .get(self.entities.crystals.locate(join?)?)?;
                 Some(Old {
                     position: crystal.previous.components(),
                     rotation: crystal.rotation,

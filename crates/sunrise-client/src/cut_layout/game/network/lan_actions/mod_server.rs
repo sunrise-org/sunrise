@@ -491,7 +491,8 @@ pub(crate) mod tests {
                     Some(sunrise_level::containers::BlockEntity::Jukebox(j)) if j.record().is_none()
                 ));
                 assert!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .any(|item| &*item.stack.item == "minecraft:music_disc_13")
                 );
@@ -875,7 +876,8 @@ pub(crate) mod tests {
                 game.creative = true;
                 game.break_block([2, 64, 0]).unwrap();
                 assert!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .any(|item| &*item.stack.item == "minecraft:beehive")
                 );

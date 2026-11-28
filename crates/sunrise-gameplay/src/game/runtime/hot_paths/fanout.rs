@@ -73,7 +73,8 @@ impl crate::game::ServerGame<'_> {
             let dimension = self.common.dim.id().to_owned();
             let entities: Vec<_> = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .map(|mob| (mob.id, mob.kind.id.clone()))
                 .collect();

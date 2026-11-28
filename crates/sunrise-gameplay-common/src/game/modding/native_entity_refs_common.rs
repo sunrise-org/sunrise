@@ -548,7 +548,14 @@ pub trait NativeEntityRefsCommonGameExt4<'__sg>: crate::game::SideGame<'__sg> {
         let keys = self.res.living_type_keys();
         match target {
             Target::Player | Target::Guest(_) => keys.player,
-            Target::Mob(id) => self.entities.mobs.iter().find(|mob| mob.id == id)?.kind.type_key,
+            Target::Mob(id) => {
+                self.entities
+                    .mobs
+                    .iter()
+                    .find(|mob| mob.id == id)?
+                    .kind
+                    .type_key
+            }
             Target::Stand(_) => keys.armor_stand,
             Target::Dragon(_) | Target::DragonPart(_) => keys.ender_dragon,
             target => {
@@ -563,13 +570,16 @@ pub trait NativeEntityRefsCommonGameExt4<'__sg>: crate::game::SideGame<'__sg> {
     {
         Some(match target {
             Target::Player | Target::Guest(_) => super::native_living_body::PLAYER,
-            Target::Mob(id) => super::native_living_body::body_kind_name(
-                sunrise_sim::health::LivingBody::Mob(self.entities.mobs.iter().find(|mob| mob.id == id)?),
-            ),
+            Target::Mob(id) => {
+                super::native_living_body::body_kind_name(sunrise_sim::health::LivingBody::Mob(
+                    self.entities.mobs.iter().find(|mob| mob.id == id)?,
+                ))
+            }
             Target::Item(_) => "minecraft:item",
             Target::Orb(_) => "minecraft:experience_orb",
             Target::Projectile(id) => self
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == id)?
                 .entity_type(),
@@ -577,7 +587,8 @@ pub trait NativeEntityRefsCommonGameExt4<'__sg>: crate::game::SideGame<'__sg> {
             Target::General(id) => self.general_kind(id)?,
             Target::Frame(id) => {
                 if self
-                    .entities.item_frames
+                    .entities
+                    .item_frames
                     .iter()
                     .any(|frame| frame.id == id && frame.glow)
                 {
@@ -587,8 +598,19 @@ pub trait NativeEntityRefsCommonGameExt4<'__sg>: crate::game::SideGame<'__sg> {
                 }
             }
             Target::Painting(_) => "minecraft:painting",
-            Target::Boat(id) => self.entities.boats.iter().find(|b| b.id == id)?.entity_type_name(),
-            Target::Cart(id) => self.entities.carts.iter().find(|cart| cart.id == id)?.kind.id(),
+            Target::Boat(id) => self
+                .entities
+                .boats
+                .iter()
+                .find(|b| b.id == id)?
+                .entity_type_name(),
+            Target::Cart(id) => self
+                .entities
+                .carts
+                .iter()
+                .find(|cart| cart.id == id)?
+                .kind
+                .id(),
             Target::Other(id) => crate::game::side_ops::player::SideOps::side_other_entity_kind(
                 self.side_state(),
                 id,
@@ -972,7 +994,8 @@ pub trait NativeEntityRefsCommonGameExt7<'__sg>: crate::game::SideGame<'__sg> {
             }
             if let Target::Stand(id) = t
                 && let Some(name) = self
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .iter()
                     .find(|a| a.id == id)
                     .and_then(|a| a.custom_name.as_ref())
@@ -1002,34 +1025,39 @@ pub trait NativeEntityRefsCommonGameExt7<'__sg>: crate::game::SideGame<'__sg> {
             }
             Target::General(id) => self.entities.general.row(id)?.custom_name.clone(),
             Target::Stand(id) => self
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|a| a.id == id)?
                 .custom_name
                 .clone(),
             Target::Frame(id) => decode(
-                self.entities.item_frames
+                self.entities
+                    .item_frames
                     .iter()
                     .find(|f| f.id == id)?
                     .custom_name
                     .as_ref()?,
             ),
             Target::Bolt(id) => decode(
-                self.entities.bolts
+                self.entities
+                    .bolts
                     .iter()
                     .find(|b| b.id == id)?
                     .custom_name
                     .as_ref()?,
             ),
             Target::Cushion(id) => decode(
-                self.entities.cushions
+                self.entities
+                    .cushions
                     .iter()
                     .find(|c| c.id == id)?
                     .custom_name
                     .as_ref()?,
             ),
             Target::Falling(id) => self
-                .entities.falling
+                .entities
+                .falling
                 .iter()
                 .find(|f| f.id == id)
                 .and_then(|f| f.saved.as_ref())

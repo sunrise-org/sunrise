@@ -118,7 +118,8 @@ impl crate::game::ServerGame<'_> {
                 let given = self.give_items_back(items, &mut pass, i, round, |game, round| {
                     if game
                         .common
-                        .entities.dropped
+                        .entities
+                        .dropped
                         .locate(join)
                         .is_some_and(|k| game.common.entities.dropped[k].id == id)
                         && (!tell_pre || game.native_tick_pre_one(round, id, native_ticks::ITEM))
@@ -129,7 +130,8 @@ impl crate::game::ServerGame<'_> {
                         if update_hook
                             && let Some(k) = game
                                 .common
-                                .entities.dropped
+                                .entities
+                                .dropped
                                 .locate(join)
                                 .filter(|&k| game.common.entities.dropped[k].id == id)
                         {
@@ -140,7 +142,8 @@ impl crate::game::ServerGame<'_> {
                                 game.native_item_removals_flush(|_| {});
                                 if !game
                                     .common
-                                    .entities.dropped
+                                    .entities
+                                    .dropped
                                     .locate(join)
                                     .is_some_and(|k| game.common.entities.dropped[k].id == id)
                                 {
@@ -349,7 +352,8 @@ impl crate::game::ServerGame<'_> {
                                 if let Some(epoch) = game.common.native_lifecycle.epoch()
                                     && game
                                         .common
-                                        .entities.dropped
+                                        .entities
+                                        .dropped
                                         .locate(join)
                                         .is_some_and(|k| game.common.entities.dropped[k].id == id)
                                 {
@@ -362,7 +366,8 @@ impl crate::game::ServerGame<'_> {
                                     game.native_item_removals_flush(|_| {});
                                     if !game
                                         .common
-                                        .entities.dropped
+                                        .entities
+                                        .dropped
                                         .locate(join)
                                         .is_some_and(|k| game.common.entities.dropped[k].id == id)
                                     {
@@ -428,7 +433,14 @@ impl crate::game::ServerGame<'_> {
                     } else {
                         Vec::new()
                     };
-                    if tell_post && !game.common.entities.dropped.iter().any(|item| item.id == id) {
+                    if tell_post
+                        && !game
+                            .common
+                            .entities
+                            .dropped
+                            .iter()
+                            .any(|item| item.id == id)
+                    {
                         game.native_tick_post_one(round, id, native_ticks::ITEM);
                     }
                 });
@@ -711,7 +723,8 @@ impl crate::game::ServerGame<'_> {
             .inflate(Vec3::new(0.5, 0.5, 0.5));
         let candidates: Vec<_> = self
             .common
-            .entities.orbs
+            .entities
+            .orbs
             .iter()
             .filter(|o| o.join != into_join && o.bounds().intersects(area))
             .map(|o| o.join)
@@ -736,8 +749,10 @@ impl crate::game::ServerGame<'_> {
             let Some(i) = self.common.entities.orbs.locate(into_join) else {
                 return;
             };
-            let written =
-                (self.common.entities.orbs[i].value, self.common.entities.orbs[i].count) != (into_value, into_count);
+            let written = (
+                self.common.entities.orbs[i].value,
+                self.common.entities.orbs[i].count,
+            ) != (into_value, into_count);
             let fresh = self.common.entities.orbs.locate(from_join).filter(|&j| {
                 let (a, b) = (&self.common.entities.orbs[i], &self.common.entities.orbs[j]);
                 (b.value, b.count) == (from_value, from_count)
@@ -901,7 +916,8 @@ impl crate::game::ServerGame<'_> {
                     .map(|o| o.join)
             });
         self.common
-            .entities.orbs
+            .entities
+            .orbs
             .restore(orbs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         if let Some(index) = touched.and_then(|join| self.common.entities.orbs.locate(join)) {
             self.host_take_orb(index);
@@ -1033,7 +1049,8 @@ impl crate::game::ServerGame<'_> {
     ) -> bool {
         let Some((item, count)) = self
             .common
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .rev()
             .find(|d| d.id == id)
@@ -1111,7 +1128,11 @@ impl crate::game::ServerGame<'_> {
     /// out of the level (`native_entity_join_level`).
     pub(in crate::game) fn just_spawned_item(&mut self) -> Option<&mut ItemEntity> {
         let id = self.server.next_entity;
-        self.common.entities.dropped.last_mut().filter(|d| d.id == id)
+        self.common
+            .entities
+            .dropped
+            .last_mut()
+            .filter(|d| d.id == id)
     }
 
     /// `new ItemEntity(level, x, y, z, stack, dx, dy, dz)`.
@@ -1280,7 +1301,13 @@ impl crate::game::ServerGame<'_> {
         } else {
             self.toss_item(thrown, at, v, uuid)?
         };
-        let item = self.common.entities.dropped.iter_mut().rev().find(|d| d.id == id)?;
+        let item = self
+            .common
+            .entities
+            .dropped
+            .iter_mut()
+            .rev()
+            .find(|d| d.id == id)?;
         item.thrower = uuid;
         Some(item.id)
     }

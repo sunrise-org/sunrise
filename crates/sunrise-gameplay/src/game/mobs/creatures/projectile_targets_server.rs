@@ -166,24 +166,21 @@ impl<'r> crate::game::ServerGame<'r> {
                 .and_then(|g| g.vehicle)
                 .or_else(|| {
                     self.common
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .find(|m| m.id == id)
                         .and_then(|m| m.extra.mount)
                 })
                 .or_else(|| {
                     self.common
-                        .entities.armor_stands
+                        .entities
+                        .armor_stands
                         .iter()
                         .find(|a| a.id == id)
                         .and_then(|a| a.vehicle)
                 })
-                .or_else(|| {
-                    self.common
-                        .entities.general
-                        .row(id)
-                        .and_then(|r| r.mount)
-                })
+                .or_else(|| self.common.entities.general.row(id).and_then(|r| r.mount))
                 .map(Who::Mob),
         }
     }
@@ -237,7 +234,8 @@ impl<'r> crate::game::ServerGame<'r> {
             Who::Mob(id) => {
                 if let Some(m) = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id && m.alive() && !m.removed)
                 {
@@ -265,7 +263,13 @@ impl<'r> crate::game::ServerGame<'r> {
                         .dragon_part_boxes()
                         .and_then(|boxes| boxes.get(part).copied());
                 }
-                if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
+                if let Some(a) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter()
+                    .find(|a| a.id == id)
+                {
                     return Some(a.bounds());
                 }
                 if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id) {
@@ -290,7 +294,8 @@ impl<'r> crate::game::ServerGame<'r> {
     ) {
         let Some(j) = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .position(|q| q.id == target_id && redirectable(q))
         else {
@@ -394,12 +399,7 @@ impl<'r> crate::game::ServerGame<'r> {
                 if self.common.entities.tnts.iter().any(|t| t.id == id) {
                     return Some("minecraft:tnt".to_owned());
                 }
-                if let Some(p) = self
-                    .common
-                    .entities.projectiles
-                    .iter()
-                    .find(|p| p.id == id)
-                {
+                if let Some(p) = self.common.entities.projectiles.iter().find(|p| p.id == id) {
                     return Some(p.entity_type().to_owned());
                 }
                 if self.common.entities.dropped.iter().any(|i| i.id == id) {
@@ -501,7 +501,13 @@ impl<'r> crate::game::ServerGame<'r> {
             && matches!(causing_target, Some(Target::Mob(_)));
 
         // ArmorStand.hurtServer (igniteForSeconds clears freeze; refusal restores fire_ticks only).
-        if let Some(i) = self.common.entities.armor_stands.iter().position(|a| a.id == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .position(|a| a.id == id)
+        {
             let prev_fire = self.common.entities.armor_stands[i].fire_ticks;
             if let Some(secs) = info.ignite_seconds
                 && !self.common.entities.armor_stands[i].mod_fire_immune
@@ -524,7 +530,12 @@ impl<'r> crate::game::ServerGame<'r> {
             );
             if !hurt
                 && info.ignite_seconds.is_some()
-                && let Some(a) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id)
+                && let Some(a) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter_mut()
+                    .find(|a| a.id == id)
             {
                 a.fire_ticks = prev_fire;
             }
@@ -536,7 +547,13 @@ impl<'r> crate::game::ServerGame<'r> {
         }
 
         // ItemFrame / GlowItemFrame (`ItemFrame.hurtServer`).
-        if let Some(i) = self.common.entities.item_frames.iter().position(|f| f.id == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .item_frames
+            .iter()
+            .position(|f| f.id == id)
+        {
             let kind = self.common.entities.item_frames[i].kind();
             if self.object_refuses_projectile(info, id, kind, causing_id, creative) {
                 return NonMobHit::Refused;
@@ -568,7 +585,13 @@ impl<'r> crate::game::ServerGame<'r> {
             {
                 return NonMobHit::Refused;
             }
-            let Some(i) = self.common.entities.paintings.iter().position(|p| p.id == id) else {
+            let Some(i) = self
+                .common
+                .entities
+                .paintings
+                .iter()
+                .position(|p| p.id == id)
+            else {
                 return NonMobHit::Refused;
             };
             let broken = self.break_painting_by(i, by_player, causing_target);
@@ -582,7 +605,8 @@ impl<'r> crate::game::ServerGame<'r> {
         // Cushion (`Cushion.hurtServer`: checks `mayBuild` and `mayInteract` spawn protection).
         if let Some(pos) = self
             .common
-            .entities.cushions
+            .entities
+            .cushions
             .iter()
             .find(|c| c.id == id)
             .map(|c| BlockPos::new(c.pos[0], c.pos[1], c.pos[2]))
@@ -613,7 +637,13 @@ impl<'r> crate::game::ServerGame<'r> {
             {
                 return NonMobHit::Refused;
             }
-            let Some(i) = self.common.entities.cushions.iter().position(|c| c.id == id) else {
+            let Some(i) = self
+                .common
+                .entities
+                .cushions
+                .iter()
+                .position(|c| c.id == id)
+            else {
                 return NonMobHit::Refused;
             };
             let broken = self.break_cushion_by(i, causing_target);
@@ -655,7 +685,8 @@ impl<'r> crate::game::ServerGame<'r> {
         // Pickable projectiles (`ShulkerBullet.hurtServer` destroys; `#redirectable_projectile` refuses).
         if let Some(i) = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .position(|p| p.id == id)
         {
@@ -674,7 +705,8 @@ impl<'r> crate::game::ServerGame<'r> {
                 }
                 let Some(i) = self
                     .common
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .position(|p| p.id == id)
                 else {
@@ -792,7 +824,12 @@ impl<'r> crate::game::ServerGame<'r> {
                 _ => self.common.player.as_ref().map(|_| Who::Player),
             },
             Who::Mob(id) => {
-                if self.common.entities.mobs.iter().any(|m| m.id == id && !m.removed)
+                if self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .any(|m| m.id == id && !m.removed)
                     || self.lan_guest_conn_by_id(id).is_some()
                 {
                     Some(Who::Mob(id))

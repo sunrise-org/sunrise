@@ -70,7 +70,10 @@ fn holder_detach_still_dispatches_the_actual_interaction_criterion() {
         "minecraft:husbandry/leash_all_frog_variants",
         "minecraft:temperate"
     ));
-    assert_eq!(game.entities.mobs[index].extra.leash_player, Some([413, 0, 0, 2]));
+    assert_eq!(
+        game.entities.mobs[index].extra.leash_player,
+        Some([413, 0, 0, 2])
+    );
     assert!(game.run_command("advancement revoke @s only leash_context:interaction used"));
     assert!(game.run_command(
         "advancement revoke @s only minecraft:husbandry/leash_all_frog_variants minecraft:temperate"

@@ -39,7 +39,8 @@ impl Hooks for ProbeMod {
 }
 
 fn porkchops(game: &sunrise_gameplay::game::ServerGame<'_>) -> usize {
-    game.entities.dropped
+    game.entities
+        .dropped
         .iter()
         .filter(|i| &*i.stack.item == "minecraft:porkchop")
         .count()
@@ -78,7 +79,8 @@ fn a_vetoed_kill_keeps_the_mob_and_a_later_kill_dies_once_isolated() {
             game.sculk_sync_index();
             assert!(game.run_command("summon pig 5.5 100 8.5 {NoAI:1b,NoGravity:1b,PersistenceRequired:1b,UUID:[I;593,0,0,1]}"));
             let pig = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.species() == sunrise_sim::mobs::Species::Pig)
                 .unwrap()

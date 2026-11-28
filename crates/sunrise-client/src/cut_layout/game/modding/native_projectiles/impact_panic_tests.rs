@@ -103,7 +103,8 @@ fn shoot_listener_panic_after_admission_preserves_owned_rows() {
                     dimension: game.dim.key(),
                     kind: Kind::Projectile,
                 };
-                game.entities.projectiles
+                game.entities
+                    .projectiles
                     .bind_residency(&journal, owner, |p| (p.id, p.join));
                 for i in 0..3 {
                     let x = if i == 2 { 5.5 } else { 0.5 };
@@ -124,7 +125,8 @@ fn shoot_listener_panic_after_admission_preserves_owned_rows() {
                     game.entities.projectiles.push(p);
                 }
                 let before: Vec<_> = game
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .map(|p| (p.id, p.join))
                     .collect();
@@ -160,7 +162,8 @@ fn shoot_listener_panic_after_admission_preserves_owned_rows() {
                     .end_tick()
                     .expect("listener panic abandoned the lifted pass");
                 let restored: Vec<_> = game
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .map(|p| (p.id, p.join))
                     .collect();
@@ -203,7 +206,8 @@ fn normal_dispatch_returns_the_owned_pass_for_explicit_restore() {
                 dimension: game.dim.key(),
                 kind: Kind::Projectile,
             };
-            game.entities.projectiles
+            game.entities
+                .projectiles
                 .bind_residency(&journal, owner, |p| (p.id, p.join));
             let mut original = Projectile::new(
                 sunrise_sim::projectiles::ProjectileKind::Egg,
@@ -221,7 +225,8 @@ fn normal_dispatch_returns_the_owned_pass_for_explicit_restore() {
             let child_identity = (8, game.entities.projectiles[0].join);
             game.with_projectile_dispatch(&mut pass, |game| {
                 assert_eq!(
-                    game.entities.projectiles
+                    game.entities
+                        .projectiles
                         .iter()
                         .map(|p| (p.id, p.join))
                         .collect::<Vec<_>>(),
@@ -237,10 +242,12 @@ fn normal_dispatch_returns_the_owned_pass_for_explicit_restore() {
                 1,
                 "normal dispatch must not auto-restore"
             );
-            game.entities.projectiles
+            game.entities
+                .projectiles
                 .restore(pass, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
             assert_eq!(
-                game.entities.projectiles
+                game.entities
+                    .projectiles
                     .iter()
                     .map(|p| (p.id, p.join))
                     .collect::<Vec<_>>(),
@@ -256,7 +263,8 @@ fn normal_dispatch_returns_the_owned_pass_for_explicit_restore() {
             assert_eq!(unwind.downcast_ref::<&str>(), Some(&"dispatch unwind"));
             assert!(pass.is_empty());
             assert_eq!(
-                game.entities.projectiles
+                game.entities
+                    .projectiles
                     .iter()
                     .map(|p| (p.id, p.join))
                     .collect::<Vec<_>>(),

@@ -64,7 +64,10 @@ fn a_status_refresh_asks_friction_as_the_chest_boat_it_is() {
             game.entities.boats.push(boat);
             calls.store(0, Ordering::SeqCst);
             game.refresh_boat_status(0);
-            assert_eq!(game.entities.boats[0].status, expected, "chest boat: {chest}");
+            assert_eq!(
+                game.entities.boats[0].status, expected,
+                "chest boat: {chest}"
+            );
             assert!(calls.load(Ordering::SeqCst) > 0);
         }
     });

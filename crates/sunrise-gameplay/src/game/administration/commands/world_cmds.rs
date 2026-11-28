@@ -229,7 +229,8 @@ impl crate::game::ServerGame<'_> {
             Some(Target::Projectile(id)) => {
                 if let Some(shot) = self
                     .common
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .find(|shot| shot.id == id)
                 {
@@ -237,7 +238,13 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Some(Target::Trident(id)) => {
-                if let Some(shot) = self.common.entities.tridents.iter().find(|shot| shot.id == id) {
+                if let Some(shot) = self
+                    .common
+                    .entities
+                    .tridents
+                    .iter()
+                    .find(|shot| shot.id == id)
+                {
                     attack.projectile = Some(id as i32);
                     attack.projectile_kind = DirectEntity::Arrow;
                     attack.projectile_type = Some("minecraft:trident");
@@ -742,7 +749,8 @@ impl crate::game::ServerGame<'_> {
                         self.write_attribute(target, attribute, AttributeWrite::ResetBase);
                         let v = self
                             .common
-                            .entities.mobs
+                            .entities
+                            .mobs
                             .iter()
                             .find(|m| m.id == mob_id)
                             .map_or(0.0, |m| finalize::base_value(m, attr));
@@ -844,7 +852,8 @@ impl crate::game::ServerGame<'_> {
         sunrise_sim::mobs::sulfur_cube::ARCHETYPE_ATTRIBUTES.contains(&attribute)
             && self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .any(|m| m.id == id && m.species() == sunrise_sim::mobs::Species::SulfurCube)
     }
@@ -1007,7 +1016,13 @@ impl crate::game::ServerGame<'_> {
                 Target::Player => self.stop_riding(),
                 Target::Mob(rider) => self.dismount_mob(rider),
                 Target::Bolt(rider) => {
-                    if let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == rider) {
+                    if let Some(i) = self
+                        .common
+                        .entities
+                        .bolts
+                        .iter()
+                        .position(|b| b.id == rider)
+                    {
                         self.common.entities.bolts.update(i, |b| b.mount = None);
                     }
                 }
@@ -1244,13 +1259,15 @@ impl crate::game::ServerGame<'_> {
                     .find_map(|target| match *target {
                         Target::Boat(id) if id == v => self
                             .common
-                            .entities.boats
+                            .entities
+                            .boats
                             .iter()
                             .find(|b| b.id == v)
                             .map(|b| b.position.y),
                         Target::Cart(id) if id == v => self
                             .common
-                            .entities.carts
+                            .entities
+                            .carts
                             .iter()
                             .find(|c| c.id == v)
                             .map(|c| c.position.y),

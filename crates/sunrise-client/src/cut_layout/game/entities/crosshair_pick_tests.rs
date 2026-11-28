@@ -1019,7 +1019,8 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 game.world.set(0, 68, 0, air).unwrap();
                 let camel_type = game.res.mob_types().get("minecraft:camel").unwrap().clone();
                 let husk_type = game.res.mob_types().get("minecraft:husk").unwrap().clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(130, camel_type, Vec3::new(0.5, 64.0, 0.5), 0.0));
                 let mut husk = Mob::new(131, husk_type, Vec3::new(0.5, 64.17, 1.0), 0.0);
                 husk.extra.mount = Some(130);
@@ -1060,7 +1061,8 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 game.entities.mobs.clear();
                 game.entities.tnts.clear();
                 let horse_type = game.res.mob_types().get("minecraft:horse").unwrap().clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(110, horse_type, Vec3::new(0.5, 64.0, 0.5), 0.0));
                 let mut stand = ArmorStand::new(112, Vec3::new(0.5, 65.6, 1.4), 0.0);
                 stand.vehicle = Some(110);
@@ -1224,7 +1226,8 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                     .get("minecraft:villager")
                     .unwrap()
                     .clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(230, camel_type, Vec3::new(0.5, 64.0, 0.5), 0.0));
                 let mut copassenger = Mob::new(231, villager_type, Vec3::new(0.5, 64.5, 1.0), 0.0);
                 copassenger.extra.mount = Some(230);
@@ -1429,7 +1432,8 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 game.riding = None;
                 place_player(game, [0.5, 64.0, 0.5], 0.0, -90.0);
                 let pig_type = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(150, pig_type, Vec3::new(0.5, 66.2, 0.5), 0.0));
                 game.client
                     .remote
@@ -1465,9 +1469,11 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 game.world.set(0, 68, 0, air).unwrap();
                 let camel_type = game.res.mob_types().get("minecraft:camel").unwrap().clone();
                 let husk_type = game.res.mob_types().get("minecraft:husk").unwrap().clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(130, camel_type, Vec3::new(0.5, 64.0, 0.5), 0.0));
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(131, husk_type, Vec3::new(0.5, 64.17, 1.0), 0.0));
                 game.client
                     .remote
@@ -1524,7 +1530,8 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 game.entities.mobs.clear();
                 game.entities.tnts.clear();
                 let horse_type = game.res.mob_types().get("minecraft:horse").unwrap().clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(110, horse_type, Vec3::new(0.5, 64.0, 0.5), 0.0));
                 let behind_fb = Vec3::new(0.5, 66.1, 2.9);
                 game.entities.falling.push(FallingBlock {

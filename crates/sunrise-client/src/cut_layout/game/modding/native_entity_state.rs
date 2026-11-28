@@ -121,13 +121,15 @@ pub(crate) mod tests {
             let orb = game.entity(43).unwrap();
             assert_eq!(orb.tick_count(game), Some(21));
 
-            game.entities.carts
+            game.entities
+                .carts
                 .push(Minecart::new(44, CartKind::Rideable, Vec3::ZERO));
             game.entities.carts.update(0, |c| c.tick_count = 5);
             let cart = game.entity(44).unwrap();
             assert_eq!(cart.tick_count(game), Some(5));
 
-            game.entities.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     45,
                     "oak".into(),
@@ -214,9 +216,11 @@ pub(crate) mod tests {
                 air: 300,
                 following: None,
             });
-            game.entities.boats
+            game.entities
+                .boats
                 .push(Boat::new(42, "oak".into(), Vec3::ZERO, 0.0));
-            game.entities.carts
+            game.entities
+                .carts
                 .push(Minecart::new(43, CartKind::Rideable, Vec3::ZERO));
             game.add_primed_tnt(BlockPos::new(0, 64, 0), 0.0, 80, None, None);
             let tnt = game.entities.tnts[0].id;
@@ -233,9 +237,11 @@ pub(crate) mod tests {
             let arrow = game.entities.projectiles[0].id;
             game.add_projectile(Projectile::new(ProjectileKind::Snowball, Vec3::ZERO, None));
             let snowball = game.entities.projectiles[1].id;
-            game.entities.rockets
+            game.entities
+                .rockets
                 .push(Rocket::remote(44, Vec3::ZERO, Vec3::ZERO));
-            game.entities.tridents
+            game.entities
+                .tridents
                 .push(ThrownTrident::remote(45, Vec3::ZERO, 0.0, 0.0));
             // Entity defaults to 300; VehicleEntity overrides it to 10 and
             // Projectile to 2 (`getDimensionChangingDelay` in vanilla 26.3).
@@ -296,7 +302,9 @@ pub(crate) mod tests {
             assert_eq!(falling.portal_cooldown(game), Some(25));
 
             // No portal cooldown: an armor stand, a wind charge, a stale handle, a parked level.
-            game.entities.armor_stands.push(ArmorStand::new(46, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(46, Vec3::ZERO, 0.0));
             let stand = game.entity(46).unwrap();
             assert_eq!(stand.portal_cooldown(game), None);
             game.add_projectile(Projectile::new(
@@ -354,8 +362,12 @@ pub(crate) mod tests {
                     (41, "minecraft:blaze", false),
                 ] {
                     let kind = g.res.mob_types().get(kind).unwrap().clone();
-                    g.entities.mobs
-                        .push(Mob::new(id, kind, sunrise_core::geometry::Vec3::ZERO, 0.0));
+                    g.entities.mobs.push(Mob::new(
+                        id,
+                        kind,
+                        sunrise_core::geometry::Vec3::ZERO,
+                        0.0,
+                    ));
                     g.entities.mobs.last_mut().unwrap().fire_ticks = 20;
                     assert_eq!(g.entity(id).unwrap().is_on_fire(g), Some(expected));
                 }
@@ -476,11 +488,17 @@ pub(crate) mod tests {
                         assert_eq!(zombie.is_on_fire(g), Some(burning));
                         assert_eq!(stand.is_on_fire(g), Some(burning));
                         assert_eq!(
-                            g.entities.mobs.iter().find(|m| m.id == 16).unwrap().is_on_fire(),
+                            g.entities
+                                .mobs
+                                .iter()
+                                .find(|m| m.id == 16)
+                                .unwrap()
+                                .is_on_fire(),
                             burning
                         );
                         assert_eq!(
-                            g.entities.armor_stands
+                            g.entities
+                                .armor_stands
                                 .iter()
                                 .find(|s| s.id == 15)
                                 .unwrap()
@@ -538,7 +556,8 @@ pub(crate) mod tests {
                 super::super::native_entity_refs::tests::bind_local_player(g, 7, 123);
                 let player = g.entity(7).unwrap();
                 let kind = g.res.mob_types().get("minecraft:zombie").unwrap().clone();
-                g.entities.mobs
+                g.entities
+                    .mobs
                     .push(Mob::new(15, kind, sunrise_core::geometry::Vec3::ZERO, 0.0));
                 let mob = g.entity(15).unwrap();
                 check_under_water(g, false, player, mob);
@@ -659,7 +678,13 @@ pub(crate) mod tests {
                 ),
                 (0.0, 0.0, false, false, Vec::new(), None),
             ] {
-                let fluids = &mut game.entities.mobs.iter_mut().find(|m| m.id == 15).unwrap().fluids;
+                let fluids = &mut game
+                    .entities
+                    .mobs
+                    .iter_mut()
+                    .find(|m| m.id == 15)
+                    .unwrap()
+                    .fluids;
                 fluids.water = water;
                 fluids.lava = lava;
                 fluids.in_water = water > 0.0;
@@ -893,7 +918,8 @@ pub(crate) mod tests {
                 .unwrap()
                 .clone();
             let at = sunrise_core::geometry::Vec3::ZERO;
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(sunrise_sim::mobs::Mob::new(500, zombie, at, 0.0));
             let mob = game.entity(500).unwrap();
             assert_eq!(read(game, mob), Some(MainHand::Right));

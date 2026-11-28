@@ -252,7 +252,8 @@ fn loot_kill_asks_with_the_commands_source_as_the_attacker() {
             .unwrap();
             assert_eq!(*seen.lock().unwrap(), [looted(2), looted(2)]);
             assert!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .any(|m| m.id == victim.id && m.health > 0.0)
             );

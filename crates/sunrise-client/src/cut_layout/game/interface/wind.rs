@@ -56,7 +56,10 @@ pub(crate) mod tests {
             let charge = game.entities.projectiles[0].clone();
             game.begin_ordered_ticks();
             game.run_ordered_ticks(charge.join_seq(), false).unwrap();
-            assert_eq!(game.server.ordered.done, Some(game.entities.orbs[0].join_seq()));
+            assert_eq!(
+                game.server.ordered.done,
+                Some(game.entities.orbs[0].join_seq())
+            );
             assert_eq!(game.entities.orbs[0].age, 1);
             assert_eq!(game.entities.tnts[0].fuse, 80);
 
@@ -183,7 +186,9 @@ pub(crate) mod tests {
                     (SPARED, Vec3::new(5.25, 70.0, 9.25)),
                     (SECOND, Vec3::new(4.5, 70.0, 8.5)),
                 ] {
-                    game.entities.mobs.push(Mob::new(id, zombie.clone(), pos, 0.0));
+                    game.entities
+                        .mobs
+                        .push(Mob::new(id, zombie.clone(), pos, 0.0));
                 }
 
                 let powered = |game: &sunrise_gameplay::game::ServerGame<'_>, pos: [i32; 3]| {
@@ -195,7 +200,12 @@ pub(crate) mod tests {
                         .and_then(|s| s.properties.get("powered").cloned())
                 };
                 let vel_of = |game: &sunrise_gameplay::game::ServerGame<'_>, id: u32| {
-                    game.entities.mobs.iter().find(|m| m.id == id).unwrap().velocity
+                    game.entities
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .unwrap()
+                        .velocity
                 };
 
                 let at = Vec3::new(5.0, 70.5, 8.5);

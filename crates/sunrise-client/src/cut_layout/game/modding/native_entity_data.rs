@@ -29,7 +29,8 @@ mod tests {
         kind: &str,
     ) -> EntityRef {
         let kind = game.res.mob_types().get(kind).unwrap().clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(id, kind, Vec3::new(0.5, 70.0, 0.5), 0.0));
         game.entity(id).unwrap()
     }
@@ -116,7 +117,9 @@ mod tests {
             assert!(mob.set_custom_name(game, None).unwrap());
             assert_eq!(mob.custom_name(game).unwrap(), None);
 
-            game.entities.armor_stands.push(ArmorStand::new(16, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(16, Vec3::ZERO, 0.0));
             let stand = game.entity(16).unwrap();
             assert_eq!(stand.custom_name(game).unwrap(), None);
             assert!(stand.set_custom_name(game, Some(name.clone())).unwrap());
@@ -124,13 +127,16 @@ mod tests {
 
             let stone = sunrise_items::items::ItemStack::new("minecraft:stone", 1);
             game.spawn_item(stone, [0.5, 70.0, 0.5], [0.0; 3], 0);
-            let item = game.entity(game.entities.dropped.last().unwrap().id).unwrap();
+            let item = game
+                .entity(game.entities.dropped.last().unwrap().id)
+                .unwrap();
             assert_eq!(item.custom_name(game).unwrap(), None);
             assert!(item.set_custom_name(game, Some(name.clone())).unwrap());
             assert_eq!(item.custom_name(game).unwrap(), Some(name));
 
             // A mob a spawn named with a plain name: no styled text, the name all the same.
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == 15)
                 .unwrap()
@@ -214,7 +220,9 @@ mod tests {
             assert_eq!(mob.custom_name_visible(game), Some(true));
 
             // An armor stand keeps its name in its own field.
-            game.entities.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(13, Vec3::ZERO, 0.0));
             let stand = game.entity(13).unwrap();
             assert!(
                 stand
@@ -272,7 +280,9 @@ mod tests {
                 let mob = push_mob(game, id, kind);
                 assert_eq!(mob.classification(game), Some(category), "{kind}");
             }
-            game.entities.armor_stands.push(ArmorStand::new(27, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(27, Vec3::ZERO, 0.0));
             let stand = game.entity(27).unwrap();
             assert_eq!(stand.classification(game), Some(MobCategory::Misc));
             let mut dragon =

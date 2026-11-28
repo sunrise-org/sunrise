@@ -361,7 +361,8 @@ impl crate::game::ServerGame<'_> {
                 leash_boats.clear();
                 leash_boats.extend(
                     self.common
-                        .entities.boats
+                        .entities
+                        .boats
                         .iter()
                         .map(super::super::boat_leads::boat_state),
                 );
@@ -1232,7 +1233,8 @@ impl crate::game::ServerGame<'_> {
             let restored_offset = self.common.entities.mobs.len();
             let same_rows = same_rows && restored_offset == 0;
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
             let mut restored = Some(self.common.entities.mobs.stamp());
             self.file_mob_section_entries(&mut section_entered);
@@ -1284,7 +1286,10 @@ impl crate::game::ServerGame<'_> {
                 if let Some(mut sting) = sting {
                     let before_hurt = events.drain(brain_from..sting.at).collect();
                     let _ = self.handle_mob_events(before_hurt);
-                    if let Some(i) = self.common.mob_index.find(&self.common.entities.mobs, sting.target)
+                    if let Some(i) = self
+                        .common
+                        .mob_index
+                        .find(&self.common.entities.mobs, sting.target)
                         && sting.same_target(&self.common.entities.mobs[i])
                     {
                         if let Some(hit) = paused_hurt.take() {
@@ -1364,7 +1369,8 @@ impl crate::game::ServerGame<'_> {
                                 let before_hurt = events.split_off(resume_from);
                                 let _ = self.handle_mob_events(before_hurt);
                             }
-                            if let Some(i) = self.common.mob_index.find(&self.common.entities.mobs, id)
+                            if let Some(i) =
+                                self.common.mob_index.find(&self.common.entities.mobs, id)
                                 && self.common.entities.mobs[i].join == join
                                 && !self.common.entities.mobs[i].removed
                             {
@@ -1412,7 +1418,8 @@ impl crate::game::ServerGame<'_> {
                             game.emit_death_poofs([(id, at, width, height)]);
                         }
                         if vehicle_split
-                            && let Some(i) = game.common.mob_index.find(&game.common.entities.mobs, id)
+                            && let Some(i) =
+                                game.common.mob_index.find(&game.common.entities.mobs, id)
                         {
                             let mut dying = game.common.entities.mobs[i].clone();
                             game.split_cube_children(&mut dying);
@@ -1424,7 +1431,13 @@ impl crate::game::ServerGame<'_> {
                     } else {
                         self.remove_mob_after(id, killed_effects, animate);
                     }
-                    if let Some(index) = self.common.entities.mobs.iter().position(|mob| mob.id == id) {
+                    if let Some(index) = self
+                        .common
+                        .entities
+                        .mobs
+                        .iter()
+                        .position(|mob| mob.id == id)
+                    {
                         self.common.entities.mobs.remove(index);
                     }
                 }
@@ -1450,7 +1463,9 @@ impl crate::game::ServerGame<'_> {
                     && self.native_tick_pre_one(round, *id, &kind.id)
                     && mod_api::__private::listened(mod_api::HookId::CanContinueSleeping)
                     && let Some(i) =
-                        super::super::native_ticks::place(&self.common.entities.mobs, *at, |m| m.id == *id)
+                        super::super::native_ticks::place(&self.common.entities.mobs, *at, |m| {
+                            m.id == *id
+                        })
                 {
                     self.sync_sleeping_mob(i);
                 }
@@ -1462,7 +1477,8 @@ impl crate::game::ServerGame<'_> {
                     &mut sections.borrow_mut(),
                 );
             }
-            let unchanged = same_rows && !views_dirty && restored == Some(self.common.entities.mobs.stamp());
+            let unchanged =
+                same_rows && !views_dirty && restored == Some(self.common.entities.mobs.stamp());
             if tell_pre.is_some() || tick_enchantments.is_some() {
                 told_at = Some(cursor);
             }
@@ -1650,7 +1666,11 @@ impl crate::game::ServerGame<'_> {
         if effects.is_empty() {
             return;
         }
-        let Some(slot) = self.common.mob_index.find(&self.common.entities.mobs, mob_id) else {
+        let Some(slot) = self
+            .common
+            .mob_index
+            .find(&self.common.entities.mobs, mob_id)
+        else {
             return;
         };
         let mut access = GameMobInsideAccess {

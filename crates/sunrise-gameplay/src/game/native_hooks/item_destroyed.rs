@@ -38,7 +38,13 @@ impl crate::game::ServerGame<'_> {
         let vanilla_spilled = entry.peek_destroyed_contents(items.items());
         let stack = entry.stack.clone();
         let Some(handle) = self.entity(id).and_then(|entity| self.item_entity(entity)) else {
-            if let Some(entry) = self.common.entities.dropped.get_mut(index).filter(|e| e.id == id) {
+            if let Some(entry) = self
+                .common
+                .entities
+                .dropped
+                .get_mut(index)
+                .filter(|e| e.id == id)
+            {
                 return entry.spill_destroyed_contents(items.items());
             }
             return vanilla_spilled;

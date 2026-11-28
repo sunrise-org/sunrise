@@ -24,13 +24,19 @@ pub fn breed_pair_credited(
         Vec3::new(0.0, 64.0, 0.0),
         0.0,
     ));
-    game.entities.mobs
+    game.entities
+        .mobs
         .push(Mob::new(base + 2, kind, Vec3::new(1.0, 64.0, 0.0), 0.0));
     game.native_joins_skip();
     if credited {
         game.server.love_cause.insert(base + 1, None);
     }
-    let parent = game.entities.mobs.iter_mut().find(|m| m.id == base + 1).unwrap();
+    let parent = game
+        .entities
+        .mobs
+        .iter_mut()
+        .find(|m| m.id == base + 1)
+        .unwrap();
     parent.random = LegacyRandom::new(0);
     let live_baby = !matches!(
         parent.species(),
@@ -43,7 +49,12 @@ pub fn breed_pair_credited(
     } else {
         parent.extra.age = 6000;
     }
-    let partner = game.entities.mobs.iter_mut().find(|m| m.id == base + 2).unwrap();
+    let partner = game
+        .entities
+        .mobs
+        .iter_mut()
+        .find(|m| m.id == base + 2)
+        .unwrap();
     partner.extra.in_love = 600;
     let child = game.breed(
         base + 1,

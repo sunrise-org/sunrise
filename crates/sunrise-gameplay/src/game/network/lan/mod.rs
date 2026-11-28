@@ -989,7 +989,8 @@ impl crate::game::ServerGame<'_> {
         };
         for m in self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| !m.removed && m.id > after)
         {
@@ -2294,7 +2295,8 @@ impl crate::game::ServerGame<'_> {
                 // Nobody can receive past movement. A returning viewer pairs
                 // from the cart's current position/rotation, as AddEntity does.
                 self.common
-                    .entities.carts
+                    .entities
+                    .carts
                     .for_each_mut(|cart| cart.lerp_steps.clear());
             }
             // Persist is swapped per level, so parked dimensions retain their marks.
@@ -5143,7 +5145,8 @@ pub(in crate::game) mod tests {
                 assert_eq!(sent(game), (zombie_swirls.clone(), guest_swirls.clone()));
                 assert!(asked().is_empty());
                 let zombie = game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == ZOMBIE as u32)
                     .unwrap();
@@ -5813,7 +5816,13 @@ pub(in crate::game) mod merchant_packet_tests {
             // Crossing the real level-two boundary runs updateSpecialPrices while
             // taking the result, so the new level's offers must reach the guest.
             let mut session = Session::new(
-                game.entities.mobs[0].extra.trade.as_ref().unwrap().offers.clone(),
+                game.entities.mobs[0]
+                    .extra
+                    .trade
+                    .as_ref()
+                    .unwrap()
+                    .offers
+                    .clone(),
                 true,
             );
             session.offers[0].uses = 0;
@@ -6097,7 +6106,10 @@ pub(in crate::game) mod merchant_packet_tests {
                 buyer_hit(game, 3.0);
             }
             assert_eq!(game.entities.mobs[0].ambient_timer, -80);
-            assert_eq!(game.entities.mobs[0].random.clone().next_long(), random.next_long());
+            assert_eq!(
+                game.entities.mobs[0].random.clone().next_long(),
+                random.next_long()
+            );
             let mut actual = record();
             assert!(!actual.iter().any(|event| event == "result:empty"));
             game.lan_flush_effects();
@@ -6131,9 +6143,11 @@ pub(in crate::game) mod merchant_packet_tests {
                 "payment stayed in the menu"
             );
             let kind = game.entities.mobs[0].kind.clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(78, kind.clone(), Vec3::new(1.0, 4.0, 1.0), 0.0));
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(79, kind, Vec3::new(1.5, 4.0, 1.0), 0.0));
             game.admit_new_mobs(0);
             assert!(game.mob_hits_mob(77, 5.0, Damage::mob(78, at)));

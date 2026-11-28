@@ -117,7 +117,12 @@ fn the_merge_keeps_the_live_orb_and_its_portal_process() {
             1,
         );
         assert!(!game.persist.raw.contains_key(&id), "no raw compound yet");
-        game.entities.orbs.iter_mut().find(|o| o.id == id).unwrap().ticks = 17;
+        game.entities
+            .orbs
+            .iter_mut()
+            .find(|o| o.id == id)
+            .unwrap()
+            .ticks = 17;
         let join = orb(game, id).join;
         assert!(run(game, &format!("data merge entity {ORB} {{Age:42s}}")).0);
         let o = orb(game, id);

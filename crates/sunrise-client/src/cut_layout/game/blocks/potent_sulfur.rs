@@ -85,9 +85,11 @@ pub(crate) mod pass_tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(1, kind.clone(), Vec3::new(1.5, 64.0, 1.5), 0.0));
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(2, kind.clone(), Vec3::new(65.5, 64.0, 1.5), 0.0));
             // The six-block-wide nausea query, expanded by the zombie's width
             // plus SeenGrid's margin, spans 3 x 3 four-block grid columns.
@@ -143,7 +145,9 @@ pub(crate) mod pass_tests {
             };
             for id in 0..60u32 {
                 let kind = kinds[id as usize % kinds.len()].clone();
-                game.entities.mobs.push(Mob::new(id + 1, kind, place(&mut rng), 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(id + 1, kind, place(&mut rng), 0.0));
             }
             let areas: Vec<Aabb> = (0..40)
                 .map(|i| {
@@ -163,7 +167,8 @@ pub(crate) mod pass_tests {
             game.entities.mobs[7].position = areas[0].center();
             check(game, "a mob moved into a geyser");
             let kind = kinds[2].clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .insert(0, Mob::new(100, kind, areas[1].center(), 0.0));
             check(game, "a mob added in front");
             game.entities.mobs.retain(|m| m.id % 5 != 0);

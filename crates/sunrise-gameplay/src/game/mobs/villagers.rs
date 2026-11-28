@@ -41,7 +41,8 @@ impl villager_brain::TradingPlayers for ServerGame<'_> {
 impl ServerGame<'_> {
     pub(in crate::game::server_side) fn villager_index(&self, id: u32) -> Option<usize> {
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .position(|m| m.id == id && m.species() == Species::Villager)
     }
@@ -158,7 +159,14 @@ impl ServerGame<'_> {
         let now = self.common.world.game_time;
         let items = server_world_items!(self);
         let professions = self.stations().professions.clone();
-        let meeting = villager::meet(&mut self.common.entities.mobs, ia, ib, now, items, &professions);
+        let meeting = villager::meet(
+            &mut self.common.entities.mobs,
+            ia,
+            ib,
+            now,
+            items,
+            &professions,
+        );
         for stack in meeting.thrown {
             self.villager_throw(meeting.from, meeting.eye, meeting.to, stack);
         }
@@ -174,7 +182,8 @@ impl ServerGame<'_> {
             return;
         };
         let now = self.common.world.game_time;
-        let Some(near) = villager::golem_summoners(&self.common.entities.mobs, i, now, needed) else {
+        let Some(near) = villager::golem_summoners(&self.common.entities.mobs, i, now, needed)
+        else {
             return;
         };
         if self.try_spawn_iron_golem(block_of(self.common.entities.mobs[i].position)) {
@@ -235,7 +244,8 @@ impl ServerGame<'_> {
         else {
             return;
         };
-        villager::ext_mut(&mut self.common.entities.mobs[ib]).eat_and_digest(server_world_items!(self));
+        villager::ext_mut(&mut self.common.entities.mobs[ib])
+            .eat_and_digest(server_world_items!(self));
         let from = self.common.entities.mobs[ia].position;
         let Some((bed, variant)) = child else {
             // VillagerMakeLove: entity event 13 for the partner, then the parent.
@@ -320,8 +330,9 @@ impl ServerGame<'_> {
         // Reuse the existing item-cell index only for large, spread-out item
         // sets with many due sensors. Small and clustered scenes retain the
         // original full scan without building an index.
-        let mut nearby = super::item_areas::ItemAreas::worthwhile(&self.common.entities.dropped, due.len())
-            .then(super::item_areas::ItemAreas::default);
+        let mut nearby =
+            super::item_areas::ItemAreas::worthwhile(&self.common.entities.dropped, due.len())
+                .then(super::item_areas::ItemAreas::default);
         let w = self.mob_world_base(&[]);
         let mut found = Vec::new();
         for i in due {
@@ -331,9 +342,9 @@ impl ServerGame<'_> {
             let requested = villager::requested_items(m, &professions);
             let eye = Vec3::new(m.position.x, m.eye_y(), m.position.z);
             let mut best: Option<(f64, Vec3)> = None;
-            let mut scan = nearby
-                .as_mut()
-                .map(|index| index.scan(&self.common.entities.dropped, self.server.next_entity, area));
+            let mut scan = nearby.as_mut().map(|index| {
+                index.scan(&self.common.entities.dropped, self.server.next_entity, area)
+            });
             let mut j = 0;
             loop {
                 if let Some(indexed) = &mut scan {
@@ -409,7 +420,11 @@ impl ServerGame<'_> {
                 Vec3::new(pos.x - half, pos.y - 0.25, pos.z - half),
                 Vec3::new(pos.x + half, pos.y + top, pos.z + half),
             );
-            let mut scan = near_items.scan(&self.common.entities.dropped, self.server.next_entity, reach);
+            let mut scan = near_items.scan(
+                &self.common.entities.dropped,
+                self.server.next_entity,
+                reach,
+            );
             if scan.is_empty() {
                 continue;
             }
@@ -447,7 +462,8 @@ impl ServerGame<'_> {
                     continue;
                 }
                 let before = self.common.entities.dropped[j].clone();
-                let rest = villager::ext_mut(&mut self.common.entities.mobs[i]).add_item(stack, max);
+                let rest =
+                    villager::ext_mut(&mut self.common.entities.mobs[i]).add_item(stack, max);
                 if rest.as_ref().is_none_or(|r| r.count < before.stack.count) {
                     let id = self.common.entities.mobs[i].id;
                     self.server_mob_take_item(&before, id);
@@ -530,7 +546,8 @@ impl ServerGame<'_> {
         };
         let snapshot: Vec<_> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .map(|m| m.seen(None, self.items()))
             .collect();
@@ -563,11 +580,13 @@ impl ServerGame<'_> {
         let Some(i) = self.villager_index(id) else {
             return;
         };
-        villager::ext_mut(&mut self.common.entities.mobs[i]).gossips.add(
-            uuid,
-            GossipType::Trading,
-            gossip::REPUTATION_CHANGE_PER_TRADE,
-        );
+        villager::ext_mut(&mut self.common.entities.mobs[i])
+            .gossips
+            .add(
+                uuid,
+                GossipType::Trading,
+                gossip::REPUTATION_CHANGE_PER_TRADE,
+            );
         // Villager.customServerAiStep after a trade: entity event 14.
         self.mob_event_particles(id, 14);
         // onReputationEventFrom refreshes the current trading player's prices.
@@ -687,7 +706,9 @@ impl ServerGame<'_> {
             .common
             .mob_index
             .find(&self.common.entities.mobs, id)
-            .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
+            .filter(|&i| {
+                self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed
+            })
         else {
             return;
         };

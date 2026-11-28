@@ -177,7 +177,12 @@ pub(crate) mod boat_passenger_tree_tests {
             assert!(game.world.loaded(8, 8));
             assert!(game.run_command("setblock 8 199 8 stone"));
             assert!(game.run_command("summon oak_boat 8.5 200 8.5 {UUID:[I;7,151,1,1],NoGravity:1b,Silent:1b,CustomName:\"Hull\"}"));
-            let bi = game.entities.boats.iter().position(|b| b.position.x == 8.5).unwrap();
+            let bi = game
+                .entities
+                .boats
+                .iter()
+                .position(|b| b.position.x == 8.5)
+                .unwrap();
             let bid = game.entities.boats[bi].id;
             let child = game
                 .spawn_mob(
@@ -187,7 +192,12 @@ pub(crate) mod boat_passenger_tree_tests {
                     sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                 )
                 .unwrap();
-            let ci = game.entities.mobs.iter().position(|m| m.id == child).unwrap();
+            let ci = game
+                .entities
+                .mobs
+                .iter()
+                .position(|m| m.id == child)
+                .unwrap();
             game.entities.mobs[ci].no_ai = true;
             game.entities.mobs[ci].no_gravity = true;
             assert!(
@@ -234,7 +244,12 @@ pub(crate) mod boat_passenger_tree_tests {
                     sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                 )
                 .unwrap();
-            let di = game.entities.mobs.iter().position(|m| m.id == control).unwrap();
+            let di = game
+                .entities
+                .mobs
+                .iter()
+                .position(|m| m.id == control)
+                .unwrap();
             game.entities.mobs[di].no_ai = true;
             game.entities.mobs[di].no_gravity = true;
             assert!(!game.persist.raw.contains_key(&control));
@@ -1061,14 +1076,16 @@ pub(crate) mod vehicle_container_tests {
                     match target {
                         Target::Boat(_) => {
                             game.common
-                                .entities.boats
+                                .entities
+                                .boats
                                 .update(game.common.entities.boats.len() - 1, |boat| {
                                     boat.items[0].as_mut().unwrap().count = 4
                                 });
                         }
                         Target::Cart(_) => {
                             game.common
-                                .entities.carts
+                                .entities
+                                .carts
                                 .update(game.common.entities.carts.len() - 1, |cart| {
                                     cart.items[0].as_mut().unwrap().count = 4
                                 });

@@ -76,12 +76,19 @@ impl crate::game::ServerGame<'_> {
             return false;
         }
         if let Some(hit) = self.server_crosshair_entity_hit() {
-            if self.common.entities.falling.iter().any(|f| f.id as i32 == hit.id) {
+            if self
+                .common
+                .entities
+                .falling
+                .iter()
+                .any(|f| f.id as i32 == hit.id)
+            {
                 return false;
             }
             if let Some(tnt_id) = self
                 .common
-                .entities.tnts
+                .entities
+                .tnts
                 .iter()
                 .find(|t| t.id as i32 == hit.id)
                 .map(|t| t.id)
@@ -96,9 +103,10 @@ impl crate::game::ServerGame<'_> {
             && self.before_block(d)
         {
             // `BlockAttachedEntity.hurtServer` refuses first through `isInvulnerableToBase`.
-            if self
-                .native_player_hit_invulnerable(self.common.entities.paintings[i].id, "minecraft:painting")
-            {
+            if self.native_player_hit_invulnerable(
+                self.common.entities.paintings[i].id,
+                "minecraft:painting",
+            ) {
                 self.server.attack_ticks = 0;
             } else {
                 self.break_painting(i, true);
@@ -141,7 +149,8 @@ impl crate::game::ServerGame<'_> {
         let catalog = sunrise_gameplay_common::game::general::general_type_catalog();
         let Some((id, kind, distance)) = self
             .common
-            .entities.general
+            .entities
+            .general
             .rows
             .iter()
             .filter(|row| catalog.pickable(row.type_slot))
@@ -193,8 +202,11 @@ impl crate::game::ServerGame<'_> {
         let attack = self.attack_of(self.common.player.as_ref().map_or(0, |p| p.entity_id));
         let target_kind = self.common.entities.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
-        let ((amount, scale, crit, magic), admitted) =
-            self.melee_damage_with_admission(&target_kind, true, Some(self.common.entities.mobs[index].id));
+        let ((amount, scale, crit, magic), admitted) = self.melee_damage_with_admission(
+            &target_kind,
+            true,
+            Some(self.common.entities.mobs[index].id),
+        );
         // Player.onAttack: the hit starts the attack strength again, hurt or not.
         self.server.attack_ticks = 0;
         if !admitted {
@@ -216,13 +228,18 @@ impl crate::game::ServerGame<'_> {
             Some(f) => self.attack_source(f),
             None => sunrise_sim::mobs::Damage::of(sunrise_sim::mobs::DamageKind::Generic),
         };
-        let (id, join) = (self.common.entities.mobs[index].id, self.common.entities.mobs[index].join);
+        let (id, join) = (
+            self.common.entities.mobs[index].id,
+            self.common.entities.mobs[index].join,
+        );
         let (landed, _) = self.hurt_by_player(index, amount, source);
         let Some(index) = self
             .common
             .mob_index
             .find(&self.common.entities.mobs, id)
-            .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
+            .filter(|&i| {
+                self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed
+            })
         else {
             if landed {
                 self.remember_player_target(Some(id));
@@ -259,8 +276,11 @@ impl crate::game::ServerGame<'_> {
             if knockback > 0.0 {
                 let (xd, zd) = self.extra_knockback_direction();
                 let aim = self.attacker_aim(source.attacker);
-                let plan =
-                    self.prepare_knockback_credit(self.common.entities.mobs[index].id as i32, None, &attack);
+                let plan = self.prepare_knockback_credit(
+                    self.common.entities.mobs[index].id as i32,
+                    None,
+                    &attack,
+                );
                 let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
                 self.common.entities.mobs[index].attacker_aim = aim;
                 let level = crate::game::server_side::entity_server::damage_level_of!(
@@ -357,7 +377,10 @@ impl crate::game::ServerGame<'_> {
                 .common
                 .mob_index
                 .find(&self.common.entities.mobs, id)
-                .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
+                .filter(|&i| {
+                    self.common.entities.mobs[i].join == join
+                        && !self.common.entities.mobs[i].removed
+                })
             else {
                 return;
             };

@@ -37,7 +37,8 @@ fn add_player_requires_info_before_replacing_a_tracked_entity() {
             deliver(game, C::SetCamera(play::SetCamera { camera_id: id }));
             assert_eq!(game.live_remote_camera_id(), Some(id as u32));
             let cart = game
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .find(|cart| cart.id == id as u32)
                 .unwrap()
@@ -62,7 +63,8 @@ fn add_player_requires_info_before_replacing_a_tracked_entity() {
                 Some(("minecraft:minecart", cart_at))
             );
             assert_eq!(
-                game.entities.carts
+                game.entities
+                    .carts
                     .iter()
                     .find(|cart| cart.id == id as u32)
                     .unwrap()

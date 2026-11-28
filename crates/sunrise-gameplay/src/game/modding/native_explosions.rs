@@ -116,13 +116,15 @@ impl crate::game::ServerGame<'_> {
             Target::Tnt(_) => Some("minecraft:tnt"),
             Target::Cart(_) => self
                 .common
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .any(|c| c.id == id && c.kind == CartKind::Tnt)
                 .then_some("minecraft:tnt_minecart"),
             Target::Projectile(_) => self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == id)
                 .map(|p| p.entity_type()),
@@ -275,20 +277,23 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Projectile(_) => self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == id)
                 .and_then(|p| Some((p.owner?, p.guest))),
             Target::Rocket(_) => self
                 .common
-                .entities.rockets
+                .entities
+                .rockets
                 .iter()
                 .find(|r| r.id == id)
                 .and_then(|r| Some((r.owner?, r.guest))),
             // A thrown trident's owner is a player: a guest, or the player in place.
             Target::Trident(_) => self
                 .common
-                .entities.tridents
+                .entities
+                .tridents
                 .iter()
                 .find(|t| t.id == id)
                 .and_then(|t| {
@@ -336,7 +341,8 @@ impl crate::game::ServerGame<'_> {
             Target::Cart(_)
                 if self
                     .common
-                    .entities.carts
+                    .entities
+                    .carts
                     .iter()
                     .any(|c| c.id == id && c.kind == CartKind::Tnt && c.fuse >= 0) =>
             {
@@ -346,15 +352,18 @@ impl crate::game::ServerGame<'_> {
             _ => {}
         }
         let calculator = match target {
-            Target::Tnt(_) if self.common.entities.tnts.iter().any(|t| t.id == id && t.used_portal) => {
+            Target::Tnt(_)
+                if self
+                    .common
+                    .entities
+                    .tnts
+                    .iter()
+                    .any(|t| t.id == id && t.used_portal) =>
+            {
                 SourceCalculator::PortalProof
             }
             Target::Projectile(_) => {
-                let charge = self
-                    .common
-                    .entities.projectiles
-                    .iter()
-                    .find(|p| p.id == id);
+                let charge = self.common.entities.projectiles.iter().find(|p| p.id == id);
                 let knockback = match charge.map(|p| &p.kind) {
                     Some(ProjectileKind::WindCharge) => super::wind::PLAYER_KNOCKBACK,
                     Some(ProjectileKind::BreezeWindCharge) => 1.0,

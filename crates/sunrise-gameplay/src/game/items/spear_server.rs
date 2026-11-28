@@ -251,7 +251,10 @@ impl crate::game::ServerGame<'_> {
         } else {
             0.0
         };
-        let (old_health, join) = (self.common.entities.mobs[index].health, self.common.entities.mobs[index].join);
+        let (old_health, join) = (
+            self.common.entities.mobs[index].health,
+            self.common.entities.mobs[index].join,
+        );
         let (hurt, _) = if deals_damage {
             self.hurt_by_player(index, total, Damage::spear(from))
         } else {
@@ -261,7 +264,9 @@ impl crate::game::ServerGame<'_> {
             .common
             .mob_index
             .find(&self.common.entities.mobs, id)
-            .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
+            .filter(|&i| {
+                self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed
+            })
         else {
             if hurt {
                 self.remember_player_target(Some(id));
@@ -282,7 +287,8 @@ impl crate::game::ServerGame<'_> {
                 &mut credit,
                 None
             );
-            self.common.entities.mobs[index].knockback_full(level, 0.4, xd, zd, &source, total, false);
+            self.common.entities.mobs[index]
+                .knockback_full(level, 0.4, xd, zd, &source, total, false);
             self.common.entities.mobs[index].attacker_aim = None;
             let (strength, _) = self.extra_knockback(&kind, id, 0.0, Some("minecraft:spear"));
             if strength > 0.0 {

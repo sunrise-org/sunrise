@@ -120,7 +120,13 @@ impl crate::game::ServerGame<'_> {
                 }
                 // The hook may have removed boats.
                 let Some(i) = Some(i)
-                    .filter(|&i| self.common.entities.boats.get(i).is_some_and(|b| b.id == id))
+                    .filter(|&i| {
+                        self.common
+                            .entities
+                            .boats
+                            .get(i)
+                            .is_some_and(|b| b.id == id)
+                    })
                     .or_else(|| self.common.entities.boats.iter().position(|b| b.id == id))
                 else {
                     break 'boat;
@@ -152,7 +158,8 @@ impl crate::game::ServerGame<'_> {
                 Some(b) if b.id == id => i + 1,
                 _ => self
                     .common
-                    .entities.boats
+                    .entities
+                    .boats
                     .iter()
                     .position(|b| b.id == id)
                     .map_or(i, |k| k + 1),
@@ -238,7 +245,10 @@ impl crate::game::ServerGame<'_> {
         if !self.common.boat_splash_roll(i) {
             return;
         }
-        let (id, p) = (self.common.entities.boats[i].id, self.common.entities.boats[i].position);
+        let (id, p) = (
+            self.common.entities.boats[i].id,
+            self.common.entities.boats[i].position,
+        );
         // Entity.gameEvent(SPLASH, getControllingPassenger()): the window's
         // own player when it drives the boat.
         let ctx = if self.common.riding == Some(id) && self.common.player.is_some() {
@@ -257,15 +267,26 @@ impl crate::game::ServerGame<'_> {
         if self.common.riding == Some(id) && self.common.player.is_some() {
             self.dismount(i);
         } else if self.guest_rides(id) {
-            self.common.entities.boats.update(i, |b| b.eject_riders = true);
+            self.common
+                .entities
+                .boats
+                .update(i, |b| b.eject_riders = true);
         }
     }
     /// `AbstractBoat.tickBubbleColumn`: on the server, a boat that stays over
     /// a column for `BUBBLE_TIME` ticks is thrown up or pulled down (a down
     /// column lets the riders out first), and every client is told.
     pub(in crate::game::server_side) fn tick_boat_bubble_column(&mut self, i: usize) {
-        if let Some(down) = self.common.entities.boats.update(i, Boat::tick_bubble_countdown) {
-            let (id, p) = (self.common.entities.boats[i].id, self.common.entities.boats[i].position);
+        if let Some(down) = self
+            .common
+            .entities
+            .boats
+            .update(i, Boat::tick_bubble_countdown)
+        {
+            let (id, p) = (
+                self.common.entities.boats[i].id,
+                self.common.entities.boats[i].position,
+            );
             let event = if down {
                 BUBBLE_DOWN_EVENT
             } else {
@@ -286,7 +307,10 @@ impl crate::game::ServerGame<'_> {
         let id = self.common.entities.boats[i].id;
         // An ejection nobody took (its player left the boat first) is void.
         if !self.guest_rides(id) {
-            self.common.entities.boats.update(i, |b| b.eject_riders = false);
+            self.common
+                .entities
+                .boats
+                .update(i, |b| b.eject_riders = false);
         }
         let touches = self.common.boat_bubble_columns(i);
         // AbstractBoat.tick calls applyEffectsFromBlocks twice.
@@ -304,7 +328,10 @@ impl crate::game::ServerGame<'_> {
         }
         self.tick_boat_bubble_column(i);
         if self.common.options.execution_role.is_client() {
-            self.common.entities.boats.update(i, Boat::tick_bubble_wobble);
+            self.common
+                .entities
+                .boats
+                .update(i, Boat::tick_bubble_wobble);
         }
         true
     }
@@ -423,7 +450,8 @@ impl crate::game::ServerGame<'_> {
                 if water || !snow.is_empty() {
                     // clearFire
                     self.common
-                        .entities.boats
+                        .entities
+                        .boats
                         .update(i, |b| b.fire_ticks = b.fire_ticks.min(0));
                 }
             }
@@ -541,7 +569,8 @@ impl crate::game::ServerGame<'_> {
     /// bobbing on water never sinks the passenger's eyes or body.
     pub(in crate::game::server_side) fn riding_boat_fluid_box(&self) -> Option<RiddenBoat> {
         self.common
-            .entities.boats
+            .entities
+            .boats
             .iter()
             .find(|b| Some(b.id) == self.common.riding)
             .map(|b| RiddenBoat {
@@ -562,8 +591,14 @@ impl crate::game::ServerGame<'_> {
         // (`setDeltaMovement(Vec3.ZERO)`, `deltaRotation = 0`) and is not
         // moved, so a boat is at a standstill when its rider gets out instead
         // of coasting on the velocity of the ride that just ended.
-        self.common.entities.boats.update(i, |b| b.velocity = Vec3::ZERO);
-        self.common.entities.boats.update(i, |b| b.delta_rotation = 0.0);
+        self.common
+            .entities
+            .boats
+            .update(i, |b| b.velocity = Vec3::ZERO);
+        self.common
+            .entities
+            .boats
+            .update(i, |b| b.delta_rotation = 0.0);
         if self.dismount_in_portal(self.common.entities.boats[i].position) {
             return;
         }
@@ -641,7 +676,13 @@ impl crate::game::ServerGame<'_> {
         self.set_boat_yaw(id, yaw);
         if self.server.serving.is_some() || self.common.options.dedicated.is_some() {
             self.native_vehicle_create(
-                self.common.entities.boats.last().unwrap().entity_type().as_str(),
+                self.common
+                    .entities
+                    .boats
+                    .last()
+                    .unwrap()
+                    .entity_type()
+                    .as_str(),
                 [
                     self.common.entities.boats.last().unwrap().position.x,
                     self.common.entities.boats.last().unwrap().position.y,
@@ -652,7 +693,8 @@ impl crate::game::ServerGame<'_> {
         // BoatItem.use: ENTITY_PLACE at the hit (the boat's position), by the player.
         let at = self
             .common
-            .entities.boats
+            .entities
+            .boats
             .last()
             .map(|b| [b.position.x, b.position.y, b.position.z]);
         if let Some(at) = at {
@@ -831,11 +873,16 @@ impl crate::game::ServerGame<'_> {
                 if !destroyed {
                     let (x, z) = self.extra_knockback_direction();
                     self.common
-                        .entities.boats
+                        .entities
+                        .boats
                         .update(i, |b| b.velocity.x += f64::from(-(x as f32) * knockback));
-                    self.common.entities.boats.update(i, |b| b.velocity.y += 0.1);
                     self.common
-                        .entities.boats
+                        .entities
+                        .boats
+                        .update(i, |b| b.velocity.y += 0.1);
+                    self.common
+                        .entities
+                        .boats
                         .update(i, |b| b.velocity.z += f64::from(-(z as f32) * knockback));
                 }
                 self.special_attack_slowdown(knockback);

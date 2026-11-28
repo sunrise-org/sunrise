@@ -257,7 +257,8 @@ fn inventory(game: &sunrise_gameplay::game::ServerGame<'_>, index: usize) -> u32
 }
 
 fn total_orb_xp(game: &sunrise_gameplay::game::ServerGame<'_>) -> u32 {
-    game.entities.orbs
+    game.entities
+        .orbs
         .iter()
         .map(|orb| orb.value as u32 * orb.count)
         .sum()
@@ -632,7 +633,10 @@ fn an_outer_abort_undoes_an_accepted_grindstone_take() {
                         game.server.lan.as_ref().unwrap().hub.guests[0].carried,
                         Some(ItemStack::new("minecraft:dirt", 1))
                     );
-                    assert_eq!(game.entities.orbs[game.entities.orbs.locate(join).unwrap()].count, 2);
+                    assert_eq!(
+                        game.entities.orbs[game.entities.orbs.locate(join).unwrap()].count,
+                        2
+                    );
                     assert!(
                         rx.try_recv().is_err(),
                         "published station content before commit"
@@ -996,7 +1000,8 @@ fn grindstone_on_take_rebuilds_the_result_before_shift_click_or_throw_all_repeat
                     assert_eq!(inventory(game, 8), 2);
                 } else {
                     assert_eq!(
-                        game.entities.dropped
+                        game.entities
+                            .dropped
                             .iter()
                             .map(|drop| drop.stack.count)
                             .sum::<u32>(),

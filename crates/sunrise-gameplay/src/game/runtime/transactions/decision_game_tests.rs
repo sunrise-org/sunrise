@@ -12,7 +12,8 @@ use sunrise_sim::entities::ArmorStand;
 fn identity(game: &mut crate::game::ServerGame<'_>) -> Identity {
     fixture_resident_column(&mut game.common.world, (0, 0));
     game.common
-        .entities.armor_stands
+        .entities
+        .armor_stands
         .push(ArmorStand::new(13, Vec3::ZERO, 0.0));
     let holder = game.entity(13).expect("fixture holder");
     Identity {
@@ -248,7 +249,8 @@ fn only_root_commit_publishes_real_listener_and_plan_drops_in_order() {
             ((), true)
         });
         let stacks: Vec<_> = game
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .skip(initial)
             .map(|item| item.stack.clone())

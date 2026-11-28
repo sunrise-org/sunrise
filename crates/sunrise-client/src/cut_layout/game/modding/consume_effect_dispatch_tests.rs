@@ -79,7 +79,8 @@ fn nested_consume_effects_follow_call_order_even_for_the_same_kind() {
             game.server_items = Some(Arc::new(items));
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
             fixture_resident_column(&mut game.world, (0, 0));
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(21, kind, Vec3::new(0.0, 64.0, 0.0), 0.0));
             let living = game.living(game.entity(21).unwrap()).unwrap();
             let stack = ItemStack::new("minecraft:pufferfish", 2)
@@ -826,7 +827,8 @@ fn a_panicking_guest_turn_restores_cross_level_state_and_quarantines_its_join_li
                     game.for_player(
                         sunrise_gameplay_common::game::commands_common::Target::Guest(13),
                         |game| {
-                            game.entities.projectiles
+                            game.entities
+                                .projectiles
                                 .iter()
                                 .any(|projectile| projectile.guest == Some(13))
                         },

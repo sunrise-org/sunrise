@@ -129,7 +129,9 @@ pub(crate) mod game_event_tests {
         let mut resources = None;
         let mut game = server_game(&mut resources);
         game.entities.item_frames.clear();
-        game.entities.item_frames.extend(vec![frame(1, [0, 64, 1], None)]);
+        game.entities
+            .item_frames
+            .extend(vec![frame(1, [0, 64, 1], None)]);
         let center = [0.5, 64.5, 1.03125];
         *game.held_mut() = Some(ItemStack::new("minecraft:stick", 3));
 
@@ -138,7 +140,10 @@ pub(crate) mod game_event_tests {
         assert!(game.interact_frame(at(1)));
         assert_eq!(posted(), expected);
         assert_eq!(game.held().map(|s| s.count), Some(2), "one goes in");
-        assert_eq!(game.entities.item_frames[0].item.as_ref().map(|s| s.count), Some(1));
+        assert_eq!(
+            game.entities.item_frames[0].item.as_ref().map(|s| s.count),
+            Some(1)
+        );
 
         reset();
         assert!(game.interact_frame(at(1)));
@@ -203,7 +208,10 @@ pub(crate) mod game_event_tests {
 
         reset();
         game.tick_item_frames();
-        assert!(game.entities.item_frames.is_empty(), "nothing holds the frame");
+        assert!(
+            game.entities.item_frames.is_empty(),
+            "nothing holds the frame"
+        );
         assert_eq!(posted(), [("minecraft:block_change", center, None)]);
     }
 }

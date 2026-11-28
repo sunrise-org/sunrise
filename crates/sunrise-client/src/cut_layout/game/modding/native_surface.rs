@@ -655,7 +655,8 @@ mod tests {
                 let state = game.pack.assets.registry.default_state(block).unwrap();
                 game.world.set(5, 64, 5, state).unwrap();
                 let snapshot: Vec<_> = game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .map(|m| m.seen(None, game.items()))
                     .collect();

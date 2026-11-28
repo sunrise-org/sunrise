@@ -20,13 +20,16 @@ impl ServerGame<'_> {
         }
         // EntityType.ITEM and EXPERIENCE_ORB.
         self.common
-            .entities.dropped
+            .entities
+            .dropped
             .retain(|i| !intersects(standing(at(i.position), 0.25, 0.25), bounds));
         self.common
-            .entities.orbs
+            .entities
+            .orbs
             .retain(|o| !intersects(standing(at(o.position), 0.5, 0.5), bounds));
         self.common
-            .entities.projectiles
+            .entities
+            .projectiles
             .retain(|p| !intersects(standing(at(p.position), 0.5, 0.5), bounds));
         self.common.entities.armor_stands.retain(|a| {
             // ArmorStand.getDimensions: a marker has none, a small one is
@@ -39,10 +42,12 @@ impl ServerGame<'_> {
             !intersects(standing(at(a.position), w, h), bounds)
         });
         self.common
-            .entities.item_frames
+            .entities
+            .item_frames
             .retain(|f| !intersects(f.bounds(), bounds));
         self.common
-            .entities.paintings
+            .entities
+            .paintings
             .retain(|p| !intersects(p.bounds(), bounds));
         let (boat_w, boat_h) = (
             sunrise_gameplay_common::game::boats_common::WIDTH,
@@ -50,7 +55,8 @@ impl ServerGame<'_> {
         );
         let gone: Vec<u32> = self
             .common
-            .entities.boats
+            .entities
+            .boats
             .iter()
             .filter(|b| intersects(standing(at(b.position), boat_w, boat_h), bounds))
             .map(|b| b.id)
@@ -63,11 +69,13 @@ impl ServerGame<'_> {
         }
         let (cart_w, cart_h) = (super::minecarts::WIDTH, super::minecarts::HEIGHT);
         self.common
-            .entities.carts
+            .entities
+            .carts
             .retain(|c| !intersects(standing(at(c.position), cart_w, cart_h), bounds));
         // EntityType.END_CRYSTAL is 2 by 2.
         self.common
-            .entities.crystals
+            .entities
+            .crystals
             .retain(|c| !intersects(standing(at(c.position), 2.0, 2.0), bounds));
         // Entities Sunrise does not simulate have no box of their own: the
         // position decides.

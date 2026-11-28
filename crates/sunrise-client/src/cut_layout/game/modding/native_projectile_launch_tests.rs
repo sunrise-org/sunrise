@@ -43,7 +43,8 @@ fn owner_launch_sets_owner_before_insertion_and_uses_projectile_random() {
             .unwrap();
         assert_eq!(game.projectile_owner(shot), Some(source));
         let projectile = game
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| p.id == shot.entity().id())
             .unwrap();
@@ -80,7 +81,8 @@ fn owner_launch_sets_owner_before_insertion_and_uses_projectile_random() {
             .spawn_projectile_from_rotation(owner, &entity_type, &enchanted, 0.0, 1.5, 1.0)
             .unwrap();
         let projectile = game
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| p.id == shot.entity().id())
             .unwrap();
@@ -92,7 +94,8 @@ fn owner_launch_sets_owner_before_insertion_and_uses_projectile_random() {
             .spawn_projectile_from_rotation(owner, &potion_type, &potion, 0.0, 1.5, 1.0)
             .unwrap();
         let projectile = game
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| p.id == shot.entity().id())
             .unwrap();

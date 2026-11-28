@@ -65,13 +65,22 @@ fn thin((lo, hi): ([f64; 3], [f64; 3])) -> [bool; 3] {
 fn a_frame_turns_to_every_direction_and_its_bounds_follow() {
     with_hanging(|game| {
         let frame = game.entity(FRAME).expect("the frame's handle");
-        assert_eq!(thin(game.entities.item_frames[0].bounds()), [false, false, true]);
+        assert_eq!(
+            thin(game.entities.item_frames[0].bounds()),
+            [false, false, true]
+        );
         assert!(game.entity_set_hanging_direction(frame, Direction::West));
         assert_eq!(game.entities.item_frames[0].facing, 4);
-        assert_eq!(thin(game.entities.item_frames[0].bounds()), [true, false, false]);
+        assert_eq!(
+            thin(game.entities.item_frames[0].bounds()),
+            [true, false, false]
+        );
         assert!(game.entity_set_hanging_direction(frame, Direction::Up));
         assert_eq!(game.entities.item_frames[0].facing, 1);
-        assert_eq!(thin(game.entities.item_frames[0].bounds()), [false, true, false]);
+        assert_eq!(
+            thin(game.entities.item_frames[0].bounds()),
+            [false, true, false]
+        );
         assert!(game.entity_set_hanging_direction(frame, Direction::Down));
         assert_eq!(game.entities.item_frames[0].facing, 0);
         assert!(game.entity_set_hanging_direction(frame, Direction::South));
@@ -87,7 +96,10 @@ fn a_painting_turns_only_to_a_horizontal_direction() {
         // Its 2D data value: south 0, west 1, north 2, east 3.
         assert!(game.entity_set_hanging_direction(painting, Direction::East));
         assert_eq!(game.entities.paintings[0].facing, 3);
-        assert_eq!(thin(game.entities.paintings[0].bounds()), [true, false, false]);
+        assert_eq!(
+            thin(game.entities.paintings[0].bounds()),
+            [true, false, false]
+        );
         assert!(game.entity_set_hanging_direction(painting, Direction::North));
         assert_eq!(game.entities.paintings[0].facing, 2);
         assert!(!game.entity_set_hanging_direction(painting, Direction::Up));

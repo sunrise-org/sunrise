@@ -302,7 +302,12 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game) fn client_mob_hit(&self) -> Option<(usize, f64, [f64; 3])> {
         if let Some(hit) = self.cached_entity_pick() {
             let (entity, distance, point) = hit?;
-            let index = self.common.entities.mobs.iter().position(|m| m.id == entity.id())?;
+            let index = self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .position(|m| m.id == entity.id())?;
             let feet = self.common.entities.mobs[index].position;
             return Some((
                 index,
@@ -316,7 +321,10 @@ impl crate::game::ClientGame<'_> {
         let CrosshairDecision::Entity(hit) = self.compute_crosshair_decision() else {
             return None;
         };
-        let i = self.common.mob_index.find_ref(&self.common.entities.mobs, hit.id)?;
+        let i = self
+            .common
+            .mob_index
+            .find_ref(&self.common.entities.mobs, hit.id)?;
         let feet = self.common.entities.mobs[i].position;
         Some((
             i,
@@ -350,7 +358,8 @@ impl crate::game::ClientGame<'_> {
             let (entity, distance, _) = hit?;
             let index = self
                 .common
-                .entities.item_frames
+                .entities
+                .item_frames
                 .iter()
                 .position(|f| f.id == entity.id())?;
             return Some((index, distance));
@@ -371,7 +380,12 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game) fn client_boat_hit(&self) -> Option<(usize, f64)> {
         if let Some(hit) = self.cached_entity_pick() {
             let (entity, distance, _) = hit?;
-            let index = self.common.entities.boats.iter().position(|f| f.id == entity.id())?;
+            let index = self
+                .common
+                .entities
+                .boats
+                .iter()
+                .position(|f| f.id == entity.id())?;
             return Some((index, distance));
         }
         let (eye, dir) = self.client_aim()?;
@@ -396,7 +410,12 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game) fn client_cart_hit(&self) -> Option<(usize, f64)> {
         if let Some(hit) = self.cached_entity_pick() {
             let (entity, distance, _) = hit?;
-            let index = self.common.entities.carts.iter().position(|f| f.id == entity.id())?;
+            let index = self
+                .common
+                .entities
+                .carts
+                .iter()
+                .position(|f| f.id == entity.id())?;
             return Some((index, distance));
         }
         let (eye, dir) = self.client_aim()?;
@@ -423,7 +442,8 @@ impl crate::game::ClientGame<'_> {
             let (entity, distance, point) = hit?;
             let index = self
                 .common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .position(|f| f.id == entity.id())?;
             return Some((index, distance, point));
@@ -456,7 +476,8 @@ impl crate::game::ClientGame<'_> {
             let (entity, distance, _) = hit?;
             let index = self
                 .common
-                .entities.paintings
+                .entities
+                .paintings
                 .iter()
                 .position(|f| f.id == entity.id())?;
             return Some((index, distance));
@@ -480,7 +501,8 @@ impl crate::game::ClientGame<'_> {
             let id = entity.id();
             if let Some(d) = self
                 .common
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .filter(|d| d.id != 0 || self.client.remote.is_some())
                 && let Some(part) = dragon_part_index(d.id, id)
@@ -568,37 +590,43 @@ impl crate::game::ClientGame<'_> {
             Target::Guest(_) => None,
             Target::Mob(id) => self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| [m.position.x, m.position.y, m.position.z]),
             Target::Item(id) => self
                 .common
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .find(|i| i.id == id)
                 .map(|i| [i.position.x, i.position.y, i.position.z]),
             Target::Orb(id) => self
                 .common
-                .entities.orbs
+                .entities
+                .orbs
                 .iter()
                 .find(|o| o.id == id)
                 .map(|o| [o.position.x, o.position.y, o.position.z]),
             Target::Projectile(id) => self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|a| a.id == id)
                 .map(|a| [a.position.x, a.position.y, a.position.z]),
             Target::Stand(id) => self
                 .common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|a| a.id == id)
                 .map(|a| [a.position.x, a.position.y, a.position.z]),
             Target::Frame(id) => self
                 .common
-                .entities.item_frames
+                .entities
+                .item_frames
                 .iter()
                 .find(|f| f.id == id)
                 .map(|f| {
@@ -609,42 +637,53 @@ impl crate::game::ClientGame<'_> {
                         (lo[2] + hi[2]) / 2.0,
                     ]
                 }),
-            Target::Painting(id) => self.common.entities.paintings.iter().find(|p| p.id == id).map(|p| {
-                let (lo, hi) = p.bounds();
-                [
-                    (lo[0] + hi[0]) / 2.0,
-                    (lo[1] + hi[1]) / 2.0,
-                    (lo[2] + hi[2]) / 2.0,
-                ]
-            }),
+            Target::Painting(id) => self
+                .common
+                .entities
+                .paintings
+                .iter()
+                .find(|p| p.id == id)
+                .map(|p| {
+                    let (lo, hi) = p.bounds();
+                    [
+                        (lo[0] + hi[0]) / 2.0,
+                        (lo[1] + hi[1]) / 2.0,
+                        (lo[2] + hi[2]) / 2.0,
+                    ]
+                }),
             Target::Boat(id) => self
                 .common
-                .entities.boats
+                .entities
+                .boats
                 .iter()
                 .find(|b| b.id == id)
                 .map(|b| [b.position.x, b.position.y, b.position.z]),
             Target::Cart(id) => self
                 .common
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| [c.position.x, c.position.y, c.position.z]),
             Target::Other(_) => self.native_client_tracked(entity).map(|(_, pos)| pos),
             Target::Crystal(id) => self
                 .common
-                .entities.crystals
+                .entities
+                .crystals
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| [c.position.x, c.position.y, c.position.z]),
             Target::Dragon(id) => self
                 .common
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .filter(|d| d.id == id)
                 .map(|d| [d.position.x, d.position.y, d.position.z]),
             Target::Cushion(id) => self
                 .common
-                .entities.cushions
+                .entities
+                .cushions
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| [c.position.x, c.position.y, c.position.z]),
@@ -656,29 +695,39 @@ impl crate::game::ClientGame<'_> {
             }),
             Target::Tnt(id) => self
                 .common
-                .entities.tnts
+                .entities
+                .tnts
                 .iter()
                 .find(|t| t.id == id)
                 .map(|t| [t.position.x, t.position.y, t.position.z]),
             Target::Falling(id) => self
                 .common
-                .entities.falling
+                .entities
+                .falling
                 .iter()
                 .find(|f| f.id == id)
                 .map(|f| [f.position.x, f.position.y, f.position.z]),
             Target::Rocket(id) => self
                 .common
-                .entities.rockets
+                .entities
+                .rockets
                 .iter()
                 .find(|r| r.id == id)
                 .map(|r| [r.position.x, r.position.y, r.position.z]),
             Target::Cloud(id) => self
                 .common
-                .entities.breath_clouds
+                .entities
+                .breath_clouds
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.at),
-            Target::Bolt(id) => self.common.entities.bolts.iter().find(|b| b.id == id).map(|b| b.at),
+            Target::Bolt(id) => self
+                .common
+                .entities
+                .bolts
+                .iter()
+                .find(|b| b.id == id)
+                .map(|b| b.at),
             Target::Hook(id) => self
                 .common
                 .hook
@@ -694,20 +743,23 @@ impl crate::game::ClientGame<'_> {
                 }),
             Target::Trident(id) => self
                 .common
-                .entities.tridents
+                .entities
+                .tridents
                 .iter()
                 .find(|t| t.id == id)
                 .map(|t| [t.position.x, t.position.y, t.position.z]),
             Target::Fangs(id) => self
                 .common
-                .entities.fangs
+                .entities
+                .fangs
                 .list
                 .iter()
                 .find(|f| f.id == id)
                 .map(|f| f.pos),
             Target::Spawner(id) => self
                 .common
-                .entities.ominous_spawners
+                .entities
+                .ominous_spawners
                 .iter()
                 .find(|s| s.id == id)
                 .map(|s| s.position),
@@ -718,7 +770,8 @@ impl crate::game::ClientGame<'_> {
                 .copied()
                 .or_else(|| {
                     self.common
-                        .entities.knots
+                        .entities
+                        .knots
                         .iter()
                         .find(|k| k.id == id)
                         .map(|k| k.fence)
@@ -729,7 +782,8 @@ impl crate::game::ClientGame<'_> {
                 }),
             Target::General(id) => self
                 .common
-                .entities.general
+                .entities
+                .general
                 .row(id)
                 .map(|row| [row.position.x, row.position.y, row.position.z])
                 .or_else(|| {

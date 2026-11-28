@@ -1182,7 +1182,8 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn fight_bar_progress(&mut self) {
         self.server.fight.bar_progress = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .map_or(1.0, |d| (d.health / MAX_HEALTH).clamp(0.0, 1.0));
     }
@@ -1291,7 +1292,8 @@ impl crate::game::ServerGame<'_> {
             );
             if self
                 .common
-                .entities.crystals
+                .entities
+                .crystals
                 .iter()
                 .any(|c| (c.position.x - at.x).abs() < 1.0 && (c.position.z - at.z).abs() < 1.0)
             {
@@ -1305,9 +1307,12 @@ impl crate::game::ServerGame<'_> {
                 .persist
                 .uuids
                 .insert(self.server.next_entity, uuid);
-            self.common
-                .entities.crystals
-                .push(Crystal::new(self.server.next_entity, at, true, time));
+            self.common.entities.crystals.push(Crystal::new(
+                self.server.next_entity,
+                at,
+                true,
+                time,
+            ));
             self.common
                 .world
                 .modified
@@ -1320,7 +1325,8 @@ impl crate::game::ServerGame<'_> {
         let spikes = sunrise_world::worldgen::end_spike::spikes_for_seed(self.common.level.seed);
         self.server.fight.alive_crystals = self
             .common
-            .entities.crystals
+            .entities
+            .crystals
             .iter()
             .filter(|c| {
                 spikes.iter().any(|s| {
@@ -1369,7 +1375,9 @@ impl crate::game::ServerGame<'_> {
         by: Option<FightWho>,
         damage: CrystalDamage,
     ) {
-        if index >= self.common.entities.crystals.len() || self.common.entities.crystals[index].invulnerable {
+        if index >= self.common.entities.crystals.len()
+            || self.common.entities.crystals[index].invulnerable
+        {
             return;
         }
         let c = self.common.entities.crystals.remove(index);
@@ -1543,7 +1551,13 @@ impl crate::game::ServerGame<'_> {
         damage_type_override: Option<&str>,
         direct: Option<DirectHit<'_>>,
     ) -> Hurt {
-        if let Some(index) = self.common.entities.crystals.iter().position(|c| c.id == id) {
+        if let Some(index) = self
+            .common
+            .entities
+            .crystals
+            .iter()
+            .position(|c| c.id == id)
+        {
             // EndCrystal.hurtServer: false while invulnerable and for fire
             // (its type is fire immune), else it blows up.
             let crystal = &self.common.entities.crystals[index];
@@ -1591,7 +1605,13 @@ impl crate::game::ServerGame<'_> {
             } else if vanilla {
                 return Hurt::Refused;
             }
-            let Some(index) = self.common.entities.crystals.iter().position(|c| c.id == id) else {
+            let Some(index) = self
+                .common
+                .entities
+                .crystals
+                .iter()
+                .position(|c| c.id == id)
+            else {
                 return Hurt::Refused;
             };
             let by = by_player.then(|| guest.map_or_else(|| self.acting_player(), FightWho::Guest));
@@ -1684,7 +1704,8 @@ impl crate::game::ServerGame<'_> {
         let direct = match by {
             Some(Target::Projectile(p)) => self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|q| q.id == p)
                 .map(|q| q.kind.clone()),
@@ -1697,7 +1718,13 @@ impl crate::game::ServerGame<'_> {
         let creative = self.creative_source_of(cause.or(by));
         let saved = self.saved_refuses_damage(id, ty, creative);
         let vanilla = saved || is_fire(kind);
-        if self.common.entities.dragon.as_ref().is_none_or(|d| d.id != id) {
+        if self
+            .common
+            .entities
+            .dragon
+            .as_ref()
+            .is_none_or(|d| d.id != id)
+        {
             return false;
         }
         let hooks = DragonHitHooks::capture();
@@ -1828,7 +1855,13 @@ impl crate::game::ServerGame<'_> {
         cause: Option<Target>,
         position: Option<[f64; 3]>,
     ) -> bool {
-        let Some(index) = self.common.entities.crystals.iter().position(|c| c.id == id) else {
+        let Some(index) = self
+            .common
+            .entities
+            .crystals
+            .iter()
+            .position(|c| c.id == id)
+        else {
             return false;
         };
         let creative = cause
@@ -1836,7 +1869,8 @@ impl crate::game::ServerGame<'_> {
             .and_then(|t| self.for_player(t, |g| g.creative))
             .unwrap_or(false);
         let bypass = self.damage_in_tag(ty, "minecraft:bypasses_invulnerability") || creative;
-        let vanilla = (self.common.entities.crystals[index].invulnerable && !bypass) || is_fire(kind);
+        let vanilla =
+            (self.common.entities.crystals[index].invulnerable && !bypass) || is_fire(kind);
         let entity_id = |target| match target {
             Some(Target::Player) => self.own_entity_id(),
             Some(Target::Guest(conn)) => self.command_guest(conn).map_or(0, |g| g.entity_id),
@@ -1929,7 +1963,8 @@ impl crate::game::ServerGame<'_> {
     /// read: its saved attributes over the type's default. 0 without a dragon.
     pub fn dragon_knockback_resistance(&self) -> f64 {
         self.common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .and_then(|d| {
                 d.live.read(
@@ -1984,7 +2019,8 @@ impl crate::game::ServerGame<'_> {
         if !origin.invulnerability_checked
             && self
                 .common
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .is_some_and(|d| d.reaches_base_check(part, damage, counts, shrugs(origin.direct)))
         {
@@ -2081,7 +2117,8 @@ impl crate::game::ServerGame<'_> {
                 && !game.target_removed(&Target::Dragon(id))
                 && game
                     .common
-                    .entities.dragon
+                    .entities
+                    .dragon
                     .as_ref()
                     .is_some_and(|d| d.id == id && d.join == join)
         };
@@ -2444,7 +2481,8 @@ impl crate::game::ServerGame<'_> {
                             nearest_enemy(&players, peaceful, egg, None, |_| true)
                         {
                             let dist = nearest.position.distance_squared(egg_centre) / 512.0;
-                            let r = &mut self.common.entities.dragon.as_mut().expect("dragon").random;
+                            let r =
+                                &mut self.common.entities.dragon.as_mut().expect("dragon").random;
                             if r.next_int_bound((dist + 2.0) as i32).unwrap_or(1) == 0
                                 || r.next_int_bound(crystals + 2).unwrap_or(1) == 0
                             {
@@ -2488,7 +2526,12 @@ impl crate::game::ServerGame<'_> {
                     });
                     self.common.entities.dragon.as_mut().expect("dragon").phase = phase;
                     if let Some(n) = next {
-                        self.common.entities.dragon.as_mut().expect("dragon").set_phase(n);
+                        self.common
+                            .entities
+                            .dragon
+                            .as_mut()
+                            .expect("dragon")
+                            .set_phase(n);
                     }
                     return;
                 };
@@ -2582,7 +2625,12 @@ impl crate::game::ServerGame<'_> {
             Phase::Landing { target } => {
                 let t = *target.get_or_insert(podium);
                 if (t.x - pos.x).powi(2) + (t.y - pos.y).powi(2) + (t.z - pos.z).powi(2) < 1.0 {
-                    self.common.entities.dragon.as_mut().expect("dragon").flame_count = 0;
+                    self.common
+                        .entities
+                        .dragon
+                        .as_mut()
+                        .expect("dragon")
+                        .flame_count = 0;
                     next = Some(Phase::Scanning { time: 0 });
                 }
             }
@@ -2665,7 +2713,12 @@ impl crate::game::ServerGame<'_> {
             Phase::Flaming { ticks } => {
                 *ticks += 1;
                 if *ticks >= 200 {
-                    let count = self.common.entities.dragon.as_ref().map_or(0, |d| d.flame_count);
+                    let count = self
+                        .common
+                        .entities
+                        .dragon
+                        .as_ref()
+                        .map_or(0, |d| d.flame_count);
                     next = Some(if count >= 4 {
                         Phase::Takeoff {
                             first: true,
@@ -2782,7 +2835,8 @@ impl crate::game::ServerGame<'_> {
         // updateDragon runs when the fight dragon ticks or dies, but not with NoAI.
         let ticks = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .is_some_and(|d| !d.alive() || !d.no_ai);
         if ticks && self.is_fight_dragon() {
@@ -2799,7 +2853,8 @@ impl crate::game::ServerGame<'_> {
         }
         let target_dead = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .and_then(|d| d.last_hurt_mob)
             .is_some_and(|(id, _)| !self.last_hurt_target_alive(id));
@@ -2873,7 +2928,12 @@ impl crate::game::ServerGame<'_> {
         if d.random.next_int_bound(10).unwrap_or(1) == 0 {
             let p = d.position;
             let nearest = self.common.nearest_crystal_to(p);
-            self.common.entities.dragon.as_mut().expect("dragon").nearest_crystal = nearest;
+            self.common
+                .entities
+                .dragon
+                .as_mut()
+                .expect("dragon")
+                .nearest_crystal = nearest;
         }
         let d = self.common.entities.dragon.as_mut().expect("dragon");
         d.yaw = wrap(d.yaw);
@@ -3035,7 +3095,8 @@ impl crate::game::ServerGame<'_> {
             // Keep team lookup in Game (including tamed pets' owner teams).
             let allowed: Vec<bool> = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .map(|m| {
                     sunrise_game_data::scoreboard::teams_allow_damage(
@@ -3085,7 +3146,8 @@ impl crate::game::ServerGame<'_> {
     pub fn dragon_silent(&self) -> bool {
         let raw = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|d| d.id != 0)
             .and_then(|d| self.common.persist.raw.get(&d.id));
@@ -3145,7 +3207,8 @@ impl crate::game::ServerGame<'_> {
             .map(|p| (p.bounds, p.position))
             .chain(
                 self.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .filter(|m| m.alive())
                     .map(|m| (m.bounds(), m.position)),
@@ -3187,7 +3250,8 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn end_dragon_flame(&mut self) {
         if self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_mut()
             .is_some_and(|d| std::mem::take(&mut d.flame_ended))
         {
@@ -3204,13 +3268,19 @@ impl crate::game::ServerGame<'_> {
         // AreaEffectCloud.serverTick: every living entity, the mobs that
         // instant damage can affect (`canBeAffected`) too; only while a
         // breath cloud is there (lingering potions' clouds tick elsewhere).
-        let no_breath = self.common.entities.breath_clouds.iter().all(|c| c.potion.is_some());
+        let no_breath = self
+            .common
+            .entities
+            .breath_clouds
+            .iter()
+            .all(|c| c.potion.is_some());
         let mobs: Vec<(u32, Aabb, Vec3)> = if no_breath {
             Vec::new()
         } else {
             let tags = &self.items().entity_type_tags;
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .filter(|m| {
                     m.alive()
@@ -3278,7 +3348,8 @@ impl crate::game::ServerGame<'_> {
             true
         });
         self.common
-            .entities.breath_clouds
+            .entities
+            .breath_clouds
             .restore(clouds, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
         for (who, amount) in harmed {
             self.as_fight_player(who, |g| {
@@ -3308,12 +3379,18 @@ impl crate::game::ServerGame<'_> {
         if hurts {
             let origin = self
                 .common
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .map(|d| [d.position.x, d.position.y, d.position.z]);
             let blocking = self.player_blocking(origin, "minecraft:mob_attack", false);
             let attack = self.current_attack();
-            let causing = self.common.entities.dragon.as_ref().map_or(0, |d| d.id as i32);
+            let causing = self
+                .common
+                .entities
+                .dragon
+                .as_ref()
+                .map_or(0, |d| d.id as i32);
             if let Some(id) = self
                 .common
                 .health_resources
@@ -3507,7 +3584,8 @@ impl crate::game::ServerGame<'_> {
         };
         let crystals: Vec<Vec3> = self
             .common
-            .entities.crystals
+            .entities
+            .crystals
             .iter()
             .filter(|c| in_reach(c.position) && self.server.combat.0.visits(c.id))
             .map(|c| c.position)
@@ -3516,7 +3594,13 @@ impl crate::game::ServerGame<'_> {
         let by = self.server.fight.blast_by;
         for at in crystals {
             // Look up the current index after each removal.
-            if let Some(i) = self.common.entities.crystals.iter().position(|c| c.position == at) {
+            if let Some(i) = self
+                .common
+                .entities
+                .crystals
+                .iter()
+                .position(|c| c.position == at)
+            {
                 let id = self.common.entities.crystals[i].id;
                 let causing = self.blast_attacker().map_or(0, |(id, _)| id as i32);
                 let vanilla = self.common.entities.crystals[i].invulnerable
@@ -3538,7 +3622,8 @@ impl crate::game::ServerGame<'_> {
         }
         let Some(d) = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|d| self.server.combat.0.visits(d.id))
         else {
@@ -3579,7 +3664,8 @@ impl crate::game::ServerGame<'_> {
         }
         let Some((id, mut push)) = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .and_then(|d| Some((d.id, d.explosion_knockback(center, radius, exposure)?)))
         else {
@@ -3715,7 +3801,8 @@ impl crate::game::ServerGame<'_> {
         // the crystal is an entity a command can name (`@e[type=end_crystal]`).
         self.server.next_entity += 1;
         self.common
-            .entities.crystals
+            .entities
+            .crystals
             .push(Crystal::new(self.server.next_entity, at, false, time));
         // EndCrystalItem.useOn: ENTITY_PLACE at the block above, by the player.
         self.post_block_game_event("minecraft:entity_place", above, self.sculk_actor(), None);
@@ -3737,7 +3824,13 @@ impl crate::game::ServerGame<'_> {
     /// `EndCrystal.kill` (`/kill`): the crystal is removed, without a blast
     /// (`Entity.kill` does not hurt it).
     pub(in crate::game::server_side) fn kill_crystal(&mut self, id: u32) {
-        if let Some(i) = self.common.entities.crystals.iter().position(|c| c.id == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .crystals
+            .iter()
+            .position(|c| c.id == id)
+        {
             let c = self.common.entities.crystals[i].clone();
             let respawn = self.server.fight.respawn.is_some()
                 && self
@@ -3747,7 +3840,10 @@ impl crate::game::ServerGame<'_> {
                     .iter()
                     .any(|p| p.distance_squared(c.position) < 0.01);
             self.crystal_destroyed(i, &c, None, respawn);
-            self.common.entities.crystals.retain(|crystal| crystal.id != id);
+            self.common
+                .entities
+                .crystals
+                .retain(|crystal| crystal.id != id);
             self.entity_killed_event([c.position.x, c.position.y, c.position.z], false);
         }
     }
@@ -3801,7 +3897,8 @@ impl crate::game::ServerGame<'_> {
             let lo = Vec3::new(f64::from(cell[0]), f64::from(cell[1]), f64::from(cell[2]));
             let hits: Vec<Vec3> = self
                 .common
-                .entities.crystals
+                .entities
+                .crystals
                 .iter()
                 .filter(|c| {
                     let p = c.position;
@@ -3865,7 +3962,8 @@ impl crate::game::ServerGame<'_> {
         };
         let alive = self.server.fight.respawn_crystals.iter().any(|p| {
             self.common
-                .entities.crystals
+                .entities
+                .crystals
                 .iter()
                 .any(|c| p.distance_squared(c.position) < 0.01)
         });
@@ -4010,7 +4108,8 @@ impl crate::game::ServerGame<'_> {
         }
         let at = Vec3::new(f64::from(cx) + 0.5, f64::from(h + 1), f64::from(cz) + 0.5);
         self.common
-            .entities.crystals
+            .entities
+            .crystals
             .retain(|c| c.position.distance_squared(at) > 0.01);
         let (drawn, _) = Crystal::own_draws();
         let time = Crystal::start_time(at, drawn, self.common.clock.still());
@@ -4083,7 +4182,13 @@ impl crate::game::ServerGame<'_> {
     /// `EnderDragonFight.findOrCreateDragon`: the End's dragon becomes the
     /// fight's, or a new one is made.
     pub(in crate::game::server_side) fn find_or_create_dragon(&mut self) {
-        match self.common.entities.dragon.as_ref().map(|d| (d.id, d.alive())) {
+        match self
+            .common
+            .entities
+            .dragon
+            .as_ref()
+            .map(|d| (d.id, d.alive()))
+        {
             None => self.create_new_dragon(),
             Some((id, true)) => {
                 self.server.fight.dragon_uuid = Some(self.uuid_for(id));
@@ -4104,7 +4209,8 @@ impl crate::game::ServerGame<'_> {
         self.server.fight.previously_killed = active;
         match self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|d| d.alive())
             .map(|d| d.id)
@@ -4149,7 +4255,8 @@ impl crate::game::ServerGame<'_> {
         for p in list {
             if let Some(i) = self
                 .common
-                .entities.crystals
+                .entities
+                .crystals
                 .iter()
                 .position(|c| c.position.distance_squared(p) < 0.01)
             {
@@ -4177,15 +4284,16 @@ impl crate::game::ServerGame<'_> {
         // setRespawnStage(END): the new dragon is summoned for every player
         // of the fight (the boss bar's players: alive within 192 blocks).
         self.create_new_dragon();
-        let view = self
-            .common
-            .entities.dragon
-            .as_ref()
-            .map(|d| sunrise_sim::advancements::EntityView {
-                kind: "minecraft:ender_dragon".to_owned(),
-                position: [d.position.x, d.position.y, d.position.z],
-                ..Default::default()
-            });
+        let view =
+            self.common
+                .entities
+                .dragon
+                .as_ref()
+                .map(|d| sunrise_sim::advancements::EntityView {
+                    kind: "minecraft:ender_dragon".to_owned(),
+                    position: [d.position.x, d.position.y, d.position.z],
+                    ..Default::default()
+                });
         if let Some(view) = view {
             self.for_each_player(|g| {
                 let near = g.player.as_ref().is_some_and(|p| {
@@ -5494,7 +5602,8 @@ pub(in crate::game) mod tests {
                     .expect("a summoned dragon");
                 let left_handed = game
                     .common
-                    .entities.dragon
+                    .entities
+                    .dragon
                     .as_ref()
                     .expect("the spawned dragon")
                     .left_handed;

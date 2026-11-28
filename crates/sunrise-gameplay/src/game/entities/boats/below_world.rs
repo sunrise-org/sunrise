@@ -24,7 +24,9 @@ impl ServerGame<'_> {
         ) {
             return false;
         }
-        self.kill_vehicle_object(crate::game::commands::Target::Boat(self.common.entities.boats[i].id));
+        self.kill_vehicle_object(crate::game::commands::Target::Boat(
+            self.common.entities.boats[i].id,
+        ));
         true
     }
 

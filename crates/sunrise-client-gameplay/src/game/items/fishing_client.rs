@@ -296,7 +296,8 @@ impl crate::game::ClientGame<'_> {
             let before = h.position;
             let owner = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == h.owner)
                 .map(|m| m.position);

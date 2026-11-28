@@ -120,7 +120,12 @@ fn neutral_mob_load_notifies_target_even_without_saved_anger() {
             let pig = game.load_mob(entity("minecraft:pig"), None).unwrap();
             for id in [wolf, golem, pig] {
                 assert_eq!(
-                    game.entities.mobs.iter().find(|mob| mob.id == id).unwrap().position,
+                    game.entities
+                        .mobs
+                        .iter()
+                        .find(|mob| mob.id == id)
+                        .unwrap()
+                        .position,
                     Vec3::ZERO
                 );
             }
@@ -134,7 +139,12 @@ fn neutral_mob_load_notifies_target_even_without_saved_anger() {
                     Tag::compound([("id", Tag::String("minecraft:pig".into())), ("Pos", pos)]);
                 let id = game.load_mob(raw, None).unwrap();
                 assert_eq!(
-                    game.entities.mobs.iter().find(|mob| mob.id == id).unwrap().position,
+                    game.entities
+                        .mobs
+                        .iter()
+                        .find(|mob| mob.id == id)
+                        .unwrap()
+                        .position,
                     Vec3::ZERO
                 );
             }

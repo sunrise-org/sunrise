@@ -113,7 +113,13 @@ impl ServerGame<'_> {
         if let Some(i) = self.common.entities.carts.iter().position(|m| m.id == id) {
             return Some(EntityHandle::Cart(i));
         }
-        if let Some(i) = self.common.entities.armor_stands.iter().position(|m| m.id == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .position(|m| m.id == id)
+        {
             return Some(EntityHandle::ArmorStand(i));
         }
         if let Some(i) = self.common.entities.tnts.iter().position(|m| m.id == id) {
@@ -127,7 +133,8 @@ impl ServerGame<'_> {
         }
         if let Some(i) = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .position(|m| m.id == id)
         {
@@ -136,12 +143,19 @@ impl ServerGame<'_> {
         if let Some(i) = self.common.entities.rockets.iter().position(|m| m.id == id) {
             return Some(EntityHandle::Rocket(i));
         }
-        if let Some(i) = self.common.entities.tridents.iter().position(|m| m.id == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .tridents
+            .iter()
+            .position(|m| m.id == id)
+        {
             return Some(EntityHandle::Trident(i));
         }
         if let Some(i) = self
             .common
-            .entities.general
+            .entities
+            .general
             .rows
             .iter()
             .position(|m| m.id == id)

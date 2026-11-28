@@ -143,7 +143,8 @@ impl crate::game::ServerGame<'_> {
         }
         let Some(p) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id)
             .map(|m| m.position)
@@ -166,7 +167,13 @@ impl crate::game::ServerGame<'_> {
         let free = |m: &sunrise_sim::mobs::Mob| {
             !spear_use::is_using_item(m) && !spear_use::counts_own_timer(m)
         };
-        if !self.common.entities.mobs.iter().any(|m| m.id == id && free(m)) {
+        if !self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .any(|m| m.id == id && free(m))
+        {
             return false;
         }
         let Some(stack) = self.mob_hand_stack(id, off_hand) else {
@@ -188,7 +195,8 @@ impl crate::game::ServerGame<'_> {
         // The hook may have changed the mob: the same checks again.
         let started = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == id)
             .is_some_and(|m| free(m) && spear_use::start_using_item(m, off_hand));

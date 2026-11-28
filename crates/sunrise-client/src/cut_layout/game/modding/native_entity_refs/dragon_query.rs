@@ -77,7 +77,8 @@ mod tests {
             let distant_x = 1_000_000;
             prepare_entity_ticking_neighborhood(game, ChunkPos::new(distant_x >> 4, 0));
             let distant_position = Vec3::new(f64::from(distant_x), 64.0, 0.0);
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(90, kind.clone(), distant_position, 0.0));
             let mut dragon = Dragon::new(Vec3::new(0.0, 80.0, 0.0), 0.0, 0);
             dragon.id = 20;
@@ -195,23 +196,25 @@ mod tests {
         with_resident_game(|game| {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             game.entities.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
-            game.entities.item_frames.push(sunrise_sim::entities::ItemFrame {
-                attachment_lifetime: Default::default(),
-                join: Default::default(),
-                id: 13,
-                pos: [0, 0, 0],
-                facing: 3,
-                glow: false,
-                item: None,
-                rotation: 0,
-                drop_chance: 1.0,
-                fixed: false,
-                invisible: false,
-                custom_name: None,
-                random: sunrise_core::random::LegacyRandom::new(0),
-                check_interval: 0,
-                ticks: 0,
-            });
+            game.entities
+                .item_frames
+                .push(sunrise_sim::entities::ItemFrame {
+                    attachment_lifetime: Default::default(),
+                    join: Default::default(),
+                    id: 13,
+                    pos: [0, 0, 0],
+                    facing: 3,
+                    glow: false,
+                    item: None,
+                    rotation: 0,
+                    drop_chance: 1.0,
+                    fixed: false,
+                    invisible: false,
+                    custom_name: None,
+                    random: sunrise_core::random::LegacyRandom::new(0),
+                    check_interval: 0,
+                    ticks: 0,
+                });
             let mut dragon = Dragon::new(Vec3::new(0.0, 80.0, 0.0), 0.0, 0);
             dragon.id = 20;
             game.entities.dragon.replace(dragon);
@@ -262,7 +265,8 @@ mod tests {
                 (10, 1.5),
                 (30, 0.0),
             ] {
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(id, kind.clone(), Vec3::new(x, 64.0, 0.0), 0.0));
             }
             let level = game.level(game.dim.id()).unwrap();
@@ -377,7 +381,8 @@ mod tests {
     fn entities_in_includes_dragon_and_separate_parts() {
         with_resident_game(|game| {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, kind, Vec3::new(5.0, 64.0, 5.0), 0.0));
             let level = game.level(game.dim.id()).unwrap();
             let query = |game: &sunrise_gameplay::game::ServerGame<'_>, lo, hi| {

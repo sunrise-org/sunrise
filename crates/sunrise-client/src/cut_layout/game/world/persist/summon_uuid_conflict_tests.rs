@@ -43,7 +43,8 @@ fn constructed_and_saved_mob_uuids_survive_repeated_reconstruction() {
             let uuid = saved_uuid.unwrap_or(CONSTRUCTOR_UUID);
             assert_eq!(game.persist.uuid_of(id), Some(uuid));
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|mob| mob.id == id)
                     .unwrap()
@@ -61,7 +62,8 @@ fn constructed_and_saved_mob_uuids_survive_repeated_reconstruction() {
                 id = game.load_mob(tag, None).unwrap();
                 assert_eq!(game.persist.uuid_of(id), Some(uuid));
                 assert_eq!(
-                    game.entities.mobs
+                    game.entities
+                        .mobs
                         .iter()
                         .find(|mob| mob.id == id)
                         .unwrap()
@@ -176,14 +178,21 @@ fn live(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> Vec<u32> {
     ids
 }
 fn mob_tagged(game: &sunrise_gameplay::game::ServerGame<'_>, tag: &str) -> Vec<u32> {
-    game.entities.mobs
+    game.entities
+        .mobs
         .iter()
         .filter(|m| game.tags_of(Target::Mob(m.id)).iter().any(|t| t == tag))
         .map(|m| m.id)
         .collect()
 }
 fn mount(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Option<u32> {
-    game.entities.mobs.iter().find(|m| m.id == id).unwrap().extra.mount
+    game.entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .extra
+        .mount
 }
 /// The first tag and the UUID of each saved passenger of mob `id`, in order.
 fn saved_riders(
@@ -431,7 +440,8 @@ fn summon_refuses_a_tree_holding_a_live_uuid() {
     with_game(|game, existing| {
         let stand = live(game, 150);
         let existing_at = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == existing)
             .unwrap()
@@ -533,7 +543,8 @@ fn summon_refuses_a_tree_holding_a_live_uuid() {
         }
 
         let after = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == existing)
             .unwrap()

@@ -893,7 +893,11 @@ impl ClientGame<'_> {
         if let Some(d) = self.client.text_displays.0.get(&(id as i32)) {
             return Some(d.position);
         }
-        if let Some(i) = self.common.mob_index.find_ref(&self.common.entities.mobs, id) {
+        if let Some(i) = self
+            .common
+            .mob_index
+            .find_ref(&self.common.entities.mobs, id)
+        {
             let m = &self.common.entities.mobs[i];
             return Some(glam::DVec3::new(m.position.x, m.position.y, m.position.z));
         }
@@ -903,7 +907,13 @@ impl ClientGame<'_> {
         if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == id) {
             return Some(glam::DVec3::new(c.position.x, c.position.y, c.position.z));
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == id)
+        {
             return Some(glam::DVec3::new(a.position.x, a.position.y, a.position.z));
         }
         if let Some(i) = self.client.interactions.get(&(id as i32)) {

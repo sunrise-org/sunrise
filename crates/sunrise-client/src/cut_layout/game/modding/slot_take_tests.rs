@@ -1387,7 +1387,11 @@ fn a_partial_mod_craft_keeps_crafting_bookkeeping_but_not_item_crafted() {
             assert_eq!(in_pot(game, 0), u32::from(!success));
             assert_eq!(held(game, 0), (if success { 64 } else { 62 }, 0));
             assert_eq!(
-                game.entities.dropped.iter().map(|e| e.stack.count).sum::<u32>(),
+                game.entities
+                    .dropped
+                    .iter()
+                    .map(|e| e.stack.count)
+                    .sum::<u32>(),
                 if success { 2 } else { 0 }
             );
             let host = game.server.lan.as_ref().unwrap();

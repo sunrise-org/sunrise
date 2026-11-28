@@ -84,7 +84,8 @@ fn brainless_villager_wakes_before_damage_listeners() {
                 .get("minecraft:villager")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(id, kind, Vec3::new(3.5, 100.0, 4.5), 0.0));
             let mob = game.entities.mobs.last_mut().unwrap();
             let job = [2, 100, 4];
@@ -632,7 +633,13 @@ fn killing_blow(cancel: bool) -> (Vec<(&'static str, i64)>, f32) {
             );
             game.tick_creature_entities().unwrap();
             game.tick_creature_entities().unwrap();
-            health = game.entities.mobs.iter().find(|m| m.id == 225017).unwrap().health;
+            health = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == 225017)
+                .unwrap()
+                .health;
         });
     });
     let heard = std::mem::take(&mut *probe.heard.lock().unwrap());
@@ -2516,13 +2523,19 @@ fn arrow_hits_name_the_projectile_on_players_mobs_and_the_dragon() {
             player.entity_id = 7;
             game.player = Some(player);
             game.set_game_mode(GameMode::Survival);
-            game.common.entities.mobs.push(mob(game, 42, "minecraft:skeleton"));
+            game.common
+                .entities
+                .mobs
+                .push(mob(game, 42, "minecraft:skeleton"));
             game.entities.mobs[0]
                 .extra
                 .set_main_hand_stack(Some(ItemStack::new("minecraft:stone_sword", 1)));
             *game.held_mut() = Some(ItemStack::new("minecraft:stone_sword", 1));
             game.offhand = Some(ItemStack::new("minecraft:crossbow", 1));
-            game.common.entities.mobs.push(mob(game, 43, "minecraft:pig"));
+            game.common
+                .entities
+                .mobs
+                .push(mob(game, 43, "minecraft:pig"));
             let mut dragon = Dragon::new(Vec3::ZERO, 0.0, 0);
             // Hover is a sitting phase and correctly shrugs off arrows.
             dragon.set_native_phase(mod_api::DragonPhase::HoldingPattern);
@@ -2571,9 +2584,25 @@ fn arrow_hits_name_the_projectile_on_players_mobs_and_the_dragon() {
                 Who::Mob(SPECIAL) => assert!(game.entities.dragon.as_ref().unwrap().health < 200.0),
                 Who::Mob(_) => {
                     if owner.is_some() && !gone {
-                        assert_eq!(game.entities.mobs.iter().find(|m| m.id == 43).unwrap().health, 9.0);
+                        assert_eq!(
+                            game.entities
+                                .mobs
+                                .iter()
+                                .find(|m| m.id == 43)
+                                .unwrap()
+                                .health,
+                            9.0
+                        );
                     } else {
-                        assert!(game.entities.mobs.iter().find(|m| m.id == 43).unwrap().health < 9.0);
+                        assert!(
+                            game.entities
+                                .mobs
+                                .iter()
+                                .find(|m| m.id == 43)
+                                .unwrap()
+                                .health
+                                < 9.0
+                        );
                     }
                 }
             }
@@ -2634,7 +2663,10 @@ fn guest_projectile_uses_current_main_hand_or_none_after_departure() {
                         guest.inventory[3] = Some(ItemStack::new("minecraft:stone_sword", 1));
                     })
                     .unwrap();
-                game.common.entities.mobs.push(mob(game, 43, "minecraft:pig"));
+                game.common
+                    .entities
+                    .mobs
+                    .push(mob(game, 43, "minecraft:pig"));
                 let mut arrow = Projectile::new(
                     ProjectileKind::Arrow {
                         base_damage: 2.0,
@@ -2676,7 +2708,13 @@ fn guest_projectile_uses_current_main_hand_or_none_after_departure() {
                     },
                 )
                 .unwrap();
-                let health = game.entities.mobs.iter().find(|m| m.id == 43).unwrap().health;
+                let health = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == 43)
+                    .unwrap()
+                    .health;
                 if gone {
                     assert!(health < 9.0);
                 } else {
@@ -2740,7 +2778,8 @@ fn a_player_blast_names_its_direct_entity_and_centre() {
             .get("minecraft:creeper")
             .unwrap()
             .clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(42, kind, Vec3::new(10.0, 0.0, 0.0), 0.0));
         game.server.combat.0.explosion_source = Some(42);
         let blast = sunrise_gameplay::game::server_side::explosion::ExplosionSource::default()
@@ -2784,10 +2823,12 @@ fn a_mob_blast_keeps_its_direct_entity_and_centre() {
             .get("minecraft:creeper")
             .unwrap()
             .clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(42, kind, Vec3::new(10.0, 0.0, 0.0), 0.0));
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(43, kind, Vec3::new(0.0, 0.0, 0.0), 0.0));
         game.server.combat.0.explosion_source = Some(42);
         let blast = sunrise_gameplay::game::server_side::explosion::ExplosionSource::default()
@@ -2798,7 +2839,12 @@ fn a_mob_blast_keeps_its_direct_entity_and_centre() {
             );
         game.explode(Some(42), [0.0, 0.0, 0.0], 3.0, blast).unwrap();
         game.server.combat.0.explosion_source = None;
-        assert!(game.entities.mobs.iter().any(|m| m.id == 43 && m.health < 10.0));
+        assert!(
+            game.entities
+                .mobs
+                .iter()
+                .any(|m| m.id == 43 && m.health < 10.0)
+        );
     });
     assert_eq!(
         heard.sources,

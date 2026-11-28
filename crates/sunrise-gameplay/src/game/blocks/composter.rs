@@ -249,7 +249,8 @@ impl crate::game::ServerGame<'_> {
             if remaining <= 0 {
                 break;
             }
-            let stack = villager::ext_mut(&mut self.common.entities.mobs[mob]).inventory[slot].clone();
+            let stack =
+                villager::ext_mut(&mut self.common.entities.mobs[mob]).inventory[slot].clone();
             if !maps.villager_compostable(&stack.item) {
                 continue;
             }

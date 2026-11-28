@@ -283,7 +283,8 @@ fn a_part_names_its_stacks_everywhere_the_game_names_them() {
                 move |game| {
                     with_command_player(game, |game| {
                         let zombie = game
-                            .entities.mobs
+                            .entities
+                            .mobs
                             .iter_mut()
                             .find(|m| m.kind.id == "minecraft:zombie")
                             .expect("the summoned zombie");

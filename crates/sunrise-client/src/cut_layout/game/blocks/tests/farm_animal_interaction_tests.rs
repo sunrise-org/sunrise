@@ -70,7 +70,8 @@ fn game_at<'a>(
 fn spawn(game: &mut sunrise_gameplay::game::ServerGame<'_>, kind: &str, id: u32, at: [f64; 3]) {
     game.entities.mobs.clear();
     let kind = game.res.mob_types().get(kind).unwrap().clone();
-    game.entities.mobs
+    game.entities
+        .mobs
         .push(Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0));
 }
 

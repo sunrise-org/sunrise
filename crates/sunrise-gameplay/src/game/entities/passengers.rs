@@ -68,7 +68,8 @@ impl ServerGame<'_> {
             .map(|m| (m.id, m.extra.mount))
             .collect();
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter_map(|m| {
                 let mut mount = m.extra.mount;
@@ -135,14 +136,16 @@ impl ServerGame<'_> {
             self.common.entities.cushions.iter().map(|c| c.id).collect();
         let tnts: std::collections::HashSet<u32> = self
             .common
-            .entities.tnts
+            .entities
+            .tnts
             .iter()
             .map(|t| t.id)
             .filter(|&id| id != 0)
             .collect();
         let index: HashMap<u32, usize> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .enumerate()
             .map(|(i, m)| (m.id, i))
@@ -160,7 +163,9 @@ impl ServerGame<'_> {
                     || tnts.contains(&v)
                     || cushions.contains(&v)
                     || self.seat(v).is_some()
-                    || index.get(&v).is_some_and(|&j| !self.common.entities.mobs[j].removed)
+                    || index
+                        .get(&v)
+                        .is_some_and(|&j| !self.common.entities.mobs[j].removed)
                     || self.player_vehicle(v).is_some());
             if valid {
                 let place = (
@@ -199,7 +204,12 @@ impl ServerGame<'_> {
                     || self.boat_object(v).is_some()
                     || self.cart_object(v).is_some()
                     || self.common.entities.cushions.iter().any(|c| c.id == v)
-                    || self.common.entities.tnts.iter().any(|t| t.id == v && v != 0)
+                    || self
+                        .common
+                        .entities
+                        .tnts
+                        .iter()
+                        .any(|t| t.id == v && v != 0)
                     || self.seat(v).is_some()
                     || self.player_vehicle(v).is_some();
                 (!valid).then_some((m.id, v))
@@ -268,7 +278,8 @@ impl ServerGame<'_> {
         }
         if let Some(t) = self
             .common
-            .entities.tnts
+            .entities
+            .tnts
             .iter()
             .find(|t| t.id == vehicle && t.id != 0)
         {
@@ -278,7 +289,8 @@ impl ServerGame<'_> {
         }
         if let Some(v) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == vehicle && !m.removed)
         {
@@ -347,7 +359,13 @@ impl ServerGame<'_> {
                 .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0));
             return Some(glam::DVec3::new(at.x, at.y, at.z));
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == vehicle) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == vehicle)
+        {
             let height = if a.marker {
                 0.0
             } else if a.small {
@@ -400,7 +418,8 @@ impl ServerGame<'_> {
         self.seat_static_mobs(&riders);
         let index: HashMap<u32, usize> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .enumerate()
             .map(|(i, m)| (m.id, i))

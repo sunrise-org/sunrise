@@ -113,7 +113,8 @@ fn cart_tick_refuses_a_write_from_a_mount_hook() {
         cart.velocity = Vec3::new(0.5, 0.0, 0.0);
         game.entities.carts.push(cart);
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(103, kind, Vec3::new(0.7, 64.0, 0.5), 0.0));
         let handle = game.entity(102).unwrap();
         state.lock().unwrap().handles.push(handle);

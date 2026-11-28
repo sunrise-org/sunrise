@@ -434,7 +434,8 @@ impl crate::game::ServerGame<'_> {
         // The stored cart is the one a plate counts: it takes the moved cart
         // for the walk and hands back what the walk left.
         self.common
-            .entities.carts
+            .entities
+            .carts
             .update(i, |stored| std::mem::swap(stored, c));
         self.with_level(|b, level, ticks| {
             for p in hits {
@@ -442,7 +443,8 @@ impl crate::game::ServerGame<'_> {
             }
         });
         self.common
-            .entities.carts
+            .entities
+            .carts
             .update(i, |stored| std::mem::swap(stored, c));
         let _ = self.server_process_level_events();
     }
@@ -1090,7 +1092,8 @@ impl crate::game::ServerGame<'_> {
     /// rideable cart (`startRiding`); others get `Entity.push`.
     pub fn pickup_from_cart(&mut self, i: usize, index: &mut CartIndex) {
         let v = self.common.entities.carts[i].velocity;
-        if self.common.entities.carts[i].kind != CartKind::Rideable || v.x * v.x + v.z * v.z < 0.01 {
+        if self.common.entities.carts[i].kind != CartKind::Rideable || v.x * v.x + v.z * v.z < 0.01
+        {
             return;
         }
         let reach = f64::from(0.2f32);
@@ -1163,7 +1166,8 @@ impl crate::game::ServerGame<'_> {
             };
             if !occupied {
                 self.common
-                    .entities.carts
+                    .entities
+                    .carts
                     .update(i, |c| c.velocity = c.velocity.subtract(v));
             }
             let m = &mut self.common.entities.mobs[j];
@@ -1291,7 +1295,8 @@ impl crate::game::ServerGame<'_> {
         // Every mob, each asked which carts it is near: a mob far from all of them is turned
         // away by a bitmap of the carts' coarse cells, without a lookup or a grid of the mobs.
         let reach = self.vehicle_mob_reach();
-        let coarse = reach.map(|_| CartCells::of(self.common.entities.carts.iter().map(Minecart::bounds)));
+        let coarse =
+            reach.map(|_| CartCells::of(self.common.entities.carts.iter().map(Minecart::bounds)));
         // (mob index, feet, box)
         let pushers: Vec<(usize, Vec3, Aabb)> = (0..self.common.entities.mobs.len() as u32)
             .into_iter()
@@ -1319,7 +1324,9 @@ impl crate::game::ServerGame<'_> {
                 let k = k as usize;
                 self.common.entities.carts.update(k, |c| {
                     // hasPassenger(mob): a mob in this cart never pushes it.
-                    if self.common.entities.mobs[j].extra.mount == Some(c.id) || !bb.intersects(c.bounds()) {
+                    if self.common.entities.mobs[j].extra.mount == Some(c.id)
+                        || !bb.intersects(c.bounds())
+                    {
                         return;
                     }
                     let Some((xa, za)) = cart_push_from(feet, c.position) else {
@@ -1358,7 +1365,10 @@ impl crate::game::ServerGame<'_> {
                 continue;
             }
             // AbstractMinecart.push(entity): `this` is cart j, `entity` cart i.
-            let (this, other) = (&self.common.entities.carts[j], &self.common.entities.carts[i]);
+            let (this, other) = (
+                &self.common.entities.carts[j],
+                &self.common.entities.carts[i],
+            );
             let (mut xa, mut za) = (
                 other.position.x - this.position.x,
                 other.position.z - this.position.z,
@@ -1630,7 +1640,8 @@ impl crate::game::ServerGame<'_> {
     pub fn tick_cart_riding(&mut self, keys: Keys) -> bool {
         let Some(i) = self
             .common
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .position(|c| Some(c.id) == self.common.riding)
         else {
@@ -1667,7 +1678,12 @@ impl crate::game::ServerGame<'_> {
         // cart instead of leaving it at the seat.
         if alive
             && self.common.riding.is_none()
-            && let Some(i) = self.common.entities.carts.iter().position(|cart| cart.id == id)
+            && let Some(i) = self
+                .common
+                .entities
+                .carts
+                .iter()
+                .position(|cart| cart.id == id)
         {
             self.dismount_cart(i);
         }

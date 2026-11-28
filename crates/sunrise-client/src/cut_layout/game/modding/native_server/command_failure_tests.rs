@@ -304,7 +304,8 @@ fn cart_failure_metadata_keeps_timestamp_and_literal_fragments() {
                 // Eleven ASCII bytes of timestamp take the flattened output to
                 // 65,535 and 65,536 modified UTF-8 bytes, respectively.
                 for (command, first) in [("rejectmetaedge", 32_762), ("rejectmetaover", 32_763)] {
-                    game.entities.carts
+                    game.entities
+                        .carts
                         .update(0, |cart| cart.command.set_command(command));
                     game.world.game_time += 1;
                     assert!(game.perform_cart_command(99));

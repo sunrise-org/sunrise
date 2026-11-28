@@ -12,7 +12,8 @@ impl crate::game::ServerGame<'_> {
     pub fn discard_resident_dragon(&mut self) {
         if let Some(id) = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|dragon| dragon.id != 0)
             .map(|dragon| dragon.id)

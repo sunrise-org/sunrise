@@ -41,13 +41,19 @@ fn loaded_mob_arrow_predicate_survives_model_and_controls_actual_block_hit() {
             "summon pig 14.5 200 14.5 {UUID:[I;197,0,0,1],NoAI:1b,NoGravity:1b,Health:10f}"
         ));
         let owner = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| game.persist.uuid_of(m.id) == Some([197, 0, 0, 1]))
             .unwrap()
             .id;
         assert_eq!(
-            game.entities.mobs.iter().find(|m| m.id == owner).unwrap().health,
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == owner)
+                .unwrap()
+                .health,
             10.0
         );
         let clock = game.world.game_time;
@@ -85,7 +91,8 @@ fn loaded_mob_arrow_predicate_survives_model_and_controls_actual_block_hit() {
             });
             assert!(game.run_command(&format!("summon arrow {} 200.5 {} {{UUID:[I;197,0,{n},2],NoGravity:1b,HasBeenShot:1b,Motion:[2d,0d,0d],Owner:[I;197,0,0,1],item:{{id:\"minecraft:arrow\",count:1}}{field}}}", f64::from(x)-1.5, f64::from(z)+0.5)));
             let p = game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| game.persist.uuid_of(p.id) == Some([197, 0, n, 2]))
                 .unwrap()
@@ -130,7 +137,8 @@ fn loaded_mob_arrow_predicate_survives_model_and_controls_actual_block_hit() {
             let drops_before = game.entities.dropped.len();
             game.tick_projectiles().unwrap();
             let after = game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|a| a.id == p.id)
                 .unwrap();
@@ -148,7 +156,8 @@ fn loaded_mob_arrow_predicate_survives_model_and_controls_actual_block_hit() {
                 missing.push(format!("{n} actual hit block {block} != {want}"));
             }
             let dropped: Vec<_> = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .skip(drops_before)
                 .map(|e| (&*e.stack.item, e.stack.count, e.position, e.velocity))

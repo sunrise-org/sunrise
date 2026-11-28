@@ -333,17 +333,28 @@ impl crate::game::ServerGame<'_> {
         conn: u32,
         pos: (i32, i32, i32),
     ) -> MenuOpen {
-        let entity_type =
-            if let Some(cart) = self.common.entities.carts.iter().find(|c| c.id as i32 == pos.2) {
-                cart.kind.id().to_owned()
-            } else if let Some(boat) = self.common.entities.boats.iter().find(|b| b.id as i32 == pos.2) {
-                if !boat.chest {
-                    return MenuOpen::NoProvider;
-                }
-                boat.entity_type()
-            } else {
+        let entity_type = if let Some(cart) = self
+            .common
+            .entities
+            .carts
+            .iter()
+            .find(|c| c.id as i32 == pos.2)
+        {
+            cart.kind.id().to_owned()
+        } else if let Some(boat) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .find(|b| b.id as i32 == pos.2)
+        {
+            if !boat.chest {
                 return MenuOpen::NoProvider;
-            };
+            }
+            boat.entity_type()
+        } else {
+            return MenuOpen::NoProvider;
+        };
         // `createMenu` (ChestMenu.threeRows or a HopperMenu), and
         // `MenuProvider.getDisplayName`, the vehicle's name key.
         let Some((menu, _)) = sunrise_level::containers::vehicle_menu(&entity_type) else {
@@ -365,7 +376,8 @@ impl crate::game::ServerGame<'_> {
         // nobody is looking at.
         let boat = self
             .common
-            .entities.boats
+            .entities
+            .boats
             .iter()
             .position(|b| b.id as i32 == pos.2 && b.chest);
         let spectator_pending = boat.is_some_and(|i| {
@@ -698,9 +710,21 @@ impl crate::game::ServerGame<'_> {
         if !other_viewers {
             self.common.world.block_entities.remove(&key);
         }
-        let at = if let Some(b) = self.common.entities.boats.iter().find(|b| b.id as i32 == key.2) {
+        let at = if let Some(b) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .find(|b| b.id as i32 == key.2)
+        {
             Some([b.position.x, b.position.y, b.position.z])
-        } else if let Some(c) = self.common.entities.carts.iter().find(|c| c.id as i32 == key.2) {
+        } else if let Some(c) = self
+            .common
+            .entities
+            .carts
+            .iter()
+            .find(|c| c.id as i32 == key.2)
+        {
             (c.kind == sunrise_gameplay_common::game::minecarts::CartKind::Chest).then_some([
                 c.position.x,
                 c.position.y,

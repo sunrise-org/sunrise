@@ -244,7 +244,8 @@ impl ServerGame<'_> {
             // makeRaidersGlow (the server's effect).
             let targets: Vec<u32> = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .filter(|m| glow.contains(&u64::from(m.id)))
                 .map(|m| m.id)
@@ -539,7 +540,8 @@ impl ServerGame<'_> {
             Some(None) => None,
             Some(Some(id)) => self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)
                 .filter(|m| {
@@ -596,7 +598,8 @@ impl ServerGame<'_> {
         );
         let near: Vec<(u32, bool, Vec3, f64)> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             // `instanceof Enemy`, not the monster category: the zombie horse,
             // camel husk and zombie nautilus are `Animal`s.

@@ -166,7 +166,8 @@ fn run(mode: Option<u8>) -> (Vec<(String, u32)>, usize, i32, u32, i64, bool) {
                 game.retrieve_hook_extracted(&ItemStack::new("minecraft:fishing_rod", 1), &mut hook)
             });
             result = Some((
-                game.entities.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .skip(before_items)
                     .map(|item| (item.stack.item.to_string(), item.stack.count))

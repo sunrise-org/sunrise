@@ -244,7 +244,13 @@ impl crate::game::ServerGame<'_> {
             .accepted_hit
             .take()
             .filter(|hit| hit.belongs_to(m.last_damage));
-        if let Some(body) = self.common.entities.mobs.iter_mut().find(|body| body.id == m.id) {
+        if let Some(body) = self
+            .common
+            .entities
+            .mobs
+            .iter_mut()
+            .find(|body| body.id == m.id)
+        {
             body.accepted_hit = None;
         }
         let weapon = accepted.as_ref().and_then(|hit| hit.weapon.as_ref());
@@ -258,7 +264,8 @@ impl crate::game::ServerGame<'_> {
                 Some(Who::Player) => Some(player()),
                 Some(Who::Mob(id)) => self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .any(|mob| mob.id == id)
                     .then(|| self.target_loot_entity(crate::game::commands::Target::Mob(id)))
@@ -525,7 +532,8 @@ impl crate::game::ServerGame<'_> {
         };
         let victim = if victim >= sunrise_gameplay_common::game::dragon_common::SPECIAL {
             self.common
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .map_or(victim, |dragon| dragon.id)
         } else {

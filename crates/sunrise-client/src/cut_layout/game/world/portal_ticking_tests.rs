@@ -47,9 +47,11 @@ fn mobs_past_the_simulation_distance_neither_enter_portals_nor_cool_down() {
             game.world.set(x, 64, 8, portal).unwrap();
             game.world.set(x, 65, 8, portal).unwrap();
             let at = |z: f64| Vec3::new(f64::from(x) + 0.5, 64.0, z);
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(in_portal, zombie.clone(), at(8.5), 0.0));
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(cooling, zombie.clone(), at(12.5), 0.0));
             game.set_portal_cooldown(cooling);
         }

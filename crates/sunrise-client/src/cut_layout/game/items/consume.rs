@@ -323,7 +323,11 @@ pub(crate) mod fox_consumption_hook_tests {
                         heard.lock().unwrap().last(),
                         Some(&(id, test_snapshot(&stack)))
                     );
-                    let actor = game.entities.mobs.iter_mut().find(|m| m.id == id && !m.removed);
+                    let actor = game
+                        .entities
+                        .mobs
+                        .iter_mut()
+                        .find(|m| m.id == id && !m.removed);
                     match action {
                         0 => {
                             let m = actor.unwrap();
@@ -452,7 +456,12 @@ pub(crate) mod fox_consumption_hook_tests {
                 assert_eq!(last.extra.main_hand_stack().unwrap().count, 6);
                 let spawned = spawned.lock().unwrap();
                 assert_eq!(spawned.len(), 1);
-                let cow = game.entities.mobs.iter().find(|m| m.id == spawned[0]).unwrap();
+                let cow = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == spawned[0])
+                    .unwrap();
                 assert_eq!(
                     cow.age, 0,
                     "a listener's new entity waits until the next batch"

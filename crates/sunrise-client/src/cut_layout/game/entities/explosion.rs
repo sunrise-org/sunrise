@@ -280,7 +280,8 @@ mod explicit_source_tests {
                 let kind = game.res.mob_types().get("minecraft:husk").unwrap().clone();
                 let species = kind.species;
                 if mode == 2 || nested {
-                    game.entities.mobs
+                    game.entities
+                        .mobs
                         .push(Mob::new(43, kind, Vec3::new(40.0, 64.0, 40.0), 0.0));
                 }
                 // An enclosing blast must not leak its owner into an explicit source.

@@ -176,7 +176,8 @@ impl ClientGame<'_> {
                 .map(|p| [p.x, p.y, p.z]),
             Target::Mob(id) => self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .and_then(|m| m.ground.supporting_block)

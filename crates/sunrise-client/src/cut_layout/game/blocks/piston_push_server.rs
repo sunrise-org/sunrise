@@ -52,7 +52,10 @@ pub(crate) mod order_tests {
             )];
             game.sync_moving_pistons();
             game.push_piston_entities(vec![(pos, piston, 0.5)]);
-            assert_eq!(game.entities.armor_stands[0].position.x, 5.5 + (0.25 + 0.01));
+            assert_eq!(
+                game.entities.armor_stands[0].position.x,
+                5.5 + (0.25 + 0.01)
+            );
         });
     }
 
@@ -434,7 +437,10 @@ pub(crate) mod order_tests {
             }
             game.push_piston_entities(pushes);
             assert_eq!(game.entities.tnts[0].position, Vec3::new(5.5, final_y, 5.5));
-            assert_eq!(game.entities.tnts[0].velocity.y.to_bits(), final_vy.to_bits());
+            assert_eq!(
+                game.entities.tnts[0].velocity.y.to_bits(),
+                final_vy.to_bits()
+            );
             assert!(game.entities.tnts[0].ground.on_ground);
         }
     }
@@ -581,7 +587,10 @@ pub(crate) mod h255_mob_piston_ground_tests {
             assert!(game.entities.mobs[main].ground.on_ground);
             assert!(game.entities.mobs[idle].ground.on_ground);
             assert!(!game.entities.mobs[vertical].ground.on_ground);
-            assert_eq!(game.entities.mobs[main].position, Vec3::new(4.5, 202.0, 4.5));
+            assert_eq!(
+                game.entities.mobs[main].position,
+                Vec3::new(4.5, 202.0, 4.5)
+            );
             assert_eq!(
                 game.res
                     .facts()
@@ -634,7 +643,10 @@ pub(crate) mod h255_mob_piston_ground_tests {
                 {
                     failures.push(format!("tick{tick}: saved ground is stale"));
                 }
-                assert_eq!(game.entities.mobs[idle].position, Vec3::new(4.5, 202.0, 12.5));
+                assert_eq!(
+                    game.entities.mobs[idle].position,
+                    Vec3::new(4.5, 202.0, 12.5)
+                );
                 assert!(game.entities.mobs[idle].ground.on_ground);
                 assert_eq!(
                     game.entities.mobs[vertical].position,
@@ -701,7 +713,8 @@ pub(crate) mod h255_mob_piston_ground_tests {
             game.entities.projectiles.clear();
             assert!(game.run_command("summon minecraft:arrow 5.75 202.5 4.5 {NoGravity:0b}"));
             let i = game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .position(|p| p.arrow.is_some())
                 .expect("the arrow");
@@ -768,7 +781,10 @@ pub(crate) mod h255_mob_piston_ground_tests {
                 assert_eq!(game.entities.tnts[0].velocity.y, -0.4);
                 push(game, &mut budget, Vec3::new(0.0, -0.51, 0.0));
                 let expected = 0.3510000138133766_f64;
-                assert_eq!(game.entities.tnts[0].velocity.y.to_bits(), expected.to_bits());
+                assert_eq!(
+                    game.entities.tnts[0].velocity.y.to_bits(),
+                    expected.to_bits()
+                );
                 game.entities.tnts[0].position.y = 200.5;
                 game.entities.tnts[0].velocity.y = -0.4;
                 push(game, &mut budget, Vec3::new(0.0, -0.51, 0.0));
@@ -916,7 +932,8 @@ pub(crate) mod lid_push_tests {
 
     fn shulker(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> u32 {
         assert!(game.run_command("summon minecraft:shulker 24 200 24 {NoAI:1b}"));
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter()
             .find(|m| m.species() == Species::Shulker)
             .expect("the shulker")
@@ -928,14 +945,17 @@ pub(crate) mod lid_push_tests {
     }
 
     fn item_y(game: &sunrise_gameplay::game::ServerGame<'_>) -> f64 {
-        game.entities.dropped.iter().next().expect("the item").position.y
+        game.entities
+            .dropped
+            .iter()
+            .next()
+            .expect("the item")
+            .position
+            .y
     }
 
     fn arrow_y(game: &sunrise_gameplay::game::ServerGame<'_>) -> f64 {
-        let arrow = game
-            .entities.projectiles
-            .iter()
-            .find(|p| p.arrow.is_some());
+        let arrow = game.entities.projectiles.iter().find(|p| p.arrow.is_some());
         arrow.expect("the arrow").position.y
     }
 
@@ -968,7 +988,9 @@ pub(crate) mod lid_push_tests {
                                 game.move_listed_entity(handle, cause, Vec3::new(0.0, -0.5, 0.0));
                             assert_eq!(moved.y, -0.25, "{cause:?}");
                             let ground = match handle {
-                                EntityHandle::ArmorStand(i) => &game.entities.armor_stands[i].ground,
+                                EntityHandle::ArmorStand(i) => {
+                                    &game.entities.armor_stands[i].ground
+                                }
                                 EntityHandle::Mob(i) => &game.entities.mobs[i].ground,
                                 _ => unreachable!(),
                             };
@@ -993,7 +1015,13 @@ pub(crate) mod lid_push_tests {
                     assert!(game.run_command("summon armor_stand 10.5 200.25 10.5"));
                     let shulker = shulker(game);
                     assert!(game.run_command("summon armor_stand 13.5 200.25 10.5"));
-                    let shulker_join = game.entities.mobs.iter().find(|m| m.id == shulker).unwrap().join;
+                    let shulker_join = game
+                        .entities
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == shulker)
+                        .unwrap()
+                        .join;
                     assert!(game.entities.armor_stands[0].join < shulker_join);
                     assert!(game.entities.armor_stands[1].join > shulker_join);
                     let swept = area(9.0, 9.0, 15.0, 12.0);
@@ -1069,7 +1097,11 @@ pub(crate) mod lid_push_tests {
             game.lid_push(lid, area(13.0, 13.0, 14.0, 14.0), Vec3::new(0.0, 0.5, 0.0));
             game.lid_push(lid, area(2.0, 2.0, 3.0, 3.0), Vec3::new(0.0, 0.5, 0.0));
             assert_eq!(item_y(game), 200.75, "the stone stops the item");
-            let pig = game.entities.mobs.iter().find(|m| m.species() == Species::Pig);
+            let pig = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.species() == Species::Pig);
             let pig = pig.expect("the pig").position.y;
             let pig_height = f64::from(0.9_f32);
             assert!(
@@ -1086,7 +1118,8 @@ pub(crate) mod lid_push_tests {
     }
 
     fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) -> usize {
-        game.entities.dropped
+        game.entities
+            .dropped
             .iter()
             .filter(|d| &*d.stack.item == item)
             .count()
@@ -1120,7 +1153,10 @@ pub(crate) mod lid_push_tests {
             assert_eq!(dropped(game, "minecraft:painting"), 1);
             assert_eq!(game.entities.item_frames.len(), 1, "the loose frame broke");
             assert!(game.entities.item_frames[0].fixed, "the fixed frame stays");
-            assert!(game.entities.item_frames[0].item.is_some(), "with its stick");
+            assert!(
+                game.entities.item_frames[0].item.is_some(),
+                "with its stick"
+            );
             assert_eq!(dropped(game, "minecraft:item_frame"), 1);
             assert_eq!(dropped(game, "minecraft:stick"), 1);
             assert!(game.entities.cushions.is_empty(), "the cushion broke");
@@ -1137,7 +1173,12 @@ pub(crate) mod lid_push_tests {
             let shulker = shulker(game);
             assert!(game.run_command("summon minecraft:oak_boat 2.5 200 6.5"));
             let boat = game.entities.boats[0].id;
-            let i = game.entities.mobs.iter().position(|m| m.id == shulker).unwrap();
+            let i = game
+                .entities
+                .mobs
+                .iter()
+                .position(|m| m.id == shulker)
+                .unwrap();
             game.entities.mobs[i].extra.mount = Some(boat);
             game.riding = Some(boat);
             let (around, lift) = (area(1.0, 1.0, 4.0, 8.0), Vec3::new(0.0, 0.25, 0.0));
@@ -1168,14 +1209,11 @@ pub(crate) mod lid_push_tests {
                 game.entities.armor_stands[0].position.y, 200.0,
                 "the stand has no physics"
             );
-            let bullet = game
-                .entities.projectiles
-                .iter()
-                .next()
-                .expect("the bullet");
+            let bullet = game.entities.projectiles.iter().next().expect("the bullet");
             assert_eq!(bullet.position.y, 200.0, "the bullet has no physics");
             let other = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id != shulker)
                 .expect("the other shulker");

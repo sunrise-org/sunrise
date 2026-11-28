@@ -294,17 +294,20 @@ pub(crate) fn target_kinematics(
 ) -> Option<(Vec3, Vec3)> {
     match target {
         TrackedTarget::Falling(id) => game
-            .entities.falling
+            .entities
+            .falling
             .iter()
             .find(|f| f.id == id)
             .map(|f| (f.position, f.velocity)),
         TrackedTarget::Stand(id) => game
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter()
             .find(|a| a.id == id)
             .map(|a| (a.position, a.velocity)),
         TrackedTarget::Item(id) => game
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .find(|i| i.id == id)
             .map(|i| (i.position, i.velocity)),

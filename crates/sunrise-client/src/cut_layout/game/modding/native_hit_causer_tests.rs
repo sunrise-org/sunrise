@@ -220,11 +220,21 @@ fn shot(kind: ProjectileKind, owner: Who) -> Projectile {
 }
 
 fn mob_at(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Vec3 {
-    game.entities.mobs.iter().find(|m| m.id == id).unwrap().position
+    game.entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .position
 }
 
 fn move_mob(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, to: Vec3) {
-    game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap().position = to;
+    game.entities
+        .mobs
+        .iter_mut()
+        .find(|m| m.id == id)
+        .unwrap()
+        .position = to;
 }
 
 fn projectile(game: &mut sunrise_gameplay::game::ServerGame<'_>, seen: &Mutex<Vec<Seen>>) {
@@ -279,7 +289,8 @@ fn sting(game: &mut sunrise_gameplay::game::ServerGame<'_>, seen: &Mutex<Vec<See
     game.player.as_mut().unwrap().position = Vec3::new(3.5, 70.0, 3.5);
     let fish = summon_mob(game, "minecraft:pufferfish", "{NoAI:1b}");
     let cow = summon_mob(game, "minecraft:cow", "{NoAI:1b}");
-    game.entities.mobs
+    game.entities
+        .mobs
         .iter_mut()
         .find(|m| m.id == fish)
         .unwrap()
@@ -430,7 +441,12 @@ fn guest_post(
     mark: &AttachmentKey<i32>,
 ) {
     let pig = summon_mob(game, "minecraft:pig", "{NoAI:1b}");
-    game.entities.mobs.iter_mut().find(|m| m.id == pig).unwrap().health = 0.5;
+    game.entities
+        .mobs
+        .iter_mut()
+        .find(|m| m.id == pig)
+        .unwrap()
+        .health = 0.5;
     mark.set(game, Holder::Player(12), 5).unwrap();
     blast(game, [1.5, 70.0, 0.5], 12, true, Some(12));
     let posts = calls(seen, "post", pig);

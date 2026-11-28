@@ -102,7 +102,12 @@ impl ClientGame<'_> {
             } else if let Some(m) = self.common.mob_index.get(&self.common.entities.mobs, id) {
                 (m.attrs.max_health, m.health)
             } else {
-                let stand = self.common.entities.armor_stands.iter().find(|s| s.id == id)?;
+                let stand = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter()
+                    .find(|s| s.id == id)?;
                 (20.0, stand.health)
             };
         let max_health = self

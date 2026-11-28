@@ -263,7 +263,13 @@ fn a_give_to_a_player_in_another_level_drops_overflow_there() {
             }
             assert_eq!(dropped(game), [before[0], before[1] + 5], "{case}");
             game.enter_level(Dim::Nether).unwrap();
-            for (item, count) in game.entities.dropped.iter().skip(before[1] + 2).zip([1, 2, 2]) {
+            for (item, count) in game
+                .entities
+                .dropped
+                .iter()
+                .skip(before[1] + 2)
+                .zip([1, 2, 2])
+            {
                 assert_eq!(&*item.stack.item, "minecraft:diamond", "{case}");
                 assert_eq!(item.stack.count, count, "{case}");
                 assert_eq!([item.position.x, item.position.z], [3.0, 5.0], "{case}");

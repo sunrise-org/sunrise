@@ -255,7 +255,8 @@ fn count(game: &sunrise_gameplay::game::ServerGame<'_>, pos: (i32, i32, i32), it
     })
 }
 fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) -> u32 {
-    game.entities.dropped
+    game.entities
+        .dropped
         .iter()
         .filter(|d| &*d.stack.item == item)
         .map(|d| d.stack.count)
@@ -578,7 +579,15 @@ fn detector_rail_comparator_unpacks_cart_once() {
         assert!(g.run_command("fill 7 63 7 10 63 9 minecraft:stone"));
         let id = cart(g);
         assert!(g.run_command("setblock 8 64 8 minecraft:detector_rail[powered=true]"));
-        assert!(g.entities.carts.iter().find(|c| c.id == id).unwrap().loot.is_some());
+        assert!(
+            g.entities
+                .carts
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap()
+                .loot
+                .is_some()
+        );
         assert!(g.run_command("setblock 9 64 8 minecraft:comparator[facing=west]"));
         for _ in 0..2 {
             g.with_level(|b, l, t| b.scheduled_block_tick(l, t, BlockPos::new(9, 64, 8)));
@@ -1132,12 +1141,14 @@ fn vehicle_slot_read_fills_without_opener_while_acting() {
         game.options.dedicated = Some(Vec::new());
         let cart_id = cart(game);
         let cart = game
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .position(|cart| cart.id == cart_id)
             .unwrap();
         let resident = ItemStack::new("minecraft:stick", 4);
-        game.entities.carts
+        game.entities
+            .carts
             .update(cart, |cart| cart.items[0] = Some(resident.clone()));
         let (tag, _) = sunrise_core::nbt::parse_snbt(&format!(
             r#"{{Pos:[8.5d,64d,8.5d],LootTable:"{TABLE}",LootTableSeed:37L}}"#
@@ -1151,7 +1162,8 @@ fn vehicle_slot_read_fills_without_opener_while_acting() {
             game.persist.raw[&boat_id].get("LootTableSeed"),
             Some(&Tag::Long(37))
         );
-        game.entities.boats
+        game.entities
+            .boats
             .update(boat, |boat| boat.items[0] = Some(resident.clone()));
 
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -1235,7 +1247,9 @@ fn saved_carts_keep_a_loot_table_only_when_they_hold_a_container() {
             let (tag, _) = sunrise_core::nbt::parse_snbt(&source).unwrap();
             game.load_cart(tag, Some([61, 0, 0, i as i32 + 1]), kind);
             // The entity chunk's own writer, as a save writes it to disk.
-            let (_, saved) = game.save_cart(game.entities.carts.len() - 1, &keys).unwrap();
+            let (_, saved) = game
+                .save_cart(game.entities.carts.len() - 1, &keys)
+                .unwrap();
             assert_eq!(
                 (
                     saved.get("LootTable").cloned(),

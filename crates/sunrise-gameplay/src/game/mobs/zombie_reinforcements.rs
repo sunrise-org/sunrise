@@ -30,7 +30,13 @@ impl ServerGame<'_> {
     /// and monsters spawning, a copy of it appears out of sight and takes
     /// `target`; both then call less often.
     pub(in crate::game::server_side) fn call_reinforcements(&mut self, caller: u32, target: Who) {
-        let Some(index) = self.common.entities.mobs.iter().position(|m| m.id == caller) else {
+        let Some(index) = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == caller)
+        else {
             return;
         };
         if self.common.world.health_rules.difficulty != Difficulty::Hard {

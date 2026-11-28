@@ -249,7 +249,8 @@ impl crate::game::CommonGame<'_> {
 
     /// `AbstractBoat.onAboveBubbleColumn`: whether the splash comes up, 1 in 100 above water.
     pub fn boat_splash_roll(&mut self, i: usize) -> bool {
-        !self.entities.boats[i].under_water() && self.world.random.next_int_bound(100).unwrap_or(1) == 0
+        !self.entities.boats[i].under_water()
+            && self.world.random.next_int_bound(100).unwrap_or(1) == 0
     }
 
     /// `Entity.makeStuckInBlock` from powder snow and cobweb cells a boat reaches into.
@@ -600,7 +601,9 @@ pub trait BoatsCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         if !self.boat_can_simulate_movement(self.entities.boats[i].id) {
             return;
         }
-        self.entities.boats.update(i, |b| column.push(&mut b.velocity));
+        self.entities
+            .boats
+            .update(i, |b| column.push(&mut b.velocity));
     }
 
     /// `AbstractBoat.handleBubbleColumnEffect`: up at 0.6, down by -0.7.
@@ -643,7 +646,8 @@ pub trait BoatsCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             );
             let writes = self.body_step_on((id, &kind), footprint, &ground, &mut velocity);
             let (writes, hurts) = split_boat_contact_hurts(writes);
-            self.entities.boats
+            self.entities
+                .boats
                 .update(i, |b| b.apply_step_writes(velocity, writes));
             self.side_queue_boat_contact_hurts(id, hurts);
             // The stored row is current here, so the hurt applies at once; a
@@ -1428,7 +1432,11 @@ pub trait BoatStatusGameExt<'g>: crate::game::SideGame<'g> {
     /// `AbstractBoat.tick`: `status = getStatus()` for a boat this window does not tick.
     fn refresh_boat_status(&mut self, i: usize) {
         let (mut water_level, mut land_friction) = (0.0, 0.0);
-        let status = self.boat_status(&self.entities.boats[i], &mut water_level, &mut land_friction);
+        let status = self.boat_status(
+            &self.entities.boats[i],
+            &mut water_level,
+            &mut land_friction,
+        );
         self.entities.boats.update(i, |b| b.status = status);
         self.entities.boats.update(i, |b| b.status_known = true);
         self.entities.boats.update(i, Boat::tick_submersion);

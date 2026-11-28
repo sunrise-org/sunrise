@@ -122,7 +122,8 @@ pub trait NativeEntityStateCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             ),
             Some(Body::Other(Target::General(id))) => {
                 let fluids = self
-                    .entities.general
+                    .entities
+                    .general
                     .row(id)
                     .ok_or(EntityReadError::Unavailable)?
                     .fluids;
@@ -160,9 +161,7 @@ pub trait NativeEntityStateCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             Body::Player(p) if !self.is_logical_server() => Some(p.is_under_water()),
             Body::Player(p) => Some(p.fluids.was_eye_in_water && p.fluids.was_touching_water),
             Body::Mob(m) => Some(m.was_eye_in_water && m.fluids.in_water),
-            Body::Other(Target::General(id)) => {
-                Some(self.entities.general.row(id)?.under_water)
-            }
+            Body::Other(Target::General(id)) => Some(self.entities.general.row(id)?.under_water),
             Body::Other(_) => None,
         }
     }
@@ -257,7 +256,13 @@ pub trait NativeEntityStateCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
                 )?
             }
             Target::Mob(id) => self.entities.mobs.iter().find(|m| m.id == id)?.age as i32,
-            Target::Stand(id) => self.entities.armor_stands.iter().find(|s| s.id == id)?.tick_count,
+            Target::Stand(id) => {
+                self.entities
+                    .armor_stands
+                    .iter()
+                    .find(|s| s.id == id)?
+                    .tick_count
+            }
             Target::Dragon(id) => self.entities.dragon.as_ref().filter(|d| d.id == id)?.ticks,
             Target::Item(id) => self.entities.dropped.iter().find(|i| i.id == id)?.ticks as i32,
             Target::Orb(id) => self.entities.orbs.iter().find(|o| o.id == id)?.ticks as i32,

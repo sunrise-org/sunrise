@@ -435,11 +435,17 @@ pub(crate) fn run_portal_arrival_effects_nested_spawns_do_not_hide_the_real_arri
                 complete_callback_arrival(game, id, portal, at);
                 assert_eq!(calls.load(Ordering::SeqCst), 1);
                 assert_eq!(game.entities.dropped.len(), 2);
-                let survivor = game.entities.dropped.iter().find(|item| item.id == waiting).unwrap();
+                let survivor = game
+                    .entities
+                    .dropped
+                    .iter()
+                    .find(|item| item.id == waiting)
+                    .unwrap();
                 assert_eq!(survivor.stack.count, 8);
                 assert_eq!(survivor.ticks, 0);
                 let nested = game
-                    .entities.dropped
+                    .entities
+                    .dropped
                     .iter()
                     .find(|item| &*item.stack.item == "minecraft:dirt")
                     .unwrap();

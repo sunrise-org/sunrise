@@ -99,7 +99,10 @@ fn block_parts_answer_what_the_dragon_and_the_wither_may_destroy() {
                     .flat_map(|x| (60..82).flat_map(move |y| (0..16).map(move |z| (x, y, z))))
                     .filter(|&(x, y, z)| game.world.block(x, y, z) == state)
                     .count();
-                (16 * 22 * 16 - left, game.entities.dragon.as_ref().unwrap().in_wall)
+                (
+                    16 * 22 * 16 - left,
+                    game.entities.dragon.as_ref().unwrap().in_wall,
+                )
             };
             let griefing = |game: &mut sunrise_gameplay::game::ServerGame<'_>, on: bool| {
                 assert!(game.ui.rules.set(

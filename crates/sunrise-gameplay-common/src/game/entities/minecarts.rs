@@ -489,7 +489,10 @@ impl crate::game::CommonGame<'_> {
             let Some(js) = riding.get(&id) else {
                 continue;
             };
-            let (pos, prev) = (self.entities.carts[i].position, self.entities.carts[i].previous);
+            let (pos, prev) = (
+                self.entities.carts[i].position,
+                self.entities.carts[i].previous,
+            );
             let cart_box = self.entities.carts[i].bounds();
             let seats: Vec<(usize, f64, f64)> = js
                 .iter()
@@ -546,9 +549,19 @@ impl crate::game::CommonGame<'_> {
             return;
         };
         let items = items.clone();
-        if let Some(i) = self.entities.carts.iter().position(|c| c.id as i32 == key.2) {
+        if let Some(i) = self
+            .entities
+            .carts
+            .iter()
+            .position(|c| c.id as i32 == key.2)
+        {
             self.entities.carts.update(i, |c| c.items = items);
-        } else if let Some(i) = self.entities.boats.iter().position(|b| b.id as i32 == key.2) {
+        } else if let Some(i) = self
+            .entities
+            .boats
+            .iter()
+            .position(|b| b.id as i32 == key.2)
+        {
             self.entities.boats.update(i, |b| {
                 b.items = items;
             });
@@ -558,12 +571,14 @@ impl crate::game::CommonGame<'_> {
     pub fn open_cart_kind(&self) -> Option<CartKind> {
         let key = self.container.filter(|k| k.1 == CART_KEY_Y)?;
         // A chest boat's chest shows like a chest minecart's.
-        self.entities.carts
+        self.entities
+            .carts
             .iter()
             .find(|c| c.id as i32 == key.2)
             .map(|c| c.kind)
             .or_else(|| {
-                self.entities.boats
+                self.entities
+                    .boats
                     .iter()
                     .any(|b| b.chest && b.id as i32 == key.2)
                     .then_some(CartKind::Chest)

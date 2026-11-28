@@ -244,12 +244,18 @@ fn a_loaded_hurt_by_mob_of_a_dead_attacker_ends_at_the_next_tick() {
     let mut game = game(&mut resources);
     step(&mut game, 1);
     let echo = index(&mut game, ECHO);
-    assert!(game.entities.mobs[echo].ai.last_hurt_by.is_some(), "resolved");
+    assert!(
+        game.entities.mobs[echo].ai.last_hurt_by.is_some(),
+        "resolved"
+    );
     let a = index(&mut game, A);
     game.entities.mobs[a].health = 0.0;
     step(&mut game, 1);
     let echo = index(&mut game, ECHO);
-    assert_eq!(game.entities.mobs[echo].ai.last_hurt_by, None, "dead attacker");
+    assert_eq!(
+        game.entities.mobs[echo].ai.last_hurt_by, None,
+        "dead attacker"
+    );
 }
 
 #[test]
@@ -258,7 +264,8 @@ fn a_saved_hurt_timestamp_uses_java_integer_wrapping() {
     let mut resources = None;
     let mut game = game(&mut resources);
     let echo = index(&mut game, ECHO);
-    game.entities.mobs[echo].ai.last_hurt_by_time = (game.entities.mobs[echo].age as i32).wrapping_sub(i32::MIN);
+    game.entities.mobs[echo].ai.last_hurt_by_time =
+        (game.entities.mobs[echo].age as i32).wrapping_sub(i32::MIN);
     step(&mut game, 1);
     let echo = index(&mut game, ECHO);
     assert!(game.entities.mobs[echo].ai.last_hurt_by.is_some());
@@ -279,7 +286,10 @@ fn a_loaded_hurt_by_mob_naming_no_entity_stays_until_it_arrives() {
     // Nothing resolves it: no baseTick end, however long, and it keeps aging.
     step(&mut game, 200);
     let ghost = index(&mut game, "00006094-0000-0000-0000-000000000005");
-    assert_eq!(game.entities.mobs[ghost].ai.last_hurt_by, None, "not the AI's yet");
+    assert_eq!(
+        game.entities.mobs[ghost].ai.last_hurt_by, None,
+        "not the AI's yet"
+    );
     assert_eq!(fields(&mut game, ghost), (named, Some(Tag::Int(207))));
     // The entity it names arrives: it resolves, is past 100 ticks, and ends.
     assert!(game.run_command(
@@ -317,7 +327,10 @@ fn a_loaded_hurt_by_mob_naming_the_mob_itself_resolves_and_ends_after_100_ticks(
         Some(Who::Mob(id)),
         "resolved"
     );
-    assert_eq!(game.entities.mobs[me].ai.last_hurt_by_ref, None, "no bare reference");
+    assert_eq!(
+        game.entities.mobs[me].ai.last_hurt_by_ref, None,
+        "no bare reference"
+    );
     assert_eq!(fields(&mut game, me), (named.clone(), Some(Tag::Int(4))));
     // Aged 100 ticks: still there; one more and `baseTick` ends it.
     step(&mut game, 96);

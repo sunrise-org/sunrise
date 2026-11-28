@@ -28,7 +28,13 @@ impl ClientGame<'_> {
             let seed = seed(m, self.common.persist.uuids.get(&id).copied());
             let seen = (!m.random_textures.has_seen()).then(|| self.seen_at(m.position));
             let names = sunrise_client::mobs::render::drawn_textures(m, self);
-            choose(&mut self.common.entities.mobs[i], &textures, names, seen, seed);
+            choose(
+                &mut self.common.entities.mobs[i],
+                &textures,
+                names,
+                seen,
+                seed,
+            );
         }
     }
 

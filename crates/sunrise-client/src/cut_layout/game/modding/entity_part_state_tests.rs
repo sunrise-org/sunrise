@@ -398,7 +398,8 @@ fn entity_part_state_is_per_entity_through_edits_transactions_and_panics() {
             charge.edit_state(game, a, |_, _tx, n| *n = 1),
             Err(PartStateError::HolderBusy)
         );
-        game.entities.mobs
+        game.entities
+            .mobs
             .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         assert_eq!(a.residency(game), EntityResidency::InPlace);
         assert_eq!(stored(charge, game, a), Some(10));
@@ -620,7 +621,8 @@ fn a_lone_mob_or_general_row_moves_under_a_new_id_and_a_ridden_pig_keeps_its_han
             "first store"
         );
         let state = game.take_transferred_entity_state(robot.id());
-        game.entities.general
+        game.entities
+            .general
             .rows
             .retain(|row| row.id != robot.id());
         game.detach_entity(robot.id());

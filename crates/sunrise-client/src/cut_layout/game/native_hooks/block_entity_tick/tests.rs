@@ -647,11 +647,17 @@ fn reentrant_removal_does_not_spill_the_same_saved_pot_twice() {
             assert!(crate::game::spill_common::saved_entity(&game.world, AT).is_none());
             assert!(game.entities.dropped.len() > 1);
             assert!(
-                game.entities.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .all(|drop| drop.stack.item == stock.item)
             );
-            let spilled: u32 = game.entities.dropped.iter().map(|drop| drop.stack.count).sum();
+            let spilled: u32 = game
+                .entities
+                .dropped
+                .iter()
+                .map(|drop| drop.stack.count)
+                .sum();
             assert_eq!(spilled, 64);
         });
     });

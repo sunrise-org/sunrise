@@ -60,7 +60,8 @@ impl crate::game::ServerGame<'_> {
             .find(|g| g.conn == conn && g.placed)?;
         let id = gm.merchant.mob?;
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id && m.alive() && !m.removed)?;
         let stack = |s: &Option<ItemStack>| s.as_ref().map(|s| json!([s.item.as_ref(), s.count]));
@@ -395,7 +396,8 @@ impl crate::game::ServerGame<'_> {
         Self::merchant_sync_in(
             &mut session,
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| Some(m.id) == gm.merchant.mob),
         );
@@ -688,7 +690,8 @@ impl crate::game::ServerGame<'_> {
         id: u32,
     ) -> bool {
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id)
             .is_some_and(|m| {
@@ -1096,7 +1099,8 @@ pub mod tests {
         game.server.lan.as_mut().unwrap().hub.guests.push(guest);
 
         let villager = spawn(game, 40, "minecraft:villager");
-        game.entities.mobs[0].extra.profession = sunrise_sim::mobs::villager::ProfessionState::from_index(5);
+        game.entities.mobs[0].extra.profession =
+            sunrise_sim::mobs::villager::ProfessionState::from_index(5);
         let profession = "minecraft:farmer".to_owned();
         let first = offer("minecraft:wheat", "minecraft:emerald");
         game.entities.mobs[0].extra.trade = Some(Box::new(Trader {

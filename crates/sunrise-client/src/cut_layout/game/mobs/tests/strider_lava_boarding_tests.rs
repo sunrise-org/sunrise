@@ -50,8 +50,14 @@ fn a_strider_with_its_eyes_in_lava_refuses_a_rider() {
         game.world.set(0, y, 0, lava).unwrap();
     }
     scan_fluids(&mut game);
-    assert!(game.entities.mobs[0].fluids.in_lava, "the strider stands in lava");
-    assert!(game.entities.mobs[0].fluids.eye_in_lava, "its eye is in the lava");
+    assert!(
+        game.entities.mobs[0].fluids.in_lava,
+        "the strider stands in lava"
+    );
+    assert!(
+        game.entities.mobs[0].fluids.eye_in_lava,
+        "its eye is in the lava"
+    );
     assert!(
         game.interact_mount(0, ""),
         "Strider.mobInteract still consumes the click"

@@ -224,7 +224,12 @@ impl ClientGame<'_> {
             sunrise_gameplay_common::game::entity::entity_lists_of!(self),
             DrawExtras {
                 local_player,
-                dragon: self.common.entities.dragon.as_ref().map(|dragon| dragon.join),
+                dragon: self
+                    .common
+                    .entities
+                    .dragon
+                    .as_ref()
+                    .map(|dragon| dragon.join),
                 crystals: if draw_crystals {
                     &self.common.entities.crystals
                 } else {
@@ -318,7 +323,8 @@ impl ClientGame<'_> {
             Mover::Cart(c) => {
                 for o in
                     self.common
-                        .entities.carts
+                        .entities
+                        .carts
                         .iter()
                         .filter(|o| o.id != c.id)
                         .map(|c| cart(|id, p, bounds| self.client_copy_box(id, p, bounds), c))
@@ -364,7 +370,8 @@ impl ClientGame<'_> {
                 }
                 for (c, target) in self
                     .common
-                    .entities.boats
+                    .entities
+                    .boats
                     .iter()
                     .map(|b| {
                         (

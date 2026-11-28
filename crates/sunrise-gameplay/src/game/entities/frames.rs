@@ -68,7 +68,12 @@ impl crate::game::ServerGame<'_> {
         ));
         let supported = behind.legacy_solid || (s[1] == 0 && behind.has_class("DiodeBlock"));
         // canCoexist(true): only hanging entities facing the same way block it.
-        supported && frame_coexists(f, &self.common.entities.item_frames, &self.common.entities.paintings)
+        supported
+            && frame_coexists(
+                f,
+                &self.common.entities.item_frames,
+                &self.common.entities.paintings,
+            )
     }
     /// Asks the mods whether the acting guest may place a hanging entity
     /// of type `kind` at `pos` (`native_hanging_place`): true when one
@@ -209,7 +214,8 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         // Only a client's own pick is stopped by a block: the range check passed.
-        if (target.is_none() && !self.before_block(d)) || self.common.entities.item_frames[i].fixed {
+        if (target.is_none() && !self.before_block(d)) || self.common.entities.item_frames[i].fixed
+        {
             return false;
         }
         let at = center(&self.common.entities.item_frames[i]);
@@ -255,7 +261,12 @@ impl crate::game::ServerGame<'_> {
             self.server.lan_acting_uuid,
             self.server.lan_acting_name.clone(),
         ) {
-            let frame = self.common.entities.item_frames.iter().find(|f| f.id == entity_id);
+            let frame = self
+                .common
+                .entities
+                .item_frames
+                .iter()
+                .find(|f| f.id == entity_id);
             let item = frame
                 .and_then(|f| f.item.as_ref())
                 .map_or_else(String::new, |s| s.item.to_string());
@@ -315,7 +326,13 @@ impl crate::game::ServerGame<'_> {
         source: Option<super::commands::Target>,
         damage_type: &str,
     ) -> bool {
-        let Some(i) = self.common.entities.item_frames.iter().position(|f| f.id == id) else {
+        let Some(i) = self
+            .common
+            .entities
+            .item_frames
+            .iter()
+            .position(|f| f.id == id)
+        else {
             return false;
         };
         let bypasses = self
@@ -368,11 +385,16 @@ impl crate::game::ServerGame<'_> {
             // The listener had the game in its hands: find the frame again by id.
             match self
                 .common
-                .entities.item_frames
+                .entities
+                .item_frames
                 .iter()
                 .position(|f| f.id == entity_id)
             {
-                Some(now) if force_break || self.common.entities.item_frames[now].item.is_none() => i = now,
+                Some(now)
+                    if force_break || self.common.entities.item_frames[now].item.is_none() =>
+                {
+                    i = now
+                }
                 _ => return,
             }
         }
@@ -405,7 +427,8 @@ impl crate::game::ServerGame<'_> {
         if !with_frame
             && let Some(frame) = self
                 .common
-                .entities.item_frames
+                .entities
+                .item_frames
                 .iter_mut()
                 .find(|frame| frame.id == entity_id)
         {
@@ -543,7 +566,11 @@ impl crate::game::ServerGame<'_> {
                     / diameter;
             if dist > 1.0
                 || self.common.entities.item_frames[i].fixed
-                || !self.server.combat.0.visits(self.common.entities.item_frames[i].id)
+                || !self
+                    .server
+                    .combat
+                    .0
+                    .visits(self.common.entities.item_frames[i].id)
                 || !self.break_frame_by(i, self.explosion_kill_credit())
             {
                 i += 1;
@@ -575,7 +602,8 @@ impl crate::game::ServerGame<'_> {
         // filled now, nothing breaks.
         let Some(index) = self
             .common
-            .entities.item_frames
+            .entities
+            .item_frames
             .iter()
             .position(|f| f.id == id && !(was_empty && f.item.is_some()))
         else {
@@ -625,9 +653,14 @@ impl crate::game::ServerGame<'_> {
         let mut told = None;
         // EntityTickList copy-on-iterate: while a listener may remove frames, the round visits
         // the frames that were there when it began, each found again by its join.
-        let joins: Option<Vec<_>> = round
-            .told_listening()
-            .then(|| self.common.entities.item_frames.iter().map(|f| f.join).collect());
+        let joins: Option<Vec<_>> = round.told_listening().then(|| {
+            self.common
+                .entities
+                .item_frames
+                .iter()
+                .map(|f| f.join)
+                .collect()
+        });
         let mut turns = joins.iter().flatten();
         let mut i = 0;
         loop {
@@ -663,15 +696,28 @@ impl crate::game::ServerGame<'_> {
                 i += 1;
                 continue;
             }
-            if self.common.entities.item_frames.get(i).is_none_or(|f| f.id != id) {
-                let Some(now) = self.common.entities.item_frames.iter().position(|f| f.id == id) else {
+            if self
+                .common
+                .entities
+                .item_frames
+                .get(i)
+                .is_none_or(|f| f.id != id)
+            {
+                let Some(now) = self
+                    .common
+                    .entities
+                    .item_frames
+                    .iter()
+                    .position(|f| f.id == id)
+                else {
                     continue;
                 };
                 i = now;
             }
             told = Some((id, kind));
             // `Entity.tickCount` is raised before the rest of the tick, and is not saved.
-            self.common.entities.item_frames[i].ticks = self.common.entities.item_frames[i].ticks.saturating_add(1);
+            self.common.entities.item_frames[i].ticks =
+                self.common.entities.item_frames[i].ticks.saturating_add(1);
             self.common.entities.item_frames[i].check_interval += 1;
             if self.common.entities.item_frames[i].check_interval >= 100 {
                 self.common.entities.item_frames[i].check_interval = 0;
@@ -680,7 +726,12 @@ impl crate::game::ServerGame<'_> {
                 {
                     // Found again by id after the listener: gone, nothing is
                     // removed; empty before and filled now, it stays.
-                    let Some(now) = self.common.entities.item_frames.iter().position(|g| g.id == f.id)
+                    let Some(now) = self
+                        .common
+                        .entities
+                        .item_frames
+                        .iter()
+                        .position(|g| g.id == f.id)
                     else {
                         continue;
                     };

@@ -27,7 +27,8 @@ fn statue_conversion_keeps_the_owner_until_physical_discard() {
             .get("minecraft:copper_golem")
             .unwrap()
             .clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(71, kind, Vec3::new(0.5, 70.0, 0.5), 0.0));
         let index = Arc::new(Mutex::new(AttachmentIndex::default()));
         let holder = mod_api::EntityRef::new(game.native_lifecycle.epoch().unwrap(), 71);
@@ -43,7 +44,8 @@ fn statue_conversion_keeps_the_owner_until_physical_discard() {
         game.golem_become_statue(71);
         assert!(game.entities.mobs[0].removed);
         let current = game
-            .entities.mobs
+            .entities
+            .mobs
             .update(0, |mob| mob.attachment_lifetime().registration().unwrap());
         assert!(original.same_registration(&current));
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);

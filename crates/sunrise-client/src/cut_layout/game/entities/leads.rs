@@ -76,7 +76,8 @@ pub(crate) mod attach_tests {
             (2, "minecraft:cow", Species::Cow),
         ] {
             let kind = game.res.mob_types().get(kind).expect(kind).clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(id, kind, Vec3::new(0.5, 64.0, 0.5), 0.0));
             assert_eq!(game.entities.mobs.last().unwrap().species(), species);
         }
@@ -139,7 +140,8 @@ pub(crate) mod attach_tests {
         assert_eq!(game.entities.mobs[0].extra.leash, Some(Holder::Player));
         assert!(
             !game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .any(|d| &*d.stack.item == "minecraft:lead"),
             "the forgotten holder drops no second lead"

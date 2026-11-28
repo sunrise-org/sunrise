@@ -144,7 +144,13 @@ fn admitted_raid_loses_removed_loaded_bed_without_erasing_memory() {
         Status::Loss
     );
     assert_eq!(
-        game.entities.mobs.iter().find(|m| m.id == 162).unwrap().extra.bed,
+        game.entities
+            .mobs
+            .iter()
+            .find(|m| m.id == 162)
+            .unwrap()
+            .extra
+            .bed,
         Some([2, 200, 1])
     );
 }

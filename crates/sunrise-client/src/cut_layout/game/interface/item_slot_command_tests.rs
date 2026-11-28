@@ -17,7 +17,9 @@ fn item_replace_asks_the_slot_predicate_of_a_stand_and_the_dragon() {
     with_resident_game(|game| {
         game.build_registries();
         game.ui.registries.permission = 4;
-        game.entities.armor_stands.push(ArmorStand::new(16, Vec3::ZERO, 0.0));
+        game.entities
+            .armor_stands
+            .push(ArmorStand::new(16, Vec3::ZERO, 0.0));
         let mut dragon =
             sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
         dragon.id = 17;

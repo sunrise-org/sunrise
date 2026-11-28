@@ -12,7 +12,8 @@ fn projectile_handle_pierce_level_changes_real_hits() {
             .unwrap()
             .clone();
         for (id, x) in [(11, 1.0), (12, 2.0), (13, 3.0)] {
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(id, zombie.clone(), Vec3::new(x, 64.0, 0.0), 0.0));
         }
         let mut shot = Projectile::new(
@@ -49,7 +50,8 @@ fn breeze_deflection_does_not_draw_from_level_random() {
             .get("minecraft:breeze")
             .unwrap()
             .clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(1, breeze, Vec3::new(0.0, 64.0, 0.0), 0.0));
         let mut projectile =
             Projectile::new(ProjectileKind::Snowball, Vec3::new(-2.0, 64.5, 0.0), None);

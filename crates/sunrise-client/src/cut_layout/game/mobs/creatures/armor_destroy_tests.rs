@@ -12,20 +12,25 @@ fn body_armor_guards_and_break_event_are_preserved() {
         game.entities.mobs.push(Mob::new(21, kind, Vec3::ZERO, 0.0));
         game.start_audio_capture();
         let sword = ItemStack::new("minecraft:diamond_sword", 1);
-        game.entities.mobs[0].set_equipment_stack(EquipmentSlot::Body as usize, Some(sword.clone()));
+        game.entities.mobs[0]
+            .set_equipment_stack(EquipmentSlot::Body as usize, Some(sword.clone()));
         game.hurt_mob_armor(
             21,
             4.0,
             &sunrise_sim::health::NO_ATTACK.player_source("minecraft:generic", 0),
         );
-        assert_eq!(game.entities.mobs[0].item_by_slot(EquipmentSlot::Body), Some(sword));
+        assert_eq!(
+            game.entities.mobs[0].item_by_slot(EquipmentSlot::Body),
+            Some(sword)
+        );
         let resistant = ItemStack::new("minecraft:netherite_chestplate", 1);
         assert!(
             !game
                 .stack_can_be_hurt_by(&resistant, "minecraft:lava")
                 .unwrap()
         );
-        game.entities.mobs[0].set_equipment_stack(EquipmentSlot::Body as usize, Some(resistant.clone()));
+        game.entities.mobs[0]
+            .set_equipment_stack(EquipmentSlot::Body as usize, Some(resistant.clone()));
         game.hurt_mob_armor(
             21,
             4.0,
@@ -98,7 +103,11 @@ fn body_armor_guards_and_break_event_are_preserved() {
             4.0,
             &sunrise_sim::health::NO_ATTACK.player_source("minecraft:generic", 0),
         );
-        assert!(game.entities.mobs[0].item_by_slot(EquipmentSlot::Body).is_none());
+        assert!(
+            game.entities.mobs[0]
+                .item_by_slot(EquipmentSlot::Body)
+                .is_none()
+        );
         assert_eq!(
             game.server
                 .lan_queues
@@ -132,7 +141,11 @@ fn sun_protection_uses_mob_draw_and_broadcasts_break() {
             let _ = game.entities.mobs[0].random.next_int_bound(2);
         }
         game.wear_sun_protection(21);
-        assert!(game.entities.mobs[0].item_by_slot(EquipmentSlot::Head).is_none());
+        assert!(
+            game.entities.mobs[0]
+                .item_by_slot(EquipmentSlot::Head)
+                .is_none()
+        );
         assert_eq!(
             game.server
                 .lan_queues
@@ -201,7 +214,13 @@ fn a_break_effect_follows_only_an_applied_break() {
             )
             .unwrap();
         let jump = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
-            game.entities.mobs.iter().find(|m| m.id == id).unwrap().ai.jumping
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .ai
+                .jumping
         };
         let ifbroke = || MobEvent::IfBroke {
             mob: id,
@@ -209,7 +228,8 @@ fn a_break_effect_follows_only_an_applied_break() {
             otherwise: vec![MobEvent::Jump { mob: id }],
         };
         // No break of this mob in the batch: the otherwise events run.
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == id)
             .unwrap()
@@ -218,7 +238,8 @@ fn a_break_effect_follows_only_an_applied_break() {
         game.handle_mob_events(vec![ifbroke()]).unwrap();
         assert!(jump(game));
         // An applied break (no mod cancels): the effects run, the jump does not.
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == id)
             .unwrap()
@@ -269,7 +290,8 @@ fn an_enderman_does_not_take_a_changed_block() {
             std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
         );
         game.world.set(0, 64, 0, dirt).unwrap();
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == id)
             .unwrap()
@@ -283,7 +305,8 @@ fn an_enderman_does_not_take_a_changed_block() {
         .unwrap();
         assert_eq!(game.world.block(0, 64, 0), dirt);
         assert!(
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .unwrap()

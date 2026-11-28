@@ -115,7 +115,8 @@ fn the_gift_keeps_the_other_slots_chances() {
         "{equipment:{saddle:{id:\"minecraft:poppy\"}},drop_chances:{head:0.5f,mainhand:0.25f,saddle:2.0f}}"
     ));
     let i = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .position(|m| m.id == id(&game, CHANCES))
         .unwrap();
@@ -140,7 +141,8 @@ fn an_antenna_that_holds_an_item_keeps_it_and_its_chance() {
         "execute if items entity {OCCUPIED} saddle minecraft:dandelion"
     )));
     let i = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .position(|m| m.id == id(&game, OCCUPIED))
         .unwrap();
@@ -153,17 +155,26 @@ fn an_antenna_that_holds_an_item_keeps_it_and_its_chance() {
         "execute if items entity {OCCUPIED} saddle minecraft:poppy"
     )));
     let i = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .position(|m| m.id == id(&game, OCCUPIED))
         .unwrap();
-    assert_eq!(game.entities.mobs[i].extra.drop_chances, chances, "the chances stay");
+    assert_eq!(
+        game.entities.mobs[i].extra.drop_chances, chances,
+        "the chances stay"
+    );
 }
 
 /// The effective chance of each slot (`Mob.dropChances.byEquipment`), as a
 /// death drop reads it, in `EquipmentSlot.VALUES` order.
 fn effective(game: &sunrise_gameplay::game::ServerGame<'_>, uuid: &str) -> Vec<f32> {
-    let m = game.entities.mobs.iter().find(|m| m.id == id(game, uuid)).unwrap();
+    let m = game
+        .entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id(game, uuid))
+        .unwrap();
     sunrise_sim::mobs::drops::SLOTS
         .iter()
         .map(|slot| sunrise_sim::mobs::drops::drop_chance(m, slot))
@@ -187,7 +198,8 @@ fn every_other_slot_keeps_its_effective_chance() {
         assert_eq!(after[7], 2.0, "{uuid}: the antenna is a guaranteed drop");
     }
     let i = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .position(|m| m.id == id(&game, EMPTY))
         .unwrap();

@@ -80,7 +80,8 @@ impl crate::game::ServerGame<'_> {
         // The part may have moved or removed the mob: its drops fall where it is now.
         let index = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .position(|m| m.id == id && !m.removed);
         let at = index.map_or(at, |i| self.common.entities.mobs[i].position);
@@ -285,7 +286,8 @@ mod tests {
                 "the cow is sheared"
             );
             let leather: Vec<_> = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .filter(|d| &*d.stack.item == "minecraft:leather")
                 .map(|d| d.stack.count)
@@ -296,8 +298,20 @@ mod tests {
                 !game.shear_entity((4, 64, 0), &shears).unwrap(),
                 "the sheep refuses"
             );
-            assert!(!game.entities.mobs.iter().any(|m| m.id == 2 && m.extra.sheared));
-            assert!(!game.entities.dropped.iter().any(|d| d.stack.item.ends_with("_wool")));
+            assert!(
+                !game
+                    .entities
+                    .mobs
+                    .iter()
+                    .any(|m| m.id == 2 && m.extra.sheared)
+            );
+            assert!(
+                !game
+                    .entities
+                    .dropped
+                    .iter()
+                    .any(|d| d.stack.item.ends_with("_wool"))
+            );
         });
     }
 }

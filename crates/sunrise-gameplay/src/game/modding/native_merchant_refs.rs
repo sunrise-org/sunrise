@@ -182,7 +182,9 @@ impl crate::game::ServerGame<'_> {
         let Some(mob) = self.native_merchant_index(merchant) else {
             return false;
         };
-        if self.lan_trade_conn(self.common.entities.mobs[mob].id).is_none()
+        if self
+            .lan_trade_conn(self.common.entities.mobs[mob].id)
+            .is_none()
             && !self.common.entities.mobs[mob].extra.flag2
         {
             self.ensure_offers(mob);

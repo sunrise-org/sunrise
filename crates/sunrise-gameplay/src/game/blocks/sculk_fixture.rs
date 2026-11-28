@@ -240,7 +240,14 @@ impl crate::game::ServerGame<'_> {
         };
         // A source entity that is gone reads as none (VibrationInfo.getEntity).
         let alive = |w: Option<Who>| match w {
-            Some(Who::Mob(id)) if !self.common.entities.mobs.iter().any(|m| m.id == id && !m.removed) => {
+            Some(Who::Mob(id))
+                if !self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .any(|m| m.id == id && !m.removed) =>
+            {
                 None
             }
             other => other,
@@ -571,7 +578,8 @@ impl crate::game::ServerGame<'_> {
             }
             let mut fresh: Vec<&Mob> = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .filter(|m| !known.contains(&m.id))
                 .collect();
@@ -614,7 +622,8 @@ impl crate::game::ServerGame<'_> {
             }
             known_items = self.common.entities.dropped.len();
             // Where an orb flies comes from its own random: its value only.
-            for orb in &self.common.entities.orbs[known_orbs.min(self.common.entities.orbs.len())..] {
+            for orb in &self.common.entities.orbs[known_orbs.min(self.common.entities.orbs.len())..]
+            {
                 lines.push(format!("new minecraft:experience_orb value={}", orb.value));
             }
             known_orbs = self.common.entities.orbs.len();
@@ -780,7 +789,8 @@ impl crate::game::ServerGame<'_> {
                         &attack,
                     );
                     let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
-                    if let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, id) {
+                    if let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, id)
+                    {
                         self.common.entities.mobs[index].damage(
                             crate::game::server_side::entity_server::damage_level_of!(
                                 self,
@@ -829,7 +839,8 @@ impl crate::game::ServerGame<'_> {
         // after the tick.
         let mut born: Vec<u32> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .map(|m| m.id)
             .filter(|id| !known.contains(id))

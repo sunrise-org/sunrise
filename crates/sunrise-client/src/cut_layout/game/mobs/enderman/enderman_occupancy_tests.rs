@@ -84,7 +84,11 @@ fn a_carried_block_is_not_placed_into_an_entity() {
             .unwrap();
         let placed = game.world.block(5, 100, 5) == stone;
         assert_eq!(placed, what == "nothing", "{what}");
-        assert_eq!(game.entities.mobs[0].extra.carried.is_none(), placed, "{what}");
+        assert_eq!(
+            game.entities.mobs[0].extra.carried.is_none(),
+            placed,
+            "{what}"
+        );
     }
 }
 

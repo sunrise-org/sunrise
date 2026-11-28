@@ -331,15 +331,22 @@ impl crate::game::ServerGame<'_> {
             Target::Hook(id) if server => self
                 .fishing_hooks_here()
                 .find_map(|(hook, _)| (hook.id() == id).then(|| hook.bounds())),
-            Target::Dragon(_) => self.common.entities.dragon.as_ref().map(|d| d.body_bounds()),
+            Target::Dragon(_) => self
+                .common
+                .entities
+                .dragon
+                .as_ref()
+                .map(|d| d.body_bounds()),
             Target::Frame(_) => self
                 .common
-                .entities.item_frames
+                .entities
+                .item_frames
                 .get(self.common.entities.item_frames.locate(join)?)
                 .map(|f| aabb_extents(f.bounds())),
             Target::Painting(_) => self
                 .common
-                .entities.paintings
+                .entities
+                .paintings
                 .get(self.common.entities.paintings.locate(join)?)
                 .map(|p| aabb_extents(p.bounds())),
             Target::Mob(_) => list_query_body(&self.common.entities.mobs, join),
@@ -353,9 +360,7 @@ impl crate::game::ServerGame<'_> {
             Target::Projectile(_) => list_query_body(&self.common.entities.projectiles, join),
             Target::Rocket(_) => list_query_body(&self.common.entities.rockets, join),
             Target::Trident(_) => list_query_body(&self.common.entities.tridents, join),
-            Target::General(_) => {
-                list_query_body(&self.common.entities.general.rows, join)
-            }
+            Target::General(_) => list_query_body(&self.common.entities.general.rows, join),
             _ => None,
         }
     }

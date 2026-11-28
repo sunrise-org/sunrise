@@ -447,7 +447,12 @@ pub(crate) fn pig_ticks(replace_cancels: bool) -> TickCalls {
     .into();
     mod_platform::testing::with_mods(mods, || {
         with_two_pigs(|game| {
-            let first = game.entities.mobs.iter().position(|mob| mob.id == 71).unwrap();
+            let first = game
+                .entities
+                .mobs
+                .iter()
+                .position(|mob| mob.id == 71)
+                .unwrap();
             game.entities.mobs.update(first, |mob| {
                 mob.no_ai = false;
                 mob.no_gravity = false;
@@ -521,12 +526,19 @@ fn trader_milk_finishes_before_its_own_entity_tick_post() {
             game.entities.mobs.push(trader);
             // Start the actual daylight drink goal, whose first tick still precedes completion.
             game.tick_creature_entities().unwrap();
-            let i = game.entities.mobs.iter().position(|mob| mob.id == 71).unwrap();
+            let i = game
+                .entities
+                .mobs
+                .iter()
+                .position(|mob| mob.id == 71)
+                .unwrap();
             assert_eq!(
                 game.entities.mobs[i].extra.main_hand_id(),
                 Some("minecraft:milk_bucket")
             );
-            game.entities.mobs.update(i, |mob| mob.extra.using_item = 32);
+            game.entities
+                .mobs
+                .update(i, |mob| mob.extra.using_item = 32);
             game.tick_creature_entities().unwrap();
         });
     });
@@ -823,7 +835,8 @@ fn mob_equipment_change_fires_before_post_and_skips_canceled_ticks() {
             );
             assert!(
                 game.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 71)
                     .unwrap()
@@ -833,7 +846,8 @@ fn mob_equipment_change_fires_before_post_and_skips_canceled_ticks() {
             );
             assert!(
                 !game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 72)
                     .unwrap()
@@ -920,7 +934,12 @@ fn an_equipped_mob_discarded_by_despawn_does_not_report_equipment() {
             }
             game.tick_creature_entities().unwrap();
             assert_eq!(
-                game.common.entities.mobs.iter().map(|m| m.id).collect::<Vec<_>>(),
+                game.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .map(|m| m.id)
+                    .collect::<Vec<_>>(),
                 [72]
             );
             assert_eq!(*heard.lock().unwrap(), [72]);

@@ -29,7 +29,13 @@ impl crate::game::ServerGame<'_> {
                 })
                 .unwrap_or(false),
             Some(Target::Mob(id)) => {
-                let Some(mob) = self.common.entities.mobs.iter_mut().find(|mob| mob.id == id) else {
+                let Some(mob) = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter_mut()
+                    .find(|mob| mob.id == id)
+                else {
                     return false;
                 };
                 // Own random, effective fire immunity, sound outbox, then clearFire.
@@ -40,7 +46,8 @@ impl crate::game::ServerGame<'_> {
             Some(Target::Stand(id)) => {
                 let Some(index) = self
                     .common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .iter()
                     .position(|stand| stand.id == id)
                 else {
@@ -63,12 +70,19 @@ impl crate::game::ServerGame<'_> {
                 true
             }
             Some(Target::Item(id)) => {
-                let Some(index) = self.common.entities.dropped.iter().position(|item| item.id == id) else {
+                let Some(index) = self
+                    .common
+                    .entities
+                    .dropped
+                    .iter()
+                    .position(|item| item.id == id)
+                else {
                     return false;
                 };
-                let immune = self
-                    .stack_can_be_hurt_by(&self.common.entities.dropped[index].stack, "minecraft:in_fire")
-                    == Some(false);
+                let immune = self.stack_can_be_hurt_by(
+                    &self.common.entities.dropped[index].stack,
+                    "minecraft:in_fire",
+                ) == Some(false);
                 let sound = {
                     let item = &mut self.common.entities.dropped[index];
                     let play = (item.fire_ticks > 0 && !immune).then(|| {

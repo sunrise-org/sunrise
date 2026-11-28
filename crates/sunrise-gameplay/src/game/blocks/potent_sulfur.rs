@@ -110,7 +110,8 @@ impl ServerGame<'_> {
         let Some(pass) = self.server.pass_mobs.as_mut() else {
             return false;
         };
-        pass.grid_for(&self.common.entities.mobs).candidates(area, out)
+        pass.grid_for(&self.common.entities.mobs)
+            .candidates(area, out)
     }
 
     /// `PotentSulfurBlockEntity.applyNauseaEffect` on the player acting (a
@@ -263,7 +264,8 @@ impl ServerGame<'_> {
         }
         for item in self
             .common
-            .entities.dropped
+            .entities
+            .dropped
             .iter_mut()
             .filter(|i| i.bounds().intersects(area))
         {
@@ -273,7 +275,8 @@ impl ServerGame<'_> {
         }
         for tnt in self
             .common
-            .entities.tnts
+            .entities
+            .tnts
             .iter_mut()
             .filter(|t| t.bounds().intersects(area))
         {

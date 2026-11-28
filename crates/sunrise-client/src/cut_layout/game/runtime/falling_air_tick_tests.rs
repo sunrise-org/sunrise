@@ -53,7 +53,8 @@ fn loaded_air_is_discarded_on_first_actual_game_tick() {
         game.tick().unwrap();
         assert_eq!(game.world.game_time, clock + 1);
         let sand = game
-            .entities.falling
+            .entities
+            .falling
             .iter()
             .find(|f| f.id == ids[1])
             .expect("nonair control survives");

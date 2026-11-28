@@ -447,7 +447,8 @@ mod tests {
                 assert_eq!(game.held().unwrap().damage, 10);
                 assert_eq!(carried(game, "minecraft:cobblestone"), 1);
                 assert_eq!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .filter(|item| &*item.stack.item == "minecraft:cobblestone")
                         .map(|item| item.stack.count)

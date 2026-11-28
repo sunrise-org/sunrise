@@ -55,13 +55,15 @@ impl crate::game::ServerGame<'_> {
     ) -> Option<[f64; 3]> {
         let at = |v: Vec3| [v.x, v.y, v.z];
         self.common
-            .entities.boats
+            .entities
+            .boats
             .iter()
             .find(|b| b.id == id)
             .map(|b| at(b.position))
             .or_else(|| {
                 self.common
-                    .entities.carts
+                    .entities
+                    .carts
                     .iter()
                     .find(|c| c.id == id)
                     .map(|c| at(c.position))
@@ -184,10 +186,20 @@ impl crate::game::ServerGame<'_> {
             return;
         }
         let (keys, dead) = (input_keys(g.input), g.dead || g.health <= 0.0);
-        let boat = self.common.entities.boats.iter().position(|b| b.id == vehicle);
+        let boat = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .position(|b| b.id == vehicle);
         let cart = self.common.entities.carts.iter().any(|c| c.id == vehicle);
         let mount = self.common.entities.mobs.iter().any(|m| m.id == vehicle);
-        let cushion = self.common.entities.cushions.iter().any(|c| c.id == vehicle);
+        let cushion = self
+            .common
+            .entities
+            .cushions
+            .iter()
+            .any(|c| c.id == vehicle);
         let seat = self.seat(vehicle).is_some();
         let Some(host) = self.server.lan.as_mut() else {
             return;
@@ -211,12 +223,21 @@ impl crate::game::ServerGame<'_> {
         let seat = self.as_guest(conn, |game| {
             // A cushion does not move: the rider sits on it until it sneaks
             // (`Cushion.removePassenger` plays the get-up sound).
-            if game.entities.cushions.iter().any(|c| Some(c.id) == game.riding) {
+            if game
+                .entities
+                .cushions
+                .iter()
+                .any(|c| Some(c.id) == game.riding)
+            {
                 if keys.shift {
                     game.tick_cushion_riding(keys);
                     return None;
                 }
-                let c = game.entities.cushions.iter().find(|c| Some(c.id) == game.riding)?;
+                let c = game
+                    .entities
+                    .cushions
+                    .iter()
+                    .find(|c| Some(c.id) == game.riding)?;
                 let p = c.seat();
                 return Some([p.x, p.y, p.z]);
             }
@@ -226,7 +247,12 @@ impl crate::game::ServerGame<'_> {
                 let p = game.tick_seat_riding(keys)?;
                 return Some([p.x, p.y, p.z]);
             }
-            if let Some(i) = game.entities.boats.iter().position(|b| Some(b.id) == game.riding) {
+            if let Some(i) = game
+                .entities
+                .boats
+                .iter()
+                .position(|b| Some(b.id) == game.riding)
+            {
                 if keys.shift || ejected {
                     game.dismount(i);
                     return None;
@@ -275,13 +301,15 @@ impl crate::game::ServerGame<'_> {
         };
         let at = self
             .common
-            .entities.boats
+            .entities
+            .boats
             .iter()
             .find(|b| b.id == vehicle)
             .map(|b| b.position)
             .or_else(|| {
                 self.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == vehicle && equine::moved_by_client(m))
                     .map(|m| m.position)
@@ -318,20 +346,28 @@ impl crate::game::ServerGame<'_> {
         }
         let at = self
             .common
-            .entities.boats
+            .entities
+            .boats
             .iter()
             .position(|b| b.id == vehicle)
-            .map(|i| (self.common.entities.boats[i].position, self.player_boat_seat(i)))
+            .map(|i| {
+                (
+                    self.common.entities.boats[i].position,
+                    self.player_boat_seat(i),
+                )
+            })
             .or_else(|| {
                 self.common
-                    .entities.carts
+                    .entities
+                    .carts
                     .iter()
                     .find(|c| c.id == vehicle)
                     .map(|c| (c.position, c.position.add_vector(Vec3::new(0.0, SEAT, 0.0))))
             })
             .or_else(|| {
                 self.common
-                    .entities.cushions
+                    .entities
+                    .cushions
                     .iter()
                     .find(|c| c.id == vehicle)
                     .map(|c| (c.position, c.seat()))
@@ -419,7 +455,8 @@ impl crate::game::ServerGame<'_> {
         let boat = vehicle.and_then(|v| self.common.entities.boats.iter().position(|b| b.id == v));
         let mount = vehicle.and_then(|v| {
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .position(|m| m.id == v && equine::moved_by_client(m))
         });
@@ -449,7 +486,8 @@ impl crate::game::ServerGame<'_> {
                 m.ground.on_ground,
             )
         } else {
-            if let Some(c) = vehicle.and_then(|v| self.common.entities.carts.iter().find(|c| c.id == v))
+            if let Some(c) =
+                vehicle.and_then(|v| self.common.entities.carts.iter().find(|c| c.id == v))
                 && c.position.distance_squared(Vec3::new(x, y, z)) > 1.0
             {
                 back(self.server.lan.as_mut().unwrap(), c.position, c.yaw);
@@ -524,15 +562,20 @@ impl crate::game::ServerGame<'_> {
         // water or a reset block resets the fall, which a move put back keeps
         // (`absSnapTo` restores only the position).
         if let Some(i) = mount {
-            self.common.entities.mobs[i].fall_distance =
-                self.common
-                    .vehicle_fall_reset(self.common.entities.mobs[i].fall_distance, old, resolved);
+            self.common.entities.mobs[i].fall_distance = self.common.vehicle_fall_reset(
+                self.common.entities.mobs[i].fall_distance,
+                old,
+                resolved,
+            );
         } else if let Some(i) = boat {
-            let reset =
-                self.common
-                    .vehicle_fall_reset(self.common.entities.boats[i].fall_distance, old, resolved);
+            let reset = self.common.vehicle_fall_reset(
+                self.common.entities.boats[i].fall_distance,
+                old,
+                resolved,
+            );
             self.common
-                .entities.boats
+                .entities
+                .boats
                 .update(i, |boat| boat.fall_distance = reset);
         }
         // An overridden decision is put back from wherever the vehicle starts:
@@ -584,11 +627,15 @@ impl crate::game::ServerGame<'_> {
         if let Some(i) = mount {
             use sunrise_sim::mobs::living::MovementAction;
 
-            let (id, join) = (self.common.entities.mobs[i].id, self.common.entities.mobs[i].join);
+            let (id, join) = (
+                self.common.entities.mobs[i].id,
+                self.common.entities.mobs[i].join,
+            );
             let mut events = Vec::new();
             let mut resume = None;
             while let Some(i) = self.common.mob_index.find(&self.common.entities.mobs, id) {
-                if self.common.entities.mobs[i].join != join || self.common.entities.mobs[i].removed {
+                if self.common.entities.mobs[i].join != join || self.common.entities.mobs[i].removed
+                {
                     break;
                 }
                 let mut m = self.common.entities.mobs[i].clone();
@@ -690,9 +737,13 @@ impl crate::game::ServerGame<'_> {
         let fall = if in_water {
             0.0
         } else {
-            self.common.boat_fall(&self.common.entities.boats[i], resolved.y)
+            self.common
+                .boat_fall(&self.common.entities.boats[i], resolved.y)
         };
-        self.common.entities.boats.update(i, |b| b.fall_distance = fall);
+        self.common
+            .entities
+            .boats
+            .update(i, |b| b.fall_distance = fall);
         let seat = self.player_boat_seat(i);
         let Some(host) = self.server.lan.as_mut() else {
             return;
@@ -746,7 +797,13 @@ impl crate::game::ServerGame<'_> {
         let Some(vehicle) = vehicle.filter(|&v| self.guest_controls_vehicle(conn, v)) else {
             return;
         };
-        if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == vehicle) {
+        if let Some(i) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .position(|b| b.id == vehicle)
+        {
             self.common.entities.boats.update(i, |b| {
                 b.paddling = paddles;
                 b.paddle_controller = true;

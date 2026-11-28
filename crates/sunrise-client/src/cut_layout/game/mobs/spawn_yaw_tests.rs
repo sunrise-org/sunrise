@@ -67,7 +67,12 @@ fn game<'a>(
 }
 
 fn yaw_of(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> f32 {
-    game.entities.mobs.iter().find(|m| m.id == id).expect("spawned").yaw
+    game.entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id)
+        .expect("spawned")
+        .yaw
 }
 
 #[test]

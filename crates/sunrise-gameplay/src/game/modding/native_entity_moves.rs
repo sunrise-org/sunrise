@@ -220,16 +220,42 @@ impl crate::game::ServerGame<'_> {
             return Some(g.head_yaw);
         }
         match t {
-            Target::Mob(id) => Some(self.common.entities.mobs.iter().find(|m| m.id == id)?.head_yaw),
-            Target::Stand(id) => Some(self.entities.armor_stands.iter().find(|a| a.id == id)?.head_yaw),
+            Target::Mob(id) => Some(
+                self.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)?
+                    .head_yaw,
+            ),
+            Target::Stand(id) => Some(
+                self.entities
+                    .armor_stands
+                    .iter()
+                    .find(|a| a.id == id)?
+                    .head_yaw,
+            ),
             _ => Some(0.0),
         }
     }
     /// `LivingEntity.yBodyRot`: the living entity's authoritative body on a server.
     pub(in crate::game) fn entity_body_yaw(&self, entity: EntityRef) -> Option<f32> {
         match self.native_entity_target(entity)? {
-            Target::Mob(id) => Some(self.common.entities.mobs.iter().find(|m| m.id == id)?.body_yaw),
-            Target::Stand(id) => Some(self.entities.armor_stands.iter().find(|a| a.id == id)?.body_yaw),
+            Target::Mob(id) => Some(
+                self.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)?
+                    .body_yaw,
+            ),
+            Target::Stand(id) => Some(
+                self.entities
+                    .armor_stands
+                    .iter()
+                    .find(|a| a.id == id)?
+                    .body_yaw,
+            ),
             Target::Dragon(_) => Some(self.common.entities.dragon.as_ref()?.body_yaw),
             t @ (Target::Player | Target::Guest(_)) => Some(self.native_player_body(t)?.body_yaw),
             _ => None,
@@ -289,14 +315,16 @@ impl crate::game::ServerGame<'_> {
             return false;
         }
         match self.native_entity_target(entity) {
-            Some(Target::Mob(id)) => match self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
-                Some(m) => {
-                    m.head_yaw = yaw;
-                    m.needs_sync = true;
-                    true
+            Some(Target::Mob(id)) => {
+                match self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
+                    Some(m) => {
+                        m.head_yaw = yaw;
+                        m.needs_sync = true;
+                        true
+                    }
+                    None => false,
                 }
-                None => false,
-            },
+            }
             Some(t @ (Target::Player | Target::Guest(_))) => {
                 let conn = match t {
                     Target::Player => self.server.lan_acting,
@@ -549,7 +577,8 @@ pub(in crate::game) mod tests {
             );
             assert!(!entity.teleport_to(game, [f64::NAN, 0.0, 0.0], None));
             assert!(!entity.push(game, [0.0, f64::INFINITY, 0.0]));
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .push(sunrise_sim::entities::ArmorStand::new(13, Vec3::ZERO, 0.0));
             let stand = game.entity(13).unwrap();
             assert!(!stand.set_rotation(game, 30.0, 10.0));
@@ -573,19 +602,21 @@ pub(in crate::game) mod tests {
             let marker = game.entity(14).unwrap();
             assert_eq!(marker.head_yaw(game), Some(0.0));
             assert!(!marker.set_head_yaw(game, 10.0));
-            game.entities.paintings.push(sunrise_sim::entities::Painting {
-                attachment_lifetime: Default::default(),
-                join: Default::default(),
-                id: 15,
-                pos: [0, 64, 0],
-                facing: 0,
-                variant: "minecraft:kebab".into(),
-                asset: None,
-                width: 1,
-                height: 1,
-                check_interval: 0,
-                ticks: 0,
-            });
+            game.entities
+                .paintings
+                .push(sunrise_sim::entities::Painting {
+                    attachment_lifetime: Default::default(),
+                    join: Default::default(),
+                    id: 15,
+                    pos: [0, 64, 0],
+                    facing: 0,
+                    variant: "minecraft:kebab".into(),
+                    asset: None,
+                    width: 1,
+                    height: 1,
+                    check_interval: 0,
+                    ticks: 0,
+                });
             let painting = game.entity(15).unwrap();
             assert!(!painting.teleport_to(game, [1.0, 64.0, 0.0], None));
             assert!(!painting.set_rotation(game, 30.0, 10.0));

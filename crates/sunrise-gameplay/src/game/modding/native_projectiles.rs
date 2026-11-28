@@ -89,7 +89,8 @@ impl Drop for ProjectileDispatch<'_, '_> {
     fn drop(&mut self) {
         if let Some(pass) = self.pass.take() {
             self.game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .restore(pass, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
         }
     }
@@ -489,7 +490,8 @@ impl crate::game::ServerGame<'_> {
             (p, pending.keep, hit) = self.broken_vehicle_retick(before.clone());
             pending.target = self.native_impact_target(hit);
             self.common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .store_back(index, p.clone());
             self.entity_section_step(p.id, from.components(), p.position.components());
             if self.projectile_removal_pending(p.id) {

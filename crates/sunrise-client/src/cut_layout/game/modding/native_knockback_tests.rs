@@ -506,7 +506,8 @@ fn a_mobs_fireball_on_the_player_names_the_shooter_and_its_bow() {
         player_with_sword(game);
         game.set_game_mode(sunrise_command::args::GameMode::Survival);
         zombie_at(game, 42, Vec3::new(0.0, 0.0, 6.0));
-        game.entities.mobs
+        game.entities
+            .mobs
             .last_mut()
             .unwrap()
             .extra
@@ -849,7 +850,8 @@ fn accepted_wolf_hits_commit_owner_replacement_clearing_and_unresolved_precedenc
                 "the listener's credit-dependent strength edit did not apply"
             );
             if owner == Some(12) {
-                game.entities.mobs[1].extra.owner = Some(sunrise_sim::lan::playerdata::uuid_ints(999));
+                game.entities.mobs[1].extra.owner =
+                    Some(sunrise_sim::lan::playerdata::uuid_ints(999));
                 assert!(!game.mob_hits_mob(100, 0.5, Damage::mob(101, [1.0, 0.0, 0.0])));
                 let credit = game.server.last_hurt_by_player[&100];
                 assert_eq!(

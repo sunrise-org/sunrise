@@ -222,7 +222,8 @@ impl crate::game::CommonGame<'_> {
     /// Internal object lookup, including a passenger refused level residency.
     /// This is deliberately separate from `level_entity` and native handle queries.
     pub fn mob_object(&self, id: u32) -> Option<&Mob> {
-        self.entities.mobs
+        self.entities
+            .mobs
             .iter()
             .find(|mob| mob.id == id)
             .or_else(|| self.persist.off_level.get(&id).and_then(OffLevel::as_mob))

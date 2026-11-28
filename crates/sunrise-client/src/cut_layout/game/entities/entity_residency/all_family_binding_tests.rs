@@ -116,8 +116,10 @@ fn every_ordinary_resident_family_binds_its_actual_owned_slot() {
         bind(game, id, Kind::Dragon);
         // #792: a general row joins its own family's list; the lookup is the
         // same table path every family takes.
-        game.entities.general.rows.push(
-            sunrise_gameplay_common::game::general::GeneralRow {
+        game.entities
+            .general
+            .rows
+            .push(sunrise_gameplay_common::game::general::GeneralRow {
                 id: 4242,
                 uuid: [11, 12, 13, 14],
                 join: sunrise_sim::join_seq::JoinSeq::UNJOINED,
@@ -146,8 +148,7 @@ fn every_ordinary_resident_family_binds_its_actual_owned_slot() {
                 vehicle_order: 0,
                 boarding_cooldown: 0,
                 attachment_lifetime: Default::default(),
-            },
-        );
+            });
         bind(game, 4242, Kind::General);
         assert_eq!(maps.len(), 23);
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 23);

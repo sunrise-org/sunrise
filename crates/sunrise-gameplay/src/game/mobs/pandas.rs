@@ -45,7 +45,8 @@ impl ServerGame<'_> {
                 let reach = m.bounds().inflate(Vec3::new(1.0, 0.0, 1.0));
                 let taken = self
                     .common
-                    .entities.dropped
+                    .entities
+                    .dropped
                     .iter()
                     .position(|e| wants(self, e) && reach.intersects(e.bounds()));
                 if let Some(j) = taken {
@@ -55,7 +56,12 @@ impl ServerGame<'_> {
                     self.mob_item_pickup_trigger(i, &before);
                     let e = self.remove_dropped(j);
                     self.server_mob_take_item(&e, id);
-                    panda::hold(&mut self.common.entities.mobs[i], &e.stack.item, e.stack.count, true);
+                    panda::hold(
+                        &mut self.common.entities.mobs[i],
+                        &e.stack.item,
+                        e.stack.count,
+                        true,
+                    );
                 }
             }
             let m = &self.common.entities.mobs[i];
@@ -63,12 +69,14 @@ impl ServerGame<'_> {
             let (near, wide) = (area(6.0), area(8.0));
             let food_near = self
                 .common
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .any(|e| wants(self, e) && near.intersects(e.bounds()));
             let food_at = self
                 .common
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .find(|e| wants(self, e) && wide.intersects(e.bounds()))
                 .map(|e| [e.position.x, e.position.y, e.position.z]);
@@ -132,7 +140,8 @@ impl ServerGame<'_> {
             self.server.love_cause.insert(id, self.server.lan_acting);
             let kind = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map(sunrise_gameplay_common::game::native_hooks::mob_kind)
@@ -151,7 +160,8 @@ impl ServerGame<'_> {
     pub fn panda_sneezed(&mut self, id: u32) {
         let Some(area) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id)
             .map(|m| m.bounds().inflate(Vec3::new(10.0, 10.0, 10.0)))
@@ -179,7 +189,8 @@ impl ServerGame<'_> {
             }
         }
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
     }
 }

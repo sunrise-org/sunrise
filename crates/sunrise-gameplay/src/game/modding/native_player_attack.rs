@@ -203,7 +203,12 @@ pub(in crate::game) mod tests {
     }
 
     fn mob<'a>(game: &'a ServerGame<'_>, id: u32) -> &'a sunrise_sim::mobs::Mob {
-        game.common.entities.mobs.iter().find(|m| m.id == id).unwrap()
+        game.common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id)
+            .unwrap()
     }
 
     /// A connected player's `attack` on a zombie, holding a Knockback II, Fire Aspect diamond

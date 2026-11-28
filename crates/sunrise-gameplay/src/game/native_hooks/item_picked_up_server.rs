@@ -57,7 +57,8 @@ impl crate::game::ServerGame<'_> {
         let (id, join) = (items[index].id, items[index].join_seq());
         let lent = items.extract(join).expect("in its pass");
         self.common
-            .entities.dropped
+            .entities
+            .dropped
             .put_back(self.common.entities.dropped.len(), lent);
         let result = notice(self);
         let removed = self.common.persist.removals.contains(&Target::Item(id));
@@ -150,7 +151,8 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn native_touch_item_now(&mut self, id: u32) -> u32 {
         let Some(before) = self
             .common
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .find(|d| d.id == id)
             .map(|d| d.stack.count)
@@ -202,7 +204,8 @@ impl crate::game::ServerGame<'_> {
         self.common.put_back_dropped(items);
         let after = self
             .common
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .find(|d| d.id == id)
             .map_or(0, |d| d.stack.count);
@@ -287,7 +290,13 @@ impl crate::game::ServerGame<'_> {
         let live = match &slot {
             PickupSlot::Lifted { items, index } => &items[**index],
             PickupSlot::Resident { .. } => {
-                let Some(live) = self.common.entities.dropped.iter().find(|item| item.id == id) else {
+                let Some(live) = self
+                    .common
+                    .entities
+                    .dropped
+                    .iter()
+                    .find(|item| item.id == id)
+                else {
                     return;
                 };
                 live
@@ -335,7 +344,9 @@ impl crate::game::ServerGame<'_> {
                 match &mut slot {
                     PickupSlot::Lifted { items, index } => items[**index].stack = during,
                     PickupSlot::Resident { .. } => {
-                        if let Some(at) = self.common.entities.dropped.iter().position(|d| d.id == id) {
+                        if let Some(at) =
+                            self.common.entities.dropped.iter().position(|d| d.id == id)
+                        {
                             self.common.entities.dropped[at].stack = during;
                         }
                     }

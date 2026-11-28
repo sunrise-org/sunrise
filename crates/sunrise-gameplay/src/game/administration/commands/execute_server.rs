@@ -169,7 +169,8 @@ impl crate::game::ServerGame<'_> {
                 // a marker or a display with that UUID is not an owner.
                 Target::Mob(id) => self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id)
                     .and_then(|m| m.extra.owner)
@@ -193,14 +194,17 @@ impl crate::game::ServerGame<'_> {
             // saved UUID that is still waiting for tickLeash to restore it.
             Some("leasher") => {
                 let leash = match entity {
-                    Target::Mob(id) => {
-                        self.common.entities.mobs.iter().find(|m| m.id == id).and_then(|m| {
-                            m.extra.leash.map(|holder| (holder, m.extra.leash_player))
-                        })
-                    }
+                    Target::Mob(id) => self
+                        .common
+                        .entities
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .and_then(|m| m.extra.leash.map(|holder| (holder, m.extra.leash_player))),
                     Target::Boat(id) => self
                         .common
-                        .entities.boats
+                        .entities
+                        .boats
                         .iter()
                         .find(|b| b.id == id)
                         .and_then(|b| b.leash.map(|holder| (holder, b.leash_player))),
@@ -225,7 +229,8 @@ impl crate::game::ServerGame<'_> {
             Some("origin") => match entity {
                 Target::Projectile(id) => self
                     .common
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .find(|p| p.id == id)
                     .and_then(|p| {
@@ -254,7 +259,8 @@ impl crate::game::ServerGame<'_> {
                     .collect(),
                 Target::Item(id) => self
                     .common
-                    .entities.dropped
+                    .entities
+                    .dropped
                     .iter()
                     .find(|d| d.id == id)
                     .and_then(|d| d.thrower)
@@ -268,7 +274,8 @@ impl crate::game::ServerGame<'_> {
                     .collect(),
                 Target::Mob(id) => self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id && m.kind.id == "minecraft:vex")
                     .map(|m| m.extra.counter2 as u32)
@@ -286,7 +293,8 @@ impl crate::game::ServerGame<'_> {
                 if let Target::Mob(id) | Target::Boat(id) = entity {
                     passengers.extend(
                         self.common
-                            .entities.mobs
+                            .entities
+                            .mobs
                             .iter()
                             .filter(|m| m.extra.mount == Some(id) && m.alive() && !m.removed)
                             .map(|m| Target::Mob(m.id)),
@@ -295,7 +303,8 @@ impl crate::game::ServerGame<'_> {
                 if let Some(id) = self.resident_target_id(entity) {
                     passengers.extend(
                         self.common
-                            .entities.bolts
+                            .entities
+                            .bolts
                             .iter()
                             .filter(|b| b.mount == Some(id))
                             .map(|b| Target::Bolt(b.id)),
@@ -307,7 +316,8 @@ impl crate::game::ServerGame<'_> {
                 Target::Mob(id)
                     if self
                         .common
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .any(|m| m.id == id && m.rider.is_some()) =>
                 {
@@ -320,7 +330,8 @@ impl crate::game::ServerGame<'_> {
                 match entity {
                     Target::Mob(id) => self
                         .common
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .find(|m| m.id == id)
                         .and_then(|m| {

@@ -125,7 +125,8 @@ impl crate::game::ServerGame<'_> {
         );
         let touching: Vec<usize> = self
             .common
-            .entities.orbs
+            .entities
+            .orbs
             .iter()
             .enumerate()
             .filter(|(_, o)| {
@@ -275,7 +276,8 @@ impl crate::game::ServerGame<'_> {
         let listens = mod_api::__private::listened(mod_api::HookId::ItemPickedUp);
         let near: Vec<_> = self
             .common
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .filter(|d| {
                 (listens

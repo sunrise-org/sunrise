@@ -71,7 +71,8 @@ impl ServerGame<'_> {
             f.life >= 0
         });
         self.common
-            .entities.fangs
+            .entities
+            .fangs
             .list
             .restore(list, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
     }
@@ -108,7 +109,8 @@ impl ServerGame<'_> {
         // owner lives, plain magic (nobody to name) once it is gone.
         let owner = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .any(|m| m.id == f.owner && m.alive())
             .then_some(f.owner);
@@ -131,7 +133,8 @@ impl ServerGame<'_> {
         let teams = self.mob_teams();
         let illagers: Vec<u32> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| is_illager(m.species()))
             .map(|m| m.id)
@@ -141,7 +144,8 @@ impl ServerGame<'_> {
         let team_of = |id: u32| teams.of(sunrise_sim::mobs::Who::Mob(id));
         let allies: Vec<u32> = if owner_known {
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .filter(|m| {
                     let other = Party {
@@ -176,7 +180,8 @@ impl ServerGame<'_> {
         // victims by identity, as `EvokerFangs.tick` does before `dealDamageTo`.
         let victims: Vec<_> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| m.id != f.owner && !allies.contains(&m.id) && m.bounds().intersects(b))
             .map(|m| m.id)

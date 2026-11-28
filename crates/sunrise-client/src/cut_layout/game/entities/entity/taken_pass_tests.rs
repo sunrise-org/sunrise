@@ -336,7 +336,8 @@ fn mob_tick_restores_spawn_buffer_before_multiple_survivors_without_renumbering(
             [81, 82, 71, 72, 73]
         );
         assert_eq!(
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter()
                 .skip(2)
                 .map(|m| (m.id, m.join))
@@ -350,7 +351,11 @@ fn mob_tick_restores_spawn_buffer_before_multiple_survivors_without_renumbering(
         let all: Vec<_> = game.entities.mobs.iter().map(|m| (m.id, m.join)).collect();
         game.tick_creature_entities().unwrap();
         assert_eq!(
-            game.entities.mobs.iter().map(|m| (m.id, m.join)).collect::<Vec<_>>(),
+            game.entities
+                .mobs
+                .iter()
+                .map(|m| (m.id, m.join))
+                .collect::<Vec<_>>(),
             all
         );
         assert_eq!(

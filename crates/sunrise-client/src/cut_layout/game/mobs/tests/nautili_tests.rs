@@ -100,7 +100,10 @@ fn a_click_that_does_nothing_still_keeps_the_nautilus() {
             !game.interact_entity(target(id)).unwrap(),
             "{item:?}: the click is refused"
         );
-        assert!(game.entities.mobs[0].persistent, "{item:?}: the click keeps it");
+        assert!(
+            game.entities.mobs[0].persistent,
+            "{item:?}: the click keeps it"
+        );
         assert_eq!(game.entities.mobs[0].extra.in_love, 0, "{item:?}: no love");
         assert_eq!(
             game.inventory[0].as_ref().map(|s| s.count),

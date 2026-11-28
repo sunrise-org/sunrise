@@ -648,7 +648,8 @@ impl ClientGame<'_> {
         }
         if let Some(i) = self
             .common
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .position(|c| c.id == id as u32 && c.kind == CartKind::Tnt)
         {
@@ -683,7 +684,8 @@ impl ClientGame<'_> {
         let improved = self.minecart_improvements();
         let carts: Vec<CartSound> = self
             .common
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .map(|c| CartSound {
                 id: c.id,

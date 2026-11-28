@@ -297,7 +297,8 @@ impl crate::game::ServerGame<'_> {
                         let hit = {
                             let world = self.mob_world_base(&[]);
                             self.common
-                                .entities.mobs
+                                .entities
+                                .mobs
                                 .iter()
                                 .find(|m| m.id == id && !m.removed)
                                 .and_then(|m| {
@@ -348,7 +349,8 @@ impl crate::game::ServerGame<'_> {
                         let sees = {
                             let world = self.mob_world_base(&[]);
                             self.common
-                                .entities.armor_stands
+                                .entities
+                                .armor_stands
                                 .iter()
                                 .find(|a| a.id == id)
                                 .is_some_and(|a| {
@@ -888,14 +890,16 @@ impl crate::game::ServerGame<'_> {
                 i
             } else if self
                 .common
-                .entities.rockets
+                .entities
+                .rockets
                 .get(i)
                 .is_some_and(|rocket| rocket.id == id)
             {
                 i + 1
             } else {
                 self.common
-                    .entities.rockets
+                    .entities
+                    .rockets
                     .iter()
                     .position(|rocket| rocket.id == id)
                     .map_or(i, |index| index + 1)

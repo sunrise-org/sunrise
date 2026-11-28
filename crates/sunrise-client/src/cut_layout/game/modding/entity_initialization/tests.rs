@@ -996,7 +996,8 @@ fn mob_constructor_first_store_binds_only_the_resident_lifetime() {
                 )
                 .unwrap();
             assert!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|mob| mob.id == id)
                     .unwrap()

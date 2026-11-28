@@ -20,7 +20,8 @@ pub fn dragon_part_index(dragon_id: u32, candidate_id: u32) -> Option<usize> {
 impl crate::game::CommonGame<'_> {
     /// The boxes of the living dragon's parts a projectile can hit, in `getSubEntities` order.
     pub fn dragon_part_boxes(&self) -> Option<[Aabb; 8]> {
-        self.entities.dragon
+        self.entities
+            .dragon
             .as_ref()
             .filter(|d| d.alive())
             .map(|d| std::array::from_fn(|i| d.part_box(i)))
@@ -158,7 +159,8 @@ impl crate::game::CommonGame<'_> {
             Vec3::new(p.x + 8.0, p.y + 8.0, p.z + 8.0),
         )
         .inflate(Vec3::new(32.0, 32.0, 32.0));
-        self.entities.crystals
+        self.entities
+            .crystals
             .iter()
             .enumerate()
             .filter(|(_, c)| {
@@ -186,7 +188,8 @@ pub trait DragonCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
     fn wire_entity_id(&self, id: u32) -> Option<i32> {
         if (SPECIAL..SPECIAL + 8).contains(&id) {
             let dragon = self
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .filter(|d| d.id != 0 || self.side_has_remote())?;
             return Some(dragon_part_wire_id(dragon.id, (id - SPECIAL) as usize));
@@ -210,7 +213,8 @@ pub trait DragonCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
     fn tracked_special_box(&self, id: i32) -> Option<Aabb> {
         let uid = id as u32;
         if let Some(d) = self
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|d| d.id != 0 || self.side_has_remote())
             && let Some(part) = dragon_part_index(d.id, uid)
@@ -218,7 +222,8 @@ pub trait DragonCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             return Some(d.part_box(part));
         }
         let id = u32::try_from(id).ok().filter(|&id| id != 0)?;
-        self.entities.crystals
+        self.entities
+            .crystals
             .iter()
             .find(|c| c.id == id)
             .map(Crystal::bounds)

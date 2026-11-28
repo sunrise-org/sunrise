@@ -18,7 +18,12 @@ pub(crate) fn check_answer(g: &sunrise_gameplay::game::ServerGame<'_>, slot: usi
         f::item_stack(&g.entities.mobs[1], slot).unwrap().damage,
         if answers { 2 } else { 0 }
     );
-    assert_eq!(f::item_stack(&g.entities.mobs[0], f::MAINHAND).unwrap().damage, 0);
+    assert_eq!(
+        f::item_stack(&g.entities.mobs[0], f::MAINHAND)
+            .unwrap()
+            .damage,
+        0
+    );
     let sounds: Vec<_> = g
         .server
         .pending_sounds

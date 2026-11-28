@@ -190,15 +190,18 @@ impl ServerGame<'_> {
         let hurt_at = self.common.entities.carts[i].position.components();
         self.entity_event_by("minecraft:entity_damage", hurt_at, hit.by);
         if destroyed {
-            let speed = self.common.entities.carts[i].velocity.x * self.common.entities.carts[i].velocity.x
-                + self.common.entities.carts[i].velocity.z * self.common.entities.carts[i].velocity.z;
-            let tnt_prime =
-                self.common.entities.carts[i].kind == CartKind::Tnt && (fire || speed >= f64::from(0.01f32));
+            let speed = self.common.entities.carts[i].velocity.x
+                * self.common.entities.carts[i].velocity.x
+                + self.common.entities.carts[i].velocity.z
+                    * self.common.entities.carts[i].velocity.z;
+            let tnt_prime = self.common.entities.carts[i].kind == CartKind::Tnt
+                && (fire || speed >= f64::from(0.01f32));
             if tnt_prime {
                 let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();
                 let mut c = self
                     .common
-                    .entities.carts
+                    .entities
+                    .carts
                     .extract(self.common.entities.carts[i].join)
                     .unwrap();
                 // MinecartTNT.destroy: prime instead of breaking.
@@ -219,7 +222,8 @@ impl ServerGame<'_> {
                 }
                 let Some(cart) = self
                     .common
-                    .entities.carts
+                    .entities
+                    .carts
                     .iter()
                     .find(|c| c.id == id && c.join == join)
                 else {

@@ -41,7 +41,8 @@ mod client_lid_tests {
                 .clone();
             let mut shell = Mob::new(72, kind, Vec3::new(6.5, 200.0, 6.5), 0.0);
             shell.extra.mount = Some(71);
-            game.entities.boats
+            game.entities
+                .boats
                 .push(Boat::new(71, "oak".into(), Vec3::new(2.5, 200.0, 6.5), 0.0));
             game.entities.mobs.push(shell);
             game.riding = Some(71);

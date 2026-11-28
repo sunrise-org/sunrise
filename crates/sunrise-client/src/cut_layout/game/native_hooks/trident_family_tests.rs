@@ -156,7 +156,12 @@ fn player_thrown_trident_is_refused_by_powered_wither_and_closed_shulker() {
                     throw_player(game);
                     step(game, true);
                     assert_eq!(
-                        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().health,
+                        game.entities
+                            .mobs
+                            .iter()
+                            .find(|m| m.id == 41)
+                            .unwrap()
+                            .health,
                         health,
                         "{kind}"
                     );
@@ -188,7 +193,12 @@ fn mob_thrown_trident_is_refused_by_powered_wither_and_closed_shulker() {
                     throw_mob(game);
                     step(game, false);
                     assert_eq!(
-                        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().health,
+                        game.entities
+                            .mobs
+                            .iter()
+                            .find(|m| m.id == 41)
+                            .unwrap()
+                            .health,
                         health,
                         "{kind}"
                     );
@@ -224,7 +234,15 @@ fn accepted_player_and_mob_tridents_keep_type_entities_position_and_full_weapon(
                     let selected = game.selected;
                     game.inventory[selected] = Some(ItemStack::new("minecraft:stick", 1));
                     step(game, player);
-                    assert!(game.entities.mobs.iter().find(|m| m.id == 41).unwrap().health <= 0.0);
+                    assert!(
+                        game.entities
+                            .mobs
+                            .iter()
+                            .find(|m| m.id == 41)
+                            .unwrap()
+                            .health
+                            <= 0.0
+                    );
                     game.tick_creature_entities().unwrap();
                     let seen = seen.lock().unwrap();
                     assert_eq!(seen.incoming.len(), 1);

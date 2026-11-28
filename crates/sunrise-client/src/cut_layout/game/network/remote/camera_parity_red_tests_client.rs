@@ -744,7 +744,8 @@ pub(in crate::game) fn run_camera_entity_hidden_in_first_person_for_all_kinds_an
             add_entity_with_data(game, id, kind, [5.5, 64.0, 5.5], 0.0, 0.0, 0);
             match kind {
                 "minecraft:creeper" => {
-                    game.entities.mobs
+                    game.entities
+                        .mobs
                         .iter_mut()
                         .find(|m| m.id == id as u32)
                         .unwrap()
@@ -1118,7 +1119,8 @@ pub(in crate::game) fn run_camera_player_fov_modifier_and_death_isolation_26_3()
                 values: vec![(9, serializer::FLOAT, EntityDataValue::Float(0.0))],
             }))
             .unwrap();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == 26)
                 .unwrap()
@@ -1636,7 +1638,8 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
             0.0,
             0.0,
         );
-        game.entities.orbs
+        game.entities
+            .orbs
             .iter_mut()
             .find(|o| o.id == 401)
             .unwrap()
@@ -1947,7 +1950,12 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
             hex_f32(&rf["watched_player_hurt"]["hurt_dir_bits"])
         );
         assert_eq!(
-            game.entities.mobs.iter().find(|m| m.id == 451).unwrap().invulnerable,
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == 451)
+                .unwrap()
+                .invulnerable,
             rf["watched_player_hurt"]["cooldown_after_base_tick"]
                 .as_i64()
                 .unwrap() as i32
@@ -1978,7 +1986,8 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
         }
         game.tick_remote_entities(true);
         assert_eq!(
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter()
                 .find(|m| m.id == 452)
                 .unwrap()
@@ -2013,7 +2022,8 @@ pub(in crate::game) fn run_review_followup_camera_parity_26_3() {
         .unwrap();
         game.tick_remote_entities(true);
         assert_eq!(
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter()
                 .find(|m| m.id == 453)
                 .unwrap()

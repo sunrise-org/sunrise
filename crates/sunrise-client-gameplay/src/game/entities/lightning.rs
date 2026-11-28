@@ -97,7 +97,8 @@ impl ClientGame<'_> {
     pub fn bolt_instances(&self, camera: glam::DVec3) -> Vec<sunrise_client::gfx::lightning::Bolt> {
         let range = 64.0 * self.view_scale();
         self.common
-            .entities.bolts
+            .entities
+            .bolts
             .iter()
             .filter(|b| {
                 !self.hides_as_camera(b.id) && {

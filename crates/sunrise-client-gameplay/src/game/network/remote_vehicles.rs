@@ -105,12 +105,7 @@ impl crate::game::ClientGame<'_> {
             let p = sunrise_sim::mobs::leash::knot_state(block).position;
             return Some([p.x, p.y, p.z]);
         }
-        if let Some(k) = self
-            .common
-            .entities.knots
-            .iter()
-            .find(|k| k.id == id)
-        {
+        if let Some(k) = self.common.entities.knots.iter().find(|k| k.id == id) {
             let p = sunrise_sim::mobs::leash::knot_state(k.fence).position;
             return Some([p.x, p.y, p.z]);
         }
@@ -120,7 +115,8 @@ impl crate::game::ClientGame<'_> {
         }
         if let Some(d) = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|d| d.id != 0 || self.client.remote.is_some())
             && let Some(part) =
@@ -136,10 +132,16 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn remote_object_hit(&self) -> Option<ObjectHit> {
         if let Some(hit) = self.cached_entity_pick() {
             let (entity, distance, point) = hit?;
-            if self.common.entities.mobs.iter().any(|m| m.id == entity.id())
+            if self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .any(|m| m.id == entity.id())
                 || self
                     .common
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .any(|p| p.id == entity.id())
             {
@@ -158,7 +160,8 @@ impl crate::game::ClientGame<'_> {
         if self.common.entities.mobs.iter().any(|m| m.id == hit.id)
             || self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .any(|p| p.id == hit.id)
         {
@@ -239,7 +242,13 @@ impl crate::game::ClientGame<'_> {
             {
                 mob.rider = None;
             }
-            if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == vehicle) {
+            if let Some(i) = self
+                .common
+                .entities
+                .boats
+                .iter()
+                .position(|b| b.id == vehicle)
+            {
                 self.common.entities.boats.update(i, |b| b.lerp = None);
             }
         }
@@ -287,7 +296,13 @@ impl crate::game::ClientGame<'_> {
                 .as_ref()
                 .is_some_and(|r| r.level_player(id).is_some())
         });
-        if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == vehicle_id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .position(|b| b.id == vehicle_id)
+        {
             self.common.entities.boats.update(i, |boat| {
                 boat.paddle_controller = player_controls;
             });
@@ -339,7 +354,13 @@ impl crate::game::ClientGame<'_> {
                 self.common.riding = Some(vehicle_id);
                 // ClientPacketListener.handleSetEntityPassengersPacket: boarding says how to get off,
                 // on the overlay and to the narrator.
-                let key = if self.common.entities.cushions.iter().any(|c| c.id == vehicle_id) {
+                let key = if self
+                    .common
+                    .entities
+                    .cushions
+                    .iter()
+                    .any(|c| c.id == vehicle_id)
+                {
                     "mount.sit"
                 } else {
                     "mount.onboard"
@@ -352,8 +373,17 @@ impl crate::game::ClientGame<'_> {
                 );
                 self.say_system_now(&message);
                 self.client.titles.set_overlay(message, false);
-                if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == vehicle_id) {
-                    self.common.entities.carts.update(i, |c| c.passenger_yaw_delta = 0.0);
+                if let Some(i) = self
+                    .common
+                    .entities
+                    .carts
+                    .iter()
+                    .position(|c| c.id == vehicle_id)
+                {
+                    self.common
+                        .entities
+                        .carts
+                        .update(i, |c| c.passenger_yaw_delta = 0.0);
                 }
                 if let Some(p) = self.common.player.as_mut() {
                     p.velocity = Vec3::ZERO;
@@ -364,7 +394,13 @@ impl crate::game::ClientGame<'_> {
             // The server takes the player out, then teleports it. A boat's easing toward
             // a teleport this client was given ends with its control.
             self.common.riding = None;
-            if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == vehicle_id) {
+            if let Some(i) = self
+                .common
+                .entities
+                .boats
+                .iter()
+                .position(|b| b.id == vehicle_id)
+            {
                 self.common.entities.boats.update(i, |b| b.lerp = None);
             }
             if let Some(m) = self
@@ -481,7 +517,8 @@ impl crate::game::ClientGame<'_> {
                     .map(|d| d.seat().1)
                     .or_else(|| {
                         self.common
-                            .entities.armor_stands
+                            .entities
+                            .armor_stands
                             .iter()
                             .find(|a| a.id == id)
                             .map(|a| {
@@ -561,10 +598,15 @@ impl crate::game::ClientGame<'_> {
                 });
             }
             // A minecart: the server moves it, the rider sits in it.
-            self.common.entities.carts.iter().find(|c| c.id == id).map(|c| {
-                c.position
-                    .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0))
-            })
+            self.common
+                .entities
+                .carts
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| {
+                    c.position
+                        .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0))
+                })
         } else if let Some(at) =
             self.passenger_riding_position(id, None, None, &std::collections::HashMap::new())
         {
@@ -702,7 +744,11 @@ impl crate::game::ClientGame<'_> {
                 };
                 self.interpolate_driven_mount_to(i, at);
             }
-            if let Some(m) = self.common.mob_index.get_mut(&mut self.common.entities.mobs, id) {
+            if let Some(m) = self
+                .common
+                .mob_index
+                .get_mut(&mut self.common.entities.mobs, id)
+            {
                 m.velocity = velocity;
                 m.ground.on_ground = on_ground;
             }
@@ -758,7 +804,10 @@ impl crate::game::ClientGame<'_> {
             self.cancel_driven_mount_interpolation(id);
         }
         if let Some(id) = self.driven_mount().map(|m| m.id)
-            && let Some(m) = self.common.mob_index.get_mut(&mut self.common.entities.mobs, id)
+            && let Some(m) = self
+                .common
+                .mob_index
+                .get_mut(&mut self.common.entities.mobs, id)
         {
             m.previous = at;
             m.position = at;
@@ -790,7 +839,13 @@ impl crate::game::ClientGame<'_> {
         if !drag_down && event != sunrise_gameplay_common::game::boats_common::BUBBLE_UP_EVENT {
             return;
         }
-        if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id as u32) {
+        if let Some(i) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .position(|b| b.id == id as u32)
+        {
             self.handle_bubble_column_effect(i, drag_down);
         }
     }
@@ -806,8 +861,14 @@ impl crate::game::ClientGame<'_> {
             if !driven {
                 // `AbstractBoat.tick`: the non-authoritative copy carries no
                 // cached motion into the next time this player drives it.
-                self.common.entities.boats.update(i, |b| b.velocity = Vec3::ZERO);
-                self.common.entities.boats.update(i, |b| b.delta_rotation = 0.0);
+                self.common
+                    .entities
+                    .boats
+                    .update(i, |b| b.velocity = Vec3::ZERO);
+                self.common
+                    .entities
+                    .boats
+                    .update(i, |b| b.delta_rotation = 0.0);
                 self.refresh_boat_status(i);
             }
             let touches = self.common.boat_bubble_columns(i);
@@ -831,7 +892,8 @@ impl crate::game::ClientGame<'_> {
             );
             if !driven {
                 self.common
-                    .entities.boats
+                    .entities
+                    .boats
                     .update(i, |b| Self::tick_boat_paddles(b, &mut self.client.audio.0));
             }
         }
@@ -864,7 +926,8 @@ impl crate::game::ClientGame<'_> {
     pub fn driven_mount(&self) -> Option<&Mob> {
         let id = self.common.riding?;
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id && self.drives(m))
     }
@@ -875,8 +938,14 @@ impl crate::game::ClientGame<'_> {
         keys: Keys,
         window: i32,
     ) -> sunrise_game_data::Result<()> {
-        let mount = self.common.entities.mobs.iter().position(|m| self.drives(m));
-        let can_sprint = mount.is_some_and(|i| equine::can_sprint(self.common.entities.mobs[i].species()));
+        let mount = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .position(|m| self.drives(m));
+        let can_sprint =
+            mount.is_some_and(|i| equine::can_sprint(self.common.entities.mobs[i].species()));
         self.player_sprint_tick(keys, window, Some((can_sprint, mount.is_some())))
     }
 

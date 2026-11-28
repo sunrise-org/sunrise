@@ -391,11 +391,18 @@ pub trait NativeLivingBodyGameExt1<'__sg>: crate::game::SideGame<'__sg> {
                 body.attachments = None;
                 LivingBody::Player(body)
             }
-            Target::Mob(id) => {
-                LivingBody::Mob(self.entities.mobs.iter().find(|m| m.id == id && !m.removed)?)
+            Target::Mob(id) => LivingBody::Mob(
+                self.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)?,
+            ),
+            Target::Stand(id) => {
+                stand_body(self.entities.armor_stands.iter().find(|a| a.id == id)?)
             }
-            Target::Stand(id) => stand_body(self.entities.armor_stands.iter().find(|a| a.id == id)?),
-            Target::Dragon(id) => dragon_body(self.entities.dragon.as_ref().filter(|d| d.id == id)?),
+            Target::Dragon(id) => {
+                dragon_body(self.entities.dragon.as_ref().filter(|d| d.id == id)?)
+            }
             _ => return None,
         })
     }
@@ -455,7 +462,8 @@ pub trait NativeLivingBodyGameExt2<'__sg>: crate::game::SideGame<'__sg> {
                 .try_for_each(visit),
             Target::Mob(id) => {
                 let mob = self
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id && !m.removed)
                     .ok_or(mod_api::EntityReadError::Stale)?;
@@ -520,7 +528,8 @@ pub trait NativeLivingBodyGameExt4<'__sg>: crate::game::SideGame<'__sg> {
                     .map_or(0, |m| m.fall_fly_ticks),
             ),
             Target::Mob(id) => Some(
-                self.entities.mobs
+                self.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id && !m.removed)?
                     .extra
@@ -539,7 +548,8 @@ pub trait NativeLivingBodyGameExt4<'__sg>: crate::game::SideGame<'__sg> {
             Target::Player => Some(self.player.as_ref()?.fall_flying),
             Target::Guest(conn) => Some(self.command_guest(conn)?.fall_flying),
             Target::Mob(id) => Some(
-                self.entities.mobs
+                self.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id && !m.removed)?
                     .extra
@@ -558,7 +568,8 @@ pub trait NativeLivingBodyGameExt4<'__sg>: crate::game::SideGame<'__sg> {
             Target::Player => Some(self.sleeping.is_some()),
             Target::Guest(conn) => Some(self.command_guest(conn)?.sleeping),
             Target::Mob(id) => Some(
-                self.entities.mobs
+                self.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id && !m.removed)
                     .map(villager::sleeping)
@@ -579,9 +590,12 @@ pub trait NativeLivingBodyGameExt4<'__sg>: crate::game::SideGame<'__sg> {
                 let g = self.command_guest(conn)?;
                 g.bed.filter(|_| g.sleeping)
             }
-            Target::Mob(id) => {
-                villager::sleeping_pos(self.entities.mobs.iter().find(|m| m.id == id && !m.removed)?)
-            }
+            Target::Mob(id) => villager::sleeping_pos(
+                self.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)?,
+            ),
             _ => None,
         }
     }
@@ -604,9 +618,14 @@ pub trait NativeLivingBodyGameExt4<'__sg>: crate::game::SideGame<'__sg> {
     fn living_no_jump_delay(&self, living: LivingRef) -> Option<i32> {
         match self.native_living_read_target(living)? {
             Target::Player => Some(self.player.as_ref()?.no_jump_delay),
-            Target::Mob(id) if self.is_logical_server() => {
-                Some(self.entities.mobs.iter().find(|m| m.id == id)?.ai.no_jump_delay)
-            }
+            Target::Mob(id) if self.is_logical_server() => Some(
+                self.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)?
+                    .ai
+                    .no_jump_delay,
+            ),
             _ => None,
         }
     }
@@ -633,7 +652,11 @@ pub trait NativeLivingBodyGameExt4<'__sg>: crate::game::SideGame<'__sg> {
                 )
             }
             Target::Mob(id) => {
-                let m = self.entities.mobs.iter().find(|m| m.id == id && !m.removed)?;
+                let m = self
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)?;
                 (m.position, false, m.extra.fall_flying)
             }
             _ => return None,
@@ -655,7 +678,8 @@ pub trait NativeLivingBodyGameExt4<'__sg>: crate::game::SideGame<'__sg> {
     fn living_baby(&self, living: LivingRef) -> Option<bool> {
         match self.native_living_read_target(living)? {
             Target::Mob(id) => Some(
-                self.entities.mobs
+                self.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id && !m.removed)?
                     .extra
@@ -759,7 +783,8 @@ pub trait NativeLivingBodyGameExt5<'__sg>: crate::game::SideGame<'__sg> {
             }
             Target::Mob(id) => {
                 let (w, h, e) = self
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id && !m.removed)?
                     .dims_in_pose(pose);
@@ -855,7 +880,8 @@ pub trait NativeLivingBodyGameExt6<'__sg>: crate::game::SideGame<'__sg> {
         let entity = match self.native_living_visit_target(living)? {
             Target::Player | Target::Guest(_) => "minecraft:player",
             Target::Mob(id) => self
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)
                 .ok_or(EntityReadError::Stale)?
@@ -896,21 +922,24 @@ pub trait NativeLivingBodyGameExt6<'__sg>: crate::game::SideGame<'__sg> {
                 .modifiers(id),
             Target::Mob(mob) => {
                 let m = self
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == mob && !m.removed)
                     .ok_or(EntityReadError::Stale)?;
                 mob_attribute_modifiers(m, catalog, id)
             }
             Target::Stand(stand) => self
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|a| a.id == stand)
                 .ok_or(EntityReadError::Stale)?
                 .live
                 .modifiers(catalog, "minecraft:armor_stand", id, Vec::new),
             Target::Dragon(dragon) => self
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .filter(|d| d.id == dragon)
                 .ok_or(EntityReadError::Stale)?

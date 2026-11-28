@@ -686,7 +686,8 @@ fn piston_push_reaction_real_block_entity_payload_lifecycle() {
                 assert_eq!(game.world.block_entities.iter_mut().count(), 1);
             }
             let diamonds: Vec<_> = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .filter(|e| &*e.stack.item == "minecraft:diamond")
                 .collect();

@@ -64,7 +64,8 @@ impl crate::game::ServerGame<'_> {
     ) -> Option<sunrise_sim::breathing::Breath> {
         let living = self.entity(id).and_then(|entity| self.living(entity))?;
         self.ask_breath(living, step.vanilla, move |game| {
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .iter()
                 .any(|a| a.id == id && a.health > 0.0 && a.air == step.air)
         })

@@ -24,7 +24,8 @@ fn murder_uses_only_the_victims_sensor_memory() {
             .unwrap()
             .clone();
         let mut victim = Mob::new(91, kind.clone(), Vec3::new(1.0, 100.0, 1.0), 0.0);
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(92, kind, Vec3::new(2.0, 100.0, 1.0), 0.0));
         game.villager_murdered(&victim, true, None);
         assert_eq!(
@@ -33,7 +34,8 @@ fn murder_uses_only_the_victims_sensor_memory() {
             "a nearby villager absent from the last scan is not a witness"
         );
         let snapshot: Vec<_> = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .map(|m| m.seen(None, game.items()))
             .collect();

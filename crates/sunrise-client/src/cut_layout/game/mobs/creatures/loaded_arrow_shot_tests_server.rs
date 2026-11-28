@@ -85,7 +85,8 @@ fn finish_hit_uses_registered_guest_context_and_restores_the_host() {
         assert_eq!(game.server.lan_acting, None);
         assert_eq!(game.server.lan.as_ref().unwrap().hub.guests[0].uuid, 114);
         assert!(
-            game.entities.projectiles
+            game.entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == id)
                 .unwrap()

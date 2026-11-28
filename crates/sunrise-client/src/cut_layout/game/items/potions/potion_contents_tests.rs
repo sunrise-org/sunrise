@@ -179,7 +179,10 @@ fn a_water_potion_refills_an_axolotl_once() {
         true,
         Vec3::ZERO,
     );
-    assert_eq!(game.entities.mobs[0].air, 1800, "one rehydrate, capped at the max");
+    assert_eq!(
+        game.entities.mobs[0].air, 1800,
+        "one rehydrate, capped at the max"
+    );
 }
 
 /// `PotionContents.is(PotionTags.DOUSES_FIRE)` needs `isPotionWithoutCustomEffects`:

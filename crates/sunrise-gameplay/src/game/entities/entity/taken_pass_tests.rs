@@ -137,22 +137,32 @@ pub fn assert_mob_spawn_survives(
         game.entities.mobs.push(mob);
     }
     balance.drain_balanced();
-    let mut expected: Vec<_> = game.entities.mobs.iter().map(|mob| (mob.id, mob.join)).collect();
+    let mut expected: Vec<_> = game
+        .entities
+        .mobs
+        .iter()
+        .map(|mob| (mob.id, mob.join))
+        .collect();
     with_spawn(spawn, || action(game));
     assert!(
         balance.drain_balanced() > 0,
         "actual caller did not emit its lift"
     );
     let index = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .position(|m| m.id == SPAWNED)
         .expect("nested spawn was dropped");
-    assert_eq!(game.entities.mobs[index].age, 0, "spawn ticked in the current pass");
+    assert_eq!(
+        game.entities.mobs[index].age, 0,
+        "spawn ticked in the current pass"
+    );
     let join = game.entities.mobs[index].join;
     expected.push((SPAWNED, join));
     assert_eq!(
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter()
             .map(|mob| (mob.id, mob.join))
             .collect::<Vec<_>>(),
@@ -171,7 +181,10 @@ pub fn assert_mob_spawn_survives(
     game.tick_creature_entities().unwrap();
     assert_eq!(game.entities.mobs[0].id, SPAWNED);
     assert_eq!(game.entities.mobs[0].join, join);
-    assert_eq!(game.entities.mobs[0].age, 1, "spawn missed the next entity pass");
+    assert_eq!(
+        game.entities.mobs[0].age, 1,
+        "spawn missed the next entity pass"
+    );
     game.entities.mobs.clear();
     game.entities.mobs.restore(
         original,
@@ -196,14 +209,16 @@ pub fn assert_projectile_spawn_survives(
         game.entities.projectiles.push(p);
     }
     let mut expected: Vec<_> = game
-        .entities.projectiles
+        .entities
+        .projectiles
         .iter()
         .filter(|p| p.id != 72)
         .map(|p| (p.id, p.join))
         .collect();
     with_spawn(spawn, || action(game));
     let p = game
-        .entities.projectiles
+        .entities
+        .projectiles
         .iter()
         .find(|p| p.id == ID)
         .expect("pickup dropped a nested projectile");
@@ -211,14 +226,16 @@ pub fn assert_projectile_spawn_survives(
     let join = p.join;
     expected.push((ID, join));
     assert_eq!(
-        game.entities.projectiles
+        game.entities
+            .projectiles
             .iter()
             .map(|p| (p.id, p.join))
             .collect::<Vec<_>>(),
         expected
     );
     let mut original = game.entities.projectiles.lift();
-    game.entities.projectiles
+    game.entities
+        .projectiles
         .push(original.extract(join).unwrap());
     game.tick_projectiles().unwrap();
     assert_eq!(game.entities.projectiles[0].age, 1);

@@ -3609,7 +3609,8 @@ fn processing_owned_menu_returns_inputs_on_close_drops_overflow_and_discards_res
         game.run_native_menu_events();
         assert_eq!(CLOSED_OWNED_LEN.get(), Some(0));
         let dropped_count = |game: &sunrise_gameplay::game::ServerGame<'_>, id: &str| -> u32 {
-            game.entities.dropped
+            game.entities
+                .dropped
                 .iter()
                 .filter(|e| &*e.stack.item == id)
                 .map(|e| e.stack.count)
@@ -3664,7 +3665,8 @@ fn processing_owned_menu_close_on_death_drops_inputs_unlike_live_close() {
                 .sum()
         };
         let dropped_count = |game: &sunrise_gameplay::game::ServerGame<'_>, id: &str| -> u32 {
-            game.entities.dropped
+            game.entities
+                .dropped
                 .iter()
                 .filter(|e| &*e.stack.item == id)
                 .map(|e| e.stack.count)

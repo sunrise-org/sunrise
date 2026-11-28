@@ -158,7 +158,8 @@ impl crate::game::ServerGame<'_> {
             Target::Frame(id) => {
                 let frame = self
                     .common
-                    .entities.item_frames
+                    .entities
+                    .item_frames
                     .iter()
                     .find(|frame| frame.id == id)?;
                 super::frames::hanging_drop_position(at, frame.step())
@@ -166,7 +167,8 @@ impl crate::game::ServerGame<'_> {
             Target::Painting(id) => {
                 let painting = self
                     .common
-                    .entities.paintings
+                    .entities
+                    .paintings
                     .iter()
                     .find(|painting| painting.id == id)?;
                 super::frames::hanging_drop_position(at, painting.step())
@@ -177,7 +179,8 @@ impl crate::game::ServerGame<'_> {
         let id = self.server.next_entity + 1;
         self.spawn_at_location(Vec3::new(x, y, z), f64::from(y_offset), stack);
         self.common
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .rev()
             .any(|d| d.id == id)
@@ -195,7 +198,13 @@ impl crate::game::ServerGame<'_> {
         killed: bool,
         prepare: impl FnOnce(&mut Self),
     ) {
-        if !self.common.entities.mobs.iter().any(|m| m.id == id && !m.removed) {
+        if !self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .any(|m| m.id == id && !m.removed)
+        {
             return;
         }
         if self
@@ -206,7 +215,12 @@ impl crate::game::ServerGame<'_> {
                 }
             })
             .is_some()
-            && self.common.entities.mobs.iter().any(|m| m.id == id && !m.removed)
+            && self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .any(|m| m.id == id && !m.removed)
         {
             self.finish_mob_removal(id);
         }
@@ -305,7 +319,13 @@ impl crate::game::ServerGame<'_> {
                 Target::Projectile(_) | Target::Trident(_) => {}
                 Target::Crystal(id) => self.common.entities.crystals.retain(|c| c.id != id),
                 Target::Dragon(id) => {
-                    if self.common.entities.dragon.as_ref().is_some_and(|d| d.id == id) {
+                    if self
+                        .common
+                        .entities
+                        .dragon
+                        .as_ref()
+                        .is_some_and(|d| d.id == id)
+                    {
                         self.discard_resident_dragon();
                     }
                 }
@@ -478,7 +498,8 @@ mod tests {
                 ));
                 let mob_id = game.take_entity_id();
                 let cow = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(mob_id, cow, Vec3::new(0.0, 64.0, 0.0), 0.0));
                 game.native_joins_flush(false, 0);
                 let boat = game.entity(boat_id).unwrap();
@@ -491,7 +512,13 @@ mod tests {
                 assert!(game.entities.boats.iter().any(|b| b.id == boat_id));
                 assert_eq!(*observer.0.lock().unwrap(), vec![(boat_id, true)]);
                 assert_eq!(game.entity_vehicle(mob), None);
-                assert!(!game.entities.mobs.iter().any(|m| m.extra.mount == Some(boat_id)));
+                assert!(
+                    !game
+                        .entities
+                        .mobs
+                        .iter()
+                        .any(|m| m.extra.mount == Some(boat_id))
+                );
 
                 game.native_leaves_flush();
                 assert!(!game.entities.boats.iter().any(|b| b.id == boat_id));
@@ -605,7 +632,8 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, kind, Vec3::new(3.5, 70.0, -2.5), 0.0));
             let mob = game.entity(12).unwrap();
             let item = mob
@@ -616,7 +644,12 @@ mod tests {
                 )
                 .unwrap()
                 .unwrap();
-            let dropped = game.entities.dropped.iter().find(|d| d.id == item.id()).unwrap();
+            let dropped = game
+                .entities
+                .dropped
+                .iter()
+                .find(|d| d.id == item.id())
+                .unwrap();
             assert_eq!(&*dropped.stack.item, "minecraft:carrot");
             assert_eq!(dropped.stack.count, 2);
             assert_eq!(dropped.position, Vec3::new(3.5, 70.5, -2.5));
@@ -700,7 +733,12 @@ mod tests {
                     )
                     .unwrap()
                     .unwrap();
-                let dropped = game.entities.dropped.iter().find(|d| d.id == item.id()).unwrap();
+                let dropped = game
+                    .entities
+                    .dropped
+                    .iter()
+                    .find(|d| d.id == item.id())
+                    .unwrap();
                 assert_eq!(dropped.position, expected);
                 assert_eq!(dropped.stack.count, 2);
                 assert_eq!(dropped.pickup_delay, 10);
@@ -756,13 +794,15 @@ mod tests {
                 .unwrap()
                 .clone();
             let zombie_id = game.take_entity_id();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(zombie_id, zombie_kind, Vec3::ZERO, 0.0));
             let zombie = game.entity(zombie_id).unwrap();
             assert_eq!(zombie.kill(game), Ok(true));
             assert!(
                 !game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == zombie_id)
                     .unwrap()
@@ -795,7 +835,9 @@ mod tests {
             // transaction and refuses with InTransaction inside one.
             let cow_kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
             let cow_id = game.take_entity_id();
-            game.entities.mobs.push(Mob::new(cow_id, cow_kind, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(cow_id, cow_kind, Vec3::ZERO, 0.0));
             let cow = game.entity(cow_id).unwrap();
             let nether = super::super::Dim::Nether;
             game.enter_command_level(nether).unwrap();

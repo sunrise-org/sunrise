@@ -54,7 +54,8 @@ impl crate::game::ServerGame<'_> {
         }
         let is_brain = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|mob| mob.id == id)
             .is_some_and(|mob| sunrise_sim::mobs::ai::brain_target(mob).is_some());
@@ -173,7 +174,8 @@ impl crate::game::ServerGame<'_> {
         let key = (at[0], at[1], at[2]);
         if !self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .any(|m| m.id == mob && m.alive() && !m.removed)
         {
@@ -192,7 +194,8 @@ impl crate::game::ServerGame<'_> {
         self.break_leash(mob, true, false);
         let Some(i) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .position(|m| m.id == mob && !m.removed)
         else {
@@ -270,7 +273,8 @@ impl crate::game::ServerGame<'_> {
         if let Some(p) = self.player_view().map(|p| p.position) {
             let ids: Vec<u32> = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .filter(|m| released.contains(&m.id) && m.distance_sqr(p) <= 16.0)
                 .map(|m| m.id)
@@ -389,7 +393,8 @@ impl crate::game::ServerGame<'_> {
             if let Some(p) = self.player_view().map(|p| p.position) {
                 let ids: Vec<u32> = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .filter(|m| released.contains(&m.id) && m.distance_sqr(p) <= 16.0)
                     .map(|m| m.id)
@@ -450,7 +455,11 @@ impl crate::game::ServerGame<'_> {
                 .random
                 .next_int_bound(players.len() as i32)
                 .unwrap_or(0) as usize;
-            self.set_event_ai_target(self.common.entities.mobs[i].id, Some(Who::Player), players[pick]);
+            self.set_event_ai_target(
+                self.common.entities.mobs[i].id,
+                Some(Who::Player),
+                players[pick],
+            );
         }
     }
 }

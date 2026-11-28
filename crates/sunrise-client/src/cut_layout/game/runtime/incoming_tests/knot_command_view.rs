@@ -107,7 +107,10 @@ fn commands_see_the_knot_a_restored_fence_leash_ties() {
     assert!(game.run_command("tick step 1"));
     game.tick_server(false).unwrap();
     let i = pig(&mut game);
-    let (leash, pending) = (game.entities.mobs[i].extra.leash, game.entities.mobs[i].extra.leash_pending);
+    let (leash, pending) = (
+        game.entities.mobs[i].extra.leash,
+        game.entities.mobs[i].extra.leash_pending,
+    );
     let at = knot_state([8, 201, 0]).position;
     eprintln!("tick-1 binding: leash={leash:?} pending={pending:?} knot at {at:?}");
     assert_eq!(

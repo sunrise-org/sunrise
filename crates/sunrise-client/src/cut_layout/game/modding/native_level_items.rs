@@ -98,7 +98,8 @@ mod tests {
             // the others, which keep their numbers.
             use sunrise_sim::join_seq::Joined;
             let joins = |game: &sunrise_gameplay::game::ServerGame<'_>| -> Vec<(u32, u64)> {
-                game.entities.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .map(|d| (d.id, d.join_seq().get()))
                     .collect()
@@ -197,7 +198,8 @@ mod tests {
                         game.merge_orb(index);
                     }
                 }
-                let left: Vec<(u32, u32)> = game.entities.orbs.iter().map(|o| (o.id, o.count)).collect();
+                let left: Vec<(u32, u32)> =
+                    game.entities.orbs.iter().map(|o| (o.id, o.count)).collect();
                 assert_eq!(left, [(40, 2), (120, 2)]);
             });
         });

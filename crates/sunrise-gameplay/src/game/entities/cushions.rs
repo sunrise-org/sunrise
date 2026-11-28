@@ -85,7 +85,8 @@ impl crate::game::ServerGame<'_> {
         // `getEntitiesOfClass(Cushion.class, spawnAABB).isEmpty()`.
         if self
             .common
-            .entities.cushions
+            .entities
+            .cushions
             .iter()
             .any(|c| overlaps(aabb(c.bounds()), bounds))
         {
@@ -449,7 +450,8 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn tick_cushion_riding(&mut self, keys: Keys) -> bool {
         let Some(c) = self
             .common
-            .entities.cushions
+            .entities
+            .cushions
             .iter()
             .find(|c| Some(c.id) == self.common.riding)
             .cloned()

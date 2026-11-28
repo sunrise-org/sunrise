@@ -54,11 +54,17 @@ pub(crate) mod tests {
             let (fox, enderman, piglin) = (handle(game, 12), handle(game, 13), handle(game, 14));
             let other = game.living(game.entity(15).unwrap()).unwrap();
             let state = |game: &sunrise_gameplay::game::ServerGame<'_>, id| {
-                game.entities.mobs.iter().find(|m| m.id == id).unwrap().clone()
+                game.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .unwrap()
+                    .clone()
             };
 
             // Fox.setTarget: a target leaves defending as it is; clearing ends it.
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == 12)
                 .unwrap()
@@ -82,8 +88,15 @@ pub(crate) mod tests {
             enderman_state.extra.flag2 = true;
             game.start_audio_capture();
             assert!(enderman.set_target(game, Some(other)));
-            client_events =
-                std::mem::take(&mut game.entities.mobs.iter_mut().find(|m| m.id == 13).unwrap().outbox);
+            client_events = std::mem::take(
+                &mut game
+                    .entities
+                    .mobs
+                    .iter_mut()
+                    .find(|m| m.id == 13)
+                    .unwrap()
+                    .outbox,
+            );
             game.handle_mob_events(client_events.clone()).unwrap();
             assert!(
                 game.server.pending_sounds.is_empty(),
@@ -106,7 +119,12 @@ pub(crate) mod tests {
             let mut expected = LegacyRandom::new(2026);
             let sound_delay = expected.next_int_bound(21).unwrap();
             let alert_delay = 80 + expected.next_int_bound(41).unwrap();
-            game.entities.mobs.iter_mut().find(|m| m.id == 14).unwrap().random = LegacyRandom::new(2026);
+            game.entities
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == 14)
+                .unwrap()
+                .random = LegacyRandom::new(2026);
             assert!(piglin.set_target(game, Some(other)));
             assert_eq!(piglin.target(game), Some(other));
             let first = state(game, 14);
@@ -273,7 +291,8 @@ pub(crate) mod tests {
             game.server.lan.as_mut().unwrap().hub.guests.push(guest);
             let cow = add_mob(game, 12, "minecraft:cow");
             let other = add_mob(game, 13, "minecraft:cow");
-            game.entities.boats
+            game.entities
+                .boats
                 .push(Boat::new(14, "oak".into(), Vec3::ZERO, 0.0));
             let boat = game.entity(14).unwrap();
             assert_eq!(
@@ -329,7 +348,8 @@ pub(crate) mod tests {
             let check =
                 |game: &sunrise_gameplay::game::ServerGame<'_>, handle: MobRef, expected| {
                     let mob = game
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .find(|m| m.id == handle.entity().id())
                         .unwrap();
@@ -576,7 +596,9 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
             let mob = game.mob(game.entity(12).unwrap()).unwrap();
             let player = game.living(game.entity(20).unwrap()).unwrap();
             assert!(mob.set_target(game, Some(player)));
@@ -599,7 +621,8 @@ pub(crate) mod tests {
             let piglin = game.mob(game.entity(13).unwrap()).unwrap();
             assert!(piglin.set_target(game, Some(player)));
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 13)
                     .unwrap()
@@ -610,7 +633,8 @@ pub(crate) mod tests {
             assert!(!game.server.last_hurt_by_player.contains_key(&13));
             assert!(piglin.set_target(game, None));
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 13)
                     .unwrap()
@@ -624,7 +648,8 @@ pub(crate) mod tests {
             assert!(!piglin.set_target(game, Some(fake_living)));
             assert_eq!(piglin.target(game), None);
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 13)
                     .unwrap()
@@ -790,10 +815,15 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, zombie.clone(), Vec3::ZERO, 0.0));
-            game.entities.mobs.push(Mob::new(13, zombie, Vec3::ZERO, 0.0));
-            game.entities.armor_stands.push(ArmorStand::new(14, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(13, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(14, Vec3::ZERO, 0.0));
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             // Reserve the dragon's eight consecutive part IDs away from the mobs.
@@ -878,7 +908,8 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, zombie, Vec3::new(3.5, 65.0, 3.5), 0.0));
             let creaking = game
                 .res
@@ -886,7 +917,8 @@ pub(crate) mod tests {
                 .get("minecraft:creaking")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(16, creaking, Vec3::new(9.5, 65.0, 9.5), 0.0));
             let mob = game.mob(game.entity(12).unwrap()).unwrap();
             assert!(game.mob_look_at(mob, [10.5, 66.0, -2.5]));
@@ -926,7 +958,8 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, zombie, Vec3::new(3.5, 65.0, 3.5), 0.0));
             let mob = game.mob(game.entity(12).unwrap()).unwrap();
             assert_eq!(game.mob_restrict_center(mob), Some([0, 0, 0]));
@@ -997,7 +1030,8 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, zombie, Vec3::new(3.5, 65.0, 3.5), 0.0));
             let mob = game.mob(game.entity(12).unwrap()).unwrap();
             // `Vec3i.distSqr` in doubles: the far corner of the int range is
@@ -1040,7 +1074,9 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = 15;
@@ -1049,7 +1085,9 @@ pub(crate) mod tests {
             let mob = game.mob(entity).unwrap();
             assert_eq!(game.mob_left_handed(mob), Some(false));
             assert!(game.mob_set_left_handed(mob, true));
-            assert!(game.entities.mobs[0].extra.left_handed && game.entities.mobs[0].main_arm_left());
+            assert!(
+                game.entities.mobs[0].extra.left_handed && game.entities.mobs[0].main_arm_left()
+            );
             assert_eq!(game.mob_left_handed(mob), Some(true));
             assert!(game.mob_set_can_pick_up_loot(mob, true));
             assert!(game.entities.mobs[0].extra.pick_up_loot);

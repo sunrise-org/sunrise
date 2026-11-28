@@ -435,7 +435,8 @@ pub(crate) fn check_case(
                     && let Some(exp_leashed) = expected.target.pig_leashed
                 {
                     let leashed = game
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .find(|m| m.id == pig_id)
                         .is_some_and(|m| matches!(m.extra.leash, Some(Holder::Knot(_))));

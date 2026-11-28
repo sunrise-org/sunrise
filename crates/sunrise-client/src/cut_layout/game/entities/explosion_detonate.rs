@@ -38,7 +38,8 @@ mod tests {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(id, zombie, Vec3::new(x, 1.0, 0.0), 0.0));
     }
 
@@ -53,7 +54,12 @@ mod tests {
     }
 
     fn health_of(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> f32 {
-        game.entities.mobs.iter().find(|m| m.id == id).unwrap().health
+        game.entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id)
+            .unwrap()
+            .health
     }
 
     #[test]
@@ -132,8 +138,8 @@ mod tests {
                 zombie(game, 900, 2.0);
                 // The repeated target must survive its first visit.
                 zombie(game, 901, -5.0);
-                game.entities.crystals
-                    .push(sunrise_gameplay_common::game::dragon_common::Crystal {
+                game.entities.crystals.push(
+                    sunrise_gameplay_common::game::dragon_common::Crystal {
                         attachment_lifetime: Default::default(),
                         join: Default::default(),
                         id: CRYSTAL,
@@ -147,7 +153,8 @@ mod tests {
                         invulnerable: false,
                         fall: (false, 0.0),
                         size_answer: None,
-                    });
+                    },
+                );
                 explode(game);
             });
         });
@@ -217,7 +224,12 @@ mod tests {
                 explode(game);
                 assert_eq!(health_of(game, FAR), 20.0);
                 assert_eq!(
-                    game.entities.mobs.iter().find(|mob| mob.id == FAR).unwrap().velocity,
+                    game.entities
+                        .mobs
+                        .iter()
+                        .find(|mob| mob.id == FAR)
+                        .unwrap()
+                        .velocity,
                     Vec3::ZERO
                 );
                 assert!(health_of(game, 900) < 20.0);
@@ -438,23 +450,35 @@ mod tests {
             mod_platform::testing::with_mods(mods, || {
                 with_resident_game(|game| {
                     for (id, x) in [(920, -1.0), (921, 1.0)] {
-                        game.entities.boats
-                            .push(sunrise_gameplay_common::game::boats_common::Boat::new(
+                        game.entities.boats.push(
+                            sunrise_gameplay_common::game::boats_common::Boat::new(
                                 id,
                                 "oak".into(),
                                 Vec3::new(x, 1.0, 0.0),
                                 0.0,
-                            ));
-                        game.entities.carts
-                            .push(sunrise_gameplay_common::game::minecarts::Minecart::new(
+                            ),
+                        );
+                        game.entities.carts.push(
+                            sunrise_gameplay_common::game::minecarts::Minecart::new(
                                 id + 10,
                                 sunrise_gameplay_common::game::minecarts::CartKind::Rideable,
                                 Vec3::new(x, 1.0, 2.0),
-                            ));
+                            ),
+                        );
                     }
                     explode(game);
-                    assert!(game.entities.boats.iter().all(|boat| ![920, 921].contains(&boat.id)));
-                    assert!(game.entities.carts.iter().all(|cart| ![930, 931].contains(&cart.id)));
+                    assert!(
+                        game.entities
+                            .boats
+                            .iter()
+                            .all(|boat| ![920, 921].contains(&boat.id))
+                    );
+                    assert!(
+                        game.entities
+                            .carts
+                            .iter()
+                            .all(|cart| ![930, 931].contains(&cart.id))
+                    );
                     assert_eq!(game.server.combat.0.blast_hit_list, None);
                 })
             });
@@ -468,13 +492,14 @@ mod tests {
         mod_platform::testing::with_mods(mods, || {
             with_game(|game| {
                 for (id, x) in [(940, 8.0), (941, 7.99)] {
-                    game.entities.crystals
-                        .push(sunrise_gameplay_common::game::dragon_common::Crystal::new(
+                    game.entities.crystals.push(
+                        sunrise_gameplay_common::game::dragon_common::Crystal::new(
                             id,
                             Vec3::new(x, 1.0, 0.0),
                             false,
                             0,
-                        ));
+                        ),
+                    );
                 }
                 game.explosion_detonate([0.0, 1.0, 0.0], 3.0, &mut Vec::new());
                 let listed = game.server.combat.0.blast_hit_list.as_ref().unwrap();
@@ -521,17 +546,19 @@ mod tests {
                             zombie(game, id, x);
                             continue;
                         }
-                        game.entities.boats
-                            .push(sunrise_gameplay_common::game::boats_common::Boat::new(
+                        game.entities.boats.push(
+                            sunrise_gameplay_common::game::boats_common::Boat::new(
                                 id,
                                 "oak".into(),
                                 Vec3::new(x, 1.0, 0.0),
                                 0.0,
-                            ));
+                            ),
+                        );
                     }
                     explode(game);
                     assert!(
-                        game.entities.boats
+                        game.entities
+                            .boats
                             .iter()
                             .all(|boat| ![970, 971, 972].contains(&boat.id))
                     );
@@ -551,7 +578,8 @@ mod tests {
     fn specials(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
         use sunrise_core::random::LegacyRandom;
         use sunrise_sim::entities::{ArmorStand, Cushion, ItemFrame, Painting};
-        game.entities.armor_stands
+        game.entities
+            .armor_stands
             .push(ArmorStand::new(950, Vec3::new(2.0, 1.0, 0.0), 0.0));
         game.entities.item_frames.push(ItemFrame {
             attachment_lifetime: Default::default(),
@@ -594,7 +622,8 @@ mod tests {
             check_interval: 0,
             custom_name: None,
         });
-        game.entities.crystals
+        game.entities
+            .crystals
             .push(sunrise_gameplay_common::game::dragon_common::Crystal::new(
                 954,
                 Vec3::new(2.0, 1.0, 0.0),
@@ -602,7 +631,8 @@ mod tests {
                 0,
             ));
         zombie(game, 955, -2.0);
-        game.entities.boats
+        game.entities
+            .boats
             .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                 960,
                 "oak".into(),
@@ -655,15 +685,31 @@ mod tests {
                 with_resident_game(|game| {
                     specials(game);
                     explode(game);
-                    assert!(game.entities.armor_stands.iter().any(|entity| entity.id == 950));
-                    assert!(game.entities.paintings.iter().any(|entity| entity.id == 952));
+                    assert!(
+                        game.entities
+                            .armor_stands
+                            .iter()
+                            .any(|entity| entity.id == 950)
+                    );
+                    assert!(
+                        game.entities
+                            .paintings
+                            .iter()
+                            .any(|entity| entity.id == 952)
+                    );
                     assert!(game.entities.cushions.iter().any(|entity| entity.id == 953));
                     assert!(game.entities.crystals.iter().any(|entity| entity.id == 954));
                     assert_eq!(
-                        game.entities.item_frames.iter().any(|entity| entity.id == 951),
+                        game.entities
+                            .item_frames
+                            .iter()
+                            .any(|entity| entity.id == 951),
                         empty
                     );
-                    assert_eq!(game.entities.boats.iter().any(|entity| entity.id == 960), empty);
+                    assert_eq!(
+                        game.entities.boats.iter().any(|entity| entity.id == 960),
+                        empty
+                    );
                     if empty {
                         assert_eq!(health_of(game, 955), 20.0);
                     } else {

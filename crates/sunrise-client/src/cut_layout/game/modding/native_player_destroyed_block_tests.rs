@@ -755,7 +755,8 @@ fn block_drops_lends_the_removed_chests_data_without_a_temporary_handle() {
             // The listener read the name the removal clears from the level and put it on the
             // chest item the break dropped.
             let named = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .filter(|item| &*item.stack.item == "minecraft:chest")
                 .map(|item| {
@@ -873,7 +874,8 @@ fn block_drops_names_the_mob_that_broke_the_block() {
                 .get("minecraft:ravager")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(51, kind, Vec3::new(5.5, 64.0, 5.5), 0.0));
             let ravager = game.entity(51).expect("the ravager's handle");
             let leaves = game

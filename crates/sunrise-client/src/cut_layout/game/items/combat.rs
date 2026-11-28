@@ -60,7 +60,8 @@ pub(crate) mod guest_hit_tests {
                 (5, "minecraft:cave_spider", 100.0),
             ] {
                 let kind = game.res.mob_types().get(kind).cloned().unwrap();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(id, kind, Vec3::new(1.5, y, 0.5), 0.0));
             }
             let from = [1.5, 100.0, 0.5];

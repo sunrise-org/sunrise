@@ -10,11 +10,15 @@ mod tests {
     fn scoped_cart_commands_keep_tick_and_self_removal_rules() {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
             game.world.game_time = 10;
-            game.entities.carts
+            game.entities
+                .carts
                 .push(Minecart::new(41, CartKind::CommandBlock, Vec3::ZERO));
-            game.entities.carts
+            game.entities
+                .carts
                 .push(Minecart::new(42, CartKind::Rideable, Vec3::ZERO));
-            game.entities.carts.update(0, |c| c.command.set_command("Searge"));
+            game.entities
+                .carts
+                .update(0, |c| c.command.set_command("Searge"));
             assert!(game.perform_cart_command(41));
             assert_eq!(game.entities.carts[0].command.success_count, 1);
             game.entities.carts.update(0, |c| c.command.set_command(""));
@@ -25,7 +29,9 @@ mod tests {
             assert!(!game.perform_cart_command(42));
             assert!(!game.perform_cart_command(99));
             game.world.game_time = 11;
-            game.entities.carts.update(0, |c| c.command.set_command("kill @s"));
+            game.entities
+                .carts
+                .update(0, |c| c.command.set_command("kill @s"));
             assert!(game.perform_cart_command(41));
             assert_eq!(game.entities.carts.len(), 1);
             assert_eq!(game.entities.carts[0].id, 42);

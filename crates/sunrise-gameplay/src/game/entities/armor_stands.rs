@@ -386,7 +386,8 @@ impl crate::game::ServerGame<'_> {
             // A player with infinite materials puts a copy of one on an empty
             // slot and keeps the stack.
             Some(h) if self.common.creative && current.is_none() => {
-                self.common.entities.armor_stands[i].equipment[slot] = Some(ItemStack { count: 1, ..h });
+                self.common.entities.armor_stands[i].equipment[slot] =
+                    Some(ItemStack { count: 1, ..h });
             }
             Some(h) if h.count > 1 => {
                 if current.is_some() {
@@ -542,7 +543,8 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn begin_armor_stand_ticks(&mut self) -> Result<()> {
         self.server.ordered.armor_stands.extend(
             self.common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .filter(|stand| stand.join < self.server.ordered.born)
                 .map(|stand| stand.join),
@@ -557,7 +559,8 @@ impl crate::game::ServerGame<'_> {
             .sort_unstable();
         let first_shulker = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|mob| !mob.removed && mob.species() == Species::Shulker)
             .map(|mob| mob.join)
@@ -588,7 +591,8 @@ impl crate::game::ServerGame<'_> {
     pub fn tick_armor_stands(&mut self) -> Result<()> {
         let joins: Vec<_> = self
             .common
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter()
             .map(|stand| stand.join)
             .collect();
@@ -628,7 +632,8 @@ impl crate::game::ServerGame<'_> {
             let at = self.common.entities.armor_stands[i].position;
             if !ticking(at.x.floor() as i32, at.z.floor() as i32) {
                 self.common.entities.armor_stands[i].previous = at;
-                self.common.entities.armor_stands[i].previous_yaw = self.common.entities.armor_stands[i].yaw;
+                self.common.entities.armor_stands[i].previous_yaw =
+                    self.common.entities.armor_stands[i].yaw;
                 self.common.entities.armor_stands[i].previous_body_yaw =
                     self.common.entities.armor_stands[i].previous_yaw;
                 continue;
@@ -648,7 +653,9 @@ impl crate::game::ServerGame<'_> {
             };
             told = Some(id);
             self.common.entities.armor_stands[i].enchantment_tick =
-                self.common.entities.armor_stands[i].enchantment_tick.wrapping_add(1);
+                self.common.entities.armor_stands[i]
+                    .enchantment_tick
+                    .wrapping_add(1);
             if !self.common.entities.armor_stands[i].equipment.is_empty() {
                 self.tick_equipment_enchantments(super::commands::Target::Stand(id), id);
             }
@@ -680,8 +687,8 @@ impl crate::game::ServerGame<'_> {
             }
             self.armor_stand_location_effects(i, false);
             // ArmorStand.travel: a marker or a NoGravity stand does not move.
-            let travels =
-                !self.common.entities.armor_stands[i].marker && !self.common.entities.armor_stands[i].no_gravity;
+            let travels = !self.common.entities.armor_stands[i].marker
+                && !self.common.entities.armor_stands[i].no_gravity;
             if travels && obstacles.is_none() {
                 obstacles = Some(self.stand_entity_collisions());
             }
@@ -895,37 +902,39 @@ impl crate::game::ServerGame<'_> {
             let registry = self.common.pack.assets.registry;
             let block_registries = &self.common.pack.block_registries;
             let hooks = &self.common.damage_hooks;
-            if let Some(damage_type) = self.common.entities.armor_stands[i].environment_tick_with_hook(
-                &mut self.common.world,
-                self.common.res.facts(),
-                registry,
-                |world, damage| {
-                    let vanilla = if damage == "minecraft:on_fire" {
-                        saved[0]
-                    } else {
-                        saved[1]
-                    };
-                    let source = sunrise_sim::health::HurtSource {
-                        damage_type: damage,
-                        causing: 0,
-                        direct: 0,
-                        position: None,
-                        direct_type: None,
-                    };
-                    sunrise_sim::health::DamageLevel::of(
-                        world,
-                        registry,
-                        Some(tags),
-                        Some(block_registries),
-                        hooks,
-                    )
-                    .no_push()
-                    .invulnerability_check(
-                        sunrise_sim::health::Hurting::ArmorStand(id as i32, source),
-                        vanilla,
-                    )
-                },
-            ) && !died_of_age
+            if let Some(damage_type) = self.common.entities.armor_stands[i]
+                .environment_tick_with_hook(
+                    &mut self.common.world,
+                    self.common.res.facts(),
+                    registry,
+                    |world, damage| {
+                        let vanilla = if damage == "minecraft:on_fire" {
+                            saved[0]
+                        } else {
+                            saved[1]
+                        };
+                        let source = sunrise_sim::health::HurtSource {
+                            damage_type: damage,
+                            causing: 0,
+                            direct: 0,
+                            position: None,
+                            direct_type: None,
+                        };
+                        sunrise_sim::health::DamageLevel::of(
+                            world,
+                            registry,
+                            Some(tags),
+                            Some(block_registries),
+                            hooks,
+                        )
+                        .no_push()
+                        .invulnerability_check(
+                            sunrise_sim::health::Hurting::ArmorStand(id as i32, source),
+                            vanilla,
+                        )
+                    },
+                )
+                && !died_of_age
             {
                 dead.push((id, Some(damage_type)));
             }
@@ -963,7 +972,8 @@ impl crate::game::ServerGame<'_> {
         for (id, bubbles) in drowned.drain(..) {
             let Some((at, v)) = self
                 .common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|a| a.id == id)
                 .map(|a| {
@@ -986,13 +996,25 @@ impl crate::game::ServerGame<'_> {
         for (id, damage_type) in dead.drain(..) {
             match damage_type {
                 Some(damage_type) => {
-                    if let Some(i) = self.common.entities.armor_stands.iter().position(|a| a.id == id) {
+                    if let Some(i) = self
+                        .common
+                        .entities
+                        .armor_stands
+                        .iter()
+                        .position(|a| a.id == id)
+                    {
                         self.break_armor_stand_by_anything(i, damage_type, 0);
                     }
                 }
                 None => {
                     // Entity event 60 (the poof), then remove(KILLED).
-                    if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
+                    if let Some(a) = self
+                        .common
+                        .entities
+                        .armor_stands
+                        .iter()
+                        .find(|a| a.id == id)
+                    {
                         let at = a.position.components();
                         self.remove_armor_stand_after(id, |game| {
                             game.lan_entity_event(id as i32, 60, at);
@@ -1231,7 +1253,12 @@ impl crate::game::ServerGame<'_> {
         effects: impl FnOnce(&mut Self),
     ) -> bool {
         self.with_vehicle_removal_effects(super::commands::Target::Stand(id), effects, |game| {
-            if let Some(i) = game.entities.armor_stands.iter().position(|stand| stand.id == id) {
+            if let Some(i) = game
+                .entities
+                .armor_stands
+                .iter()
+                .position(|stand| stand.id == id)
+            {
                 game.entities.armor_stands.remove(i);
             }
         })
@@ -1317,7 +1344,13 @@ impl crate::game::ServerGame<'_> {
             return false;
         }
         // Re-locate after invulnerability hooks may have removed or moved the stand.
-        let Some(i) = self.common.entities.armor_stands.iter().position(|a| a.id == id) else {
+        let Some(i) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .position(|a| a.id == id)
+        else {
             return false;
         };
         let a = &self.common.entities.armor_stands[i];

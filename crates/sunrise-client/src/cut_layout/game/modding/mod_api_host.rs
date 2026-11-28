@@ -148,7 +148,9 @@ mod attachment_membership_tests {
         with_game(|game| {
             game.reset_entity_residency();
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.entities.mobs.push(Mob::new(410, kind, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(410, kind, Vec3::ZERO, 0.0));
             let check = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 for id in [0, 410, 999] {
                     assert_eq!(
@@ -159,19 +161,21 @@ mod attachment_membership_tests {
                 }
             };
             check(game);
-            game.entities.paintings.push(sunrise_sim::entities::Painting {
-                attachment_lifetime: Default::default(),
-                join: Default::default(),
-                id: 420,
-                pos: [0, 64, 0],
-                facing: 2,
-                variant: "minecraft:kebab".into(),
-                asset: None,
-                width: 1,
-                height: 1,
-                check_interval: 0,
-                ticks: 0,
-            });
+            game.entities
+                .paintings
+                .push(sunrise_sim::entities::Painting {
+                    attachment_lifetime: Default::default(),
+                    join: Default::default(),
+                    id: 420,
+                    pos: [0, 64, 0],
+                    facing: 2,
+                    variant: "minecraft:kebab".into(),
+                    asset: None,
+                    width: 1,
+                    height: 1,
+                    check_interval: 0,
+                    ticks: 0,
+                });
             game.persist.removals.push(Target::Painting(420));
             assert_eq!(
                 game.attachment_entity_exists(420),
@@ -240,7 +244,9 @@ mod attachment_membership_tests {
             for population in [300, 3000, 10000] {
                 while game.entities.mobs.len() < population {
                     let id = game.entities.mobs.len() as u32 + 100;
-                    game.entities.mobs.push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
+                    game.entities
+                        .mobs
+                        .push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
                 }
                 let holder = mod_api::Holder::Entity(100);
                 game.attachment_slot(holder, AttachmentAccess::Existing)

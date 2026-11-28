@@ -829,7 +829,8 @@ impl crate::game::ClientGame<'_> {
         self.spawner_geometry(camera, alpha, out);
         let live = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .filter(|a| !self.hides_as_camera(a.id))
             .map(|a| {

@@ -305,7 +305,8 @@ mod tests {
                 game.player = Some(player);
                 bind_local_player(game, 7, 1);
                 let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(21, kind.clone(), Vec3::new(1.0, 64.0, 0.0), 0.0));
                 let mut victim = Mob::new(22, kind, Vec3::new(1.5, 64.0, 0.0), 0.0);
                 let mut boots = ItemStack::new("minecraft:stick", 1);
@@ -507,8 +508,12 @@ mod tests {
                         .clone();
                     let mut damage_with = |levels: &[(&str, u32)]| {
                         game.entities.mobs.clear();
-                        game.entities.mobs
-                            .push(Mob::new(21, golem.clone(), Vec3::new(1.0, 64.0, 0.0), 0.0));
+                        game.entities.mobs.push(Mob::new(
+                            21,
+                            golem.clone(),
+                            Vec3::new(1.0, 64.0, 0.0),
+                            0.0,
+                        ));
                         if levels.iter().any(|(id, _)| *id == "damage_test:force") {
                             let mut boots = ItemStack::new("minecraft:stick", 1);
                             boots.damage = 22;

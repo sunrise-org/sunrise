@@ -70,7 +70,10 @@ impl ServerGame<'_> {
                 }
                 let sound = nautilus::eat_sound(&self.common.entities.mobs[index]);
                 // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
-                self.mob_event_particles(self.common.entities.mobs[index].id, if tamed { 7 } else { 6 });
+                self.mob_event_particles(
+                    self.common.entities.mobs[index].id,
+                    if tamed { 7 } else { 6 },
+                );
                 self.nautilus_sound(index, sound);
                 if tamed {
                     let view = self.mob_entity(&self.common.entities.mobs[index]);
@@ -111,7 +114,9 @@ impl ServerGame<'_> {
                         self.items(),
                         stack,
                         "body",
-                        sunrise_sim::mobs::species::vanilla_id(self.common.entities.mobs[index].species()),
+                        sunrise_sim::mobs::species::vanilla_id(
+                            self.common.entities.mobs[index].species(),
+                        ),
                     )
                 });
             let m = &mut self.common.entities.mobs[index];
@@ -183,9 +188,11 @@ impl ServerGame<'_> {
     /// handling runs.
     pub(in crate::game::server_side) fn nautilus_clicked(&mut self, id: Option<i32>) {
         let Some(index) = id.and_then(|id| {
-            sunrise_gameplay_common::game::item_actions::named_entity(&self.common.entities.mobs, id, |m| {
-                m.id
-            })
+            sunrise_gameplay_common::game::item_actions::named_entity(
+                &self.common.entities.mobs,
+                id,
+                |m| m.id,
+            )
         }) else {
             return;
         };

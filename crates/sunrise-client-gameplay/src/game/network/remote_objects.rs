@@ -217,14 +217,26 @@ impl ClientGame<'_> {
         let id = id as u32;
         for (index, _, value) in values {
             if let (8, Value::Item(stack)) = (index, value)
-                && self.common.entities.ominous_spawners.iter().any(|s| s.id == id)
+                && self
+                    .common
+                    .entities
+                    .ominous_spawners
+                    .iter()
+                    .any(|s| s.id == id)
             {
                 // OminousItemSpawner.DATA_ITEM.
                 if let (Some(item), Some(i)) = (
                     self.to_stack(stack),
-                    self.common.entities.ominous_spawners.iter().position(|s| s.id == id),
+                    self.common
+                        .entities
+                        .ominous_spawners
+                        .iter()
+                        .position(|s| s.id == id),
                 ) {
-                    self.common.entities.ominous_spawners.update(i, |s| s.item = item);
+                    self.common
+                        .entities
+                        .ominous_spawners
+                        .update(i, |s| s.item = item);
                 }
             } else if self.common.entities.item_frames.iter().any(|f| f.id == id) {
                 // HangingEntity.DATA_DIRECTION, ItemFrame.DATA_ITEM and DATA_ROTATION.
@@ -232,7 +244,13 @@ impl ClientGame<'_> {
                     (9, Value::Item(stack)) => Some(self.to_stack(stack)),
                     _ => None,
                 };
-                let Some(f) = self.common.entities.item_frames.iter_mut().find(|f| f.id == id) else {
+                let Some(f) = self
+                    .common
+                    .entities
+                    .item_frames
+                    .iter_mut()
+                    .find(|f| f.id == id)
+                else {
                     continue;
                 };
                 match (index, value) {
@@ -248,13 +266,23 @@ impl ClientGame<'_> {
                 // HangingEntity.DATA_DIRECTION, kept as the painting's 2D value; it is never vertical.
                 if let (8, Value::Id(direction)) = (index, value)
                     && let Some(facing) = painting_facing(*direction)
-                    && let Some(p) = self.common.entities.paintings.iter_mut().find(|p| p.id == id)
+                    && let Some(p) = self
+                        .common
+                        .entities
+                        .paintings
+                        .iter_mut()
+                        .find(|p| p.id == id)
                 {
                     p.facing = facing;
                 }
                 // Painting.DATA_PAINTING_VARIANT_ID: holder already resolved during packet decode.
                 if let (9, Value::PaintingVariant(holder)) = (index, value)
-                    && let Some(p) = self.common.entities.paintings.iter_mut().find(|p| p.id == id)
+                    && let Some(p) = self
+                        .common
+                        .entities
+                        .paintings
+                        .iter_mut()
+                        .find(|p| p.id == id)
                 {
                     let (variant_name, v) = match holder {
                         PaintingHolder::Reference { name, variant, .. } => {
@@ -269,7 +297,13 @@ impl ClientGame<'_> {
                     p.width = v.width;
                     p.height = v.height;
                 }
-            } else if let Some(a) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id) {
+            } else if let Some(a) = self
+                .common
+                .entities
+                .armor_stands
+                .iter_mut()
+                .find(|a| a.id == id)
+            {
                 match (index, value) {
                     // Entity.DATA_SHARED_FLAGS_ID: FLAG_ONFIRE (`Entity.isOnFire` on a client, which
                     // draws the flames; the client never counts it down) and FLAG_INVISIBLE.
@@ -300,21 +334,30 @@ impl ClientGame<'_> {
                     _ => {}
                 }
             } else if let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) {
-                self.common.entities.bolts.update(i, |b| match (index, value) {
-                    (0, Value::Byte(flags)) => {
-                        b.fire_ticks = i32::from(flags & 1);
-                        b.glowing = (*flags as u8 & 0x40) != 0;
-                    }
-                    (1, Value::Int(air)) => b.air = *air,
-                    (2, Value::OptText(name)) => b.custom_name = name.clone(),
-                    (2, Value::Text(name)) => b.custom_name = Some(name.clone()),
-                    (3, Value::Bool(visible)) => b.custom_name_visible = *visible,
-                    (4, Value::Bool(silent)) => b.silent = *silent,
-                    (5, Value::Bool(no_gravity)) => b.no_gravity = *no_gravity,
-                    (7, Value::Int(frozen)) => b.ticks_frozen = *frozen,
-                    _ => {}
-                });
-            } else if let Some(c) = self.common.entities.cushions.iter_mut().find(|c| c.id == id) {
+                self.common
+                    .entities
+                    .bolts
+                    .update(i, |b| match (index, value) {
+                        (0, Value::Byte(flags)) => {
+                            b.fire_ticks = i32::from(flags & 1);
+                            b.glowing = (*flags as u8 & 0x40) != 0;
+                        }
+                        (1, Value::Int(air)) => b.air = *air,
+                        (2, Value::OptText(name)) => b.custom_name = name.clone(),
+                        (2, Value::Text(name)) => b.custom_name = Some(name.clone()),
+                        (3, Value::Bool(visible)) => b.custom_name_visible = *visible,
+                        (4, Value::Bool(silent)) => b.silent = *silent,
+                        (5, Value::Bool(no_gravity)) => b.no_gravity = *no_gravity,
+                        (7, Value::Int(frozen)) => b.ticks_frozen = *frozen,
+                        _ => {}
+                    });
+            } else if let Some(c) = self
+                .common
+                .entities
+                .cushions
+                .iter_mut()
+                .find(|c| c.id == id)
+            {
                 // Cushion.DATA_COLOR (DyeColor, a byte-backed id).
                 if let (8, Value::Id(color)) = (index, value) {
                     c.color = (*color).clamp(0, 15) as u8;
@@ -335,40 +378,43 @@ impl ClientGame<'_> {
                     }
                 });
             } else if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
-                self.common.entities.carts.update(i, |c| match (index, value) {
-                    (8, Value::Int(v)) => c.hurt_time = *v,
-                    (9, Value::Int(v)) => c.hurt_dir = *v,
-                    (10, Value::Float(v)) => c.damage = *v,
-                    // AbstractMinecart.DATA_ID_CUSTOM_DISPLAY_BLOCK (0, air,
-                    // for none) and DATA_ID_DISPLAY_OFFSET.
-                    (11, Value::Id(state)) => {
-                        c.custom_display = (*state > 0).then(|| {
-                            sunrise_sim::entity_nbt::state_to_nbt(
-                                self.common.pack.assets.registry,
-                                sunrise_world::registry::BlockStateId(*state as u32),
-                            )
-                        });
-                    }
-                    (12, Value::Int(offset)) => c.custom_offset = Some(*offset),
-                    (13, Value::Bool(lit)) if c.kind == super::minecarts::CartKind::Furnace => {
-                        c.fuel = i32::from(*lit);
-                    }
-                    // MinecartCommandBlock.onSyncedDataUpdated: setCommand
-                    // (which resets the success count) and setLastOutput.
-                    (13, Value::String(command))
-                        if c.kind == super::minecarts::CartKind::CommandBlock =>
-                    {
-                        c.command.set_command(command);
-                    }
-                    (14, Value::Text(output))
-                        if c.kind == super::minecarts::CartKind::CommandBlock =>
-                    {
-                        c.command.last_output = Some(sunrise_game_data::scoreboard::comp_text(
-                            &sunrise_game_data::scoreboard::tag_to_json(output),
-                        ));
-                    }
-                    _ => {}
-                });
+                self.common
+                    .entities
+                    .carts
+                    .update(i, |c| match (index, value) {
+                        (8, Value::Int(v)) => c.hurt_time = *v,
+                        (9, Value::Int(v)) => c.hurt_dir = *v,
+                        (10, Value::Float(v)) => c.damage = *v,
+                        // AbstractMinecart.DATA_ID_CUSTOM_DISPLAY_BLOCK (0, air,
+                        // for none) and DATA_ID_DISPLAY_OFFSET.
+                        (11, Value::Id(state)) => {
+                            c.custom_display = (*state > 0).then(|| {
+                                sunrise_sim::entity_nbt::state_to_nbt(
+                                    self.common.pack.assets.registry,
+                                    sunrise_world::registry::BlockStateId(*state as u32),
+                                )
+                            });
+                        }
+                        (12, Value::Int(offset)) => c.custom_offset = Some(*offset),
+                        (13, Value::Bool(lit)) if c.kind == super::minecarts::CartKind::Furnace => {
+                            c.fuel = i32::from(*lit);
+                        }
+                        // MinecartCommandBlock.onSyncedDataUpdated: setCommand
+                        // (which resets the success count) and setLastOutput.
+                        (13, Value::String(command))
+                            if c.kind == super::minecarts::CartKind::CommandBlock =>
+                        {
+                            c.command.set_command(command);
+                        }
+                        (14, Value::Text(output))
+                            if c.kind == super::minecarts::CartKind::CommandBlock =>
+                        {
+                            c.command.last_output = Some(sunrise_game_data::scoreboard::comp_text(
+                                &sunrise_game_data::scoreboard::tag_to_json(output),
+                            ));
+                        }
+                        _ => {}
+                    });
             }
         }
     }
@@ -380,7 +426,13 @@ impl ClientGame<'_> {
         id: i32,
         slots: &[(u8, Option<sunrise_protocol::item::Stack>)],
     ) {
-        if !self.common.entities.armor_stands.iter().any(|a| a.id == id as u32) {
+        if !self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .any(|a| a.id == id as u32)
+        {
             return;
         }
         let items: Vec<_> = slots
@@ -389,7 +441,8 @@ impl ClientGame<'_> {
             .collect();
         if let Some(a) = self
             .common
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter_mut()
             .find(|a| a.id == id as u32)
         {
@@ -430,7 +483,8 @@ impl ClientGame<'_> {
     pub(in crate::game::client_side) fn remote_cart_primed(&mut self, id: u32) {
         if let Some(i) = self
             .common
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .position(|c| c.id == id && c.kind == super::minecarts::CartKind::Tnt)
         {
@@ -473,7 +527,10 @@ impl ClientGame<'_> {
                 let [x, y, z] = self.rail_block(to, true);
                 let on_rails = self.is_rail(self.common.world.block(x, y, z));
                 if self.common.entities.carts[cart].on_rails != on_rails {
-                    self.common.entities.carts.update(cart, |c| c.on_rails = on_rails);
+                    self.common
+                        .entities
+                        .carts
+                        .update(cart, |c| c.on_rails = on_rails);
                 }
             }
             if kind == super::minecarts::CartKind::Furnace
@@ -626,7 +683,8 @@ impl ClientGame<'_> {
         if self.common.riding == Some(id)
             && let Some(y) = self
                 .common
-                .entities.cushions
+                .entities
+                .cushions
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.position.y)

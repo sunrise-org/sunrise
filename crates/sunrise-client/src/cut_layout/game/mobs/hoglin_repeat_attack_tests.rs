@@ -102,7 +102,14 @@ fn health(game: &mut sunrise_gameplay::game::ServerGame<'_>, uuid: &str) -> f32 
         .target_with_uuid(sunrise_sim::save::uuid_from_text(uuid).unwrap())
         .expect("the entity is in the level");
     match target {
-        Target::Mob(id) => game.entities.mobs.iter().find(|m| m.id == id).unwrap().health,
+        Target::Mob(id) => {
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .health
+        }
         other => panic!("{other:?} is not a mob"),
     }
 }
@@ -152,7 +159,12 @@ fn a_hoglin_keeps_attacking_its_attacker_beside_another_hit_hoglin() {
 
 fn hurt_time(game: &mut sunrise_gameplay::game::ServerGame<'_>, uuid: &str) -> i32 {
     let id = mob_id(game, uuid);
-    game.entities.mobs.iter().find(|m| m.id == id).unwrap().hurt_time
+    game.entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .hurt_time
 }
 
 /// Vanilla 26.3's hit pen: the hoglin enters the fight activity at the end of
@@ -195,7 +207,12 @@ fn deferred_stronger_hits_do_not_count_hurt_timers_down_twice() {
 
     // A stronger hit on the following tick also leaves the already-counted
     // timers alone rather than decrementing them again.
-    let victim = game.entities.mobs.iter_mut().find(|m| m.id == target).unwrap();
+    let victim = game
+        .entities
+        .mobs
+        .iter_mut()
+        .find(|m| m.id == target)
+        .unwrap();
     victim.hurt_time = 8;
     victim.invulnerable = 18;
     assert!(game.mob_hits_mob(target, 8.0, Damage::mob(first, [0.0; 3])));
@@ -225,7 +242,12 @@ fn a_broadcast_target_replaces_only_a_farther_one() {
     let receiver = mob_id(&mut game, HOGLIN);
     let (near, far) = (mob_id(&mut game, PIG), mob_id(&mut game, NEAR_PIG));
     let place = |game: &sunrise_gameplay::game::ServerGame<'_>, id: u32| {
-        game.entities.mobs.iter().find(|m| m.id == id).unwrap().position
+        game.entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id)
+            .unwrap()
+            .position
     };
     let (near_at, far_at) = (place(&game, near), place(&game, far));
     let position = |who: Who, _current| match who {
@@ -233,7 +255,12 @@ fn a_broadcast_target_replaces_only_a_farther_one() {
         Who::Mob(id) if id == far => Some(far_at),
         _ => None::<Vec3>,
     };
-    let m = game.entities.mobs.iter_mut().find(|m| m.id == receiver).unwrap();
+    let m = game
+        .entities
+        .mobs
+        .iter_mut()
+        .find(|m| m.id == receiver)
+        .unwrap();
     // No current target: the broadcast's is taken.
     m.ai.target = None;
     let proposal = receive_attack_target(m, Who::Mob(far), position);
@@ -298,7 +325,8 @@ fn the_sensed_receivers_are_visible_adult_hoglins() {
     let baby = mob_id(&mut game, "00006093-0000-0000-0000-000000000004");
     let walled = mob_id(&mut game, "00006093-0000-0000-0000-000000000005");
     let adults = &game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .find(|m| m.id == receiver)
         .unwrap()
@@ -372,7 +400,8 @@ fn hoglin_broadcast_obeys_target_cancellation_and_redirection() {
                 .unwrap()
                 .clone();
             for (id, x) in [(9001, 0.0), (9002, 4.0), (9003, 2.0)] {
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(id, kind.clone(), Vec3::new(x, 64.0, 0.0), 0.0));
             }
             let broadcast = || {
@@ -518,7 +547,13 @@ fn target_of(
     game: &sunrise_gameplay::game::ServerGame<'_>,
     id: u32,
 ) -> Option<sunrise_sim::mobs::Who> {
-    game.entities.mobs.iter().find(|m| m.id == id).unwrap().ai.target
+    game.entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .ai
+        .target
 }
 
 fn set_target(
@@ -526,7 +561,13 @@ fn set_target(
     id: u32,
     target: Option<sunrise_sim::mobs::Who>,
 ) {
-    game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap().ai.target = target;
+    game.entities
+        .mobs
+        .iter_mut()
+        .find(|m| m.id == id)
+        .unwrap()
+        .ai
+        .target = target;
 }
 
 fn place_player(game: &mut sunrise_gameplay::game::ServerGame<'_>, x: f64, z: f64) {

@@ -34,7 +34,8 @@ impl crate::game::ServerGame<'_> {
                 let bounds = block.bounds();
                 let victims: Vec<_> = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .filter(|mob| mob.alive() && !mob.removed && bounds.intersects(mob.bounds()))
                     .map(|mob| mob.join)

@@ -38,20 +38,23 @@ impl ServerGame<'_> {
     /// `OminousItemSpawner.create` added at `position`.
     pub fn add_ominous_item_spawner(&mut self, item: ItemStack, position: [f64; 3], delay: i32) {
         self.server.next_entity += 1;
-        self.common.entities.ominous_spawners.push(OminousItemSpawner {
-            attachment_lifetime: Default::default(),
-            join: Default::default(),
-            id: self.server.next_entity,
-            item,
-            position,
-            spawn_item_after: i64::from(delay),
-            tick_count: 0,
-            fire_ticks: 0,
-            synced_fire: false,
-            has_visual_fire: false,
-            uuid: sunrise_sim::save::random_uuid(),
-            raw: None,
-        });
+        self.common
+            .entities
+            .ominous_spawners
+            .push(OminousItemSpawner {
+                attachment_lifetime: Default::default(),
+                join: Default::default(),
+                id: self.server.next_entity,
+                item,
+                position,
+                spawn_item_after: i64::from(delay),
+                tick_count: 0,
+                fire_ticks: 0,
+                synced_fire: false,
+                has_visual_fire: false,
+                uuid: sunrise_sim::save::random_uuid(),
+                raw: None,
+            });
     }
     /// A saved spawner, as `readAdditionalSaveData` leaves it: its tick
     /// count starts again from 0.
@@ -84,20 +87,23 @@ impl ServerGame<'_> {
         let uuid = self.uuid_for(id);
         let fire_ticks = sunrise_sim::entity_nbt::fire_ticks_from_nbt(&tag);
         let has_visual_fire = sunrise_sim::entity_nbt::flag(&tag, "HasVisualFire");
-        self.common.entities.ominous_spawners.push(OminousItemSpawner {
-            attachment_lifetime: Default::default(),
-            join: Default::default(),
-            id,
-            item,
-            position: [at.x, at.y, at.z],
-            spawn_item_after,
-            tick_count: 0,
-            fire_ticks,
-            synced_fire: false,
-            has_visual_fire,
-            uuid,
-            raw: Some(Box::new(tag)),
-        });
+        self.common
+            .entities
+            .ominous_spawners
+            .push(OminousItemSpawner {
+                attachment_lifetime: Default::default(),
+                join: Default::default(),
+                id,
+                item,
+                position: [at.x, at.y, at.z],
+                spawn_item_after,
+                tick_count: 0,
+                fire_ticks,
+                synced_fire: false,
+                has_visual_fire,
+                uuid,
+                raw: Some(Box::new(tag)),
+            });
     }
     /// Every item spawner's tick: `commonTick`'s count, `tickServer` (the
     /// warning sound, then the item) and `tickClient` (particles every 5

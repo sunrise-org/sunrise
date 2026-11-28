@@ -33,7 +33,8 @@ pub(crate) mod tests {
                 || game.tick_fangs(),
             );
             assert_eq!(
-                game.entities.fangs
+                game.entities
+                    .fangs
                     .list
                     .iter()
                     .map(|f| (f.id, f.warmup))

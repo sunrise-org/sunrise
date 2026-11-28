@@ -846,7 +846,8 @@ impl crate::game::ServerGame<'_> {
         // there must neither decrement its cooldown nor travel before its blast.
         let removed_before_portal: std::collections::HashSet<u32> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|_| !vehicles)
             .filter(|m| sunrise_sim::mobs::sulfur_cube::removes_before_portal_tick(m))
@@ -1076,7 +1077,13 @@ impl crate::game::ServerGame<'_> {
     /// `Entity.canUsePortal(false)` for a primed TNT: it carries no mob.
     pub(in crate::game::server_side) fn tnt_can_use_portal(&self, id: u32) -> bool {
         // Id 0: not tracked yet, nothing to key its portal state by.
-        id != 0 && !self.common.entities.mobs.iter().any(|m| m.extra.mount == Some(id))
+        id != 0
+            && !self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .any(|m| m.extra.mount == Some(id))
     }
     /// `canUsePortal(false)` of a boat or minecart: it is nobody's passenger;
     /// the mobs riding it, and on a server the players, cross with it.
@@ -1398,7 +1405,8 @@ impl crate::game::ServerGame<'_> {
         }
         let p = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| p.id == id && (is_arrow(p) || is_portal_projectile(p)))?;
         let (width, height) = projectile_box(p);
@@ -1488,7 +1496,13 @@ impl crate::game::ServerGame<'_> {
                 (tag, List::Item, i)
             } else if let Some(i) = self.common.entities.tnts.iter().position(|t| t.id == id) {
                 (self.tnt_nbt(i), List::Tnt, i)
-            } else if let Some(i) = self.common.entities.tridents.iter().position(|t| t.id == id) {
+            } else if let Some(i) = self
+                .common
+                .entities
+                .tridents
+                .iter()
+                .position(|t| t.id == id)
+            {
                 let uuid = self.uuid_for(id);
                 let tag = self.common.entities.tridents[i].to_nbt(
                     uuid,
@@ -1513,7 +1527,8 @@ impl crate::game::ServerGame<'_> {
             } else {
                 let i = self
                     .common
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .position(|p| p.id == id && (is_arrow(p) || is_portal_projectile(p)))?;
                 let uuid = self.uuid_for(id);
@@ -1595,7 +1610,12 @@ impl crate::game::ServerGame<'_> {
         // restoreFrom copies to the arriving entity.
         let cooldown = self.dimension_changing_delay(id);
         if let Some((at, width, height)) = self.lone_traveller_box(id) {
-            let living = self.common.entities.armor_stands.iter().any(|stand| stand.id == id);
+            let living = self
+                .common
+                .entities
+                .armor_stands
+                .iter()
+                .any(|stand| stand.id == id);
             let plan = self.entity_plan(entry, at, width, height, living);
             if !self.may_travel_through(id, &plan) {
                 return;

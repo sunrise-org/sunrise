@@ -86,7 +86,8 @@ fn the_golems_preserved_equipment_and_a_broken_stand_reach_living_drops() {
             game.mob_die(&golem);
             assert_eq!(game.entities.dropped.len(), dropped);
             // An armor stand that breaks fires it with nothing in the list.
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .push(sunrise_sim::entities::ArmorStand::new(
                     9000,
                     Vec3::new(4.5, 64.0, 4.5),

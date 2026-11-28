@@ -106,7 +106,8 @@ impl crate::game::ServerGame<'_> {
                     })
                     .or_else(|| {
                         self.common
-                            .entities.mobs
+                            .entities
+                            .mobs
                             .iter()
                             .find(|m| m.id == id)
                             .map(|m| self.mob_entity(m))
@@ -511,7 +512,8 @@ impl crate::game::ServerGame<'_> {
             }),
             None => self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| self.mob_entity(m)),
@@ -545,7 +547,8 @@ impl crate::game::ServerGame<'_> {
             return Some(kind.clone());
         }
         self.common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|d| d.id == id)
             .map(|_| "minecraft:ender_dragon".into())

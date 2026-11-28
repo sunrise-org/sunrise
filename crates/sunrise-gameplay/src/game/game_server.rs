@@ -2363,7 +2363,8 @@ impl crate::game::ServerGame<'_> {
             });
             let cart_boxes = self
                 .common
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .map(|c| {
                     let p = c.position;
@@ -2375,7 +2376,8 @@ impl crate::game::ServerGame<'_> {
                 .collect();
             let arrow_boxes = self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .filter(|p| p.arrow.is_some())
                 .map(|p| p.position)
@@ -2415,7 +2417,8 @@ impl crate::game::ServerGame<'_> {
             // EntityType.LIGHTNING_BOLT: 0 x 0.
             let trigger_extras: Vec<Aabb> = self
                 .common
-                .entities.bolts
+                .entities
+                .bolts
                 .iter()
                 .map(|b| {
                     let at = Vec3::new(b.at[0], b.at[1], b.at[2]);

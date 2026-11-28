@@ -33,7 +33,8 @@ impl ServerGame<'_> {
         let id = self.server.next_entity + 1;
         self.add_item_entity(stack, at, motion, pickup_delay);
         self.common
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .rev()
             .any(|d| d.id == id)

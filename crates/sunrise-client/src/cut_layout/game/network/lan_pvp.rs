@@ -347,7 +347,8 @@ mod tests {
                 strike.amount = 5.0;
                 strike.damage_type = "minecraft:mace_smash".into();
                 let cow = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(41, cow, Vec3::new(3.0, 64.0, 5.0), 0.0));
                 let bystander_health = game.entities.mobs[0].health;
                 assert!(game.pvp_land(Victim::Guest(13), &strike).is_some());

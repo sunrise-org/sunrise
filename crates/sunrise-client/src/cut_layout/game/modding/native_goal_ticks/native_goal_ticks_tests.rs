@@ -208,7 +208,8 @@ fn tick_goals_as(
         selector.tick(&mut mobs[index], &mut cx);
         mobs[index].ai.goals = selector;
     }
-    game.entities.mobs
+    game.entities
+        .mobs
         .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
 }
 
@@ -232,7 +233,15 @@ fn goals_register_after_the_species_own_and_only_on_their_type() {
         // A zombie without the parts: the species list alone.
         bare = {
             zombie(game, 90, [3.5, 65.0, 3.5]);
-            let names: Vec<_> = game.entities.mobs.last().unwrap().ai.goals.entries().collect();
+            let names: Vec<_> = game
+                .entities
+                .mobs
+                .last()
+                .unwrap()
+                .ai
+                .goals
+                .entries()
+                .collect();
             game.entities.mobs.clear();
             names
         };
@@ -240,7 +249,15 @@ fn goals_register_after_the_species_own_and_only_on_their_type() {
     install_game_mods();
     with_game(|game| {
         zombie(game, 91, [3.5, 65.0, 3.5]);
-        let entries: Vec<_> = game.entities.mobs.last().unwrap().ai.goals.entries().collect();
+        let entries: Vec<_> = game
+            .entities
+            .mobs
+            .last()
+            .unwrap()
+            .ai
+            .goals
+            .entries()
+            .collect();
         assert_eq!(entries[0], bare[0], "the species goals lead");
         assert_eq!(
             entries.last().unwrap(),
@@ -756,7 +773,10 @@ fn a_goal_jump_goes_through_the_jump_control_input() {
         tick_goals(game, 0);
         // The goal asked the jump control, not its output: the production
         // `jump_control_tick` assigns the output from this wish.
-        assert!(game.entities.mobs[0].ai.jump, "the goal set the control's input");
+        assert!(
+            game.entities.mobs[0].ai.jump,
+            "the goal set the control's input"
+        );
         assert!(!game.entities.mobs[0].ai.jumping, "not its output");
         game.entities.mobs[0].jump_control_tick();
         assert!(

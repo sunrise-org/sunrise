@@ -396,7 +396,8 @@ fn a_reads_calculator_is_the_one_the_blasts_rays_use() {
         // obsidian resists 1200 and stays.
         assert!(game.run_command("summon minecraft:wither_skull 1.5 90 14.5 {dangerous:1b}"));
         let skull = game
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| matches!(p.kind, ProjectileKind::WitherSkull { dangerous: true }))
             .unwrap()

@@ -309,7 +309,8 @@ impl crate::game::ServerGame<'_> {
         }
         if let Some(d) = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|d| !self.server_is_pick_camera(d.id))
         {
@@ -496,7 +497,10 @@ impl crate::game::ServerGame<'_> {
         let CrosshairDecision::Entity(hit) = self.server_pick_ray_decision() else {
             return None;
         };
-        let i = self.common.mob_index.find_ref(&self.common.entities.mobs, hit.id)?;
+        let i = self
+            .common
+            .mob_index
+            .find_ref(&self.common.entities.mobs, hit.id)?;
         let point = v3(hit.point);
         let feet = self.common.entities.mobs[i].position;
         Some((
@@ -614,7 +618,8 @@ impl crate::game::ServerGame<'_> {
         }
         self.vehicle_of_any(entity).or_else(|| {
             self.common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|a| a.id == entity)
                 .and_then(|a| a.vehicle)

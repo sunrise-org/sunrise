@@ -52,13 +52,19 @@ fn reload_preserves_runtime_identity(kind: &str) {
             .expect("fixture entity loads");
         match target {
             Target::Mob(id) => {
-                let mob = game.entities.mobs.iter_mut().find(|mob| mob.id == id).unwrap();
+                let mob = game
+                    .entities
+                    .mobs
+                    .iter_mut()
+                    .find(|mob| mob.id == id)
+                    .unwrap();
                 mob.age = 17;
                 mob.invulnerable = 9;
                 mob.last_hurt = 2.0;
             }
             Target::Item(id) => {
-                game.entities.dropped
+                game.entities
+                    .dropped
                     .iter_mut()
                     .find(|item| item.id == id)
                     .unwrap()
@@ -101,7 +107,8 @@ fn reload_preserves_runtime_identity(kind: &str) {
                 assert_eq!((mob.age, mob.invulnerable, mob.last_hurt), (17, 9, 2.0));
             }
             Target::Item(id) => assert_eq!(
-                game.entities.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .find(|item| item.id == id)
                     .unwrap()
@@ -155,13 +162,19 @@ fn data_edits_keep_hit_cooldown_separate_from_saved_immunity() {
         game.set_allow_commands(true);
         assert!(game.run_command("summon cow 8.5 65 8.5"));
         let id = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.species() == sunrise_sim::mobs::Species::Cow)
             .unwrap()
             .id;
         let health = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-            game.entities.mobs.iter().find(|m| m.id == id).unwrap().health
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .health
         };
         assert!(game.run_command("damage @e[type=cow,limit=1] 4 minecraft:generic"));
         assert_eq!(health(game), 6.0);

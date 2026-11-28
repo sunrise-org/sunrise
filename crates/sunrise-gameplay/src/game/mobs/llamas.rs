@@ -91,7 +91,12 @@ impl ServerGame<'_> {
         let (baby, tamed, vehicle) = (m.is_baby(), m.extra.tame, m.rider.is_some());
         let open_inventory = !baby && tamed && sneaking;
         if !vehicle && !open_inventory && !item.is_empty() {
-            if self.common.entities.mobs[index].kind.food.iter().any(|f| f == item) {
+            if self.common.entities.mobs[index]
+                .kind
+                .food
+                .iter()
+                .any(|f| f == item)
+            {
                 return self.feed_llama(index, item);
             }
             if !tamed {
@@ -124,7 +129,9 @@ impl ServerGame<'_> {
             {
                 // Equippable.canBeSheared: the carpet comes off.
                 let at = m.center();
-                let carpet = self.common.entities.mobs[index].take_body_equipment().unwrap();
+                let carpet = self.common.entities.mobs[index]
+                    .take_body_equipment()
+                    .unwrap();
                 self.server_play_sound("minecraft:item.llama_carpet.unequip", at, 1.0, 1.0);
                 self.spawn_item(carpet, at, [0.0, 0.2, 0.0], 10);
                 self.damage_held_tool();

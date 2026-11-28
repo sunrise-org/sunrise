@@ -42,7 +42,8 @@ impl crate::game::ServerGame<'_> {
             });
         }
         self.common
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .find(|cart| cart.id == id)
             .map(|cart| LootEntity {

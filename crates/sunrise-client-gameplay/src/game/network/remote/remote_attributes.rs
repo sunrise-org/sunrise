@@ -122,7 +122,8 @@ impl ClientGame<'_> {
         else {
             if let Some(a) = self
                 .common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter_mut()
                 .find(|a| a.id == id as u32)
             {

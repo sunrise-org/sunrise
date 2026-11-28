@@ -97,7 +97,8 @@ fn restoring_keeps_both_owners_bound_and_old_batches_immutable() {
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 2);
         for (i, expected) in [(0, registration), (1, spawn_registration)] {
             let actual = game
-                .entities.boats
+                .entities
+                .boats
                 .update(i, |boat| boat.attachment_lifetime().registration().unwrap());
             assert!(expected.same_registration(&actual));
         }

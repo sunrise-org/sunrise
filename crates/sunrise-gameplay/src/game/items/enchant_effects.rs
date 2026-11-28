@@ -367,7 +367,11 @@ impl ServerGame<'_> {
                 motion: motion.map(|p| (p.fall_distance, p.fall_flying || p.flying)),
             });
         }
-        if let Some(index) = self.common.mob_index.find_ref(&self.common.entities.mobs, id as u32) {
+        if let Some(index) = self
+            .common
+            .mob_index
+            .find_ref(&self.common.entities.mobs, id as u32)
+        {
             let mob = &self.common.entities.mobs[index];
             return Some(EnchantmentActor {
                 id,
@@ -417,32 +421,53 @@ impl ServerGame<'_> {
         if let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, id) {
             return self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .get_mut(index)
                 .map(|mob| effect(&mut mob.random));
         }
-        if let Some(dragon) = self.common.entities.dragon.as_mut().filter(|dragon| dragon.id == id) {
+        if let Some(dragon) = self
+            .common
+            .entities
+            .dragon
+            .as_mut()
+            .filter(|dragon| dragon.id == id)
+        {
             return Some(effect(&mut dragon.random));
         }
         if let Some(stand) = self
             .common
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter_mut()
             .find(|stand| stand.id == id)
         {
             return Some(effect(&mut stand.random));
         }
-        if let Some(index) = self.common.entities.boats.iter().position(|boat| boat.id == id) {
+        if let Some(index) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .position(|boat| boat.id == id)
+        {
             return Some(
                 self.common
-                    .entities.boats
+                    .entities
+                    .boats
                     .update(index, |boat| effect(&mut boat.random)),
             );
         }
-        let index = self.common.entities.carts.iter().position(|cart| cart.id == id)?;
+        let index = self
+            .common
+            .entities
+            .carts
+            .iter()
+            .position(|cart| cart.id == id)?;
         Some(
             self.common
-                .entities.carts
+                .entities
+                .carts
                 .update(index, |cart| effect(&mut cart.random)),
         )
     }
@@ -749,7 +774,8 @@ impl ServerGame<'_> {
                     Some(Target::Mob(id)) => {
                         if let Some(mob) = self
                             .common
-                            .entities.mobs
+                            .entities
+                            .mobs
                             .iter_mut()
                             .find(|mob| mob.id == id && !mob.fire_immune())
                         {
@@ -759,7 +785,8 @@ impl ServerGame<'_> {
                     Some(Target::Stand(id)) => {
                         if let Some(stand) = self
                             .common
-                            .entities.armor_stands
+                            .entities
+                            .armor_stands
                             .iter_mut()
                             .find(|stand| stand.id == id && !stand.mod_fire_immune)
                         {
@@ -1034,7 +1061,8 @@ impl ServerGame<'_> {
             self.spawn_bolt(at, false);
             if let Some(last) = self.common.entities.bolts.len().checked_sub(1) {
                 self.common
-                    .entities.bolts
+                    .entities
+                    .bolts
                     .update(last, |bolt| bolt.cause = player.map(|(conn, _)| conn));
             }
         }
@@ -1159,7 +1187,9 @@ impl ServerGame<'_> {
     /// (`LivingEntity.onEquippedItemBroken`).
     pub fn wear_mob_piece(&mut self, id: u32, slot: usize, amount: u32) {
         use sunrise_sim::mobs::finalize as f;
-        let (at, stack, is_stand) = if let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) {
+        let (at, stack, is_stand) = if let Some(m) =
+            self.common.entities.mobs.iter().find(|m| m.id == id)
+        {
             let at = [m.position.x, m.position.y, m.position.z];
             let Some(stack) = f::item_stack(m, slot).filter(|s| {
                 amount > 0 && sunrise_sim::stations::is_damageable(server_world_items!(self), s)
@@ -1167,7 +1197,13 @@ impl ServerGame<'_> {
                 return;
             };
             (at, stack, false)
-        } else if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
+        } else if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == id)
+        {
             let at = [a.position.x, a.position.y, a.position.z];
             let Some(stack) = a
                 .equipment
@@ -1192,7 +1228,13 @@ impl ServerGame<'_> {
             .get(&stack.item)
             .map_or(0, |i| i.max_damage);
         if is_stand {
-            let Some(a) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id) else {
+            let Some(a) = self
+                .common
+                .entities
+                .armor_stands
+                .iter_mut()
+                .find(|a| a.id == id)
+            else {
                 return;
             };
             if damage < max {
@@ -1609,8 +1651,10 @@ impl ServerGame<'_> {
                 }
             }
             Target::Mob(id) => {
-                let mob =
-                    &self.common.entities.mobs[self.common.mob_index.find_ref(&self.common.entities.mobs, id)?];
+                let mob = &self.common.entities.mobs[self
+                    .common
+                    .mob_index
+                    .find_ref(&self.common.entities.mobs, id)?];
                 TickBody {
                     position: mob.position,
                     movement: mob.position.subtract(mob.previous),
@@ -1624,7 +1668,8 @@ impl ServerGame<'_> {
             Target::Stand(id) => {
                 let stand = self
                     .common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .iter()
                     .find(|stand| stand.id == id)?;
                 TickBody {
@@ -1638,7 +1683,12 @@ impl ServerGame<'_> {
                 }
             }
             Target::Dragon(id) => {
-                let d = self.common.entities.dragon.as_ref().filter(|d| d.id == id)?;
+                let d = self
+                    .common
+                    .entities
+                    .dragon
+                    .as_ref()
+                    .filter(|d| d.id == id)?;
                 TickBody {
                     position: d.position,
                     movement: d.position.subtract(d.previous),
@@ -1660,16 +1710,24 @@ impl ServerGame<'_> {
         }
         let (target, sound) = if let Some(index) = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .position(|p| p.id == actor)
         {
             let sound = self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .update(index, |p| enchantment_sound(effect, level, &mut p.random.0));
             (Some(Target::Projectile(actor)), sound)
-        } else if let Some(trident) = self.common.entities.tridents.iter_mut().find(|t| t.id == actor) {
+        } else if let Some(trident) = self
+            .common
+            .entities
+            .tridents
+            .iter_mut()
+            .find(|t| t.id == actor)
+        {
             (
                 Some(Target::Trident(actor)),
                 enchantment_sound(effect, level, &mut trident.random),
@@ -1763,7 +1821,8 @@ impl ServerGame<'_> {
                 let living = mod_api::LivingRef::new(mod_api::EntityRef::new(epoch, id));
                 for slot in sunrise_core::equipment_slot::EquipmentSlot::ALL {
                     let i = slot as usize;
-                    let Some(stand) = stand_by_hint_mut(&mut self.common.entities.armor_stands, index, id)
+                    let Some(stand) =
+                        stand_by_hint_mut(&mut self.common.entities.armor_stands, index, id)
                     else {
                         break;
                     };
@@ -1790,7 +1849,8 @@ impl ServerGame<'_> {
                     {
                         return;
                     }
-                    if let Some(stand) = stand_by_hint_mut(&mut self.common.entities.armor_stands, index, id)
+                    if let Some(stand) =
+                        stand_by_hint_mut(&mut self.common.entities.armor_stands, index, id)
                     {
                         stand.enchantment_equipment[i] = to;
                     }

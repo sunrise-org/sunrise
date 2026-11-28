@@ -317,14 +317,17 @@ fn a_piston_ignored_general_row_moves_for_a_shulker_lid() {
         let (id, before) = (row.id, row.position);
         let stand = id + 1;
         let shulker = id + 2;
-        game.entities.armor_stands.push(ArmorStand::new(stand, before, 0.0));
+        game.entities
+            .armor_stands
+            .push(ArmorStand::new(stand, before, 0.0));
         let kind = game
             .res
             .mob_types()
             .get("minecraft:shulker")
             .unwrap()
             .clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(shulker, kind, Vec3::new(8.0, 64.0, 8.0), 0.0));
         assert_eq!(
             game.entity(id).unwrap().piston_push_reaction(game),
@@ -1353,24 +1356,25 @@ fn removing_a_vehicle_dismounts_general_and_mob_passengers_immediately_in_order(
         .zip(71..)
         {
             match case {
-                "boat damage" => {
-                    game.entities.boats
-                        .push(sunrise_gameplay_common::game::boats_common::Boat::new(
-                            vehicle,
-                            "oak".into(),
-                            at,
-                            0.0,
-                        ))
-                }
+                "boat damage" => game.entities.boats.push(
+                    sunrise_gameplay_common::game::boats_common::Boat::new(
+                        vehicle,
+                        "oak".into(),
+                        at,
+                        0.0,
+                    ),
+                ),
                 "stand damage" => game
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .push(sunrise_sim::entities::ArmorStand::new(vehicle, at, 0.0)),
                 "mob death" | "mob death with only a mob rider" => {
                     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
                     game.entities.mobs.push(Mob::new(vehicle, kind, at, 0.0));
                 }
                 _ => game
-                    .entities.carts
+                    .entities
+                    .carts
                     .push(Minecart::new(vehicle, CartKind::Rideable, at)),
             }
             let rider_id = if case == "mob death with only a mob rider" {
@@ -1420,7 +1424,12 @@ fn removing_a_vehicle_dismounts_general_and_mob_passengers_immediately_in_order(
                         (0, 0),
                         std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
                     );
-                    let index = game.entities.mobs.iter().position(|mob| mob.id == vehicle).unwrap();
+                    let index = game
+                        .entities
+                        .mobs
+                        .iter()
+                        .position(|mob| mob.id == vehicle)
+                        .unwrap();
                     game.entities.mobs.update(index, |mob| {
                         mob.health = 0.0;
                         mob.death_time = 19;
@@ -1650,10 +1659,7 @@ fn a_cross_level_general_tree_applies_each_riders_transition_on_arrival() {
             ],
             8,
         );
-        game.entities.general
-            .row_mut(ids[1])
-            .unwrap()
-            .velocity = Vec3::new(0.5, 0.5, 0.5);
+        game.entities.general.row_mut(ids[1]).unwrap().velocity = Vec3::new(0.5, 0.5, 0.5);
         assert!(
             game.teleport_general_tree_across(
                 ids[0],
@@ -1738,7 +1744,8 @@ fn refused_dimension_transfer_returns_the_whole_tree() {
         let root = record_tag("mymod:robot", [1, 2, 3, 4], b"", vec![rider, sibling]);
         game.load_listed("mymod:robot", None, None, root).unwrap();
         let before: Vec<_> = game
-            .entities.general
+            .entities
+            .general
             .rows
             .iter()
             .map(|row| (row.id, row.uuid, row.join, row.position))
@@ -1756,7 +1763,8 @@ fn refused_dimension_transfer_returns_the_whole_tree() {
             .is_err()
         );
         let after: Vec<_> = game
-            .entities.general
+            .entities
+            .general
             .rows
             .iter()
             .map(|row| (row.id, row.uuid, row.join, row.position))
@@ -1825,9 +1833,7 @@ fn a_general_rider_keeps_minecart_drag_and_pickup_occupied() {
             record_tag("mymod:robot", [2, 3, 4, 5], b"rider", Vec::new()),
         )
         .unwrap();
-        let rider = game
-            .entity(game.entities.general.rows[0].id)
-            .unwrap();
+        let rider = game.entity(game.entities.general.rows[0].id).unwrap();
         let cart = game.entity(cart_id).unwrap();
         assert_eq!(game.entity_start_riding(rider, cart, false), Ok(()));
         // Exercise the maintained index, not the scan while it is stale after mounting.
@@ -1862,7 +1868,8 @@ fn a_general_rider_fills_a_chest_boat_and_keeps_it_from_being_pushed() {
         fixture_resident_column(&mut game.world, (0, 0));
         fixture_resident_column(&mut game.world, (1, 0));
         let (full, empty, pig) = (5000, 5001, 5002);
-        game.entities.boats
+        game.entities
+            .boats
             .push(Boat::new(full, "oak".into(), at, 0.0).with_chest());
         game.entities.boats.push(Boat::new(
             empty,
@@ -1877,9 +1884,7 @@ fn a_general_rider_fills_a_chest_boat_and_keeps_it_from_being_pushed() {
             record_tag("mymod:robot", [2, 3, 4, 5], b"rider", Vec::new()),
         )
         .unwrap();
-        let rider = game
-            .entity(game.entities.general.rows[0].id)
-            .unwrap();
+        let rider = game.entity(game.entities.general.rows[0].id).unwrap();
         let boat = game.entity(full).unwrap();
         game.entity_start_riding(rider, boat, false).unwrap();
         game.tick_general().unwrap();
@@ -1908,7 +1913,9 @@ fn a_general_rider_fills_a_chest_boat_and_keeps_it_from_being_pushed() {
         // directions of the contact; the boat with the general rider gets none.
         let pushed = Vec3::new(f64::from(0.05_f32), 0.0, 0.0);
         for i in [0, 1] {
-            game.entities.boats.update(1, |boat| boat.velocity = Vec3::ZERO);
+            game.entities
+                .boats
+                .update(1, |boat| boat.velocity = Vec3::ZERO);
             game.boat_contacts(i);
             assert_eq!(game.entities.boats[0].velocity, Vec3::ZERO);
             assert_eq!(game.entities.boats[1].velocity, pushed);
@@ -2213,9 +2220,7 @@ fn a_general_entitys_base_state_round_trips_through_its_handle_and_record() {
         let tag = record_tag("mymod:blaze", [11, 12, 13, 14], b"", Vec::new());
         let start = game.entities.general.rows.len();
         game.load_listed("mymod:blaze", None, None, tag).unwrap();
-        let blaze = game
-            .entity(game.entities.general.rows[start].id)
-            .unwrap();
+        let blaze = game.entity(game.entities.general.rows[start].id).unwrap();
         assert!(blaze.set_remaining_fire_ticks(game, 40));
         assert_eq!(blaze.fire_immune(game), Some(true));
         assert_eq!(blaze.is_on_fire(game), Some(false));

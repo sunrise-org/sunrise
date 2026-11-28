@@ -50,7 +50,8 @@ pub(crate) mod tests {
             );
             assert!(game.run_command(r#"summon minecraft:pig 0 64 0 {UUID:[I;0,0,0,175],Tags:["portal_root"],Passengers:[{id:"minecraft:pig",UUID:[I;0,0,0,175],Passengers:[{id:"minecraft:pig",UUID:[I;0,0,0,176]}]}]}"#));
             let root = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| {
                     game.persist_raw(m.id)
@@ -223,14 +224,16 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn portal_cooldown_follows_the_class_then_the_first_passenger() {
         sunrise_gameplay::game::native_guest_turn_tests::with_guests(|game| {
-            game.entities.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     101,
                     Arc::from("oak"),
                     Vec3::ZERO,
                     0.0,
                 ));
-            game.entities.carts
+            game.entities
+                .carts
                 .push(sunrise_gameplay_common::game::minecarts::Minecart::new(
                     103,
                     sunrise_gameplay_common::game::minecarts::CartKind::Rideable,
@@ -399,7 +402,10 @@ pub(crate) mod tests {
             spare.store(102, Ordering::Relaxed);
             game.send_through_portal(101, BlockPos::new(0, 64, 0));
             assert_eq!(game.server.portals.arrivals.len(), 1);
-            assert_eq!(game.entities.mobs.iter().map(|m| m.id).collect::<Vec<_>>(), [102]);
+            assert_eq!(
+                game.entities.mobs.iter().map(|m| m.id).collect::<Vec<_>>(),
+                [102]
+            );
             assert_eq!(game.entities.mobs[0].extra.mount, None);
             assert_eq!(
                 heard

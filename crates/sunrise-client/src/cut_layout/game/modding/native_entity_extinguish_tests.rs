@@ -25,7 +25,8 @@ const PITCH: u32 = 0x3fe09a90;
 fn extinguish_fire_uses_mob_kind_immunity_and_own_random_unlike_silent_clear() {
     with_resident_game(|game| {
         let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(21, kind, Vec3::new(3.0, 64.0, 5.0), 0.0));
         let entity = game.entity(21).unwrap();
         for (ticks, immune) in [(72, false), (0, false), (-12, false), (72, true)] {
@@ -81,7 +82,9 @@ fn extinguish_fire_preserves_player_guest_stand_and_item_sound_routes() {
             |_| {},
         )
         .unwrap();
-        game.entities.armor_stands.push(ArmorStand::new(22, at, 0.0));
+        game.entities
+            .armor_stands
+            .push(ArmorStand::new(22, at, 0.0));
         game.entities.dropped.push(ItemEntity::new(
             23,
             ItemStack::new("minecraft:stone", 1),

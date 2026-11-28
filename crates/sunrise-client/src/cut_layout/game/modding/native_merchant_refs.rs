@@ -41,7 +41,16 @@ pub(crate) mod tests {
             assert!(!villager.set_profession(game, "minecraft:farmer"));
             assert!(game.interact_trader(0, "minecraft:air").unwrap());
             assert!(game.station.is_none());
-            assert_eq!(game.entities.mobs[0].extra.trade.as_ref().unwrap().offers.len(), 1);
+            assert_eq!(
+                game.entities.mobs[0]
+                    .extra
+                    .trade
+                    .as_ref()
+                    .unwrap()
+                    .offers
+                    .len(),
+                1
+            );
             assert_eq!(
                 villager.profession(game).as_deref(),
                 Some("example:engineer")
@@ -61,7 +70,9 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(42, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(42, zombie, Vec3::ZERO, 0.0));
             assert!(game.merchant(game.entity(42).unwrap()).is_none());
 
             // Nothing is rolled yet; reading and a refused write draw nothing.
@@ -77,7 +88,13 @@ pub(crate) mod tests {
                 ),
                 Ok(false)
             );
-            assert!(game.entities.mobs[0].extra.trade.as_ref().is_none_or(|t| t.unset));
+            assert!(
+                game.entities.mobs[0]
+                    .extra
+                    .trade
+                    .as_ref()
+                    .is_none_or(|t| t.unset)
+            );
 
             // A wandering trader has offers but no villager data.
             assert_eq!(

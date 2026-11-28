@@ -253,10 +253,7 @@ impl crate::game::ServerGame<'_> {
                 if transient {
                     self.common.persist.transient.insert(row.id);
                 }
-                self.common
-                    .entities.general
-                    .rows
-                    .insert(index, row);
+                self.common.entities.general.rows.insert(index, row);
             }
             return Err(format!("{error}"));
         }

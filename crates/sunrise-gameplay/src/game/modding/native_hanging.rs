@@ -13,7 +13,13 @@ impl crate::game::ServerGame<'_> {
     ) -> bool {
         let pos = match self.native_entity_target(entity) {
             Some(Target::Frame(id)) => {
-                let Some(frame) = self.common.entities.item_frames.iter_mut().find(|f| f.id == id) else {
+                let Some(frame) = self
+                    .common
+                    .entities
+                    .item_frames
+                    .iter_mut()
+                    .find(|f| f.id == id)
+                else {
                     return false;
                 };
                 frame.facing = data_3d(direction);
@@ -23,7 +29,13 @@ impl crate::game::ServerGame<'_> {
                 let Some(facing) = data_2d(direction) else {
                     return false;
                 };
-                let Some(painting) = self.common.entities.paintings.iter_mut().find(|p| p.id == id) else {
+                let Some(painting) = self
+                    .common
+                    .entities
+                    .paintings
+                    .iter_mut()
+                    .find(|p| p.id == id)
+                else {
                     return false;
                 };
                 painting.facing = facing;
@@ -43,7 +55,13 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Frame(id)) = self.native_entity_target(entity) else {
             return false;
         };
-        let Some(frame) = self.common.entities.item_frames.iter_mut().find(|f| f.id == id) else {
+        let Some(frame) = self
+            .common
+            .entities
+            .item_frames
+            .iter_mut()
+            .find(|f| f.id == id)
+        else {
             return false;
         };
         frame.rotation = (rotation % 8) as i8;

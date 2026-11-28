@@ -26,7 +26,8 @@ fn a_discarded_trident_does_not_apply_its_captured_impact() {
     with_probe(Action::Discard, true, |game, observed| {
         if pig {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(72, kind, Vec3::new(3.0, 64.0, 0.5), 0.0));
         } else {
             let stone = game

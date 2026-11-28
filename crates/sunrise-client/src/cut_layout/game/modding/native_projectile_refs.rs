@@ -41,7 +41,8 @@ mod tests {
             fixture_resident_column(&mut game.world, (-1, 0));
             game.options.dedicated = Some(Vec::new());
             let boat_id = game.take_entity_id();
-            game.entities.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     boat_id,
                     "oak".into(),
@@ -95,7 +96,8 @@ mod tests {
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.world.health_rules.difficulty = sunrise_world::food::Difficulty::Easy;
             let boat_id = game.take_entity_id();
-            game.entities.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     boat_id,
                     "oak".into(),
@@ -166,7 +168,8 @@ mod tests {
             assert_eq!(game.entities.projectiles[0].owner, Some(Who::Mob(99)));
             // A non-living owner has collision identity but no living hit credit.
             let boat_id = game.take_entity_id();
-            game.entities.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     boat_id,
                     "oak".into(),
@@ -342,7 +345,9 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(99, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(99, zombie, Vec3::ZERO, 0.0));
             let mob = game.entity(99).unwrap();
             assert!(!trident.set_owner(game, Some(mob)));
 
@@ -379,7 +384,10 @@ mod tests {
             assert_eq!(game.entities.rockets[0].owner, Some(Who::Mob(99)));
             let _ = rocket_random.next_float();
             assert!(rocket.deflect(game, Deflection::Reverse, None, None, false, [0.5; 3]));
-            assert_eq!(game.entities.rockets[0].velocity, Vec3::new(-0.5, -1.0, -1.5));
+            assert_eq!(
+                game.entities.rockets[0].velocity,
+                Vec3::new(-0.5, -1.0, -1.5)
+            );
             assert_eq!(
                 game.entities.rockets[0].random.clone().next_float(),
                 rocket_random.next_float()
@@ -389,7 +397,8 @@ mod tests {
             // A rocket keeps an owner that is neither player nor mob, across a
             // save too, but a player's trident still refuses one.
             let boat_id = game.take_entity_id();
-            game.entities.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     boat_id,
                     "oak".into(),
@@ -436,7 +445,8 @@ mod tests {
                 .unwrap();
             let random = game.entities.projectiles[0].random.0.clone().next_float();
             for left in 1..=5 {
-                game.entities.projectiles
+                game.entities
+                    .projectiles
                     .update(0, |p| p.no_deflect_ticks = left);
                 assert!(!charge.deflect(game, Deflection::Reverse, None, None, true, [1.0; 3]));
                 let p = &game.entities.projectiles[0];
@@ -444,7 +454,8 @@ mod tests {
                 assert_eq!(p.owner, Some(Who::Mob(99)));
                 assert_eq!(p.random.0.clone().next_float(), random);
             }
-            game.entities.projectiles
+            game.entities
+                .projectiles
                 .update(0, |p| p.no_deflect_ticks = 0);
 
             // REVERSE of a non-arrow takes one float from its own random, not the level's.
@@ -556,7 +567,8 @@ mod tests {
                 Vec3::new(0.0, 1.0, 0.0)
             );
             assert_eq!(game.entities.projectiles[i].owner, Some(Who::Mob(99)));
-            game.entities.projectiles
+            game.entities
+                .projectiles
                 .update(i, |p| p.no_deflect_ticks = 0);
             game.server.attack_ticks = 50;
             assert!(game.deflect(i));

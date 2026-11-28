@@ -25,7 +25,8 @@ pub(crate) mod tests {
     fn cow(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32) -> LivingRef {
         fixture_resident_column(&mut game.world, (0, 0));
         let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(id, kind, Vec3::new(5.5, 64.0, 5.5), 0.0));
         game.living(game.entity(id).unwrap()).unwrap()
     }
@@ -41,7 +42,9 @@ pub(crate) mod tests {
             assert!(game.entities.mobs[0].extra.fall_flying);
             assert_eq!(game.living_is_gliding(mob), Some(true));
             // An armor stand has no glide state, so the write changes nothing.
-            game.entities.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(13, Vec3::ZERO, 0.0));
             let living = game.living(game.entity(13).unwrap()).unwrap();
             assert!(!game.living_start_gliding(living));
             // The player in place and a guest start their own body's flag.
@@ -122,7 +125,8 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(13, kind, Vec3::new(5.5, 64.0, 5.5), 0.0));
             let zombie_ref = game.mob(game.entity(13).unwrap()).unwrap();
             assert!(game.mob_set_persistence_required(zombie_ref));
@@ -213,7 +217,10 @@ pub(crate) mod tests {
                 ),
             )
             .unwrap();
-            assert!(!game.entities.mobs[before].persistent, "a summon stays vanilla");
+            assert!(
+                !game.entities.mobs[before].persistent,
+                "a summon stays vanilla"
+            );
         });
     }
 
@@ -838,7 +845,8 @@ pub(crate) mod tests {
                     .get("minecraft:villager")
                     .unwrap()
                     .clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(20, kind, Vec3::new(3.0, 64.0, 5.0), 0.0));
                 let living = game.living(game.entity(20).unwrap()).unwrap();
                 let stone = game

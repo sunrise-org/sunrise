@@ -213,7 +213,8 @@ pub(crate) fn lethal_landing(totem: bool) {
         assert_eq!(guest.position[1], 100.0);
         assert_eq!(guest.last_death.as_ref().unwrap().1, [12, 100, 12]);
         let drop = g
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .find(|item| item.stack.item.as_ref() == "minecraft:diamond")
             .unwrap();

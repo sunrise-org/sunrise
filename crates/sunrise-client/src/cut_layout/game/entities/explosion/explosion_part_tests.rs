@@ -604,7 +604,8 @@ fn block_parts_answer_drops_from_explosions() {
         assert_eq!(game.entities.tnts.len(), primed + 2);
         // Refused infested stone lets no silverfish out; the one beside it does.
         let silverfish = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter()
                 .filter(|m| m.kind.id == "minecraft:silverfish")
                 .count()

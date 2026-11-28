@@ -47,17 +47,20 @@ impl crate::game::CommonGame<'_> {
     /// (`EntitySectionStorage.count`).
     pub fn debug_entity_sections(&self) -> usize {
         let sections: HashSet<[i32; 3]> = self
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| !m.removed)
             .map(|m| [m.position.x, m.position.y, m.position.z])
             .chain(
-                self.entities.dropped
+                self.entities
+                    .dropped
                     .iter()
                     .map(|i| [i.position.x, i.position.y, i.position.z]),
             )
             .chain(
-                self.entities.orbs
+                self.entities
+                    .orbs
                     .iter()
                     .map(|o| [o.position.x, o.position.y, o.position.z]),
             )

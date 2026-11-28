@@ -160,7 +160,8 @@ impl crate::game::ClientGame<'_> {
         }
         self.client_team_with_owner(id, || {
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .and_then(tame_owner)
@@ -183,7 +184,8 @@ impl crate::game::ClientGame<'_> {
         }
         let tame_owners: HashMap<u32, [i32; 4]> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter_map(|m| Some((m.id, tame_owner(m)?)))
             .collect();
@@ -244,7 +246,8 @@ impl crate::game::ClientGame<'_> {
                         .find_map(|(&id, &u)| (u == uuid).then_some(id))
                 })?;
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == pet && m.extra.tame)?
                 .extra

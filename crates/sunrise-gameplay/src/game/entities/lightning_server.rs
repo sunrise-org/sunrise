@@ -109,7 +109,8 @@ impl crate::game::ServerGame<'_> {
         let sees_sky = |g: &Self, p: [i32; 3]| g.world.light(p[0], p[1], p[2]) >> 4 == 15;
         let mut candidates: Vec<[i32; 3]> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| m.alive())
             .map(|m| {
@@ -279,7 +280,8 @@ impl crate::game::ServerGame<'_> {
         }
         if let Some(mob) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == vehicle && !m.removed)
         {
@@ -457,7 +459,8 @@ impl crate::game::ServerGame<'_> {
                     if !visual_only {
                         let mut rng = self.common.entities.bolts[i].random.clone();
                         let set = self.bolt_fire(at, 0, &mut rng);
-                        if let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) {
+                        if let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id)
+                        {
                             self.common.entities.bolts.update(i, |b| {
                                 b.random = rng;
                                 b.fires += set;
@@ -473,7 +476,8 @@ impl crate::game::ServerGame<'_> {
                 };
                 let (mut strike, cause) = self
                     .common
-                    .entities.bolts
+                    .entities
+                    .bolts
                     .update(i, |b| (std::mem::take(&mut b.strike), b.cause));
                 let struck = self.thunder_hit_state(id, at, &mut strike);
                 if let Some(i) = self.common.entities.bolts.iter().position(|b| b.id == id) {
@@ -568,7 +572,8 @@ impl crate::game::ServerGame<'_> {
         };
         let viewers: Vec<EntityView> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| m.alive() && !hit.contains(&m.id))
             .filter(|m| in_viewer_box(at, [m.position.x, m.position.y, m.position.z]))
@@ -578,7 +583,8 @@ impl crate::game::ServerGame<'_> {
         let mut viewers = viewers;
         viewers.extend(
             self.common
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .filter(|e| !hit_items.contains(&e.id))
                 .filter(|e| in_viewer_box(at, [e.position.x, e.position.y, e.position.z]))
@@ -895,7 +901,10 @@ impl crate::game::ServerGame<'_> {
                     }
                 }
                 EntityHandle::Cart(i) => {
-                    let (id, kind) = (self.common.entities.carts[i].id, self.common.entities.carts[i].kind.id());
+                    let (id, kind) = (
+                        self.common.entities.carts[i].id,
+                        self.common.entities.carts[i].kind.id(),
+                    );
                     let source = sunrise_sim::health::HurtSource {
                         damage_type: "minecraft:lightning_bolt",
                         causing: bolt as i32,
@@ -1210,13 +1219,18 @@ mod strike_tests {
                 game.ui.difficulty = 2;
                 let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
                 for (id, x) in [(spared, 0.0), (struck, 1.0)] {
-                    game.entities.mobs
-                        .push(Mob::new(id, pig.clone(), Vec3::new(x, 64.0, 0.0), 0.0));
+                    game.entities.mobs.push(Mob::new(
+                        id,
+                        pig.clone(),
+                        Vec3::new(x, 64.0, 0.0),
+                        0.0,
+                    ));
                 }
                 let mut bolt = Bolt::struck_at(77, [0.5, 64.0, 0.5]);
                 game.thunder_hit(&mut bolt);
                 let kind = |game: &crate::game::ServerGame<'_>, id| {
-                    game.entities.mobs
+                    game.entities
+                        .mobs
                         .iter()
                         .find(|m| m.id == id && !m.removed)
                         .map(|m| m.species())
@@ -1224,7 +1238,8 @@ mod strike_tests {
                 assert_eq!(kind(game, spared), Some(Species::Pig));
                 assert_eq!(kind(game, struck), None, "converted");
                 let spared_pig = game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == spared && !m.removed)
                     .unwrap();

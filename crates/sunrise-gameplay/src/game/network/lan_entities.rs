@@ -243,7 +243,8 @@ impl ServerGame<'_> {
             }
             if let Some(driver) = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == vehicle as u32)
                 .and_then(|m| m.extra.rider)
@@ -406,7 +407,13 @@ impl ServerGame<'_> {
                 _ => {}
             }
         });
-        for a in self.common.entities.armor_stands.iter().filter(|a| a.id > after) {
+        for a in self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .filter(|a| a.id > after)
+        {
             let p = a.position;
             let e = add_state(
                 out,
@@ -480,7 +487,13 @@ impl ServerGame<'_> {
             }
             self.stand_attributes(&a.live, &mut e.attributes);
         }
-        for f in self.common.entities.item_frames.iter().filter(|f| f.id > after) {
+        for f in self
+            .common
+            .entities
+            .item_frames
+            .iter()
+            .filter(|f| f.id > after)
+        {
             // ItemFrame.getAddEntityPacket: the block it hangs in and its direction.
             let e = add_state(out, f.id, f.kind(), f.pos.map(f64::from), 0.0, false);
             e.pitch = match f.facing {
@@ -537,7 +550,13 @@ impl ServerGame<'_> {
                 false,
             );
         }
-        for p in self.common.entities.paintings.iter().filter(|p| p.id > after) {
+        for p in self
+            .common
+            .entities
+            .paintings
+            .iter()
+            .filter(|p| p.id > after)
+        {
             let e = add_state(
                 out,
                 p.id,
@@ -593,7 +612,13 @@ impl ServerGame<'_> {
                 ));
             }
         }
-        for c in self.common.entities.cushions.iter().filter(|c| c.id > after) {
+        for c in self
+            .common
+            .entities
+            .cushions
+            .iter()
+            .filter(|c| c.id > after)
+        {
             let p = c.position;
             let e = add_state(
                 out,
@@ -610,7 +635,13 @@ impl ServerGame<'_> {
             }
         }
         // DATA_ITEM, `ItemStack.EMPTY` by default.
-        for o in self.common.entities.ominous_spawners.iter().filter(|o| o.id > after) {
+        for o in self
+            .common
+            .entities
+            .ominous_spawners
+            .iter()
+            .filter(|o| o.id > after)
+        {
             let e = add_state(
                 out,
                 o.id,
@@ -684,13 +715,15 @@ impl ServerGame<'_> {
             p.sync_velocity = false;
         });
         self.common
-            .entities.falling
+            .entities
+            .falling
             .for_each_mut(|f| f.sync_velocity = false);
         for d in &mut self.common.entities.dropped {
             d.needs_sync = false;
         }
         self.common
-            .entities.tridents
+            .entities
+            .tridents
             .iter_mut()
             .for_each(|t| t.needs_sync = false);
     }
@@ -705,7 +738,12 @@ impl ServerGame<'_> {
         let next = &mut self.server.next_entity;
         use super::entity_residency::assign_resident_ids;
         assign_resident_ids!(self.common.entities.tnts, t, next, None);
-        assign_resident_ids!(self.common.entities.falling, f, next, Some(&f.attachment_lifetime));
+        assign_resident_ids!(
+            self.common.entities.falling,
+            f,
+            next,
+            Some(&f.attachment_lifetime)
+        );
         assign_resident_ids!(
             self.common.entities.projectiles,
             p,
@@ -715,7 +753,12 @@ impl ServerGame<'_> {
         assign_resident_ids!(self.common.entities.tridents, t, next, None);
         assign_resident_ids!(self.common.entities.rockets, r, next, None);
         assign_resident_ids!(self.common.entities.crystals, c, next, None);
-        assign_resident_ids!(self.common.entities.bolts, b, next, Some(&b.attachment_lifetime));
+        assign_resident_ids!(
+            self.common.entities.bolts,
+            b,
+            next,
+            Some(&b.attachment_lifetime)
+        );
         assign_resident_ids!(self.common.entities.ominous_spawners, o, next, None);
         crate::game::server_side::potions_server::thrown_ids(&mut self.common.potions).for_each(
             |id| {
@@ -805,7 +848,14 @@ impl ServerGame<'_> {
             Some(sunrise_sim::mobs::Who::Player) | None => 0,
         };
         let at = |p: sunrise_core::geometry::Vec3| [p.x, p.y, p.z];
-        for f in self.common.entities.fangs.list.iter().filter(|f| f.id > after) {
+        for f in self
+            .common
+            .entities
+            .fangs
+            .list
+            .iter()
+            .filter(|f| f.id > after)
+        {
             let e = add_state(out, f.id, "minecraft:evoker_fangs", f.pos, f.yaw, false);
             if f.synced_fire {
                 e.meta.push((0, serializer::BYTE, Value::Byte(1)));
@@ -903,7 +953,8 @@ impl ServerGame<'_> {
         }
         for p in self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .filter(|p| p.id > after)
         {
@@ -1062,7 +1113,13 @@ impl ServerGame<'_> {
             let e = add_state(out, id, "minecraft:eye_of_ender", position, 0.0, false);
             e.velocity = velocity;
         }
-        for t in self.common.entities.tridents.iter().filter(|t| t.id > after) {
+        for t in self
+            .common
+            .entities
+            .tridents
+            .iter()
+            .filter(|t| t.id > after)
+        {
             let data = match t.guest.and_then(|conn| hub.guest(conn)) {
                 Some(g) => g.entity_id,
                 None => owner(Some(sunrise_sim::mobs::Who::Player)),
@@ -1141,7 +1198,13 @@ impl ServerGame<'_> {
                 e.meta.push((10, serializer::BOOLEAN, Value::Bool(true)));
             }
         }
-        for c in self.common.entities.crystals.iter().filter(|c| c.id > after) {
+        for c in self
+            .common
+            .entities
+            .crystals
+            .iter()
+            .filter(|c| c.id > after)
+        {
             let e = add_state(
                 out,
                 c.id,
@@ -1172,7 +1235,13 @@ impl ServerGame<'_> {
             ),
             None,
         );
-        for b in self.common.entities.breath_clouds.iter().filter(|b| b.id > after) {
+        for b in self
+            .common
+            .entities
+            .breath_clouds
+            .iter()
+            .filter(|b| b.id > after)
+        {
             // The hub is out of `self.lan` while these states are built, so
             // the particle must be encoded through the hub passed in: going
             // through `network_particle` would drop it and leave the client
@@ -1382,7 +1451,12 @@ mod tests {
                 "teleport" => ("teleport @e[tag=turn_me,limit=1] 4 64 5 135 0", [96, 96]),
                 "teleport_without_rotation" => {
                     // The head can be turned independently of view before /tp.
-                    game.entities.armor_stands.iter_mut().next().unwrap().head_yaw = 90.0;
+                    game.entities
+                        .armor_stands
+                        .iter_mut()
+                        .next()
+                        .unwrap()
+                        .head_yaw = 90.0;
                     ("teleport @e[tag=turn_me,limit=1] 4 64 5", [32, 32])
                 }
                 _ => unreachable!(),

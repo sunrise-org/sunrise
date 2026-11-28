@@ -694,7 +694,13 @@ impl crate::game::ServerGame<'_> {
         let Some(level) = self.common.transactions.last_mut() else {
             return;
         };
-        if let Some(mob) = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed) {
+        if let Some(mob) = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)
+        {
             level.mob_health.entry((dim, id)).or_insert(KeptMobHealth {
                 health: mob.health,
                 absorption: mob.absorption,
@@ -717,7 +723,8 @@ impl crate::game::ServerGame<'_> {
         self.journal_mob_health(id);
         let mob = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter_mut()
             .find(|mob| mob.id == id && !mob.removed)?;
         let invalidation = if !self.common.transactions.is_empty() {
@@ -1312,13 +1319,19 @@ impl crate::game::ServerGame<'_> {
         for ((dim, id), kept) in equipment {
             let _ = self.with_effect_level(dim, |game| match kept {
                 KeptEquipment::Mob { slots, gear } => {
-                    if let Some(mob) = game.entities.mobs.iter_mut().find(|m| m.id == id && !m.removed) {
+                    if let Some(mob) = game
+                        .entities
+                        .mobs
+                        .iter_mut()
+                        .find(|m| m.id == id && !m.removed)
+                    {
                         mob.extra.equipment = *slots;
                         mob.extra.gear = gear;
                     }
                 }
                 KeptEquipment::Stand(slots) => {
-                    if let Some(stand) = game.entities.armor_stands.iter_mut().find(|a| a.id == id) {
+                    if let Some(stand) = game.entities.armor_stands.iter_mut().find(|a| a.id == id)
+                    {
                         stand.equipment = *slots;
                     }
                 }
@@ -1346,7 +1359,12 @@ impl crate::game::ServerGame<'_> {
         for ((dim, id), changes) in std::mem::take(&mut level.modifier_changes) {
             let _ = self.with_effect_level(dim, |game| {
                 let common = &mut game.common;
-                if let Some(mob) = common.entities.mobs.iter_mut().find(|m| m.id == id && !m.removed) {
+                if let Some(mob) = common
+                    .entities
+                    .mobs
+                    .iter_mut()
+                    .find(|m| m.id == id && !m.removed)
+                {
                     super::living_attributes::undo_mob_modifiers(
                         common.motion.attributes(),
                         mob,
@@ -2080,7 +2098,8 @@ impl crate::game::ServerGame<'_> {
             After::Emptied(id) => {
                 let emptied = self
                     .common
-                    .entities.dropped
+                    .entities
+                    .dropped
                     .iter()
                     .position(|e| e.id == id && e.stack.count == 0);
                 if let Some(i) = emptied {
@@ -2090,7 +2109,8 @@ impl crate::game::ServerGame<'_> {
             After::EquipmentSync(id) => {
                 if let Some(mob) = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == id && !m.removed)
                 {

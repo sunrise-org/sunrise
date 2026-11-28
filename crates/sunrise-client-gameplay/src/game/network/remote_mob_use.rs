@@ -104,7 +104,12 @@ impl ClientGame<'_> {
                 m.extra.saddled()
                     && !sneaking
                     && self.common.riding != Some(m.id)
-                    && !self.common.entities.mobs.iter().any(|o| o.extra.mount == Some(m.id))
+                    && !self
+                        .common
+                        .entities
+                        .mobs
+                        .iter()
+                        .any(|o| o.extra.mount == Some(m.id))
             }
             // HappyGhast.mobInteract: a harnessed adult is ridden.
             Species::HappyGhast => !baby && m.extra.body_id().is_some(),

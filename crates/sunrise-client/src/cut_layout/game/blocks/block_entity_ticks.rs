@@ -952,7 +952,11 @@ pub(crate) mod slot_mutation_tests {
                     game.world.block_entities.get(&A),
                     Some(BlockEntity::Furnace(_))
                 ));
-                assert_eq!(game.entities.dropped.len(), 1, "no hopper tick took the item");
+                assert_eq!(
+                    game.entities.dropped.len(),
+                    1,
+                    "no hopper tick took the item"
+                );
             },
         );
     }

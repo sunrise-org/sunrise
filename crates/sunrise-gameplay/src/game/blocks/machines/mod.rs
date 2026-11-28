@@ -784,7 +784,13 @@ impl ServerGame<'_> {
             return;
         }
         // `push_item_entity` just pushed it; a join listener runs later.
-        let Some(item) = self.common.entities.dropped.last().filter(|item| item.id == id) else {
+        let Some(item) = self
+            .common
+            .entities
+            .dropped
+            .last()
+            .filter(|item| item.id == id)
+        else {
             return;
         };
         wake_hoppers_reaching(&mut self.common.world.block_entities, item.bounds());
@@ -1120,13 +1126,15 @@ impl ServerGame<'_> {
             let id = z as u32;
             let at = self
                 .common
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.position)
                 .or_else(|| {
                     self.common
-                        .entities.boats
+                        .entities
+                        .boats
                         .iter()
                         .find(|b| b.id == id)
                         .map(|b| b.position)
@@ -1356,7 +1364,8 @@ impl ServerGame<'_> {
         };
         let mut found: Vec<u32> = self
             .common
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .filter(|c| {
                 matches!(
@@ -1368,7 +1377,8 @@ impl ServerGame<'_> {
             .collect();
         found.extend(
             self.common
-                .entities.boats
+                .entities
+                .boats
                 .iter()
                 .filter(|b| b.chest && meets(b.bounds()))
                 .map(|b| b.id),
@@ -1458,19 +1468,22 @@ impl ServerGame<'_> {
         id: u32,
         f: impl FnOnce(&mut Self, &View) -> R,
     ) -> Option<R> {
-        let mut items = if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
+        let mut items = if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id)
+        {
             self.unpack_loot(
                 sunrise_gameplay_common::game::container_loot_level::LootTarget::Cart(id),
                 None,
             );
             self.common
-                .entities.carts
+                .entities
+                .carts
                 .update(i, |c| std::mem::take(&mut c.items))
         } else {
             let i = self.common.entities.boats.iter().position(|b| b.id == id)?;
             self.unpack_boat_loot(i, false);
             self.common
-                .entities.boats
+                .entities
+                .boats
                 .update(i, |b| std::mem::take(&mut b.items))
         };
         let key = (i32::MAX - 15, super::minecarts::CART_KEY_Y, id as i32);

@@ -227,7 +227,8 @@ mod item_destroyed_tests {
                 assert_eq!(seen.lock().unwrap().len(), 1);
                 assert_eq!(seen.lock().unwrap()[0].0, "minecraft:cactus");
                 assert!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .any(|e| &*e.stack.item == "minecraft:emerald" && e.stack.count == 3)
                 );
@@ -249,7 +250,8 @@ mod item_destroyed_tests {
                 assert_eq!(seen.lock().unwrap().len(), 1);
                 assert_eq!(seen.lock().unwrap()[0].0, "minecraft:in_fire");
                 assert!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .any(|e| &*e.stack.item == "minecraft:emerald" && e.stack.count == 3)
                 );
@@ -270,7 +272,8 @@ mod item_destroyed_tests {
                 assert_eq!(seen.lock().unwrap().len(), 1);
                 assert_eq!(seen.lock().unwrap()[0].0, "minecraft:on_fire");
                 assert!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .any(|e| &*e.stack.item == "minecraft:emerald" && e.stack.count == 3)
                 );
@@ -296,7 +299,8 @@ mod item_destroyed_tests {
                 assert_eq!(seen.lock().unwrap().len(), 1);
                 assert_eq!(seen.lock().unwrap()[0].0, "minecraft:lava");
                 assert!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .any(|e| &*e.stack.item == "minecraft:emerald" && e.stack.count == 3)
                 );
@@ -412,7 +416,10 @@ mod item_destroyed_tests {
                     0,
                 );
                 assert!(game.as_console(|g| g.run_command("kill @e[type=item]")));
-                assert!(game.entities.dropped.is_empty(), "/kill must remove without drops");
+                assert!(
+                    game.entities.dropped.is_empty(),
+                    "/kill must remove without drops"
+                );
                 assert!(seen.lock().unwrap().is_empty(), "/kill must not fire hook");
 
                 // 2. Void removal (`y < min_y - 64`) discards without firing `onDestroyed`.
@@ -424,7 +431,10 @@ mod item_destroyed_tests {
                     0,
                 );
                 game.tick_world(true).unwrap();
-                assert!(game.entities.dropped.is_empty(), "void must remove without drops");
+                assert!(
+                    game.entities.dropped.is_empty(),
+                    "void must remove without drops"
+                );
                 assert!(seen.lock().unwrap().is_empty(), "void must not fire hook");
 
                 // 3. Lifetime despawn (`age >= 6000`) discards without firing `onDestroyed`.
@@ -436,7 +446,10 @@ mod item_destroyed_tests {
                 );
                 game.entities.dropped.last_mut().unwrap().age = 5999;
                 game.tick_world(true).unwrap();
-                assert!(game.entities.dropped.is_empty(), "despawn must remove without drops");
+                assert!(
+                    game.entities.dropped.is_empty(),
+                    "despawn must remove without drops"
+                );
                 assert!(
                     seen.lock().unwrap().is_empty(),
                     "despawn must not fire hook"
@@ -524,7 +537,10 @@ mod item_destroyed_tests {
                 }));
                 assert_eq!(*observed.lock().unwrap(), vec![(1, 1, 1)]);
                 assert_eq!(game.entities.dropped.len(), 1);
-                assert_eq!(&*game.entities.dropped[0].stack.item, "minecraft:iron_ingot");
+                assert_eq!(
+                    &*game.entities.dropped[0].stack.item,
+                    "minecraft:iron_ingot"
+                );
                 assert_eq!(game.entities.dropped[0].stack.count, 4);
 
                 // 2. Explosion path (`server_explode`): same original-stack visibility.
@@ -541,7 +557,10 @@ mod item_destroyed_tests {
                 .unwrap();
                 assert_eq!(*observed.lock().unwrap(), vec![(1, 1, 1)]);
                 assert_eq!(game.entities.dropped.len(), 1);
-                assert_eq!(&*game.entities.dropped[0].stack.item, "minecraft:iron_ingot");
+                assert_eq!(
+                    &*game.entities.dropped[0].stack.item,
+                    "minecraft:iron_ingot"
+                );
                 assert_eq!(game.entities.dropped[0].stack.count, 4);
 
                 // 3. Normal `tick_world(true)` lava destruction path: same original-stack visibility.
@@ -575,7 +594,8 @@ mod item_destroyed_tests {
                 }
                 assert_eq!(*observed.lock().unwrap(), vec![(1, 1, 1)]);
                 assert!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .any(|e| &*e.stack.item == "minecraft:iron_ingot" && e.stack.count == 4)
                 );
@@ -620,7 +640,10 @@ mod item_destroyed_tests {
                 assert!(game.entities.dropped.iter().all(|e| e.id != id));
                 assert!(game.score.board.objective("destroyed_write").is_none());
                 assert_eq!(game.entities.dropped.len(), 1);
-                assert_eq!(&*game.entities.dropped[0].stack.item, "minecraft:iron_ingot");
+                assert_eq!(
+                    &*game.entities.dropped[0].stack.item,
+                    "minecraft:iron_ingot"
+                );
                 assert_eq!(game.entities.dropped[0].stack.count, 4);
                 assert_eq!(seen.lock().unwrap().len(), 1);
             });

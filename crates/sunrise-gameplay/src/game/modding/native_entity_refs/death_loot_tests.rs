@@ -94,7 +94,9 @@ fn rolls_live_death_context_without_dropping() {
         killer.set_equipment_stack(0, Some(sword));
         game.entities.mobs.push(victim);
         game.entities.mobs.push(killer);
-        game.entities.mobs.push(Mob::new(14, zombie, Vec3::ZERO, 0.0));
+        game.entities
+            .mobs
+            .push(Mob::new(14, zombie, Vec3::ZERO, 0.0));
         game.server.next_entity = game.server.next_entity.max(14);
         let victim = game.entity(12).unwrap();
         let killer = game.entity(13).unwrap();

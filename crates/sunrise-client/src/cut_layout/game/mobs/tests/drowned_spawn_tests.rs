@@ -42,7 +42,8 @@ fn summoned_drowned_hold_shells_as_guaranteed_drops() {
         assert!(game.run_command(&format!("summon drowned {x} 100 {z}")));
     }
     let drowned: Vec<u32> = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .filter(|m| m.species() == sunrise_sim::mobs::Species::Drowned)
         .map(|m| m.id)
@@ -93,7 +94,12 @@ fn only_an_empty_offhand_drowned_draws_for_the_shell() {
     }
     let difficulty = game.local_difficulty([0.5, 100.0, 0.5]);
     let base = |game: &sunrise_gameplay::game::ServerGame<'_>, kind: &str| {
-        let m = game.entities.mobs.iter().find(|m| &*m.kind.id == kind).unwrap();
+        let m = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| &*m.kind.id == kind)
+            .unwrap();
         assert_eq!(
             m.extra.off_hand_id(),
             None,

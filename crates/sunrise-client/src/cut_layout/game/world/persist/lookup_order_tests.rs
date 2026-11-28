@@ -178,7 +178,8 @@ pub(crate) fn run_chunk_loaded_families_keep_vanilla_lookup_and_save_order() {
         let uuids = &game.common.persist.uuids;
         let tnt = game
             .common
-            .entities.tnts
+            .entities
+            .tnts
             .iter_mut()
             .find(|t| uuids.get(&t.id) == Some(&[2703, 0, 0, 1]));
         let tnt = tnt.unwrap();

@@ -6,7 +6,8 @@ use super::{CartKind, Minecart};
 pub fn tnt_cart(game: &mut crate::game::ServerGame<'_>, id: u32, silent: bool) {
     game.common.entities.carts.clear();
     game.common
-        .entities.carts
+        .entities
+        .carts
         .push(Minecart::new(id, CartKind::Tnt, Vec3::new(0.5, 64.0, 0.5)));
     game.common.persist.raw.remove(&id);
     game.server.lan_queues.entity_events.clear();

@@ -457,7 +457,8 @@ fn the_contextual_bar_facts_read_the_jumpable_mount_and_the_tracked_waypoints() 
                 let camel = game.entity(32);
                 assert!(camel.is_some());
                 assert_eq!(facts(game), (camel, false));
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == 32)
                     .unwrap()
@@ -534,7 +535,8 @@ fn a_dying_mount_stays_the_jumpable_vehicle() {
             with_client_game(|game| {
                 let _connection = join(game);
                 add(game, 30, "minecraft:horse");
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == 30)
                     .unwrap()
@@ -547,7 +549,12 @@ fn a_dying_mount_stays_the_jumpable_vehicle() {
                 .unwrap();
                 let horse = game.entity(30);
                 assert!(horse.is_some());
-                game.entities.mobs.iter_mut().find(|m| m.id == 30).unwrap().health = 0.0;
+                game.entities
+                    .mobs
+                    .iter_mut()
+                    .find(|m| m.id == 30)
+                    .unwrap()
+                    .health = 0.0;
                 assert_eq!((&*game as &dyn ClientHost).jumpable_vehicle(), horse);
                 assert_eq!(game.contextual_bar(), ContextualBar::JumpableVehicle);
             });

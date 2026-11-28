@@ -120,7 +120,8 @@ fn registered_angles_reach_local_remote_and_humanoid_before_species_animation() 
         game.extract_remote_arm_poses();
         let models = game.client_res().client_mob_models();
         assert_eq!(
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter()
                 .map(|m| arms(m, models))
                 .collect::<Vec<_>>(),

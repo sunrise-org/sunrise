@@ -13,7 +13,9 @@ mod namespace_review_tests {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
             let mut kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
             Arc::make_mut(&mut kind).id = "example:mob".into();
-            game.entities.mobs.push(Mob::new(151, kind, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(151, kind, Vec3::ZERO, 0.0));
             let tag = game.mob_tree_nbt(0);
             assert_eq!(entity_nbt::kind(&tag).as_deref(), Some("example:mob"));
             let tree = game.capture_vehicle_tree_state(151).unwrap();

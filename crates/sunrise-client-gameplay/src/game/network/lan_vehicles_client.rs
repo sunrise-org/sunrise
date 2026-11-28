@@ -25,7 +25,13 @@ impl ClientGame<'_> {
             let (lo, hi) = corners(c.bounds());
             return Some((lo, hi, at(c.position)));
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == id)
+        {
             let (lo, hi) = corners(a.bounds());
             return Some((lo, hi, at(a.position)));
         }

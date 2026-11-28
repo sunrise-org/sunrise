@@ -48,7 +48,9 @@ fn a_stands_body_and_saddle_writes_are_told_once_each() {
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
             fixture_resident_column(&mut game.world, (0, 0));
-            game.entities.armor_stands.push(ArmorStand::new(16, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(16, Vec3::ZERO, 0.0));
             let body = ItemStack::new("minecraft:diamond_horse_armor", 1);
             let saddle = ItemStack::new("minecraft:saddle", 1);
             let helmet = ItemStack::new("minecraft:iron_helmet", 1);
@@ -148,7 +150,9 @@ fn listener_edits_to_later_slots_take_effect_in_the_same_pass() {
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
             fixture_resident_column(&mut game.world, (0, 0));
-            game.entities.armor_stands.push(ArmorStand::new(17, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(17, Vec3::ZERO, 0.0));
             game.entities.armor_stands[0].equipment[HEAD] = Some(old_helmet.clone());
             game.armor_stand_location_effects(0, false);
             heard.lock().unwrap().clear();

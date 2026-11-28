@@ -26,7 +26,11 @@ pub(crate) mod nested_orb_spawn_tests {
             let join = game.entities.orbs[2].join;
             expected.push((game.entities.orbs[2].id, join));
             assert_eq!(
-                game.entities.orbs.iter().map(|o| (o.id, o.join)).collect::<Vec<_>>(),
+                game.entities
+                    .orbs
+                    .iter()
+                    .map(|o| (o.id, o.join))
+                    .collect::<Vec<_>>(),
                 expected
             );
             assert_eq!(game.entities.orbs[2].age, 0);
@@ -38,7 +42,11 @@ pub(crate) mod nested_orb_spawn_tests {
             let spawned = game.entities.orbs.iter().find(|o| o.join == join).unwrap();
             assert_eq!(spawned.age, 1);
             assert_eq!(
-                game.entities.orbs.iter().map(|o| (o.id, o.join)).collect::<Vec<_>>(),
+                game.entities
+                    .orbs
+                    .iter()
+                    .map(|o| (o.id, o.join))
+                    .collect::<Vec<_>>(),
                 expected
             );
         });

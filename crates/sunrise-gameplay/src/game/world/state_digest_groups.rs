@@ -561,7 +561,8 @@ fn decorations(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items, 
     game.server.broken_knots.hash(&mut knots.hash);
     for e in game
         .common
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .filter(|e| e.extra.leash.is_some() || e.extra.leash_pending.is_some())
     {
@@ -570,7 +571,8 @@ fn decorations(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items, 
     }
     for e in game
         .common
-        .entities.boats
+        .entities
+        .boats
         .iter()
         .filter(|e| e.leash.is_some() || e.leash_pending.is_some())
     {
@@ -1201,14 +1203,16 @@ fn seats(game: &ServerGame<'_>) -> Group {
     let retained_ids: BTreeSet<_> = retained.iter().map(|e| e.id).collect();
     let mobs = game
         .common
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .chain(retained)
         .filter(|e| !e.removed)
         .filter_map(|e| Some((e.id, e.extra.mount?)));
     let rows = game
         .common
-        .entities.general
+        .entities
+        .general
         .rows
         .iter()
         .filter(|e| {
@@ -1221,7 +1225,8 @@ fn seats(game: &ServerGame<'_>) -> Group {
         .filter_map(|e| Some((e.id, e.mount?)));
     let bolts = game
         .common
-        .entities.bolts
+        .entities
+        .bolts
         .iter()
         .filter_map(|e| Some((e.id, e.mount?)));
     let host = game

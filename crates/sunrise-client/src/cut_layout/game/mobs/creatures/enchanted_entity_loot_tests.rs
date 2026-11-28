@@ -47,7 +47,11 @@ pub(crate) fn listening(seen: &Arc<Mutex<Vec<Heard>>>, level: u32) -> mod_api::M
 #[allow(unused_imports)]
 pub(crate) use crate::game::server_side::creatures_server::enchanted_entity_loot_tests::zombie;
 pub(crate) fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) -> u32 {
-    let drops = game.entities.dropped.iter().filter(|d| &*d.stack.item == item);
+    let drops = game
+        .entities
+        .dropped
+        .iter()
+        .filter(|d| &*d.stack.item == item);
     drops.map(|d| d.stack.count).sum()
 }
 pub(crate) fn heard(entity: &str, attacker: &str, damage_type: &str, level: u32) -> Heard {

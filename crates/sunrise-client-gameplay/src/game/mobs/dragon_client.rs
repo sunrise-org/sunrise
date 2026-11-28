@@ -421,7 +421,9 @@ impl ClientGame<'_> {
         }
         // The healing beam to the nearest crystal.
         if let Some(d) = world
-            && let Some(c) = d.nearest_crystal.and_then(|i| self.common.entities.crystals.get(i))
+            && let Some(c) = d
+                .nearest_crystal
+                .and_then(|i| self.common.entities.crystals.get(i))
         {
             let bob = f64::from(sunrise_client::end_crystal::y(c.time as f32 + a));
             let to = glam::DVec3::new(c.position.x, c.position.y + bob, c.position.z);
@@ -727,7 +729,12 @@ impl ClientGame<'_> {
         if d.random.next_int_bound(10).unwrap_or(1) == 0 {
             let p = d.position;
             let nearest = self.common.nearest_crystal_to(p);
-            self.common.entities.dragon.as_mut().expect("dragon").nearest_crystal = nearest;
+            self.common
+                .entities
+                .dragon
+                .as_mut()
+                .expect("dragon")
+                .nearest_crystal = nearest;
         }
         let d = self.common.entities.dragon.as_mut().expect("dragon");
         d.yaw = wrap(d.yaw);
@@ -791,7 +798,8 @@ impl ClientGame<'_> {
     pub(in crate::game::client_side) fn client_discard_dragon(&mut self) {
         if let Some(id) = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|dragon| dragon.id != 0 || self.client.remote.is_some())
             .map(|dragon| dragon.id)
@@ -875,14 +883,21 @@ impl ClientGame<'_> {
     pub fn remove_remote_dragon(&mut self, id: i32) {
         if self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .is_some_and(|d| d.id as i32 == id)
         {
             self.client_discard_dragon();
             return;
         }
-        let Some(index) = self.common.entities.crystals.iter().position(|c| c.id as i32 == id) else {
+        let Some(index) = self
+            .common
+            .entities
+            .crystals
+            .iter()
+            .position(|c| c.id as i32 == id)
+        else {
             return;
         };
         if let Some(d) = self.common.entities.dragon.as_mut() {

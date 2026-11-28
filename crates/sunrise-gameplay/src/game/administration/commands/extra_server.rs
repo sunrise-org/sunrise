@@ -519,7 +519,8 @@ impl crate::game::ServerGame<'_> {
         if let Target::Mob(id) = t {
             return self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)
                 .map_or(0.0, |m| {

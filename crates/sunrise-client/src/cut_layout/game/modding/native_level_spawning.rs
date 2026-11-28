@@ -477,7 +477,12 @@ mod tests {
                     Some("minecraft:cow")
                 );
                 assert_eq!(game.entity_position(cow), Some([8.5, 64.0, 8.25]));
-                let mob = game.entities.mobs.iter().find(|m| m.id == cow.id()).unwrap();
+                let mob = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == cow.id())
+                    .unwrap();
                 assert!(!mob.persistent);
                 assert_eq!(
                     *heard.lock().unwrap(),
@@ -572,7 +577,12 @@ mod tests {
             let cow = game
                 .level_spawn_entity(level, "minecraft:cow", [8.5, 64.0, 8.5], &spawn)
                 .unwrap();
-            let mob = game.entities.mobs.iter().find(|m| m.id == cow.id()).unwrap();
+            let mob = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == cow.id())
+                .unwrap();
             assert_eq!(mob.velocity, Vec3::new(0.25, 0.5, -0.125));
             assert_eq!((mob.yaw, mob.head_pitch), (45.0, -10.0));
             // The kind resolves as `/summon`'s.
@@ -633,7 +643,8 @@ mod tests {
                 .unwrap();
             assert_eq!(game.entity_owner(shot), Some(cow));
             let p = game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == shot.id())
                 .unwrap();

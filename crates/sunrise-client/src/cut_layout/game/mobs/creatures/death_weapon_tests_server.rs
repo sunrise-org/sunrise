@@ -45,7 +45,8 @@ fn a_player_credited_death_drops_experience_without_a_loot_snapshot() {
             None,
         );
         let total: i64 = game
-            .entities.orbs
+            .entities
+            .orbs
             .iter()
             .map(|orb| i64::from(orb.value) * i64::from(orb.count))
             .sum();
@@ -208,7 +209,8 @@ pub(crate) fn weapon_case(item: &str, enchantment: &str, level: u32, projectile:
                 } else {
                     arrow.fired_from_weapon = Some(weapon);
                 }
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == 41)
                     .unwrap()

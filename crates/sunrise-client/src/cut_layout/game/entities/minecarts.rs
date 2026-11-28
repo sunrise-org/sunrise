@@ -305,7 +305,8 @@ pub(crate) mod cart_push_tests {
             rolled.loot = Some(loot.clone());
             game.entities.carts.push(rolled);
             // Facing along X (yaw 0) and 0.4 apart on X: the old behaviour pushes.
-            game.entities.carts
+            game.entities
+                .carts
                 .push(Minecart::new(2, CartKind::Chest, Vec3::new(8.7, 64.0, 8.5)));
             for _ in 0..5 {
                 game.tick_carts();
@@ -351,8 +352,12 @@ pub(crate) mod cart_push_tests {
             target: usize,
             velocity: Vec3,
         ) -> Vec3 {
-            game.entities.carts.update(target, |cart| cart.velocity = Vec3::ZERO);
-            game.entities.carts.update(pusher, |cart| cart.velocity = velocity);
+            game.entities
+                .carts
+                .update(target, |cart| cart.velocity = Vec3::ZERO);
+            game.entities
+                .carts
+                .update(pusher, |cart| cart.velocity = velocity);
             let mut index =
                 sunrise_gameplay::game::server_side::minecarts_server::CartIndex::default();
             game.push_from_cart(pusher, &mut index);
@@ -442,7 +447,8 @@ pub(crate) mod cart_push_tests {
         let name = game.holder_name(Target::Cart(2)).expect("a cart's UUID");
         game.score.board.add_team("cart-2").collision_rule = CollisionRule::Never;
         game.score.board.add_to_team(&name, "cart-2");
-        game.entities.carts
+        game.entities
+            .carts
             .update(0, |cart| cart.velocity = Vec3::new(0.2, 0.0, 0.0));
         let mut index = sunrise_gameplay::game::server_side::minecarts_server::CartIndex::default();
         game.push_from_cart(0, &mut index);
@@ -600,7 +606,8 @@ pub(crate) mod rejected_passenger_tests {
                 0.997
             );
             assert!(!game.start_riding_target(Target::Mob(candidate), Target::Cart(cart), false));
-            game.entities.carts
+            game.entities
+                .carts
                 .update(0, |c| c.velocity = Vec3::new(0.2, 0.0, 0.0));
             game.pickup_from_cart(
                 0,
@@ -720,7 +727,8 @@ pub(crate) mod hook_mutation_regressions {
         mod_platform::testing::with_mods(mods, || {
             sunrise_gameplay::game::native_entity_refs::tests::with_resident_game(|game| {
                 game.options.dedicated = Some(Vec::new());
-                game.entities.carts
+                game.entities
+                    .carts
                     .push(Minecart::new(71, CartKind::Rideable, Vec3::ZERO));
                 let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
                 for id in [72, 73, 74] {
@@ -759,7 +767,8 @@ pub(crate) mod hook_mutation_regressions {
         mod_platform::testing::with_mods(mods, || {
             sunrise_gameplay::game::native_entity_refs::tests::with_resident_game(|game| {
                 game.options.dedicated = Some(Vec::new());
-                game.entities.carts
+                game.entities
+                    .carts
                     .push(Minecart::new(71, CartKind::Rideable, Vec3::ZERO));
                 let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
                 let original = Vec3::new(2.0, 60.0, 3.0);
@@ -815,7 +824,8 @@ pub(crate) mod hook_mutation_regressions {
                         sunrise_game_data::gamerules::Value::Bool(true),
                     );
                     if cart {
-                        game.entities.carts
+                        game.entities
+                            .carts
                             .push(Minecart::new(71, CartKind::Rideable, Vec3::ZERO));
                         game.hurt_cart(
                             0,
@@ -826,13 +836,14 @@ pub(crate) mod hook_mutation_regressions {
                             ),
                         );
                     } else {
-                        game.entities.boats
-                            .push(sunrise_gameplay_common::game::boats_common::Boat::new(
+                        game.entities.boats.push(
+                            sunrise_gameplay_common::game::boats_common::Boat::new(
                                 71,
                                 "oak".into(),
                                 Vec3::ZERO,
                                 0.0,
-                            ));
+                            ),
+                        );
                         game.hurt_boat(0, 5.0, false);
                     }
                     assert_eq!(*destroyed.lock().unwrap(), 0);
@@ -926,7 +937,9 @@ pub(crate) mod cart_cost_bench {
                 }
                 game.world.set(x, 64, z, rail_ns).unwrap();
                 let at = Vec3::new(f64::from(x) + 0.5, 64.0, f64::from(z) + 0.5);
-                game.entities.carts.push(Minecart::new(id, CartKind::Rideable, at));
+                game.entities
+                    .carts
+                    .push(Minecart::new(id, CartKind::Rideable, at));
                 id += 1;
             }
         }

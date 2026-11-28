@@ -90,7 +90,10 @@ fn a_watched_rider_gets_hearts_for_the_dragon_and_local_player_but_not_a_boat() 
                         passengers: vec![WATCHED],
                     }))
                     .unwrap();
-                    assert_eq!(game.entities.mobs[watched].extra.mount, Some(vehicle as u32));
+                    assert_eq!(
+                        game.entities.mobs[watched].extra.mount,
+                        Some(vehicle as u32)
+                    );
                     assert_eq!(game.camera_vehicle(camera).is_some(), expected.is_some());
                     assert_eq!(
                         game.camera_vehicle_health(camera)

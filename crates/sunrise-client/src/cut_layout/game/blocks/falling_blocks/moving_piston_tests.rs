@@ -93,7 +93,8 @@ pub(crate) fn run_a_falling_block_resting_in_a_moving_piston_cell_stays() {
                 let id = current_id.expect("summon before probe");
                 if field == "Pos" {
                     let i = game
-                        .entities.falling
+                        .entities
+                        .falling
                         .iter()
                         .position(|f| f.id == id)
                         .expect("the block stays");
@@ -119,7 +120,11 @@ pub(crate) fn run_a_falling_block_resting_in_a_moving_piston_cell_stays() {
                 checked += 1;
             } else if cmd.starts_with("/execute if entity @e[type=minecraft:item,") {
                 let expected = row["results"][0][0].as_bool().expect("item check result");
-                assert_eq!(!game.entities.dropped.is_empty(), expected, "record {index}: {cmd}");
+                assert_eq!(
+                    !game.entities.dropped.is_empty(),
+                    expected,
+                    "record {index}: {cmd}"
+                );
                 checked += 1;
             } else {
                 panic!("unexpected witness record {index}: {cmd}");

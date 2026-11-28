@@ -499,7 +499,8 @@ impl<'g> GameLevel<'g, '_> {
         if asked <= SCANNED_QUERIES && self.boxes.get().is_none() {
             return Box::new(
                 self.game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .enumerate()
                     .filter(|(_, m)| !m.removed)
@@ -1251,7 +1252,8 @@ impl<'a> crate::game::ServerGame<'a> {
         ));
         !self
             .common
-            .entities.boats
+            .entities
+            .boats
             .iter()
             .any(|boat| boat.bounds().intersects(query))
             && !mob_collision(query)
@@ -1396,7 +1398,13 @@ impl<'a> crate::game::ServerGame<'a> {
         }
         for (chicken, rider) in rides {
             let rider = links.get(rider).copied().unwrap_or(*rider);
-            if let Some(c) = self.common.entities.mobs.iter_mut().find(|m| m.id == *chicken) {
+            if let Some(c) = self
+                .common
+                .entities
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == *chicken)
+            {
                 c.extra.jockey = true;
                 c.extra.rider = Some(rider);
             }
@@ -1681,7 +1689,8 @@ impl<'a> crate::game::ServerGame<'a> {
             laps.lap("sn_level");
             let counted: Vec<Counted> = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .map(|m| Counted {
                     entity: &m.kind.id,
@@ -1914,7 +1923,12 @@ impl<'a> crate::game::ServerGame<'a> {
                         ids.get(&rider).copied()
                     };
                     if resolved == Some(body_id)
-                        && let Some(chicken) = self.common.entities.mobs.iter_mut().find(|m| m.id == chicken)
+                        && let Some(chicken) = self
+                            .common
+                            .entities
+                            .mobs
+                            .iter_mut()
+                            .find(|m| m.id == chicken)
                     {
                         chicken.extra.jockey = true;
                         chicken.extra.rider = Some(body_id);
@@ -1931,7 +1945,11 @@ impl<'a> crate::game::ServerGame<'a> {
             let view = match &outcome {
                 NaturalAdmission::Placed { level, id, join } if *level == self.common.dim => {
                     let mob = if join.is_joined() {
-                        self.common.entities.mobs.locate(*join).map(|i| &self.common.entities.mobs[i])
+                        self.common
+                            .entities
+                            .mobs
+                            .locate(*join)
+                            .map(|i| &self.common.entities.mobs[i])
                     } else {
                         self.common.persist.off_level.get(id).and_then(
                             sunrise_gameplay_common::game::entity_memory::OffLevel::as_mob,
@@ -3809,7 +3827,13 @@ mod tests {
                 // its random is where an untouched copy of it is.
                 let ask = |game: &mut crate::game::ServerGame<'_>, said, peaceful: bool| {
                     *answer.lock().unwrap() = said;
-                    let mut mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap().clone();
+                    let mut mob = game
+                        .entities
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .unwrap()
+                        .clone();
                     mob.ai.no_action_time = 601;
                     let mut untouched = mob.random.clone();
                     let handle = mod_api::MobRef::new(mod_api::EntityRef::new(
@@ -3875,7 +3899,13 @@ mod tests {
                     sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                 )
                 .unwrap();
-            let mut mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap().clone();
+            let mut mob = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .clone();
             mob.ai.no_action_time = 601;
             let mut untouched = mob.random.clone();
             let mut world = game.mob_world_base(&[]);
@@ -4202,7 +4232,8 @@ mod tests {
                 );
                 game.native_joins_flush(false, 0);
                 assert!(
-                    game.entities.mobs
+                    game.entities
+                        .mobs
                         .iter()
                         .all(|m| !(first..=first + 2).contains(&m.id))
                 );
@@ -4221,7 +4252,10 @@ mod tests {
             );
             let id = JOINED_CANDIDATE.load(std::sync::atomic::Ordering::Relaxed);
             assert_ne!(id, 0);
-            assert_eq!(game.entities.mobs.iter().any(|m| m.id == id), case == "valid");
+            assert_eq!(
+                game.entities.mobs.iter().any(|m| m.id == id),
+                case == "valid"
+            );
             if case == "move" {
                 let moved = game.server.levels.0.parked_mobs(Dim::Nether).unwrap();
                 assert!(moved.iter().any(|m| {
@@ -4351,7 +4385,8 @@ mod tests {
                         &mut scratch,
                     );
                     let actual: Vec<_> = game
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .filter(|mob| mob.kind.id == SILVERFISH)
                         .map(|mob| {

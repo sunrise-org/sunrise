@@ -74,7 +74,8 @@ fn default_drop_rng_continues_identically_with_table_sequence_or_level_fallback(
             let mut random = game.world.random.clone();
             let continuation: Vec<i64> = (0..4).map(|_| random.next_long()).collect();
             let drops: Vec<_> = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .map(|d| (d.stack.item.to_string(), d.stack.count))
                 .collect();

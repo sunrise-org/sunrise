@@ -579,7 +579,10 @@ fn cauldron_transfer_awards_two_statistics_once() {
         assert_eq!(seen.drops.load(Ordering::SeqCst), 1);
         assert_eq!(game.entities.dropped.len(), 1);
         assert_eq!(
-            (&*game.entities.dropped[0].stack.item, game.entities.dropped[0].stack.count),
+            (
+                &*game.entities.dropped[0].stack.item,
+                game.entities.dropped[0].stack.count
+            ),
             ("minecraft:glass_bottle", 1)
         );
         assert_eq!(game.stats.get("custom", "minecraft:use_cauldron"), 1);

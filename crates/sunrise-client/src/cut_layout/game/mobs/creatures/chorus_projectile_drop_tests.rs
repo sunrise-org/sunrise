@@ -82,7 +82,8 @@ pub(crate) fn launch(
     let own = if owner { ",Owner:[I;116,0,0,99]" } else { "" };
     assert!(game.run_command(&format!("summon {kind} {x}.5 202.5 {z}.5 {{UUID:[I;116,0,0,{n}],NoGravity:1b,Motion:[0d,-2d,0d]{own}}}")));
     let p = game
-        .entities.projectiles
+        .entities
+        .projectiles
         .iter()
         .find(|p| game.persist.uuid_of(p.id) == Some([116, 0, 0, n]))
         .unwrap();
@@ -97,7 +98,11 @@ pub(crate) fn launch(
     p.id
 }
 pub(crate) fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) {
-    assert_eq!(game.entities.dropped.len(), 1, "actual unfiltered item collection");
+    assert_eq!(
+        game.entities.dropped.len(),
+        1,
+        "actual unfiltered item collection"
+    );
     assert_eq!(&*game.entities.dropped[0].stack.item, item);
     assert_eq!(game.entities.dropped[0].stack.count, 1);
 }
@@ -114,7 +119,8 @@ fn a_registered_arrow_collision_keeps_the_actual_projectile_for_chorus_loot() {
             "actual collision broke the source"
         );
         assert!(
-            game.entities.projectiles
+            game.entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == id)
                 .unwrap()

@@ -50,7 +50,8 @@ fn added_issuer_actor_missing_guest_and_restoration_controls() {
     assert!(game.run_command("fill 0 199 0 15 199 15 stone"));
     assert!(game.run_command("summon pig 2.5 200.0 2.5 {UUID:[I;0,0,0,99],NoAI:1b}"));
     let actor = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .find(|m| game.persist.uuid_of(m.id) == Some([0, 0, 0, 99]))
         .unwrap()

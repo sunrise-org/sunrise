@@ -74,7 +74,8 @@ pub(crate) use sunrise_gameplay::game::server_side::commands_server::execute::te
         for n in [1, 2] {
             assert!(game.run_command(&format!("summon pig {} 200 4.5 {{UUID:[I;147,0,0,{n}],Health:10f,NoAI:1b,NoGravity:1b,Tags:[\"h147\"]}}", n as f64 + 0.5)));
             assert!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .any(|m| game.persist.uuids.get(&m.id) == Some(&[147, 0, 0, n])
                         && m.kind.id == "minecraft:pig"

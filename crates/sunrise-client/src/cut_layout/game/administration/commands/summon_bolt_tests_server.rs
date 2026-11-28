@@ -123,7 +123,8 @@ pub(crate) fn run_a_bolt_summoned_with_nbt_strikes_and_goes() {
                     );
                     if !game.entities.bolts.is_empty() {
                         let keys: HashSet<(i32, i32)> = game
-                            .entities.bolts
+                            .entities
+                            .bolts
                             .iter()
                             .map(|b| ((b.at[0].floor() as i32) >> 4, (b.at[2].floor() as i32) >> 4))
                             .collect();

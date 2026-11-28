@@ -110,7 +110,8 @@ fn a_merge_reloads_an_arrows_own_save_data() {
         Tag::compound([("life", Tag::Short(5))]),
     );
     let a = game
-        .entities.projectiles
+        .entities
+        .projectiles
         .last()
         .unwrap()
         .arrow

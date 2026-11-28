@@ -54,7 +54,8 @@ pub(crate) mod tests {
         .unwrap();
         let camera = glam::DVec3::new(0.5, 64.0, 0.5);
         let start = Vec3::new(0.5, 64.0, 4.5);
-        game.entities.rockets
+        game.entities
+            .rockets
             .push(sunrise_gameplay_common::game::fireworks::Rocket::remote(
                 77,
                 start,

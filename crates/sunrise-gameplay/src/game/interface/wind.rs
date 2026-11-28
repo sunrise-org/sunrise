@@ -265,7 +265,8 @@ impl ServerGame<'_> {
     ) {
         let Some(d) = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|d| self.server.combat.0.visits(d.id))
         else {
@@ -276,7 +277,8 @@ impl ServerGame<'_> {
         let exposure = self.seen_percent(center, [lo.x, lo.y, lo.z], [hi.x, hi.y, hi.z]);
         let Some((id, mut push)) = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .and_then(|d| Some((d.id, d.explosion_knockback(center, radius, exposure)?)))
         else {
@@ -320,7 +322,13 @@ impl ServerGame<'_> {
         // The charge owner is the indirect source of the explosion.
         let owner = match p.owner {
             Some(Who::Player) => Some(self.own_entity_id() as u32),
-            Some(Who::Mob(id)) => self.common.entities.mobs.iter().any(|m| m.id == id).then_some(id),
+            Some(Who::Mob(id)) => self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .any(|m| m.id == id)
+                .then_some(id),
             None => None,
         };
         let cause = BurstCause {
@@ -982,7 +990,8 @@ impl ServerGame<'_> {
         }
         let breeze = self.server.combat.0.explosion_source.is_some_and(|id| {
             self.common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .any(|p| p.id == id && p.kind == ProjectileKind::BreezeWindCharge)
         });

@@ -59,7 +59,10 @@ fn teleport_and_rotate_resolve_pitch_at_their_own_boundary() {
         game.entities.mobs[0].yaw = 10.0;
         game.entities.mobs[0].head_pitch = 20.0;
         game.teleport_to_in_level(Target::Mob(42), [0.0; 3], Some(rotation), [false; 3], true);
-        assert_eq!([game.entities.mobs[0].yaw, game.entities.mobs[0].head_pitch], expected);
+        assert_eq!(
+            [game.entities.mobs[0].yaw, game.entities.mobs[0].head_pitch],
+            expected
+        );
     }
     game.build_registries();
     game.set_allow_commands(true);
@@ -87,7 +90,10 @@ fn teleport_and_rotate_resolve_pitch_at_their_own_boundary() {
     game.yaw = 190.0;
     game.entities.mobs[0].yaw = 170.0;
     assert!(game.run_command("tp @e[type=minecraft:zombie,limit=1] 0 0 0 ~ ~"));
-    assert_eq!(game.entities.mobs[0].yaw, 190.0, "relative yaw wraps the delta");
+    assert_eq!(
+        game.entities.mobs[0].yaw, 190.0,
+        "relative yaw wraps the delta"
+    );
 
     game.entities.mobs[0].head_pitch = 360.0;
     assert!(
@@ -114,7 +120,10 @@ fn teleport_and_rotate_resolve_pitch_at_their_own_boundary() {
         assert!(game.run_command(&format!(
             "tp @e[type=minecraft:zombie,limit=1] 0 0 0 {yaw} {pitch}"
         )));
-        assert_eq!([game.entities.mobs[0].yaw, game.entities.mobs[0].head_pitch], expected);
+        assert_eq!(
+            [game.entities.mobs[0].yaw, game.entities.mobs[0].head_pitch],
+            expected
+        );
     }
 }
 

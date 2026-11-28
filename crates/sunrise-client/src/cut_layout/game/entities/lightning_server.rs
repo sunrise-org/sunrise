@@ -145,7 +145,8 @@ pub(crate) mod tests {
                 .unwrap();
             assert!(game.entity(old.id).is_none());
             assert!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|mob| mob.id == converted)
                     .unwrap()
@@ -223,7 +224,8 @@ pub(crate) mod tests {
                 .is_none()
             );
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == rider_id)
                     .unwrap()
@@ -231,7 +233,15 @@ pub(crate) mod tests {
                     .mount,
                 Some(old_id)
             );
-            assert!(!game.entities.mobs.iter().find(|m| m.id == old_id).unwrap().removed);
+            assert!(
+                !game
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == old_id)
+                    .unwrap()
+                    .removed
+            );
             let seen = seen.lock().unwrap();
             assert_eq!(seen.len(), 4);
             assert_eq!(seen[0].old.as_deref(), Some("minecraft:piglin"));

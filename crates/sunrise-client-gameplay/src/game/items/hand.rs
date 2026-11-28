@@ -441,10 +441,16 @@ impl crate::game::ClientGame<'_> {
     pub fn crosshair_living(&self) -> Option<bool> {
         if let Some(hit) = self.cached_entity_pick() {
             let (entity, distance, _) = hit?;
-            if !self.common.entities.mobs.iter().any(|mob| mob.id == entity.id())
+            if !self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .any(|mob| mob.id == entity.id())
                 && !self
                     .common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .iter()
                     .any(|stand| stand.id == entity.id())
             {
@@ -485,7 +491,12 @@ impl crate::game::ClientGame<'_> {
                 let hit = self.crosshair_entity_hit()?;
                 let uid = u32::try_from(hit.id).ok()?;
                 if !self.common.entities.mobs.iter().any(|m| m.id == uid)
-                    && !self.common.entities.armor_stands.iter().any(|a| a.id == uid)
+                    && !self
+                        .common
+                        .entities
+                        .armor_stands
+                        .iter()
+                        .any(|a| a.id == uid)
                 {
                     return None;
                 }
@@ -508,7 +519,8 @@ impl crate::game::ClientGame<'_> {
                 c.id as i32 == hit.id && matches!(c.kind, CartKind::Chest | CartKind::Hopper)
             }) || self
                 .common
-                .entities.boats
+                .entities
+                .boats
                 .iter()
                 .any(|b| b.id as i32 == hit.id && b.chest);
         }

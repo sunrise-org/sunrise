@@ -291,7 +291,8 @@ impl crate::game::ServerGame<'_> {
                         self.common.persist.uuids.iter().find(|(_, u)| **u == uuid)
                         && let Some(m) = self
                             .common
-                            .entities.mobs
+                            .entities
+                            .mobs
                             .iter_mut()
                             .find(|m| m.id == id && !m.removed)
                     {
@@ -481,7 +482,10 @@ mod omen_tests {
                 game.server_tick_trial_spawner((0, 0, 0), &mut spawner, TrialState::Active, true)
                     .unwrap();
                 assert_eq!(game.entities.ominous_spawners.len(), count + 1);
-                assert_eq!(game.entities.ominous_spawners.last().unwrap().position, expected);
+                assert_eq!(
+                    game.entities.ominous_spawners.last().unwrap().position,
+                    expected
+                );
             }
         });
     }

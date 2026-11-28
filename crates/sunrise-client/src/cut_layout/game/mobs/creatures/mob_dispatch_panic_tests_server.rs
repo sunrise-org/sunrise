@@ -98,7 +98,8 @@ fn mob_despawn_listener_panic_preserves_owned_rows_and_lent_random() {
                 dimension: game.dim.key(),
                 kind: Kind::Mob,
             };
-            game.entities.mobs
+            game.entities
+                .mobs
                 .bind_residency(&journal, owner, |mob| (mob.id, mob.join));
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             for id in [71, 72, 73, 74] {
@@ -129,7 +130,12 @@ fn mob_despawn_listener_panic_preserves_owned_rows_and_lent_random() {
                 }
                 game.entities.mobs.push(mob);
             }
-            let joined: Vec<_> = game.entities.mobs.iter().map(|mob| (mob.id, mob.join)).collect();
+            let joined: Vec<_> = game
+                .entities
+                .mobs
+                .iter()
+                .map(|mob| (mob.id, mob.join))
+                .collect();
             let (removed, expected) = joined.split_at(match case {
                 Case::UnloadedRow => 1,
                 Case::NormalRemoval => joined.len(),
@@ -196,7 +202,10 @@ fn mob_despawn_listener_panic_preserves_owned_rows_and_lent_random() {
                 );
             }
             if case == Case::PendingDeath {
-                assert!(!game.entities.mobs[0].alive(), "real burning death was not reached");
+                assert!(
+                    !game.entities.mobs[0].alive(),
+                    "real burning death was not reached"
+                );
                 assert!(
                     game.creatures.ticked.contains(&71),
                     "prior real tick was lost"
@@ -222,7 +231,8 @@ fn mob_despawn_listener_panic_preserves_owned_rows_and_lent_random() {
             assert!(lifts > 0, "actual lifting boundary was not observed");
             assert_eq!(depth, 0, "mob listener abandoned the real lifted pass");
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .map(|mob| (mob.id, mob.join))
                     .collect::<Vec<_>>(),
@@ -247,7 +257,8 @@ fn mob_despawn_listener_panic_preserves_owned_rows_and_lent_random() {
             }
             assert!(take_hook_panics().is_empty());
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .map(|mob| (mob.id, mob.join))
                     .collect::<Vec<_>>(),

@@ -74,14 +74,26 @@ impl PickFingerprint {
             epoch: game.native_lifecycle.epoch(),
             dim: Some(game.dim),
             is_remote: game.client.remote.is_some(),
-            mobs: (game.entities.mobs.len(), game.entities.mobs.last().map(|e| e.join_seq())),
-            boats: (game.entities.boats.len(), game.entities.boats.last().map(|e| e.join_seq())),
-            carts: (game.entities.carts.len(), game.entities.carts.last().map(|e| e.join_seq())),
+            mobs: (
+                game.entities.mobs.len(),
+                game.entities.mobs.last().map(|e| e.join_seq()),
+            ),
+            boats: (
+                game.entities.boats.len(),
+                game.entities.boats.last().map(|e| e.join_seq()),
+            ),
+            carts: (
+                game.entities.carts.len(),
+                game.entities.carts.last().map(|e| e.join_seq()),
+            ),
             armor_stands: (
                 game.entities.armor_stands.len(),
                 game.entities.armor_stands.last().map(|e| e.join_seq()),
             ),
-            tnts: (game.entities.tnts.len(), game.entities.tnts.last().map(|e| e.join_seq())),
+            tnts: (
+                game.entities.tnts.len(),
+                game.entities.tnts.last().map(|e| e.join_seq()),
+            ),
             falling: (
                 game.entities.falling.len(),
                 game.entities.falling.last().map(|e| e.join_seq()),
@@ -100,17 +112,20 @@ impl PickFingerprint {
             ),
             general: (
                 game.entities.general.rows.len(),
-                game.entities.general
-                    .rows
-                    .last()
-                    .map(|e| e.join_seq()),
+                game.entities.general.rows.last().map(|e| e.join_seq()),
             ),
-            paintings: (game.entities.paintings.len(), game.entities.paintings.last().map(|e| e.join)),
+            paintings: (
+                game.entities.paintings.len(),
+                game.entities.paintings.last().map(|e| e.join),
+            ),
             item_frames: (
                 game.entities.item_frames.len(),
                 game.entities.item_frames.last().map(|e| e.join),
             ),
-            cushions: (game.entities.cushions.len(), game.entities.cushions.last().map(|e| e.join)),
+            cushions: (
+                game.entities.cushions.len(),
+                game.entities.cushions.last().map(|e| e.join),
+            ),
             interactions: game.client.interactions.len(),
             remote_general: game.client.remote.as_ref().map_or((0, None), |r| {
                 (
@@ -123,7 +138,10 @@ impl PickFingerprint {
                 game.entities.knots.len(),
                 game.entities.knots.last().map(|e| e.join),
             ),
-            crystals: (game.entities.crystals.len(), game.entities.crystals.last().map(|e| e.join)),
+            crystals: (
+                game.entities.crystals.len(),
+                game.entities.crystals.last().map(|e| e.join),
+            ),
             displays: (
                 game.client.text_displays.0.len(),
                 game.client.text_displays.0.last().map(|(_, d)| d.join),
@@ -137,7 +155,10 @@ impl PickFingerprint {
                 .remote
                 .as_ref()
                 .map_or(0, |r| r.pending_items.len()),
-            orbs: (game.entities.orbs.len(), game.entities.orbs.last().map(|e| e.join_seq())),
+            orbs: (
+                game.entities.orbs.len(),
+                game.entities.orbs.last().map(|e| e.join_seq()),
+            ),
             player: game.client_section_player().map(|p| {
                 (
                     p.entity_id as u32,
@@ -382,11 +403,9 @@ pub(in crate::game) fn visit_section_members(
     game: &crate::game::ClientGame<'_>,
     consider: &mut impl FnMut(u64, PickKind, u32, [f64; 3]),
 ) {
-    for e in game
-        .entities.mobs
-        .iter()
-        .filter(|e| game.is_logical_server() || game.entities.dragon.as_ref().is_none_or(|d| d.id != e.id))
-    {
+    for e in game.entities.mobs.iter().filter(|e| {
+        game.is_logical_server() || game.entities.dragon.as_ref().is_none_or(|d| d.id != e.id)
+    }) {
         let p = e.position();
         consider(e.join_seq().get(), PickKind::Mob, e.id(), [p.x, p.y, p.z]);
     }
@@ -695,7 +714,11 @@ impl crate::game::ClientGame<'_> {
                 return Some((kind, self.pick_member_position_of_kind(kind, id)?));
             }
         }
-        if let Some(i) = self.common.mob_index.find_ref(&self.common.entities.mobs, id) {
+        if let Some(i) = self
+            .common
+            .mob_index
+            .find_ref(&self.common.entities.mobs, id)
+        {
             let p = self.common.entities.mobs[i].position;
             return Some((PickKind::Mob, [p.x, p.y, p.z]));
         }
@@ -707,7 +730,13 @@ impl crate::game::ClientGame<'_> {
             let p = c.position();
             return Some((PickKind::Cart, [p.x, p.y, p.z]));
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|e| e.id() == id) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|e| e.id() == id)
+        {
             let p = a.position();
             return Some((PickKind::ArmorStand, [p.x, p.y, p.z]));
         }
@@ -721,7 +750,8 @@ impl crate::game::ClientGame<'_> {
         }
         if let Some(p) = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|e| e.id() == id)
         {
@@ -769,12 +799,7 @@ impl crate::game::ClientGame<'_> {
         if let Some(&block) = self.client.remote_knots.get(&id) {
             return Some((PickKind::RemoteKnot, knot_position(block)));
         }
-        if let Some(k) = self
-            .common
-            .entities.knots
-            .iter()
-            .find(|k| k.id == id)
-        {
+        if let Some(k) = self.common.entities.knots.iter().find(|k| k.id == id) {
             return Some((PickKind::LocalKnot, knot_position(k.fence)));
         }
         if let Some(c) = self.common.entities.crystals.iter().find(|c| c.id == id) {
@@ -794,7 +819,8 @@ impl crate::game::ClientGame<'_> {
             PickKind::RemoteDisplay => self.client.text_displays.0.get(&id32).map(|d| d.join),
             PickKind::Item => self
                 .common
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| e.join_seq())
@@ -808,7 +834,8 @@ impl crate::game::ClientGame<'_> {
                 }),
             PickKind::Orb => self
                 .common
-                .entities.orbs
+                .entities
+                .orbs
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| e.join_seq()),
@@ -821,72 +848,79 @@ impl crate::game::ClientGame<'_> {
                 .map(|i| self.common.entities.mobs[i].join_seq()),
             PickKind::Boat => self
                 .common
-                .entities.boats
+                .entities
+                .boats
                 .iter()
                 .find(|e| e.id() == id)
                 .map(|e| e.join_seq()),
             PickKind::Cart => self
                 .common
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .find(|e| e.id() == id)
                 .map(|e| e.join_seq()),
             PickKind::ArmorStand => self
                 .common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|e| e.id() == id)
                 .map(|e| e.join_seq()),
             PickKind::Tnt => self
                 .common
-                .entities.tnts
+                .entities
+                .tnts
                 .iter()
                 .find(|e| e.id() == id)
                 .map(|e| e.join_seq()),
             PickKind::Falling => self
                 .common
-                .entities.falling
+                .entities
+                .falling
                 .iter()
                 .find(|e| e.id() == id)
                 .map(|e| e.join_seq()),
             PickKind::Projectile => self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|e| e.id() == id)
                 .map(|e| e.join_seq()),
             PickKind::Trident => self
                 .common
-                .entities.tridents
+                .entities
+                .tridents
                 .iter()
                 .find(|e| e.id() == id)
                 .map(|e| e.join_seq()),
             PickKind::Rocket => self
                 .common
-                .entities.rockets
+                .entities
+                .rockets
                 .iter()
                 .find(|e| e.id() == id)
                 .map(|e| e.join_seq()),
-            PickKind::General => self
-                .common
-                .entities.general
-                .row(id)
-                .map(|e| e.join_seq()),
+            PickKind::General => self.common.entities.general.row(id).map(|e| e.join_seq()),
             PickKind::Painting => self
                 .common
-                .entities.paintings
+                .entities
+                .paintings
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| e.join),
             PickKind::ItemFrame => self
                 .common
-                .entities.item_frames
+                .entities
+                .item_frames
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| e.join),
             PickKind::Cushion => self
                 .common
-                .entities.cushions
+                .entities
+                .cushions
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| e.join),
@@ -899,13 +933,15 @@ impl crate::game::ClientGame<'_> {
             PickKind::RemoteKnot => None,
             PickKind::LocalKnot => self
                 .common
-                .entities.knots
+                .entities
+                .knots
                 .iter()
                 .find(|k| k.id == id)
                 .map(|k| k.join),
             PickKind::Crystal => self
                 .common
-                .entities.crystals
+                .entities
+                .crystals
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.join),
@@ -923,7 +959,8 @@ impl crate::game::ClientGame<'_> {
                 .map(|d| d.position().to_array()),
             PickKind::Item => self
                 .common
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| e.position.components())
@@ -937,7 +974,8 @@ impl crate::game::ClientGame<'_> {
                 }),
             PickKind::Orb => self
                 .common
-                .entities.orbs
+                .entities
+                .orbs
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| e.position.components()),
@@ -947,7 +985,8 @@ impl crate::game::ClientGame<'_> {
                 .map(|p| p.position.components()),
             PickKind::Dragon => self
                 .common
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .filter(|d| d.id == id)
                 .map(|d| d.position.components()),
@@ -959,68 +998,108 @@ impl crate::game::ClientGame<'_> {
                     let p = self.common.entities.mobs[i].position;
                     [p.x, p.y, p.z]
                 }),
-            PickKind::Boat => self.common.entities.boats.iter().find(|e| e.id() == id).map(|e| {
-                let p = e.position();
-                [p.x, p.y, p.z]
-            }),
-            PickKind::Cart => self.common.entities.carts.iter().find(|e| e.id() == id).map(|e| {
-                let p = e.position();
-                [p.x, p.y, p.z]
-            }),
-            PickKind::ArmorStand => {
-                self.common
-                    .entities.armor_stands
-                    .iter()
-                    .find(|e| e.id() == id)
-                    .map(|e| {
-                        let p = e.position();
-                        [p.x, p.y, p.z]
-                    })
-            }
-            PickKind::Tnt => self.common.entities.tnts.iter().find(|e| e.id() == id).map(|e| {
-                let p = e.position();
-                [p.x, p.y, p.z]
-            }),
-            PickKind::Falling => self.common.entities.falling.iter().find(|e| e.id() == id).map(|e| {
-                let p = e.position();
-                [p.x, p.y, p.z]
-            }),
-            PickKind::Projectile => self
+            PickKind::Boat => self
                 .common
-                .entities.projectiles
+                .entities
+                .boats
                 .iter()
                 .find(|e| e.id() == id)
                 .map(|e| {
                     let p = e.position();
                     [p.x, p.y, p.z]
                 }),
-            PickKind::Trident => self.common.entities.tridents.iter().find(|e| e.id() == id).map(|e| {
-                let p = e.position();
-                [p.x, p.y, p.z]
-            }),
-            PickKind::Rocket => self.common.entities.rockets.iter().find(|e| e.id() == id).map(|e| {
-                let p = e.position();
-                [p.x, p.y, p.z]
-            }),
+            PickKind::Cart => self
+                .common
+                .entities
+                .carts
+                .iter()
+                .find(|e| e.id() == id)
+                .map(|e| {
+                    let p = e.position();
+                    [p.x, p.y, p.z]
+                }),
+            PickKind::ArmorStand => self
+                .common
+                .entities
+                .armor_stands
+                .iter()
+                .find(|e| e.id() == id)
+                .map(|e| {
+                    let p = e.position();
+                    [p.x, p.y, p.z]
+                }),
+            PickKind::Tnt => self
+                .common
+                .entities
+                .tnts
+                .iter()
+                .find(|e| e.id() == id)
+                .map(|e| {
+                    let p = e.position();
+                    [p.x, p.y, p.z]
+                }),
+            PickKind::Falling => self
+                .common
+                .entities
+                .falling
+                .iter()
+                .find(|e| e.id() == id)
+                .map(|e| {
+                    let p = e.position();
+                    [p.x, p.y, p.z]
+                }),
+            PickKind::Projectile => self
+                .common
+                .entities
+                .projectiles
+                .iter()
+                .find(|e| e.id() == id)
+                .map(|e| {
+                    let p = e.position();
+                    [p.x, p.y, p.z]
+                }),
+            PickKind::Trident => self
+                .common
+                .entities
+                .tridents
+                .iter()
+                .find(|e| e.id() == id)
+                .map(|e| {
+                    let p = e.position();
+                    [p.x, p.y, p.z]
+                }),
+            PickKind::Rocket => self
+                .common
+                .entities
+                .rockets
+                .iter()
+                .find(|e| e.id() == id)
+                .map(|e| {
+                    let p = e.position();
+                    [p.x, p.y, p.z]
+                }),
             PickKind::General => self.common.entities.general.row(id).map(|e| {
                 let p = e.position();
                 [p.x, p.y, p.z]
             }),
             PickKind::Painting => self
                 .common
-                .entities.paintings
+                .entities
+                .paintings
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| hanging_center(e.bounds())),
             PickKind::ItemFrame => self
                 .common
-                .entities.item_frames
+                .entities
+                .item_frames
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| hanging_center(e.bounds())),
             PickKind::Cushion => self
                 .common
-                .entities.cushions
+                .entities
+                .cushions
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| [e.position.x, e.position.y, e.position.z]),
@@ -1045,13 +1124,15 @@ impl crate::game::ClientGame<'_> {
                 .map(knot_position),
             PickKind::LocalKnot => self
                 .common
-                .entities.knots
+                .entities
+                .knots
                 .iter()
                 .find(|k| k.id == id)
                 .map(|k| knot_position(k.fence)),
             PickKind::Crystal => self
                 .common
-                .entities.crystals
+                .entities
+                .crystals
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| [c.position.x, c.position.y, c.position.z]),
@@ -1069,26 +1150,42 @@ impl crate::game::ClientGame<'_> {
             | PickKind::LocalPlayer
             | PickKind::Dragon => None,
             PickKind::Mob => {
-                let m = &self.common.entities.mobs[self.common.mob_index.find_ref(&self.common.entities.mobs, id)?];
+                let m = &self.common.entities.mobs[self
+                    .common
+                    .mob_index
+                    .find_ref(&self.common.entities.mobs, id)?];
                 m.is_pickable().then(|| (m.id, m.bounds(), 0.0))
             }
-            PickKind::Boat => self.common.entities.boats.iter().find(|e| e.id == id).map(|e| {
-                (
-                    e.id,
-                    self.client_copy_box(e.id, e.position, e.bounds()),
-                    0.0,
-                )
-            }),
-            PickKind::Cart => self.common.entities.carts.iter().find(|e| e.id == id).map(|e| {
-                (
-                    e.id,
-                    self.client_copy_box(e.id, e.position, e.bounds()),
-                    0.0,
-                )
-            }),
+            PickKind::Boat => self
+                .common
+                .entities
+                .boats
+                .iter()
+                .find(|e| e.id == id)
+                .map(|e| {
+                    (
+                        e.id,
+                        self.client_copy_box(e.id, e.position, e.bounds()),
+                        0.0,
+                    )
+                }),
+            PickKind::Cart => self
+                .common
+                .entities
+                .carts
+                .iter()
+                .find(|e| e.id == id)
+                .map(|e| {
+                    (
+                        e.id,
+                        self.client_copy_box(e.id, e.position, e.bounds()),
+                        0.0,
+                    )
+                }),
             PickKind::ArmorStand => self
                 .common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|e| e.id == id)
                 .filter(|e| e.is_pickable())
@@ -1099,23 +1196,36 @@ impl crate::game::ClientGame<'_> {
                         0.0,
                     )
                 }),
-            PickKind::Tnt => self.common.entities.tnts.iter().find(|e| e.id == id).map(|e| {
-                (
-                    e.id,
-                    self.client_copy_box(e.id, e.position, e.bounds()),
-                    0.0,
-                )
-            }),
-            PickKind::Falling => self.common.entities.falling.iter().find(|e| e.id == id).map(|e| {
-                (
-                    e.id,
-                    self.client_copy_box(e.id, e.position, e.bounds()),
-                    0.0,
-                )
-            }),
+            PickKind::Tnt => self
+                .common
+                .entities
+                .tnts
+                .iter()
+                .find(|e| e.id == id)
+                .map(|e| {
+                    (
+                        e.id,
+                        self.client_copy_box(e.id, e.position, e.bounds()),
+                        0.0,
+                    )
+                }),
+            PickKind::Falling => self
+                .common
+                .entities
+                .falling
+                .iter()
+                .find(|e| e.id == id)
+                .map(|e| {
+                    (
+                        e.id,
+                        self.client_copy_box(e.id, e.position, e.bounds()),
+                        0.0,
+                    )
+                }),
             PickKind::Projectile => self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == id)
                 .filter(|p| self.projectile_is_pickable(p))
@@ -1125,7 +1235,8 @@ impl crate::game::ClientGame<'_> {
                 }),
             PickKind::Trident => self
                 .common
-                .entities.tridents
+                .entities
+                .tridents
                 .iter()
                 .find(|t| t.id == id)
                 .filter(|t| self.trident_is_pickable(t))
@@ -1138,7 +1249,8 @@ impl crate::game::ClientGame<'_> {
                 }),
             PickKind::Rocket => self
                 .common
-                .entities.rockets
+                .entities
+                .rockets
                 .iter()
                 .find(|r| r.id == id)
                 .filter(|_| self.rocket_is_pickable())
@@ -1151,25 +1263,29 @@ impl crate::game::ClientGame<'_> {
                 }),
             PickKind::General => self
                 .common
-                .entities.general
+                .entities
+                .general
                 .row(id)
                 .filter(|r| r.is_pickable())
                 .map(|r| (r.id, r.bounds(), 0.0)),
             PickKind::Painting => self
                 .common
-                .entities.paintings
+                .entities
+                .paintings
                 .iter()
                 .find(|p| p.id == id)
                 .map(|p| (p.id, aabb_extents(p.bounds()), 0.0)),
             PickKind::ItemFrame => self
                 .common
-                .entities.item_frames
+                .entities
+                .item_frames
                 .iter()
                 .find(|f| f.id == id)
                 .map(|f| (f.id, aabb_extents(f.bounds()), 0.0)),
             PickKind::Cushion => self
                 .common
-                .entities.cushions
+                .entities
+                .cushions
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| (c.id, aabb_extents(c.bounds()), 0.0)),
@@ -1195,25 +1311,42 @@ impl crate::game::ClientGame<'_> {
                 .map(|block| (id, knot_bounds(block), 0.0)),
             PickKind::LocalKnot => self
                 .common
-                .entities.knots
+                .entities
+                .knots
                 .iter()
                 .find(|k| k.id == id)
                 .map(|k| (k.id, knot_bounds(k.fence), 0.0)),
-            PickKind::Crystal => self.common.entities.crystals.iter().find(|c| c.id == id).map(|c| {
-                (
-                    c.id,
-                    self.client_copy_box(c.id, c.position, c.bounds()),
-                    0.0,
-                )
-            }),
+            PickKind::Crystal => self
+                .common
+                .entities
+                .crystals
+                .iter()
+                .find(|c| c.id == id)
+                .map(|c| {
+                    (
+                        c.id,
+                        self.client_copy_box(c.id, c.position, c.bounds()),
+                        0.0,
+                    )
+                }),
         }
     }
 
     fn live_entity_bounds_for_pick(&self, id: u32) -> Option<Aabb> {
-        if let Some(i) = self.common.mob_index.find_ref(&self.common.entities.mobs, id) {
+        if let Some(i) = self
+            .common
+            .mob_index
+            .find_ref(&self.common.entities.mobs, id)
+        {
             return Some(self.common.entities.mobs[i].bounds());
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|e| e.id == id) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|e| e.id == id)
+        {
             return Some(a.bounds());
         }
         if let Some(b) = self.common.entities.boats.iter().find(|e| e.id == id) {
@@ -1240,12 +1373,7 @@ impl crate::game::ClientGame<'_> {
         if let Some(i) = self.client.interactions.get(&(id as i32)) {
             return Some(i.bounds());
         }
-        if let Some(p) = self
-            .common
-            .entities.projectiles
-            .iter()
-            .find(|e| e.id == id)
-        {
+        if let Some(p) = self.common.entities.projectiles.iter().find(|e| e.id == id) {
             return Some(p.bounds());
         }
         if let Some(t) = self.common.entities.tridents.iter().find(|e| e.id == id) {
@@ -1259,7 +1387,8 @@ impl crate::game::ClientGame<'_> {
         }
         if let Some(d) = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|d| (d.id != 0 || self.client.remote.is_some()) && d.id == id)
         {
@@ -1280,12 +1409,7 @@ impl crate::game::ClientGame<'_> {
         if let Some(&block) = self.client.remote_knots.get(&id) {
             return Some(knot_bounds(block));
         }
-        if let Some(k) = self
-            .common
-            .entities.knots
-            .iter()
-            .find(|k| k.id == id)
-        {
+        if let Some(k) = self.common.entities.knots.iter().find(|k| k.id == id) {
             return Some(knot_bounds(k.fence));
         }
         None
@@ -1341,7 +1465,8 @@ impl crate::game::ClientGame<'_> {
         }
         if let Some(d) = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|d| !self.is_pick_camera(d.id))
         {

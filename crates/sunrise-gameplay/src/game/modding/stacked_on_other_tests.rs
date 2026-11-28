@@ -1178,7 +1178,10 @@ pub(in crate::game) mod families {
                         let (worn_saddle, worn_armor) = equipment(game);
                         assert_eq!(worn_saddle.as_ref(), (slot != 0).then_some(&saddle));
                         assert_eq!(worn_armor.as_ref(), (slot != 1).then_some(&armor));
-                        assert!(game.entities.mobs[1].extra.items.is_empty(), "no chest slots");
+                        assert!(
+                            game.entities.mobs[1].extra.items.is_empty(),
+                            "no chest slots"
+                        );
                         assert!(menu_packets().is_empty());
                         ((), false)
                     });
@@ -2194,7 +2197,8 @@ pub mod item_part_tests {
                     };
 
                     spawn(game, 61, "minecraft:villager");
-                    game.entities.mobs[0].position = sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5);
+                    game.entities.mobs[0].position =
+                        sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5);
                     game.entities.mobs[0].extra.trade = Some(Box::new(Trader {
                         offers: vec![offer("minecraft:coal", "minecraft:diamond")],
                         ..Trader::default()
@@ -2893,7 +2897,10 @@ pub mod item_part_tests {
                 });
                 assert!(local_menu_ops(game, &[(Some(302), 0, Input::Pickup)]));
                 assert!(game.world.block_entities.get(&pos).unwrap().slots()[2].is_none());
-                assert_eq!(game.entities.orbs.iter().map(|o| o.points()).sum::<u32>(), 7);
+                assert_eq!(
+                    game.entities.orbs.iter().map(|o| o.points()).sum::<u32>(),
+                    7
+                );
                 clear_local_furnace(game);
             });
         });
@@ -3141,7 +3148,10 @@ pub mod item_part_tests {
                 game.storage_scope(|game, _| {
                     game.lan_guest_packet(12, click_output);
                     assert!(game.world.block_entities.get(&pos).unwrap().slots()[2].is_none());
-                    assert!(game.entities.orbs.is_empty(), "XP orb award waits for root commit");
+                    assert!(
+                        game.entities.orbs.is_empty(),
+                        "XP orb award waits for root commit"
+                    );
                     ((), false)
                 });
                 assert_eq!(

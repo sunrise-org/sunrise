@@ -37,7 +37,8 @@ impl crate::game::ClientGame<'_> {
         };
         let flying: sunrise_level::fast_hash::FxHashSet<u32> = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .map(|p| p.id)
             .chain(self.common.entities.tridents.iter().map(|t| t.id))
@@ -355,7 +356,8 @@ impl crate::game::ClientGame<'_> {
             if player.auto_spin_attack_ticks > 0 {
                 player.spin_targets.extend(
                     self.common
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .filter(|m| !m.removed)
                         .map(|m| (m.id, m.bounds())),
@@ -859,7 +861,8 @@ impl crate::game::ClientGame<'_> {
         // mobs and the player (position and eye height).
         let wither_targets: Vec<(i32, [f64; 3], f64)> = if self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .any(|m| m.species() == sunrise_sim::mobs::Species::Wither)
         {
@@ -870,7 +873,8 @@ impl crate::game::ClientGame<'_> {
                 .zip(self.common.eye_position())
                 .map(|(r, eye)| (r.entity_id, eye, eye[1]));
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .map(|m| {
                     (
@@ -899,7 +903,8 @@ impl crate::game::ClientGame<'_> {
                 });
             let others = self.client.remote.as_ref().into_iter().flat_map(|r| {
                 self.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .filter(move |m| m.alive() && r.level_players.contains_key(&(m.id as i32)))
                     .filter(move |m| r.remote_player_info_game_mode(m.id as i32) != Some(SPECTATOR))
@@ -921,7 +926,8 @@ impl crate::game::ClientGame<'_> {
             .as_ref()
             .map(|r| {
                 self.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .filter(|m| {
                         r.level_players.contains_key(&(m.id as i32)) && m.extra.ints[1] != 0
@@ -1452,7 +1458,8 @@ impl crate::game::ClientGame<'_> {
             // The dragon: LivingEntity's interpolation, inside its aiStep.
             let dragon_lerp = self
                 .common
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .and_then(|d| lerps.get_mut(&(d.id as i32)))
                 .filter(|l| l.steps > 0)
@@ -1564,7 +1571,8 @@ impl crate::game::ClientGame<'_> {
         looks.clear();
         looks.extend(
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .enumerate()
                 .filter(|(_, m)| {
@@ -1574,7 +1582,8 @@ impl crate::game::ClientGame<'_> {
                     let look = match m.ai.target.filter(|_| m.extra.flag) {
                         Some(Who::Mob(id)) => self
                             .common
-                            .entities.mobs
+                            .entities
+                            .mobs
                             .iter()
                             .find(|t| t.id == id)
                             .map(|t| [t.position.x, t.eye_y(), t.position.z]),

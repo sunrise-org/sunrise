@@ -184,7 +184,8 @@ pub(crate) mod tests {
                 game.server.lan.as_mut().unwrap().hub.guests.push(a);
                 let mob = |game: &mut sunrise_gameplay::game::ServerGame<'_>, id, kind: &str, x| {
                     let kind = game.res.mob_types().get(kind).unwrap().clone();
-                    game.entities.mobs
+                    game.entities
+                        .mobs
                         .push(Mob::new(id, kind, Vec3::new(x, 64.0, 2.0), 0.0));
                 };
                 mob(game, 50, "minecraft:goat", 2.0);
@@ -322,7 +323,8 @@ pub(crate) mod tests {
 
                 // A mod's sound bound to a cow, asked at the cow.
                 let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(40, kind, Vec3::new(2.0, 64.0, 2.0), 0.0));
                 let cow = game.entity(40).unwrap();
                 assert!(game.entity_play_bound_sound(

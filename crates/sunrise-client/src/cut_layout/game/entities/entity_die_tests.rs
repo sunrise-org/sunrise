@@ -141,7 +141,8 @@ fn entity_die_commands() {
             .get("minecraft:warden")
             .unwrap()
             .clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(700, kind, Vec3::new(7.5, 200.0, 4.5), 0.0));
         for (kind, nbt, heard) in [
             ("item", "{Item:{id:\"minecraft:stone\",count:1}}", true),
@@ -190,7 +191,12 @@ fn entity_die_commands() {
                 assert_eq!(info.pos, at);
                 assert_eq!(info.source, source, "{kind} source");
             }
-            let vibration = &game.entities.mobs[0].extra.warden.as_ref().unwrap().vibration;
+            let vibration = &game.entities.mobs[0]
+                .extra
+                .warden
+                .as_ref()
+                .unwrap()
+                .vibration;
             assert_eq!(
                 vibration.selector.current.is_some(),
                 heard && kind != "armor_stand",
@@ -225,7 +231,8 @@ fn entity_die_explosions() {
             .get("minecraft:creeper")
             .unwrap()
             .clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(700, kind, Vec3::new(10.0, 200.0, 10.0), 0.0));
         for source in [None, Some(700)] {
             let expected_source = source.map(Who::Mob);
@@ -277,7 +284,8 @@ fn entity_die_explosions() {
             assert!(
                 game.entities.dropped.is_empty() && game.entities.orbs.is_empty(),
                 "blast discards items and orbs: items={:?} orbs={}",
-                game.entities.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .map(|i| (&i.stack.item, i.health))
                     .collect::<Vec<_>>(),
@@ -342,7 +350,8 @@ fn painting_falling_off_the_wall_posts_no_entity_die() {
         assert!(game.entities.paintings.is_empty());
         // BlockAttachedEntity.tick: discard(), then dropItem().
         assert_eq!(
-            game.entities.dropped
+            game.entities
+                .dropped
                 .iter()
                 .map(|i| &*i.stack.item)
                 .collect::<Vec<_>>(),
@@ -477,7 +486,13 @@ fn a_data_packs_placeable_painting_variant_is_placed() {
         assert!(game.place_painting(&hit, &painting));
         assert_eq!(game.entities.paintings.len(), 1);
         assert_eq!(&*game.entities.paintings[0].variant, "test:big_square");
-        assert_eq!((game.entities.paintings[0].width, game.entities.paintings[0].height), (2, 2));
+        assert_eq!(
+            (
+                game.entities.paintings[0].width,
+                game.entities.paintings[0].height
+            ),
+            (2, 2)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     });
 }

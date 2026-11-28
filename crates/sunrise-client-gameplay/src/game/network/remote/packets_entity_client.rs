@@ -215,7 +215,10 @@ impl crate::game::ClientGame<'_> {
         }
         // LivingEntity.handleEntityEvent 60: the poof as the dead body goes.
         if p.event == 60
-            && let Some(m) = self.common.mob_index.get(&self.common.entities.mobs, p.id as u32)
+            && let Some(m) = self
+                .common
+                .mob_index
+                .get(&self.common.entities.mobs, p.id as u32)
         {
             let (at, w, h) = (m.position, f64::from(m.width()), f64::from(m.height()));
             self.death_poof([at.x, at.y, at.z], w, h);
@@ -224,7 +227,14 @@ impl crate::game::ClientGame<'_> {
             self.remote_totem(p.id);
         }
         // Mob.handleEntityEvent 20: the spawn poof.
-        if p.event == 20 && self.common.entities.mobs.iter().any(|m| m.id == p.id as u32) {
+        if p.event == 20
+            && self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .any(|m| m.id == p.id as u32)
+        {
             self.poof_particles(p.id as u32);
         }
         // The particle bursts of Villager 12 to 14 and 42, TamableAnimal
@@ -237,7 +247,8 @@ impl crate::game::ClientGame<'_> {
         if p.event == 3 {
             let crumbs = self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|pr| pr.id == p.id as u32)
                 .and_then(|pr| {
@@ -272,7 +283,8 @@ impl crate::game::ClientGame<'_> {
                     .map(|q| [q.position.x, q.position.y, q.position.z])
             } else {
                 self.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == p.id as u32)
                     .map(|m| [m.position.x, m.position.y, m.position.z])
@@ -313,7 +325,8 @@ impl crate::game::ClientGame<'_> {
             m.extra.client_effects.list.retain(|e| e.id != id);
         } else if let Some(a) = self
             .common
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter_mut()
             .find(|a| a.id == p.id as u32)
         {
@@ -392,7 +405,13 @@ impl crate::game::ClientGame<'_> {
         // Entity.DATA_NO_GRAVITY of an item, which may come before its stack
         // (`DATA_ITEM`, 8) and so before the item is made.
         if let (5, Value::Bool(no_gravity)) = (index, value) {
-            if let Some(item) = self.common.entities.dropped.iter_mut().find(|d| d.id == id as u32) {
+            if let Some(item) = self
+                .common
+                .entities
+                .dropped
+                .iter_mut()
+                .find(|d| d.id == id as u32)
+            {
                 item.no_gravity = *no_gravity;
             } else if let Some(pending) = self
                 .client
@@ -438,7 +457,8 @@ impl crate::game::ClientGame<'_> {
         // too, remote_mob_data's apply reads index 8 above.
         let mannequin = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .any(|m| m.id == id as u32 && &*m.kind.id == "minecraft:mannequin");
         let other = mannequin
@@ -651,7 +671,12 @@ impl crate::game::ClientGame<'_> {
         // ExperienceOrb.DATA_VALUE (the icon's size).
         if *index == 8
             && let Value::Int(v) = value
-            && let Some(o) = self.common.entities.orbs.iter_mut().find(|o| o.id == id as u32)
+            && let Some(o) = self
+                .common
+                .entities
+                .orbs
+                .iter_mut()
+                .find(|o| o.id == id as u32)
         {
             o.value = *v;
         }
@@ -792,7 +817,8 @@ impl crate::game::ClientGame<'_> {
             return Some(row.kind().to_owned());
         }
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id as u32)
             .map(|m| m.kind.id.to_string())

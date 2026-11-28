@@ -1656,7 +1656,8 @@ fn humanoid_arm_pose_mod_reads_mob_state_and_changes_the_model() {
         {
             let models = game.client_res().client_mob_models();
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .map(|m| arms(m, models))
                     .collect::<Vec<_>>(),
@@ -1696,7 +1697,8 @@ fn humanoid_arm_pose_mod_reads_mob_state_and_changes_the_model() {
         game.extract_remote_arm_poses();
         let models = game.client_res().client_mob_models();
         assert_eq!(
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter()
                 .map(|m| arms(m, models))
                 .collect::<Vec<_>>(),

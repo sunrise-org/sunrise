@@ -108,7 +108,10 @@ impl ServerGame<'_> {
             self.consume_held();
             self.sulfur_sound(index, "entity.sulfur_cube.absorb");
             // Entity.gameEvent(ENTITY_INTERACT): the cube is the source.
-            let (id, at) = (self.common.entities.mobs[index].id, self.common.entities.mobs[index].position);
+            let (id, at) = (
+                self.common.entities.mobs[index].id,
+                self.common.entities.mobs[index].position,
+            );
             let ctx = self.who_context(Some(Who::Mob(id)), None);
             self.post_game_event("minecraft:entity_interact", [at.x, at.y, at.z], ctx);
             return true;
@@ -157,7 +160,8 @@ impl ServerGame<'_> {
     /// use this tick although the body has changed since.
     pub fn sulfur_cubes_adopted_explosive(&self) -> Vec<(u32, i32)> {
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| m.species() == Species::SulfurCube)
             .filter_map(|m| Some((m.id, sulfur_cube::adopted_explosion(m)?.0)))
@@ -249,7 +253,8 @@ impl ServerGame<'_> {
             let pos = m.position;
             let best = self
                 .common
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .enumerate()
                 .filter(|(_, e)| {
@@ -269,7 +274,8 @@ impl ServerGame<'_> {
                 .inflate(sunrise_core::geometry::Vec3::new(1.0, 0.0, 1.0));
             let e = &self.common.entities.dropped[j];
             let close = touch.contains(e.position);
-            self.common.entities.mobs[i].extra.point = Some([e.position.x, e.position.y, e.position.z]);
+            self.common.entities.mobs[i].extra.point =
+                Some([e.position.x, e.position.y, e.position.z]);
             if !griefing || !close {
                 continue;
             }

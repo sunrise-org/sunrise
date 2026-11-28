@@ -177,9 +177,17 @@ fn tnt_destroys_an_unprotected_star_and_spares_an_explosion_resistant_diamond() 
         game.entities.tnts[0].no_gravity = true;
         game.entities.tnts[0].velocity = Vec3::ZERO;
         game.tick_one_tnt(0, &[]).unwrap();
-        assert!(game.entities.tnts.is_empty(), "the primed TNT actually detonated");
+        assert!(
+            game.entities.tnts.is_empty(),
+            "the primed TNT actually detonated"
+        );
         assert!(game.entities.dropped.iter().all(|item| item.id != star));
-        let survivor = game.entities.dropped.iter().find(|item| item.id == diamond).unwrap();
+        let survivor = game
+            .entities
+            .dropped
+            .iter()
+            .find(|item| item.id == diamond)
+            .unwrap();
         assert_eq!(survivor.health, 5);
     });
 }
@@ -233,7 +241,10 @@ fn a_mod_items_default_cactus_resistance_keeps_five_health_for_ten_ticks() {
         game.world.set(4, 64, 4, cactus).unwrap();
         drop_stack(game, "minecraft:stone", [5.08, 64.0, 4.5]);
         game.tick_items();
-        assert_eq!(game.entities.dropped[0].health, 4, "the tick really touches cactus");
+        assert_eq!(
+            game.entities.dropped[0].health, 4,
+            "the tick really touches cactus"
+        );
         game.entities.dropped.clear();
         let id = drop_stack(game, "fixture:cactus_item", [5.08, 64.0, 4.5]);
         assert!(

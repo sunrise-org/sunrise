@@ -235,7 +235,8 @@ pub fn frame_scene(game: &mut crate::game::ClientGame<'_>) -> winit::event_loop:
     game.client.particles.0.camera = [0.5, 65.5, 1.5];
     // Ordinary (non-particle) entity geometry and an unrelated item light.
     game.common
-        .entities.dropped
+        .entities
+        .dropped
         .push(sunrise_sim::entities::ItemEntity::new(
             2,
             sunrise_items::items::ItemStack::new("minecraft:torch", 1),

@@ -46,9 +46,12 @@ fn write_and_read_back(game: &mut ServerGame<'_>, entity: EntityRef) {
 fn a_boat_keeps_its_base_state() {
     with_game(|game| {
         open_chunk(game);
-        game.common
-            .entities.boats
-            .push(Boat::new(31, "oak".into(), Vec3::new(8.5, 65.0, 8.5), 0.0));
+        game.common.entities.boats.push(Boat::new(
+            31,
+            "oak".into(),
+            Vec3::new(8.5, 65.0, 8.5),
+            0.0,
+        ));
         let entity = game.entity(31).unwrap();
         write_and_read_back(game, entity);
         let raw = game.common.persist.raw.get(&31).unwrap();

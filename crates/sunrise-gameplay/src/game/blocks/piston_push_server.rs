@@ -147,7 +147,8 @@ impl crate::game::ServerGame<'_> {
         }
         if let Some(stuck) = stuck {
             self.common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .update(i, |p| p.stuck_speed = stuck);
         }
         let stuck_arrow = self.common.entities.projectiles[i]
@@ -279,7 +280,8 @@ impl crate::game::ServerGame<'_> {
         };
         let mut i = 0;
         while i < self.common.entities.paintings.len() {
-            if !(meets(self.common.entities.paintings[i].bounds()) && self.break_painting_by(i, false, None))
+            if !(meets(self.common.entities.paintings[i].bounds())
+                && self.break_painting_by(i, false, None))
             {
                 i += 1;
             }
@@ -398,7 +400,8 @@ impl crate::game::ServerGame<'_> {
                     .common
                     .vehicle_fall_reset(boat.fall_distance, body.position, moved);
                 self.common
-                    .entities.boats
+                    .entities
+                    .boats
                     .update(i, |boat| boat.fall_distance = fall);
             }
             self.reset_general_fall(target, body.position, moved);
@@ -419,7 +422,8 @@ impl crate::game::ServerGame<'_> {
             if self.boat_can_simulate_movement(boat.id) {
                 let fall = self.common.boat_fall(boat, moved.y);
                 self.common
-                    .entities.boats
+                    .entities
+                    .boats
                     .update(i, |boat| boat.fall_distance = fall);
             }
         }
@@ -942,7 +946,9 @@ impl crate::game::ServerGame<'_> {
                 let host = self.server.lan.as_mut()?;
                 limit(&mut host.hub.guests.motion_mut(conn)?.piston)
             }
-            MoveWho::Entity(EntityHandle::Mob(i)) => limit(&mut self.common.entities.mobs[i].piston),
+            MoveWho::Entity(EntityHandle::Mob(i)) => {
+                limit(&mut self.common.entities.mobs[i].piston)
+            }
             MoveWho::Entity(handle) => {
                 let key = with_entity!(self, handle, entity => (entity.id(), entity.join_seq()));
                 limit(accumulators.entry(key).or_default())
@@ -1081,13 +1087,17 @@ impl crate::game::ServerGame<'_> {
                 }));
                 lent.give_back(&mut self.common.world);
                 self.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
                 if let Err(payload) = result {
                     std::panic::resume_unwind(payload);
                 }
                 if let Some(hit) = paused_hurt
-                    && let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, hit.victim)
+                    && let Some(index) = self
+                        .common
+                        .mob_index
+                        .find(&self.common.entities.mobs, hit.victim)
                 {
                     self.server.paused_mob_hurt.0 = Some(hit);
                     self.finish_mob_damage_at(index);
@@ -1103,7 +1113,9 @@ impl crate::game::ServerGame<'_> {
             return Some(target);
         }
         let can_simulate = match handle {
-            EntityHandle::Boat(i) => self.boat_can_simulate_movement(self.common.entities.boats[i].id),
+            EntityHandle::Boat(i) => {
+                self.boat_can_simulate_movement(self.common.entities.boats[i].id)
+            }
             EntityHandle::Item(_)
             | EntityHandle::Tnt(_)
             | EntityHandle::Orb(_)
@@ -1135,7 +1147,10 @@ impl crate::game::ServerGame<'_> {
                 EntityHandle::Cart(i) => {
                     let (distance, landing) =
                         self.cart_move_fall(&self.common.entities.carts[i], from, moved);
-                    self.common.entities.carts.update(i, |c| c.fall_distance = distance);
+                    self.common
+                        .entities
+                        .carts
+                        .update(i, |c| c.fall_distance = distance);
                     if !self.finish_cart_landing(landing, effect, |game, power| {
                         let mut cart = game.entities.carts[i].clone();
                         game.explode_cart(&mut cart, power)
@@ -1561,7 +1576,9 @@ impl crate::game::ServerGame<'_> {
             return;
         }
         let authoritative = match handle {
-            EntityHandle::Boat(i) => self.boat_can_simulate_movement(self.common.entities.boats[i].id),
+            EntityHandle::Boat(i) => {
+                self.boat_can_simulate_movement(self.common.entities.boats[i].id)
+            }
             _ => self.common.is_logical_server(),
         };
         if let EntityHandle::ArmorStand(i) = handle {

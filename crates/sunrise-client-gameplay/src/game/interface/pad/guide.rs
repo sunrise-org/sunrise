@@ -501,12 +501,19 @@ impl crate::game::ClientGame<'_> {
     /// leaves the click to the item, and so does a painting.
     fn pad_guide_object(&self, id: i32, distance: f64) -> Option<Verb> {
         let sneaking = self.held_mapping(Action::Sneak);
-        if let Some(cart) = self.common.entities.carts.iter().find(|c| c.id as i32 == id) {
+        if let Some(cart) = self
+            .common
+            .entities
+            .carts
+            .iter()
+            .find(|c| c.id as i32 == id)
+        {
             use super::super::minecarts::CartKind;
             let ridden = self.common.riding == Some(cart.id)
                 || self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .any(|m| m.extra.mount == Some(cart.id));
             let game_master = self.common.can_use_game_master_blocks();
@@ -517,7 +524,13 @@ impl crate::game::ClientGame<'_> {
                 _ => Some(Verb::Use),
             };
         }
-        if let Some(i) = self.common.entities.boats.iter().position(|b| b.id as i32 == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .position(|b| b.id as i32 == id)
+        {
             // ChestBoat.interact, then AbstractBoat.interact.
             let boat = &self.common.entities.boats[i];
             let room = self.boat_has_room(i);
@@ -535,7 +548,13 @@ impl crate::game::ClientGame<'_> {
             return None;
         }
         // ItemFrame.interact: a fixed frame, or an empty one with nothing to put in it, passes.
-        if let Some(frame) = self.common.entities.item_frames.iter().find(|f| f.id as i32 == id) {
+        if let Some(frame) = self
+            .common
+            .entities
+            .item_frames
+            .iter()
+            .find(|f| f.id as i32 == id)
+        {
             let held = self.common.held().is_some() || self.common.offhand.is_some();
             if frame.fixed || (frame.item.is_none() && !held) {
                 return None;

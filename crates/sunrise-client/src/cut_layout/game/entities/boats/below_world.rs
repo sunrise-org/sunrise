@@ -43,7 +43,8 @@ pub(crate) mod tests {
                 let carts: Vec<f64> = g.entities.carts.iter().map(|c| c.position.x).collect();
                 assert_eq!(carts, [6.5]);
                 let spilled: u32 = g
-                    .entities.dropped
+                    .entities
+                    .dropped
                     .iter()
                     .filter(|i| &*i.stack.item == "minecraft:diamond")
                     .map(|i| i.stack.count)
@@ -76,7 +77,10 @@ pub(crate) mod tests {
                 g.load_boat(tag, None, "minecraft:oak_boat");
                 assert_eq!(g.entities.boats.len(), 1);
                 assert_eq!(g.entities.boats[0].position.y, -20_000_000.0);
-                assert_eq!(g.entities.boats[0].velocity, Vec3::new(-2e-323, 0.0, -2e-323));
+                assert_eq!(
+                    g.entities.boats[0].velocity,
+                    Vec3::new(-2e-323, 0.0, -2e-323)
+                );
                 g.player = Some(PlayerMotion::new(g.motion, Vec3::new(-77.75, 64.0, -55.67)));
                 g.world
                     .chunks
@@ -86,7 +90,8 @@ pub(crate) mod tests {
                 g.tick_boats();
                 assert!(g.entities.boats.is_empty());
                 for y in [f64::from(i32::MIN) - 1.0, f64::from(i32::MAX) + 1.0] {
-                    g.entities.boats
+                    g.entities
+                        .boats
                         .push(Boat::new(2, "oak".into(), Vec3::new(0.5, y, 0.5), 0.0));
                     assert!(g.boat_bubble_columns(0).is_empty());
                     assert_eq!(

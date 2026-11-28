@@ -58,7 +58,8 @@ impl crate::game::CommonGame<'_> {
     }
 
     pub fn charge_mount_jump(&mut self, i: usize, keys: Keys) -> f32 {
-        let saddled = self.entities.mobs[i].extra.saddled() && Self::jumps(self.entities.mobs[i].species());
+        let saddled =
+            self.entities.mobs[i].extra.saddled() && Self::jumps(self.entities.mobs[i].species());
         let mut jump = 0.0;
         if saddled {
             let st = &mut self.mount;

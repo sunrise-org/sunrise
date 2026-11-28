@@ -67,11 +67,15 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(12, kind.clone(), Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(12, kind.clone(), Vec3::ZERO, 0.0));
             let mut shielded = Mob::new(13, kind, Vec3::ZERO, 0.0);
             shielded.invulnerable_flag = true;
             game.entities.mobs.push(shielded);
-            game.entities.armor_stands.push(ArmorStand::new(14, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(14, Vec3::ZERO, 0.0));
             let (entity, dragon) = dragon_in(game);
             assert!(game.dragon(game.entity(12).unwrap()).is_none());
             let mob = game.mob(entity).unwrap();
@@ -90,11 +94,12 @@ mod tests {
             assert_eq!(mob.persistence_required(game), Some(false));
             assert!(mob.set_persistence_required(game));
             assert_eq!(mob.persistence_required(game), Some(true));
-            let saved = game
-                .entities.dragon
-                .as_ref()
-                .unwrap()
-                .to_nbt([0; 4], None, &Default::default());
+            let saved =
+                game.entities
+                    .dragon
+                    .as_ref()
+                    .unwrap()
+                    .to_nbt([0; 4], None, &Default::default());
             assert_eq!(saved.get("PersistenceRequired"), Some(&Tag::Byte(1)));
             assert!(Dragon::from_nbt(&saved, 0).unwrap().persistent);
             // `getBooleanOr` takes any nonzero number as true.
@@ -178,11 +183,11 @@ mod tests {
                 } else {
                     assert_eq!(synced, Some(&(16, serializer::INT, Value::Int(i as i32))));
                 }
-                let saved = game
-                    .entities.dragon
-                    .as_ref()
-                    .unwrap()
-                    .to_nbt([0; 4], None, &Default::default());
+                let saved = game.entities.dragon.as_ref().unwrap().to_nbt(
+                    [0; 4],
+                    None,
+                    &Default::default(),
+                );
                 assert_eq!(saved.get("DragonPhase"), Some(&Tag::Int(i as i32)));
                 let loaded = Dragon::from_nbt(&saved, 0).unwrap();
                 assert_eq!(loaded.native_phase(), phase);
@@ -248,7 +253,11 @@ mod tests {
             game.entities.breath_clouds.push(cloud(true));
             game.entities.breath_clouds.push(cloud(false));
             assert!(dragon.set_phase(game, DragonPhase::Hover));
-            assert_eq!(game.entities.breath_clouds.len(), 1, "the flame cloud is gone");
+            assert_eq!(
+                game.entities.breath_clouds.len(),
+                1,
+                "the flame cloud is gone"
+            );
             assert!(!game.entities.breath_clouds[0].from_dragon);
             // Back in and out within one hook leaves nothing of the old cloud.
             assert!(dragon.set_phase(game, DragonPhase::SittingFlaming));
@@ -258,11 +267,13 @@ mod tests {
             assert_eq!(game.entities.breath_clouds.len(), 1);
             // The gameplay path leaves the flag for the tick.
             game.entities.breath_clouds.push(cloud(true));
-            game.entities.dragon
+            game.entities
+                .dragon
                 .as_mut()
                 .unwrap()
                 .set_native_phase(DragonPhase::Hover);
-            game.entities.dragon
+            game.entities
+                .dragon
                 .as_mut()
                 .unwrap()
                 .set_native_phase(DragonPhase::SittingFlaming);
@@ -439,7 +450,9 @@ mod tests {
     #[ignore = "daily"]
     fn a_dragon_that_has_no_id_yet_has_no_parts() {
         with_game(|game| {
-            game.entities.dragon.replace(Dragon::new(Vec3::ZERO, 0.0, 0));
+            game.entities
+                .dragon
+                .replace(Dragon::new(Vec3::ZERO, 0.0, 0));
             // The ids after 0 are the player's and its neighbours', not parts.
             for id in 1..=8 {
                 assert!(game.level_dragon_part(id).is_none());

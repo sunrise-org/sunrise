@@ -1056,7 +1056,12 @@ pub(crate) mod tests {
             let bystander = summon_mob(game, "minecraft:pig", "{NoAI:1b,UUID:[I;21,22,23,24]}");
             let victim_uuid = Tag::IntArray(game.persist.uuid_of(victim).unwrap().to_vec());
             let bystander_uuid = Tag::IntArray(game.persist.uuid_of(bystander).unwrap().to_vec());
-            let slot = game.entities.mobs.iter().position(|m| m.id == victim).unwrap();
+            let slot = game
+                .entities
+                .mobs
+                .iter()
+                .position(|m| m.id == victim)
+                .unwrap();
             let ticks_since_hurt = 17;
             assert!(game.entities.mobs[slot].ai.last_hurt_by_ref.is_none());
             game.entities.mobs.update(slot, |m| {

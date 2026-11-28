@@ -31,7 +31,8 @@ impl crate::game::ServerGame<'_> {
         let mut fences = Vec::new();
         let mobs = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| !m.removed)
             .map(|m| m.extra.leash);
@@ -54,7 +55,8 @@ impl crate::game::ServerGame<'_> {
             .knot_ids
             .retain(|p, _| fences.contains(p));
         self.common
-            .entities.knots
+            .entities
+            .knots
             .retain(|knot| fences.contains(&knot.fence));
     }
     /// `LeashFenceKnotEntity.notifyLeasheeRemoved`: only a knot losing a
@@ -70,12 +72,14 @@ impl crate::game::ServerGame<'_> {
         };
         if self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .any(|m| m.id != departing && !m.removed && m.extra.leash == Some(Holder::Knot(fence)))
             || self
                 .common
-                .entities.boats
+                .entities
+                .boats
                 .iter()
                 .any(|b| b.id != departing && b.leash == Some(Holder::Knot(fence)))
         {
@@ -83,7 +87,8 @@ impl crate::game::ServerGame<'_> {
         }
         self.server.knot_state.knot_ids.remove(&fence);
         self.common
-            .entities.knots
+            .entities
+            .knots
             .retain(|knot| knot.fence != fence);
     }
     /// `LeashFenceKnotEntity.getOrCreateKnot` → `createKnot`: the first lead
@@ -139,26 +144,27 @@ impl crate::game::ServerGame<'_> {
         let holder = Some(Holder::Knot(fence));
         let mobs: Vec<_> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|mob| !mob.removed && mob.extra.leash == holder)
             .map(|mob| mob.id)
             .collect();
         let boats: Vec<_> = self
             .common
-            .entities.boats
+            .entities
+            .boats
             .iter()
             .filter(|boat| boat.leash == holder)
             .map(|boat| boat.id)
             .collect();
         self.server.knot_state.knot_ids.remove(&fence);
-        self.common
-            .entities.knots
-            .retain(|knot| knot.id != id);
+        self.common.entities.knots.retain(|knot| knot.id != id);
         for id in mobs {
             if self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .any(|mob| mob.id == id && mob.extra.leash == holder)
             {
@@ -168,7 +174,8 @@ impl crate::game::ServerGame<'_> {
         for id in boats {
             if self
                 .common
-                .entities.boats
+                .entities
+                .boats
                 .iter()
                 .any(|boat| boat.id == id && boat.leash == holder)
             {
@@ -182,10 +189,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn natural_knot_id_iter(
         &self,
     ) -> impl Iterator<Item = u32> + '_ {
-        self.common
-            .entities.knots
-            .iter()
-            .map(|knot| knot.id)
+        self.common.entities.knots.iter().map(|knot| knot.id)
     }
     /// The ids of the level's natural knots that a lead still holds, in the
     /// order they were made.
@@ -307,7 +311,12 @@ impl crate::game::ServerGame<'_> {
         drop: bool,
         sound: bool,
     ) {
-        let dying = self.common.entities.mobs.iter().any(|m| m.id == id && !m.alive());
+        let dying = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .any(|m| m.id == id && !m.alive());
         let drop = drop
             && (!dying
                 || self
@@ -399,7 +408,8 @@ impl crate::game::ServerGame<'_> {
             Target::Mob(id) => {
                 let held = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .any(|m| m.id == id && m.extra.leash.is_some());
                 if held {
@@ -434,20 +444,21 @@ impl crate::game::ServerGame<'_> {
             .lead_killers
             .remove(&id)
             .map(|(killer, _)| killer);
-        let Some((at, kind, holder)) =
-            self.common
-                .entities.mobs
-                .iter_mut()
-                .find(|m| m.id == id)
-                .and_then(|m| {
-                    let holder = m.extra.leash;
-                    sunrise_sim::mobs::leash::remove(m)?;
-                    Some((
-                        [m.position.x, m.position.y, m.position.z],
-                        sunrise_gameplay_common::game::native_hooks::mob_kind(m),
-                        holder,
-                    ))
-                })
+        let Some((at, kind, holder)) = self
+            .common
+            .entities
+            .mobs
+            .iter_mut()
+            .find(|m| m.id == id)
+            .and_then(|m| {
+                let holder = m.extra.leash;
+                sunrise_sim::mobs::leash::remove(m)?;
+                Some((
+                    [m.position.x, m.position.y, m.position.z],
+                    sunrise_gameplay_common::game::native_hooks::mob_kind(m),
+                    holder,
+                ))
+            })
         else {
             return;
         };
@@ -545,7 +556,8 @@ impl crate::game::ServerGame<'_> {
                 let live_id = self.server.knot_state.knot_ids.get(&fence).copied();
                 let mobs: Vec<u32> = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .filter(|m| {
                         !m.removed
@@ -560,7 +572,9 @@ impl crate::game::ServerGame<'_> {
                 let boats: Vec<usize> = self
                     .boats_on(Holder::Knot(fence))
                     .into_iter()
-                    .filter(|&i| live_id.is_none() || self.common.entities.boats[i].leash_knot_id != live_id)
+                    .filter(|&i| {
+                        live_id.is_none() || self.common.entities.boats[i].leash_knot_id != live_id
+                    })
                     .collect();
                 for boat_idx in boats {
                     self.release_stored_boat_leash(boat_idx, drop);
@@ -723,7 +737,8 @@ impl crate::game::ServerGame<'_> {
             }
             let others: Vec<u32> = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .filter(|m| m.extra.leash == Some(Holder::Mob(id)))
                 .map(|m| m.id)
@@ -838,7 +853,8 @@ impl crate::game::ServerGame<'_> {
             for i in self.boats_on(Holder::Knot(knot_pos)) {
                 if self.common.entities.boats[i].leash_knot_id.is_none() {
                     self.common
-                        .entities.boats
+                        .entities
+                        .boats
                         .update(i, |b| b.leash_knot_id = Some(knot_id));
                 }
             }

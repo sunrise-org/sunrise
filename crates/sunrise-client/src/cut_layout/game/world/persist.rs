@@ -123,7 +123,8 @@ mod interaction_saved_defaults_tests {
             assert!(marker_before.get(key).is_none());
         }
         let pig_id = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| game.persist.uuids.get(&m.id) == Some(&[109, 0, 0, 5]))
             .unwrap()
@@ -429,7 +430,12 @@ mod loaded_tag_tests {
                 );
             }
             assert_eq!(
-                game.entities.mobs.iter().find(|m| m.id == id).unwrap().position,
+                game.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .unwrap()
+                    .position,
                 Vec3::new(x, 200.0, 4.5)
             );
             assert_eq!(game.uuid_for(id), [252, 0, 0, n as i32]);
@@ -732,7 +738,8 @@ mod item_display_saved_transform_tests {
                 );
             }
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| game.persist.uuid_of(m.id) == Some([132, 0, 0, 99]))
                     .unwrap()
@@ -1093,7 +1100,10 @@ mod attribute_instance_save_tests {
             // Before any tick, without the load's compound.
             for (kind, n) in [("pig", 1), ("allay", 2)] {
                 let i = mob(game, n);
-                game.common.persist.raw.remove(&game.common.entities.mobs[i].id);
+                game.common
+                    .persist
+                    .raw
+                    .remove(&game.common.entities.mobs[i].id);
                 if !saved_ids(game, i).is_empty() {
                     failures.push(format!("{kind} before a tick: {:?}", saved_ids(game, i)));
                 }
@@ -1101,7 +1111,10 @@ mod attribute_instance_save_tests {
             game.tick_world(true).unwrap();
             for (kind, n) in [("pig", 1), ("allay", 2)] {
                 let i = mob(game, n);
-                game.common.persist.raw.remove(&game.common.entities.mobs[i].id);
+                game.common
+                    .persist
+                    .raw
+                    .remove(&game.common.entities.mobs[i].id);
                 if saved_ids(game, i) != speed() {
                     failures.push(format!("{kind} after a tick: {:?}", saved_ids(game, i)));
                 }
@@ -1385,7 +1398,10 @@ mod mob_inventory_merge_tests {
                     )));
                     let i = mob(game, n);
                     // No raw echo: the load's compound is gone, only the model is left.
-                    game.common.persist.raw.remove(&game.common.entities.mobs[i].id);
+                    game.common
+                        .persist
+                        .raw
+                        .remove(&game.common.entities.mobs[i].id);
                     if &live(game, i) != want {
                         failures.push(format!("{kind} {name}: live {:?}", live(game, i)));
                     }
@@ -1432,7 +1448,8 @@ mod invalid_passenger_tests {
     /// The mob in the level with UUID `n`.
     fn mob(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> u32 {
         let ids: Vec<u32> = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| game.persist.uuid_of(m.id) == Some([161, 0, 0, n]))
             .map(|m| m.id)
@@ -1441,7 +1458,13 @@ mod invalid_passenger_tests {
         ids[0]
     }
     fn mount(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Option<u32> {
-        game.entities.mobs.iter().find(|m| m.id == id).unwrap().extra.mount
+        game.entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id)
+            .unwrap()
+            .extra
+            .mount
     }
     /// Each saved passenger of `id` as (id, UUID word 3, first tag), in order;
     /// `None` when the entity saves no Passengers.
@@ -1727,7 +1750,10 @@ mod h262_enderman_absolute_anger_tests {
             .find_map(|(id, u)| (*u == [262, 1, 0, n]).then_some(*id))
             .unwrap();
         let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
-        assert_eq!(game.entities.mobs[i].species(), sunrise_sim::mobs::Species::Enderman);
+        assert_eq!(
+            game.entities.mobs[i].species(),
+            sunrise_sim::mobs::Species::Enderman
+        );
         assert!(game.entities.mobs[i].no_ai);
         assert_eq!(game.entities.mobs[i].health, 40.0);
         assert_eq!(game.entities.mobs[i].position, Vec3::new(6.5, 200.0, 4.5));
@@ -1873,7 +1899,8 @@ mod h262_enderman_absolute_anger_tests {
                 )
             );
             let i = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .position(|m| m.species() == sunrise_sim::mobs::Species::Wolf)
                 .unwrap();
@@ -2023,7 +2050,8 @@ mod sulfur_body_attribute_tests {
             let sel = "@e[type=minecraft:sulfur_cube,nbt={UUID:[I;192,0,0,9]},limit=1]";
             let cached = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 let m = game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| game.persist.uuid_of(m.id) == Some([192, 0, 0, 9]))
                     .unwrap();
@@ -2087,7 +2115,8 @@ mod sulfur_body_attribute_tests {
                 "attribute {sel} minecraft:knockback_resistance modifier add {id} 0.2 add_value"
             )));
             let mob = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.species() == sunrise_sim::mobs::Species::SulfurCube)
                 .unwrap();
@@ -2105,7 +2134,8 @@ mod sulfur_body_attribute_tests {
             ));
             assert_eq!(read(game, 19, "knockback_resistance"), 600);
             let mob = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.species() == sunrise_sim::mobs::Species::SulfurCube)
                 .unwrap();
@@ -2131,7 +2161,8 @@ mod sulfur_body_attribute_tests {
             }
             game.tick_world(true).unwrap();
             let cached = |game: &sunrise_gameplay::game::ServerGame<'_>, n: i32| {
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| game.persist.uuid_of(m.id) == Some([192, 0, 0, n]))
                     .unwrap()
@@ -2367,7 +2398,8 @@ mod summoned_knot_tests {
                 marker_before
             );
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| game.persist.uuid_of(m.id) == Some([129, 0, 0, 99]))
                     .unwrap()
@@ -2463,13 +2495,17 @@ mod summoned_knot_tests {
             assert!(game.run_command("item replace entity @s weapon.mainhand with lead"));
             assert!(game.run_command("setblock 14 200 2 oak_fence strict"));
             let pig = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .position(|m| game.persist.uuid_of(m.id) == Some([129, 0, 0, 99]))
                 .unwrap();
             assert!(game.interact_leash(pig, "minecraft:lead"));
             assert!(game.use_knot([14, 200, 2], false));
-            assert_eq!(game.entities.mobs[pig].extra.leash, Some(Holder::Knot([14, 200, 2])));
+            assert_eq!(
+                game.entities.mobs[pig].extra.leash,
+                Some(Holder::Knot([14, 200, 2]))
+            );
             game.lan_assign_ids();
             let natural = game.server.knot_state.knot_ids[&[14, 200, 2]];
             let ids = summon_knots(game);
@@ -2479,7 +2515,8 @@ mod summoned_knot_tests {
             game.lan_assign_ids();
             assert_eq!(game.server.knot_state.knot_ids[&[14, 200, 2]], natural);
             let pig = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| game.persist.uuid_of(m.id) == Some([129, 0, 0, 99]))
                 .unwrap();
@@ -2584,7 +2621,8 @@ mod camel_pose_saved_tests {
                 .unwrap_or_default();
             assert!(game.run_command(&format!("summon camel {} 200 4.5 {{UUID:[I;94,0,0,{number}],NoAI:1b,NoGravity:1b,PersistenceRequired:1b,Health:32f,Temper:17,Tags:[\"h094\"]{field}}}", 2.5 + n as f64 * 2.5)));
             let mob = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| game.persist.uuids.get(&m.id) == Some(&[94, 0, 0, number]))
                 .unwrap();
@@ -2644,7 +2682,8 @@ mod camel_pose_saved_tests {
         for step in 0..8 {
             for number in 1..=cases.len() as i32 {
                 let index = game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .position(|m| game.persist.uuids.get(&m.id) == Some(&[94, 0, 0, number]))
                     .unwrap();
@@ -2691,7 +2730,8 @@ mod mob_hurt_cooldown_tests {
     /// (`invulnerableTime`, `lastHurt`).
     fn pig(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> (f32, i32, f32) {
         let m = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| game.persist.uuid_of(m.id) == Some([0, 248, 0, n]))
             .unwrap();
@@ -2820,11 +2860,17 @@ mod restored_vehicle_transfer_tests {
                 runtime.set(&mut map, Holder::Level, 41).unwrap();
                 saved.set(&mut map, Holder::Level, 51).unwrap();
                 game.entity_attachments.insert(source, map);
-                let index = game.entities.mobs.iter().position(|m| m.id == source).unwrap();
+                let index = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .position(|m| m.id == source)
+                    .unwrap();
                 let incoming = game.mob_tree_nbt(index);
                 let tree = (!generic).then(|| game.capture_vehicle_tree_state(source).unwrap());
                 let state = generic.then(|| game.take_transferred_entity_state(source));
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .retain(|m| m.id != source && Some(m.id) != source_child);
                 game.detach_entity(source);
                 if let Some(child) = source_child {

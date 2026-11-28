@@ -66,7 +66,8 @@ fn a_rocket_posts_its_shot_once_and_a_silent_one_launches_quietly() {
             game.run_command("summon firework_rocket 9.5 201.5 10.5 {LifeTime:100,HasBeenShot:1b}")
         );
         assert!(
-            game.entities.rockets
+            game.entities
+                .rockets
                 .iter()
                 .all(|r| r.has_been_shot == (r.position.x == 9.5))
         );

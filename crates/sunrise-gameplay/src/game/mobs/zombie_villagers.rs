@@ -39,10 +39,22 @@ impl crate::game::ServerGame<'_> {
     /// `Zombie.killedEntity`: a villager killed by a zombie may rise as a
     /// zombie villager keeping its profession, trades and gossip.
     pub(in crate::game) fn zombie_killed(&mut self, killer: u32, victim: u32) {
-        let Some(k) = self.common.entities.mobs.iter().position(|m| m.id == killer) else {
+        let Some(k) = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == killer)
+        else {
             return;
         };
-        let Some(v) = self.common.entities.mobs.iter().position(|m| m.id == victim) else {
+        let Some(v) = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == victim)
+        else {
             return;
         };
         if !is_zombie(self.common.entities.mobs[k].species())
@@ -72,7 +84,12 @@ impl crate::game::ServerGame<'_> {
         ) else {
             return;
         };
-        let ensure = self.common.entities.mobs.iter().position(|m| m.id == victim);
+        let ensure = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == victim);
         if let Some(i) = ensure {
             self.ensure_offers(i);
         }
@@ -150,7 +167,9 @@ impl crate::game::ServerGame<'_> {
         let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == id) else {
             return;
         };
-        if self.common.entities.mobs[i].removed || zombie_villager::cure(&self.common.entities.mobs[i]).is_none() {
+        if self.common.entities.mobs[i].removed
+            || zombie_villager::cure(&self.common.entities.mobs[i]).is_none()
+        {
             return;
         }
         let old = self.common.entities.mobs[i].clone();

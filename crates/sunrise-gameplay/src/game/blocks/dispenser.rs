@@ -689,7 +689,8 @@ impl crate::game::ServerGame<'_> {
         let key = |at: Vec3, id: u32| (section_order(at), id);
         let mut found: Vec<(_, Target)> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .enumerate()
             .filter(|(_, m)| !m.removed && overlaps(m.bounds(), block))
@@ -697,7 +698,8 @@ impl crate::game::ServerGame<'_> {
             .collect();
         found.extend(
             self.common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .enumerate()
                 .filter(|(_, s)| overlaps(s.bounds(), block))
@@ -870,7 +872,12 @@ impl crate::game::ServerGame<'_> {
             return Ok(());
         };
         let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();
-        let mut m = self.common.entities.mobs.extract(self.common.entities.mobs[i].join).unwrap();
+        let mut m = self
+            .common
+            .entities
+            .mobs
+            .extract(self.common.entities.mobs[i].join)
+            .unwrap();
         let mut events = Vec::new();
         {
             let w = self.mob_world_base(&[]);
@@ -1804,15 +1811,26 @@ pub mod tests {
         let mut zombie = sunrise_sim::mobs::Mob::new(10 + row, kind, at, 0.0);
         zombie.extra.pick_up_loot = true;
         game.entities.mobs.push(zombie);
-        game.entities.armor_stands
+        game.entities
+            .armor_stands
             .push(sunrise_sim::entities::ArmorStand::new(20 + row, at, 0.0));
         let mut stack = stack;
         let done = game.dispense_equipment((5, 64, z), Direction::East, &mut stack);
-        let zombie = game.entities.mobs.iter().find(|m| m.id == 10 + row).unwrap();
+        let zombie = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == 10 + row)
+            .unwrap();
         let worn = [Slot::Head, Slot::Chest, Slot::Legs, Slot::Feet]
             .into_iter()
             .find(|slot| mob_slot_item(zombie, *slot).is_some());
-        let stand = game.entities.armor_stands.iter().find(|s| s.id == 20 + row).unwrap();
+        let stand = game
+            .entities
+            .armor_stands
+            .iter()
+            .find(|s| s.id == 20 + row)
+            .unwrap();
         (
             done,
             worn,
@@ -1901,7 +1919,9 @@ impl crate::game::ServerGame<'_> {
             .targets_at(target)
             .into_iter()
             .filter_map(|t| match t {
-                Target::Mob(i) if self.common.entities.mobs[i].species() == Species::Armadillo => Some(i),
+                Target::Mob(i) if self.common.entities.mobs[i].species() == Species::Armadillo => {
+                    Some(i)
+                }
                 _ => None,
             })
             .collect();
@@ -2069,7 +2089,9 @@ impl crate::game::ServerGame<'_> {
                 self.server_play_sound(&sound, [at.x, at.y, at.z], 1.0, 1.0);
             }
             let who = match target {
-                Target::Mob(i) => Some(sunrise_sim::mobs::Who::Mob(self.common.entities.mobs[i].id)),
+                Target::Mob(i) => {
+                    Some(sunrise_sim::mobs::Who::Mob(self.common.entities.mobs[i].id))
+                }
                 Target::Player | Target::Guest(_) | Target::Stand(_) => None,
             };
             let ctx = self.who_context(who, None);
@@ -2462,7 +2484,8 @@ impl crate::game::ServerGame<'_> {
         let area = Aabb::new(centre, centre).inflate(Vec3::new(16.0, 16.0, 16.0));
         let mut leashed: Vec<(u32, usize)> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .enumerate()
             .filter(|(_, m)| {
@@ -2514,7 +2537,9 @@ impl crate::game::ServerGame<'_> {
             .targets_at(target)
             .into_iter()
             .filter_map(|t| match t {
-                Target::Mob(i) if self.common.entities.mobs[i].species() == Species::SulfurCube => Some(i),
+                Target::Mob(i) if self.common.entities.mobs[i].species() == Species::SulfurCube => {
+                    Some(i)
+                }
                 _ => None,
             })
             .collect();

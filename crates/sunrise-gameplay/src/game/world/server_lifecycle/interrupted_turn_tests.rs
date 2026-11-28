@@ -120,7 +120,8 @@ fn scenario(interruption: Interruption) {
         let (before_12, before_13) = (read(12), read(13));
         // Guest 12 rides a boat alone; a save would move it into the player file.
         let boat = 700;
-        game.entities.boats
+        game.entities
+            .boats
             .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                 boat,
                 "oak".into(),

@@ -413,7 +413,8 @@ pub(crate) fn fixture_game(
 }
 
 pub(crate) fn eggs(game: &sunrise_gameplay::game::ServerGame<'_>) -> u32 {
-    game.entities.dropped
+    game.entities
+        .dropped
         .iter()
         .filter(|d| d.stack.item.as_ref() == "minecraft:egg")
         .map(|d| d.stack.count)
@@ -640,7 +641,8 @@ impl ConsumerProbe {
         assert_eq!(std::mem::take(&mut *self.posts.lock().unwrap()), [71, 72]);
         assert_eq!(eggs(game), egg_count);
         let joined: Vec<_> = game
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .filter(|d| d.stack.item.as_ref() == "minecraft:egg")
             .map(|d| d.id)

@@ -128,7 +128,13 @@ impl ServerGame<'_> {
                 )
             }
             Holder::Mob(id) => {
-                let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id && m.alive()) else {
+                let Some(m) = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && m.alive())
+                else {
                     return Held::Gone;
                 };
                 let (lo, hi) = (m.bounds().min_position(), m.bounds().max_position());
@@ -196,10 +202,14 @@ impl ServerGame<'_> {
     }
 
     pub fn release_stored_boat_leash(&mut self, i: usize, drop: bool) {
-        let (holder, id) = (self.common.entities.boats[i].leash, self.common.entities.boats[i].id);
+        let (holder, id) = (
+            self.common.entities.boats[i].leash,
+            self.common.entities.boats[i].id,
+        );
         let at = self
             .common
-            .entities.boats
+            .entities
+            .boats
             .update(i, |b| Self::take_boat_leash(b, drop));
         self.notify_knot_leashee_removed(holder, id);
         if let Some(at) = at {
@@ -484,9 +494,13 @@ impl ServerGame<'_> {
         for i in self.boats_on(Holder::Knot(knot)) {
             if self.boat_can_attach(i, player) {
                 self.common
-                    .entities.boats
+                    .entities
+                    .boats
                     .update(i, |b| b.leash = Some(Holder::Player));
-                self.common.entities.boats.update(i, |b| b.leash_player = Some(me));
+                self.common
+                    .entities
+                    .boats
+                    .update(i, |b| b.leash_player = Some(me));
                 any = true;
             }
         }
@@ -496,9 +510,18 @@ impl ServerGame<'_> {
 
     /// `Leashable.dropLeash` for each boat in `list`.
     pub fn drop_boat_leashes(&mut self, list: &[usize]) {
-        let ids: Vec<_> = list.iter().map(|&i| self.common.entities.boats[i].id).collect();
+        let ids: Vec<_> = list
+            .iter()
+            .map(|&i| self.common.entities.boats[i].id)
+            .collect();
         for id in ids {
-            if let Some(i) = self.common.entities.boats.iter().position(|boat| boat.id == id) {
+            if let Some(i) = self
+                .common
+                .entities
+                .boats
+                .iter()
+                .position(|boat| boat.id == id)
+            {
                 self.release_stored_boat_leash(i, true);
             }
         }
@@ -548,7 +571,8 @@ impl ServerGame<'_> {
         if self.held_shears(SHEARS_HARVEST) {
             let held_mobs: Vec<u32> = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .filter(|m| m.extra.leash == Some(Holder::Boat(id)))
                 .map(|m| m.id)
@@ -581,7 +605,13 @@ impl ServerGame<'_> {
             let player = self.player_center();
             if self.boat_can_attach(i, player) {
                 self.release_stored_boat_leash(i, true);
-                let Some(i) = self.common.entities.boats.iter().position(|boat| boat.id == id) else {
+                let Some(i) = self
+                    .common
+                    .entities
+                    .boats
+                    .iter()
+                    .position(|boat| boat.id == id)
+                else {
                     return true;
                 };
                 let player_uuid = self.acting_player_uuid();

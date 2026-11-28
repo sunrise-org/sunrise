@@ -242,7 +242,13 @@ impl crate::game::ServerGame<'_> {
             return true;
         }
         if let Target::Spawner(id) = t {
-            let Some(i) = self.common.entities.ominous_spawners.iter().position(|s| s.id == id) else {
+            let Some(i) = self
+                .common
+                .entities
+                .ominous_spawners
+                .iter()
+                .position(|s| s.id == id)
+            else {
                 return false;
             };
             self.common.entities.ominous_spawners.update(i, |spawner| {

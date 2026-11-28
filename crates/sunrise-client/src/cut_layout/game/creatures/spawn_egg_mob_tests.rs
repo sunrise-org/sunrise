@@ -20,7 +20,8 @@ pub(crate) fn spawn(
 ) {
     game.entities.mobs.clear();
     let kind = game.res.mob_types().get(kind).unwrap().clone();
-    game.entities.mobs
+    game.entities
+        .mobs
         .push(Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0));
 }
 
@@ -61,7 +62,8 @@ fn an_egg_used_on_a_mob_posts_entity_interact() {
         )]
     );
     let babies = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .filter(|m| m.species() == Species::Cow && m.is_baby())
         .count();
@@ -96,7 +98,8 @@ fn a_mooshroom_egg_child_rolls_the_colour_flip() {
         game.inventory[0] = Some(ItemStack::new("minecraft:mooshroom_spawn_egg", 1));
         assert!(game.interact_mob(target(9)).unwrap());
         let child = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id != 9)
             .expect("the egg's baby");

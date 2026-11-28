@@ -110,9 +110,18 @@ fn every_entity_kind_follows_a_cross_dimension_tp() {
             format!("execute in minecraft:the_nether run tp @e[type={ty},limit=1] {x} 64 0.5");
         assert!(game.run_command(&command), "{command}");
     }
-    assert!(game.entities.armor_stands.is_empty(), "the stand left the overworld");
-    assert!(game.entities.dropped.is_empty(), "the item left the overworld");
-    assert!(game.entities.item_frames.is_empty(), "the frame left the overworld");
+    assert!(
+        game.entities.armor_stands.is_empty(),
+        "the stand left the overworld"
+    );
+    assert!(
+        game.entities.dropped.is_empty(),
+        "the item left the overworld"
+    );
+    assert!(
+        game.entities.item_frames.is_empty(),
+        "the frame left the overworld"
+    );
     assert!(
         game.entities.projectiles.is_empty(),
         "the arrow left the overworld"
@@ -120,7 +129,12 @@ fn every_entity_kind_follows_a_cross_dimension_tp() {
     assert!(game.entities.tnts.is_empty(), "the tnt left the overworld");
     let back = game.enter_command_level(Dim::Nether);
     assert_eq!(game.dim, Dim::Nether);
-    let stand = game.entities.armor_stands.iter().next().expect("stand crossed");
+    let stand = game
+        .entities
+        .armor_stands
+        .iter()
+        .next()
+        .expect("stand crossed");
     assert_eq!(
         [stand.position.x, stand.position.y, stand.position.z],
         [10.5, 64.0, 0.5]
@@ -133,7 +147,8 @@ fn every_entity_kind_follows_a_cross_dimension_tp() {
     let frame = game.entities.item_frames.first().expect("frame crossed");
     assert_eq!(frame.pos, [12, 64, 0]);
     let arrow = game
-        .entities.projectiles
+        .entities
+        .projectiles
         .iter()
         .next()
         .expect("arrow crossed");

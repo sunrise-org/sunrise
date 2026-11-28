@@ -461,9 +461,14 @@ impl crate::game::ServerGame<'_> {
         let mut told = None;
         // EntityTickList copy-on-iterate: while a listener may remove tridents, the round visits
         // the tridents that were there when it began, each found again by its join.
-        let joins: Option<Vec<_>> = round
-            .told_listening()
-            .then(|| self.common.entities.tridents.iter().map(|t| t.join).collect());
+        let joins: Option<Vec<_>> = round.told_listening().then(|| {
+            self.common
+                .entities
+                .tridents
+                .iter()
+                .map(|t| t.join)
+                .collect()
+        });
         let mut turns = joins.iter().flatten();
         let mut i = 0;
         let mut through = None;
@@ -495,13 +500,22 @@ impl crate::game::ServerGame<'_> {
                 i += 1;
                 continue;
             }
-            let (id, join) = (self.common.entities.tridents[i].id, self.common.entities.tridents[i].join);
+            let (id, join) = (
+                self.common.entities.tridents[i].id,
+                self.common.entities.tridents[i].join,
+            );
             if !self.native_tick_pre_one(&mut round, id, "minecraft:trident") {
                 i += 1;
                 continue;
             }
             // The Pre's listener may have removed tridents.
-            if self.common.entities.tridents.get(i).is_none_or(|t| t.join != join) {
+            if self
+                .common
+                .entities
+                .tridents
+                .get(i)
+                .is_none_or(|t| t.join != join)
+            {
                 let Some(at) = self.common.entities.tridents.locate(join) else {
                     continue;
                 };
@@ -794,7 +808,8 @@ impl crate::game::ServerGame<'_> {
                                     hurt(self);
                                     let Some(index) = self
                                         .common
-                                        .entities.tridents
+                                        .entities
+                                        .tridents
                                         .locate(join)
                                         .filter(|_| !self.removal_pending(&target))
                                     else {
@@ -857,7 +872,8 @@ impl crate::game::ServerGame<'_> {
                                             hurt_mob = Some((id, join));
                                         } else if self
                                             .common
-                                            .entities.mobs
+                                            .entities
+                                            .mobs
                                             .iter()
                                             .find(|m| m.id == id && m.join == join && !m.removed)
                                             .is_some_and(|m| m.species() == Species::Enderman)
@@ -880,7 +896,8 @@ impl crate::game::ServerGame<'_> {
                                     } else {
                                         let stand_pos = self
                                             .common
-                                            .entities.armor_stands
+                                            .entities
+                                            .armor_stands
                                             .iter()
                                             .find(|a| a.id == id)
                                             .map(|a| a.position.components());
@@ -937,7 +954,8 @@ impl crate::game::ServerGame<'_> {
                             && let Some((id, join)) = hurt_mob
                             && let Some(m) = self
                                 .common
-                                .entities.mobs
+                                .entities
+                                .mobs
                                 .iter()
                                 .find(|m| m.id == id && m.join == join && !m.removed)
                         {
@@ -1041,7 +1059,8 @@ impl crate::game::ServerGame<'_> {
                         i = row;
                         t = if transaction.is_some() {
                             self.common
-                                .entities.tridents
+                                .entities
+                                .tridents
                                 .extract(join)
                                 .expect("the trident was located")
                         } else {

@@ -88,8 +88,11 @@ fn with_families(test: impl FnOnce(&mut ServerGame<'_>, &Heard, &Cancel, &Discar
                     && g.run_command("summon minecraft:glow_item_frame 10 100 8 {Facing:3b}")
                     && g.run_command("summon minecraft:painting 12 100 8 {facing:0b}")
             }));
-            game.entities.armor_stands.push(ArmorStand::new(STAND, AT, 0.0));
-            game.entities.tridents
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(STAND, AT, 0.0));
+            game.entities
+                .tridents
                 .push(ThrownTrident::remote(TRIDENT, AT, 0.0, 0.0));
             test(game, &heard, &cancel, &discard);
         });
@@ -110,7 +113,10 @@ fn item_and_glow_item_frames_are_told_their_tick() {
     with_families(|game, listened, _, _| {
         assert_eq!(game.entities.item_frames.len(), 2);
         // Summoned in this order: the item frame, then the glow item frame.
-        let (frame, glow) = (game.entities.item_frames[0].id, game.entities.item_frames[1].id);
+        let (frame, glow) = (
+            game.entities.item_frames[0].id,
+            game.entities.item_frames[1].id,
+        );
         heard(listened);
         game.tick_item_frames();
         let expected = [
@@ -162,7 +168,12 @@ fn a_thrown_trident_is_told_its_tick() {
 #[ignore = "daily"]
 fn a_canceled_pre_skips_the_tick_and_the_post_of_each_family() {
     with_families(|game, listened, cancel, _| {
-        let frames = game.entities.item_frames.iter().map(|f| f.id).collect::<Vec<_>>();
+        let frames = game
+            .entities
+            .item_frames
+            .iter()
+            .map(|f| f.id)
+            .collect::<Vec<_>>();
         let painting = game.entities.paintings[0].id;
         let age = game.entities.tridents[0].age;
         cancel
@@ -203,13 +214,30 @@ fn discarding_the_first_in_its_post_spares_the_other_frames_paintings_and_triden
                 && g.run_command("summon minecraft:painting 6 100 8 {facing:0b}")
                 && g.run_command("summon minecraft:painting 2 100 8 {facing:0b}")
         }));
-        game.entities.tridents
+        game.entities
+            .tridents
             .push(ThrownTrident::remote(TRIDENT + 1, AT, 0.0, 0.0));
-        game.entities.tridents
+        game.entities
+            .tridents
             .push(ThrownTrident::remote(TRIDENT + 2, AT, 0.0, 0.0));
-        let frames = game.entities.item_frames.iter().map(|f| f.id).collect::<Vec<_>>();
-        let paintings = game.entities.paintings.iter().map(|p| p.id).collect::<Vec<_>>();
-        let tridents = game.entities.tridents.iter().map(|t| t.id).collect::<Vec<_>>();
+        let frames = game
+            .entities
+            .item_frames
+            .iter()
+            .map(|f| f.id)
+            .collect::<Vec<_>>();
+        let paintings = game
+            .entities
+            .paintings
+            .iter()
+            .map(|p| p.id)
+            .collect::<Vec<_>>();
+        let tridents = game
+            .entities
+            .tridents
+            .iter()
+            .map(|t| t.id)
+            .collect::<Vec<_>>();
         for family in [&frames, &paintings, &tridents] {
             assert_eq!(family.len(), 3);
             discard.lock().unwrap().push(family[0]);

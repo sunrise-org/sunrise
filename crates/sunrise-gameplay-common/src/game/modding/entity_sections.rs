@@ -575,7 +575,8 @@ pub trait EntitySectionsGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             }
             let Some(index) = hint
                 .filter(|&index| {
-                    self.entities.mobs
+                    self.entities
+                        .mobs
                         .get(index)
                         .is_some_and(|mob| mob.join == write.join)
                 })
@@ -602,14 +603,17 @@ pub trait EntitySectionsGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             let final_position = self.entities.mobs[index].position;
             let staged = final_position != write.to;
             if staged {
-                self.entities.mobs.update(index, |mob| mob.position = write.to);
+                self.entities
+                    .mobs
+                    .update(index, |mob| mob.position = write.to);
             }
             let staged_stamp = self.entities.mobs.stamp();
             self.tell_entity_sections();
             written |= self.entities.mobs.stamp() != staged_stamp;
             if staged {
                 let restore = if self
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .get(index)
                     .is_some_and(|mob| mob.join == write.join)
                 {
@@ -619,8 +623,12 @@ pub trait EntitySectionsGameExt1<'__sg>: crate::game::SideGame<'__sg> {
                 };
                 if let Some(index) = restore {
                     hint = Some(index);
-                    if !self.entities.mobs[index].removed && self.entities.mobs[index].position == write.to {
-                        self.entities.mobs.update(index, |mob| mob.position = final_position);
+                    if !self.entities.mobs[index].removed
+                        && self.entities.mobs[index].position == write.to
+                    {
+                        self.entities
+                            .mobs
+                            .update(index, |mob| mob.position = final_position);
                     }
                 }
             }

@@ -330,7 +330,8 @@ impl ClientGame<'_> {
                     .get(&sunrise_sim::lan::playerdata::ints_uuid(*uuid))
                 && let Some(m) = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id as u32 && !m.removed)
             {

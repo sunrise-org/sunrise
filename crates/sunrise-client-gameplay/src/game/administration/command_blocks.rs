@@ -56,7 +56,8 @@ impl crate::game::ClientGame<'_> {
         match s.cart {
             Some(id) => self
                 .common
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| &c.command),

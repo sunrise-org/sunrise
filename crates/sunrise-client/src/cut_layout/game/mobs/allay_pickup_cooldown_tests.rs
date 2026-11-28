@@ -92,7 +92,11 @@ fn an_allay_keeps_its_item_pickup_cooldown_memory() {
     let mut game = game(&mut resources);
     let i = index(&mut game);
     // The supplied memory is loaded into the pickup cooldown and saved back.
-    assert_eq!(allay::pickup_cooldown(&game.entities.mobs[i]), Some(30), "loaded");
+    assert_eq!(
+        allay::pickup_cooldown(&game.entities.mobs[i]),
+        Some(30),
+        "loaded"
+    );
     assert_eq!(
         saved(&mut game, i),
         Some(Tag::compound([("value", Tag::Int(30))])),

@@ -50,7 +50,10 @@ impl crate::game::ClientGame<'_> {
         // The dragon's render and motion body is separate from its mob row.
         if kind != "minecraft:ender_dragon"
             && (kind == "minecraft:player" || self.common.res.mob_types().contains_key(kind))
-            && let Some(i) = self.common.mob_index.find_ref(&self.common.entities.mobs, eid)
+            && let Some(i) = self
+                .common
+                .mob_index
+                .find_ref(&self.common.entities.mobs, eid)
         {
             return Some(mob_tracking_body(&self.common.entities.mobs[i]));
         }
@@ -73,7 +76,8 @@ impl crate::game::ClientGame<'_> {
             "minecraft:ender_dragon" => {
                 let dragon = self
                     .common
-                    .entities.dragon
+                    .entities
+                    .dragon
                     .as_ref()
                     .filter(|dragon| dragon.id == eid)?;
                 let Vec3 { x, y, z } = dragon.position;
@@ -82,7 +86,8 @@ impl crate::game::ClientGame<'_> {
             "minecraft:armor_stand" => {
                 let stand = self
                     .common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .iter()
                     .find(|stand| stand.id == eid)?;
                 (width, height) = sunrise_gameplay_common::game::entity::armor_stand_size(stand);
@@ -164,7 +169,11 @@ impl crate::game::ClientGame<'_> {
                 return Some([p.x, p.y, p.z]);
             }
         }
-        if let Some(m) = self.common.mob_index.get_ref(&self.common.entities.mobs, eid) {
+        if let Some(m) = self
+            .common
+            .mob_index
+            .get_ref(&self.common.entities.mobs, eid)
+        {
             return Some([m.position.x, m.position.y, m.position.z]);
         }
         if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == eid) {
@@ -181,7 +190,8 @@ impl crate::game::ClientGame<'_> {
         }
         if let Some(p) = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| p.id == eid)
         {
@@ -193,13 +203,25 @@ impl crate::game::ClientGame<'_> {
         if let Some(r) = self.common.entities.rockets.iter().find(|r| r.id == eid) {
             return Some([r.position.x, r.position.y, r.position.z]);
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == eid) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == eid)
+        {
             return Some([a.position.x, a.position.y, a.position.z]);
         }
         if let Some(c) = self.common.entities.cushions.iter().find(|c| c.id == eid) {
             return Some([c.position.x, c.position.y, c.position.z]);
         }
-        if let Some(f) = self.common.entities.item_frames.iter().find(|f| f.id == eid) {
+        if let Some(f) = self
+            .common
+            .entities
+            .item_frames
+            .iter()
+            .find(|f| f.id == eid)
+        {
             let (lo, hi) = f.bounds();
             return Some([
                 (lo[0] + hi[0]) / 2.0,
@@ -224,7 +246,13 @@ impl crate::game::ClientGame<'_> {
         if let Some(f) = self.common.entities.falling.iter().find(|f| f.id == eid) {
             return Some([f.position.x, f.position.y, f.position.z]);
         }
-        if let Some(c) = self.common.entities.breath_clouds.iter().find(|c| c.id == eid) {
+        if let Some(c) = self
+            .common
+            .entities
+            .breath_clouds
+            .iter()
+            .find(|c| c.id == eid)
+        {
             return Some(c.at);
         }
         if let Some(b) = self.common.entities.bolts.iter().find(|b| b.id == eid) {
@@ -233,7 +261,13 @@ impl crate::game::ClientGame<'_> {
         if let Some(f) = self.common.entities.fangs.list.iter().find(|f| f.id == eid) {
             return Some(f.pos);
         }
-        if let Some(s) = self.common.entities.ominous_spawners.iter().find(|s| s.id == eid) {
+        if let Some(s) = self
+            .common
+            .entities
+            .ominous_spawners
+            .iter()
+            .find(|s| s.id == eid)
+        {
             return Some(s.position);
         }
         if let Some((_, _, _, p, _)) = self
@@ -283,7 +317,8 @@ impl crate::game::ClientGame<'_> {
             // Its value (ExperienceOrb.DATA_VALUE) follows in SetEntityData.
             self.common.entities.orbs.retain(|o| o.id != id as u32);
             self.common
-                .entities.orbs
+                .entities
+                .orbs
                 .push(ExperienceOrb::new(id as u32, at, Vec3::ZERO, 1));
         }
         if let Some(t) = mob_type {
@@ -311,7 +346,10 @@ impl crate::game::ClientGame<'_> {
                 .get(&id)
                 .is_some_and(|old| old.kind == "minecraft:item")
             {
-                self.common.entities.dropped.retain(|item| item.id != id as u32);
+                self.common
+                    .entities
+                    .dropped
+                    .retain(|item| item.id != id as u32);
                 r.pending_items.remove(&id);
             }
             if kind == "minecraft:item" {

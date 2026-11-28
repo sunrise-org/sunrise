@@ -78,7 +78,13 @@ fn a_killed_stand_keeps_its_source_in_the_sensor() {
         );
         let stand = game.entities.armor_stands.last().unwrap().id;
         assert!(game.run_command("kill 00000251-0000-0000-0000-000000000002"));
-        assert!(!game.entities.armor_stands.iter().any(|entity| entity.id == stand));
+        assert!(
+            !game
+                .entities
+                .armor_stands
+                .iter()
+                .any(|entity| entity.id == stand)
+        );
         let Some(sunrise_level::containers::BlockEntity::Sculk(sensor)) =
             game.world.block_entities.get(&(8, 100, 8))
         else {
@@ -98,7 +104,8 @@ fn a_killed_stand_keeps_its_source_in_the_sensor() {
 fn a_killed_mob_posts_its_death_before_the_command_returns() {
     game(|game| {
         let pig = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.species() == sunrise_sim::mobs::Species::Pig)
             .unwrap()
@@ -126,7 +133,15 @@ fn a_killed_mob_posts_its_death_before_the_command_returns() {
             [([5.5, 100.0, 8.5], Some(Who::Mob(pig)))],
             "one death, by the pig"
         );
-        assert_eq!(game.entities.mobs.iter().find(|m| m.id == pig).unwrap().health, 0.0);
+        assert_eq!(
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == pig)
+                .unwrap()
+                .health,
+            0.0
+        );
         // The sensor's listener holds it at the pig, before any tick.
         let (_, said) = run(game, "data get block 8 100 8 listener.selector.event");
         let said = said.concat();
@@ -144,7 +159,8 @@ fn a_killed_mob_posts_its_death_before_the_command_returns() {
         );
         // The rest of the death still runs once: the pig's loot is on the ground.
         let porkchops = |g: &sunrise_gameplay::game::ServerGame<'_>| {
-            g.entities.dropped
+            g.entities
+                .dropped
                 .iter()
                 .filter(|i| &*i.stack.item == "minecraft:porkchop")
                 .count()

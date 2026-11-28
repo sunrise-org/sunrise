@@ -188,7 +188,12 @@ pub mod fake_action_tests {
     }
     #[cfg(test)]
     pub(in crate::game) fn health(game: &crate::game::ServerGame<'_>, id: u32) -> f32 {
-        game.entities.mobs.iter().find(|m| m.id == id).unwrap().health
+        game.entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id)
+            .unwrap()
+            .health
     }
     #[cfg(test)]
     #[test]

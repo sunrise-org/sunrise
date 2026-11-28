@@ -55,7 +55,8 @@ fn wanted_position_moves_and_navigation_replaces_the_wish() {
             taken[0].position
         );
         assert!((10.5 - taken[0].position.x).abs() < 6.95);
-        game.entities.mobs
+        game.entities
+            .mobs
             .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         let mut taken = game.entities.mobs.lift();
         let w = game.mob_world_base(&[]);
@@ -73,7 +74,8 @@ fn wanted_position_moves_and_navigation_replaces_the_wish() {
             },
         );
         taken[0].nav_tick(&w);
-        game.entities.mobs
+        game.entities
+            .mobs
             .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         assert_ne!(mob.wanted_position(game), Some([10.5, 65.0, 3.5]));
         assert_eq!(mob.speed_modifier(game), Some(1.25));
@@ -129,7 +131,8 @@ fn wanted_position_names_invalid_inputs_and_refuses_unavailable_mobs() {
         let taken = game.entities.mobs.lift();
         assert_eq!(mob.set_wanted_position(game, [0.0; 3], 1.0), Ok(false));
         assert_eq!(mob.wanted_position(game), None);
-        game.entities.mobs
+        game.entities
+            .mobs
             .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         let mut dragon =
             sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);

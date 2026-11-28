@@ -30,7 +30,8 @@ mod nested_spawn_tests {
                 dimension: game.dim.key(),
                 kind: Kind::Projectile,
             };
-            game.entities.projectiles
+            game.entities
+                .projectiles
                 .bind_residency(&journal, owner, |p| (p.id, p.join));
             let mut shot = Projectile::new(
                 sunrise_sim::projectiles::ProjectileKind::Egg,
@@ -54,7 +55,8 @@ mod nested_spawn_tests {
                 &mut Vec::new(),
             );
             assert_eq!(pass.iter().map(|p| p.id).collect::<Vec<_>>(), [71, 72]);
-            game.entities.projectiles
+            game.entities
+                .projectiles
                 .restore(pass, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
             if park {
                 game.enter_level(sunrise_gameplay_common::game::Dim::Overworld)
@@ -77,7 +79,8 @@ mod nested_spawn_tests {
                     .unwrap();
             }
             assert_eq!(
-                game.entities.projectiles
+                game.entities
+                    .projectiles
                     .iter()
                     .map(|p| (p.id, p.join))
                     .collect::<Vec<_>>(),
@@ -159,11 +162,13 @@ mod nested_spawn_tests {
             );
             assert_eq!(taken[2].age, 0);
             assert_eq!(taken[2].join, join);
-            game.entities.projectiles
+            game.entities
+                .projectiles
                 .restore(taken, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
             game.tick_projectiles().unwrap();
             let spawned = game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == 72)
                 .unwrap();

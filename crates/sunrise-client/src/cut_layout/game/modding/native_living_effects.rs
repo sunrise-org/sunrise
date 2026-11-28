@@ -89,7 +89,9 @@ pub(crate) mod tests {
             );
             assert_eq!(first, [speed]);
 
-            game.entities.armor_stands.push(ArmorStand::new(22, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(22, Vec3::ZERO, 0.0));
             let stand = game.living(game.entity(22).unwrap()).unwrap();
             assert_eq!(
                 stand.visit_effects(game, &mut |_| panic!("unavailable effects visited")),
@@ -160,7 +162,12 @@ pub(crate) mod tests {
             assert!(!game.living_add_effect(cow, &effect("slowness", 200, 0)));
             assert!(!game.living_remove_effect(cow, speed));
             assert!(!game.living_remove_all_effects(cow));
-            let held: Vec<_> = game.entities.mobs[0].extra.effects.iter().map(|e| e.id).collect();
+            let held: Vec<_> = game.entities.mobs[0]
+                .extra
+                .effects
+                .iter()
+                .map(|e| e.id)
+                .collect();
             assert_eq!(held, ["minecraft:speed"]);
         });
     }
@@ -183,7 +190,10 @@ pub(crate) mod tests {
                 game.living_apply_consume_effect(cow, &item("minecraft:pufferfish"), 0),
                 Some(true)
             );
-            assert_eq!(game.entities.mobs[0].random.next_float(), expected.next_float());
+            assert_eq!(
+                game.entities.mobs[0].random.next_float(),
+                expected.next_float()
+            );
             assert_eq!(game.world.random.next_float(), level_random.next_float());
             assert!(game.living_potion_affected(
                 cow,

@@ -90,7 +90,9 @@ pub(crate) mod tests {
                 game.spawn_creeper_cloud([0.0, 80.0, 0.0], Vec::new(), Vec::new(), Vec::new(), 0);
             }
             if !potion_pass {
-                game.entities.breath_clouds.for_each_mut(|c| c.potion = None);
+                game.entities
+                    .breath_clouds
+                    .for_each_mut(|c| c.potion = None);
             }
             let first = game.entities.breath_clouds[0].id;
             let second = game.entities.breath_clouds[1].id;
@@ -117,7 +119,8 @@ pub(crate) mod tests {
                 },
             );
             assert_eq!(
-                game.entities.breath_clouds
+                game.entities
+                    .breath_clouds
                     .iter()
                     .map(|c| (c.id, c.age))
                     .collect::<Vec<_>>(),
@@ -137,8 +140,8 @@ pub(crate) mod tests {
                     .unwrap();
             let potion = game.load_potion_cloud(&tag).unwrap();
             for (age, duration) in [(20, 1), (0, 40)] {
-                game.entities.breath_clouds
-                    .push(sunrise_gameplay_common::game::dragon_common::Breath {
+                game.entities.breath_clouds.push(
+                    sunrise_gameplay_common::game::dragon_common::Breath {
                         attachment_lifetime: Default::default(),
                         join: Default::default(),
                         id: 0,
@@ -153,7 +156,8 @@ pub(crate) mod tests {
                         from_dragon: false,
                         victims: Vec::new(),
                         potion: None,
-                    });
+                    },
+                );
             }
             game.add_remote_ominous_item_spawner(0, [0.0, 80.0, 0.0]);
             let before = game.server.next_entity;
@@ -164,7 +168,8 @@ pub(crate) mod tests {
             assert_eq!(game.entities.breath_clouds[2].id, before + 3);
             game.tick_breath();
             assert_eq!(
-                game.entities.breath_clouds
+                game.entities
+                    .breath_clouds
                     .iter()
                     .map(|c| (c.id, c.age))
                     .collect::<Vec<_>>(),
@@ -174,7 +179,9 @@ pub(crate) mod tests {
             game.tick_potion_clouds();
             assert_eq!(game.entities.breath_clouds.len(), 1);
             assert_eq!(game.entities.breath_clouds[0].age, 1);
-            game.entities.breath_clouds.update(0, |c| c.from_dragon = true);
+            game.entities
+                .breath_clouds
+                .update(0, |c| c.from_dragon = true);
             assert!(
                 collect_dragon_breath(
                     Aabb::new(Vec3::new(-0.3, 80.0, -0.3), Vec3::new(0.3, 81.8, 0.3)),
@@ -281,7 +288,8 @@ pub(crate) mod tests {
             assert_eq!(name, "test:measured");
             assert_eq!(options, &[1, 1, 0, 0]);
 
-            let saved = potion_cloud_to_nbt(&game.entities.breath_clouds[0], [1, 2, 3, 4], Some(&tag));
+            let saved =
+                potion_cloud_to_nbt(&game.entities.breath_clouds[0], [1, 2, 3, 4], Some(&tag));
             let particle_tag = saved.get("custom_particle").unwrap();
             assert_eq!(particle_tag.get("measure"), Some(&Tag::Int(257)));
             assert!(
@@ -579,7 +587,8 @@ pub(crate) mod tests {
             game.tick_creature_entities().unwrap();
             assert!(!game.entities.mobs[0].alive());
             assert!(
-                game.entities.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .any(|item| &*item.stack.item == "minecraft:iron_sword")
             );
@@ -742,8 +751,12 @@ pub(crate) mod tests {
                         .unwrap()
                         .clone();
                     game.entities.mobs.push(Mob::new(21, cow, Vec3::ZERO, 0.0));
-                    game.entities.mobs.push(Mob::new(22, spider, Vec3::ZERO, 0.0));
-                    game.entities.mobs.push(Mob::new(23, wither, Vec3::ZERO, 0.0));
+                    game.entities
+                        .mobs
+                        .push(Mob::new(22, spider, Vec3::ZERO, 0.0));
+                    game.entities
+                        .mobs
+                        .push(Mob::new(23, wither, Vec3::ZERO, 0.0));
 
                     sunrise_gameplay_common::game::test_fixtures::fixture_resident_column(
                         &mut game.world,
@@ -1350,7 +1363,12 @@ pub(crate) mod mob_health_boost_tests {
             }
             let state = |game: &sunrise_gameplay::game::ServerGame<'_>| -> Vec<(f32, f32)> {
                 ids.iter()
-                    .map(|&i| (game.entities.mobs[i].attrs.max_health, game.entities.mobs[i].health))
+                    .map(|&i| {
+                        (
+                            game.entities.mobs[i].attrs.max_health,
+                            game.entities.mobs[i].health,
+                        )
+                    })
                     .collect()
             };
             let before = state(game);

@@ -151,7 +151,11 @@ fn cart_index_finds_the_mobs_a_scan_finds() {
                 let scan: Vec<u32> = (0..game.entities.mobs.len() as u32)
                     .filter(|&j| area.intersects(game.entities.mobs[j as usize].bounds()))
                     .collect();
-                let ridden = game.entities.mobs.iter().any(|m| m.extra.mount == Some(c.id));
+                let ridden = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .any(|m| m.extra.mount == Some(c.id));
                 assert_eq!(
                     game.has_seated_passengers(c.id),
                     ridden,
@@ -169,7 +173,8 @@ fn cart_index_finds_the_mobs_a_scan_finds() {
         game.entities.mobs[11].extra.mount = Some(carts[4].id);
         check(game, "one moved, one boarded");
         let kind = kinds[0].clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .insert(0, Mob::new(500, kind, carts[5].position, 0.0));
         game.entities.mobs.retain(|m| m.id % 7 != 0);
         check(game, "added and removed");

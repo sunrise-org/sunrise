@@ -77,7 +77,8 @@ impl crate::game::ServerGame<'_> {
         crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
         let moved = mobs[index].nav_move_to(&self.mob_world_base(&[]), at, speed);
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         moved
     }
@@ -118,7 +119,8 @@ impl crate::game::ServerGame<'_> {
         crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
         let followed = mobs[index].nav_move_to_supplied(&self.mob_world_base(&[]), &nodes, speed);
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         supplied_path_refusal(followed)
     }
@@ -144,7 +146,8 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)?
                 .ai
@@ -163,7 +166,8 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)?
                 .ai
@@ -177,7 +181,12 @@ impl crate::game::ServerGame<'_> {
         let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
             return None;
         };
-        let mob = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let mob = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         navigation_flags_supported(mob).then_some(mob.ai.nav.can_open_doors)
     }
 
@@ -188,7 +197,8 @@ impl crate::game::ServerGame<'_> {
         };
         let Some(mob) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
         else {
@@ -206,7 +216,12 @@ impl crate::game::ServerGame<'_> {
         let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
             return None;
         };
-        let mob = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let mob = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         navigation_flags_supported(mob).then_some(mob.ai.nav.can_pass_doors)
     }
 
@@ -217,7 +232,8 @@ impl crate::game::ServerGame<'_> {
         };
         let Some(mob) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
         else {
@@ -235,7 +251,12 @@ impl crate::game::ServerGame<'_> {
         let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
             return None;
         };
-        let mob = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let mob = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         navigation_flags_supported(mob).then_some(mob.ai.nav.can_float)
     }
 
@@ -246,7 +267,8 @@ impl crate::game::ServerGame<'_> {
         };
         let Some(mob) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
         else {
@@ -273,7 +295,8 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)?
                 .malus(kind),
@@ -298,7 +321,8 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
             .map(|m| m.set_malus(kind, malus))
@@ -318,7 +342,8 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == id)
             .map(|m| m.ai.nav.speed_modifier = speed)

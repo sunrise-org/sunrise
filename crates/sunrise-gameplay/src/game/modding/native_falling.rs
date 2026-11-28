@@ -88,10 +88,16 @@ mod tests {
                 ..game.entities.falling[0].clone()
             };
             game.entities.falling.push(second);
-            let expected: Vec<_> = game.entities.falling.iter().map(|f| (f.id, f.join)).collect();
+            let expected: Vec<_> = game
+                .entities
+                .falling
+                .iter()
+                .map(|f| (f.id, f.join))
+                .collect();
             game.tick_one_falling(0, &[]).unwrap();
             assert_eq!(
-                game.entities.falling
+                game.entities
+                    .falling
                     .iter()
                     .map(|f| (f.id, f.join))
                     .collect::<Vec<_>>(),
@@ -101,19 +107,24 @@ mod tests {
             assert!(game.entities.falling[0].position.y < 70.0);
             game.tick_one_falling(1, &[]).unwrap();
             assert_eq!(
-                game.entities.falling
+                game.entities
+                    .falling
                     .iter()
                     .map(|f| (f.id, f.join))
                     .collect::<Vec<_>>(),
                 expected
             );
-            assert_eq!([game.entities.falling[0].age, game.entities.falling[1].age], [1, 1]);
+            assert_eq!(
+                [game.entities.falling[0].age, game.entities.falling[1].age],
+                [1, 1]
+            );
             // A corrupt resident palette makes the real collision lookup fail.
             Arc::make_mut(game.world.chunks.get_mut(&(0, 0)).unwrap()).set(0, 69, 0, 65_535);
             let position = game.entities.falling[0].position;
             assert!(game.tick_one_falling(0, &[]).is_err());
             assert_eq!(
-                game.entities.falling
+                game.entities
+                    .falling
                     .iter()
                     .map(|f| (f.id, f.join))
                     .collect::<Vec<_>>(),
@@ -299,7 +310,8 @@ mod tests {
         assert_eq!(before.len(), 1);
         exercise(game, &index);
         let current = game
-            .entities.falling
+            .entities
+            .falling
             .update(0, |f| f.attachment_lifetime().registration().unwrap());
         assert!(original.same_registration(&current));
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
@@ -413,7 +425,12 @@ mod tests {
                     );
                     assert_eq!(game.entity_position(thrown), Some([1.5, 70.0, 2.5]));
                     assert_eq!(game.entity_velocity(thrown), Some([0.5, 9.0, -9.0]));
-                    let block = game.entities.falling.iter().find(|f| f.id == thrown.id()).unwrap();
+                    let block = game
+                        .entities
+                        .falling
+                        .iter()
+                        .find(|f| f.id == thrown.id())
+                        .unwrap();
                     assert_eq!(block.state, sand);
                     assert_eq!(block.start_pos, BlockPos::new(1, 70, 2));
                     assert_eq!(block.velocity, Vec3::new(0.5, 9.0, -9.0));
@@ -434,7 +451,8 @@ mod tests {
                         .unwrap()
                         .unwrap();
                     let anvil_row = game
-                        .entities.falling
+                        .entities
+                        .falling
                         .iter()
                         .find(|f| f.id == anvil_ref.id())
                         .unwrap();
@@ -455,7 +473,8 @@ mod tests {
                         .unwrap()
                         .unwrap();
                     let air_index = game
-                        .entities.falling
+                        .entities
+                        .falling
                         .iter()
                         .position(|f| f.id == air_ref.id())
                         .unwrap();
@@ -589,7 +608,12 @@ mod tests {
                     );
                     game.begin_ordered_ticks();
                     game.run_ordered_ticks(JoinSeq::MAX, true).unwrap();
-                    let row = game.entities.falling.iter().find(|f| f.id == hidden.id()).unwrap();
+                    let row = game
+                        .entities
+                        .falling
+                        .iter()
+                        .find(|f| f.id == hidden.id())
+                        .unwrap();
                     assert_eq!(
                         row.age, 0,
                         "an admitted entity in a non-ticking section does not tick"

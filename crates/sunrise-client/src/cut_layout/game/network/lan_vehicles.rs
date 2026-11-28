@@ -335,7 +335,12 @@ pub(crate) mod controller_tests {
                     },
                 );
             }
-            let mob = game.entities.mobs.iter().find(|mob| mob.id == horse).unwrap();
+            let mob = game
+                .entities
+                .mobs
+                .iter()
+                .find(|mob| mob.id == horse)
+                .unwrap();
             assert!(mob.alive());
             assert!(mob.extra.main_hand_stack().is_none());
             assert!(!mob.has_effect("minecraft:poison"));
@@ -407,13 +412,19 @@ pub(crate) mod controller_tests {
         for y in [209.0, 207.0, 204.0] {
             game.guest_move_vehicle(2, &move_to(y, false));
         }
-        assert_eq!(game.entities.mobs[0].position.y, 204.0, "the guest moves the horse");
+        assert_eq!(
+            game.entities.mobs[0].position.y, 204.0,
+            "the guest moves the horse"
+        );
         assert_eq!(
             game.entities.mobs[0].fall_distance, 6.0,
             "each drop adds to the fall"
         );
         game.guest_move_vehicle(2, &move_to(200.0, true));
-        assert_eq!(game.entities.mobs[0].fall_distance, 0.0, "the landing ends the fall");
+        assert_eq!(
+            game.entities.mobs[0].fall_distance, 0.0,
+            "the landing ends the fall"
+        );
         assert_eq!(
             game.entities.mobs[0].health, twin.health,
             "the landing hurts as the fall does"
@@ -444,7 +455,10 @@ pub(crate) mod controller_tests {
         // it (FALLDAMAGE_RESETTING, WATER), and the cobweb it crosses resets
         // the fall (a fall loaded from its save, here) before the move counts.
         game.guest_move_vehicle(2, &move_to(205.5, false));
-        assert_eq!(game.entities.mobs[0].position.y, 205.5, "the guest lifts the horse");
+        assert_eq!(
+            game.entities.mobs[0].position.y, 205.5,
+            "the guest lifts the horse"
+        );
         game.entities.mobs[0].fall_distance = 4.0;
         game.guest_move_vehicle(
             2,
@@ -455,7 +469,10 @@ pub(crate) mod controller_tests {
                 on_ground: false,
             },
         );
-        assert_eq!(game.entities.mobs[0].position.x, 6.5, "the guest moves the horse on");
+        assert_eq!(
+            game.entities.mobs[0].position.x, 6.5,
+            "the guest moves the horse on"
+        );
         assert_eq!(
             game.entities.mobs[0].fall_distance, 0.0,
             "a long move through a cobweb resets the fall"
@@ -472,7 +489,10 @@ pub(crate) mod controller_tests {
                 on_ground: false,
             },
         );
-        assert_eq!(game.entities.mobs[0].position.x, 6.5, "the move is put back");
+        assert_eq!(
+            game.entities.mobs[0].position.x, 6.5,
+            "the move is put back"
+        );
         assert_eq!(
             game.entities.mobs[0].fall_distance, 0.0,
             "a move put back keeps the cobweb's reset"

@@ -1406,7 +1406,10 @@ mod tests {
             assert_eq!(mod_ref.lock(game), None);
             assert!(!game.world.block_names.contains_key(&mod_key));
             assert!(game.world.block_lock(mod_key).is_none());
-            assert!(game.entities.dropped.is_empty(), "preRemoveSideEffects must not run");
+            assert!(
+                game.entities.dropped.is_empty(),
+                "preRemoveSideEffects must not run"
+            );
             assert!(
                 !game.world.modified.contains(&(0, 0)),
                 "LevelChunk.removeBlockEntity does not mark the chunk unsaved"
@@ -1432,7 +1435,10 @@ mod tests {
             assert_eq!(game.world.block(2, 64, 1), chest_state);
             assert!(game.block_entity(level, chest_pos).is_none());
             assert_eq!(chest_ref.remove(game), Err(BlockEntityError::Stale));
-            assert!(game.entities.dropped.is_empty(), "chest contents must not drop");
+            assert!(
+                game.entities.dropped.is_empty(),
+                "chest contents must not drop"
+            );
             assert!(!game.world.modified.contains(&(0, 0)));
 
             // Accessing the still-chest block recreates a fresh, empty block entity.
@@ -1867,7 +1873,8 @@ mod tests {
                 "barrel block entity removed after set_block must remain removed at commit"
             );
             assert!(
-                game.entities.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .any(|item| &*item.stack.item == "minecraft:gold_ingot"),
                 "first chest's preRemoveSideEffects must still replay at commit"

@@ -168,7 +168,12 @@ impl ClientGame<'_> {
                     .find(|&(_, v)| v == uuid)
                     .map(|(&id, _)| id)
             })?;
-        let m = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let m = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         Some(ConduitTarget {
             position: [m.position.x, m.position.y, m.position.z],
             eye_y: m.eye_y(),

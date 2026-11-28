@@ -99,7 +99,8 @@ pub(crate) fn run_continuing_wind_charge_keeps_tick_order_and_skips_relaunch_in_
                 "reversed" => (40.5, 5_u32, "boat_rev", "w6_rev", Some("a2_rev")),
                 _ => (8.5, 5_u32, "boat_main", "w6_main", Some("a2_main")),
             };
-            game.entities.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     71,
                     Arc::from("oak"),
@@ -180,7 +181,8 @@ pub(crate) fn run_continuing_wind_charge_keeps_tick_order_and_skips_relaunch_in_
             }
             let spawned = (case == "mixed-batch").then(|| {
                 assert!(*observed.buffered.lock().unwrap());
-                game.entities.projectiles
+                game.entities
+                    .projectiles
                     .iter()
                     .find(|p| p.position.x == 12.5)
                     .expect("nested snowball restored ahead of survivors")
@@ -196,12 +198,14 @@ pub(crate) fn run_continuing_wind_charge_keeps_tick_order_and_skips_relaunch_in_
             let expected_launches: Vec<u32> = spawned.into_iter().collect();
             assert_eq!(*observed.launches.lock().unwrap(), expected_launches);
             let w6_live = game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == 85)
                 .unwrap();
             let a2_live = game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == 86)
                 .unwrap();
@@ -215,12 +219,14 @@ pub(crate) fn run_continuing_wind_charge_keeps_tick_order_and_skips_relaunch_in_
                 let (a2_pos, a2_mot) =
                     wind_continuation_witness_26_3(&witness, tick, a2_tag).expect("a2 alive");
                 let w6 = game
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .find(|p| p.id == 85)
                     .unwrap();
                 let a2 = game
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .find(|p| p.id == 86)
                     .unwrap();

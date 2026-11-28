@@ -167,7 +167,13 @@ pub(crate) fn run_mob_pearls_use_the_hook_and_recheck_listener_writes_without_pl
                     3 => assert!(mob.is_none()),
                     _ => unreachable!(),
                 }
-                assert!(!game.entities.mobs.iter().any(|m| m.species() == Species::Endermite));
+                assert!(
+                    !game
+                        .entities
+                        .mobs
+                        .iter()
+                        .any(|m| m.species() == Species::Endermite)
+                );
                 assert_eq!(
                     *command_teleports.lock().unwrap(),
                     if action < 2 { vec![] } else { vec![42] },

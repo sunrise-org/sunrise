@@ -628,12 +628,7 @@ fn a_general_rows_collided_move_writes_its_flags_for_every_cause() {
                 };
                 game.load_listed("mymod:robot", None, None, record.to_tag())
                     .unwrap();
-                let row = game
-                    .entities.general
-                    .rows
-                    .iter_mut()
-                    .last()
-                    .unwrap();
+                let row = game.entities.general.rows.iter_mut().last().unwrap();
                 row.no_physics = no_physics;
                 let id = row.id;
                 let moved = game
@@ -727,12 +722,7 @@ fn load_general_row(
     };
     game.load_listed("mymod:robot", None, None, record.to_tag())
         .unwrap();
-    game.entities.general
-        .rows
-        .iter()
-        .last()
-        .unwrap()
-        .id
+    game.entities.general.rows.iter().last().unwrap().id
 }
 
 /// `Entity.move`'s fall-reset ray: a general row that moves a block or more through a block of

@@ -137,7 +137,12 @@ fn hold(game: &mut sunrise_gameplay::game::ServerGame<'_>, item: &str) {
 }
 
 fn health(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> f32 {
-    game.entities.mobs.iter().find(|m| m.id == id).unwrap().health
+    game.entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .health
 }
 
 /// A guest's blow on a mob goes `guest_attack` → `attack_entity` → the held item's Part: a
@@ -188,7 +193,12 @@ fn a_part_cancels_the_blow_before_it_lands() {
             // The Part lets the blow through: the hit lands, `hurt_enemy` hears it
             // and the sword wears.
             probe.0.lock().unwrap().cancel_attack = false;
-            let mob = game.entities.mobs.iter_mut().find(|mob| mob.id == zombie).unwrap();
+            let mob = game
+                .entities
+                .mobs
+                .iter_mut()
+                .find(|mob| mob.id == zombie)
+                .unwrap();
             Arc::make_mut(&mut mob.kind).id = "attack_probe:sparring_mob".into();
             hold(game, "minecraft:iron_sword");
             assert!(game.guest_attack(12, gi, zombie as i32).unwrap());

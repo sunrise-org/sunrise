@@ -165,7 +165,8 @@ pub(crate) mod entity_tick_tests {
                 }
                 game.tick_remote_projectiles(|_, at| at);
                 positions.extend(
-                    game.entities.projectiles
+                    game.entities
+                        .projectiles
                         .iter()
                         .map(|p| [p.position.x, p.position.y, p.position.z]),
                 );

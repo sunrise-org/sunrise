@@ -36,7 +36,8 @@ impl ServerGame<'_> {
         for (id, join) in ticked.drain(..) {
             let Some(i) = self
                 .common
-                .entities.falling
+                .entities
+                .falling
                 .locate(join)
                 .filter(|&i| self.common.entities.falling[i].id == id)
             else {

@@ -70,7 +70,13 @@ impl crate::game::ServerGame<'_> {
                 })
             }
             Some(Target::Mob(id)) => {
-                if !self.common.entities.mobs.iter().any(|m| m.id == id && !m.removed) {
+                if !self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .any(|m| m.id == id && !m.removed)
+                {
                     return false;
                 }
                 let mut mobs = self.common.entities.mobs.lift();
@@ -87,7 +93,8 @@ impl crate::game::ServerGame<'_> {
                     moved
                 });
                 self.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
                 let _ = self.handle_mob_events(events);
                 // `teleportTo` is one position update, told at once.

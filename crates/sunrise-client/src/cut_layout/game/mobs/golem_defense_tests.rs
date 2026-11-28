@@ -166,7 +166,8 @@ fn targets_guest(game: &mut sunrise_gameplay::game::ServerGame<'_>, ticks: usize
         game.tick_server(false).unwrap();
     }
     let id = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .find(|m| m.species() == sunrise_sim::mobs::Species::IronGolem)
         .expect("the golem")
@@ -245,7 +246,8 @@ fn control_a_hated_host_does_not_turn_the_golem_on_the_selected_guest() {
     // the target goes (`TargetGoal.canContinueToUse`) and what follows depends
     // on those rolls, not on whom it chose.
     let golem_of = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter()
             .find(|m| m.species() == sunrise_sim::mobs::Species::IronGolem)
             .map(|m| (m.id, m.ai.target))

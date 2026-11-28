@@ -37,7 +37,8 @@ impl ServerGame<'_> {
                 self.journal_mob_health(id);
                 let Some(m) = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == id && !m.removed)
                 else {

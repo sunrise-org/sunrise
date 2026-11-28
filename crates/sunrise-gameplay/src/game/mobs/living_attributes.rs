@@ -118,11 +118,16 @@ impl ServerGame<'_> {
                 .common
                 .mob_index
                 .find(&self.common.entities.mobs, id)
-                .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
+                .filter(|&i| {
+                    self.common.entities.mobs[i].join == join
+                        && !self.common.entities.mobs[i].removed
+                })
             else {
                 return;
             };
-            let Some(change) = finalize::changed_equipment_slot(&self.common.entities.mobs[i], slot) else {
+            let Some(change) =
+                finalize::changed_equipment_slot(&self.common.entities.mobs[i], slot)
+            else {
                 continue;
             };
             let current = change.current.map(|read| read.project().into_owned());
@@ -142,11 +147,18 @@ impl ServerGame<'_> {
             .common
             .mob_index
             .find(&self.common.entities.mobs, id)
-            .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
+            .filter(|&i| {
+                self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed
+            })
         {
             let catalog = self.common.motion.attributes().clone();
             let items = server_world_items!(self);
-            finalize::finish_equipment_tick(&mut self.common.entities.mobs[i], &catalog, items, deltas);
+            finalize::finish_equipment_tick(
+                &mut self.common.entities.mobs[i],
+                &catalog,
+                items,
+                deltas,
+            );
         }
     }
 
@@ -193,7 +205,12 @@ impl ServerGame<'_> {
         if self.common.transactions.is_empty() {
             return None;
         }
-        let mob = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let mob = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         snapshot(self.common.motion.attributes(), mob)
     }
 
@@ -211,7 +228,8 @@ impl ServerGame<'_> {
         let items = server_world_items!(self);
         let Some(m) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
         else {
@@ -493,7 +511,8 @@ impl ServerGame<'_> {
                     if done && name == "minecraft:knockback_resistance" {
                         let m = self
                             .common
-                            .entities.mobs
+                            .entities
+                            .mobs
                             .iter_mut()
                             .find(|m| m.id == mob && !m.removed)?;
                         // Admission belongs to the body's map. Its archetype changes can
@@ -517,7 +536,8 @@ impl ServerGame<'_> {
                 }
                 let m = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == mob && !m.removed)?;
                 if let Some(a) = own_attribute(m, name) {
@@ -552,7 +572,11 @@ impl ServerGame<'_> {
             // `onAttributeUpdated(SCALE)`: the mob's dimensions follow.
             if name == "minecraft:scale"
                 && let Target::Mob(id) = t
-                && let Some(m) = self.entities.mobs.iter_mut().find(|m| m.id == id && !m.removed)
+                && let Some(m) = self
+                    .entities
+                    .mobs
+                    .iter_mut()
+                    .find(|m| m.id == id && !m.removed)
             {
                 sunrise_sim::mobs::finalize::scale_changed(m);
             }
@@ -575,7 +599,8 @@ impl ServerGame<'_> {
             Target::Mob(id) => {
                 let Some(m) = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == id && !m.removed)
                 else {
@@ -593,7 +618,13 @@ impl ServerGame<'_> {
                 (&mut m.extra.live, m.kind.id.clone(), seed)
             }
             Target::Stand(id) => {
-                let Some(a) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id) else {
+                let Some(a) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter_mut()
+                    .find(|a| a.id == id)
+                else {
                     return;
                 };
                 (&mut a.live, "minecraft:armor_stand".to_owned(), Vec::new())
@@ -631,8 +662,12 @@ pub mod tests {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
-        game.entities.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
+        game.entities
+            .mobs
+            .push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+        game.entities
+            .armor_stands
+            .push(ArmorStand::new(13, Vec3::ZERO, 0.0));
         let mut dragon =
             sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
         dragon.id = 14;

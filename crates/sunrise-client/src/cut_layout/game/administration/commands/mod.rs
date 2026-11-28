@@ -79,7 +79,8 @@ pub(crate) mod peaceful_tests {
                 Ok(1)
             );
             assert!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .any(|mob| mob.kind.id == "peaceful_test:zombie")
             );
@@ -168,7 +169,8 @@ pub(crate) mod selector_bounds_tests {
         .unwrap();
         game.build_registries();
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(30, kind, Vec3::new(10.5, 220.0, 10.5), 0.0));
         let target = Target::Mob(30);
         let mut selector = Selector {
@@ -199,7 +201,8 @@ pub(crate) mod selector_bounds_tests {
                 .len(),
             1
         );
-        game.entities.armor_stands
+        game.entities
+            .armor_stands
             .push(ArmorStand::new(31, Vec3::new(30.5, 220.0, 10.5), 0.0));
         selector.delta = [Some(0.0); 3];
         for (x, count) in [(29.5, 1), (29.25, 0), (30.75, 0), (29.250000000000004, 1)] {
@@ -725,16 +728,27 @@ pub(crate) mod global_selector_order_tests {
                 assert_eq!(game.target_position(target), Some(*pos));
                 assert!(game.world.loaded(pos[0] as i32, pos[2] as i32));
                 let join = match target {
-                    Target::Mob(id) => game.entities.mobs.iter().find(|m| m.id == id).unwrap().join_seq(),
-                    Target::Stand(id) => game
-                        .entities.armor_stands
+                    Target::Mob(id) => game
+                        .entities
+                        .mobs
                         .iter()
                         .find(|m| m.id == id)
                         .unwrap()
                         .join_seq(),
-                    Target::Item(id) => {
-                        game.entities.dropped.iter().find(|m| m.id == id).unwrap().join_seq()
-                    }
+                    Target::Stand(id) => game
+                        .entities
+                        .armor_stands
+                        .iter()
+                        .find(|m| m.id == id)
+                        .unwrap()
+                        .join_seq(),
+                    Target::Item(id) => game
+                        .entities
+                        .dropped
+                        .iter()
+                        .find(|m| m.id == id)
+                        .unwrap()
+                        .join_seq(),
                     _ => panic!("actual admitted family"),
                 };
                 assert!(

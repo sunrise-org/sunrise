@@ -205,7 +205,8 @@ impl crate::game::ClientGame<'_> {
         // A boat pushes from its own tick, in the same order as the mobs.
         for b in self
             .common
-            .entities.boats
+            .entities
+            .boats
             .iter()
             .filter(|b| order(b.id) && self.common.riding != Some(b.id))
         {
@@ -433,7 +434,8 @@ impl crate::game::ClientGame<'_> {
             });
         let dragon = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .map(|d| (d.id as i32, [d.position.x, d.position.y, d.position.z]));
         let mut state = entity_sound_state(id, player, mob, &r.entities, dragon)?;

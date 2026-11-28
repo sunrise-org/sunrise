@@ -171,15 +171,18 @@ impl crate::game::ServerGame<'_> {
             }
         };
         self.common
-            .entities.orbs
+            .entities
+            .orbs
             .iter()
             .for_each(|e| offer(e.join, Pending::Orb));
         self.common
-            .entities.tnts
+            .entities
+            .tnts
             .iter()
             .for_each(|e| offer(e.join, Pending::Tnt));
         self.common
-            .entities.falling
+            .entities
+            .falling
             .iter()
             .for_each(|e| offer(e.join, Pending::Falling));
         if let Some(dragon) = self.common.entities.dragon.as_ref() {
@@ -211,14 +214,24 @@ impl crate::game::ServerGame<'_> {
             // ServerLevel.tick: only entities in entity-ticking chunks tick.
             match kind {
                 Pending::Dragon => {
-                    let Some(dragon) = self.common.entities.dragon.as_ref().filter(|d| d.join == join)
+                    let Some(dragon) = self
+                        .common
+                        .entities
+                        .dragon
+                        .as_ref()
+                        .filter(|d| d.join == join)
                     else {
                         continue;
                     };
                     let at = dragon.position;
                     if entity_ticking(at.x.floor() as i32, at.z.floor() as i32) {
                         self.tick_dragon();
-                        if let Some(dragon) = self.common.entities.dragon.as_ref().filter(|d| d.join == join)
+                        if let Some(dragon) = self
+                            .common
+                            .entities
+                            .dragon
+                            .as_ref()
+                            .filter(|d| d.join == join)
                         {
                             self.entity_section_step(
                                 dragon.id,
@@ -405,7 +418,8 @@ impl crate::game::ServerGame<'_> {
                                     let invulnerable = self.native_nonliving_invulnerable(
                                         orb_id, entity.1, source, vanilla,
                                     );
-                                    let Some(current) = self.common.entities.orbs.locate(join) else {
+                                    let Some(current) = self.common.entities.orbs.locate(join)
+                                    else {
                                         continue 'entity;
                                     };
                                     i = current;
@@ -526,7 +540,8 @@ impl crate::game::ServerGame<'_> {
         if !self.server.ordered.landed.is_empty() {
             let landed = &mut self.server.ordered.landed;
             self.common
-                .entities.falling
+                .entities
+                .falling
                 .retain(|block| !landed.contains(&block.join));
             landed.clear();
         }

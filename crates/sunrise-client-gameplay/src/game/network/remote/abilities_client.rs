@@ -86,7 +86,8 @@ impl crate::game::ClientGame<'_> {
                 if r.level_players.contains_key(&id) {
                     let spectator = r.remote_player_info_game_mode(id) == Some(SPECTATOR);
                     self.common
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .update(i, |m| m.extra.spectator = spectator);
                 }
             }

@@ -31,7 +31,8 @@ mod tests {
                 "summon minecraft:sulfur_cube 4.5 200 4.5 {NoAI:1b,NoGravity:1b,Silent:1b,PersistenceRequired:1b,Size:1}"
             ));
             let cube = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.species() == sunrise_sim::mobs::Species::SulfurCube)
                 .expect("the cube");

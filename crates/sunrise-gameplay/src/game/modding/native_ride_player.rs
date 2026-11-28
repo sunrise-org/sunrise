@@ -65,7 +65,8 @@ impl crate::game::ServerGame<'_> {
         };
         let mob = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id && !m.removed)
             .ok_or(RidePlayerRefusal::NoEntity)?;
@@ -118,7 +119,8 @@ impl crate::game::ServerGame<'_> {
             };
         if !self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .any(|m| !m.removed && m.extra.mount.is_some_and(|v| is_player(self, v)))
         {
@@ -126,7 +128,8 @@ impl crate::game::ServerGame<'_> {
         }
         let riders: Vec<(u32, u32)> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| !m.removed)
             .filter_map(|m| {

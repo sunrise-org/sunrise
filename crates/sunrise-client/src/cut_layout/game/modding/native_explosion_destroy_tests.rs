@@ -150,7 +150,8 @@ fn set(game: &mut sunrise_gameplay::game::ServerGame<'_>, pos: [i32; 3], block: 
 
 /// How many of `item` lie dropped.
 fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) -> u32 {
-    game.entities.dropped
+    game.entities
+        .dropped
         .iter()
         .filter(|e| &*e.stack.item == item)
         .map(|e| e.stack.count)
@@ -239,7 +240,8 @@ fn a_detonate_listener_edits_reorders_and_adds_positions() {
         assert!(!game.world.chunks.contains_key(&(6, 6)), "never loaded");
         // Reordered [3, 80, 3] first -> merged cobblestone drop pops from [3, 3], not [2, 1].
         let drops: Vec<_> = game
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .map(|e| (e.stack.item.to_string(), e.stack.count, e.position))
             .collect();
@@ -324,7 +326,8 @@ fn drops_of_one_item_merge_at_the_first_blocks_position() {
         // after the shuffle, but its constructor motion uses its own random.
         assert_eq!(game.world.random.next_int(), -1_105_573_998);
         let drops: Vec<_> = game
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .map(|e| (e.stack.item.to_string(), e.stack.count, e.position))
             .collect();

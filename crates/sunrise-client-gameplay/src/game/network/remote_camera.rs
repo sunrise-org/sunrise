@@ -459,7 +459,11 @@ pub(in crate::game::client_side) fn entity_post_effect(kind: &str) -> Option<&'s
 impl ClientGame<'_> {
     /// True if this client holds a live entity with `id` in any runtime list or slot.
     fn holds_camera_entity(&self, id: u32) -> bool {
-        self.common.entities.dragon.as_ref().is_some_and(|d| d.id == id)
+        self.common
+            .entities
+            .dragon
+            .as_ref()
+            .is_some_and(|d| d.id == id)
             || self
                 .common
                 .mob_index
@@ -609,7 +613,10 @@ impl ClientGame<'_> {
     }
 
     fn snapshot_remote_player_hud(&self, uid: u32) -> Option<DetachedPlayerHud> {
-        let m = self.common.mob_index.get_ref(&self.common.entities.mobs, uid)?;
+        let m = self
+            .common
+            .mob_index
+            .get_ref(&self.common.entities.mobs, uid)?;
         let mob_id = m.id as i32;
         let max_health = self
             .common
@@ -871,7 +878,11 @@ impl ClientGame<'_> {
         let mount = self
             .common
             .riding
-            .and_then(|id| self.common.mob_index.get_ref(&self.common.entities.mobs, id))
+            .and_then(|id| {
+                self.common
+                    .mob_index
+                    .get_ref(&self.common.entities.mobs, id)
+            })
             .map(|m| self.living_camera_values(m));
         let ride_turn = self
             .common
@@ -940,13 +951,29 @@ impl ClientGame<'_> {
     /// `Camera.alignWithEntity`: living vehicle's scale and camera distance without allocating closures.
     fn living_vehicle_for(&self, remote: &Remote, id: u32) -> Option<(f32, f64)> {
         let vehicle = remote.passenger_vehicles.get(&id)?.vehicle;
-        if let Some(d) = self.common.entities.dragon.as_ref().filter(|d| d.id == vehicle) {
+        if let Some(d) = self
+            .common
+            .entities
+            .dragon
+            .as_ref()
+            .filter(|d| d.id == vehicle)
+        {
             return Some(self.remote_entity_living_values(d.id as i32));
         }
-        if let Some(m) = self.common.mob_index.get_ref(&self.common.entities.mobs, vehicle) {
+        if let Some(m) = self
+            .common
+            .mob_index
+            .get_ref(&self.common.entities.mobs, vehicle)
+        {
             return Some(self.living_camera_values(m));
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == vehicle) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == vehicle)
+        {
             return Some(self.stand_camera_values(a));
         }
         if vehicle == remote.entity_id as u32
@@ -1141,7 +1168,11 @@ impl ClientGame<'_> {
                 detached_hud: None,
             });
         }
-        if let Some(m) = self.common.mob_index.get_ref(&self.common.entities.mobs, uid) {
+        if let Some(m) = self
+            .common
+            .mob_index
+            .get_ref(&self.common.entities.mobs, uid)
+        {
             let is_player = &*m.kind.id == "minecraft:player";
             let mut camera = mob_camera_entity(m, self.living_camera_values(m));
             if let Some(living) = &mut camera.living {
@@ -1187,7 +1218,13 @@ impl ClientGame<'_> {
                 detached_hud: None,
             });
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == uid) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == uid)
+        {
             let mut camera = stand_camera_entity_with(a, self.stand_camera_values(a));
             camera.mount = mount;
             let fog_effects = CameraFogEffects::from_effects(&a.client_effects, a.darkness_blend);
@@ -1247,7 +1284,13 @@ impl ClientGame<'_> {
             };
             return Some(non_living_subject(camera, EntityContextKind::Other, kind));
         }
-        if let Some(f) = self.common.entities.item_frames.iter().find(|f| f.id == uid) {
+        if let Some(f) = self
+            .common
+            .entities
+            .item_frames
+            .iter()
+            .find(|f| f.id == uid)
+        {
             let kind = if f.glow {
                 "minecraft:glow_item_frame"
             } else {
@@ -1296,7 +1339,8 @@ impl ClientGame<'_> {
         }
         if let Some(p) = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| p.id == uid)
         {

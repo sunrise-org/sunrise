@@ -374,7 +374,11 @@ pub(crate) fn run_live_damage_and_blast_creaking_reactions_and_timed_player_cred
             assert!(game.run_command(command), "{command}");
         }
         creaking::set_transient(
-            game.entities.mobs.iter_mut().find(|m| m.id == creaking_id).unwrap(),
+            game.entities
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == creaking_id)
+                .unwrap(),
             [8, 64, 8],
         );
         // `CreakingHeartBlockEntity.creakingHurt` from its protector starts the 100-tick emitter.
@@ -430,11 +434,21 @@ pub(crate) fn run_live_damage_and_blast_creaking_reactions_and_timed_player_cred
         }
 
         let clear_anim = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
-            let c = game.entities.mobs.iter_mut().find(|m| m.id == creaking_id).unwrap();
+            let c = game
+                .entities
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == creaking_id)
+                .unwrap();
             c.extra.ints[0] = 0;
         };
         let creaking_state = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-            let c = game.entities.mobs.iter().find(|m| m.id == creaking_id).unwrap();
+            let c = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == creaking_id)
+                .unwrap();
             (c.health, c.extra.ints[0], c.ai.last_hurt_by_player)
         };
 
@@ -536,7 +550,8 @@ pub(crate) fn run_live_damage_and_blast_creaking_reactions_and_timed_player_cred
         assert_eq!(creaking_state(game), (start_health, 8, 100));
 
         clear_anim(game);
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == creaking_id)
             .unwrap()
@@ -599,7 +614,8 @@ pub(crate) fn run_live_damage_and_blast_creaking_reactions_and_timed_player_cred
 
         clear_anim(game);
         clear_emitter(game);
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == creaking_id)
             .unwrap()
@@ -689,7 +705,8 @@ pub(crate) fn run_live_damage_and_blast_creaking_reactions_and_timed_player_cred
                 "emitter": 100, "animation": 8,
             })
         );
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == creaking_id)
             .unwrap()
@@ -775,7 +792,12 @@ fn live_damage_and_blast_ghast_reflected_fireball() {
                 "{ty}"
             );
             assert_eq!(
-                game.entities.mobs.iter().find(|m| m.id == id).unwrap().health,
+                game.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .unwrap()
+                    .health,
                 0.0,
                 "{ty}"
             );
@@ -783,7 +805,8 @@ fn live_damage_and_blast_ghast_reflected_fireball() {
 
         // Reflected LargeFireball still returns true under Fire Resistance and on hurt cooldown.
         let (resist_id, resist_uuid) = spawn_ghast(game, 20, 10.0);
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == resist_id)
             .unwrap()
@@ -792,7 +815,12 @@ fn live_damage_and_blast_ghast_reflected_fireball() {
             "damage {resist_uuid} 1 minecraft:fireball by 00000056-0000-0000-0000-000000000002 from @p"
         )));
         assert_eq!(
-            game.entities.mobs.iter().find(|m| m.id == resist_id).unwrap().health,
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == resist_id)
+                .unwrap()
+                .health,
             10.0
         );
 
@@ -801,14 +829,24 @@ fn live_damage_and_blast_ghast_reflected_fireball() {
             "damage {cool_uuid} 1 minecraft:generic by 00000056-0000-0000-0000-000000000002 from @p"
         )));
         assert_eq!(
-            game.entities.mobs.iter().find(|m| m.id == cool_id).unwrap().health,
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == cool_id)
+                .unwrap()
+                .health,
             1000.0
         );
         assert!(game.run_command(&format!(
             "damage {cool_uuid} 1 minecraft:generic by 00000056-0000-0000-0000-000000000002 from @p"
         )));
         assert_eq!(
-            game.entities.mobs.iter().find(|m| m.id == cool_id).unwrap().health,
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == cool_id)
+                .unwrap()
+                .health,
             1000.0
         );
 
@@ -825,7 +863,12 @@ fn live_damage_and_blast_ghast_reflected_fireball() {
                 "{args}"
             );
             assert_eq!(
-                game.entities.mobs.iter().find(|m| m.id == immune_id).unwrap().health,
+                game.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == immune_id)
+                    .unwrap()
+                    .health,
                 10.0,
                 "{args}"
             );
@@ -844,7 +887,8 @@ fn live_damage_and_blast_ghast_reflected_fireball() {
         )
         .unwrap();
         assert_eq!(
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter()
                 .find(|m| m.id == blast_player_id)
                 .unwrap()
@@ -864,7 +908,8 @@ fn live_damage_and_blast_ghast_reflected_fireball() {
         .unwrap();
         // At the centre (distance 0, exposure 1) a radius-3 blast deals (1 + 1) / 2 * 7 * 6 + 1.
         assert_eq!(
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter()
                 .find(|m| m.id == blast_mob_id)
                 .unwrap()

@@ -78,7 +78,13 @@ fn last(heard: &Heard) -> (CommandSource, CommandInvocation) {
 /// The handle of the only mob in `dim`, looked up with that level in place.
 fn only_mob(game: &mut ServerGame<'_>, dim: Dim) -> EntityRef {
     let back = game.enter_command_level(dim);
-    let id = game.entities.mobs.iter().next().expect("the mob was summoned").id;
+    let id = game
+        .entities
+        .mobs
+        .iter()
+        .next()
+        .expect("the mob was summoned")
+        .id;
     let entity = game.entity(id).expect("a summoned mob has a handle");
     if let Some(back) = back {
         game.enter_command_level(back);

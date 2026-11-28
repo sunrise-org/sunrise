@@ -71,7 +71,8 @@ fn a_mannequin_saves_its_own_fields_and_no_mob_fields() {
         "summon mannequin 8.5 100 4.5 {UUID:[I;321,0,0,6],NoGravity:1b,NoAI:1b,PersistenceRequired:1b,CanPickUpLoot:1b,LeftHanded:1b}"
     ));
     let id = |g: &sunrise_gameplay::game::ServerGame<'_>, n: i32| {
-        g.entities.mobs
+        g.entities
+            .mobs
             .iter()
             .find(|m| g.persist.uuids.get(&m.id) == Some(&[321, 0, 0, n]))
             .unwrap()
@@ -121,7 +122,8 @@ fn a_mannequin_reads_and_saves_from_its_own_state() {
                 "summon {kind} {}.5 100 4.5 {{UUID:[I;321,0,0,{n}],NoGravity:1b,{fields}}}",
                 n * 2
             )));
-            g.entities.mobs
+            g.entities
+                .mobs
                 .iter()
                 .position(|m| g.persist.uuids.get(&m.id) == Some(&[321, 0, 0, n]))
                 .unwrap()

@@ -341,7 +341,8 @@ fn mob_taken_store_refuses_without_writing_and_missing_store_refuses() {
                 .get(&id)
                 .is_some_and(|map| map.has_index_binding())
         );
-        game.entities.mobs
+        game.entities
+            .mobs
             .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         assert_eq!(
             value_key.get_existing(game, Holder::Entity(id), |value| value.cloned()),

@@ -101,12 +101,14 @@ impl ServerGame<'_> {
     fn mob_strike(&mut self, id: u32, who: Who) -> Option<(Vec<MobEvent>, Option<bool>)> {
         let index = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .position(|m| m.id == id && !m.removed)?;
         let snapshot: Vec<_> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .map(|m| seen(m, self.common.level.player_uuid, self.items()))
             .collect();
@@ -140,7 +142,8 @@ impl ServerGame<'_> {
         drop(w);
         lent.give_back(&mut self.common.world);
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .restore(lifted, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         Some((events, answer))
     }
@@ -193,7 +196,13 @@ mod tests {
             let player = game.player(1).unwrap().entity();
             let mob = |game: &ServerGame<'_>, entity| game.mob(entity).unwrap();
             let health = |game: &ServerGame<'_>, id| {
-                game.common.entities.mobs.iter().find(|m| m.id == id).unwrap().health
+                game.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .unwrap()
+                    .health
             };
             let striker = mob(game, zombie);
             assert_eq!(striker.do_hurt_target(game, player), Ok(true));

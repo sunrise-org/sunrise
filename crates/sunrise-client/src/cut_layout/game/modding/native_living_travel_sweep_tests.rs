@@ -65,7 +65,13 @@ fn one_travel_fires_once_and_its_move_beside_and_noai_fires_nobody() {
                 "{Motion:[0.5d,0.0d,0.0d]}",
             )
             .unwrap_or_else(|e| panic!("summon zombie: {e:?}"));
-            let zombie = game.entities.mobs.iter().next().expect("normal zombie spawned").id;
+            let zombie = game
+                .entities
+                .mobs
+                .iter()
+                .next()
+                .expect("normal zombie spawned")
+                .id;
             game.summon_with_nbt(
                 "minecraft:zombie",
                 [6.5, 40.5, 5.5],

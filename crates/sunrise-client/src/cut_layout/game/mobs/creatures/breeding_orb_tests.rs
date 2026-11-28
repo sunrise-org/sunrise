@@ -8,14 +8,23 @@ use sunrise_gameplay_common::game::creatures::{Mob, Vec3};
 fn breeding_drops_one_orb_of_the_whole_roll() {
     sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
         let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(7, kind, Vec3::new(8.5, 64.0, 8.5), 0.0));
         let mut values = std::collections::BTreeSet::new();
         for _ in 0..40 {
-            let roll = 1 + game.entities.mobs[0].random.clone().next_int_bound(7).unwrap() as u32;
+            let roll = 1 + game.entities.mobs[0]
+                .random
+                .clone()
+                .next_int_bound(7)
+                .unwrap() as u32;
             let orbs = game.entities.orbs.len();
             game.award_breeding_experience(7, [8.5, 64.0, 8.5]);
-            assert_eq!(game.entities.orbs.len(), orbs + 1, "a fresh orb, not merged");
+            assert_eq!(
+                game.entities.orbs.len(),
+                orbs + 1,
+                "a fresh orb, not merged"
+            );
             assert_eq!(
                 game.entities.orbs.last().map(|o| (o.points(), o.count)),
                 Some((roll, 1))

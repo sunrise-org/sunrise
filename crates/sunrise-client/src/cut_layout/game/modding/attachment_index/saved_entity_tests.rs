@@ -341,7 +341,11 @@ fn saved_binding_family_first_stores_publish_to_queries() {
                 );
             }};
         }
-            family!("item", r#"{Item:{id:"minecraft:stone",count:1}}"#, entities.dropped);
+            family!(
+                "item",
+                r#"{Item:{id:"minecraft:stone",count:1}}"#,
+                entities.dropped
+            );
             family!("experience_orb", "{Value:1s}", entities.orbs);
             family!("arrow", "{}", entities.projectiles);
             family!("armor_stand", "{}", entities.armor_stands);

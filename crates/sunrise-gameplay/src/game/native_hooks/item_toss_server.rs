@@ -28,7 +28,13 @@ impl crate::game::ServerGame<'_> {
             self.common.native_lifecycle.held_joins.pop();
             if canceled {
                 // A canceled toss never enters the world; what was thrown is gone.
-                if let Some(at) = self.common.entities.dropped.iter().rposition(|d| d.id == id) {
+                if let Some(at) = self
+                    .common
+                    .entities
+                    .dropped
+                    .iter()
+                    .rposition(|d| d.id == id)
+                {
                     self.remove_dropped(at);
                 }
                 self.forget_entity(id);
@@ -39,7 +45,8 @@ impl crate::game::ServerGame<'_> {
         }
         let _ = self.join_item_entity(id, at);
         self.common
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .rev()
             .any(|d| d.id == id)

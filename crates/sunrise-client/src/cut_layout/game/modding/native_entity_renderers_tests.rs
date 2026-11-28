@@ -293,7 +293,8 @@ fn a_vanilla_boat_is_unchanged_by_a_registration_for_its_type() {
     in_scene(
         "a_vanilla_boat_is_unchanged_by_a_registration_for_its_type",
         |game, scene| {
-            game.entities.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     100,
                     "oak".into(),

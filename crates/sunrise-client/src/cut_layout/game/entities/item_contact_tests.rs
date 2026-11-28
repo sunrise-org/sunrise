@@ -134,7 +134,10 @@ fn the_active_stack_survives_a_partial_contact_and_consumption_removes_the_entit
             for count in [1, 2] {
                 spawn(game, count);
                 game.tick_items();
-                assert!(game.entities.dropped.is_empty(), "consumed stack of {count}");
+                assert!(
+                    game.entities.dropped.is_empty(),
+                    "consumed stack of {count}"
+                );
             }
         });
     });
@@ -1396,7 +1399,12 @@ fn contact_hurt_uses_the_world_damage_type_tags_and_death_message() {
                     game.entities.mobs.push(mob);
                 }
                 let health = |game: &sunrise_gameplay::game::ServerGame<'_>, id| {
-                    game.entities.mobs.iter().find(|mob| mob.id == id).unwrap().health
+                    game.entities
+                        .mobs
+                        .iter()
+                        .find(|mob| mob.id == id)
+                        .unwrap()
+                        .health
                 };
                 game.tick_mobs().unwrap();
                 assert_eq!(health(game, 71), 20.0, "hot floor is fire damage");
@@ -1426,7 +1434,13 @@ fn contact_hurt_uses_the_world_damage_type_tags_and_death_message() {
                     )
                     .unwrap();
                 game.tick_mobs().unwrap();
-                let dead = game.entities.mobs.iter().find(|mob| mob.id == 73).unwrap().clone();
+                let dead = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|mob| mob.id == 73)
+                    .unwrap()
+                    .clone();
                 assert_eq!(dead.health, 0.0);
                 assert_eq!(
                     game.mob_death_message(&dead, None).component()["translate"],
@@ -1607,7 +1621,10 @@ fn contact_hurt_uses_the_orbs_level_fall_immunity_tag() {
                     );
                     if tagged {
                         assert_eq!(game.entities.orbs.len(), 1);
-                        assert_eq!(game.entities.orbs[0].position.y.to_bits(), 64.0_f64.to_bits());
+                        assert_eq!(
+                            game.entities.orbs[0].position.y.to_bits(),
+                            64.0_f64.to_bits()
+                        );
                         assert_eq!(game.entities.orbs[0].health, 5);
                     } else {
                         assert!(game.entities.orbs.is_empty());

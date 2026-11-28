@@ -127,7 +127,12 @@ fn singleton_client_dragon_install_explicitly_replaces_network_owner() {
 fn singleton_late_dragon_id_reserves_all_eight_parts_once() {
     with_game(|game| {
         game.entities.dragon.discard();
-        assert!(game.entities.dragon.install(Dragon::new(Vec3::ZERO, 0.0, 0)).is_ok());
+        assert!(
+            game.entities
+                .dragon
+                .install(Dragon::new(Vec3::ZERO, 0.0, 0))
+                .is_ok()
+        );
         let before = game.server.next_entity;
         game.assign_dragon_and_crystal_ids();
         assert_eq!(game.entities.dragon.as_ref().unwrap().id, before + 1);
@@ -148,7 +153,13 @@ fn singleton_lifecycle_commands_unload_and_parked_owners() {
                 install_server_dragon(game, id, at);
             }
         },
-        ids: |game| game.entities.dragon.as_ref().map(|d| vec![d.id]).unwrap_or_default(),
+        ids: |game| {
+            game.entities
+                .dragon
+                .as_ref()
+                .map(|d| vec![d.id])
+                .unwrap_or_default()
+        },
         target: sunrise_gameplay_common::game::commands_common::Target::Dragon,
         unloads_with_chunk: true,
         remote: None,
@@ -167,7 +178,10 @@ fn singleton_death_fight_scan_and_resets_discard_owners() {
         assert!(game.entities.dragon.is_none(), "death completion");
         install_server_dragon(game, 602, [1.0, 80.0, 1.0]);
         game.scan_state();
-        assert!(game.entities.dragon.is_none(), "fight scan without exit portal");
+        assert!(
+            game.entities.dragon.is_none(),
+            "fight scan without exit portal"
+        );
         install_server_dragon(game, 603, [1.0, 80.0, 1.0]);
         game.clear_entities();
         assert!(game.entities.dragon.is_none(), "world reset");
@@ -474,8 +488,14 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                     assert!(game.entities.orbs.is_empty());
                     assert!(!game.server.fight.killed);
                     game.tick_dragon();
-                    assert!(game.entities.dragon.is_none(), "cancelled dragon removed at tick 20");
-                    assert!(game.entities.orbs.is_empty(), "cancelled dragon drops no XP");
+                    assert!(
+                        game.entities.dragon.is_none(),
+                        "cancelled dragon removed at tick 20"
+                    );
+                    assert!(
+                        game.entities.orbs.is_empty(),
+                        "cancelled dragon drops no XP"
+                    );
                     assert!(
                         !game.server.fight.killed,
                         "cancelled dragon does not win the fight"
@@ -693,7 +713,8 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
             game.reset_entity_residency();
             spawn_one_hp(game);
             let crystal_tag =
-                game.entities.dragon
+                game.entities
+                    .dragon
                     .as_ref()
                     .unwrap()
                     .to_nbt([2, 0, 0, 1], None, game.res.items());
@@ -735,7 +756,8 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                 Vec3::new(0.0, 80.0, 0.0),
                 0.0,
             ));
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(921, zombie, Vec3::new(1.0, 80.0, 0.0), 0.0));
             assert!(game.hurt_target(
                 Target::Dragon(dragon_id),

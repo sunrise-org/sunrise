@@ -122,7 +122,12 @@ impl crate::game::ClientGame<'_> {
     /// The entity type of the open mount menu's mount (`minecraft:horse`).
     pub(in crate::game::client_side) fn mount_menu_entity(&self) -> Option<String> {
         let open = self.client.mount_menu.open.as_ref()?;
-        let m = self.common.entities.mobs.iter().find(|m| m.id == open.mob)?;
+        let m = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == open.mob)?;
         Some(m.kind.id.to_string())
     }
     /// The chest columns of the open mount menu (the server's window's).
@@ -144,9 +149,12 @@ impl crate::game::ClientGame<'_> {
             return;
         };
         let mob = open.mob;
-        let mount = self
-            .mount_mob_index(mob)
-            .map(|i| (self.common.entities.mobs[i].alive(), self.common.entities.mobs[i].bounds()));
+        let mount = self.mount_mob_index(mob).map(|i| {
+            (
+                self.common.entities.mobs[i].alive(),
+                self.common.entities.mobs[i].bounds(),
+            )
+        });
         let valid = match mount {
             Some((true, bounds)) => self.common.within_entity_interaction_range(&bounds, 4.0),
             _ => false,

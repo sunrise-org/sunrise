@@ -38,7 +38,13 @@ impl ClientGame<'_> {
         if let Some(seat) = self.client_general_seat(id, false) {
             return Some(seat);
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == id)
+        {
             let (height, width) = if a.marker {
                 (0.0, 0.0)
             } else if a.small {
@@ -111,7 +117,8 @@ impl ClientGame<'_> {
         }
         if let Some(t) = self
             .common
-            .entities.tnts
+            .entities
+            .tnts
             .iter()
             .find(|t| t.id == vehicle && t.id != 0)
         {
@@ -121,7 +128,8 @@ impl ClientGame<'_> {
         }
         if let Some(v) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == vehicle && !m.removed)
         {
@@ -206,7 +214,13 @@ impl ClientGame<'_> {
                 .add_vector(Vec3::new(0.0, super::minecarts::SEAT, 0.0));
             return Some(glam::DVec3::new(at.x, at.y, at.z));
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == vehicle) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == vehicle)
+        {
             let height = if a.marker {
                 0.0
             } else if a.small {
@@ -268,7 +282,8 @@ impl ClientGame<'_> {
         self.client_seat_static_mobs(&riders);
         let index: HashMap<u32, usize> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .enumerate()
             .map(|(i, m)| (m.id, i))
@@ -304,7 +319,11 @@ impl ClientGame<'_> {
                             let old = self.common.entities.mobs[i].previous;
                             glam::DVec3::new(
                                 old.x,
-                                old.y + riders::vehicle_attachment(&self.common.entities.mobs[i], 0.0),
+                                old.y
+                                    + riders::vehicle_attachment(
+                                        &self.common.entities.mobs[i],
+                                        0.0,
+                                    ),
                                 old.z,
                             )
                         });
@@ -457,7 +476,8 @@ impl ClientGame<'_> {
         );
         for stand in self
             .common
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter_mut()
             .filter(|a| a.vehicle == Some(me))
         {

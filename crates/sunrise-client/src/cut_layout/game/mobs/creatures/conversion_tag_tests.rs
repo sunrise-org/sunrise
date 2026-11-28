@@ -71,7 +71,13 @@ fn converted_mobs_keep_command_tags_at_the_new_id_and_on_save() {
         ]);
         let old_id = game.load_mob(raw, None).unwrap();
         assert_eq!(game.tags_of(Target::Mob(old_id)), ["subject", from]);
-        let source = game.entities.mobs.iter().find(|m| m.id == old_id).unwrap().clone();
+        let source = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == old_id)
+            .unwrap()
+            .clone();
         let new_id = game
             .convert_to(
                 &source,
@@ -87,7 +93,12 @@ fn converted_mobs_keep_command_tags_at_the_new_id_and_on_save() {
             ["subject", from],
             "converted ID must keep tags"
         );
-        let index = game.entities.mobs.iter().position(|m| m.id == new_id).unwrap();
+        let index = game
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == new_id)
+            .unwrap();
         let saved = game.mob_tree_nbt(index);
         assert_eq!(saved.get("Tags"), Some(&tags));
         assert_eq!(

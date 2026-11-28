@@ -51,7 +51,13 @@ impl ServerGame<'_> {
     fn credited_mob_uuid(&self, attacker: u32) -> Option<[i32; 4]> {
         let mut id = attacker;
         loop {
-            if self.common.entities.mobs.iter().any(|a| a.id == id && a.alive()) {
+            if self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .any(|a| a.id == id && a.alive())
+            {
                 return self.common.persist.uuid_of(id);
             }
             if let Some((_, mob)) = self.mob_in_other_level(id) {
@@ -78,7 +84,8 @@ impl ServerGame<'_> {
     pub fn resolve_last_hurt_by_refs(&mut self) {
         let resolved: Vec<(usize, Who)> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .enumerate()
             .filter_map(|(i, m)| {

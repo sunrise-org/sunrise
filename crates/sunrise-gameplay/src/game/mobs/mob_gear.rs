@@ -104,7 +104,8 @@ impl ServerGame<'_> {
     ) {
         let Some(pos) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id)
             .map(|m| [m.position.x, m.position.y, m.position.z])
@@ -226,7 +227,13 @@ mod tests {
                 .unwrap();
             // Wave 4 > num_groups(1) = 3; odds 1.0 guarantees enchanting.
             game.apply_raid_buffs(id, RaiderType::Pillager, 4, 1.0);
-            let m = game.common.entities.mobs.iter().find(|m| m.id == id).unwrap();
+            let m = game
+                .common
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap();
             assert_eq!(gear::level(m, MAIN, "minecraft:multishot"), 1);
             assert_eq!(gear::level(m, MAIN, "minecraft:quick_charge"), 0);
         });

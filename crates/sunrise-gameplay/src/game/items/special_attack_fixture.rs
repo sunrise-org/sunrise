@@ -69,13 +69,17 @@ impl crate::game::ServerGame<'_> {
         let center = match kind {
             "boat" => {
                 let id = self.take_entity_id();
-                self.common.entities.boats.push(Boat::new(id, "oak".into(), at, 0.0));
+                self.common
+                    .entities
+                    .boats
+                    .push(Boat::new(id, "oak".into(), at, 0.0));
                 self.common.entities.boats[0].bounds().center()
             }
             "cart" => {
                 let id = self.take_entity_id();
                 self.common
-                    .entities.carts
+                    .entities
+                    .carts
                     .push(Minecart::new(id, CartKind::Rideable, at));
                 self.common.entities.carts[0].bounds().center()
             }
@@ -166,23 +170,36 @@ impl crate::game::ServerGame<'_> {
         self.common.pitch = (-dy).atan2((dx * dx + dz * dz).sqrt()).to_degrees() as f32;
         self.attack();
         // A ray miss must not pass as an accepted hit with an unchanged cost.
-        let accepted = match kind {
-            "boat" => Some(self.common.entities.boats.first().is_none_or(|b| b.hurt_time > 0)),
-            "cart" => Some(self.common.entities.carts.first().is_none_or(|c| c.hurt_time > 0)),
-            "stand" => Some(
-                self.common
-                    .entities.armor_stands
-                    .first()
-                    .is_none_or(|s| !op["break"].as_bool().unwrap_or(false) && s.last_hit == 100),
-            ),
-            "dragon" => Some(
-                self.common
-                    .entities.dragon
-                    .as_ref()
-                    .is_some_and(|d| d.health < 200.0),
-            ),
-            _ => None,
-        };
+        let accepted =
+            match kind {
+                "boat" => Some(
+                    self.common
+                        .entities
+                        .boats
+                        .first()
+                        .is_none_or(|b| b.hurt_time > 0),
+                ),
+                "cart" => Some(
+                    self.common
+                        .entities
+                        .carts
+                        .first()
+                        .is_none_or(|c| c.hurt_time > 0),
+                ),
+                "stand" => {
+                    Some(self.common.entities.armor_stands.first().is_none_or(|s| {
+                        !op["break"].as_bool().unwrap_or(false) && s.last_hit == 100
+                    }))
+                }
+                "dragon" => Some(
+                    self.common
+                        .entities
+                        .dragon
+                        .as_ref()
+                        .is_some_and(|d| d.health < 200.0),
+                ),
+                _ => None,
+            };
         let outcome = accepted.map_or("control", |hit| if hit { "accepted" } else { "unchanged" });
         let player = self
             .common

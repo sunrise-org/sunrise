@@ -214,7 +214,8 @@ impl ServerGame<'_> {
             let roaring = m.extra.anim_ticks != 0;
             let stunned = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == id)
                 .is_some_and(|m| sunrise_sim::mobs::ravager::blocked(m, &mut events));

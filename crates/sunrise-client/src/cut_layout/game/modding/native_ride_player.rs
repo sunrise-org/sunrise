@@ -60,7 +60,8 @@ mod tests {
                     case(game, conn);
                     // The unload save takes the pig away with its chunk; every other case keeps it.
                     let mount = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-                        game.entities.mobs
+                        game.entities
+                            .mobs
                             .iter()
                             .find(|m| m.id == 80 && !m.removed)
                             .map(|m| m.extra.mount)
@@ -189,7 +190,9 @@ mod tests {
             fixture_resident_column(&mut game.world, (0, 0));
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             for id in [80, 81] {
-                game.entities.mobs.push(Mob::new(id, pig.clone(), Vec3::ZERO, 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(id, pig.clone(), Vec3::ZERO, 0.0));
             }
             let player =
                 sunrise_gameplay::game::native_player_death::tests::add_guest(game).entity();

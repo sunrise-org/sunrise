@@ -46,7 +46,10 @@ impl ServerGame<'_> {
             return;
         };
         // The acting player must be the saved owner (`getOwner`).
-        if !sunrise_sim::mobs::tame::owned_by(self.common.entities.mobs[i].extra.owner, self.acting_uuid()) {
+        if !sunrise_sim::mobs::tame::owned_by(
+            self.common.entities.mobs[i].extra.owner,
+            self.acting_uuid(),
+        ) {
             return;
         }
         if self.common.riding.is_some()
@@ -140,7 +143,8 @@ impl ServerGame<'_> {
         let alive = !p.health.dead_or_dying();
         let nearby: Vec<_> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| m.alive() && !m.removed && m.bounds().intersects(area))
             .map(|m| (m.kind.id.as_str(), m.silent))

@@ -229,7 +229,8 @@ pub(crate) fn run_borrowed_creaking_hurt_finishes_before_the_tick_continues() {
             if case == "sting" {
                 assert!(game.run_command("summon pufferfish 4.5 64 4.5 {UUID:[I;86,0,0,2],PuffState:2,NoAI:1b,NoGravity:1b}"));
                 let fish = game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.kind.id == "minecraft:pufferfish")
                     .unwrap();
@@ -249,7 +250,8 @@ pub(crate) fn run_borrowed_creaking_hurt_finishes_before_the_tick_continues() {
             game.update_chunk_tickets();
             assert!(game.entity_ticking_area()(4, 4));
             let creaking = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter_mut()
                 .find(|m| creaking::is_creaking(m))
                 .unwrap();

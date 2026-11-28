@@ -84,7 +84,8 @@ impl ItemPart for Probe {
 fn setup(game: &mut sunrise_gameplay::game::ServerGame<'_>, probe: &Probe, kind: &str, id: u32) {
     game.entities.mobs.clear();
     let kind = game.res.mob_types().get(kind).unwrap().clone();
-    game.entities.mobs
+    game.entities
+        .mobs
         .push(Mob::new(id, kind, Vec3::new(0.5, 64.0, 2.5), 0.0));
     game.station = None;
     game.inventory[0] = Some(ItemStack::new("minecraft:stick", 2));

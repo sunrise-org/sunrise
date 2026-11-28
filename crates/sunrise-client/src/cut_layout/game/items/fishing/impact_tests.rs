@@ -66,7 +66,8 @@ fn entity_impact_includes_items_and_cancel_skips_hooking() {
                     (game.entities.dropped[0].id, "minecraft:item", 2.875)
                 } else {
                     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                    game.entities.mobs
+                    game.entities
+                        .mobs
                         .push(Mob::new(72, kind, Vec3::new(3.0, 64.0, 0.5), 0.0));
                     (72, "minecraft:pig", 2.55)
                 };
@@ -111,7 +112,8 @@ fn bobbers_notify_before_entity_deflection_and_cancel_skips_it() {
                 .get("minecraft:breeze")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(72, kind, Vec3::new(3.0, 64.0, 0.5), 0.0));
             cast(game);
             game.tick_fishing();

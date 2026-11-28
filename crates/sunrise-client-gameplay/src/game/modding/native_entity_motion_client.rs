@@ -18,7 +18,13 @@ impl crate::game::ClientGame<'_> {
         if let Some(i) = self.common.entities.carts.iter().position(|e| e.id == id) {
             return Some(EntityHandle::Cart(i));
         }
-        if let Some(i) = self.common.entities.armor_stands.iter().position(|e| e.id == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .position(|e| e.id == id)
+        {
             return Some(EntityHandle::ArmorStand(i));
         }
         if let Some(i) = self.common.entities.tnts.iter().position(|e| e.id == id) {
@@ -32,7 +38,8 @@ impl crate::game::ClientGame<'_> {
         }
         if let Some(i) = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .position(|e| e.id == id)
         {
@@ -41,11 +48,18 @@ impl crate::game::ClientGame<'_> {
         if let Some(i) = self.common.entities.rockets.iter().position(|e| e.id == id) {
             return Some(EntityHandle::Rocket(i));
         }
-        if let Some(i) = self.common.entities.tridents.iter().position(|e| e.id == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .tridents
+            .iter()
+            .position(|e| e.id == id)
+        {
             return Some(EntityHandle::Trident(i));
         }
         self.common
-            .entities.general
+            .entities
+            .general
             .rows
             .iter()
             .position(|e| e.id == id)
@@ -100,14 +114,27 @@ impl crate::game::ClientGame<'_> {
                 let c = self.common.entities.crystals.iter().find(|c| c.id == id)?;
                 return Some(corners(self.client_copy_box(id, c.position, c.bounds())));
             }
-            Target::Cushion(id) => self.common.entities.cushions.iter().find(|c| c.id == id)?.bounds(),
+            Target::Cushion(id) => self
+                .common
+                .entities
+                .cushions
+                .iter()
+                .find(|c| c.id == id)?
+                .bounds(),
             Target::Frame(id) => self
                 .common
-                .entities.item_frames
+                .entities
+                .item_frames
                 .iter()
                 .find(|f| f.id == id)?
                 .bounds(),
-            Target::Painting(id) => self.common.entities.paintings.iter().find(|p| p.id == id)?.bounds(),
+            Target::Painting(id) => self
+                .common
+                .entities
+                .paintings
+                .iter()
+                .find(|p| p.id == id)?
+                .bounds(),
             _ => return None,
         };
         if lo.iter().chain(&hi).any(|v| !v.is_finite()) {

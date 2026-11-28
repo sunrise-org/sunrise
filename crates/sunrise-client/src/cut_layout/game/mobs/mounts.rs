@@ -150,7 +150,10 @@ pub(crate) mod tests {
                 .with(|events| events.borrow_mut().take().unwrap_or_default());
             sunrise_gameplay_common::game::side_ops::events::TEST_POSTED_EVENTS
                 .with(|events| *events.borrow_mut() = None);
-            assert!(game.entities.mobs[0].extra.chested, "{kind} wears the chest");
+            assert!(
+                game.entities.mobs[0].extra.chested,
+                "{kind} wears the chest"
+            );
             assert_eq!(sounds.len(), 1, "{kind}: {sounds:?}");
             assert_eq!(sounds[0].0, sound, "{kind} chest sound");
             assert_eq!(sounds[0].2, 1.0, "{kind} chest sound volume");
@@ -192,7 +195,10 @@ pub(crate) mod tests {
         let at = [1.5, 64.0, -2.5];
         assert!(shown.sounds.is_empty(), "Silent: {shown:?}");
         assert_eq!(shown.events, vec![("minecraft:eat", at, Some(Who::Mob(1)))]);
-        assert_eq!(game.entities.mobs[0].extra.age, -23600, "wheat ages a horse by 20 s");
+        assert_eq!(
+            game.entities.mobs[0].extra.age, -23600,
+            "wheat ages a horse by 20 s"
+        );
         assert_eq!(
             game.entities.mobs[0].random.clone().next_double(),
             r.next_double(),
@@ -255,7 +261,10 @@ pub(crate) mod tests {
             "{shown:?}"
         );
         assert_eq!(shown.events, vec![("minecraft:eat", at, Some(Who::Mob(4)))]);
-        assert_eq!(game.entities.mobs[0].extra.age, -23800, "camel cactus ages 10 s");
+        assert_eq!(
+            game.entities.mobs[0].extra.age, -23800,
+            "camel cactus ages 10 s"
+        );
     }
     /// `LivingEntity.onEquipItem`: a saddle or horse armour plays its equip sound
     /// at pitch `1.0F`, at the mount's feet, seeded with the mount's own random's
@@ -380,7 +389,10 @@ pub(crate) mod tests {
         });
         assert!(game.interact_mob(target).unwrap(), "the saddle is used");
         assert!(game.entities.mobs[0].extra.saddled(), "the saddle went on");
-        assert!(game.entities.mobs[0].persistent, "a clicked camel husk stays");
+        assert!(
+            game.entities.mobs[0].persistent,
+            "a clicked camel husk stays"
+        );
     }
 }
 

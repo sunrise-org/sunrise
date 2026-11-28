@@ -1416,7 +1416,8 @@ impl crate::game::ClientGame<'_> {
                         let id: u32 = a.get(1, "ID")?.parse()?;
                         let m = self
                             .common
-                            .entities.mobs
+                            .entities
+                            .mobs
                             .iter()
                             .find(|m| m.id == id)
                             .ok_or_else(|| format!("no entity {id}"))?;
@@ -1459,7 +1460,8 @@ impl crate::game::ClientGame<'_> {
                 if let Some(id) = id {
                     let m = self
                         .common
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .find(|m| m.id == id)
                         .ok_or_else(|| format!("no entity {id}"))?;
@@ -1478,9 +1480,12 @@ impl crate::game::ClientGame<'_> {
                         5.0,
                     );
                 }
-                let target = self
-                    .mob_hit()
-                    .map(|(i, _, _)| (self.common.entities.mobs[i].id, self.common.entities.mobs[i].health));
+                let target = self.mob_hit().map(|(i, _, _)| {
+                    (
+                        self.common.entities.mobs[i].id,
+                        self.common.entities.mobs[i].health,
+                    )
+                });
                 self.agent_mouse(MouseButton::Left, true)?;
                 self.agent_mouse(MouseButton::Left, false)?;
                 let report_tick = self.common.ticks + 4;
@@ -2060,7 +2065,9 @@ impl crate::game::ClientGame<'_> {
             *ahead -= 1;
             return false;
         }
-        let picked = self.mob_hit().map(|(i, _, _)| self.common.entities.mobs[i].id);
+        let picked = self
+            .mob_hit()
+            .map(|(i, _, _)| self.common.entities.mobs[i].id);
         let Some(Task {
             kind: TaskKind::Attack { id, aimed, .. },
             ..
@@ -2322,7 +2329,9 @@ impl crate::game::ClientGame<'_> {
                     }
                     let ahead = self.remote_attack_clicks_queued();
                     *aimed = Some(AttackAim::Clicked { ahead });
-                    let target = self.mob_hit().map(|(i, _, _)| &self.common.entities.mobs[i]);
+                    let target = self
+                        .mob_hit()
+                        .map(|(i, _, _)| &self.common.entities.mobs[i]);
                     if target.map(|m| m.id) != *id {
                         return Some(
                             json!({ "error": "that entity is out of reach or hidden; get closer" }),

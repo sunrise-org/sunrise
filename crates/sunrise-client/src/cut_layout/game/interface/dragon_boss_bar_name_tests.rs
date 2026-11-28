@@ -106,7 +106,12 @@ fn the_dragon_boss_bar_takes_the_dragons_custom_name() {
     for _ in 0..20 {
         game.tick_fight();
     }
-    let id = game.entities.dragon.as_ref().expect("the fight's dragon").id;
+    let id = game
+        .entities
+        .dragon
+        .as_ref()
+        .expect("the fight's dragon")
+        .id;
     game.publish_boss_bars();
     drain(&near, &mut overlay);
     let default = overlay
@@ -132,7 +137,11 @@ fn the_dragon_boss_bar_takes_the_dragons_custom_name() {
     assert_eq!(named.name.plain(), "Bob");
     // A living NoAI dragon's `aiStep` does not call `updateDragon`, so the
     // bar keeps the name it had.
-    game.entities.dragon.as_mut().expect("the fight's dragon").no_ai = true;
+    game.entities
+        .dragon
+        .as_mut()
+        .expect("the fight's dragon")
+        .no_ai = true;
     game.persist.raw.insert(
         id,
         Tag::compound([("CustomName", Tag::String("Not Yet".into()))]),

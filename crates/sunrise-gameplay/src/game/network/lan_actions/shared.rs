@@ -1284,7 +1284,9 @@ pub(in crate::game) mod pickup_xp_tests {
                 g.position = [0.5, 70.0, 0.5];
                 g.xp_total = initial_xp;
                 game.server.lan.as_mut().unwrap().hub.guests.push(g);
-                game.entities.orbs.push(make_orb(initial_value, initial_count));
+                game.entities
+                    .orbs
+                    .push(make_orb(initial_value, initial_count));
                 game.guest_orbs(0);
                 let surviving = game.entities.orbs.iter().find(|o| o.id == 40);
                 let saved = surviving.map(|o| orb_to_nbt(o, [0; 4]));
@@ -1578,7 +1580,9 @@ pub(in crate::game) mod pickup_xp_tests {
                 crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
                 game.server.xp_delay = 0;
                 game.experience = Default::default();
-                game.entities.orbs.push(make_orb(initial_value, initial_count));
+                game.entities
+                    .orbs
+                    .push(make_orb(initial_value, initial_count));
                 game.tick_experience();
                 let surviving = game.entities.orbs.iter().find(|o| o.id == 40);
                 out = (

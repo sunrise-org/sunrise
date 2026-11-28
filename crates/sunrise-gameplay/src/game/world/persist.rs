@@ -1218,7 +1218,8 @@ impl crate::game::ServerGame<'_> {
             .map(|m| (m.id, m.extra.mount))
             .chain(
                 self.common
-                    .entities.general
+                    .entities
+                    .general
                     .rows
                     .iter()
                     .map(|r| (r.id, r.mount)),
@@ -1471,7 +1472,13 @@ impl crate::game::ServerGame<'_> {
                 self.common.persist.raw.get(&root),
                 self.common.res.items(),
             )
-        } else if let Some(stand) = self.common.entities.armor_stands.iter().find(|a| a.id == root) {
+        } else if let Some(stand) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == root)
+        {
             let mut tag = entity_nbt::armor_stand_to_nbt(
                 stand,
                 uuid,
@@ -1565,10 +1572,14 @@ impl crate::game::ServerGame<'_> {
         }
         self.common.entities.boats.retain(|b| !gone.contains(&b.id));
         self.common.entities.carts.retain(|c| !gone.contains(&c.id));
-        self.common.entities.armor_stands.retain(|a| !gone.contains(&a.id));
+        self.common
+            .entities
+            .armor_stands
+            .retain(|a| !gone.contains(&a.id));
         self.server.others.0.retain(|o| !gone.contains(&o.id));
         self.common
-            .entities.general
+            .entities
+            .general
             .rows
             .retain(|r| !gone.contains(&r.id));
     }
@@ -1578,7 +1589,8 @@ impl crate::game::ServerGame<'_> {
             (found == uuid
                 && (self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .any(|mob| mob.id == id && !mob.removed)
                     || (self.common.entities.boats.iter().any(|boat| boat.id == id)
@@ -1760,16 +1772,21 @@ impl crate::game::ServerGame<'_> {
     /// `Entity.isSilent`: mobs model it directly; other entities retain it
     /// in their saved fields, including command changes to `Silent`.
     pub(in crate::game) fn entity_silent(&self, id: u32) -> bool {
-        self.common.entities.mobs.iter().find(|m| m.id == id).map_or_else(
-            || {
-                self.common
-                    .persist
-                    .raw
-                    .get(&id)
-                    .is_some_and(|tag| sunrise_sim::entity_nbt::flag(tag, "Silent"))
-            },
-            |m| m.silent,
-        )
+        self.common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id)
+            .map_or_else(
+                || {
+                    self.common
+                        .persist
+                        .raw
+                        .get(&id)
+                        .is_some_and(|tag| sunrise_sim::entity_nbt::flag(tag, "Silent"))
+                },
+                |m| m.silent,
+            )
     }
     /// The `Tags` of the projectile `add_projectile` just pushed.
     fn remember_last_projectile_tags(&mut self, tag: &Tag) {
@@ -1824,7 +1841,12 @@ impl crate::game::ServerGame<'_> {
         } else {
             None
         };
-        entity_nbt::who_by_uuid(&self.common.persist.uuids, &self.common.entities.mobs, player, uuid)
+        entity_nbt::who_by_uuid(
+            &self.common.persist.uuids,
+            &self.common.entities.mobs,
+            player,
+            uuid,
+        )
     }
     /// The mob that was loaded or saved with a UUID.
     pub fn mob_by_uuid(&self, uuid: [i32; 4]) -> Option<u32> {
@@ -1860,7 +1882,12 @@ impl crate::game::ServerGame<'_> {
             }
             Some(Target::Spawner(_)) => {
                 // A freshly spawned ominous spawner already carries its save UUID.
-                let Some(spawner) = self.common.entities.ominous_spawners.iter().find(|row| row.id == id)
+                let Some(spawner) = self
+                    .common
+                    .entities
+                    .ominous_spawners
+                    .iter()
+                    .find(|row| row.id == id)
                 else {
                     return Ok(false);
                 };
@@ -2556,7 +2583,8 @@ impl crate::game::ServerGame<'_> {
         self.spawn_loaded_entities();
         if self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .is_some_and(|d| d.death_canceled && keys.contains(&chunk_of(d.position)))
         {
@@ -2585,7 +2613,12 @@ impl crate::game::ServerGame<'_> {
             .is_none_or(|vehicle| self.saved_vehicle_position(vehicle).is_none())
             && keys.contains(&chunk_of(m.position))
             && !m.removed;
-        saves.then(|| (chunk_of(self.common.entities.mobs[i].position), self.mob_tree_nbt(i)))
+        saves.then(|| {
+            (
+                chunk_of(self.common.entities.mobs[i].position),
+                self.mob_tree_nbt(i),
+            )
+        })
     }
     pub(in crate::game::server_side) fn save_item(
         &mut self,
@@ -2694,7 +2727,10 @@ impl crate::game::ServerGame<'_> {
         entity_nbt::who_uuid(who, &mut |id| self.common.persist.uuid_of(id))
     }
     pub fn save_falling(&mut self, i: usize, keys: &HashSet<ChunkKey>) -> Option<(ChunkKey, Tag)> {
-        let (id, pos) = (self.common.entities.falling[i].id, self.common.entities.falling[i].position);
+        let (id, pos) = (
+            self.common.entities.falling[i].id,
+            self.common.entities.falling[i].position,
+        );
         if !keys.contains(&chunk_of(pos)) {
             return None;
         }
@@ -2733,7 +2769,10 @@ impl crate::game::ServerGame<'_> {
         i: usize,
         keys: &HashSet<ChunkKey>,
     ) -> Option<(ChunkKey, Tag)> {
-        let (id, at) = (self.common.entities.rockets[i].id, self.common.entities.rockets[i].position);
+        let (id, at) = (
+            self.common.entities.rockets[i].id,
+            self.common.entities.rockets[i].position,
+        );
         keys.contains(&chunk_of(at)).then(|| {
             let uuid = self.uuid_for(id);
             let tag = self.common.entities.rockets[i].to_nbt(
@@ -2750,7 +2789,10 @@ impl crate::game::ServerGame<'_> {
         i: usize,
         keys: &HashSet<ChunkKey>,
     ) -> Option<(ChunkKey, Tag)> {
-        let (id, at) = (self.common.entities.tridents[i].id, self.common.entities.tridents[i].position);
+        let (id, at) = (
+            self.common.entities.tridents[i].id,
+            self.common.entities.tridents[i].position,
+        );
         keys.contains(&chunk_of(at)).then(|| {
             let (uuid, reg) = (self.uuid_for(id), self.common.pack.assets.registry);
             let tag = self.common.entities.tridents[i].to_nbt(
@@ -2794,7 +2836,10 @@ impl crate::game::ServerGame<'_> {
         Some((chunk_of(at), tag))
     }
     pub fn save_cart(&mut self, i: usize, keys: &HashSet<ChunkKey>) -> Option<(ChunkKey, Tag)> {
-        let (id, at) = (self.common.entities.carts[i].id, self.common.entities.carts[i].position);
+        let (id, at) = (
+            self.common.entities.carts[i].id,
+            self.common.entities.carts[i].position,
+        );
         if !keys.contains(&chunk_of(at)) {
             return None;
         }

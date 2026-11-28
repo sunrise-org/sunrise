@@ -141,11 +141,9 @@ pub fn target_alive(game: &crate::game::ServerGame<'_>, target: TrackedTarget) -
         TrackedTarget::Cushion(id) => game.common.entities.cushions.iter().any(|c| c.id == id),
         TrackedTarget::Falling(id) => game.common.entities.falling.iter().any(|f| f.id == id),
         TrackedTarget::ExplicitKnot(id) => game.server.others.0.iter().any(|o| o.id == id),
-        TrackedTarget::NaturalKnot { id, .. } => game
-            .common
-            .entities.knots
-            .iter()
-            .any(|k| k.id == id),
+        TrackedTarget::NaturalKnot { id, .. } => {
+            game.common.entities.knots.iter().any(|k| k.id == id)
+        }
     }
 }
 
@@ -154,7 +152,8 @@ pub fn target_bounds(game: &crate::game::ServerGame<'_>, target: TrackedTarget) 
         TrackedTarget::Stand(id) => {
             let a = game
                 .common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|a| a.id == id)
                 .unwrap();

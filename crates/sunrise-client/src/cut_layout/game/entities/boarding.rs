@@ -55,7 +55,8 @@ pub(crate) mod tests {
             ));
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let (vehicle, rider) = (90, 91);
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(vehicle, pig.clone(), Vec3::ZERO, 0.0));
             let order = game.boarding_order(vehicle, 12, true);
             let dimension = game.dim.id().to_owned();
@@ -105,7 +106,8 @@ pub(crate) mod tests {
                 .clone();
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let (vehicle, rider) = (90, 91);
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(vehicle, ghast, Vec3::new(8.5, 64.0, 8.5), 0.0));
             let order = game.boarding_order(vehicle, 12, true);
             let dimension = game.dim.id().to_owned();

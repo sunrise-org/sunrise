@@ -341,7 +341,8 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_re
             );
 
             let t_fangs = game
-                .entities.fangs
+                .entities
+                .fangs
                 .list
                 .iter()
                 .find(|f| f.pos.map(f64::to_bits) == pause.target_fangs_pos.map(f64::to_bits));
@@ -360,7 +361,8 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_re
                 stage.name
             );
             let t_items: Vec<_> = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .filter(|d| in_chunk(d.position, pause.target_chunk))
                 .collect();
@@ -376,7 +378,8 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_re
             }
 
             let c_fangs = game
-                .entities.fangs
+                .entities
+                .fangs
                 .list
                 .iter()
                 .find(|f| f.pos.map(f64::to_bits) == pause.control_fangs_pos.map(f64::to_bits));
@@ -395,7 +398,8 @@ pub(crate) fn run_fangs_and_an_ominous_item_spawner_pause_on_scheduled_ticket_re
                 stage.name
             );
             let c_items: Vec<_> = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .filter(|d| in_chunk(d.position, pause.control_chunk))
                 .collect();

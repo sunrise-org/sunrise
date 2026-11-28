@@ -69,7 +69,8 @@ impl crate::game::ServerGame<'_> {
         // the ones a thrown trident is in.
         for p in self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .filter(|p| p.arrow.is_some())
         {

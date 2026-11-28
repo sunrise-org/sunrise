@@ -83,7 +83,8 @@ impl ServerGame<'_> {
             let vanilla = sunrise_gameplay_common::game::dragon_common::Crystal::DIMENSIONS;
             if let Some(answer) = self.ask_entity_size(id, Pose::Standing, vanilla, previous) {
                 self.common
-                    .entities.crystals
+                    .entities
+                    .crystals
                     .update(i, |c| c.size_answer = Some(answer));
             }
         }
@@ -731,7 +732,12 @@ pub(in crate::game) mod tests {
                 // The same pose again: no new size, no new call.
                 entity_data(game, id, vec![pose(2)]);
                 assert_eq!(calls(seen), expected, "asleep, same pose again");
-                let m = game.entities.mobs.iter().find(|m| m.id == id as u32).unwrap();
+                let m = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id as u32)
+                    .unwrap();
                 assert_eq!((m.width(), m.height()), (0.4, 0.4));
                 // Waking: the pose stands it up, before or after the bed is cleared.
                 if bed_first {
@@ -882,9 +888,11 @@ pub(in crate::game) mod tests {
         }
         with_server(true, |game, seen| {
             let (cart_at, other_at) = (Vec3::new(8.5, 70.0, 8.5), Vec3::new(10.0, 70.0, 8.5));
-            game.entities.carts
+            game.entities
+                .carts
                 .push(Minecart::new(9001, CartKind::Rideable, cart_at));
-            game.entities.carts
+            game.entities
+                .carts
                 .push(Minecart::new(9002, CartKind::Rideable, other_at));
             game.spawn_item(
                 sunrise_items::items::ItemStack::new("minecraft:stone", 1),
@@ -894,7 +902,9 @@ pub(in crate::game) mod tests {
             );
             let item = game.entities.dropped.last().unwrap().id;
             let stand_at = Vec3::new(2.5, 70.0, 6.5);
-            game.entities.armor_stands.push(ArmorStand::new(9004, stand_at, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(9004, stand_at, 0.0));
             let shot_at = Vec3::new(2.5, 70.0, 2.5);
             let mut shot = Projectile::new(ProjectileKind::Snowball, shot_at, None);
             shot.id = 9003;
@@ -995,9 +1005,16 @@ pub(in crate::game) mod tests {
                     sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                 )
                 .unwrap();
-            let health = game.entities.mobs.iter().find(|m| m.id == pig).unwrap().health;
+            let health = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == pig)
+                .unwrap()
+                .health;
             game.common
-                .entities.falling
+                .entities
+                .falling
                 .push(sunrise_gameplay_common::game::FallingBlock {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
@@ -1031,7 +1048,13 @@ pub(in crate::game) mod tests {
             let mut anvil = game.entities.falling[0].clone();
             game.entities.falling.remove(0);
             game.falling_block_impact(&mut anvil);
-            let hurt = game.entities.mobs.iter().find(|m| m.id == pig).unwrap().health;
+            let hurt = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == pig)
+                .unwrap()
+                .health;
             assert!(hurt < health, "{hurt} < {health}");
         });
     }
@@ -1065,7 +1088,10 @@ pub(in crate::game) mod tests {
             game.native_mob_sizes();
             game.tick_creature_entities().unwrap();
             let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
-            assert!(!game.entities.mobs[i].is_baby(), "the calf grew up in its tick");
+            assert!(
+                !game.entities.mobs[i].is_baby(),
+                "the calf grew up in its tick"
+            );
             // EntityType.COW: 0.9 by 1.4, eyes 1.3.
             let cow = [0.9, 1.4, 1.3];
             let calls: Vec<_> = seen
@@ -1098,7 +1124,9 @@ pub(in crate::game) mod tests {
         }
         with_server(false, |game, _| {
             let at = Vec3::new(8.5, 70.0, 8.5);
-            game.entities.carts.push(Minecart::new(9001, CartKind::Rideable, at));
+            game.entities
+                .carts
+                .push(Minecart::new(9001, CartKind::Rideable, at));
             game.native_mob_sizes();
             game.native_entity_sizes();
             assert_eq!(game.entities.carts[0].size_answer, None);

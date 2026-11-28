@@ -281,7 +281,8 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
                 dimension: game.dim.key(),
                 kind: Kind::Mob,
             };
-            game.entities.mobs
+            game.entities
+                .mobs
                 .bind_residency(&journal, owner, |m| (m.id, m.join));
             let ids: &[u32] = match output {
                 Output::Push => &[70, 71, 72],
@@ -437,7 +438,11 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
             assert!(lifts > 0);
             assert_eq!(depth, 0, "borrowed region was not restored");
             assert_eq!(
-                game.entities.mobs.iter().map(|m| (m.id, m.join)).collect::<Vec<_>>(),
+                game.entities
+                    .mobs
+                    .iter()
+                    .map(|m| (m.id, m.join))
+                    .collect::<Vec<_>>(),
                 rows
             );
             assert!(
@@ -488,7 +493,10 @@ pub(crate) fn run_fixture(family: Family, output: Output, dim: Dim) {
 
             if unwind.is_some() {
                 assert!(
-                    game.entities.mobs[1].ai.targets.is_running("BorrowedTarget"),
+                    game.entities.mobs[1]
+                        .ai
+                        .targets
+                        .is_running("BorrowedTarget"),
                     "actual native target selector was lost"
                 );
                 assert!(

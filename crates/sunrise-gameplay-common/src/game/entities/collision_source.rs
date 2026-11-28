@@ -102,7 +102,8 @@ pub trait CollisionSourceGameExt1<'__sg>: crate::game::SideGame<'__sg> {
                     }
                 }
                 for b in self
-                    .entities.boats
+                    .entities
+                    .boats
                     .iter()
                     .map(|b| boat(|id, p, bounds| self.client_copy_box(id, p, bounds), b))
                 {

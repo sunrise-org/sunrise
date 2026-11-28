@@ -99,7 +99,8 @@ impl ClientGame<'_> {
     pub(in crate::game::client_side) fn remote_fangs_event(&mut self, id: u32, event: i8) {
         let sound = self
             .common
-            .entities.fangs
+            .entities
+            .fangs
             .list
             .iter()
             .position(|f| f.id == id)

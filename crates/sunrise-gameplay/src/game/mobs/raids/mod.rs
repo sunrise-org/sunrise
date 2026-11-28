@@ -592,7 +592,8 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn raid_glow(&mut self, id: i32) {
         let targets: Vec<u32> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| raider::state(m).is_some_and(|s| s.raid_id == Some(id)))
             .map(|m| m.id)
@@ -695,7 +696,8 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn register_loaded_raiders(&mut self) {
         let pending: Vec<(u32, i32, i32, f32, bool)> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| m.alive() && !m.removed)
             .filter_map(|m| {
@@ -1017,7 +1019,8 @@ impl crate::game::ServerGame<'_> {
         let now = self.common.world.game_time;
         let golems: HashSet<u32> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| m.species() == Species::IronGolem)
             .map(|m| m.id)
@@ -1041,7 +1044,8 @@ impl crate::game::ServerGame<'_> {
         }
         let banners: Vec<(usize, u32, Vec3)> = self
             .common
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .enumerate()
             .filter(|(_, e)| {
@@ -1754,7 +1758,8 @@ impl crate::game::ServerGame<'_> {
             };
             let m = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id && m.species() == Species::Villager)
                 .ok_or("raid observation: actor is not a villager")?;

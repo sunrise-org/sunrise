@@ -76,7 +76,8 @@ fn items_past_the_simulation_distance_enter_no_end_gateway() {
             .insert((cx, 0), Arc::new(Chunk::empty(cx, 0)));
         game.load_ticking_neighbourhood(cx, 0);
         game.world.set(x, 64, 8, gateway).unwrap();
-        game.entities.dropped
+        game.entities
+            .dropped
             .push(item(id, Vec3::new(f64::from(x) + 0.5, 64.2, 8.5)));
     }
     game.update_chunk_tickets();

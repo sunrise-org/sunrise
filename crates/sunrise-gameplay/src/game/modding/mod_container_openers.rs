@@ -198,7 +198,8 @@ impl ServerGame<'_> {
             }
             let golems = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .filter(|m| {
                     m.species() == Species::CopperGolem

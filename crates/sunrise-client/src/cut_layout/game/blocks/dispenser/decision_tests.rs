@@ -70,7 +70,12 @@ fn crown_is_prepared_once_for_three_and_eight_dispenser_candidates() {
                     sunrise_gameplay_common::game::equip_answers::take_equip_conversions(),
                     1
                 );
-                for mob in game.entities.mobs.iter().filter(|mob| ids.contains(&mob.id)) {
+                for mob in game
+                    .entities
+                    .mobs
+                    .iter()
+                    .filter(|mob| ids.contains(&mob.id))
+                {
                     assert_eq!(mob_slot_item(mob, Slot::Head).is_some(), mob.id == 23);
                 }
             });

@@ -609,7 +609,8 @@ fn load_saved_row(
         .load_listed(fixture::KIND, Some(uuid), None, saved)
         .unwrap();
     let id = server
-        .entities.general
+        .entities
+        .general
         .rows
         .iter()
         .find(|row| row.uuid == uuid)

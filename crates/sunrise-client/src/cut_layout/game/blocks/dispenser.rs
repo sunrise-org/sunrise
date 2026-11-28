@@ -394,7 +394,8 @@ pub(crate) mod tests {
         super::super::native_entity_refs::tests::with_game(|game| {
             let kind = game.res.mob_types().get("minecraft:cod").unwrap().clone();
             for id in [70, 71, 72] {
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(id, kind.clone(), Vec3::new(0.5, 70.0, 0.5), 0.0));
             }
             let holder = mod_api::EntityRef::new(game.native_lifecycle.epoch().unwrap(), 71);
@@ -415,7 +416,8 @@ pub(crate) mod tests {
                 [70, 71, 72]
             );
             let current = game
-                .entities.mobs
+                .entities
+                .mobs
                 .update(1, |m| m.attachment_lifetime().registration().unwrap());
             assert!(original.same_registration(&current));
             assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
@@ -692,7 +694,9 @@ pub(crate) mod tests {
                 .guests
                 .update(0, |g| g.entity_id = guest_id);
             game.entities.armor_stands.clear();
-            game.entities.armor_stands.extend(vec![stand_at(stand_id, 8.5, 8.5)]);
+            game.entities
+                .armor_stands
+                .extend(vec![stand_at(stand_id, 8.5, 8.5)]);
             let (done, _) = dispense_at_guest(&mut game, "minecraft:iron_helmet");
             assert!(done);
             let guest = game.server.lan.as_ref().unwrap().hub.guest(2).unwrap();
@@ -701,7 +705,10 @@ pub(crate) mod tests {
                 guest_first,
                 "stand {stand_id}, guest {guest_id}"
             );
-            assert_eq!(game.entities.armor_stands[0].equipment[5].is_some(), !guest_first);
+            assert_eq!(
+                game.entities.armor_stands[0].equipment[5].is_some(),
+                !guest_first
+            );
         }
     }
     /// `forEachAccessibleNonEmptySection` walks sections before join order:
@@ -715,7 +722,8 @@ pub(crate) mod tests {
         game.server.lan.as_mut().unwrap().hub.guests.clear();
         // Stand boxes are 0.5 wide: x 16.2 spans 15.95..16.45.
         game.entities.armor_stands.clear();
-        game.entities.armor_stands
+        game.entities
+            .armor_stands
             .extend(vec![stand_at(1, 16.2, 8.5), stand_at(2, 15.5, 8.5)]);
         let mut stack = ItemStack::new("minecraft:iron_helmet", 1);
         assert!(game.dispense_equipment((15, 201, 8), Direction::Down, &mut stack));
@@ -795,7 +803,10 @@ pub(crate) mod tests {
                 assert_eq!(out, None);
                 assert!(heard.take().is_empty());
                 assert_eq!(game.entities.dropped.len(), 1);
-                assert_eq!(game.entities.dropped[0].stack, ItemStack::new("minecraft:stick", 1));
+                assert_eq!(
+                    game.entities.dropped[0].stack,
+                    ItemStack::new("minecraft:stick", 1)
+                );
                 assert!(events.iter().any(|e| e == "L 1000 5,64,5 0"), "{events:?}");
             });
         });

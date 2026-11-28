@@ -36,10 +36,9 @@ impl MobTarget<'_> {
     fn get_mut<'b>(&'b mut self, game: &'b mut crate::game::ServerGame<'_>) -> Option<&'b mut Mob> {
         match self {
             Self::Resident { id, join } => {
-                let idx = game
-                    .entities.mobs
-                    .locate(*join)
-                    .filter(|&k| game.entities.mobs[k].id == *id && !game.entities.mobs[k].removed)?;
+                let idx = game.entities.mobs.locate(*join).filter(|&k| {
+                    game.entities.mobs[k].id == *id && !game.entities.mobs[k].removed
+                })?;
                 Some(&mut game.entities.mobs[idx])
             }
             Self::Unjoined(mob) => (!mob.removed).then_some(&mut **mob),

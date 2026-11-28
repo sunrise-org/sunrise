@@ -806,7 +806,8 @@ pub(crate) mod sweep_tests {
                     "the lifted row returned, exactly once"
                 );
                 let arrow = game
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .next()
                     .expect("the arrow is still in the list");

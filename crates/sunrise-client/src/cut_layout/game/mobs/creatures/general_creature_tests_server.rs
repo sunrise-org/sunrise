@@ -194,7 +194,9 @@ fn wolf_owner_rejoining_receives_the_kill_statistic() {
             wolf.extra.tame = true;
             wolf.extra.owner = Some(sunrise_sim::lan::playerdata::uuid_ints(12));
             game.entities.mobs.push(wolf);
-            game.entities.mobs.push(Mob::new(101, pig_type, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(101, pig_type, Vec3::ZERO, 0.0));
             {
                 let value = false;
                 game.server

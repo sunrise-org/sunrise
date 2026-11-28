@@ -91,7 +91,12 @@ pub(crate) fn matrix(mods: mod_api::Mods) {
                             1
                         );
                         assert_eq!(game.world.block(0, 64, 0), target_state);
-                        assert!(game.entities.mobs.iter().all(|mob| !mob.removed && mob.alive()));
+                        assert!(
+                            game.entities
+                                .mobs
+                                .iter()
+                                .all(|mob| !mob.removed && mob.alive())
+                        );
                         assert_eq!(
                             game.swings_started - swings,
                             if server_only {

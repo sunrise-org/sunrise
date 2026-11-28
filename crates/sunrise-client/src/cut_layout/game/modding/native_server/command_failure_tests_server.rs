@@ -32,7 +32,8 @@ fn tracked_executor_failure_survives_saved_depth_boundary() {
                             panic!("expected a command block");
                         };
                         block.set_command(command);
-                        game.entities.carts
+                        game.entities
+                            .carts
                             .update(0, |cart| cart.command.set_command(command));
                         game.world.game_time += 1;
                         game.command_block_tick(BlockPos::new(pos.0, pos.1, pos.2));

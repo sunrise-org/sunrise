@@ -382,7 +382,8 @@ fn neutral_load_restores_only_the_saved_live_target_with_or_without_listeners() 
             .load_mob(saved_neutral("minecraft:enderman", uuid), None)
             .unwrap();
         assert_eq!(
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter()
                 .find(|mob| mob.id == live)
                 .unwrap()
@@ -391,7 +392,8 @@ fn neutral_load_restores_only_the_saved_live_target_with_or_without_listeners() 
             Some(sunrise_sim::mobs::Who::Mob(zombie))
         );
         assert_eq!(
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter()
                 .find(|mob| mob.id == absent)
                 .unwrap()
@@ -400,7 +402,12 @@ fn neutral_load_restores_only_the_saved_live_target_with_or_without_listeners() 
             None,
             "an offline UUID must never become a different player"
         );
-        let enderman_state = game.entities.mobs.iter().find(|mob| mob.id == enderman).unwrap();
+        let enderman_state = game
+            .entities
+            .mobs
+            .iter()
+            .find(|mob| mob.id == enderman)
+            .unwrap();
         assert_eq!(
             enderman_state.ai.target,
             Some(sunrise_sim::mobs::Who::Mob(zombie))
@@ -1204,7 +1211,8 @@ fn a_lingering_cloud_leaves_with_its_chunk() {
         ),
     ]);
     let clouds = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-        game.entities.breath_clouds
+        game.entities
+            .breath_clouds
             .iter()
             .filter(|c| c.potion.is_some())
             .count()
@@ -1410,7 +1418,10 @@ fn an_orb_saves_its_live_portal_cooldown() {
             .unwrap();
         game.handle_entity_portals();
         assert_eq!(game.entities.orbs[0].fire_ticks, 39, "one tick of Fire");
-        assert_eq!(game.entities.orbs[0].air, 299, "the stored air does not tick");
+        assert_eq!(
+            game.entities.orbs[0].air, 299,
+            "the stored air does not tick"
+        );
         assert_eq!(
             game.server
                 .portals
@@ -1432,7 +1443,10 @@ fn an_orb_saves_its_live_portal_cooldown() {
         assert_eq!(written.len(), 1, "the orb leaves with its chunk");
         game.world.queue_entity_nbt((0, 0), written);
         game.spawn_loaded_entities();
-        assert_eq!(game.entities.orbs[0].fire_ticks, 39, "the reload keeps the fire");
+        assert_eq!(
+            game.entities.orbs[0].fire_ticks, 39,
+            "the reload keeps the fire"
+        );
         assert_eq!(game.entities.orbs[0].air, 299, "and the air");
         let read = game
             .command_target_nbt(sunrise_gameplay_common::game::commands_common::Target::Orb(

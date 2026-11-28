@@ -193,10 +193,14 @@ fn two_entities_are_asked_in_the_draw_queues_order() {
     with_player_pair(&heard, |game| {
         game.client.pack_ids = Some(Default::default());
         game.common
-            .entities.mobs
+            .entities
+            .mobs
             .push(mob(game, "minecraft:zombie", 91, 0.0));
         admit_own_player(game, false);
-        game.common.entities.mobs.push(mob(game, "minecraft:cow", 92, 2.0));
+        game.common
+            .entities
+            .mobs
+            .push(mob(game, "minecraft:cow", 92, 2.0));
         let (out, ..) = game.entity_geometry(CAMERA, 1.0, None, Vec::new(), &mut Vec::new());
         assert_eq!(
             events(&heard),
@@ -245,7 +249,8 @@ fn a_spectator_following_an_entity_submits_no_local_body() {
         admit_own_player(game, true);
         game.mode = GameMode::Spectator;
         game.common
-            .entities.mobs
+            .entities
+            .mobs
             .push(mob(game, "minecraft:zombie", 91, 0.0));
         game.handle_packet(Clientbound::SetCamera(SetCamera { camera_id: 91 }))
             .unwrap();
@@ -408,7 +413,12 @@ pub(in crate::game::client_side) fn run_entity_draw_order_after_client_packets()
                 }),
                 ["beams", crystal] => {
                     let id: u32 = crystal.parse().unwrap();
-                    let index = game.entities.crystals.iter().position(|c| c.id == id).unwrap();
+                    let index = game
+                        .entities
+                        .crystals
+                        .iter()
+                        .position(|c| c.id == id)
+                        .unwrap();
                     game.entities.dragon.as_mut().unwrap().nearest_crystal = Some(index);
                     check_beams = true;
                     C::SetEntityData(play::SetEntityData {
@@ -553,7 +563,8 @@ fn a_canceled_living_pre_skips_the_model_and_the_post_hook() {
     let heard: Arc<Mutex<Heard>> = Arc::default();
     with_pair(&heard, |game| {
         game.common
-            .entities.mobs
+            .entities
+            .mobs
             .push(mob(game, "minecraft:zombie", 91, 0.0));
         let drawn = mob_frame(game);
         assert!(drawn.len() > 4, "its model, beside the marker");
@@ -703,7 +714,8 @@ fn a_culled_entity_is_asked_neither_hook() {
     with_pair(&heard, |game| {
         // Far past any render distance.
         game.common
-            .entities.mobs
+            .entities
+            .mobs
             .push(mob(game, "minecraft:zombie", 91, 100_000.0));
         let out = mob_frame(game);
         assert_eq!(events(&heard), Vec::<String>::new());

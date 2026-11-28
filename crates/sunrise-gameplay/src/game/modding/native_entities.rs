@@ -79,7 +79,9 @@ impl crate::game::ServerGame<'_> {
                             None
                         ))
                     }
-                    "minecraft:falling_block" if deferred.1 < game.common.entities.falling.len() => {
+                    "minecraft:falling_block"
+                        if deferred.1 < game.common.entities.falling.len() =>
+                    {
                         Some(super::entity_residency::assign_resident_id!(
                             game.common.entities.falling,
                             deferred.1,
@@ -88,7 +90,9 @@ impl crate::game::ServerGame<'_> {
                             Some(&f.attachment_lifetime)
                         ))
                     }
-                    "minecraft:firework_rocket" if deferred.2 < game.common.entities.rockets.len() => {
+                    "minecraft:firework_rocket"
+                        if deferred.2 < game.common.entities.rockets.len() =>
+                    {
                         Some(super::entity_residency::assign_resident_id!(
                             game.common.entities.rockets,
                             deferred.2,
@@ -362,7 +366,12 @@ impl crate::game::ServerGame<'_> {
     pub fn assign_pending_join_ids(&mut self) {
         self.assign_dragon_and_crystal_ids();
         use super::entity_residency::assign_resident_ids;
-        assign_resident_ids!(self.common.entities.tnts, t, &mut self.server.next_entity, None);
+        assign_resident_ids!(
+            self.common.entities.tnts,
+            t,
+            &mut self.server.next_entity,
+            None
+        );
         assign_resident_ids!(
             self.common.entities.falling,
             f,
@@ -375,8 +384,18 @@ impl crate::game::ServerGame<'_> {
             &mut self.server.next_entity,
             Some(&p.attachment_lifetime)
         );
-        assign_resident_ids!(self.common.entities.tridents, t, &mut self.server.next_entity, None);
-        assign_resident_ids!(self.common.entities.rockets, r, &mut self.server.next_entity, None);
+        assign_resident_ids!(
+            self.common.entities.tridents,
+            t,
+            &mut self.server.next_entity,
+            None
+        );
+        assign_resident_ids!(
+            self.common.entities.rockets,
+            r,
+            &mut self.server.next_entity,
+            None
+        );
     }
     /// The entity inserted earliest after `mark` (and, with a `through`, no later than it), but
     /// the `skipped`.
@@ -484,9 +503,10 @@ impl crate::game::ServerGame<'_> {
                 "minecraft:end_crystal".into(),
                 self.common.entities.crystals[i].position,
             ),
-            Slot::Apart(Apart::Cushion(i)) => {
-                ("minecraft:cushion".into(), self.common.entities.cushions[i].position)
-            }
+            Slot::Apart(Apart::Cushion(i)) => (
+                "minecraft:cushion".into(),
+                self.common.entities.cushions[i].position,
+            ),
             Slot::Apart(Apart::Painting(i)) => (
                 "minecraft:painting".into(),
                 block(self.common.entities.paintings[i].pos),
@@ -507,7 +527,8 @@ impl crate::game::ServerGame<'_> {
             Slot::Apart(Apart::Dragon) => (
                 "minecraft:ender_dragon".into(),
                 self.common
-                    .entities.dragon
+                    .entities
+                    .dragon
                     .as_ref()
                     .map_or(Vec3::ZERO, |d| d.position),
             ),
@@ -519,25 +540,29 @@ impl crate::game::ServerGame<'_> {
             Slot::Walk(handle) => return self.refresh_entity_handle(id, handle).map(Slot::Walk),
             Slot::Apart(Apart::Crystal(_)) => self
                 .common
-                .entities.crystals
+                .entities
+                .crystals
                 .iter()
                 .position(|e| e.id == id)
                 .map(Apart::Crystal),
             Slot::Apart(Apart::Cushion(_)) => self
                 .common
-                .entities.cushions
+                .entities
+                .cushions
                 .iter()
                 .position(|e| e.id == id)
                 .map(Apart::Cushion),
             Slot::Apart(Apart::Painting(_)) => self
                 .common
-                .entities.paintings
+                .entities
+                .paintings
                 .iter()
                 .position(|e| e.id == id)
                 .map(Apart::Painting),
             Slot::Apart(Apart::Frame(_)) => self
                 .common
-                .entities.item_frames
+                .entities
+                .item_frames
                 .iter()
                 .position(|e| e.id == id)
                 .map(Apart::Frame),
@@ -550,7 +575,8 @@ impl crate::game::ServerGame<'_> {
                 .map(Apart::Other),
             Slot::Apart(Apart::Dragon) => self
                 .common
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .filter(|e| e.id == id)
                 .map(|_| Apart::Dragon),
@@ -655,10 +681,26 @@ impl crate::game::ServerGame<'_> {
         super::entity::for_each_entity!(super::entity::entity_lists_of!(self.common), e => {
             seen(e.id());
         });
-        self.common.entities.crystals.iter().for_each(|c| seen(c.id));
-        self.common.entities.cushions.iter().for_each(|c| seen(c.id));
-        self.common.entities.paintings.iter().for_each(|p| seen(p.id));
-        self.common.entities.item_frames.iter().for_each(|f| seen(f.id));
+        self.common
+            .entities
+            .crystals
+            .iter()
+            .for_each(|c| seen(c.id));
+        self.common
+            .entities
+            .cushions
+            .iter()
+            .for_each(|c| seen(c.id));
+        self.common
+            .entities
+            .paintings
+            .iter()
+            .for_each(|p| seen(p.id));
+        self.common
+            .entities
+            .item_frames
+            .iter()
+            .for_each(|f| seen(f.id));
         self.server.others.0.iter().for_each(|e| seen(e.id));
         if let Some(d) = self.common.entities.dragon.as_ref() {
             seen(d.id);
@@ -763,7 +805,8 @@ mod tests {
             );
             assert_eq!(
                 game.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .map(|mob| mob.id)
                     .collect::<Vec<_>>(),

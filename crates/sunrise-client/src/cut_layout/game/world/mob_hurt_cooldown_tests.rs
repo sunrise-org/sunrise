@@ -58,7 +58,8 @@ fn with_game(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
 /// (`invulnerableTime`, `lastHurt`).
 fn pig(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> (f32, i32, f32) {
     let m = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .find(|m| game.persist.uuid_of(m.id) == Some([0, 248, 0, n]))
         .unwrap();

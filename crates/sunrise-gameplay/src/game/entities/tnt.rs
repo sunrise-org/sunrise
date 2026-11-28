@@ -189,13 +189,15 @@ impl ServerGame<'_> {
             self.nonliving_fall_on(id, position, movement.effect);
             self.post_landing_event(position, bounds, false);
         }
-        let Some(i) = super::native_ticks::place(&self.common.entities.tnts, i, |t| t.id == id) else {
+        let Some(i) = super::native_ticks::place(&self.common.entities.tnts, i, |t| t.id == id)
+        else {
             return Ok(());
         };
         let response = self.common.entities.tnts[i]
             .move_restitution(self.common.body_motion(&game_side!(self)), movement);
         let mut velocity = self.finish_body_restitution((id, "minecraft:tnt"), position, response);
-        let Some(i) = super::native_ticks::place(&self.common.entities.tnts, i, |t| t.id == id) else {
+        let Some(i) = super::native_ticks::place(&self.common.entities.tnts, i, |t| t.id == id)
+        else {
             return Ok(());
         };
         self.common
@@ -239,7 +241,8 @@ impl ServerGame<'_> {
         for pos in tops {
             self.bubble_column_particles(pos);
         }
-        let Some(i) = super::native_ticks::place(&self.common.entities.tnts, i, |t| t.id == id) else {
+        let Some(i) = super::native_ticks::place(&self.common.entities.tnts, i, |t| t.id == id)
+        else {
             return Ok(());
         };
         let t = &self.common.entities.tnts[i];
@@ -302,7 +305,10 @@ impl ServerGame<'_> {
     pub fn tnt_nbt(&mut self, i: usize) -> sunrise_core::nbt::Tag {
         let id = self.common.entities.tnts[i].id;
         let uuid = self.uuid_for(id);
-        let owner = self.tnt_owner_uuid(self.common.entities.tnts[i].owner, self.common.entities.tnts[i].guest);
+        let owner = self.tnt_owner_uuid(
+            self.common.entities.tnts[i].owner,
+            self.common.entities.tnts[i].guest,
+        );
         let t = &self.common.entities.tnts[i];
         sunrise_sim::entity_nbt::tnt_to_nbt(
             t.position,
@@ -335,7 +341,9 @@ impl ServerGame<'_> {
                     .map(|g| uuid_ints(g.uuid)),
                 None => self.common.level.player_uuid,
             },
-            Who::Mob(id) if self.common.entities.mobs.iter().any(|m| m.id == id) => Some(self.uuid_for(id)),
+            Who::Mob(id) if self.common.entities.mobs.iter().any(|m| m.id == id) => {
+                Some(self.uuid_for(id))
+            }
             Who::Mob(id) => self.common.persist.uuids.get(&id).copied(),
         }
     }
@@ -359,7 +367,8 @@ impl ServerGame<'_> {
     pub(in crate::game::server_side) fn set_tnt_blast_owner(&mut self, id: u32) {
         let (owner, guest) = self
             .common
-            .entities.tnts
+            .entities
+            .tnts
             .iter()
             .find(|t| t.id == id)
             .map_or((None, None), |t| (t.owner, t.guest));

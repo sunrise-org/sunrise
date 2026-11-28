@@ -15,7 +15,10 @@ impl crate::game::ServerGame<'_> {
     }
 
     fn native_minecart(&self, cart: MinecartRef) -> Option<&Minecart> {
-        self.common.entities.carts.get(self.native_minecart_index(cart)?)
+        self.common
+            .entities
+            .carts
+            .get(self.native_minecart_index(cart)?)
     }
 
     /// Edits a cart, of one kind if `kind` is given. False for another kind

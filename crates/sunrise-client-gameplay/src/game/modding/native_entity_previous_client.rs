@@ -24,7 +24,8 @@ impl ClientGame<'_> {
             Target::Trident(id) => list_join_by_id(&self.common.entities.tridents, id),
             Target::Crystal(id) => self
                 .common
-                .entities.crystals
+                .entities
+                .crystals
                 .iter()
                 .find(|crystal| crystal.id == id)
                 .map(|crystal| crystal.join),

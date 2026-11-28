@@ -221,7 +221,8 @@ impl ServerGame<'_> {
             );
             for m in self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter_mut()
                 .filter(|m| m.species() == Species::Axolotl && !m.removed)
             {

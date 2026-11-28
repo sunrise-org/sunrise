@@ -119,7 +119,8 @@ impl crate::game::ServerGame<'_> {
         };
         if self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == mob)
             .is_some_and(|m| {
@@ -351,7 +352,8 @@ impl crate::game::ServerGame<'_> {
                         });
                     }
                     let kind = game
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .find(|m| m.id == mob)
                         .map(sunrise_gameplay_common::game::native_hooks::mob_kind);
@@ -517,7 +519,8 @@ impl TakeReads {
                         .is_some_and(|gm| gm.window == self.window && gm.merchant.mob == Some(mob))
             })
             && game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .any(|m| m.id == mob && m.alive() && !m.removed)
             && guest.menu_generation == self.hub_generation

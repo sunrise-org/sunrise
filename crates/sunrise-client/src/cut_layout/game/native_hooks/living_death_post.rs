@@ -116,7 +116,12 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::living_
                 let mut mob = sheep(game, player_blow);
                 // The last hurt by a player, so the death rolls experience.
                 mob.ai.last_hurt_by_player = 100;
-                game.entities.mobs.last_mut().unwrap().ai.last_hurt_by_player = 100;
+                game.entities
+                    .mobs
+                    .last_mut()
+                    .unwrap()
+                    .ai
+                    .last_hurt_by_player = 100;
                 game.mob_die(&mob);
                 assert_eq!(
                     *heard.lock().unwrap(),
@@ -261,7 +266,8 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::living_
                 assert_eq!(post.attacker, Some(0), "no attacker was recorded");
                 assert!(post.experience_before, "the experience ran before it");
                 assert!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .any(|d| &*d.stack.item == "minecraft:stone"),
                     "the inventory was dropped before it"

@@ -272,7 +272,12 @@ fn starts_and_stops_are_heard_at_their_packets() {
             .hub
             .guests
             .update(0, |g| g.position = [4000.5, 64.0, 8.5]);
-        let index = game.entities.dropped.iter().position(|d| d.id == near).unwrap();
+        let index = game
+            .entities
+            .dropped
+            .iter()
+            .position(|d| d.id == near)
+            .unwrap();
         let _ = game.entities.dropped.remove(index);
         assert_eq!(
             sorted(tick_until_heard(game, heard)),

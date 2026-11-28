@@ -467,7 +467,10 @@ fn respawn_arrivals_hold_movement_then_resume_damage_and_pickups() {
             for _ in 0..20 {
                 game.tick_guests();
             }
-            assert!(game.entities.dropped.is_empty(), "pickups resume after arrival");
+            assert!(
+                game.entities.dropped.is_empty(),
+                "pickups resume after arrival"
+            );
             assert!(
                 game.server.lan.as_ref().unwrap().hub.guests[0]
                     .inventory

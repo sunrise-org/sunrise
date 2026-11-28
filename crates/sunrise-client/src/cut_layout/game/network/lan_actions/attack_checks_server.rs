@@ -170,7 +170,12 @@ pub(crate) mod tests {
         )];
 
         let hp = |g: &sunrise_gameplay::game::ServerGame<'_>| {
-            g.entities.mobs.iter().find(|m| m.id as i32 == pig).unwrap().health
+            g.entities
+                .mobs
+                .iter()
+                .find(|m| m.id as i32 == pig)
+                .unwrap()
+                .health
         };
         let full = hp(&game);
         attack(&mut game, 2, pig);

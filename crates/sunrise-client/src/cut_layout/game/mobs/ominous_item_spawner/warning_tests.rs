@@ -122,7 +122,8 @@ fn residency_spawner_load_expiry_and_spawn_order() {
         assert_eq!(game.entities.ominous_spawners[0].id, survivor);
         assert_eq!(game.entities.ominous_spawners[0].tick_count, 1);
         assert_eq!(
-            game.entities.dropped
+            game.entities
+                .dropped
                 .iter()
                 .map(|e| e.stack.item.as_ref())
                 .collect::<Vec<_>>(),
@@ -168,7 +169,8 @@ fn taken_spawner_tick_keeps_survivors_before_both_spawns() {
             || game.tick_ominous_item_spawners(),
         );
         assert_eq!(
-            game.entities.ominous_spawners
+            game.entities
+                .ominous_spawners
                 .iter()
                 .map(|s| (s.id, s.tick_count))
                 .collect::<Vec<_>>(),
@@ -197,7 +199,13 @@ fn lifecycle_spawner_commands_unload_park_and_remote_metadata() {
                 game.add_remote_ominous_item_spawner(id, at);
             }
         },
-        ids: |game| game.entities.ominous_spawners.iter().map(|s| s.id).collect(),
+        ids: |game| {
+            game.entities
+                .ominous_spawners
+                .iter()
+                .map(|s| s.id)
+                .collect()
+        },
         target: Target::Spawner,
         unloads_with_chunk: true,
         remote: None,
@@ -210,7 +218,13 @@ fn lifecycle_spawner_commands_unload_park_and_remote_metadata() {
                 game.add_remote_ominous_item_spawner(id, at);
             }
         },
-        |game| game.entities.ominous_spawners.iter().map(|s| s.id).collect(),
+        |game| {
+            game.entities
+                .ominous_spawners
+                .iter()
+                .map(|s| s.id)
+                .collect()
+        },
         RemoteLifecycle {
             prepare: |game| {
                 let (client, _server) = Pipe::pair();
@@ -236,7 +250,8 @@ fn lifecycle_spawner_commands_unload_park_and_remote_metadata() {
                     )],
                 );
                 let changed = game
-                    .entities.ominous_spawners
+                    .entities
+                    .ominous_spawners
                     .iter()
                     .find(|s| s.id == update)
                     .unwrap();
@@ -256,7 +271,10 @@ fn residency_command_positions_and_client_spawner_clock() {
         game.add_remote_ominous_item_spawner(701, [1.0, 80.0, 1.0]);
         game.spawn_creeper_cloud([2.0, 80.0, 2.0], Vec::new(), Vec::new(), Vec::new(), 0);
         assert!(game.run_command("tp @e[type=minecraft:ominous_item_spawner] 64.0 80.0 64.0"));
-        assert_eq!(game.entities.ominous_spawners[0].position, [64.0, 80.0, 64.0]);
+        assert_eq!(
+            game.entities.ominous_spawners[0].position,
+            [64.0, 80.0, 64.0]
+        );
         assert!(game.run_command("tp @e[type=minecraft:area_effect_cloud] -32.0 90.0 -48.0"));
         assert_eq!(game.entities.breath_clouds[0].at, [-32.0, 90.0, -48.0]);
         #[cfg(feature = "client")]
@@ -274,7 +292,10 @@ fn with_spawner_client(
 ) {
     crate::game::server_side::native_entity_refs::tests::with_client_game(|client| {
         client.world.game_time = server.world.game_time;
-        client.entities.ominous_spawners.append(&mut server.entities.ominous_spawners);
+        client
+            .entities
+            .ominous_spawners
+            .append(&mut server.entities.ominous_spawners);
         test(client);
     });
 }

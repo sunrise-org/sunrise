@@ -1209,7 +1209,8 @@ pub(crate) mod tests {
                 let new_chest = game.world.block_entities.get(&CELL).unwrap();
                 assert!(new_chest.slots().iter().all(Option::is_none));
                 let dropped: u32 = game
-                    .entities.dropped
+                    .entities
+                    .dropped
                     .iter()
                     .filter(|entity| &*entity.stack.item == CONTENT)
                     .map(|entity| entity.stack.count)

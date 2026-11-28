@@ -444,7 +444,12 @@ pub(crate) use sunrise_gameplay::game::server_side::creatures_server::pending_bi
 pub(crate) use crate::game::server_side::creatures_server::pending_birth_tests::breed_pair_credited;
 
 pub(crate) fn find(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Mob {
-    game.entities.mobs.iter().find(|m| m.id == id).unwrap().clone()
+    game.entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .clone()
 }
 
 #[test]
@@ -520,7 +525,8 @@ fn breeding_replaces_the_cow_baby_with_a_pig_baby() {
             );
             assert_eq!(
                 game.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .filter(|m| m.kind.id == "minecraft:cow")
                     .count(),
@@ -529,7 +535,8 @@ fn breeding_replaces_the_cow_baby_with_a_pig_baby() {
             );
             assert_eq!(
                 game.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .filter(|m| m.kind.id == "minecraft:pig")
                     .count(),
@@ -567,10 +574,14 @@ fn breeding_veto_leaves_no_baby_orb_or_statistic_and_the_parents_resting() {
                 before + 2,
                 "only the two parents exist"
             );
-            assert!(game.common.entities.mobs.iter().all(|m| m.extra.age >= 0), "no baby");
+            assert!(
+                game.common.entities.mobs.iter().all(|m| m.extra.age >= 0),
+                "no baby"
+            );
             assert!(
                 !game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .any(|m| m.kind.id == "minecraft:experience_orb"),
                 "no experience"
@@ -645,7 +656,11 @@ fn clearing_the_baby_without_cancel_leaves_parents_and_credit_untouched() {
             );
             assert_eq!(animals_bred(game), 0);
             assert!(game.server.love_cause.contains_key(&parent));
-            assert_eq!(game.common.entities.mobs.len(), 2, "only the parents remain");
+            assert_eq!(
+                game.common.entities.mobs.len(),
+                2,
+                "only the parents remain"
+            );
             for mob in &game.common.entities.mobs {
                 assert_eq!(mob.extra.age, 0);
                 assert_eq!(mob.extra.in_love, 599);
@@ -1135,7 +1150,13 @@ fn a_noop_birth_listener_leaves_goal_position_age_and_random_unchanged() {
         let parent = add_ready_pair(game);
         game.tick_creature_entities().unwrap();
         let m = find(game, parent);
-        let baby = game.common.entities.mobs.iter().find(|m| m.extra.age < 0).unwrap();
+        let baby = game
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.extra.age < 0)
+            .unwrap();
         assert_eq!(baby.position, Vec3::new(0.5, 80.0, 0.5));
         assert_eq!(m.extra.age, 5999);
         m.random.state()
@@ -1170,11 +1191,18 @@ fn breeding_dispatches_when_proposed_child_is_none_and_accepts_replacement() {
             0.0,
         ));
         game.common
-            .entities.mobs
+            .entities
+            .mobs
             .push(Mob::new(base + 2, kind, Vec3::new(4.0, 64.0, 4.0), 0.0));
         game.native_joins_skip();
         for id in [base + 1, base + 2] {
-            let m = game.common.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
+            let m = game
+                .common
+                .entities
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == id)
+                .unwrap();
             m.random = LegacyRandom::new(0);
             m.extra.age = 0;
             m.extra.in_love = 600;
@@ -1451,7 +1479,11 @@ fn a_later_birth_unwind_does_not_lose_or_replay_a_cube_removal() {
             assert_eq!(calls.load(Ordering::Relaxed), 1);
             assert!(!game.entities.mobs.iter().any(|m| m.id == cube_id));
             let slime_counts = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-                let slimes = game.entities.mobs.iter().filter(|m| m.species() == Species::Slime);
+                let slimes = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .filter(|m| m.species() == Species::Slime);
                 let (mut splits, mut oozing) = (0, 0);
                 for slime in slimes {
                     if slime.position.x == 10.0 && slime.position.z == 10.0 {
@@ -1471,7 +1503,8 @@ fn a_later_birth_unwind_does_not_lose_or_replay_a_cube_removal() {
             game.tick_creature_entities().unwrap();
             assert_eq!(calls.load(Ordering::Relaxed), 1);
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .filter(|m| m.species() == Species::Slime)
                     .count(),
@@ -1668,7 +1701,8 @@ fn detached_constructed_baby_preserves_attachments_and_reattaches_across_worlds_
             // Reattached cow received a fresh ID, kept its constructor attachment (41),
             // and was NOT double-constructed.
             let cow = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.kind.id == "minecraft:cow")
                 .expect("reattached cow joined World 2")

@@ -366,7 +366,8 @@ fn a_players_move_by_stops_at_a_boat() {
             .unwrap();
         game.server.next_entity += 1;
         let id = game.server.next_entity;
-        game.entities.boats
+        game.entities
+            .boats
             .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                 id,
                 "oak".into(),
@@ -452,7 +453,9 @@ fn a_players_move_by_falls_through_a_happy_ghast_that_is_not_held_still() {
             .get("minecraft:happy_ghast")
             .unwrap()
             .clone();
-        game.entities.mobs.push(Mob::new(id, kind, Vec3::new(x, y, z), 0.0));
+        game.entities
+            .mobs
+            .push(Mob::new(id, kind, Vec3::new(x, y, z), 0.0));
         let up = game
             .entity_move_by(b.entity(), [0.0, 6.0, 0.0], MoveCause::SelfMovement)
             .unwrap();
@@ -1040,7 +1043,8 @@ fn another_guest_follows_a_vehicle_teleported_during_a_turn() {
             .update_guest(13, |guest| guest.vehicle = Some(42))
             .unwrap();
         let horse = game.res.mob_types().get("minecraft:horse").unwrap().clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(42, horse, Vec3::new(3.0, 64.0, 5.0), 0.0));
         // Boarding publishes the seat back to the hub after positioning the body.
         game.guest_boarded(13, None);
@@ -1078,7 +1082,8 @@ fn a_mounted_guests_turn_publishes_its_teleport_without_dismounting() {
 
     with_guests(|game| {
         let horse = game.res.mob_types().get("minecraft:horse").unwrap().clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(42, horse, Vec3::new(3.0, 64.0, 5.0), 0.0));
         // Ordinary seating sends no teleport. A passenger transition does,
         // even to the same position; both carry the transition's relative axes.
@@ -1583,7 +1588,11 @@ fn a_vetoed_drop_gives_the_stack_back() {
                 Ok(Some(stone.try_into_api().unwrap())),
                 "a vetoed toss comes back whole"
             );
-            assert_eq!(game.entities.dropped.len(), before, "and makes no item entity");
+            assert_eq!(
+                game.entities.dropped.len(),
+                before,
+                "and makes no item entity"
+            );
             let empty = ItemStack::new("minecraft:stone", 0);
             assert_eq!(
                 game.player_drop_stack(player, empty.clone(), false),

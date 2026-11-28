@@ -133,7 +133,10 @@ pub(crate) mod tests {
             game.world.queue_entity_nbt((0, 0), vec![saved]);
             game.spawn_loaded_entities();
             assert_eq!(game.entities.tnts.len(), 1);
-            assert!(!game.entities.tnts[0].used_portal, "ordinary NBT marker {marker}");
+            assert!(
+                !game.entities.tnts[0].used_portal,
+                "ordinary NBT marker {marker}"
+            );
             game.entities.tnts.clear();
         }
     }
@@ -325,13 +328,20 @@ pub(crate) mod tests {
         ));
         assert!(game.run_command("summon tnt 5.5 200 5.5 {UUID:[I;89,0,0,1],fuse:40s,Motion:[0d,0d,0d],NoGravity:1b,explosion_power:2f,owner:[I;89,0,0,3],Tags:[keep],Silent:1b}"));
         let pig = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| game.persist.uuid_of(m.id) == Some([89, 0, 0, 3]))
             .unwrap()
             .id;
         assert_eq!(
-            game.entities.mobs.iter().find(|m| m.id == pig).unwrap().kind.id,
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == pig)
+                .unwrap()
+                .kind
+                .id,
             "minecraft:pig"
         );
         assert_eq!(game.entities.tnts.len(), 1);
@@ -600,7 +610,12 @@ pub(crate) mod tests {
                     game.server.lan_events.clear();
                     let particles = particle_count(&game);
                     let clouds = game.entities.breath_clouds.len();
-                    let xp: u32 = game.entities.orbs.iter().map(|o| o.points() * o.count).sum();
+                    let xp: u32 = game
+                        .entities
+                        .orbs
+                        .iter()
+                        .map(|o| o.points() * o.count)
+                        .sum();
                     game.tick_creature_entities().unwrap();
                     assert!(!game.entities.projectiles.iter().any(|p| p.id == id));
                     assert!(particle_count(&game) > particles, "{kind} keeps its splash");
@@ -613,7 +628,13 @@ pub(crate) mod tests {
                         game.entities.breath_clouds.len() - clouds,
                         usize::from(kind == "lingering_potion")
                     );
-                    let gained = game.entities.orbs.iter().map(|o| o.points() * o.count).sum::<u32>() - xp;
+                    let gained = game
+                        .entities
+                        .orbs
+                        .iter()
+                        .map(|o| o.points() * o.count)
+                        .sum::<u32>()
+                        - xp;
                     if kind == "experience_bottle" {
                         assert!((3..=11).contains(&gained), "silence keeps the experience");
                     }
@@ -697,7 +718,12 @@ pub(crate) mod tests {
                         },
                     )
                     .unwrap();
-                    let xp: u32 = game.entities.orbs.iter().map(|o| o.points() * o.count).sum();
+                    let xp: u32 = game
+                        .entities
+                        .orbs
+                        .iter()
+                        .map(|o| o.points() * o.count)
+                        .sum();
                     let next = game.world.random.next_long();
                     assert!((3..=11).contains(&xp));
                     if let Some((audible_xp, audible_next)) = audible {
@@ -782,7 +808,11 @@ pub(crate) mod tests {
             game.entities.tnts.iter().all(|t| t.id != first),
             "the first TNT went off"
         );
-        assert_eq!(game.entities.tnts.len(), 1, "its blast primed the TNT block");
+        assert_eq!(
+            game.entities.tnts.len(),
+            1,
+            "its blast primed the TNT block"
+        );
         let primed = &game.entities.tnts[0];
         assert_eq!(
             primed.position, primed.previous,
@@ -839,7 +869,8 @@ pub(crate) mod entity_collision_tests {
             }
             let boat_top = game.entities.boats[0].bounds().max_position().y;
             let tnt_at = |z: f64| {
-                game.entities.tnts
+                game.entities
+                    .tnts
                     .iter()
                     .find(|t| (t.position.z - z).abs() < 0.5)
                     .map(|t| t.position.y)
@@ -865,7 +896,8 @@ pub(crate) mod entity_collision_tests {
                 "nor is it placed over air"
             );
             assert!(
-                game.entities.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .any(|i| &*i.stack.item == "minecraft:sand"),
                 "the sand breaks into an item"

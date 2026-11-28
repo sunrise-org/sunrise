@@ -115,7 +115,10 @@ fn a_placed_cushion_keeps_its_stacks_custom_name() {
     game.creative = true;
     assert!(game.place_cushion(&top_hit(), &named_stack()));
     assert_eq!(game.entities.cushions.len(), 1);
-    assert_eq!(game.entities.cushions[0].position, Vec3::new(AT[0], AT[1], AT[2]));
+    assert_eq!(
+        game.entities.cushions[0].position,
+        Vec3::new(AT[0], AT[1], AT[2])
+    );
     assert_eq!(
         game.entities.cushions[0].custom_name,
         Some(Tag::String("Seat".into())),
@@ -180,7 +183,10 @@ fn a_creative_blast_leaves_no_cushion_item() {
         )
         .unwrap();
         game.server.lan_acting = None;
-        assert!(game.entities.cushions.is_empty(), "the blast breaks the cushion");
+        assert!(
+            game.entities.cushions.is_empty(),
+            "the blast breaks the cushion"
+        );
         assert_eq!(
             game.entities.dropped.len(),
             dropped,
@@ -214,7 +220,10 @@ fn a_cushion_that_loses_its_support_is_discarded_silently() {
         vec![("minecraft:entity_die", AT, Some(Who::Player))],
         "a player's break kills the cushion"
     );
-    assert!(game.entities.dropped.is_empty(), "a creative breaker gets no item");
+    assert!(
+        game.entities.dropped.is_empty(),
+        "a creative breaker gets no item"
+    );
 
     assert!(game.place_cushion(&top_hit(), &named_stack()));
     assert!(game.run_command("setblock 4 199 4 air strict"));
@@ -225,7 +234,10 @@ fn a_cushion_that_loses_its_support_is_discarded_silently() {
     assert!(game.entities.cushions.is_empty(), "the cushion is gone");
     assert_eq!(events(), [], "a discarded cushion posts no game event");
     assert_eq!(game.entities.dropped.len(), 1, "it still drops its item");
-    assert_eq!(game.entities.dropped[0].stack.custom_name().as_deref(), Some("Seat"));
+    assert_eq!(
+        game.entities.dropped[0].stack.custom_name().as_deref(),
+        Some("Seat")
+    );
 }
 
 fn doubles(v: [f64; 3]) -> Tag {

@@ -30,7 +30,8 @@ impl crate::game::CommonGame<'_> {
         edit: impl FnOnce(&mut Minecart) -> R,
     ) -> Option<R> {
         let i = self
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .position(|c| c.id == id && c.kind == CartKind::CommandBlock)?;
         Some(self.entities.carts.update(i, edit))

@@ -119,7 +119,9 @@ pub(crate) mod tests {
             floor_and_zombies(game);
             let zombie = game.living(game.entity(12).unwrap()).unwrap();
             let spear = ItemStack::new("minecraft:iron_spear", 1);
-            game.entities.mobs[0].extra.set_slot_stack(MAINHAND, Some(spear));
+            game.entities.mobs[0]
+                .extra
+                .set_slot_stack(MAINHAND, Some(spear));
             game.entities.mobs[0].ai.targets.clear();
             game.entities.mobs[0].ai.goals.clear();
             assert!(game.living_start_using_item(zombie, Hand::Main));
@@ -424,7 +426,8 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(40, kind, Vec3::new(3.0, 64.0, 5.0), 0.0));
             let zombie = game.living(game.entity(40).unwrap()).unwrap();
             // The hand in the swing packet the flush sends after each swing.

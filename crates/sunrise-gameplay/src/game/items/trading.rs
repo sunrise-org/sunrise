@@ -228,7 +228,10 @@ impl ServerGame<'_> {
                     Vec::new()
                 }
             };
-            let trade = self.common.entities.mobs[index].extra.trade.get_or_insert_default();
+            let trade = self.common.entities.mobs[index]
+                .extra
+                .trade
+                .get_or_insert_default();
             trade.offers = offers;
             trade.unset = false;
         }
@@ -480,7 +483,9 @@ impl ServerGame<'_> {
             self.journal_merchant_mob(id);
         }
         let mut silent = false;
-        if let Some(m) = mob.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id)) {
+        if let Some(m) =
+            mob.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id))
+        {
             session.give_mob_clock(m);
             silent = m.silent;
             if villager {
@@ -574,7 +579,8 @@ impl ServerGame<'_> {
             if let (Some(id), Some(_)) = (mob, self.server.lan_acting)
                 && let Some(kind) = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id)
                     .map(sunrise_gameplay_common::game::native_hooks::mob_kind)
@@ -596,7 +602,8 @@ impl ServerGame<'_> {
             self.villager_trade_pending(id);
             if let Some(villager) = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| self.mob_entity(m))

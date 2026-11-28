@@ -729,7 +729,8 @@ impl crate::game::ClientGame<'_> {
             return Some(("minecraft:armor_stand".to_owned(), true));
         }
         self.common
-            .entities.crystals
+            .entities
+            .crystals
             .iter()
             .any(|c| c.id == id)
             .then(|| ("minecraft:end_crystal".to_owned(), false))

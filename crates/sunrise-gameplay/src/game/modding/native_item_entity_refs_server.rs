@@ -77,7 +77,8 @@ impl crate::game::ServerGame<'_> {
         };
         hint.filter(|&i| {
             self.common
-                .entities.dropped
+                .entities
+                .dropped
                 .get(i)
                 .is_some_and(|row| row.join == location.join)
         })
@@ -97,7 +98,8 @@ impl crate::game::ServerGame<'_> {
     ) -> Option<()> {
         let stack = &self
             .common
-            .entities.dropped
+            .entities
+            .dropped
             .get(self.native_item_entity_index(item, None)?)?
             .stack;
         let metadata = stack_read_metadata(stack).ok()?;
@@ -162,7 +164,8 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn item_entity_age(&self, item: ItemEntityRef) -> Option<i32> {
         Some(
             self.common
-                .entities.dropped
+                .entities
+                .dropped
                 .get(self.native_item_entity_index(item, None)?)?
                 .age,
         )
@@ -171,7 +174,8 @@ impl crate::game::ServerGame<'_> {
     /// The UUID set by `ItemEntity.setTarget`, limiting pickup to that player.
     pub(in crate::game) fn item_entity_target(&self, item: ItemEntityRef) -> Option<u128> {
         self.common
-            .entities.dropped
+            .entities
+            .dropped
             .get(self.native_item_entity_index(item, None)?)?
             .target
             .map(ints_uuid)
@@ -194,7 +198,8 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn item_entity_owner(&self, item: ItemEntityRef) -> Option<EntityRef> {
         let uuid = self
             .common
-            .entities.dropped
+            .entities
+            .dropped
             .get(self.native_item_entity_index(item, None)?)?
             .thrower?;
         let target = self.target_by_uuid(ints_uuid(uuid))?;
@@ -274,7 +279,11 @@ mod tests {
             assert_eq!(game.entities.orbs.len(), 1);
             assert_eq!(guest.exp_cooldown(game), Some(2));
             assert_eq!(guest.touch_orb(game, second), Ok(false));
-            assert_eq!(game.entities.orbs.len(), 1, "the delay left it on the ground");
+            assert_eq!(
+                game.entities.orbs.len(),
+                1,
+                "the delay left it on the ground"
+            );
             assert_eq!(
                 guest.touch_orb(game, first),
                 Err(mod_api::PickupError::Stale)
@@ -345,7 +354,11 @@ mod tests {
             assert_eq!(game.experience.total, 7);
             assert_eq!(player.exp_cooldown(game), Some(2));
             assert_eq!(player.touch_orb(game, second), Ok(false));
-            assert_eq!(game.entities.orbs.len(), 1, "the delay left it on the ground");
+            assert_eq!(
+                game.entities.orbs.len(),
+                1,
+                "the delay left it on the ground"
+            );
             assert_eq!(game.experience.total, 7);
             assert_eq!(
                 player.touch_orb(game, first),
@@ -404,7 +417,10 @@ mod tests {
                 .unwrap();
                 assert_eq!(player.touch_orb(game, orb), Ok(false));
                 assert_eq!(calls.load(Ordering::Relaxed), 1);
-                assert_eq!((game.entities.orbs.len(), game.entities.orbs[0].count), (1, 1));
+                assert_eq!(
+                    (game.entities.orbs.len(), game.entities.orbs[0].count),
+                    (1, 1)
+                );
                 assert_eq!(game.experience.total, 0);
                 assert_eq!(player.exp_cooldown(game), Some(0));
             });
@@ -422,7 +438,10 @@ mod tests {
                 .unwrap();
                 assert_eq!(guest.touch_orb(game, orb), Ok(false));
                 assert_eq!(calls.load(Ordering::Relaxed), 2);
-                assert_eq!((game.entities.orbs.len(), game.entities.orbs[0].count), (1, 1));
+                assert_eq!(
+                    (game.entities.orbs.len(), game.entities.orbs[0].count),
+                    (1, 1)
+                );
                 assert_eq!(guest.exp_cooldown(game), Some(0));
             });
         });
@@ -504,7 +523,8 @@ mod tests {
                     .unwrap();
                 assert_eq!(player.touch_item(game, item), Ok(5));
                 assert_eq!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .map(|d| d.stack.count)
                         .collect::<Vec<_>>(),
@@ -571,7 +591,8 @@ mod tests {
                     .unwrap();
                 assert_eq!(guest.touch_item(game, item), Ok(5));
                 assert_eq!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .map(|d| d.stack.count)
                         .collect::<Vec<_>>(),
@@ -682,7 +703,10 @@ mod tests {
             );
             assert_eq!(held(game, 13), living_before);
             assert_eq!(game.entities.dropped.len(), 1);
-            assert_eq!((game.entities.orbs.len(), game.entities.orbs[0].count), (1, 1));
+            assert_eq!(
+                (game.entities.orbs.len(), game.entities.orbs[0].count),
+                (1, 1)
+            );
         });
     }
 }

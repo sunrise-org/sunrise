@@ -44,7 +44,10 @@ pub(crate) mod tests {
         }
         // Replacing the shape between moves doesn't select a new support.
         common.world.set(8, 64, 8, stone).unwrap();
-        assert_eq!(common.breeze_ground(&common.entities.mobs[0]), ([8, 64, 8], stone));
+        assert_eq!(
+            common.breeze_ground(&common.entities.mobs[0]),
+            ([8, 64, 8], stone)
+        );
         // The same breeze on the full block's top reads that block.
         common.entities.mobs[0].position = Vec3::new(8.5, 65.0, 8.5);
         let _ = common.entities.mobs[0].update_retained_ground(
@@ -54,7 +57,10 @@ pub(crate) mod tests {
             true,
             None,
         );
-        assert_eq!(common.breeze_ground(&common.entities.mobs[0]), ([8, 64, 8], stone));
+        assert_eq!(
+            common.breeze_ground(&common.entities.mobs[0]),
+            ([8, 64, 8], stone)
+        );
     }
 
     #[cfg(feature = "client")]

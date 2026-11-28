@@ -73,7 +73,8 @@ fn shoot(game: &mut sunrise_gameplay::game::ServerGame<'_>, z: f64) {
 }
 
 fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) -> usize {
-    game.entities.dropped
+    game.entities
+        .dropped
         .iter()
         .filter(|d| &*d.stack.item == item)
         .count()
@@ -90,8 +91,15 @@ fn an_arrow_knocks_the_item_out_then_breaks_the_frame() {
     ));
     assert_eq!(game.entities.item_frames.len(), 1);
     shoot(&mut game, 6.5);
-    assert_eq!(game.entities.item_frames.len(), 1, "the first hit leaves the frame");
-    assert!(game.entities.item_frames[0].item.is_none(), "the item came out");
+    assert_eq!(
+        game.entities.item_frames.len(),
+        1,
+        "the first hit leaves the frame"
+    );
+    assert!(
+        game.entities.item_frames[0].item.is_none(),
+        "the item came out"
+    );
     assert_eq!(dropped(&game, "minecraft:diamond"), 1);
     // The empty frame breaks and drops itself.
     shoot(&mut game, 6.5);
@@ -117,9 +125,7 @@ fn a_fixed_frame_refuses_the_arrow() {
     // The frame took the arrow's hit and refused it, so the arrow turned back
     // (`AbstractArrow.onHitEntity`'s deflection) instead of reaching the wall.
     assert!(
-        game.entities.projectiles
-            .iter()
-            .all(|p| p.position.x < 3.9),
+        game.entities.projectiles.iter().all(|p| p.position.x < 3.9),
         "the arrow went through the frame"
     );
 }

@@ -16,7 +16,8 @@ fn a_given_invisibility_hides_a_mobs_waypoint_and_a_loaded_one_does_not() {
         ));
         let mob = |game: &sunrise_gameplay::game::ServerGame<'_>, n: i32| {
             let m = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| game.persist.uuid_of(m.id) == Some([1988, 0, 0, n]))
                 .expect("the summoned zombie");

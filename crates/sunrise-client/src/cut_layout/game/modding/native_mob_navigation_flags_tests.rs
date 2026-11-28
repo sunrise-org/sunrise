@@ -15,7 +15,8 @@ fn zombie(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> MobRef {
         .get("minecraft:zombie")
         .unwrap()
         .clone();
-    game.entities.mobs
+    game.entities
+        .mobs
         .push(Mob::new(99, kind, Vec3::new(3.5, 65.0, 3.5), 0.0));
     game.mob(game.entity(99).unwrap()).unwrap()
 }
@@ -85,7 +86,8 @@ fn navigation_flags_refuse_held_out_of_level() {
         let mob = zombie(game);
         let held = game.entities.mobs.lift();
         refused(game, mob);
-        game.entities.mobs
+        game.entities
+            .mobs
             .restore(held, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
     });
 }
@@ -127,7 +129,8 @@ fn path_to_exact_goal(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32
         let path = mobs[index].create_path_to(&world, [10, 65, 3], 0);
         mobs[index].nav_move_to_path(&world, path, 1.0)
     };
-    game.entities.mobs
+    game.entities
+        .mobs
         .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
     started
 }
@@ -205,13 +208,15 @@ fn navigation_flags_closed_door_path_reaches_goal_only_when_passable() {
                     path_to_exact_goal(game, id);
                 }
                 let before = game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id)
                     .map(|m| (m.position, m.health));
                 game.tick().unwrap();
                 let at = game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id)
                     .unwrap_or_else(|| panic!("zombie removed at tick {tick}, before={before:?}"))

@@ -64,7 +64,8 @@ fn a_brewed_remainder_ignores_the_block_drops_rule() {
     game.tick_brewing_stand(pos).expect("the stand ticks");
 
     let bottle = game
-        .entities.dropped
+        .entities
+        .dropped
         .iter()
         .find(|i| &*i.stack.item == "minecraft:glass_bottle")
         .expect("the dragon's breath left its bottle");

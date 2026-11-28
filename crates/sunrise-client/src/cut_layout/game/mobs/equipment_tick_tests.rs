@@ -90,7 +90,8 @@ fn a_mobs_compass_loses_a_broken_lodestone_and_keeps_the_others() {
             )));
         }
         let id = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| game.persist.uuid_of(m.id) == Some([UUID_HIGH, 0, 0, n]))
             .expect("the summoned zombie")

@@ -175,7 +175,8 @@ pub(crate) mod stand_lodestone_inventory_tick_tests {
             let x = f64::from(n * 2) + 0.5;
             assert!(game.run_command(&format!("summon armor_stand {x} 200.0 4.5 {{UUID:[I;42321,0,0,{n}],Health:20f,NoGravity:1b}}")));
             let id = game
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|a| game.persist.uuid_of(a.id) == Some([42321, 0, 0, n]))
                 .unwrap()
@@ -191,7 +192,12 @@ pub(crate) mod stand_lodestone_inventory_tick_tests {
             for hand in ["mainhand", "offhand"] {
                 assert!(game.run_command(&format!("item replace entity {who} weapon.{hand} with compass[minecraft:lodestone_tracker={{{tracker}}},minecraft:custom_data={{marker:{n}}}] 1")));
             }
-            let a = game.entities.armor_stands.iter().find(|a| a.id == id).unwrap();
+            let a = game
+                .entities
+                .armor_stands
+                .iter()
+                .find(|a| a.id == id)
+                .unwrap();
             assert_eq!(a.position, Vec3::new(x, 200.0, 4.5));
             assert!(a.no_gravity);
             assert!(a.first_tick, "fresh actual stand has not ticked yet");
@@ -243,7 +249,12 @@ pub(crate) mod stand_lodestone_inventory_tick_tests {
         game.tick_armor_stands().unwrap();
         let mut mismatches = Vec::new();
         for (id, n, target) in ids {
-            let a = game.entities.armor_stands.iter().find(|a| a.id == id).unwrap();
+            let a = game
+                .entities
+                .armor_stands
+                .iter()
+                .find(|a| a.id == id)
+                .unwrap();
             assert_eq!(a.position, Vec3::new(f64::from(n * 2) + 0.5, 200.0, 4.5));
             assert_eq!(a.health, 20.0);
             assert!(a.no_gravity);
@@ -325,7 +336,8 @@ pub(crate) mod postbaseline_lodestone_controls {
         id: u32,
         slot: usize,
     ) -> &'g ItemStack {
-        game.entities.armor_stands
+        game.entities
+            .armor_stands
             .iter()
             .find(|a| a.id == id)
             .unwrap()
@@ -397,7 +409,8 @@ pub(crate) mod postbaseline_lodestone_controls {
         assert!(game.run_command("fill 64 199 64 79 199 79 stone"));
         assert!(game.run_command(&format!("summon armor_stand 65.5 200.0 65.5 {{UUID:[I;42321,0,0,102],Health:20f,NoGravity:1b,equipment:{{mainhand:{}}}}}",item("minecraft:compass",tracked,100,1))));
         let id = |n| {
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .iter()
                 .find(|a| game.persist.uuid_of(a.id) == Some([42321, 0, 0, n]))
                 .unwrap()
@@ -418,7 +431,8 @@ pub(crate) mod postbaseline_lodestone_controls {
         assert!(game.world.loaded(65, 65));
         let before: Vec<_> = (0..6)
             .map(|slot| {
-                game.entities.armor_stands
+                game.entities
+                    .armor_stands
                     .iter()
                     .find(|a| a.id == mixed)
                     .unwrap()
@@ -442,7 +456,8 @@ pub(crate) mod postbaseline_lodestone_controls {
         game.tick_armor_stands().unwrap();
         assert!(
             !game
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|a| a.id == all)
                 .unwrap()
@@ -450,7 +465,8 @@ pub(crate) mod postbaseline_lodestone_controls {
             "active stand really ticked"
         );
         assert!(
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .iter()
                 .find(|a| a.id == inactive)
                 .unwrap()
@@ -472,7 +488,8 @@ pub(crate) mod postbaseline_lodestone_controls {
         }
         let after: Vec<_> = (0..6)
             .map(|slot| {
-                game.entities.armor_stands
+                game.entities
+                    .armor_stands
                     .iter()
                     .find(|a| a.id == mixed)
                     .unwrap()

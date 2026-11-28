@@ -169,7 +169,12 @@ impl ServerGame<'_> {
     /// `OfferFlowerGoal.stop` (`MobEvent::Gift`): the item on the target's
     /// empty antenna, as a guaranteed drop.
     pub fn receive_gift(&mut self, target: u32, item: &'static str) {
-        if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == target)
+        if let Some(m) = self
+            .common
+            .entities
+            .mobs
+            .iter_mut()
+            .find(|m| m.id == target)
             && m.saddle_item().is_none()
         {
             m.set_saddle(Some(ItemStack::new(item, 1)));
@@ -207,7 +212,8 @@ impl ServerGame<'_> {
             );
             let count = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .filter(|m| {
                     m.species() == Species::CopperGolem
@@ -267,7 +273,8 @@ impl ServerGame<'_> {
     pub fn golem_become_statue(&mut self, id: u32) {
         let Some(i) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .position(|m| m.id == id && !m.removed)
         else {
@@ -277,7 +284,12 @@ impl ServerGame<'_> {
             let mut m = game.entities.mobs[i].clone();
             let became_statue = game.golem_turn_to_statue(&mut m);
             let position = m.position.components();
-            if let Some(i) = game.entities.mobs.iter().position(|x| x.id == id && !x.removed) {
+            if let Some(i) = game
+                .entities
+                .mobs
+                .iter()
+                .position(|x| x.id == id && !x.removed)
+            {
                 game.entities.mobs.update(i, |owner| {
                     sunrise_sim::join_seq::store_back(owner, m);
                 });

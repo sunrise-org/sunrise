@@ -124,7 +124,8 @@ pub(crate) mod on_entity_item_update_tests {
 pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::on_entity_item_update::on_entity_item_update_tests::rest;
 
     pub(crate) fn counts(game: &sunrise_gameplay::game::ServerGame<'_>, ids: &[u32]) -> Vec<u32> {
-        game.entities.dropped
+        game.entities
+            .dropped
             .iter()
             .filter(|item| ids.contains(&item.id))
             .map(|item| item.stack.count)
@@ -216,16 +217,31 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::on_enti
                     );
                 }
                 for id in irons {
-                    let held = game.entities.dropped.iter().find(|item| item.id == id).unwrap();
+                    let held = game
+                        .entities
+                        .dropped
+                        .iter()
+                        .find(|item| item.id == id)
+                        .unwrap();
                     // Nothing of the entity's own tick ran: not its age, nor its delay's
                     // countdown; only the part's write is there.
                     assert_eq!((held.age, held.ticks, held.pickup_delay), (0, 0, 7));
                 }
                 for id in diamonds {
-                    let ticked = game.entities.dropped.iter().find(|item| item.id == id).unwrap();
+                    let ticked = game
+                        .entities
+                        .dropped
+                        .iter()
+                        .find(|item| item.id == id)
+                        .unwrap();
                     assert_eq!((ticked.age, ticked.pickup_delay), (1, 19));
                 }
-                let gold_item = game.entities.dropped.iter().find(|item| item.id == gold_id).unwrap();
+                let gold_item = game
+                    .entities
+                    .dropped
+                    .iter()
+                    .find(|item| item.id == gold_id)
+                    .unwrap();
                 // The part wrote 7, and then the item's own tick counted down.
                 assert_eq!((gold_item.age, gold_item.pickup_delay), (1, 6));
 
@@ -237,7 +253,8 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::on_enti
                 assert_eq!(counts(game, &irons), [1, 1]);
                 assert_eq!(counts(game, &diamonds), [2]);
                 assert!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .filter(|item| irons.contains(&item.id))
                         .all(|item| item.age == 0)
@@ -426,7 +443,8 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::on_enti
             game.tick_items();
             assert_eq!(STACK_PROJECTIONS.get(), 0);
             assert!(
-                game.entities.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .all(|item| (item.age, item.pickup_delay) == (1, 19))
             );

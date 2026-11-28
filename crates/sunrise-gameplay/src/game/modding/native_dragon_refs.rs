@@ -116,7 +116,8 @@ impl crate::game::ServerGame<'_> {
         match target {
             Target::Mob(id) => self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .any(|m| m.id == id && !m.removed && m.alive() && !m.invulnerable_flag),
             Target::Player | Target::Guest(_) => self

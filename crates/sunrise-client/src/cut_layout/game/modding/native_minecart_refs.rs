@@ -22,7 +22,9 @@ mod tests {
         id: u32,
         kind: CartKind,
     ) -> MinecartRef {
-        game.entities.carts.push(Minecart::new(id, kind, Vec3::ZERO));
+        game.entities
+            .carts
+            .push(Minecart::new(id, kind, Vec3::ZERO));
         game.minecart(game.entity(id).unwrap()).unwrap()
     }
 
@@ -141,7 +143,9 @@ mod tests {
             let [rideable, _, furnace, tnt, hopper, ..] = carts[..] else {
                 unreachable!()
             };
-            game.entities.armor_stands.push(ArmorStand::new(99, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(99, Vec3::ZERO, 0.0));
             assert!(game.minecart(game.entity(99).unwrap()).is_none());
 
             // Max speed: old behaviour, water, furnace, then the experiment's rule.
@@ -262,7 +266,9 @@ mod tests {
             // for clients (`onUpdated`), and the cart then runs the new command.
             let command = carts[5];
             assert_eq!(command.command(game).as_deref(), Some(""));
-            game.entities.carts.update(5, |c| c.command.success_count = 3);
+            game.entities
+                .carts
+                .update(5, |c| c.command.success_count = 3);
             assert!(command.set_command(game, "gamerule mob_griefing false"));
             assert_eq!(
                 command.command(game).as_deref(),

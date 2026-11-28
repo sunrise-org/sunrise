@@ -50,7 +50,8 @@ impl crate::game::ServerGame<'_> {
 
     fn native_projectile(&self, projectile: ProjectileRef) -> Option<&Projectile> {
         self.common
-            .entities.projectiles
+            .entities
+            .projectiles
             .get(self.native_projectile_index(projectile)?)
     }
 
@@ -340,7 +341,8 @@ impl crate::game::ServerGame<'_> {
     ) -> Result<(), PierceLevelError> {
         let index = self.native_arrow_index(projectile)?;
         self.common
-            .entities.projectiles
+            .entities
+            .projectiles
             .update(index, |p| p.arrow.as_mut().unwrap().pierce = level as u8);
         Ok(())
     }

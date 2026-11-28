@@ -212,15 +212,27 @@ impl crate::game::ServerGame<'_> {
         // Check removal before borrowing the victim and the lent attacker.
         let dragon_victim = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|d| d.id as i32 == entity)
             .is_some_and(|d| !self.target_removed(&crate::game::commands::Target::Dragon(d.id)));
-        let victim_mob = self.common.entities.mobs.iter().position(|m| m.id as i32 == entity);
+        let victim_mob = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id as i32 == entity);
         // The Post record exists only for a Post subscriber, and names an attacker only if the hit
         // lent one: it carries the setup's decision.
         let lend_mob = original_lend
-            .and_then(|id| self.common.entities.mobs.iter().position(|m| m.id as i32 == id))
+            .and_then(|id| {
+                self.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .position(|m| m.id as i32 == id)
+            })
             .filter(|&index| Some(index) != victim_mob);
         // A parked guest the hit lent, lent again if its reads still answer from its record.
         let parked = original_lend
@@ -230,7 +242,8 @@ impl crate::game::ServerGame<'_> {
             (Some(v), Some(l)) => {
                 let [v, l] = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .get_disjoint_mut([v, l])
                     .expect("two different mobs");
                 (Some(&*v), Some(l))
@@ -310,7 +323,8 @@ impl crate::game::ServerGame<'_> {
         let against = self.common.world.block(pos[0], pos[1] - 1, pos[2]);
         let kind = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == mob)
             .map(|m| m.kind.id.clone());

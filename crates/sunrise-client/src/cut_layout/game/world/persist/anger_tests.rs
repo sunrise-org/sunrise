@@ -60,7 +60,12 @@ fn h13076_loaded_anger_end_time_is_kept() {
         for (id, end) in [(past, 1), (zero, 0), (future, 999_999)] {
             assert_eq!(saved(game, id), Some(Tag::Long(end)), "ticked");
         }
-        let i = game.entities.mobs.iter().position(|m| m.id == future).unwrap();
+        let i = game
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == future)
+            .unwrap();
         // The countdown counted the missed ticks too.
         assert_eq!(
             i64::from(game.entities.mobs[i].extra.anger),

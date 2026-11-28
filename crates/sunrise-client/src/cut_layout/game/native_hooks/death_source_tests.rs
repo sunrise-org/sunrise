@@ -229,7 +229,15 @@ pub(crate) fn player_arrow(
 
 pub(crate) fn finish_projectile_death(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32) {
     game.tick_projectiles().unwrap();
-    assert!(game.entities.mobs.iter().find(|mob| mob.id == id).unwrap().health <= 0.0);
+    assert!(
+        game.entities
+            .mobs
+            .iter()
+            .find(|mob| mob.id == id)
+            .unwrap()
+            .health
+            <= 0.0
+    );
     game.tick_creature_entities().unwrap();
 }
 
@@ -288,7 +296,9 @@ fn skeleton_arrow_death_credits_the_skeleton_not_the_player() {
                 mob(game, 43, "minecraft:zombie", Vec3::new(6.0, 80.0, 4.5));
                 game.entities.mobs[1].health = 1.0;
                 let weapon = bow();
-                game.entities.mobs[0].extra.set_main_hand_stack(Some(weapon.clone()));
+                game.entities.mobs[0]
+                    .extra
+                    .set_main_hand_stack(Some(weapon.clone()));
                 let mut shot = Projectile::new(
                     ProjectileKind::Arrow {
                         base_damage: 2.0,
@@ -334,11 +344,20 @@ pub(crate) fn cancelled_mob(heal: bool) {
             assert!(elapsed < 20);
             for _ in elapsed..19 {
                 game.tick_creature_entities().unwrap();
-                assert!(game.entities.mobs.iter().any(|mob| mob.id == 44 && !mob.removed));
+                assert!(
+                    game.entities
+                        .mobs
+                        .iter()
+                        .any(|mob| mob.id == 44 && !mob.removed)
+                );
             }
             game.tick_creature_entities().unwrap();
             assert!(
-                !game.entities.mobs.iter().any(|mob| mob.id == 44 && !mob.removed),
+                !game
+                    .entities
+                    .mobs
+                    .iter()
+                    .any(|mob| mob.id == 44 && !mob.removed),
                 "body removed at tick 20"
             );
         } else {
@@ -564,7 +583,8 @@ fn later_cancelled_mob_revival_is_transactional_and_a_second_kill_drops_loot() {
                     "the genuine second death reaches its listener"
                 );
                 assert!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .any(|drop| &*drop.stack.item == "minecraft:mutton")
                 );
@@ -695,7 +715,8 @@ fn later_cancelled_player_revival_is_transactional_and_a_second_kill_drops_inven
                 assert!(!guest.body_present());
                 assert!(guest.carried.is_none());
                 assert_eq!(
-                    game.entities.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .filter(|drop| &*drop.stack.item == "minecraft:diamond")
                         .map(|drop| drop.stack.count)

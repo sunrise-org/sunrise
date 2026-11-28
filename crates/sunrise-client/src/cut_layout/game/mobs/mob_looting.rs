@@ -57,12 +57,14 @@ mod tests {
                 ];
                 for (id, name, y) in mobs {
                     let kind = game.res.mob_types().get(name).unwrap().clone();
-                    game.entities.mobs
+                    game.entities
+                        .mobs
                         .push(Mob::new(id, kind, Vec3::new(0.5, y, 0.5), 0.0));
                 }
                 let worn =
                     |game: &sunrise_gameplay::game::ServerGame<'_>, index: usize, slot: Slot| {
-                        finalize::item(&game.entities.mobs[index], slot.index()).map(|item| item.to_string())
+                        finalize::item(&game.entities.mobs[index], slot.index())
+                            .map(|item| item.to_string())
                     };
                 let helmet = ItemStack::new("minecraft:iron_helmet", 1);
                 sunrise_gameplay_common::game::equip_answers::take_equip_conversions();

@@ -84,7 +84,8 @@ fn resident_new_family_lifetimes_bind_move_and_retire() {
 
         game.server.next_entity += 1;
         let id = game.server.next_entity;
-        game.entities.knots
+        game.entities
+            .knots
             .push(sunrise_gameplay_common::leash_knot::Knot {
                 attachment_lifetime: Default::default(),
                 id,
@@ -142,7 +143,8 @@ fn resident_new_family_lifetimes_bind_move_and_retire() {
         assert!(
             registration.same_registration(
                 &game
-                    .entities.dragon
+                    .entities
+                    .dragon
                     .as_mut()
                     .unwrap()
                     .attachment_lifetime()

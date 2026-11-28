@@ -69,7 +69,13 @@ impl crate::game::ServerGame<'_> {
                 self.native_item_toss(uuid, item, &mut canceled);
                 self.common.native_lifecycle.held_joins.pop();
                 if canceled {
-                    if let Some(at) = self.common.entities.dropped.iter().rposition(|d| d.id == id) {
+                    if let Some(at) = self
+                        .common
+                        .entities
+                        .dropped
+                        .iter()
+                        .rposition(|d| d.id == id)
+                    {
                         self.remove_dropped(at);
                     }
                     self.forget_entity(id);
@@ -98,7 +104,13 @@ impl crate::game::ServerGame<'_> {
             let (lo, hi) = corners(c.bounds());
             return Some((lo, hi, at(c.position)));
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == id)
+        {
             let (lo, hi) = corners(a.bounds());
             return Some((lo, hi, at(a.position)));
         }
@@ -271,12 +283,14 @@ impl crate::game::ServerGame<'_> {
             });
         }
         if let Some(index) = self
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .position(|m| m.id as i32 == id && m.alive())
             .filter(|_| {
                 self.common
-                    .entities.dragon
+                    .entities
+                    .dragon
                     .as_ref()
                     .is_none_or(|d| d.id as i32 != id)
             })
@@ -320,12 +334,14 @@ impl crate::game::ServerGame<'_> {
         let (old_yaw, old_pitch) = (host.hub.guests[gi].yaw, host.hub.guests[gi].pitch);
         let boat = self
             .common
-            .entities.boats
+            .entities
+            .boats
             .iter()
             .position(|boat| boat.id as i32 == id);
         let tnt = self
             .common
-            .entities.tnts
+            .entities
+            .tnts
             .iter()
             .find(|tnt| tnt.id as i32 == id)
             .map(|tnt| tnt.id);
@@ -533,7 +549,8 @@ impl crate::game::ServerGame<'_> {
             ));
         }
         self.common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| p.id != 0 && p.id as i32 == id)
             .map(|p| p.bounds())
@@ -876,7 +893,8 @@ impl crate::game::ServerGame<'_> {
                 // side, so the ray meets the boat before them (the server
                 // attacks the entity it is sent).
                 let carries = u32::try_from(id).is_ok_and(|v| {
-                    self.common.entities.boats.iter().any(|b| b.id == v) && !self.boat_mobs(v).is_empty()
+                    self.common.entities.boats.iter().any(|b| b.id == v)
+                        && !self.boat_mobs(v).is_empty()
                 });
                 if carries {
                     let near = |k: usize| eye[k].clamp(lo[k] + 0.01, hi[k] - 0.01);
@@ -895,7 +913,8 @@ impl crate::game::ServerGame<'_> {
         };
         let mob_box = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id as i32 == id)
             .map(|m| {

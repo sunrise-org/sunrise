@@ -1339,7 +1339,8 @@ impl crate::game::ServerGame<'_> {
             Target::Guest(conn) => self.command_guest(conn).is_some_and(|g| !g.dead),
             Target::Mob(id) => self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .any(|m| m.id == id && !m.removed && m.alive()),
             _ => self.target_position(t).is_some(),
@@ -1374,7 +1375,8 @@ impl crate::game::ServerGame<'_> {
         if let Target::Item(id) = t {
             context.dampens = self
                 .common
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .find(|i| i.id == id)
                 .is_some_and(|i| {
@@ -1451,7 +1453,8 @@ impl crate::game::ServerGame<'_> {
                 self.mob_die(&m);
                 if self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .any(|m| m.id == id && !m.removed && (m.alive() || m.death_canceled))
                 {
@@ -1473,7 +1476,14 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Frame(id) => {
                 // ItemFrame.onKilled.
-                if let Some(frame) = self.common.entities.item_frames.iter().find(|f| f.id == id).cloned() {
+                if let Some(frame) = self
+                    .common
+                    .entities
+                    .item_frames
+                    .iter()
+                    .find(|f| f.id == id)
+                    .cloned()
+                {
                     self.remove_framed_map(&frame);
                 }
                 self.common.entities.item_frames.retain(|f| f.id != id);
@@ -1548,14 +1558,45 @@ impl crate::game::ServerGame<'_> {
                 candidates.extend(entity.selector_target());
             }
         });
-        candidates.extend(self.common.entities.item_frames.iter().map(|f| Target::Frame(f.id)));
-        candidates.extend(self.common.entities.paintings.iter().map(|p| Target::Painting(p.id)));
-        candidates.extend(self.common.entities.cushions.iter().map(|c| Target::Cushion(c.id)));
+        candidates.extend(
+            self.common
+                .entities
+                .item_frames
+                .iter()
+                .map(|f| Target::Frame(f.id)),
+        );
+        candidates.extend(
+            self.common
+                .entities
+                .paintings
+                .iter()
+                .map(|p| Target::Painting(p.id)),
+        );
+        candidates.extend(
+            self.common
+                .entities
+                .cushions
+                .iter()
+                .map(|c| Target::Cushion(c.id)),
+        );
         candidates.extend(self.server.others.0.iter().map(|o| Target::Other(o.id)));
-        candidates.extend(self.common.entities.fangs.list.iter().map(|f| Target::Fangs(f.id)));
+        candidates.extend(
+            self.common
+                .entities
+                .fangs
+                .list
+                .iter()
+                .map(|f| Target::Fangs(f.id)),
+        );
         // The End crystals and the dragon (EndCrystal and EnderDragon
         // are entities of their own).
-        candidates.extend(self.common.entities.crystals.iter().map(|c| Target::Crystal(c.id)));
+        candidates.extend(
+            self.common
+                .entities
+                .crystals
+                .iter()
+                .map(|c| Target::Crystal(c.id)),
+        );
         // EnderDragon.isAlive is its health's, through the dying flight too.
         if let Some(d) = self.common.entities.dragon.as_ref()
             && (!alive_only || d.health > 0.0)
@@ -1564,20 +1605,23 @@ impl crate::game::ServerGame<'_> {
         }
         candidates.extend(
             self.common
-                .entities.ominous_spawners
+                .entities
+                .ominous_spawners
                 .iter()
                 .map(|s| Target::Spawner(s.id)),
         );
         candidates.extend(
             self.common
-                .entities.breath_clouds
+                .entities
+                .breath_clouds
                 .iter()
                 .filter(|c| c.id != 0)
                 .map(|c| Target::Cloud(c.id)),
         );
         candidates.extend(
             self.common
-                .entities.bolts
+                .entities
+                .bolts
                 .iter()
                 .filter(|b| b.id != 0)
                 .map(|b| Target::Bolt(b.id)),

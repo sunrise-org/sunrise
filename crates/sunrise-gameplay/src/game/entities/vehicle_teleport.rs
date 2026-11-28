@@ -493,7 +493,8 @@ impl ServerGame<'_> {
                 );
             }
             if game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .any(|m| m.id == root && m.extra.mount.is_some())
             {
@@ -519,7 +520,8 @@ impl ServerGame<'_> {
                     rotation.filter(|_| turn_riders),
                 );
                 let row = game
-                    .entities.general
+                    .entities
+                    .general
                     .rows
                     .iter_mut()
                     .find(|row| row.id == id)
@@ -652,12 +654,24 @@ impl ServerGame<'_> {
         let pos = [v.x.floor() as i32, v.y.floor() as i32, v.z.floor() as i32];
         match t {
             Target::Frame(id) => {
-                if let Some(f) = self.common.entities.item_frames.iter_mut().find(|f| f.id == id) {
+                if let Some(f) = self
+                    .common
+                    .entities
+                    .item_frames
+                    .iter_mut()
+                    .find(|f| f.id == id)
+                {
                     f.pos = pos;
                 }
             }
             Target::Painting(id) => {
-                if let Some(p) = self.common.entities.paintings.iter_mut().find(|p| p.id == id) {
+                if let Some(p) = self
+                    .common
+                    .entities
+                    .paintings
+                    .iter_mut()
+                    .find(|p| p.id == id)
+                {
                     p.pos = pos;
                 }
             }
@@ -739,7 +753,8 @@ impl ServerGame<'_> {
         }
         let row = self
             .common
-            .entities.general
+            .entities
+            .general
             .rows
             .iter()
             .find(|r| r.id == id)?;
@@ -767,7 +782,8 @@ impl ServerGame<'_> {
             }
         } else if let Some(row) = self
             .common
-            .entities.general
+            .entities
+            .general
             .rows
             .iter_mut()
             .find(|row| row.id == id)
@@ -960,7 +976,13 @@ impl ServerGame<'_> {
                 }
             }
             Target::Stand(id) => {
-                if let Some(a) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id) {
+                if let Some(a) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter_mut()
+                    .find(|a| a.id == id)
+                {
                     a.set_rotation([yaw, pitch.unwrap_or(a.pitch)]);
                 }
             }
@@ -990,7 +1012,14 @@ impl ServerGame<'_> {
                 }
             }
             Target::Fangs(id) if yaw.is_finite() => {
-                if let Some(i) = self.common.entities.fangs.list.iter().position(|e| e.id == id) {
+                if let Some(i) = self
+                    .common
+                    .entities
+                    .fangs
+                    .list
+                    .iter()
+                    .position(|e| e.id == id)
+                {
                     self.common.entities.fangs.list.update(i, |f| {
                         f.yaw = yaw;
                     });

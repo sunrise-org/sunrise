@@ -100,7 +100,10 @@ pub(crate) mod tests {
                     }),
                 );
             }
-            assert_eq!(game.entities.mobs[0].extra.profession.id(), "example:engineer");
+            assert_eq!(
+                game.entities.mobs[0].extra.profession.id(),
+                "example:engineer"
+            );
             assert_eq!(game.entities.mobs[0].extra.villager_level, 4);
             assert_eq!(game.entities.mobs[0].extra.trade.as_ref().unwrap().xp, 17);
             assert!(rx.try_iter().any(|out| match out {
@@ -283,7 +286,10 @@ pub(crate) mod tests {
             assert_eq!(sent_offers(), 3);
             // The mob's offers are the screen's (the brain restocks them).
             let live = vec![changed.clone(), second.clone()];
-            assert_eq!(game.entities.mobs[0].extra.trade.as_ref().unwrap().offers, live);
+            assert_eq!(
+                game.entities.mobs[0].extra.trade.as_ref().unwrap().offers,
+                live
+            );
             assert_eq!(villager.offers(game), Some(live.try_into_api().unwrap()));
             assert_eq!(villager.xp(game), Some(40));
             assert_eq!(villager.level(game), Some(3));

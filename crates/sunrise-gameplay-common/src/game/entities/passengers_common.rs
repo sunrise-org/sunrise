@@ -27,7 +27,11 @@ impl crate::game::CommonGame<'_> {
         self.entities.boats.iter().any(|b| b.id == vehicle)
             || self.entities.carts.iter().any(|c| c.id == vehicle)
             || self.entities.cushions.iter().any(|c| c.id == vehicle)
-            || self.entities.tnts.iter().any(|t| t.id == vehicle && t.id != 0)
+            || self
+                .entities
+                .tnts
+                .iter()
+                .any(|t| t.id == vehicle && t.id != 0)
     }
 
     /// `Entity.positionRider` for mobs riding primed TNT.

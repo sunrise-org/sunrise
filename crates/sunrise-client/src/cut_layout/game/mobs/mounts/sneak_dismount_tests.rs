@@ -52,7 +52,8 @@ pub(crate) fn with_horse(
         game.options.dedicated = Some(Vec::new());
         assert!(game.run_command("summon horse 8.5 100 8.5 {NoAI:1b,Silent:1b,Tame:1b}"));
         let horse = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| &*m.kind.id == "minecraft:horse")
             .unwrap()

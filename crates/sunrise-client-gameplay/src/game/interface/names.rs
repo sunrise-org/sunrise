@@ -185,7 +185,9 @@ impl crate::game::ClientGame<'_> {
         hooks: bool,
         frustum: Option<&sunrise_client::gfx::JoinedFrusta>,
     ) -> Vec<NameTag> {
-        let target = self.mob_hit().map(|(i, _, _)| self.common.entities.mobs[i].id);
+        let target = self
+            .mob_hit()
+            .map(|(i, _, _)| self.common.entities.mobs[i].id);
         // Asked once a frame: a mod loaded without this hook costs the tags nothing.
         let name_format = hooks && mod_api::__private::listened(mod_api::HookId::PlayerNameFormat);
         let viewer = self.client_player_team();

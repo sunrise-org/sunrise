@@ -116,29 +116,61 @@ impl crate::game::ClientGame<'_> {
         {
             // Squid.aiStep derives its body pitch and roll from network motion.
             m.velocity = v;
-        } else if let Some(d) = self.common.entities.dropped.iter_mut().find(|d| d.id == id as u32) {
+        } else if let Some(d) = self
+            .common
+            .entities
+            .dropped
+            .iter_mut()
+            .find(|d| d.id == id as u32)
+        {
             d.velocity = v;
-        } else if let Some(i) = self.common.entities.falling.iter().rposition(|f| f.id == id as u32) {
+        } else if let Some(i) = self
+            .common
+            .entities
+            .falling
+            .iter()
+            .rposition(|f| f.id == id as u32)
+        {
             self.common.entities.falling.update(i, |f| f.velocity = v);
         } else if let Some(t) = self
             .common
-            .entities.tnts
+            .entities
+            .tnts
             .iter_mut()
             .rev()
             .find(|t| t.id == id as u32)
         {
             t.velocity = v;
-        } else if let Some(o) = self.common.entities.orbs.iter_mut().find(|o| o.id == id as u32) {
+        } else if let Some(o) = self
+            .common
+            .entities
+            .orbs
+            .iter_mut()
+            .find(|o| o.id == id as u32)
+        {
             o.velocity = v;
-        } else if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id as u32) {
+        } else if let Some(i) = self
+            .common
+            .entities
+            .carts
+            .iter()
+            .position(|c| c.id == id as u32)
+        {
             self.common.entities.carts.update(i, |c| c.velocity = v);
-        } else if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id as u32) {
+        } else if let Some(i) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .position(|b| b.id == id as u32)
+        {
             // Entity.lerpMotion: the boat the player drives floats on from the server's motion
             // (`tick_remote_boat_bubbles` drops it again on a boat nobody here drives).
             self.common.entities.boats.update(i, |b| b.velocity = v);
         } else if let Some(i) = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .position(|p| p.id == id as u32)
         {
@@ -154,7 +186,13 @@ impl crate::game::ClientGame<'_> {
                     }
                 }
             });
-        } else if let Some(t) = self.common.entities.tridents.iter_mut().find(|t| t.id == id as u32) {
+        } else if let Some(t) = self
+            .common
+            .entities
+            .tridents
+            .iter_mut()
+            .find(|t| t.id == id as u32)
+        {
             t.velocity = v;
             // AbstractArrow.lerpMotion (ThrownTrident keeps it): `life`
             // restarts, and a trident set moving leaves its block.
@@ -162,7 +200,13 @@ impl crate::game::ClientGame<'_> {
             if t.in_ground && v.length_squared() > 0.0 {
                 t.in_ground = false;
             }
-        } else if let Some(r) = self.common.entities.rockets.iter_mut().find(|r| r.id == id as u32) {
+        } else if let Some(r) = self
+            .common
+            .entities
+            .rockets
+            .iter_mut()
+            .find(|r| r.id == id as u32)
+        {
             r.velocity = v;
         } else if self.remote_hook_motion(id as u32, v) {
         } else if let Some(p) = self
@@ -197,7 +241,8 @@ impl crate::game::ClientGame<'_> {
         // dragon where it spawned (#2083).
         let dragon = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .is_some_and(|d| d.id as i32 == id);
         let driven = self.driven_mount().is_some_and(|m| m.id as i32 == id)
@@ -329,7 +374,8 @@ impl crate::game::ClientGame<'_> {
                 // Armor stands use the same stepped handler in `tick_remote_entities`.
                 if let Some(a) = self
                     .common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .iter_mut()
                     .find(|a| a.id == id as u32)
                 {
@@ -386,7 +432,8 @@ impl crate::game::ClientGame<'_> {
             // ticks.
             if let Some(i) = self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .position(|p| p.id == id as u32)
             {
@@ -422,7 +469,13 @@ impl crate::game::ClientGame<'_> {
                 }
             }
             // A thrown trident is an arrow: placed at once, flown on by its tick.
-            if let Some(t) = self.common.entities.tridents.iter_mut().find(|t| t.id == id as u32) {
+            if let Some(t) = self
+                .common
+                .entities
+                .tridents
+                .iter_mut()
+                .find(|t| t.id == id as u32)
+            {
                 if path.is_some() {
                     t.position = Vec3::new(position[0], position[1], position[2]);
                 }
@@ -434,7 +487,12 @@ impl crate::game::ClientGame<'_> {
             }
             // So does a firework rocket: its own tick flies it on.
             if path.is_some()
-                && let Some(f) = self.common.entities.rockets.iter_mut().find(|f| f.id == id as u32)
+                && let Some(f) = self
+                    .common
+                    .entities
+                    .rockets
+                    .iter_mut()
+                    .find(|f| f.id == id as u32)
             {
                 f.position = Vec3::new(position[0], position[1], position[2]);
                 return;
@@ -452,18 +510,31 @@ impl crate::game::ClientGame<'_> {
             // at once, and their own tick moves them on between the server's
             // updates (`tick_remote_entities`, `tick_remote_projectiles`).
             let at = Vec3::new(position[0], position[1], position[2]);
-            if let Some(d) = self.common.entities.dropped.iter_mut().find(|d| d.id == id as u32) {
+            if let Some(d) = self
+                .common
+                .entities
+                .dropped
+                .iter_mut()
+                .find(|d| d.id == id as u32)
+            {
                 d.position = at;
                 d.ground.on_ground = on_ground;
                 return;
             }
-            if let Some(i) = self.common.entities.falling.iter().rposition(|f| f.id == id as u32) {
+            if let Some(i) = self
+                .common
+                .entities
+                .falling
+                .iter()
+                .rposition(|f| f.id == id as u32)
+            {
                 self.common.entities.falling.update(i, |f| f.position = at);
                 return;
             }
             if let Some(t) = self
                 .common
-                .entities.tnts
+                .entities
+                .tnts
                 .iter_mut()
                 .rev()
                 .find(|t| t.id == id as u32)
@@ -476,7 +547,13 @@ impl crate::game::ClientGame<'_> {
             // LinearInterpolationHandler: the correction is spread over 3
             // ticks (`tick_remote_entities`), while `ExperienceOrb.tick` keeps
             // moving it.
-            if let Some(o) = self.common.entities.orbs.iter_mut().find(|o| o.id == id as u32) {
+            if let Some(o) = self
+                .common
+                .entities
+                .orbs
+                .iter_mut()
+                .find(|o| o.id == id as u32)
+            {
                 o.ground.on_ground = on_ground;
                 if let Some(r) = self.client.remote.as_mut() {
                     r.lerps.insert(
@@ -498,7 +575,13 @@ impl crate::game::ClientGame<'_> {
             if has_cart_lerp {
                 // A minecart on NewMinecartBehavior keeps Entity's NO_OP
                 // InterpolationHandler: a teleport puts it there at once.
-                if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id as u32) {
+                if let Some(i) = self
+                    .common
+                    .entities
+                    .carts
+                    .iter()
+                    .position(|c| c.id == id as u32)
+                {
                     self.common.entities.carts.update(i, |c| {
                         if path.is_some() {
                             c.position = at;
@@ -569,18 +652,39 @@ impl crate::game::ClientGame<'_> {
         // local player (`AUTHORITATIVE_SIDE`) and every `SERVER_AND_CLIENT` body.
         let simulated = self.driven_mount().is_some_and(|m| m.id == entity_id)
             || self.controls_boat(entity_id)
-            || self.common.entities.dropped.iter().any(|d| d.id == entity_id)
+            || self
+                .common
+                .entities
+                .dropped
+                .iter()
+                .any(|d| d.id == entity_id)
             || remote.pending_items.contains_key(&id)
             || self.common.entities.tnts.iter().any(|t| t.id == entity_id)
-            || self.common.entities.falling.iter().any(|f| f.id == entity_id)
+            || self
+                .common
+                .entities
+                .falling
+                .iter()
+                .any(|f| f.id == entity_id)
             || self.common.entities.orbs.iter().any(|o| o.id == entity_id)
             || self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .any(|p| p.id == entity_id)
-            || self.common.entities.tridents.iter().any(|t| t.id == entity_id)
-            || self.common.entities.rockets.iter().any(|f| f.id == entity_id)
+            || self
+                .common
+                .entities
+                .tridents
+                .iter()
+                .any(|t| t.id == entity_id)
+            || self
+                .common
+                .entities
+                .rockets
+                .iter()
+                .any(|f| f.id == entity_id)
             || self
                 .common
                 .hook
@@ -590,7 +694,8 @@ impl crate::game::ClientGame<'_> {
             || self.common.potions.has_thrown(entity_id)
             || self
                 .common
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .is_some_and(|d| d.id == entity_id && (d.death_time > 0 || !d.alive()));
         if simulated {

@@ -619,7 +619,8 @@ fn datapack_vanilla_values_agree_with_worldgen_and_invalidate_on_reload() {
                 assert_eq!(unobstructed.test(game, level, [10, 65, 10]), Ok(true));
                 // Non-marker armor stand blocks building; marker armor stand does not.
                 game.common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .push(sunrise_sim::entities::ArmorStand::new(
                         9001,
                         Vec3::new(10.5, 65.0, 10.5),
@@ -662,7 +663,8 @@ fn datapack_vanilla_values_agree_with_worldgen_and_invalidate_on_reload() {
                 let back = game.common.dim;
                 game.enter_level(Dim::Nether).unwrap();
                 game.common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .push(sunrise_sim::entities::ArmorStand::new(
                         9003,
                         Vec3::new(16.5, 65.0, 16.5),

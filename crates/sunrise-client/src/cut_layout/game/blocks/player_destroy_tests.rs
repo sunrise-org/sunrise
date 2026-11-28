@@ -51,7 +51,8 @@ fn at(game: &sunrise_gameplay::game::ServerGame<'_>) -> BlockStateId {
 }
 
 fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) -> u32 {
-    game.entities.dropped
+    game.entities
+        .dropped
         .iter()
         .filter(|dropped| &*dropped.stack.item == item)
         .map(|dropped| dropped.stack.count)

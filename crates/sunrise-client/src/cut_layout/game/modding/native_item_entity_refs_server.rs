@@ -89,7 +89,8 @@ pub(crate) mod tests {
             assert_eq!(item.target(game), Some(target));
             assert!(item.set_target(game, None));
             assert_eq!(item.target(game), None);
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .push(ArmorStand::new(100, Vec3::ZERO, 0.0));
             assert!(game.item_entity(game.entity(100).unwrap()).is_none());
             let stale = ItemEntityRef::new(EntityRef::new(

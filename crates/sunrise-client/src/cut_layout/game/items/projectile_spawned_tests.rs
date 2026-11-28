@@ -129,7 +129,8 @@ fn owner_launch_applies_the_supplied_stacks_effects() {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(21, kind, Vec3::new(0.0, 64.0, 0.0), 0.0));
         let source = game.entity(21).unwrap();
         let owner = game.living(source).unwrap();
@@ -139,7 +140,8 @@ fn owner_launch_applies_the_supplied_stacks_effects() {
             .spawn_projectile_from_rotation(owner, &snowball, &stack, 0.0, 1.5, 1.0)
             .unwrap();
         let p = game
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| p.id == shot.entity().id())
             .unwrap();

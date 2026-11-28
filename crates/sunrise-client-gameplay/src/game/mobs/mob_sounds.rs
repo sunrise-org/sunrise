@@ -16,7 +16,13 @@ impl ClientGame<'_> {
         let ridden = self
             .common
             .riding
-            .and_then(|id| self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed))
+            .and_then(|id| {
+                self.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)
+            })
             .map(|m| {
                 let species = m.species();
                 let sound = RiddenSound {
@@ -142,7 +148,8 @@ impl ClientGame<'_> {
     pub(in crate::game::client_side) fn start_sniffer_digging_sound(&mut self, id: u32) {
         let Some(m) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id && m.species() == Species::Sniffer)
         else {

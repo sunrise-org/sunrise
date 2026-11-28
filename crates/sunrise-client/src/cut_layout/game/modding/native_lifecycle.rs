@@ -493,7 +493,9 @@ pub(crate) mod tests {
                     .unwrap();
 
                 let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                game.entities.mobs.push(Mob::new(410, pig, Default::default(), 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(410, pig, Default::default(), 0.0));
                 assert!(matches!(
                     game.server_resident_entity(410),
                     EntityLookup::Found { .. }

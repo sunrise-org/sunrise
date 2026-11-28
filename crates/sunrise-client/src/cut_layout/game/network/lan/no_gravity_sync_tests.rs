@@ -49,7 +49,10 @@ fn an_items_and_a_mobs_no_gravity_reaches_the_tracker() {
         game.entities.dropped.push(drop);
         game.server.next_entity = 102;
         let (pig, item) = (101, 102);
-        assert!(game.entities.mobs.last().unwrap().no_gravity && game.entities.dropped.last().unwrap().no_gravity);
+        assert!(
+            game.entities.mobs.last().unwrap().no_gravity
+                && game.entities.dropped.last().unwrap().no_gravity
+        );
         for id in [pig, item] {
             assert_eq!(
                 no_gravity_entry(game, id),

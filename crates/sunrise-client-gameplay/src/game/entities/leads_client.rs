@@ -141,7 +141,8 @@ impl ClientGame<'_> {
             let quad = match (holder, quad) {
                 (Holder::Mob(id), Some(offsets)) => self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|o| o.id == id)
                     .and_then(|o| leash::quad_holder_offsets(o).map(|h| (o, h, offsets))),

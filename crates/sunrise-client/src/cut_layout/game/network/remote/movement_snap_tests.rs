@@ -81,7 +81,12 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     assert!(game.remote_ride(Keys::default()));
     close(game.player.as_ref().unwrap().position, 2.0, 65.7, 3.0);
     close(
-        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().position,
+        game.entities
+            .mobs
+            .iter()
+            .find(|m| m.id == 41)
+            .unwrap()
+            .position,
         2.0,
         65.7,
         3.0,
@@ -100,7 +105,12 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     }
     close(game.player.as_ref().unwrap().position, 12.0, 68.7, -4.0);
     close(
-        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().position,
+        game.entities
+            .mobs
+            .iter()
+            .find(|m| m.id == 41)
+            .unwrap()
+            .position,
         12.0,
         68.7,
         -4.0,
@@ -116,7 +126,12 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     game.player.as_mut().unwrap().position = Vec3::new(20.0, 70.0, 25.0);
     game.position_riders();
     close(
-        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().position,
+        game.entities
+            .mobs
+            .iter()
+            .find(|m| m.id == 41)
+            .unwrap()
+            .position,
         20.0,
         71.7,
         25.0,
@@ -126,7 +141,12 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     game.remote_ride(Keys::default());
     close(game.player.as_ref().unwrap().position, 12.0, 68.2, -4.0);
     close(
-        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().position,
+        game.entities
+            .mobs
+            .iter()
+            .find(|m| m.id == 41)
+            .unwrap()
+            .position,
         12.0,
         68.2,
         -4.0,
@@ -135,7 +155,13 @@ fn plugin_player_stack_follows_network_moves_and_local_carriers() {
     game.remove_entity(40);
     assert_eq!(game.riding, None);
     assert_eq!(
-        game.entities.mobs.iter().find(|m| m.id == 41).unwrap().extra.mount,
+        game.entities
+            .mobs
+            .iter()
+            .find(|m| m.id == 41)
+            .unwrap()
+            .extra
+            .mount,
         None
     );
 }
@@ -191,7 +217,8 @@ fn a_stand_position_snap_keeps_the_first_draws_body_yaw() {
         .unwrap();
         let stand = game
             .common
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter()
             .find(|a| a.id == 40)
             .unwrap();
@@ -463,7 +490,10 @@ fn entity_interpolate_to_steps_observed_boat_and_refuses_simulated_bodies() {
             // Accepted for observed boat: eases over 3 ticks.
             assert!(boat_ref.interpolate_to(host, [13.0, 64.0, 5.0], Some([90.0, 0.0])));
         }
-        assert_eq!(game.common.entities.boats[0].position, Vec3::new(10.0, 64.0, 5.0));
+        assert_eq!(
+            game.common.entities.boats[0].position,
+            Vec3::new(10.0, 64.0, 5.0)
+        );
         for _ in 0..3 {
             game.tick_remote_entities(true);
         }

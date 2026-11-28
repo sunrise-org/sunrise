@@ -367,7 +367,8 @@ impl crate::game::ServerGame<'_> {
                         // ends), count its passengers again, and board the
                         // mob only if it is still there, not removed and not
                         // riding.
-                        let Some(now) = self.common.entities.boats.iter().position(|b| b.id == id) else {
+                        let Some(now) = self.common.entities.boats.iter().position(|b| b.id == id)
+                        else {
                             return;
                         };
                         i = now;
@@ -375,7 +376,8 @@ impl crate::game::ServerGame<'_> {
                         if count < self.common.entities.boats[i].max_passengers()
                             && let Some(m) = self
                                 .common
-                                .entities.mobs
+                                .entities
+                                .mobs
                                 .iter_mut()
                                 .find(|m| m.id == mob && !m.removed && m.extra.mount.is_none())
                         {
@@ -408,7 +410,8 @@ impl crate::game::ServerGame<'_> {
             for _ in 0..usize::from(touched) + usize::from(pushes) {
                 if count == 0 {
                     self.common
-                        .entities.boats
+                        .entities
+                        .boats
                         .update(i, |b| b.velocity = b.velocity.subtract(v));
                 }
                 if own && let Some(p) = self.common.player.as_mut() {
@@ -421,19 +424,22 @@ impl crate::game::ServerGame<'_> {
             if k == i || !ob.intersects(area) || !boat_pushes(bb, ob, true) {
                 continue;
             }
-            let Some(v) =
-                push_impulse(self.common.entities.boats[i].position, self.common.entities.boats[k].position)
-            else {
+            let Some(v) = push_impulse(
+                self.common.entities.boats[i].position,
+                self.common.entities.boats[k].position,
+            ) else {
                 continue;
             };
             if count == 0 {
                 self.common
-                    .entities.boats
+                    .entities
+                    .boats
                     .update(i, |b| b.velocity = b.velocity.subtract(v));
             }
             if !self.has_seated_passengers(self.common.entities.boats[k].id) {
                 self.common
-                    .entities.boats
+                    .entities
+                    .boats
                     .update(k, |b| b.velocity = b.velocity.add_vector(v));
             }
         }
@@ -442,26 +448,32 @@ impl crate::game::ServerGame<'_> {
             if !cb.intersects(area) || !boat_pushes(bb, cb, false) {
                 continue;
             }
-            let Some(v) =
-                push_impulse(self.common.entities.boats[i].position, self.common.entities.carts[c].position)
-            else {
+            let Some(v) = push_impulse(
+                self.common.entities.boats[i].position,
+                self.common.entities.carts[c].position,
+            ) else {
                 continue;
             };
             if count == 0 {
                 self.common
-                    .entities.boats
+                    .entities
+                    .boats
                     .update(i, |b| b.velocity = b.velocity.subtract(v));
             }
             if !self.has_seated_passengers(self.common.entities.carts[c].id) {
                 self.common
-                    .entities.carts
+                    .entities
+                    .carts
                     .update(c, |c| c.velocity = c.velocity.add_vector(v));
             }
         }
     }
     /// `AbstractBoat.push(mob)` from boat `i`, which has `count` passengers.
     fn boat_push_mob(&mut self, i: usize, j: usize, count: usize) {
-        let (b, m) = (&self.common.entities.boats[i], &self.common.entities.mobs[j]);
+        let (b, m) = (
+            &self.common.entities.boats[i],
+            &self.common.entities.mobs[j],
+        );
         if !boat_pushes(b.bounds(), m.bounds(), false) {
             return;
         }
@@ -470,7 +482,8 @@ impl crate::game::ServerGame<'_> {
         };
         if count == 0 {
             self.common
-                .entities.boats
+                .entities
+                .boats
                 .update(i, |b| b.velocity = b.velocity.subtract(v));
         }
         let m = &mut self.common.entities.mobs[j];
@@ -514,13 +527,15 @@ impl crate::game::ServerGame<'_> {
         let vehicle = match target {
             Target::Boat(_) => self
                 .common
-                .entities.boats
+                .entities
+                .boats
                 .iter()
                 .position(|b| b.id == id)
                 .map(|i| RemovedVehicle::Boat(self.common.entities.boats.remove(i))),
             Target::Cart(_) => self
                 .common
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .position(|c| c.id == id)
                 .map(|i| RemovedVehicle::Cart(self.common.entities.carts.remove(i))),
@@ -553,16 +568,30 @@ impl crate::game::ServerGame<'_> {
             )
         };
         let slots = match target {
-            Target::Boat(_) => self.common.entities.boats.iter().position(|b| b.id == id).map(|i| {
-                self.common
-                    .entities.boats
-                    .update(i, |b| take(b.position, &mut b.items))
-            }),
-            _ => self.common.entities.carts.iter().position(|c| c.id == id).map(|i| {
-                self.common
-                    .entities.carts
-                    .update(i, |c| take(c.position, &mut c.items))
-            }),
+            Target::Boat(_) => self
+                .common
+                .entities
+                .boats
+                .iter()
+                .position(|b| b.id == id)
+                .map(|i| {
+                    self.common
+                        .entities
+                        .boats
+                        .update(i, |b| take(b.position, &mut b.items))
+                }),
+            _ => self
+                .common
+                .entities
+                .carts
+                .iter()
+                .position(|c| c.id == id)
+                .map(|i| {
+                    self.common
+                        .entities
+                        .carts
+                        .update(i, |c| take(c.position, &mut c.items))
+                }),
         };
         if let Some((at, items)) = slots {
             self.drop_vehicle_contents(at, &items);

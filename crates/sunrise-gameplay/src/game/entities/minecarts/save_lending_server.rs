@@ -39,11 +39,17 @@ impl crate::game::ServerGame<'_> {
         let silent = explodes && self.entity_silent(c.id);
         if self
             .with_destroying_vehicle(target, |game| {
-                if game.entities.carts.iter().any(|x| x.id == c.id && x.join == c.join) {
+                if game
+                    .entities
+                    .carts
+                    .iter()
+                    .any(|x| x.id == c.id && x.join == c.join)
+                {
                     game.release_vehicle_container(c.id);
                 }
                 if let Some(i) = game
-                    .entities.carts
+                    .entities
+                    .carts
                     .iter()
                     .position(|x| x.id == c.id && x.join == c.join)
                 {

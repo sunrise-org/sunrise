@@ -61,7 +61,8 @@ mod tests {
         mod_platform::testing::with_mods(mods, || {
             with_resident_game(|game| {
                 let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(91, kind.clone(), Vec3::new(3.5, 70.0, 5.5), 0.0));
                 game.entities.mobs.push(Mob::new(92, kind, Vec3::ZERO, 0.0));
                 game.persist

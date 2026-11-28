@@ -387,9 +387,15 @@ impl crate::game::ClientGame<'_> {
             let mut steps = Vec::new();
             if let Some(paddles) = case.paddles {
                 self.common.riding = None;
-                self.common.entities.boats.update(0, |b| b.paddles = paddles.initial);
+                self.common
+                    .entities
+                    .boats
+                    .update(0, |b| b.paddles = paddles.initial);
                 for step in paddles.steps {
-                    self.common.entities.boats.update(0, |b| b.paddling = step.flags);
+                    self.common
+                        .entities
+                        .boats
+                        .update(0, |b| b.paddling = step.flags);
                     self.common.entities.boats.update(0, |b| {
                         b.paddle_controller = step.occupied && step.first_player
                     });

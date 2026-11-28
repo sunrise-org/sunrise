@@ -39,7 +39,8 @@ pub(crate) mod tests {
                     heard
                 };
                 let mut ids: Vec<u32> = game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter_mut()
                     .filter_map(|m| heard(m).map(|_| m.id))
                     .collect();
@@ -49,18 +50,24 @@ pub(crate) mod tests {
             assert_eq!(post(game), [0u32; 0], "nobody to hear it");
             assert_eq!(post(game), [0u32; 0]);
 
-            game.entities.mobs.push(Mob::new(1, zombie.clone(), at(1.0), 0.0));
-            game.entities.mobs.push(Mob::new(2, warden.clone(), at(2.0), 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(1, zombie.clone(), at(1.0), 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(2, warden.clone(), at(2.0), 0.0));
             assert_eq!(post(game), [2], "one that joined since");
             assert_eq!(post(game), [2], "and again with nothing changed");
 
-            game.entities.mobs
+            game.entities
+                .mobs
                 .insert(0, Mob::new(3, warden.clone(), at(3.0), 0.0));
             assert_eq!(post(game), [2, 3], "the slots moved");
 
             let level = game.entities.mobs.lift();
             assert_eq!(post(game), [0u32; 0], "another level's list");
-            game.entities.mobs
+            game.entities
+                .mobs
                 .restore(level, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
             assert_eq!(post(game), [2, 3], "this level's again");
 
@@ -163,7 +170,12 @@ pub(crate) mod command_damage_listener_tests {
                 "summon pig 4.5 200 4.5 {{UUID:[I;113,0,0,{}],Health:10f,NoAI:1b,NoGravity:1b,Invulnerable:{}b,Motion:[0d,0d,0d]}}",
                 index + 1, if accepted {0} else {1},
             )));
-            let id = game.entities.mobs.last().expect("actual summon must create pig").id;
+            let id = game
+                .entities
+                .mobs
+                .last()
+                .expect("actual summon must create pig")
+                .id;
             assert_eq!(game.uuid_for(id), [113, 0, 0, index as i32 + 1]);
             assert!(game.run_command("setblock 7 200 4 sculk_sensor strict"));
             assert!(game.run_command("setblock 39 200 4 sculk_sensor strict"));
@@ -207,7 +219,12 @@ pub(crate) mod command_damage_listener_tests {
             assert!(game.run_command(&format!("tp {uuid} 36.5 200 4.5")));
             assert_eq!(game.world.game_time, before);
             assert_eq!(
-                game.entities.mobs.iter().find(|m| m.id == id).unwrap().position,
+                game.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .unwrap()
+                    .position,
                 Vec3::new(36.5, 200.0, 4.5)
             );
             assert!(selected(&game, destination).is_none());

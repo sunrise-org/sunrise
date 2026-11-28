@@ -1222,7 +1222,8 @@ pub(crate) mod sweep_tests {
                 assert!(
                     game.entities.dropped.len() > dropped_before
                         && game
-                            .entities.dropped
+                            .entities
+                            .dropped
                             .iter()
                             .any(|d| d.stack.item.as_ref() == "minecraft:stick"
                                 && d.stack.count == 2),

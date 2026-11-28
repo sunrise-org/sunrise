@@ -43,7 +43,8 @@ pub(crate) mod honey_overflow_tests {
             assert!(game.use_beehive([8, 64, 10], Some(&bottles)).unwrap());
             let eye = game.eye_position().unwrap();
             let honey: Vec<_> = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .filter(|e| &*e.stack.item == "minecraft:honey_bottle")
                 .collect();
@@ -193,7 +194,8 @@ pub(crate) mod changed_tests {
         let key = (8, 64, 8);
         hive_at(&mut game, key, Beehive::default());
         let kind = game.res.mob_types().get("minecraft:bee").unwrap().clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(42, kind, Vec3::new(8.0, 64.0, 8.0), 0.0));
         game.world.modified.clear();
 

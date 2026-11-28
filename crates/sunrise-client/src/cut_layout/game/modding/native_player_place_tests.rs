@@ -665,7 +665,8 @@ fn chosen_placement_attributes_the_player_and_rolls_back_on_refusal() {
                     let source = game.world.block_entities.get(&(5, 70, 2)).unwrap();
                     assert_eq!(source.slots()[0].as_ref(), Some(&stack));
                     assert_eq!(
-                        game.entities.dropped
+                        game.entities
+                            .dropped
                             .iter()
                             .filter(|item| &*item.stack.item == "minecraft:dirt")
                             .map(|item| item.stack.count)
@@ -695,12 +696,14 @@ fn chosen_placement_attributes_the_player_and_rolls_back_on_refusal() {
                         ("minecraft:dirt", 133)
                     };
                     assert!(
-                        game.entities.dropped
+                        game.entities
+                            .dropped
                             .iter()
                             .all(|item| &*item.stack.item == dropped_item)
                     );
                     assert_eq!(
-                        game.entities.dropped
+                        game.entities
+                            .dropped
                             .iter()
                             .map(|item| item.stack.count)
                             .sum::<u32>(),
@@ -946,7 +949,10 @@ fn set_placed_by_writes_are_part_of_player_placement() {
             let mut expected = vec![ORIGIN];
             if wither {
                 expected.extend(pattern.iter().map(|&(pos, _)| pos));
-                assert_eq!(game.entities.mobs.len(), mob_count + usize::from(!probe.veto));
+                assert_eq!(
+                    game.entities.mobs.len(),
+                    mob_count + usize::from(!probe.veto)
+                );
                 assert_eq!(level.block_state(game, ORIGIN), Some(air));
                 for (pos, before) in pattern {
                     assert_eq!(
@@ -975,12 +981,14 @@ fn set_placed_by_writes_are_part_of_player_placement() {
                 );
                 if probe.destroy {
                     assert!(
-                        game.entities.dropped
+                        game.entities
+                            .dropped
                             .iter()
                             .all(|item| &*item.stack.item == "minecraft:white_wool")
                     );
                     assert_eq!(
-                        game.entities.dropped
+                        game.entities
+                            .dropped
                             .iter()
                             .map(|item| item.stack.count)
                             .sum::<u32>(),

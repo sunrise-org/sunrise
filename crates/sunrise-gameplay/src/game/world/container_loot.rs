@@ -42,7 +42,8 @@ impl ServerGame<'_> {
         }
         let Some(i) = self
             .common
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .position(|c| c.id == cart.id && c.join == cart.join)
         else {
@@ -56,7 +57,8 @@ impl ServerGame<'_> {
         self.unpack_loot(LootTarget::Cart(cart.id), None);
         let Some(i) = self
             .common
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .position(|c| c.id == cart.id && c.join == cart.join)
         else {
@@ -186,13 +188,15 @@ impl ServerGame<'_> {
             }
             LootTarget::Cart(id) => self
                 .common
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.items.clone()),
             LootTarget::Boat(id) => self
                 .common
-                .entities.boats
+                .entities
+                .boats
                 .iter()
                 .find(|b| b.id == id)
                 .map(|b| b.items.clone()),
@@ -204,7 +208,8 @@ impl ServerGame<'_> {
             LootTarget::Cart(id) => {
                 let p = self
                     .common
-                    .entities.carts
+                    .entities
+                    .carts
                     .iter()
                     .find(|c| c.id == id)
                     .unwrap()
@@ -214,7 +219,8 @@ impl ServerGame<'_> {
             LootTarget::Boat(id) => {
                 let p = self
                     .common
-                    .entities.boats
+                    .entities
+                    .boats
                     .iter()
                     .find(|b| b.id == id)
                     .unwrap()
@@ -285,13 +291,15 @@ impl ServerGame<'_> {
             let items = match target {
                 LootTarget::Cart(_) => self
                     .common
-                    .entities.carts
+                    .entities
+                    .carts
                     .iter()
                     .find(|c| c.id == id)
                     .map(|c| c.items.clone()),
                 _ => self
                     .common
-                    .entities.boats
+                    .entities
+                    .boats
                     .iter()
                     .find(|b| b.id == id)
                     .map(|b| b.items.clone()),

@@ -203,14 +203,25 @@ pub(crate) mod tests {
                 &Default::default(),
             );
             let loaded_id = game.load_mob(saved.clone(), None).unwrap();
-            let loaded = game.entities.mobs.iter().find(|m| m.id == loaded_id).unwrap();
+            let loaded = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == loaded_id)
+                .unwrap();
             assert_eq!(sunrise_sim::mobs::armor::values(loaded), (20.0, 0.0));
             game.apply_entity_nbt(Target::Mob(12), saved).unwrap();
-            assert_eq!(sunrise_sim::mobs::armor::values(&game.entities.mobs[0]), (20.0, 0.0));
+            assert_eq!(
+                sunrise_sim::mobs::armor::values(&game.entities.mobs[0]),
+                (20.0, 0.0)
+            );
             let shulker = living(game, 12);
             assert!(shulker.set_attribute_base(game, "minecraft:max_health", 40.0));
             // No handle read in between: damage must not need a read to restore the map.
-            assert_eq!(sunrise_sim::mobs::armor::values(&game.entities.mobs[0]), (20.0, 0.0));
+            assert_eq!(
+                sunrise_sim::mobs::armor::values(&game.entities.mobs[0]),
+                (20.0, 0.0)
+            );
             let mut synced = Vec::new();
             let m = game.entities.mobs[0].clone();
             game.mob_attributes(
@@ -312,7 +323,9 @@ pub(crate) mod tests {
             // A horse's body piece armors it by its stack's rows.
             let horse_kind = game.res.mob_types().get("minecraft:horse").unwrap().clone();
             // The fixture dragon owns IDs 14 through 22, including its parts.
-            game.entities.mobs.push(Mob::new(40, horse_kind, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(40, horse_kind, Vec3::ZERO, 0.0));
             let horse = living(game, 40);
             assert!(game.living_set_equipment(
                 horse,
@@ -405,7 +418,8 @@ pub(crate) mod tests {
             game.entities.armor_stands[0]
                 .equipment
                 .set(HEAD, stack("minecraft:diamond_helmet"));
-            game.entities.dragon
+            game.entities
+                .dragon
                 .as_mut()
                 .unwrap()
                 .equipment
@@ -454,7 +468,9 @@ pub(crate) mod tests {
                     ])]),
                 ),
             ])]);
-            game.entities.armor_stands[0].live.load(Some(&saved), |_| true);
+            game.entities.armor_stands[0]
+                .live
+                .load(Some(&saved), |_| true);
             assert_eq!(
                 read(game, 13, "minecraft:max_health"),
                 (Some(60.0), Some(40.0))
@@ -512,7 +528,8 @@ pub(crate) mod tests {
                 )
             };
             let close = |value: Option<f64>, to: f64| value.is_some_and(|v| (v - to).abs() < 1e-6);
-            game.entities.mobs[0].set_equipment_stack(CHEST, stack("minecraft:netherite_chestplate"));
+            game.entities.mobs[0]
+                .set_equipment_stack(CHEST, stack("minecraft:netherite_chestplate"));
             game.refresh_gear_knockback_resistance();
             let (first, value) = read_at(game);
             assert!(first.is_some() && close(value, 0.1), "{value:?}");
@@ -662,7 +679,10 @@ pub(crate) mod tests {
             );
             // A mob's armor goes to its armor map, which its damage reads.
             assert!(zombie.set_attribute_base(game, "minecraft:armor", 10.0));
-            assert_eq!(sunrise_sim::mobs::armor::values(&game.entities.mobs[0]).0, 10.0);
+            assert_eq!(
+                sunrise_sim::mobs::armor::values(&game.entities.mobs[0]).0,
+                10.0
+            );
             assert_eq!(read(game, 12, "minecraft:armor").1, Some(10.0));
         });
     }

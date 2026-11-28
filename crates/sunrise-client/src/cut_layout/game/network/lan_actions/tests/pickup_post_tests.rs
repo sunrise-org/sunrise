@@ -203,7 +203,8 @@ pub(crate) fn spawn(
 }
 
 pub(crate) fn ground(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Option<u32> {
-    game.entities.dropped
+    game.entities
+        .dropped
         .iter()
         .find(|item| item.id == id)
         .map(|item| item.stack.count)
@@ -398,13 +399,17 @@ fn ground_state(
     game: &sunrise_gameplay::game::ServerGame<'_>,
     id: u32,
 ) -> Option<(String, u32, i32)> {
-    game.entities.dropped.iter().find(|item| item.id == id).map(|item| {
-        (
-            item.stack.item.to_string(),
-            item.stack.count,
-            item.pickup_delay,
-        )
-    })
+    game.entities
+        .dropped
+        .iter()
+        .find(|item| item.id == id)
+        .map(|item| {
+            (
+                item.stack.item.to_string(),
+                item.stack.count,
+                item.pickup_delay,
+            )
+        })
 }
 
 /// Both the host-player and guest pickup paths share one NeoForge

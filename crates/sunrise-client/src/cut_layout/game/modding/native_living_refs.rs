@@ -328,8 +328,12 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(12, zombie_kind, Vec3::ZERO, 0.0));
-            game.entities.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(12, zombie_kind, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(13, Vec3::ZERO, 0.0));
             let zombie = game.living(game.entity(12).unwrap()).unwrap();
             let stand = game.living(game.entity(13).unwrap()).unwrap();
 
@@ -508,8 +512,12 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
-            game.entities.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(13, Vec3::ZERO, 0.0));
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             // The eight dragon parts must not overlap the player at ID 20.
@@ -637,7 +645,13 @@ pub(crate) mod tests {
             let nether = game.level("minecraft:the_nether");
             assert_eq!(credit.level(game), nether);
             // The same reads from a mod goal of the pig's own tick.
-            let mut actor = game.entities.mobs.iter().find(|m| m.id == pig).unwrap().clone();
+            let mut actor = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == pig)
+                .unwrap()
+                .clone();
             game.in_goal_view(&mut actor, |view| {
                 assert_eq!(living.kill_credit(view), Some(credit));
                 assert_eq!(
@@ -723,7 +737,8 @@ pub(crate) mod tests {
         let mut credited = 0;
         let heard = super::super::native_knockback_tests::heard(|game, _| {
             let (pig, zombie) = hurt_pig(game);
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == zombie)
                 .unwrap()
@@ -771,7 +786,9 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(15, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(15, zombie, Vec3::ZERO, 0.0));
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player.as_mut().unwrap().entity_id = 20;
             // The host's own turn: the uuid is acting, no guest connection.
@@ -807,7 +824,9 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
             let living = game.living(game.entity(12).unwrap()).unwrap();
             assert!(living.set_health(game, 8.0));
             assert_eq!(living.health(game), Some(8.0));
@@ -827,7 +846,9 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
             game.entities.mobs[0].needs_sync = false;
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player.as_mut().unwrap().entity_id = 20;
@@ -921,7 +942,9 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
             let living = game.living(game.entity(12).unwrap()).unwrap();
             assert!(living.set_health(game, 10.0));
             assert!(living.heal(game, 2.0));
@@ -944,7 +967,9 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(15, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(15, zombie, Vec3::ZERO, 0.0));
             let source = game
                 .motion
                 .health
@@ -1218,10 +1243,14 @@ pub(crate) mod tests {
             expect_slot(game, horse, EquipmentSlot::Saddle, Some(&saddle));
             sunrise_sim::mobs::raider::set_patrol_leader(&mut game.entities.mobs[2], true);
             sunrise_sim::mobs::raider::wear_banner(&mut game.entities.mobs[2]);
-            assert!(sunrise_sim::mobs::raider::is_captain(&game.entities.mobs[2]));
+            assert!(sunrise_sim::mobs::raider::is_captain(
+                &game.entities.mobs[2]
+            ));
             assert!(game.living_set_equipment(captain, EquipmentSlot::Head, Some(helmet.clone())));
             expect_slot(game, captain, EquipmentSlot::Head, Some(&helmet));
-            assert!(!sunrise_sim::mobs::raider::is_captain(&game.entities.mobs[2]));
+            assert!(!sunrise_sim::mobs::raider::is_captain(
+                &game.entities.mobs[2]
+            ));
             assert!(game.living_set_equipment(
                 horse,
                 EquipmentSlot::Body,
@@ -1250,14 +1279,18 @@ pub(crate) mod tests {
                     expect_slot(game, living, slot, Some(&stack));
                 }
             }
-            let saved = game
-                .entities.dragon
-                .as_ref()
-                .unwrap()
-                .to_nbt([0; 4], None, &Default::default());
+            let saved =
+                game.entities
+                    .dragon
+                    .as_ref()
+                    .unwrap()
+                    .to_nbt([0; 4], None, &Default::default());
             let loaded =
                 sunrise_gameplay_common::game::dragon_common::Dragon::from_nbt(&saved, 0).unwrap();
-            assert_eq!(loaded.equipment, game.entities.dragon.as_ref().unwrap().equipment);
+            assert_eq!(
+                loaded.equipment,
+                game.entities.dragon.as_ref().unwrap().equipment
+            );
             let stored = game.entities.armor_stands.last().unwrap();
             let saved = sunrise_sim::entity_nbt::armor_stand_to_nbt(
                 stored,
@@ -1275,11 +1308,11 @@ pub(crate) mod tests {
             for slot in EquipmentSlot::ALL {
                 assert!(game.living_set_equipment(dragon, slot, None));
             }
-            let stale =
-                game.entities.dragon
-                    .as_ref()
-                    .unwrap()
-                    .to_nbt([0; 4], Some(&saved), &Default::default());
+            let stale = game.entities.dragon.as_ref().unwrap().to_nbt(
+                [0; 4],
+                Some(&saved),
+                &Default::default(),
+            );
             assert!(stale.get("equipment").is_none());
         });
     }
@@ -1329,7 +1362,13 @@ pub(crate) mod tests {
             );
             let wolf_uuid = game.uuid_for(id);
             let thrown = game.entities.dropped.last().unwrap();
-            let eye = game.entities.mobs.iter().find(|m| m.id == id).unwrap().eye_y();
+            let eye = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .eye_y();
             assert_eq!(thrown.position.y, eye - f64::from(0.3f32));
             assert_eq!((thrown.pickup_delay, thrown.thrower), (40, Some(wolf_uuid)));
             // The drop swung: one tick on, that swing goes on.
@@ -1339,10 +1378,14 @@ pub(crate) mod tests {
             assert!(!game.living_swing(wolf, Hand::Main, true));
             let scattered = game.living_drop(wolf, bone, true, false).unwrap();
             assert_ne!(scattered, item);
-            assert_eq!(game.entities.dropped.last().unwrap().velocity.y, f64::from(0.2f32));
+            assert_eq!(
+                game.entities.dropped.last().unwrap().velocity.y,
+                f64::from(0.2f32)
+            );
             assert_eq!(game.entities.dropped.last().unwrap().thrower, None);
 
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .push(ArmorStand::new(90, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let stand = game.living(game.entity(90).unwrap()).unwrap();
             assert_eq!(game.living_is_tamed(stand), None);
@@ -1383,7 +1426,8 @@ pub(crate) mod tests {
                 "both drop routes allocate the same random streams"
             );
             let mod_velocity = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .find(|entity| entity.id == id)
                 .unwrap()
@@ -1460,7 +1504,12 @@ pub(crate) mod tests {
                         assert!(id.is_none());
                         assert_eq!(game.entities.dropped.len(), before);
                     } else {
-                        let drop = game.entities.dropped.iter().find(|d| Some(d.id) == id).unwrap();
+                        let drop = game
+                            .entities
+                            .dropped
+                            .iter()
+                            .find(|d| Some(d.id) == id)
+                            .unwrap();
                         assert_eq!(
                             [drop.velocity.x, drop.velocity.y, drop.velocity.z],
                             velocity
@@ -1474,7 +1523,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn armor_stand_drop_does_not_swing() {
         super::super::native_entity_refs::tests::with_game(|game| {
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .push(sunrise_sim::entities::ArmorStand::new(
                     90,
                     sunrise_core::geometry::Vec3::ZERO,
@@ -1506,11 +1556,14 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(30, zombie.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0));
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(31, zombie.clone(), Vec3::new(1.5, 64.0, 0.5), 0.0));
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(32, zombie, Vec3::new(5.5, 64.0, 0.5), 0.0));
             let near = game.living(game.entity(30).unwrap()).unwrap();
             let beside = game.entity(31).unwrap();
@@ -1536,7 +1589,8 @@ pub(crate) mod tests {
                 .get("minecraft:villager")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(35, villager, Vec3::new(11.5, 64.0, 0.5), 0.0));
             let sleeper = game.living(game.entity(35).unwrap()).unwrap();
             game.entities.mobs.last_mut().unwrap().extra.ints[1] = 1;
@@ -1595,7 +1649,8 @@ pub(crate) mod tests {
             }
 
             let squid = game.res.mob_types().get("minecraft:squid").unwrap().clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(33, squid, Vec3::new(7.5, 64.0, 0.5), 0.0));
             let squid = game.living(game.entity(33).unwrap()).unwrap();
             let golem_kind = game
@@ -1604,7 +1659,8 @@ pub(crate) mod tests {
                 .get("minecraft:copper_golem")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(34, golem_kind, Vec3::new(9.5, 64.0, 0.5), 0.0));
             let golem = game.living(game.entity(34).unwrap()).unwrap();
             {
@@ -1665,7 +1721,8 @@ pub(crate) mod tests {
                 .get("minecraft:villager")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(30, villager, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let sleeper = game.living(game.entity(30).unwrap()).unwrap();
             let host: &dyn Host = game;
@@ -1674,12 +1731,14 @@ pub(crate) mod tests {
             // Asleep in the bed: the block's own facing, the engine's own
             // sleeping position naming the bed.
             game.entities.mobs[0].extra.ints[1] = 1;
-            sunrise_sim::mobs::villager::ext_mut(&mut game.entities.mobs[0]).sleeping_pos = Some([2, 63, 2]);
+            sunrise_sim::mobs::villager::ext_mut(&mut game.entities.mobs[0]).sleeping_pos =
+                Some([2, 63, 2]);
             let host: &dyn Host = game;
             assert_eq!(sleeper.bed_orientation(host), Some(Direction::North));
             assert_eq!(sleeper.can_use_portal(host), Some(false));
             // A sleeping position that is not a bed answers none.
-            sunrise_sim::mobs::villager::ext_mut(&mut game.entities.mobs[0]).sleeping_pos = Some([0, 63, 0]);
+            sunrise_sim::mobs::villager::ext_mut(&mut game.entities.mobs[0]).sleeping_pos =
+                Some([0, 63, 0]);
             let host: &dyn Host = game;
             assert_eq!(sleeper.bed_orientation(host), None);
             // A player asleep in the same bed answers the same facing.

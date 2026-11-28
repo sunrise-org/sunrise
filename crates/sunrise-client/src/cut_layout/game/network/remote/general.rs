@@ -210,7 +210,8 @@ pub(crate) mod tests {
                     assert_eq!(game.entity(7), Some(me));
                     assert_eq!(ghast.position(game), Some([2.5, 70.0, 0.5]));
                     assert_eq!(
-                        game.entities.mobs
+                        game.entities
+                            .mobs
                             .iter()
                             .find(|mob| mob.id == 20)
                             .unwrap()

@@ -10,7 +10,8 @@ impl crate::game::ServerGame<'_> {
     ) {
         let places: Vec<(u32, Vec3)> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| m.alive())
             .map(|m| (m.id, m.position))
@@ -30,10 +31,13 @@ impl crate::game::ServerGame<'_> {
                 Some(Vec3::new(p[0], p[1], p[2]))
             }
         };
-        let proposal =
-            self.common.entities.mobs.iter().find(|m| m.id == mob).and_then(|m| {
-                sunrise_sim::mobs::piglin::receive_attack_target(m, target, position)
-            });
+        let proposal = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == mob)
+            .and_then(|m| sunrise_sim::mobs::piglin::receive_attack_target(m, target, position));
         if let Some(target) = proposal {
             self.set_event_ai_target(mob, Some(target), player);
         }

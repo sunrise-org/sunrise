@@ -121,7 +121,8 @@ fn add_piglin(
     );
     assert!(game.run_command(&command), "{command}");
     let m = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter_mut()
         .find(|m| m.species() == Species::Piglin && !before.contains(&m.id))
         .unwrap();
@@ -372,7 +373,8 @@ fn without_parts_only_the_gold_ingot_is_currency_isolated() {
             .unwrap()
             .clone();
         client
-            .entities.mobs
+            .entities
+            .mobs
             .push(Mob::new(101, kind, sunrise_core::geometry::Vec3::ZERO, 0.0));
         client.common.inventory[client.common.selected] = Some(coins(1));
         assert!(!client.remote_mob_would_take(0, Hand::Main));

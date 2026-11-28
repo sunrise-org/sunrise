@@ -344,7 +344,9 @@ pub(crate) fn with_picked_cushion(
 #[ignore = "daily"]
 fn a_click_on_a_cushion_at_a_non_finite_position_is_refused() {
     with_picked_cushion(|game, server, target| {
-        game.entities.cushions.update(0, |c| c.position.x = f64::NAN);
+        game.entities
+            .cushions
+            .update(0, |c| c.position.x = f64::NAN);
         game.refresh_client_pick(1.0);
         assert_eq!(game.crosshair_target(), Some(target));
         game.remote_use(mod_api::InteractionAttempt::Press);
@@ -546,7 +548,12 @@ fn pick_origin_is_the_eye_used_for_each_pick_and_isolated_per_listener() {
             game.refresh_client_pick(1.0);
             game.refresh_client_pick(0.25);
 
-            let mob = game.entities.mobs.iter_mut().find(|mob| mob.id == 31).unwrap();
+            let mob = game
+                .entities
+                .mobs
+                .iter_mut()
+                .find(|mob| mob.id == 31)
+                .unwrap();
             mob.previous = Vec3::new(6.0, 4.0, -1.5);
             let mob_eye = f64::from(mob.eye_height() as f32);
             game.remote_set_camera(31);
@@ -682,7 +689,10 @@ fn client_pick_listener_can_select_pig_occluded_by_closer_block() {
                 ),
                 "listener selected the pig behind the closer block"
             );
-            assert_eq!(game.mob_hit().map(|(i, _, _)| game.entities.mobs[i].id), Some(31));
+            assert_eq!(
+                game.mob_hit().map(|(i, _, _)| game.entities.mobs[i].id),
+                Some(31)
+            );
         });
     });
 }

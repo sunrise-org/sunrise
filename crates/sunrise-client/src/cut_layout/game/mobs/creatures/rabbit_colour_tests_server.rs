@@ -64,7 +64,8 @@ fn a_baby_rabbit_takes_a_parents_colour_or_a_fresh_biome_variant() {
             true,
         );
         let child = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id != part && m.id != mate_id)
             .expect("a baby rabbit");
@@ -96,7 +97,8 @@ fn a_baby_rabbit_takes_a_parents_colour_or_a_fresh_biome_variant() {
             let _ = parent.next_int_bound(7);
         }
         let mut drawn = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == part)
             .expect("the parent")

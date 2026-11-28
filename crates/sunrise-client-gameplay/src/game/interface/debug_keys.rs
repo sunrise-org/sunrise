@@ -1162,7 +1162,8 @@ impl crate::game::ClientGame<'_> {
                 // else where it was last.
                 let position = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id)
                     .map_or(position, |m| m.position);
@@ -1300,7 +1301,8 @@ impl crate::game::ClientGame<'_> {
         }
         for f in self
             .common
-            .entities.item_frames
+            .entities
+            .item_frames
             .iter()
             .filter(|f| !f.invisible && hide_camera != Some(f.id))
         {
@@ -1344,7 +1346,8 @@ impl crate::game::ClientGame<'_> {
         }
         for a in self
             .common
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter()
             .filter(|a| !a.invisible && hide_camera != Some(a.id))
         {
@@ -1506,7 +1509,8 @@ impl crate::game::ClientGame<'_> {
         // The dragon: 16 by 8, a living entity; its parts follow.
         if let Some(d) = self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .filter(|d| hide_camera != Some(d.id))
         {

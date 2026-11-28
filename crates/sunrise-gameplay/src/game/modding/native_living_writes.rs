@@ -49,7 +49,8 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Mob(id) => self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == id)
                 .map(|m| &mut m.extra.stuck),
@@ -68,7 +69,8 @@ impl crate::game::ServerGame<'_> {
         match self.native_living_target(living) {
             Some(Target::Mob(id)) => self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == id)
                 .is_some_and(|m| m.swing_hand_modified(hand == Hand::Off, SwingAnimation::DEFAULT)),
@@ -699,7 +701,10 @@ pub(in crate::game) mod tests {
                 assert_eq!(game.living_used_item_hand(zombie), Some(hand));
                 // Its clients are told through the counter and the hand.
                 assert_eq!(game.entities.mobs[0].extra.using_item, 1);
-                assert_eq!(game.entities.mobs[0].extra.using_off_hand, hand == Hand::Off);
+                assert_eq!(
+                    game.entities.mobs[0].extra.using_off_hand,
+                    hand == Hand::Off
+                );
                 // A bow is used for 72000 ticks, and a write moves the counter
                 // to where 100 are left of them.
                 assert_eq!(game.living_item_use_remaining(zombie), Some(72_000));
@@ -730,7 +735,9 @@ pub(in crate::game) mod tests {
             game.entities.mobs[1]
                 .extra
                 .set_slot_stack(OFFHAND, Some(gold.clone()));
-            game.entities.mobs[1].extra.set_slot_stack(MAINHAND, Some(gold));
+            game.entities.mobs[1]
+                .extra
+                .set_slot_stack(MAINHAND, Some(gold));
             assert!(!game.living_start_using_item(piglin, Hand::Main));
             assert_eq!(game.entities.mobs[1].extra.using_item, 0);
             assert_eq!(game.living_item_use_remaining(piglin), Some(0));
@@ -738,7 +745,9 @@ pub(in crate::game) mod tests {
             // A witch's drink is its own timer: no use to read, end or replace.
             let witch = game.living(game.entity(14).unwrap()).unwrap();
             let potion = ItemStack::new("minecraft:potion", 1);
-            game.entities.mobs[2].extra.set_slot_stack(MAINHAND, Some(potion));
+            game.entities.mobs[2]
+                .extra
+                .set_slot_stack(MAINHAND, Some(potion));
             game.entities.mobs[2].extra.using_item = 10;
             game.entities.mobs[2].extra.flag = true;
             assert_eq!(game.living_used_item_hand(witch), None);

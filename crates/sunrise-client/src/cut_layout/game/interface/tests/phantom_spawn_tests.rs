@@ -113,7 +113,8 @@ fn attempt(
         game.stats.set_phantom_tick(0);
         game.spawn_phantoms();
         spawned = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| m.species() == sunrise_sim::mobs::Species::Phantom)
             .map(|m| m.position)

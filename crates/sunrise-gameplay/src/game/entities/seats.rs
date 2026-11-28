@@ -41,7 +41,13 @@ impl crate::game::ServerGame<'_> {
         if let Some(seat) = self.general_seat(id, false) {
             return Some(seat);
         }
-        if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == id)
+        {
             // ArmorStand: sized(0.5F, 1.975F), half that when small, nothing as a
             // marker; the passenger point is the float height widened to double.
             let (height, width) = if a.marker {

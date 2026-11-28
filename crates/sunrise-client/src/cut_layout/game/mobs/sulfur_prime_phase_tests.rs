@@ -60,7 +60,8 @@ fn game<'a>(
 
 fn fuse(game: &sunrise_gameplay::game::ServerGame<'_>) -> i32 {
     let cube = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .find(|m| m.species() == sunrise_sim::mobs::Species::SulfurCube)
         .expect("the cube");

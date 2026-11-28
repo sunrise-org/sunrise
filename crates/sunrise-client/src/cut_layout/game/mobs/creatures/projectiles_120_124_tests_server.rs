@@ -114,7 +114,10 @@ pub(crate) fn run_witness_firework_rocket_targets_124() {
             }
             "tnt" => {
                 assert!(game.run_command("summon minecraft:tnt 3.5 64.0 4.5 {fuse:80}"));
-                targets.insert("tnt".into(), Target124::Tnt(game.entities.tnts.last().unwrap().id));
+                targets.insert(
+                    "tnt".into(),
+                    Target124::Tnt(game.entities.tnts.last().unwrap().id),
+                );
             }
             "armor_stand" => {
                 assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 4.5 {}"));
@@ -226,7 +229,8 @@ pub(crate) fn run_witness_firework_rocket_targets_124() {
                 break;
             }
             let mut got_drops: Vec<String> = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .map(|d| d.stack.item.to_string())
                 .collect();

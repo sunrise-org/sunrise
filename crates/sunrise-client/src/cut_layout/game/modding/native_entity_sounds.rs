@@ -14,7 +14,8 @@ mod tests {
 
     fn spawn(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, kind: &str) -> EntityRef {
         let kind = game.res.mob_types().get(kind).unwrap().clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(id, kind, Vec3::new(1.5, 64.0, 2.5), 0.0));
         game.entity(id).unwrap()
     }
@@ -42,7 +43,8 @@ mod tests {
             assert_eq!(source(game, slime), Some(SoundSource::Hostile));
             assert_eq!(source(game, sulfur), Some(SoundSource::Neutral));
             assert_eq!(source(game, bunny), Some(SoundSource::Neutral));
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == 15)
                 .unwrap()

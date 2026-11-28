@@ -56,7 +56,8 @@ pub(crate) fn read_borrowed_target(
             })
         })
         .unwrap();
-    game.entities.mobs
+    game.entities
+        .mobs
         .restore(loan, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
     result
 }
@@ -355,7 +356,8 @@ fn body_yaw_targets_live_living_owners_and_respects_overrides() {
         use sunrise_sim::entity_nbt::{armor_stand_from_nbt, armor_stand_to_nbt};
         let stand = sunrise_sim::entities::ArmorStand::new(50, Vec3::ZERO, 12.0);
         let saved = armor_stand_to_nbt(&stand, [0; 4], None, game.items());
-        game.entities.armor_stands
+        game.entities
+            .armor_stands
             .push(armor_stand_from_nbt(&saved, 50).unwrap());
         let stand = game.entity(50).unwrap();
         assert_eq!(stand.body_yaw(game), Some(0.0));
@@ -401,7 +403,8 @@ fn body_yaw_targets_live_living_owners_and_respects_overrides() {
         .unwrap();
         game.guest_server_tick(12, true);
         assert_eq!(guest.body_yaw(game), Some(50.0));
-        game.entities.boats
+        game.entities
+            .boats
             .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                 51,
                 "oak".into(),
@@ -448,7 +451,8 @@ fn body_yaw_targets_live_living_owners_and_respects_overrides() {
         assert_eq!(part.body_yaw(game), None);
 
         let other = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|mob| mob.id == 40)
             .expect("the mob row");
@@ -488,7 +492,8 @@ fn body_yaw_targets_live_living_owners_and_respects_overrides() {
         assert_eq!(dragon.body_yaw(game), None);
         game.options.execution_role = role;
 
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|mob| mob.id == 40)
             .unwrap()
@@ -534,7 +539,8 @@ fn a_players_last_hurt_mob_resolves_the_mob_lent_to_its_tick() {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(72, kind, Vec3::new(3.0, 80.0, 0.5), 0.0));
         game.player.as_mut().unwrap().health.last_hurt_mob = Some((72, 39));
         let player = game.living(game.entity(20).unwrap()).unwrap();
@@ -555,7 +561,8 @@ fn a_players_last_hurt_mob_resolves_the_mob_lent_to_its_tick() {
                 (player.last_hurt_mob(game), player.last_hurt_mob(&context))
             })
             .unwrap();
-        game.entities.mobs
+        game.entities
+            .mobs
             .restore(loan, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         assert_eq!(reads, (None, Some((zombie, 39))));
     });

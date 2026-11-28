@@ -570,7 +570,8 @@ pub(crate) fn run_witness_wind_charge_end_crystal_121() {
             }
             if let Some(pid) = pig_id {
                 let hp = game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == pid)
                     .map_or(0.0, |m| m.health);
@@ -661,7 +662,8 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
             }
         };
         let target_pos0 = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == target_id)
             .unwrap()
@@ -735,7 +737,12 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
                     break;
                 }
             }
-            let target = game.entities.mobs.iter().find(|m| m.id == target_id).unwrap();
+            let target = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == target_id)
+                .unwrap();
             if target.health.to_bits() != exp.target_health.to_bits() {
                 failures.push(format!(
                     "{label} t={}: target_health expected {} got {}",
@@ -761,7 +768,8 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
                 break;
             }
             let behind_hp = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == behind_id)
                 .map_or(0.0, |m| m.health);
@@ -806,7 +814,8 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
     assert!(game.run_command("summon minecraft:enderman 3.5 64.0 4.5 {NoAI:1b,Silent:1b}"));
     let enderman_id = game.entities.mobs.last().unwrap().id;
     let enderman_pos0 = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .find(|m| m.id == enderman_id)
         .unwrap()
@@ -821,10 +830,7 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
     game.entities.projectiles.push(proj);
     for exp in &unowned.ticks {
         let (events, sounds) = step_recording(&mut game);
-        let p = game
-            .entities.projectiles
-            .iter()
-            .find(|p| p.id == mob_tr_id);
+        let p = game.entities.projectiles.iter().find(|p| p.id == mob_tr_id);
         let Some(p) = p else {
             failures.push(format!("122 mob_trident t={}: disappeared", exp.tick));
             break;
@@ -853,9 +859,15 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
             ));
             break;
         }
-        let em = game.entities.mobs.iter().find(|m| m.id == enderman_id).unwrap();
+        let em = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == enderman_id)
+            .unwrap();
         let behind_hp = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == behind_id)
             .map_or(0.0, |m| m.health);
@@ -2084,7 +2096,10 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 ));
                 let em_idx = game.entities.mobs.len() - 1;
                 game.entities.mobs[em_idx].random.set_seed(seed);
-                tracked.insert("enderman".into(), ReviewTracked::Mob(game.entities.mobs[em_idx].id));
+                tracked.insert(
+                    "enderman".into(),
+                    ReviewTracked::Mob(game.entities.mobs[em_idx].id),
+                );
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
@@ -2562,7 +2577,8 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 }
             }
             let mut got_drops: Vec<String> = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .map(|d| d.stack.item.to_string())
                 .filter(|item| item != "minecraft:cobblestone")

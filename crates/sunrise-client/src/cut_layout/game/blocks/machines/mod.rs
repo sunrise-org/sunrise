@@ -610,7 +610,8 @@ pub(crate) mod hopper_cart_transfer_tests {
             for player in [false, true] {
                 game.server.next_entity += 1;
                 let id = game.server.next_entity;
-                game.entities.boats
+                game.entities
+                    .boats
                     .push(Boat::new(id, "oak".into(), Vec3::new(8.5, 65.0, 8.5), 0.0).with_chest());
                 game.persist.raw.insert(
                     id,
@@ -769,7 +770,8 @@ pub(crate) mod hopper_cart_transfer_tests {
                     _ => 0,
                 };
                 let in_cart: u32 = game
-                    .entities.carts
+                    .entities
+                    .carts
                     .iter()
                     .find(|c| c.id == id)
                     .unwrap()

@@ -47,7 +47,8 @@ impl ServerGame<'_> {
             || sunrise_game_data::scoreboard::teams_allied(self.mob_team(mob), target_team)
             || self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|other| other.id == mob)
                 .is_none_or(|other| other.ai.target.is_some())
@@ -306,7 +307,8 @@ impl ServerGame<'_> {
             let eye = Vec3::new(pos.x, m.eye_y(), pos.z);
             let nearest = self
                 .common
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .enumerate()
                 .map(|(j, e)| (j, e.position.distance_squared(pos)))
@@ -319,8 +321,9 @@ impl ServerGame<'_> {
                     w.line_of_sight(eye, at)
                 })
                 .min_by(|a, b| a.1.total_cmp(&b.1));
-            let loved =
-                nearest.is_some_and(|(j, _)| self.piglin_loved(&self.common.entities.dropped[j].stack.item));
+            let loved = nearest.is_some_and(|(j, _)| {
+                self.piglin_loved(&self.common.entities.dropped[j].stack.item)
+            });
             self.admire_seen_item(i, nearest.map(|(_, d)| d), loved);
             let best = nearest.filter(|(_, d)| *d <= 81.0);
             let Some((j, _)) = best else {
@@ -332,7 +335,8 @@ impl ServerGame<'_> {
                 && (e.position.z - pos.z).abs() <= 1.3
                 && (e.position.y - pos.y).abs() <= 1.0;
             if !close || e.pickup_delay > 0 {
-                self.common.entities.mobs[i].extra.point = Some([e.position.x, e.position.y, e.position.z]);
+                self.common.entities.mobs[i].extra.point =
+                    Some([e.position.x, e.position.y, e.position.z]);
                 continue;
             }
             // Nuggets come whole, anything else one at a time.
@@ -645,7 +649,8 @@ impl ServerGame<'_> {
             // The piglin again by its id: one a listener removed is skipped.
             let Some(i) = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .position(|m| m.id == id && !m.removed)
             else {

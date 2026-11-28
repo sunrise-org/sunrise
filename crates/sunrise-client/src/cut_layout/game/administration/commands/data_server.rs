@@ -472,7 +472,8 @@ pub(crate) mod falling_live_adoption_tests {
                 "execute as {uuid} if entity @s[type=falling_block]"
             )));
             let index = game
-                .entities.falling
+                .entities
+                .falling
                 .iter()
                 .position(|f| game.persist.uuid_of(f.id) == Some([980, 0, 0, 1]))
                 .unwrap();

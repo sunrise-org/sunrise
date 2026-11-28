@@ -201,14 +201,17 @@ pub(crate) mod off_level_tests {
                     game.options.dedicated = Some(Vec::new());
                     let at = Vec3::new(10.0, 200.0, 20.0);
                     if cart {
-                        game.entities.carts
-                            .push(sunrise_gameplay_common::game::minecarts::Minecart::new(
+                        game.entities.carts.push(
+                            sunrise_gameplay_common::game::minecarts::Minecart::new(
                                 71,
                                 sunrise_gameplay_common::game::minecarts::CartKind::Rideable,
                                 at,
-                            ));
+                            ),
+                        );
                     } else {
-                        game.entities.boats.push(Boat::new(71, "oak".into(), at, 0.0));
+                        game.entities
+                            .boats
+                            .push(Boat::new(71, "oak".into(), at, 0.0));
                     }
                     let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
                     let mut rider = Mob::new(72, pig.clone(), Vec3::new(5.0, 190.0, 6.0), 0.0);
@@ -836,14 +839,17 @@ pub(crate) mod nested_vehicle_discard_tests {
                 }
                 let at = Vec3::new(10.0, 200.0, 20.0);
                 if cart {
-                    game.entities.carts
-                        .push(sunrise_gameplay_common::game::minecarts::Minecart::new(
+                    game.entities.carts.push(
+                        sunrise_gameplay_common::game::minecarts::Minecart::new(
                             71,
                             sunrise_gameplay_common::game::minecarts::CartKind::Rideable,
                             at,
-                        ));
+                        ),
+                    );
                 } else {
-                    game.entities.boats.push(Boat::new(71, "oak".into(), at, 0.0));
+                    game.entities
+                        .boats
+                        .push(Boat::new(71, "oak".into(), at, 0.0));
                 }
                 let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
                 let mut rider = Mob::new(72, kind.clone(), Vec3::new(2.0, 190.0, 3.0), 0.0);
@@ -909,14 +915,17 @@ pub(crate) mod nested_vehicle_discard_tests {
             }
             let at = Vec3::new(10.0, 200.0, 20.0);
             if cart {
-                game.entities.carts
+                game.entities
+                    .carts
                     .push(sunrise_gameplay_common::game::minecarts::Minecart::new(
                         71,
                         sunrise_gameplay_common::game::minecarts::CartKind::Rideable,
                         at,
                     ));
             } else {
-                game.entities.boats.push(Boat::new(71, "oak".into(), at, 0.0));
+                game.entities
+                    .boats
+                    .push(Boat::new(71, "oak".into(), at, 0.0));
             }
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let mut rider = Mob::new(72, kind.clone(), Vec3::new(2.0, 190.0, 3.0), 0.0);
@@ -1365,7 +1374,8 @@ pub(crate) mod nested_vehicle_discard_tests {
                         }
                         game.native_removals_flush();
                         let diamonds = |game: &sunrise_gameplay::game::ServerGame<'_>| -> u32 {
-                            game.entities.dropped
+                            game.entities
+                                .dropped
                                 .iter()
                                 .filter(|item| item.stack.item.as_ref() == "minecraft:diamond")
                                 .map(|item| item.stack.count)
@@ -1967,12 +1977,18 @@ pub(crate) mod trap_scatter_tests {
         let expected_pushes: Vec<(f64, f64)> = (0..3)
             .map(|_| trap_horse_scatter(&mut expected_horse_rng))
             .collect();
-        let horse = game.entities.mobs.iter_mut().find(|m| m.id == trap_id).unwrap();
+        let horse = game
+            .entities
+            .mobs
+            .iter_mut()
+            .find(|m| m.id == trap_id)
+            .unwrap();
         assert!(!horse.extra.trap);
         assert_eq!(horse.random.next_long(), expected_horse_rng.next_long());
 
         let extra_horses: Vec<&sunrise_sim::mobs::Mob> = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| m.species() == Species::SkeletonHorse && m.id != trap_id)
             .collect();
@@ -1993,7 +2009,12 @@ pub(crate) mod trap_scatter_tests {
             .spawn_mob_raw("minecraft:skeleton_horse", [8.5, 64.0, 8.5], false)
             .unwrap();
         let seeded = || LegacyRandom::new(5);
-        game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap().random = seeded();
+        game.entities
+            .mobs
+            .iter_mut()
+            .find(|m| m.id == id)
+            .unwrap()
+            .random = seeded();
         game.enchant_item(id, sunrise_sim::mobs::finalize::MAINHAND, 0.5);
         let m = game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
         assert_eq!(m.random.next_long(), seeded().next_long());

@@ -314,7 +314,13 @@ impl crate::game::ServerGame<'_> {
         self.start_audio_capture();
         LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
         let old_mobs: Vec<u32> = self.common.entities.mobs.iter().map(|m| m.id).collect();
-        let old_stands: Vec<u32> = self.common.entities.armor_stands.iter().map(|s| s.id).collect();
+        let old_stands: Vec<u32> = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .map(|s| s.id)
+            .collect();
         let old_vehicles: Vec<u32> = (self.common.entities.boats.iter().map(|b| b.id))
             .chain(self.common.entities.carts.iter().map(|c| c.id))
             .collect();
@@ -885,7 +891,8 @@ impl crate::game::ServerGame<'_> {
             Some(&Target::Mob(id)) => {
                 let index = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .position(|m| m.id == id)
                     .ok_or("the target is gone")?;
@@ -897,7 +904,10 @@ impl crate::game::ServerGame<'_> {
                     .common
                     .mob_index
                     .find(&self.common.entities.mobs, id)
-                    .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
+                    .filter(|&i| {
+                        self.common.entities.mobs[i].join == join
+                            && !self.common.entities.mobs[i].removed
+                    })
                     .ok_or("the target is gone")?;
                 // The hurt sound the mob raised, where it stands.
                 for event in std::mem::take(&mut self.common.entities.mobs[index].outbox) {
@@ -913,7 +923,8 @@ impl crate::game::ServerGame<'_> {
             Some(&Target::Stand(id)) => {
                 let index = self
                     .common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .iter()
                     .position(|s| s.id == id)
                     .ok_or("the target is gone")?;
@@ -974,7 +985,13 @@ impl crate::game::ServerGame<'_> {
                     Some(m) => (num(f64::from(m.health)), m.velocity),
                     None => continue,
                 },
-                Target::Stand(id) => match self.common.entities.armor_stands.iter().find(|s| s.id == id) {
+                Target::Stand(id) => match self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter()
+                    .find(|s| s.id == id)
+                {
                     Some(s) => ("-".to_owned(), s.velocity),
                     None => {
                         out.push(format!("V {i} gone"));
@@ -1402,13 +1419,15 @@ impl crate::game::ServerGame<'_> {
         let items = match *target {
             Target::Boat(id) => self
                 .common
-                .entities.boats
+                .entities
+                .boats
                 .iter()
                 .find(|b| b.id == id)
                 .map(|b| &b.items),
             Target::Cart(id) => self
                 .common
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| &c.items),
@@ -1455,7 +1474,13 @@ impl crate::game::ServerGame<'_> {
             },
             Target::Stand(id) => {
                 line.push_str("minecraft:armor_stand");
-                let Some(stand) = self.common.entities.armor_stands.iter().find(|s| s.id == id) else {
+                let Some(stand) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter()
+                    .find(|s| s.id == id)
+                else {
                     line.push_str(" removed");
                     return line;
                 };
@@ -1504,7 +1529,8 @@ impl crate::game::ServerGame<'_> {
                     Species::CopperGolem => Some(
                         self.common.golem_shearable(
                             self.common
-                                .entities.mobs
+                                .entities
+                                .mobs
                                 .iter()
                                 .position(|o| o.id == id)
                                 .unwrap_or(0),
@@ -1564,7 +1590,8 @@ impl crate::game::ServerGame<'_> {
         };
         for m in self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| !old_mobs.contains(&m.id))
         {
@@ -1582,7 +1609,8 @@ impl crate::game::ServerGame<'_> {
         }
         for s in self
             .common
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter()
             .filter(|s| !old_stands.contains(&s.id))
         {
@@ -1644,7 +1672,8 @@ impl crate::game::ServerGame<'_> {
         }
         for b in self
             .common
-            .entities.boats
+            .entities
+            .boats
             .iter()
             .filter(|b| !old_vehicles.contains(&b.id))
         {
@@ -1667,7 +1696,8 @@ impl crate::game::ServerGame<'_> {
         }
         for c in self
             .common
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .filter(|c| !old_vehicles.contains(&c.id))
         {

@@ -313,7 +313,10 @@ impl ServerGame<'_> {
                 .common
                 .mob_index
                 .find(&self.common.entities.mobs, id)
-                .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
+                .filter(|&i| {
+                    self.common.entities.mobs[i].join == join
+                        && !self.common.entities.mobs[i].removed
+                })
             else {
                 return (hurt, false);
             };
@@ -338,7 +341,9 @@ impl ServerGame<'_> {
             .common
             .mob_index
             .find(&self.common.entities.mobs, id)
-            .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
+            .filter(|&i| {
+                self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed
+            })
         else {
             return (hurt, killed);
         };
@@ -357,7 +362,9 @@ impl ServerGame<'_> {
             .common
             .mob_index
             .find(&self.common.entities.mobs, id)
-            .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
+            .filter(|&i| {
+                self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed
+            })
         {
             // The accepted hit already committed its player credit, including Thorns.
             self.finish_mob_damage_at(index);
@@ -370,7 +377,8 @@ impl ServerGame<'_> {
     pub(in crate::game) fn settle_dealt_absorbed(&mut self, by_player: bool) {
         let absorbed: i32 = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter_mut()
             .map(|m| std::mem::take(&mut m.dealt_absorbed))
             .fold(0, i32::saturating_add);
@@ -556,7 +564,8 @@ impl ServerGame<'_> {
         }
         for s in self
             .common
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter_mut()
             .filter(|s| !s.marker && target != Spared::Stand(s.id))
         {
@@ -697,7 +706,13 @@ impl ServerGame<'_> {
         victims.sort_by_key(|&(key, id, _)| (key, id));
         for (_, id, is_stand) in victims {
             if is_stand {
-                let Some(i) = self.common.entities.armor_stands.iter().position(|s| s.id == id) else {
+                let Some(i) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter()
+                    .position(|s| s.id == id)
+                else {
                     continue;
                 };
                 // knockback(0.4F, ..) follows a hurtServer that landed, on a
@@ -736,7 +751,10 @@ impl ServerGame<'_> {
                     .common
                     .mob_index
                     .find(&self.common.entities.mobs, id)
-                    .filter(|&i| self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed)
+                    .filter(|&i| {
+                        self.common.entities.mobs[i].join == join
+                            && !self.common.entities.mobs[i].removed
+                    })
                 else {
                     continue;
                 };

@@ -108,7 +108,8 @@ fn an_explosion_teleports_endermen_before_it_returns() {
     )
     .unwrap();
     let pending: Vec<u32> = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .filter(|m| m.extra.counter2 > 0)
         .map(|m| m.id)
@@ -118,7 +119,8 @@ fn an_explosion_teleports_endermen_before_it_returns() {
         "teleports left for the AI step: {pending:?}"
     );
     let moved = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .zip(&before)
         .filter(|(m, b)| m.position.distance(**b) > 3.0)
@@ -167,7 +169,8 @@ fn an_infested_endermans_silverfish_come_out_where_it_was_hurt() {
         "the enderman did not teleport"
     );
     let silverfish: Vec<Vec3> = game
-        .entities.mobs
+        .entities
+        .mobs
         .iter()
         .filter(|m| m.kind.id == "minecraft:silverfish")
         .map(|m| m.position)
@@ -323,7 +326,8 @@ fn a_teleporting_shulker_posts_teleport_where_it_stood() {
         mob.extra.flag = true;
         let uuid = game.level.player_uuid;
         let others: Vec<_> = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .map(|m| sunrise_gameplay_common::game::creatures::seen(m, uuid, game.items()))
             .collect();

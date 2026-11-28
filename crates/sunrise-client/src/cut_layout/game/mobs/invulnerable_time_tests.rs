@@ -71,7 +71,12 @@ fn health(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> f32 {
         .unwrap();
     match target {
         sunrise_gameplay_common::game::commands_common::Target::Mob(id) => {
-            game.entities.mobs.iter().find(|m| m.id == id).unwrap().health
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .health
         }
         other => panic!("{other:?}"),
     }
@@ -141,7 +146,10 @@ fn the_hurt_cooldown_and_invulnerable_time_are_separate_fields() {
     // A hit: the cooldown only.
     assert!(game.run_command(&format!("damage {EDIT} 2 minecraft:generic")));
     assert_eq!(
-        (game.entities.mobs[i].invulnerable, game.entities.mobs[i].invulnerable_time),
+        (
+            game.entities.mobs[i].invulnerable,
+            game.entities.mobs[i].invulnerable_time
+        ),
         (20, 0),
         "a hit"
     );
@@ -154,7 +162,10 @@ fn the_hurt_cooldown_and_invulnerable_time_are_separate_fields() {
     assert!(game.run_command(&format!("data merge entity {EDIT} {{invulnerable_time:3}}")));
     let i = mob(&mut game);
     assert_eq!(
-        (game.entities.mobs[i].invulnerable, game.entities.mobs[i].invulnerable_time),
+        (
+            game.entities.mobs[i].invulnerable,
+            game.entities.mobs[i].invulnerable_time
+        ),
         (20, 3),
         "both positive"
     );
@@ -172,7 +183,10 @@ fn the_hurt_cooldown_and_invulnerable_time_are_separate_fields() {
     // The NoAI mob's invulnerable_time counts down with the ticks, then ends.
     step(&mut game, 1);
     assert_eq!(
-        (game.entities.mobs[i].invulnerable, game.entities.mobs[i].invulnerable_time),
+        (
+            game.entities.mobs[i].invulnerable,
+            game.entities.mobs[i].invulnerable_time
+        ),
         (19, 2),
         "one tick"
     );

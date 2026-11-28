@@ -45,7 +45,8 @@ fn converted_place(
             }
             game.creative = false;
             let m = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.species() != into)
                 .expect("the mob was summoned");
@@ -60,7 +61,8 @@ fn converted_place(
                 "the mob converted"
             );
             let new = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.species() == into)
                 .expect("the new mob joined");

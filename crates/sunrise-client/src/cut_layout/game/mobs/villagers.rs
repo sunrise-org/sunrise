@@ -124,7 +124,13 @@ pub(crate) mod birth_tests {
         .unwrap();
         for id in [parent, partner] {
             assert_eq!(
-                game.entities.mobs.iter().find(|m| m.id == id).unwrap().extra.age,
+                game.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .unwrap()
+                    .extra
+                    .age,
                 6000
             );
         }
@@ -133,7 +139,8 @@ pub(crate) mod birth_tests {
     fn bed_owners(game: &sunrise_gameplay::game::ServerGame<'_>) -> Vec<u32> {
         // The same Seen.bed projection supplies the POI ticket searches and
         // take_bed_for_child; no independent reservation exists in the Game.
-        game.entities.mobs
+        game.entities
+            .mobs
             .iter()
             .filter(|m| m.seen(None, game.items()).bed == Some(BED))
             .map(|m| m.id)
@@ -179,7 +186,8 @@ pub(crate) mod birth_tests {
     fn assert_baby(game: &sunrise_gameplay::game::ServerGame<'_>, parent: u32, partner: u32) {
         assert_eq!(game.entities.mobs.len(), 3);
         let baby = game
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id != parent && m.id != partner)
             .unwrap();

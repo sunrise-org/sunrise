@@ -323,7 +323,8 @@ fn spawn_tree(
         record_at("mymod:robot", root, at, riders),
     )
     .unwrap();
-    game.entities.general
+    game.entities
+        .general
         .rows
         .iter()
         .find(|row| row.uuid == root)
@@ -333,7 +334,8 @@ fn spawn_tree(
 
 /// The rows' ids in storage order.
 fn row_ids(game: &sunrise_gameplay::game::ServerGame<'_>) -> Vec<u32> {
-    game.entities.general
+    game.entities
+        .general
         .rows
         .iter()
         .map(|row| row.id)
@@ -464,7 +466,8 @@ fn a_removed_last_rider_leaves_no_stale_index_link() {
         l.trace.lock().unwrap().clear();
         // The sweep took the last-joined rider out of the list.
         let gone = game
-            .entities.general
+            .entities
+            .general
             .rows
             .iter()
             .position(|row| row.id == ids[2])
@@ -488,7 +491,8 @@ fn a_removed_only_rider_leaves_no_stale_index_link() {
         assert_eq!(*l.trace.lock().unwrap(), [root, ids[1]]);
         l.trace.lock().unwrap().clear();
         let gone = game
-            .entities.general
+            .entities
+            .general
             .rows
             .iter()
             .position(|row| row.id == ids[1])
@@ -1090,7 +1094,8 @@ fn spawn_entity_returns_its_own_row_when_a_join_spawns_another() {
         assert!(heard.contains(&(missile.id(), "join")));
         assert!(!heard.iter().any(|&(_, what)| what == "load"), "{heard:?}");
         let row = |id: u32| {
-            game.entities.general
+            game.entities
+                .general
                 .rows
                 .iter()
                 .find(|row| row.id == id)

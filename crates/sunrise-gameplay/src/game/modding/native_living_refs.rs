@@ -255,7 +255,8 @@ impl ServerGame<'_> {
     ) -> bool {
         let Some(index) = self
             .common
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter()
             .position(|stand| stand.id == id)
         else {
@@ -487,7 +488,12 @@ impl ServerGame<'_> {
                 )
             }
             Target::Mob(id) => {
-                let m = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed)?;
+                let m = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)?;
                 Some(self.mob_portal_eligible(m))
             }
             _ => None,
@@ -508,7 +514,12 @@ impl ServerGame<'_> {
         let Target::Mob(id) = self.native_living_read_target(living)? else {
             return None;
         };
-        let m = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let m = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         let [min, max] = self.entity_bounding_box(target)?;
         let bounds = sunrise_core::geometry::Aabb::new(
             sunrise_core::geometry::Vec3::new(min[0], min[1], min[2]),
@@ -526,7 +537,12 @@ impl ServerGame<'_> {
     pub(in crate::game) fn living_can_freeze(&self, living: LivingRef) -> Option<bool> {
         match self.native_living_read_target(living)? {
             Target::Mob(id) => {
-                let m = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed)?;
+                let m = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)?;
                 let w = self.mob_world_base(&[]);
                 Some(sunrise_sim::mobs::ai::can_freeze(m, &w))
             }
@@ -540,7 +556,12 @@ impl ServerGame<'_> {
     pub(in crate::game) fn living_can_breathe_underwater(&self, living: LivingRef) -> Option<bool> {
         match self.native_living_read_target(living)? {
             Target::Mob(id) => {
-                let mob = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed)?;
+                let mob = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)?;
                 Some(self.items().entity_type_tags.has_bit(
                     mob.kind.flags.entity_tag_slot,
                     EntityTypeTags::CAN_BREATHE_UNDER_WATER,
@@ -616,7 +637,8 @@ impl ServerGame<'_> {
                 self.journal_mob_health(id);
                 let Some(m) = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == id && !m.removed)
                 else {
@@ -657,7 +679,8 @@ impl ServerGame<'_> {
             Some(Target::Mob(id)) => {
                 let Some(m) = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == id && !m.removed)
                 else {
@@ -724,7 +747,12 @@ impl ServerGame<'_> {
                 .kill_credit(self.common.world.game_time)
                 .and_then(|id| self.credited_entity(id)),
             Target::Mob(id) => {
-                let m = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed)?;
+                let m = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)?;
                 let who = m.recent_hurt_by()?;
                 let attacker = match who {
                     Who::Mob(attacker) => {
@@ -794,11 +822,13 @@ impl ServerGame<'_> {
             }
             Target::Stand(id) => {
                 let (_, join) = self.last_hurt_living_target(id)?;
-                self.common.entities.armor_stands[self.common.entities.armor_stands.locate(join)?].last_hurt_mob
+                self.common.entities.armor_stands[self.common.entities.armor_stands.locate(join)?]
+                    .last_hurt_mob
             }
             Target::Dragon(id) => {
                 self.common
-                    .entities.dragon
+                    .entities
+                    .dragon
                     .as_ref()
                     .filter(|d| d.id == id)?
                     .last_hurt_mob
@@ -849,9 +879,9 @@ impl ServerGame<'_> {
     ) -> Option<EquipmentRead<'_>> {
         let body = match target {
             // A removed mob still lends what it wears.
-            Target::Mob(id) => {
-                sunrise_sim::health::LivingBody::Mob(self.common.entities.mobs.iter().find(|m| m.id == id)?)
-            }
+            Target::Mob(id) => sunrise_sim::health::LivingBody::Mob(
+                self.common.entities.mobs.iter().find(|m| m.id == id)?,
+            ),
             target => self.native_living_body(target)?,
         };
         super::native_living_body::body_equipment(body, slot)
@@ -916,14 +946,16 @@ impl ServerGame<'_> {
         match target {
             Target::Mob(id) => {
                 self.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter_mut()
                     .find(|mob| mob.id == id)?
                     .set_equipment_stack(slot as usize, updated);
             }
             Target::Stand(id) => {
                 self.common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .iter_mut()
                     .find(|stand| stand.id == id)?
                     .equipment
@@ -931,7 +963,8 @@ impl ServerGame<'_> {
             }
             Target::Dragon(id) => {
                 self.common
-                    .entities.dragon
+                    .entities
+                    .dragon
                     .as_mut()
                     .filter(|dragon| dragon.id == id)?
                     .equipment
@@ -1136,13 +1169,15 @@ impl ServerGame<'_> {
         let equip_event_at = match t {
             Target::Stand(id) => self
                 .common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|a| a.id == id)
                 .map(|a| (a.equipment.get(slot as usize), a.position, a.first_tick)),
             Target::Dragon(id) => self
                 .common
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .filter(|d| d.id == id)
                 .map(|d| (d.equipment.get(slot as usize), d.position, d.first_tick())),
@@ -1284,7 +1319,8 @@ impl ServerGame<'_> {
             return None;
         };
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id && m.is_tamable())
     }

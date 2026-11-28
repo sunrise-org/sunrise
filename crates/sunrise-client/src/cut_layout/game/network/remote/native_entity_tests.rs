@@ -39,7 +39,8 @@ fn client_base_tick_preserves_previous_eye_sample() {
         crate::game::server_side::native_entity_refs::tests::with_client_game(|game| {
             let _server = sunrise_client_gameplay::game::client_side::native_client_session::tests::logged_client(game);
             game.spawn_entity(15, "minecraft:zombie", [0.0; 3], [0.0; 3]);
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == 15)
                 .unwrap()
@@ -52,7 +53,8 @@ fn client_base_tick_preserves_previous_eye_sample() {
             game.tick_remote_entities(true);
             assert!(
                 !game
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 15)
                     .unwrap()

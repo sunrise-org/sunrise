@@ -596,7 +596,13 @@ fn teleport_then_walk(
     });
     for _ in 0..4 {
         game.tick_creature_entities().unwrap();
-        let at = game.entities.mobs.iter().find(|m| m.id == id).unwrap().position;
+        let at = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id)
+            .unwrap()
+            .position;
         if (at.y - start).abs() > 5.0 {
             return;
         }
@@ -613,7 +619,13 @@ fn a_mobs_teleport_and_its_walk_in_one_tick_are_two_crossings() {
             // Section y 6 (blocks 96 to 111), teleported near the top of y 7, then 0.6 up into y 8.
             let id = floating_cow(game, [8.5, 100.0, 8.5]);
             teleport_then_walk(game, id, &[[8.5, 127.75, 8.5]], [0.0, 0.6, 0.0]);
-            let at = game.entities.mobs.iter().find(|m| m.id == id).unwrap().position;
+            let at = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .position;
             assert!(at.y >= 128.0, "the walk took it into y 8: {at:?}");
             assert_eq!(
                 calls.lock().unwrap().as_slice(),
@@ -735,7 +747,13 @@ fn a_mobs_teleport_out_and_its_walk_back_in_one_tick_are_two_crossings() {
             // Teleported just over y = 112 into section y 7, then 0.6 down, back into y 6.
             let id = floating_cow(game, [8.5, 100.0, 8.5]);
             teleport_then_walk(game, id, &[[8.5, 112.25, 8.5]], [0.0, -0.6, 0.0]);
-            let at = game.entities.mobs.iter().find(|m| m.id == id).unwrap().position;
+            let at = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .position;
             assert!(at.y < 112.0, "the walk took it back into y 6: {at:?}");
             assert_eq!(
                 calls.lock().unwrap().as_slice(),
@@ -759,7 +777,13 @@ fn a_mob_that_teleports_twice_in_its_tick_then_walks_is_three_crossings() {
             let id = floating_cow(game, [8.5, 100.0, 8.5]);
             let targets = [[8.5, 120.0, 8.5], [8.5, 143.75, 8.5]];
             teleport_then_walk(game, id, &targets, [0.0, 0.6, 0.0]);
-            let at = game.entities.mobs.iter().find(|m| m.id == id).unwrap().position;
+            let at = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .position;
             assert!(at.y >= 144.0, "the walk took it into y 9: {at:?}");
             assert_eq!(
                 calls.lock().unwrap().as_slice(),
@@ -818,14 +842,22 @@ fn a_size_change_nudge_in_a_mobs_tick_then_its_walk_are_two_crossings() {
             let id = floating_cow(game, [8.5, 112.3, 8.5]);
             game.tick_creature_entities().unwrap();
             let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
-            game.entities.mobs.update(i, |m| m.ai.goals.add(0, Grows(false)));
+            game.entities
+                .mobs
+                .update(i, |m| m.ai.goals.add(0, Grows(false)));
             for _ in 0..4 {
                 game.tick_creature_entities().unwrap();
                 if !calls.lock().unwrap().is_empty() {
                     break;
                 }
             }
-            let at = game.entities.mobs.iter().find(|m| m.id == id).unwrap().position;
+            let at = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .position;
             assert!(
                 (at.y - 112.25).abs() < 1e-3,
                 "nudged to 111.65, walked to 112.25: {at:?}"
@@ -903,12 +935,20 @@ fn a_server_mobs_own_move_is_not_reconstructed_after_its_post() {
                     sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                 )
                 .unwrap();
-            let kind = game.entities.mobs.iter().find(|m| m.id == id).unwrap().kind.clone();
+            let kind = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .kind
+                .clone();
             // The mob's round: Pre, the tick (its own move over z = 16), then the Post.
             let mut round = game.native_tick_round();
             assert!(game.native_tick_pre_one(&mut round, id, &kind.id));
             let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .update(i, |m| m.position = Vec3::new(1.0, 70.0, 17.0));
             assert!(calls.lock().unwrap().is_empty());
             game.native_tick_post_one(&round, id, &kind.id);
@@ -1001,7 +1041,8 @@ fn a_client_is_told_each_teleport_and_where_its_entities_really_are() {
             .unwrap();
             // Its own move (the interpolation the client steps), not the packet's position.
             let i = game.entities.mobs.iter().position(|m| m.id == 20).unwrap();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .update(i, |m| m.position = Vec3::new(1.0, 70.0, -2.0));
             assert!(calls.lock().unwrap().is_empty());
             game.client_entity_sections_stepped();
@@ -1050,8 +1091,14 @@ fn a_refused_player_add_does_not_hide_the_resident_entities_crossing() {
                         })
                     };
                     game.handle_packet(add(game, 20, "minecraft:pig")).unwrap();
-                    let i = game.entities.mobs.iter().position(|mob| mob.id == 20).unwrap();
-                    game.entities.mobs
+                    let i = game
+                        .entities
+                        .mobs
+                        .iter()
+                        .position(|mob| mob.id == 20)
+                        .unwrap();
+                    game.entities
+                        .mobs
                         .update(i, |mob| mob.position = Vec3::new(17.0, 70.0, 3.0));
                     // The unfiled move is still pending when an unknown player tries the same id.
                     calls.lock().unwrap().clear();
@@ -1337,7 +1384,8 @@ fn ticked_live_preserves_order_removals_and_reindexed_rows() {
 
             assert!(moves.is_empty());
             assert!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .any(|m| ![mob_a, mob_b, mob_c, mob_d].contains(&m.id)),
                 "the listener must add a row during dispatch"
@@ -1351,7 +1399,12 @@ fn ticked_live_preserves_order_removals_and_reindexed_rows() {
                 ]
             );
             assert_eq!(
-                game.entities.mobs.iter().find(|m| m.id == mob_a).unwrap().position,
+                game.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == mob_a)
+                    .unwrap()
+                    .position,
                 end
             );
             assert!(

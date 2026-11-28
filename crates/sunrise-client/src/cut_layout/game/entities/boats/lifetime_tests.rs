@@ -76,7 +76,8 @@ fn a_bound_ridden_boat_commits_the_server_leash_tick() {
 fn bound_boat_server_case(tick: impl Fn(&mut sunrise_gameplay::game::ServerGame<'_>, i32)) {
     sunrise_gameplay::game::native_entity_refs::tests::with_resident_game(|game| {
         game.server.chunk_ticking.tickets.update(None);
-        game.entities.boats
+        game.entities
+            .boats
             .push(Boat::new(71, "oak".into(), Vec3::new(0.5, 70.0, 0.5), 0.0));
         game.entities.boats.update(0, |boat| boat.hurt_time = 6);
         let holder = {
@@ -96,7 +97,8 @@ fn bound_boat_server_case(tick: impl Fn(&mut sunrise_gameplay::game::ServerGame<
         for step in 1..=3 {
             tick(game, step);
             let current = game
-                .entities.boats
+                .entities
+                .boats
                 .update(0, |boat| boat.attachment_lifetime().registration().unwrap());
             assert!(original.same_registration(&current));
             assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
@@ -133,7 +135,8 @@ fn bound_boat_client_case(tick: impl Fn(&mut sunrise_client_gameplay::game::Clie
         game.connect_local(client, "BoatLifetimeTest").unwrap();
         game.client.remote.as_mut().unwrap().joined = true;
         game.client.remote.as_mut().unwrap().first_passenger = true;
-        game.entities.boats
+        game.entities
+            .boats
             .push(Boat::new(71, "oak".into(), Vec3::new(0.5, 70.0, 0.5), 0.0));
         game.entities.boats.update(0, |boat| boat.hurt_time = 6);
         let holder = mod_api::EntityRef::new(game.native_lifecycle.epoch().unwrap(), 71);
@@ -150,7 +153,8 @@ fn bound_boat_client_case(tick: impl Fn(&mut sunrise_client_gameplay::game::Clie
         for step in 1..=3 {
             tick(game, step);
             let current = game
-                .entities.boats
+                .entities
+                .boats
                 .update(0, |boat| boat.attachment_lifetime().registration().unwrap());
             assert!(original.same_registration(&current));
             assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);

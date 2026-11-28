@@ -700,11 +700,18 @@ pub(crate) mod fake_action_tests {
                     );
                     assert!(game.container.is_none());
                     let items = game
-                        .entities.carts
+                        .entities
+                        .carts
                         .iter()
                         .find(|c| c.id == id)
                         .map(|c| &c.items)
-                        .or_else(|| game.entities.boats.iter().find(|b| b.id == id).map(|b| &b.items))
+                        .or_else(|| {
+                            game.entities
+                                .boats
+                                .iter()
+                                .find(|b| b.id == id)
+                                .map(|b| &b.items)
+                        })
                         .unwrap();
                     assert_eq!(items[3], diamonds, "vehicle {id} lost its items");
                 }
@@ -799,7 +806,13 @@ pub(crate) mod fake_action_tests {
             assert_eq!(items[4], emerald, "the staging kept the viewer's edit");
             game.guest_close_all(real_conn);
             assert!(!game.world.block_entities.contains_key(&key));
-            let items = &game.entities.carts.iter().find(|c| c.id == 6110).unwrap().items;
+            let items = &game
+                .entities
+                .carts
+                .iter()
+                .find(|c| c.id == 6110)
+                .unwrap()
+                .items;
             assert_eq!(
                 items[3],
                 Some(ItemStack::new("minecraft:diamond", 5)),
@@ -944,7 +957,10 @@ pub(crate) mod fake_action_tests {
             assert_eq!(result.outcome, ActionOutcome::Consumed);
             assert_eq!((result.held, result.other.len()), (None, 0));
             assert_eq!(result.unrepresentable, 1);
-            assert_eq!(game.entities.armor_stands.last().unwrap().equipment[0], None);
+            assert_eq!(
+                game.entities.armor_stands.last().unwrap().equipment[0],
+                None
+            );
             assert_eq!(game.entities.dropped.len(), dropped + 1);
             let item = game.entities.dropped.last().unwrap();
             assert_eq!(item.stack, ItemStack::new("test:missing", 1));
@@ -1006,8 +1022,15 @@ pub(crate) mod fake_action_tests {
                 assert_eq!(result.outcome, ActionOutcome::Consumed);
                 assert_eq!((result.held, result.other.len()), (None, 0));
                 assert_eq!(result.unrepresentable, 0, "the vetoed stack is not counted");
-                assert_eq!(game.entities.armor_stands.last().unwrap().equipment[0], None);
-                assert_eq!(game.entities.dropped.len(), dropped, "no item entity is left");
+                assert_eq!(
+                    game.entities.armor_stands.last().unwrap().equipment[0],
+                    None
+                );
+                assert_eq!(
+                    game.entities.dropped.len(),
+                    dropped,
+                    "no item entity is left"
+                );
             });
         });
     }

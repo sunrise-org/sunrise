@@ -863,20 +863,23 @@ impl crate::game::ServerGame<'_> {
         let ticks = |at: Vec3| ticking(at.x.floor() as i32, at.z.floor() as i32);
         let items: Vec<(u32, Vec3, f32, f32)> = self
             .common
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .filter(|e| ticks(e.position))
             .map(|e| (e.id, e.position, 0.25, 0.25))
             .collect();
         let mobs: Vec<(u32, Vec3, f32, f32)> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| ticks(m.position) && self.mob_portal_eligible(m))
             .map(|m| (m.id, m.position, m.width(), m.height()))
             .chain(
                 self.common
-                    .entities.boats
+                    .entities
+                    .boats
                     .iter()
                     .filter(|b| ticks(b.position) && self.vehicle_can_use_portal(b.id))
                     .map(|b| {
@@ -890,7 +893,8 @@ impl crate::game::ServerGame<'_> {
             )
             .chain(
                 self.common
-                    .entities.carts
+                    .entities
+                    .carts
                     .iter()
                     .filter(|c| ticks(c.position) && self.vehicle_can_use_portal(c.id))
                     .map(|c| {
@@ -916,7 +920,8 @@ impl crate::game::ServerGame<'_> {
         // A pearl's move this tick, from where it started it.
         let pearls: Vec<(u32, Option<Who>, Option<u32>, BlockPos)> = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .filter(|p| ticks(p.position))
             .filter_map(|p| {
@@ -998,30 +1003,35 @@ impl crate::game::ServerGame<'_> {
         let ticks = |at: Vec3| ticking(at.x.floor() as i32, at.z.floor() as i32);
         let ids: Vec<(u32, bool, bool)> = self
             .common
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .map(|e| (e.id, true, ticks(e.position)))
             .chain(
                 self.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .map(|m| (m.id, self.mob_portal_eligible(m), ticks(m.position))),
             )
             .chain(
                 self.common
-                    .entities.boats
+                    .entities
+                    .boats
                     .iter()
                     .map(|b| (b.id, self.vehicle_can_use_portal(b.id), ticks(b.position))),
             )
             .chain(
                 self.common
-                    .entities.carts
+                    .entities
+                    .carts
                     .iter()
                     .map(|c| (c.id, self.vehicle_can_use_portal(c.id), ticks(c.position))),
             )
             .chain(
                 self.common
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .filter(|p| matches!(p.kind, ProjectileKind::EnderPearl))
                     .map(|p| (p.id, true, ticks(p.position))),
@@ -1050,7 +1060,8 @@ impl crate::game::ServerGame<'_> {
             }
             let is_pearl = self
                 .common
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .any(|p| p.id == id && matches!(p.kind, ProjectileKind::EnderPearl));
             if is_pearl != after_move {
@@ -1102,7 +1113,8 @@ impl crate::game::ServerGame<'_> {
         }
         if let Some(i) = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .position(|p| p.id == id)
         {

@@ -45,10 +45,16 @@ fn an_already_discarded_trident_is_not_ticked_before_sweep() {
         let actor = &mut *scope.game;
         assert!(actor.entity_discard(handle));
         assert!(actor.entity(71).is_none());
-        let (age, at) = (actor.entities.tridents[0].age, actor.entities.tridents[0].position);
+        let (age, at) = (
+            actor.entities.tridents[0].age,
+            actor.entities.tridents[0].position,
+        );
         actor.tick_tridents();
         assert_eq!(
-            (actor.entities.tridents[0].age, actor.entities.tridents[0].position),
+            (
+                actor.entities.tridents[0].age,
+                actor.entities.tridents[0].position
+            ),
             (age, at)
         );
         assert!(observed.hits.lock().unwrap().is_empty());

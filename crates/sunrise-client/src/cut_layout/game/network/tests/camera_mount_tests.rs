@@ -60,7 +60,8 @@ fn spawn(game: &mut sunrise_client_gameplay::game::ClientGame<'_>, id: i32, kind
     if kind == "minecraft:oak_boat" {
         // The boat models are not loaded here, so the boat is tracked and listed by hand.
         game.spawn_entity(id, kind, [at().x, at().y, at().z], [0.0; 3]);
-        game.entities.boats
+        game.entities
+            .boats
             .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                 id as u32,
                 "oak".into(),

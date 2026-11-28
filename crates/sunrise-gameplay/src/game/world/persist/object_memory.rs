@@ -26,7 +26,13 @@ impl crate::game::ServerGame<'_> {
 
     /// Mutate an extant mob object without making it resident.
     pub fn mob_object_mut(&mut self, id: u32) -> Option<&mut Mob> {
-        if let Some(index) = self.common.entities.mobs.iter().position(|mob| mob.id == id) {
+        if let Some(index) = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .position(|mob| mob.id == id)
+        {
             return Some(&mut self.common.entities.mobs[index]);
         }
         self.common
@@ -43,7 +49,8 @@ impl crate::game::ServerGame<'_> {
         id: u32,
     ) -> Option<&sunrise_gameplay_common::game::boats_common::Boat> {
         self.common
-            .entities.boats
+            .entities
+            .boats
             .iter()
             .find(|boat| boat.id == id)
             .or_else(|| {
@@ -62,7 +69,8 @@ impl crate::game::ServerGame<'_> {
         id: u32,
     ) -> Option<&sunrise_gameplay_common::game::minecarts::Minecart> {
         self.common
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .find(|cart| cart.id == id)
             .or_else(|| {
@@ -373,7 +381,8 @@ impl crate::game::ServerGame<'_> {
             // to int before short narrowing; integer tags narrow directly.
             let fuse = tnt_fuse(&tag);
             self.common
-                .entities.tnts
+                .entities
+                .tnts
                 .push(sunrise_gameplay_common::game::tnt_common::PrimedTnt {
                     size_answer: None,
                     used_portal,
@@ -700,7 +709,8 @@ impl crate::game::ServerGame<'_> {
     pub(super) fn mob_passenger_objects(&self, id: u32) -> Vec<MobObject> {
         let mut riders: Vec<(i64, u32, MobObject)> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .enumerate()
             .filter(|(_, mob)| mob.extra.mount == Some(id) && !mob.removed)
@@ -759,7 +769,8 @@ impl crate::game::ServerGame<'_> {
             (VehicleTreeKind::Cart, cart.kind.id().to_owned())
         } else if self
             .common
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter()
             .any(|stand| stand.id == root)
         {
@@ -899,7 +910,8 @@ impl crate::game::ServerGame<'_> {
                 let id = self.server.next_entity + 1;
                 self.load_armor_stand_transferred(tag, uuid, Some(state));
                 self.common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .iter()
                     .any(|stand| stand.id == id)
                     .then_some(id)
@@ -910,7 +922,8 @@ impl crate::game::ServerGame<'_> {
 
     pub(super) fn mob_object_slot(&self, id: u32) -> Option<MobObject> {
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .position(|mob| mob.id == id)
             .map(MobObject::Resident)

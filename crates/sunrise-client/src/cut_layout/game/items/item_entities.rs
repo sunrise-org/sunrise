@@ -10,7 +10,8 @@ pub(crate) mod destroyed_contents_tests {
 
     /// The motion of each spilled stack, in the order the spill made them.
     fn spilled_motions(game: &sunrise_gameplay::game::ServerGame<'_>) -> Vec<[f64; 3]> {
-        game.entities.dropped
+        game.entities
+            .dropped
             .iter()
             .map(|item| [item.velocity.x, item.velocity.y, item.velocity.z])
             .collect()
@@ -78,7 +79,8 @@ pub(crate) mod destroyed_contents_tests {
         assert_eq!(game.entities.dropped.len(), 1);
         assert!(game.run_command("damage @e[type=minecraft:item,limit=1] 100 minecraft:generic"));
         let mut spilled: Vec<_> = game
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .map(|item| (item.stack.item.to_string(), item.stack.count))
             .collect();
@@ -260,7 +262,8 @@ pub(crate) mod expire_tests {
                 // First expiry at age 6000: listeners add 60 + 40 -> lifespan 6100, age stays 6000.
                 game.tick_items();
                 let item = game
-                    .entities.dropped
+                    .entities
+                    .dropped
                     .iter()
                     .find(|item| item.id == id)
                     .expect("extended item survives");
@@ -283,7 +286,8 @@ pub(crate) mod expire_tests {
                 game.entities.dropped.last_mut().unwrap().age = 6099;
                 game.tick_items();
                 let item = game
-                    .entities.dropped
+                    .entities
+                    .dropped
                     .iter()
                     .find(|item| item.id == id)
                     .expect("clamped item survives at age 6100 < 32766");
@@ -644,7 +648,8 @@ pub(crate) mod expire_tests {
                 game.tick_items();
                 assert_eq!(*edited.lock().unwrap(), Some(true));
                 let item = game
-                    .entities.dropped
+                    .entities
+                    .dropped
                     .iter()
                     .find(|item| item.id == id)
                     .expect("item survives at age 6000 < 6001");
@@ -758,7 +763,8 @@ pub(crate) mod expire_tests {
                         "departed item {id} must not resolve during entity_leave_level"
                     );
                 }
-                let survivors: Vec<u32> = game.entities.dropped.iter().map(|item| item.id).collect();
+                let survivors: Vec<u32> =
+                    game.entities.dropped.iter().map(|item| item.id).collect();
                 assert_eq!(survivors, expected_survivors);
                 // Baseline before Row 5 was 404,829 allocations (O(KN) ItemCells rebuilds + stack clones).
                 assert!(

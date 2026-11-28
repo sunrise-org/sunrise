@@ -48,7 +48,8 @@ fn exercise_restore<'g, G: SideGame<'g>>(
         .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
         .unwrap();
     game.entities.projectiles.push(arrow(71, at));
-    game.entities.projectiles
+    game.entities
+        .projectiles
         .update(0, |p| p.velocity = Vec3::new(0.3, 0.0, 0.0));
     let index = Arc::new(Mutex::new(AttachmentIndex::default()));
     let mut values = Attachments::default();
@@ -63,7 +64,8 @@ fn exercise_restore<'g, G: SideGame<'g>>(
     assert_eq!(before.len(), 1);
     step(game, at);
     let current = game
-        .entities.projectiles
+        .entities
+        .projectiles
         .update(0, |p| p.attachment_lifetime().registration().unwrap());
     assert!(original.same_registration(&current), "restore path {path}");
     assert_eq!(
@@ -118,7 +120,8 @@ fn projectile_restore_entries_keep_the_bound_arrow() {
                     );
                 }
                 assert_eq!(
-                    game.entities.projectiles
+                    game.entities
+                        .projectiles
                         .iter()
                         .map(|p| p.id)
                         .collect::<Vec<_>>(),

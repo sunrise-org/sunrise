@@ -59,7 +59,8 @@ pub(crate) mod part_remainder_tests {
                 game.entities.dropped.clear();
                 game.crafter_dispense(pos, state).unwrap();
                 let output: Vec<_> = game
-                    .entities.dropped
+                    .entities
+                    .dropped
                     .iter()
                     .map(|e| (e.stack.item.to_string(), e.stack.count))
                     .collect();

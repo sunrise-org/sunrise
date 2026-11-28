@@ -166,9 +166,12 @@ mod tests {
             );
 
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(300001, pig.clone(), Vec3::ZERO, 0.0));
-            game.entities.mobs.push(Mob::new(300002, pig, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(300002, pig, Vec3::ZERO, 0.0));
             let victim = game.entity(300001).unwrap();
             let control = game.entity(300002).unwrap();
             assert_eq!(
@@ -201,7 +204,9 @@ mod tests {
     fn review_unknown_damage_type_is_refused() {
         with_resident_game(|game| {
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.entities.mobs.push(Mob::new(300001, pig, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(300001, pig, Vec3::ZERO, 0.0));
             let victim = game.entity(300001).unwrap();
             assert_eq!(
                 victim.hurt(game, "missing:unknown", 5.0, None, None),
@@ -216,7 +221,9 @@ mod tests {
     fn review_fire_immune_query() {
         with_resident_game(|game| {
             let blaze = game.res.mob_types().get("minecraft:blaze").unwrap().clone();
-            game.entities.mobs.push(Mob::new(300001, blaze, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(300001, blaze, Vec3::ZERO, 0.0));
             let victim = game.entity(300001).unwrap();
             assert_eq!(
                 victim.invulnerable_to_damage(game, "minecraft:in_fire"),
@@ -254,7 +261,9 @@ mod tests {
             with_resident_game(|game| {
                 let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
                 for id in 300001..=300003 {
-                    game.entities.mobs.push(Mob::new(id, pig.clone(), Vec3::ZERO, 0.0));
+                    game.entities
+                        .mobs
+                        .push(Mob::new(id, pig.clone(), Vec3::ZERO, 0.0));
                 }
                 let victim = game.entity(300001).unwrap();
                 let direct = game.entity(300002).unwrap();
@@ -314,7 +323,9 @@ mod tests {
         mod_platform::testing::with_mods(mods, || {
             with_resident_game(|game| {
                 let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                game.entities.mobs.push(Mob::new(300001, pig, Vec3::ZERO, 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(300001, pig, Vec3::ZERO, 0.0));
                 let victim = game.entity(300001).unwrap();
                 assert_eq!(
                     victim.hurt(game, "minecraft:dragon_breath", 10.0, None, None),
@@ -346,7 +357,9 @@ mod tests {
         mod_platform::testing::with_mods(mods, || {
             with_resident_game(|game| {
                 let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                game.entities.mobs.push(Mob::new(300001, pig, Vec3::ZERO, 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(300001, pig, Vec3::ZERO, 0.0));
                 let victim = game.entity(300001).unwrap();
                 // An accepted hit: taken, the health drops, the damage hooks
                 // the engine's own path fires are the ones that fire.
@@ -423,9 +436,12 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(300001, zombie.clone(), Vec3::ZERO, 0.0));
-            game.entities.mobs.push(Mob::new(300002, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(300002, zombie, Vec3::ZERO, 0.0));
             let a = game.entity(300001).unwrap();
             let b = game.entity(300002).unwrap();
             // No team on either side: damage is allowed, and a mob without
@@ -447,7 +463,9 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
             let mob = game.entity(12).unwrap();
             assert_eq!(game.entity_permanently_invulnerable(mob), Some(false));
             assert!(game.entity_set_invulnerable(mob, true));
@@ -476,7 +494,8 @@ mod tests {
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
             let player = game.entity(20).unwrap();
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .push(sunrise_sim::entities::ArmorStand::new(14, Vec3::ZERO, 0.0));
             let stand = game.entity(14).unwrap();
 
@@ -551,9 +570,11 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, zombie.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0));
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(13, zombie, Vec3::new(5.5, 64.0, 0.5), 0.0));
             floor(game);
             let mob = game.entity(12).unwrap();
@@ -627,9 +648,11 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, zombie.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0));
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(13, zombie, Vec3::new(5.5, 64.0, 0.5), 0.0));
             floor(game);
             let victim = game.entity(12).unwrap();
@@ -655,7 +678,10 @@ mod tests {
                 5.0,
                 Damage::of(DamageKind::Generic),
             ));
-            assert_eq!(game.entities.mobs[0].health, before, "the window refused it");
+            assert_eq!(
+                game.entities.mobs[0].health, before,
+                "the window refused it"
+            );
             assert!(game.entities.mobs[0].damage(
                 sunrise_gameplay::game::server_side::entity_server::damage_level_of!(
                     game,
@@ -762,7 +788,8 @@ mod tests {
         use sunrise_core::geometry::Vec3;
         use sunrise_sim::entities::ArmorStand;
         super::super::native_entity_refs::tests::with_resident_game(|game| {
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .push(ArmorStand::new(14, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let stand = game.entity(14).unwrap();
             assert!(game.entity_set_invulnerable_time(stand, 20));
@@ -827,7 +854,9 @@ mod tests {
         use sunrise_sim::motion::PlayerMotion;
         with_resident_game(|game| {
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.entities.mobs.push(Mob::new(300001, pig, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(300001, pig, Vec3::ZERO, 0.0));
             let mob = game.entity(300001).unwrap();
             assert_eq!(mob.invulnerable_to_piercing_weapon(game), Some(false));
             // The window alone, without the flag, answers it.
@@ -840,7 +869,8 @@ mod tests {
             assert!(game.entity_set_invulnerable(player, true));
             assert_eq!(player.invulnerable_to_piercing_weapon(game), Some(true));
             // A saved kind's window, over its tags.
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .push(ArmorStand::new(14, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let stand = game.entity(14).unwrap();
             assert!(game.entity_set_invulnerable_time(stand, 5));
@@ -863,7 +893,8 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(300001, zombie, Vec3::new(0.5, 64.0, 0.5), 0.0));
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
@@ -898,7 +929,8 @@ mod tests {
     fn a_saved_stand_refuses_the_punch_that_would_break_it() {
         use sunrise_sim::entities::ArmorStand;
         with_resident_game(|game| {
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .push(ArmorStand::new(14, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let stand = game.entity(14).unwrap();
             // The window refuses even the first hit's wobble.

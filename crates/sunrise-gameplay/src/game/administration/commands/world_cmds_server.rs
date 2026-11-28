@@ -702,13 +702,15 @@ impl crate::game::ServerGame<'_> {
         let entity_kind = match target {
             Target::Boat(_) => self
                 .common
-                .entities.boats
+                .entities
+                .boats
                 .iter()
                 .find(|b| b.id == id)
                 .map(|b| b.entity_type()),
             Target::Cart(_) => self
                 .common
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.kind.id().to_owned()),
@@ -746,13 +748,15 @@ impl crate::game::ServerGame<'_> {
         match target {
             Target::Boat(_) => self
                 .common
-                .entities.boats
+                .entities
+                .boats
                 .iter()
                 .position(|b| b.id == id)
                 .is_some_and(|i| self.hurt_boat_result(i, amount, creative).is_some()),
             Target::Cart(_) => self
                 .common
-                .entities.carts
+                .entities
+                .carts
                 .iter()
                 .position(|c| c.id == id)
                 .is_some_and(|i| {
@@ -846,7 +850,8 @@ impl crate::game::ServerGame<'_> {
                 let attacker_species = match attacker {
                     Some(Who::Mob(i)) => self
                         .common
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .find(|m| m.id == i)
                         .map(|m| sunrise_sim::mobs::species::vanilla_id(m.species())),
@@ -912,8 +917,23 @@ impl crate::game::ServerGame<'_> {
         let id = match t {
             Target::Player => self.common.riding?,
             Target::Guest(conn) => self.command_guest(conn)?.vehicle?,
-            Target::Mob(id) => self.common.entities.mobs.iter().find(|m| m.id == id)?.extra.mount?,
-            Target::Bolt(id) => self.common.entities.bolts.iter().find(|b| b.id == id)?.mount?,
+            Target::Mob(id) => {
+                self.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)?
+                    .extra
+                    .mount?
+            }
+            Target::Bolt(id) => {
+                self.common
+                    .entities
+                    .bolts
+                    .iter()
+                    .find(|b| b.id == id)?
+                    .mount?
+            }
             _ => return None,
         };
         Some(if self.common.entities.boats.iter().any(|b| b.id == id) {

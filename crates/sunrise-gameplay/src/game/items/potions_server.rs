@@ -345,7 +345,8 @@ impl crate::game::ServerGame<'_> {
         {
             let old = self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)
                 .and_then(|m| {
@@ -374,7 +375,12 @@ impl crate::game::ServerGame<'_> {
         };
         if new && changed {
             if let Some(sound) = sound_on_added(name)
-                && let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id && !m.removed)
+                && let Some(m) = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)
             {
                 let at = [m.position.x, m.position.y, m.position.z];
                 self.server_play_sound(sound, at, 1.0, 1.0);
@@ -666,7 +672,8 @@ impl crate::game::ServerGame<'_> {
                     Who::Player => self.common.player.as_ref().map(|p| p.position),
                     Who::Mob(id) => self
                         .common
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .find(|m| m.id == id)
                         .map(|m| m.position)
@@ -957,7 +964,8 @@ impl crate::game::ServerGame<'_> {
             Who::Mob(id) => {
                 let Some(i) = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .position(|m| m.id == id && m.alive())
                 else {
@@ -969,7 +977,8 @@ impl crate::game::ServerGame<'_> {
                 );
                 for (effect, duration, amp) in effects {
                     // A mod's `onEffectAdded` may have changed the mobs.
-                    let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, id) else {
+                    let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, id)
+                    else {
                         return;
                     };
                     let m = &mut self.common.entities.mobs[index];
@@ -1232,7 +1241,8 @@ impl crate::game::ServerGame<'_> {
                 let near = bounds.inflate(Vec3::new(2.0, 2.0, 2.0));
                 let nearby = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .filter(|m| {
                         m.species() == sunrise_sim::mobs::Species::Slime
@@ -1661,7 +1671,8 @@ impl crate::game::ServerGame<'_> {
                 };
                 let Some(i) = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .position(|m| m.id == mob_id && !m.removed)
                 else {
@@ -1859,7 +1870,8 @@ impl crate::game::ServerGame<'_> {
         // the others neither become victims nor use up its radius.
         let candidates: Vec<(u32, String, f64, f64)> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| m.alive() && m.bounds().intersects(area))
             .map(|m| (m.id, m.kind.id.clone(), m.position.x, m.position.z))
@@ -1924,7 +1936,13 @@ impl crate::game::ServerGame<'_> {
     /// The authoritative `AreaEffectCloud.serverTick` for lingering potions' clouds.
     /// The logical client draws particles from tracked cloud data.
     pub fn tick_potion_clouds(&mut self) {
-        if self.common.entities.breath_clouds.iter().all(|c| c.potion.is_none()) {
+        if self
+            .common
+            .entities
+            .breath_clouds
+            .iter()
+            .all(|c| c.potion.is_none())
+        {
             return;
         }
         let players: Vec<FightPlayer> = self
@@ -1951,7 +1969,8 @@ impl crate::game::ServerGame<'_> {
             keep
         });
         self.common
-            .entities.breath_clouds
+            .entities
+            .breath_clouds
             .restore(clouds, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
         // A cloud that expired on its own takes its `noPhysics` write with it.
         for id in expired {
@@ -2022,8 +2041,10 @@ impl crate::game::ServerGame<'_> {
                 // GameEvent.FLUID_PICKUP, fires PLAYER_INTERACTED_WITH_ENTITY on the
                 // cloud, and turns one bottle into dragon_breath.
                 if let Some(player) = self.common.player.as_ref()
-                    && let Some(cloud_at) =
-                        collect_dragon_breath(player.bounds(), &mut self.common.entities.breath_clouds)
+                    && let Some(cloud_at) = collect_dragon_breath(
+                        player.bounds(),
+                        &mut self.common.entities.breath_clouds,
+                    )
                 {
                     let player_pos = [player.position.x, player.position.y, player.position.z];
                     self.server_play_sound(

@@ -169,7 +169,11 @@ pub(crate) mod tests {
                 with_game(|game| {
                     let before = game.entities.mobs.len();
                     assert_eq!(spawn_pig(game), None);
-                    assert_eq!(game.entities.mobs.len(), before, "a stopped spawn adds no mob");
+                    assert_eq!(
+                        game.entities.mobs.len(),
+                        before,
+                        "a stopped spawn adds no mob"
+                    );
                 });
             },
         );

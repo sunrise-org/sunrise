@@ -64,7 +64,8 @@ impl crate::game::ServerGame<'_> {
             }
             let (id, at) = self
                 .common
-                .entities.dragon
+                .entities
+                .dragon
                 .as_ref()
                 .map_or((0, p), |d| (d.id, d.position));
             self.discard_resident_dragon();

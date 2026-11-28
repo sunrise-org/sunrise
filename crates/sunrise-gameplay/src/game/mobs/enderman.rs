@@ -34,7 +34,8 @@ impl ServerGame<'_> {
     pub fn settle_hurt_teleports(&mut self) -> Result<()> {
         let pending: Vec<u32> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| {
                 (m.species() == Species::Enderman && m.extra.counter2 > 0)
@@ -63,7 +64,8 @@ impl ServerGame<'_> {
             let uuid = self.common.level.player_uuid;
             let others: Vec<_> = if shulker {
                 self.common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .map(|m| sunrise_gameplay_common::game::creatures::seen(m, uuid, self.items()))
                     .collect()
@@ -175,7 +177,8 @@ impl ServerGame<'_> {
         // stale attempt instead of overwriting its writes or normalizing twice.
         let kind = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| {
                 m.id == mob
@@ -251,11 +254,24 @@ impl ServerGame<'_> {
         met || player
             .into_iter()
             .chain(self.lan_block_trigger_boxes().into_iter().map(boxed))
-            .chain(self.common.entities.item_frames.iter().map(|f| boxed(f.bounds())))
-            .chain(self.common.entities.paintings.iter().map(|p| boxed(p.bounds())))
             .chain(
                 self.common
-                    .entities.crystals
+                    .entities
+                    .item_frames
+                    .iter()
+                    .map(|f| boxed(f.bounds())),
+            )
+            .chain(
+                self.common
+                    .entities
+                    .paintings
+                    .iter()
+                    .map(|p| boxed(p.bounds())),
+            )
+            .chain(
+                self.common
+                    .entities
+                    .crystals
                     .iter()
                     .map(sunrise_gameplay_common::game::dragon_common::Crystal::bounds),
             )

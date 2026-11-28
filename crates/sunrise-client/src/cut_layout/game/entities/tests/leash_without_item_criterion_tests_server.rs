@@ -67,7 +67,10 @@ fn actual_holder_detach_does_not_reaward_the_held_lead_criterion() {
         game.entities.mobs[index].extra.leash,
         Some(sunrise_sim::mobs::leash::Holder::Player)
     );
-    assert_eq!(game.entities.mobs[index].extra.leash_player, Some([413, 0, 0, 1]));
+    assert_eq!(
+        game.entities.mobs[index].extra.leash_player,
+        Some([413, 0, 0, 1])
+    );
     assert_eq!(game.held().unwrap().count, 3);
     assert!(
         game.adv.progress.has(ADV, CRITERION),

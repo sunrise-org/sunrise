@@ -57,7 +57,8 @@ mod mod_parrot_tests {
                 game.remove_entities_on_shoulder();
                 if variant.is_some() {
                     let back = game
-                        .entities.mobs
+                        .entities
+                        .mobs
                         .iter()
                         .find(|m| !m.removed && m.kind.id == id)
                         .expect("it comes back off the shoulder");

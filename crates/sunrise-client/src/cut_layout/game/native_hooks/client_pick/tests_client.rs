@@ -137,7 +137,10 @@ fn frame_pick_is_shared_ordered_and_refuses_stale_or_invalid_output() {
             game.refresh_client_pick(1.0);
             assert_eq!(game.crosshair_target(), Some(entity_hit));
             assert!(game.entity_targeted());
-            assert_eq!(game.mob_hit().map(|(i, _, _)| game.entities.mobs[i].id), Some(31));
+            assert_eq!(
+                game.mob_hit().map(|(i, _, _)| game.entities.mobs[i].id),
+                Some(31)
+            );
             game.native_lifecycle.begin_open(None);
             game.refresh_client_pick(1.0);
             assert!(

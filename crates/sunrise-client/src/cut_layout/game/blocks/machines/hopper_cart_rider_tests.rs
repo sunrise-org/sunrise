@@ -30,7 +30,8 @@ fn counts(game: &sunrise_gameplay::game::ServerGame<'_>, x: i32, id: u32) -> (u3
         _ => 0,
     };
     let in_cart: u32 = game
-        .entities.carts
+        .entities
+        .carts
         .iter()
         .find(|c| c.id == id)
         .unwrap()

@@ -73,7 +73,14 @@ pub(in crate::game) mod tests {
                 Ok::<(), ()>(())
             });
             assert_eq!(result, Ok(()));
-            assert_eq!(game.entities.armor_stands[0].equipment.get(4).unwrap().count, 1);
+            assert_eq!(
+                game.entities.armor_stands[0]
+                    .equipment
+                    .get(4)
+                    .unwrap()
+                    .count,
+                1
+            );
             assert_eq!(game.server.pending_sounds.len(), 1);
             let events = super::super::dispense_fixture::stop_recording();
             assert_eq!(events.len(), 1, "only one event at root commit: {events:?}");

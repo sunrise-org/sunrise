@@ -55,7 +55,8 @@ pub(crate) mod tests {
                 CartKind::Rideable,
                 Vec3::new(0.5, 64.0, 0.5),
             ));
-            game.entities.boats
+            game.entities
+                .boats
                 .push(Boat::new(6, "oak".into(), Vec3::new(2.5, 64.0, 0.5), 0.0));
             for (riding, cart, boat) in [
                 (None, false, false),
@@ -503,7 +504,10 @@ pub(crate) mod tests {
                         let expected = mount.movement_speed() as f32 + 0.1_f32;
                         game.entities.mobs.push(mount);
                         game.apply_remote_passengers(7, &[42]);
-                        assert!(game.entities.mobs[0].rider.is_none(), "before the first driven tick");
+                        assert!(
+                            game.entities.mobs[0].rider.is_none(),
+                            "before the first driven tick"
+                        );
                         assert!(game.remote_ride(Keys::default()));
                         assert_eq!(game.entities.mobs[0].ai.speed.to_bits(), expected.to_bits());
                         assert_eq!(game.entities.mobs[0].ai.zza, 0.98, "the last walking input");
@@ -558,7 +562,12 @@ mod plugin_seat_tests {
             game.entities.mobs.push(horse_mob);
             game.riding = Some(horse);
             for shift in [true, false] {
-                let i = game.entities.mobs.iter().position(|m| m.id == horse).unwrap();
+                let i = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .position(|m| m.id == horse)
+                    .unwrap();
                 // Exercise client prediction itself, not the server input assignment.
                 game.drive_mount(
                     i,
@@ -643,7 +652,8 @@ mod plugin_seat_tests {
         game.remote_ride(Keys::default());
         close(game.player.as_ref().unwrap().position.y, 65.375);
         let kind = game.client_res().player_type().clone().unwrap();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(43, kind, Vec3::new(5.0, 70.0, 6.0), 0.0));
         game.entities.armor_stands[0].marker = true;
         game.entities.armor_stands[0].vehicle = Some(43);

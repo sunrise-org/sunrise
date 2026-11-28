@@ -330,7 +330,8 @@ impl crate::game::ServerGame<'_> {
             Target::Player => self.player_entity(),
             Target::Mob(id) => self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| self.mob_entity(m))
@@ -622,13 +623,15 @@ impl crate::game::ServerGame<'_> {
         }
         let vehicle = state.riding.and_then(|id| {
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| Box::new(self.mob_entity(m)))
                 .or_else(|| {
                     self.common
-                        .entities.boats
+                        .entities
+                        .boats
                         .iter()
                         .find(|b| b.id == id)
                         .map(|b| Box::new(self.boat_entity(b)))
@@ -703,7 +706,8 @@ impl crate::game::ServerGame<'_> {
             on_ground: b.ground.on_ground,
             passengers: self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .filter(|m| m.extra.mount == Some(b.id))
                 .map(|m| self.mob_entity(m))
@@ -759,7 +763,8 @@ impl crate::game::ServerGame<'_> {
 
         let passengers: Vec<EntityView> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|r| r.extra.mount == Some(m.id))
             .map(|r| self.mob_entity(r))
@@ -1899,8 +1904,12 @@ impl crate::game::ServerGame<'_> {
             return None;
         }
         Some(match t {
-            Target::Mob(id) => self.mob_entity(self.common.entities.mobs.iter().find(|m| m.id == id)?),
-            Target::Boat(id) => self.boat_entity(self.common.entities.boats.iter().find(|b| b.id == id)?),
+            Target::Mob(id) => {
+                self.mob_entity(self.common.entities.mobs.iter().find(|m| m.id == id)?)
+            }
+            Target::Boat(id) => {
+                self.boat_entity(self.common.entities.boats.iter().find(|b| b.id == id)?)
+            }
             other => self.entity_view_of(other),
         })
     }
@@ -2418,7 +2427,8 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn trigger_started_riding(&mut self, vehicle: u32) {
         let mounts: Vec<(u32, Option<u32>)> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .map(|m| (m.id, m.extra.mount))
             .collect();

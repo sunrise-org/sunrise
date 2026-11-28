@@ -148,7 +148,11 @@ fn block_drops_off_stops_the_pop_of_bone_meal_and_harvests() {
     let (block, item, _, meal, _, on) = CASES[0];
     place(&mut game, on, block);
     assert!(use_block(&mut game, on, stack(meal)));
-    assert_eq!(game.entities.dropped.len(), 1, "the rule on pops {item} again");
+    assert_eq!(
+        game.entities.dropped.len(),
+        1,
+        "the rule on pops {item} again"
+    );
     assert_eq!(&*game.entities.dropped[0].stack.item, item);
 }
 
@@ -166,7 +170,11 @@ fn block_drops_on_keeps_the_pop() {
         place(&mut game, on, block);
         let mut expected = game.world.random.clone();
         assert!(use_block(&mut game, on, stack(meal)), "{block} was used");
-        assert_eq!(game.entities.dropped.len(), drops, "{block} pops its stacks");
+        assert_eq!(
+            game.entities.dropped.len(),
+            drops,
+            "{block} pops its stacks"
+        );
         for dropped in &game.entities.dropped {
             assert_eq!(&*dropped.stack.item, item);
         }
@@ -219,7 +227,8 @@ fn harvest(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> Vec<String> {
     place(game, at, "minecraft:sweet_berry_bush[age=3]");
     assert!(use_block(game, at, None));
     let mut dropped: Vec<String> = game
-        .entities.dropped
+        .entities
+        .dropped
         .iter()
         .map(|d| d.stack.item.to_string())
         .collect();

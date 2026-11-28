@@ -190,7 +190,8 @@ impl crate::game::ClientGame<'_> {
         // Build once: resolving each player must not scan every level entity.
         let players: HashMap<_, _> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .enumerate()
             .filter(|(_, m)| &*m.kind.id == "minecraft:player")
@@ -233,7 +234,8 @@ impl crate::game::ClientGame<'_> {
         // player's, never required to be signed.
         let mannequins: Vec<(usize, sunrise_client::skins::Textures)> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .enumerate()
             .filter(|(_, m)| &*m.kind.id == "minecraft:mannequin" && m.profile.is_some())

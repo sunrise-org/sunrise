@@ -41,7 +41,13 @@ fn a_mob_moved_in_one_arrows_post_is_hit_by_the_next_arrow() {
                 assert!(game.run_command(command), "{command}");
             }
             first.store(game.entities.projectiles[0].id, Ordering::Relaxed);
-            let health = game.entities.mobs.iter().find(|m| m.id == 72).unwrap().health;
+            let health = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == 72)
+                .unwrap()
+                .health;
             game.server.ticked_entities_through = u32::MAX;
             game.tick_projectiles().unwrap();
             let pig = game.entities.mobs.iter().find(|m| m.id == 72).unwrap();
@@ -137,7 +143,8 @@ fn item_lifetime_edit_in_the_item_tick_still_lands() {
             let mut round = game.native_tick_round();
             game.tick_dropped_items(&mut round);
             let item = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .find(|item| item.id == id)
                 .expect("the extended item stayed");

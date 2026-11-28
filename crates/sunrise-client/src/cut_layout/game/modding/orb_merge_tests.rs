@@ -64,7 +64,10 @@ fn experience_orb_ref_writes_live_ints_and_refuses_invalid_count() {
         assert_eq!(orb_ref.set_age(game, 100_000), Ok(()));
         assert_eq!(orb_ref.value(&*game), Ok(40_000));
         assert_eq!(orb_ref.age(&*game), Ok(100_000));
-        assert_eq!((game.entities.orbs[0].value, game.entities.orbs[0].age), (40_000, 100_000));
+        assert_eq!(
+            (game.entities.orbs[0].value, game.entities.orbs[0].age),
+            (40_000, 100_000)
+        );
 
         // Serialization (`ExperienceOrb.addAdditionalSaveData`) truncates Value and Age to (short).
         let saved = orb_to_nbt(&game.entities.orbs[0], [0; 4]);
@@ -85,6 +88,9 @@ fn experience_orb_ref_writes_live_ints_and_refuses_invalid_count() {
 
         assert_eq!(orb_ref.set_value(game, 11), Ok(()));
         assert_eq!(orb_ref.set_count(game, 1), Ok(()));
-        assert_eq!((game.entities.orbs[0].value, game.entities.orbs[0].count), (11, 1));
+        assert_eq!(
+            (game.entities.orbs[0].value, game.entities.orbs[0].count),
+            (11, 1)
+        );
     });
 }

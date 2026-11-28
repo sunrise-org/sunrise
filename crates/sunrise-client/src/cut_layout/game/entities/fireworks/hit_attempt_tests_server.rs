@@ -114,7 +114,15 @@ fn remaining_hit_callers_observe_refusals_and_zero_damage() {
                 1,
                 "resident dead mob is included in the rocket splash query",
             );
-            assert_eq!(game.entities.mobs.iter().find(|m| m.id == 903).unwrap().health, 0.0);
+            assert_eq!(
+                game.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == 903)
+                    .unwrap()
+                    .health,
+                0.0
+            );
             game.entities.mobs.clear();
 
             fresh_player(game, GameMode::Spectator);

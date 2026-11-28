@@ -152,7 +152,8 @@ pub(crate) mod tests {
         assert_eq!(game.entities.mobs[1].extra.leash, Some(Holder::Player));
         assert_eq!(game.entities.mobs[2].extra.leash, Some(Holder::Player));
         let leads: Vec<_> = game
-            .entities.dropped
+            .entities
+            .dropped
             .iter()
             .filter(|d| &*d.stack.item == "minecraft:lead")
             .collect();

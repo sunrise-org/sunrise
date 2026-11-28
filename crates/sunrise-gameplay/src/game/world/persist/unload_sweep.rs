@@ -42,7 +42,8 @@ impl crate::game::ServerGame<'_> {
             .map(|m| m.id)
             .chain(
                 self.common
-                    .entities.general
+                    .entities
+                    .general
                     .rows
                     .iter()
                     .filter(|r| leaves(r.id, r.position, r.mount))
@@ -57,7 +58,8 @@ impl crate::game::ServerGame<'_> {
             keep
         });
         self.common
-            .entities.crystals
+            .entities
+            .crystals
             .retain(|c| keep_row(c.id, c.position, &mut self.common.persist.transient));
         self.common.entities.ominous_spawners.retain(|s| {
             let keep = !gone(Vec3::new(s.position[0], s.position[1], s.position[2]));
@@ -68,7 +70,8 @@ impl crate::game::ServerGame<'_> {
         });
         if self
             .common
-            .entities.dragon
+            .entities
+            .dragon
             .as_ref()
             .is_some_and(|d| gone(d.position))
         {
@@ -167,7 +170,8 @@ impl crate::game::ServerGame<'_> {
                 .filter_map(|m| m.extra.mount)
                 .chain(
                     self.common
-                        .entities.general
+                        .entities
+                        .general
                         .rows
                         .iter()
                         .filter(|row| !leaving.contains(&row.id))
@@ -191,7 +195,8 @@ impl crate::game::ServerGame<'_> {
             keep
         });
         self.common
-            .entities.orbs
+            .entities
+            .orbs
             .retain(|o| keep_row(o.id, o.position, &mut self.common.persist.transient));
         // Unloaded with their chunk: PersistentEntitySectionManager.stopTracking.
         self.native_leaves_flush();
@@ -205,16 +210,20 @@ impl crate::game::ServerGame<'_> {
             keep
         });
         self.common
-            .entities.falling
+            .entities
+            .falling
             .retain(|f| keep_row(f.id, f.position, &mut self.common.persist.transient));
         self.common
-            .entities.rockets
+            .entities
+            .rockets
             .retain(|r| keep_row(r.id, r.position, &mut self.common.persist.transient));
         self.common
-            .entities.tridents
+            .entities
+            .tridents
             .retain(|t| keep_row(t.id, t.position, &mut self.common.persist.transient));
         self.common
-            .entities.tnts
+            .entities
+            .tnts
             .retain(|t| keep_row(t.id, t.position, &mut self.common.persist.transient));
         self.common.entities.general.rows.retain(|row| {
             let keep = !leaving.contains(&row.id);

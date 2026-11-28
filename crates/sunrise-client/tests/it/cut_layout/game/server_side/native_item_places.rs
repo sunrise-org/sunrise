@@ -558,7 +558,11 @@ pub(crate) mod tests {
                 received.data().unwrap().trim.as_ref().and_then(trim::named),
                 Some(("minecraft:gold", "minecraft:sentry"))
             );
-            let resident = game.entities.mobs[0].extra.equipment.get(slot as usize).unwrap();
+            let resident = game.entities.mobs[0]
+                .extra
+                .equipment
+                .get(slot as usize)
+                .unwrap();
             assert_eq!(resident.tag_enchantment_level("minecraft:protection"), 1);
             assert_eq!(
                 resident.data().unwrap().trim.as_ref().and_then(trim::named),
@@ -579,7 +583,11 @@ pub(crate) mod tests {
                 })
             })
             .unwrap();
-            let resident = game.entities.mobs[0].extra.equipment.get(slot as usize).unwrap();
+            let resident = game.entities.mobs[0]
+                .extra
+                .equipment
+                .get(slot as usize)
+                .unwrap();
             assert!(
                 resident
                     .data()
@@ -1577,7 +1585,12 @@ pub(crate) mod tests {
                 Some(ItemStack::new("minecraft:diamond_chestplate", 1))
             ));
             // A mob can have gear that the raw stack does not carry at all.
-            gear::upgrade(&mut game.entities.mobs[0], gear::CHEST, "minecraft:protection", 2);
+            gear::upgrade(
+                &mut game.entities.mobs[0],
+                gear::CHEST,
+                "minecraft:protection",
+                2,
+            );
             let armor = |host: &dyn mod_api::ServerHost| {
                 living.attribute_value(host, "minecraft:armor").unwrap()
             };
@@ -3367,7 +3380,8 @@ pub(crate) mod tests {
         with_resident_game(|game| {
             game.options.dedicated = Some(Vec::new());
             let position = sunrise_core::geometry::Vec3::new(0.5, 65.0, 0.5);
-            game.entities.carts
+            game.entities
+                .carts
                 .push(Minecart::new(500, CartKind::Chest, position));
             let host: &mut dyn ServerHost = game;
             let cart = host.entity(500).unwrap();
@@ -3397,7 +3411,8 @@ pub(crate) mod tests {
                 Some(ItemStack::new("minecraft:stick", 6))
             );
             // A plain minecart has no items.
-            game.entities.carts
+            game.entities
+                .carts
                 .push(Minecart::new(501, CartKind::Rideable, position));
             let host: &mut dyn ServerHost = game;
             let plain = host.entity(501).unwrap();
@@ -3795,7 +3810,8 @@ pub(crate) mod tests {
             open_to_lan(game);
             hopper_with(game, "down", Some(ItemStack::new("minecraft:stick", 3)));
             let position = sunrise_core::geometry::Vec3::new(0.5, 63.0, 0.5);
-            game.entities.carts
+            game.entities
+                .carts
                 .push(Minecart::new(500, CartKind::Chest, position));
             // A guest standing in the same cell, and no pig anywhere.
             let mut player = guest(1);
@@ -3978,8 +3994,12 @@ pub(crate) mod tests {
         use sunrise_core::geometry::Vec3;
         use sunrise_sim::entities::ArmorStand;
         with_resident_game(|game| {
-            game.entities.armor_stands.push(ArmorStand::new(40, Vec3::ZERO, 0.0));
-            game.entities.armor_stands.push(ArmorStand::new(41, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(40, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(41, Vec3::ZERO, 0.0));
             let stand_slot = |game: &sunrise_gameplay::game::ServerGame<'_>, id: usize| {
                 game.entities.armor_stands[id].equipment.get(4).cloned()
             };

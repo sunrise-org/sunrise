@@ -66,7 +66,8 @@ impl crate::game::ServerGame<'_> {
         };
         let Some((species, navigation)) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id)
             .map(|m| (m.species(), m.ai.nav.kind))
@@ -91,7 +92,8 @@ impl crate::game::ServerGame<'_> {
         };
         let Some((species, navigation)) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == id)
             .map(|m| (m.species(), m.ai.nav.kind))
@@ -118,7 +120,12 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Mob(entity)) = self.native_entity_target(mob.entity()) else {
             return None;
         };
-        let index = self.common.entities.mobs.iter().position(|m| m.id == entity)?;
+        let index = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == entity)?;
         Some(self.remove_from_selector(index, id, false))
     }
 
@@ -132,7 +139,12 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Mob(entity)) = self.native_entity_target(mob.entity()) else {
             return None;
         };
-        let index = self.common.entities.mobs.iter().position(|m| m.id == entity)?;
+        let index = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == entity)?;
         Some(self.remove_from_selector(index, id, true))
     }
 
@@ -183,7 +195,8 @@ impl crate::game::ServerGame<'_> {
     fn remove_from_selector(&mut self, index: usize, id: &str, targets: bool) -> usize {
         let snapshot: Vec<_> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .map(|m| {
                 sunrise_gameplay_common::game::creatures::seen(
@@ -236,7 +249,8 @@ impl crate::game::ServerGame<'_> {
         drop(w);
         lent.give_back(&mut self.common.world);
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         self.handle_mob_events(events).ok();
         removed

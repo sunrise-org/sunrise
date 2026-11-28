@@ -77,7 +77,8 @@ pub(crate) mod loot_mine_component_tests {
         let stand = "0000003c-0000-0000-0000-000000000001";
         assert!(game.run_command(&format!("execute as {stand} if entity @s[type=armor_stand,nbt={{UUID:[I;60,0,0,1],Health:20f,NoGravity:1b,Pos:[8.5d,200d,8.5d]}}]")));
         let id = game
-            .entities.armor_stands
+            .entities
+            .armor_stands
             .iter()
             .find(|s| game.persist.uuids.get(&s.id) == Some(&[60, 0, 0, 1]))
             .unwrap()

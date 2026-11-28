@@ -60,7 +60,8 @@ fn lifecycle_carts_keep_registrations_through_commands_unload_park_and_remote() 
             apply: |game, remove, update| {
                 game.remote_object_data(update as i32, &[(12, serializer::INT, Value::Int(19))]);
                 assert_eq!(
-                    game.entities.carts
+                    game.entities
+                        .carts
                         .iter()
                         .find(|cart| cart.id == update)
                         .unwrap()
@@ -96,7 +97,8 @@ fn connecting_to_a_remote_level_clears_the_existing_cart_list() {
 #[ignore = "daily"]
 fn exploding_a_cart_removes_only_its_owner_and_keeps_a_bound_survivor() {
     bound_cart_case(CartKind::Rideable, |game| {
-        game.entities.carts
+        game.entities
+            .carts
             .push(Minecart::new(72, CartKind::Tnt, Vec3::new(40.5, 70.0, 0.5)));
         let mut doomed = game.entities.carts[1].clone();
         let index = Arc::new(Mutex::new(AttachmentIndex::default()));
@@ -110,7 +112,11 @@ fn exploding_a_cart_removes_only_its_owner_and_keeps_a_bound_survivor() {
         assert_eq!(retained.len(), 1);
         game.explode_cart(&mut doomed, 0.0);
         assert_eq!(
-            game.entities.carts.iter().map(|cart| cart.id).collect::<Vec<_>>(),
+            game.entities
+                .carts
+                .iter()
+                .map(|cart| cart.id)
+                .collect::<Vec<_>>(),
             [71]
         );
         assert!(index.lock().unwrap().snapshot(&key).is_empty());
@@ -379,7 +385,8 @@ fn a_bound_tnt_cart_keeps_its_join_when_damage_primes_it() {
             sunrise_gameplay::game::server_side::minecarts_server::CartHit::default(),
         );
         assert_eq!(
-            game.entities.carts
+            game.entities
+                .carts
                 .iter()
                 .map(|c| (c.id, c.join))
                 .collect::<Vec<_>>(),

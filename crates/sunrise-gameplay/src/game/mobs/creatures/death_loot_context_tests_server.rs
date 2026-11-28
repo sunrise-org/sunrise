@@ -354,7 +354,9 @@ fn death_loot_uses_call_scoped_source_and_hand() {
             .into();
             mod_platform::testing::with_mods(mods, || {
                 let before = seen.lock().unwrap().len();
-                game.entities.mobs.push(Mob::new(78, ty.clone(), Vec3::ZERO, 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(78, ty.clone(), Vec3::ZERO, 0.0));
                 assert!(game.mob_hits_mob(78, 1000.0, Damage::fall()));
                 assert_eq!(seen.lock().unwrap().len(), before);
                 game.entities.mobs.push(Mob::new(79, ty, Vec3::ZERO, 0.0));

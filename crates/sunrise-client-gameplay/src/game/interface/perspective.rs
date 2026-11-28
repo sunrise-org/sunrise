@@ -549,10 +549,14 @@ impl crate::game::ClientGame<'_> {
             .sleeping
             .map_or(0, |head| self.common.bed_facing(head));
         let spectator = self.own_player_is_spectator();
-        let boat_yaw = self
-            .common
-            .riding
-            .and_then(|id| self.common.entities.boats.iter().find(|b| b.id == id).map(|b| b.yaw));
+        let boat_yaw = self.common.riding.and_then(|id| {
+            self.common
+                .entities
+                .boats
+                .iter()
+                .find(|b| b.id == id)
+                .map(|b| b.yaw)
+        });
         let blocking = boat_yaw.is_none()
             && self.common.using.is_some_and(|(slot, ticks)| {
                 self.common
@@ -825,7 +829,8 @@ impl crate::game::ClientGame<'_> {
             }
             let stand = self
                 .common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|stand| stand.id == id)?;
             Some((id, stand.previous_body_yaw, stand.body_yaw))

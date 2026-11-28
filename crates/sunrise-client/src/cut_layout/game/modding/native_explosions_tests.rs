@@ -208,7 +208,8 @@ fn kill(
                 assert_eq!(mob_kills(game), expected_kills);
                 // Monster's base reward for an adult zombie with no equipment.
                 let xp: i32 = game
-                    .entities.orbs
+                    .entities
+                    .orbs
                     .iter()
                     .map(|orb| orb.value * orb.count as i32)
                     .sum();
@@ -370,7 +371,9 @@ fn a_players_firework_rocket_credits_the_player() {
         "a_players_firework_rocket_credits_the_player",
         |game| {
             let id = summoned(game, "minecraft:firework_rocket", "{LifeTime:100}");
-            game.entities.rockets.for_each_mut(|r| r.owner = Some(Who::Player));
+            game.entities
+                .rockets
+                .for_each_mut(|r| r.owner = Some(Who::Player));
             id
         },
         (11, "minecraft:player_explosion", true),
@@ -1069,7 +1072,11 @@ fn a_wind_charge_source_damages_neither_a_mob_nor_a_player() {
             let source = wind_charge(game, kind.clone());
             explode(game, wind_blast(source, None), Ok(()));
             let player = game.player.as_ref().unwrap().health.health();
-            assert_eq!((game.entities.mobs[0].health, player), (20.0, 20.0), "{kind:?}");
+            assert_eq!(
+                (game.entities.mobs[0].health, player),
+                (20.0, 20.0),
+                "{kind:?}"
+            );
             assert!(heard.lock().unwrap().damage.is_empty(), "{kind:?}");
             // Knockback still applies.
             let (zombie, player) = pushes(game);

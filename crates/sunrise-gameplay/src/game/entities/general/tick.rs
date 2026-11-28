@@ -209,7 +209,8 @@ impl ServerGame<'_> {
         }
         if self
             .common
-            .entities.general
+            .entities
+            .general
             .riders
             .mob_vehicles
             .contains(&id)
@@ -329,12 +330,9 @@ fn general_tick_subscribed(catalog: &GeneralTypeCatalog) -> Vec<bool> {
 /// rewrite its mount. The row's identity is its place: nothing in the pass
 /// reorders the storage, so an index read now is the row it names.
 fn general_row_live(game: &crate::game::ServerGame<'_>, index: usize, mount: Option<u32>) -> bool {
-    game.entities.general
-        .rows
-        .get(index)
-        .is_some_and(|row| {
-            row.mount == mount && !game.persist.removals.contains(&Target::General(row.id))
-        })
+    game.entities.general.rows.get(index).is_some_and(|row| {
+        row.mount == mount && !game.persist.removals.contains(&Target::General(row.id))
+    })
 }
 
 use sunrise_gameplay_common::game::transactions::TransactionsGameExt as _;

@@ -159,7 +159,8 @@ impl crate::game::CommonGame<'_> {
         };
         if !scene.unobstructed(bounds).unwrap_or(false)
             || self
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .any(|o| stand_overlaps(o.bounds(), bounds))
         {

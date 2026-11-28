@@ -961,7 +961,8 @@ pub(crate) mod tests {
             .unwrap()
             .id();
         let len = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-            game.entities.mobs
+            game.entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .unwrap()
@@ -1259,10 +1260,12 @@ pub(crate) mod mod_capability_tests {
                     .chunks
                     .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
                 game.common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .push(ArmorStand::new(13, Vec3::ZERO, 0.0));
                 game.common
-                    .entities.armor_stands
+                    .entities
+                    .armor_stands
                     .push(ArmorStand::new(14, Vec3::ZERO, 0.0));
                 let guest = 0x5eed_u128;
                 let config = sunrise_sim::lan::hub::HubConfig {

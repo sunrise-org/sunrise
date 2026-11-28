@@ -113,12 +113,26 @@ impl crate::game::ServerGame<'_> {
         if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
             m.custom_name = name.as_ref().map(Text::plain);
             m.custom_name_text = name;
-        } else if let Some(a) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id) {
+        } else if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter_mut()
+            .find(|a| a.id == id)
+        {
             a.custom_name = name;
-        } else if let Some(f) = self.common.entities.item_frames.iter_mut().find(|f| f.id == id) {
+        } else if let Some(f) = self
+            .common
+            .entities
+            .item_frames
+            .iter_mut()
+            .find(|f| f.id == id)
+        {
             f.custom_name = saved.clone();
         } else if let Some(i) = self.entities.bolts.iter().position(|b| b.id == id) {
-            self.entities.bolts.update(i, |b| b.custom_name = saved.clone());
+            self.entities
+                .bolts
+                .update(i, |b| b.custom_name = saved.clone());
         } else if let Some(row) = self.entities.general.row_mut(id) {
             // A general row's name is saved from the row, and synced as entry 2.
             row.custom_name = name;
@@ -137,17 +151,20 @@ impl crate::game::ServerGame<'_> {
         Some(match t {
             Target::Mob(_) => self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .any(|m| m.id == id && m.name_visible),
             Target::Stand(_) => self
                 .common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .any(|a| a.id == id && a.name_visible),
             Target::General(_) => self
                 .common
-                .entities.general
+                .entities
+                .general
                 .row(id)
                 .is_some_and(|row| row.custom_name_visible),
             _ => self
@@ -169,7 +186,13 @@ impl crate::game::ServerGame<'_> {
         };
         if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
             m.name_visible = visible;
-        } else if let Some(a) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id) {
+        } else if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter_mut()
+            .find(|a| a.id == id)
+        {
             a.name_visible = visible;
         } else if let Some(row) = self.entities.general.row_mut(id) {
             row.custom_name_visible = visible;
@@ -184,9 +207,14 @@ impl crate::game::ServerGame<'_> {
     /// from its type, `Monster` for the dragon, `Misc` for every other kind.
     pub(in crate::game) fn entity_classification(&self, entity: EntityRef) -> Option<MobCategory> {
         Some(match self.native_entity_target(entity)? {
-            Target::Mob(id) => {
-                mob_category(self.common.entities.mobs.iter().find(|m| m.id == id)?.category())
-            }
+            Target::Mob(id) => mob_category(
+                self.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)?
+                    .category(),
+            ),
             Target::Dragon(_) => MobCategory::Monster,
             _ => MobCategory::Misc,
         })

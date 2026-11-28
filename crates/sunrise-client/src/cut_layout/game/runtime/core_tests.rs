@@ -1140,7 +1140,12 @@ pub(crate) mod wind_charge_burst_tests {
                 },
             )
             .unwrap();
-            let pig = game.entities.mobs.iter().find(|m| m.id == id).expect("the pig");
+            let pig = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .expect("the pig");
             assert!(!pig.alive(), "a point of damage kills 1 health");
             let hit = pig.combat.entries.last().expect("the hit").source;
             assert_eq!(

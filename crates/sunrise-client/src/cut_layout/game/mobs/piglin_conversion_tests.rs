@@ -42,7 +42,8 @@ fn a_piglin_converting_as_its_admiring_ends_drops_its_stash_and_is_replaced_befo
             }
             game.creative = false;
             let piglin = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .position(|m| m.species() == Species::Piglin);
             let m = &mut game.entities.mobs[piglin.unwrap()];
@@ -72,7 +73,8 @@ fn a_piglin_converting_as_its_admiring_ends_drops_its_stash_and_is_replaced_befo
                 "the piglin converted"
             );
             let zombified = game
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.species() == Species::ZombifiedPiglin)
                 .expect("a zombified piglin took its place");
@@ -90,7 +92,8 @@ fn a_piglin_converting_as_its_admiring_ends_drops_its_stash_and_is_replaced_befo
                 Some("minecraft:golden_sword")
             );
             let dropped: Vec<(String, u32)> = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .map(|d| (d.stack.item.to_string(), d.stack.count))
                 .collect();

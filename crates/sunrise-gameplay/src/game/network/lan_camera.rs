@@ -28,7 +28,12 @@ impl crate::game::ServerGame<'_> {
         }
         let t = self.level_entity(id)?;
         if let Target::Mob(m) = t
-            && !self.common.entities.mobs.iter().any(|x| x.id == m && x.alive())
+            && !self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .any(|x| x.id == m && x.alive())
         {
             return None;
         }
@@ -95,7 +100,8 @@ impl crate::game::ServerGame<'_> {
             Some(Target::Mob(_)) => self.camera_state(id).is_some(),
             Some(Target::Stand(s)) => self
                 .common
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .any(|a| a.id == s && !a.marker),
             // BlockAttachedEntity, minecarts, boats, end crystals.

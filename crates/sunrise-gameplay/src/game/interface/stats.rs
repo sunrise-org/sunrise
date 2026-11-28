@@ -294,7 +294,8 @@ impl crate::game::ServerGame<'_> {
         let climbing = p.last_climbable.is_some() && d.y > 0.0;
         let riding = self.common.riding.map(|id| {
             self.common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map(|m| m.species())
@@ -321,14 +322,16 @@ impl crate::game::ServerGame<'_> {
             Some(Err(())) => {
                 if self
                     .common
-                    .entities.boats
+                    .entities
+                    .boats
                     .iter()
                     .any(|b| Some(b.id) == self.common.riding)
                 {
                     self.award_custom_stat("boat_one_cm", total)
                 } else if self
                     .common
-                    .entities.carts
+                    .entities
+                    .carts
                     .iter()
                     .any(|c| Some(c.id) == self.common.riding)
                 {

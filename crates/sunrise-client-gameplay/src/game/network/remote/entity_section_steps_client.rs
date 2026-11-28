@@ -61,15 +61,37 @@ impl ClientGame<'_> {
         if r.entity_id == id || r.level_players.contains_key(&id) {
             return true;
         }
-        let pos = if let Some(m) = self.common.mob_index.get_ref(&self.common.entities.mobs, id as u32) {
+        let pos = if let Some(m) = self
+            .common
+            .mob_index
+            .get_ref(&self.common.entities.mobs, id as u32)
+        {
             [m.position.x, m.position.z]
         } else if let Some(i) = self.client.interactions.get(&id) {
             [i.position.x, i.position.z]
-        } else if let Some(a) = self.common.entities.armor_stands.iter().find(|a| a.id == id as u32) {
+        } else if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == id as u32)
+        {
             [a.position.x, a.position.z]
-        } else if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id as u32) {
+        } else if let Some(b) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .find(|b| b.id == id as u32)
+        {
             [b.position.x, b.position.z]
-        } else if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == id as u32) {
+        } else if let Some(c) = self
+            .common
+            .entities
+            .carts
+            .iter()
+            .find(|c| c.id == id as u32)
+        {
             [c.position.x, c.position.z]
         } else if let Some(t) = r.entities.get(&id) {
             [t.position[0], t.position[2]]

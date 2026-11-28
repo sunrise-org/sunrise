@@ -62,7 +62,10 @@ pub(crate) mod allay_owner_damage_tests {
                     };
                     let expected = liked != Some(actual);
                     assert_eq!(accepted, expected, "melee={melee}, liked={liked:?}");
-                    assert_eq!(game.entities.mobs[0].health, if expected { 18.0 } else { 20.0 });
+                    assert_eq!(
+                        game.entities.mobs[0].health,
+                        if expected { 18.0 } else { 20.0 }
+                    );
                     assert_eq!(game.entities.mobs[0].extra.owner, liked);
                     assert_eq!(game.world.game_time, before);
                 }
@@ -93,13 +96,14 @@ pub(crate) mod datapack_damage_tests {
             with_pack(game);
             let crystal = |game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32| {
                 game.server.next_entity = game.server.next_entity.max(id);
-                game.entities.crystals
-                    .push(sunrise_gameplay_common::game::dragon_common::Crystal::new(
+                game.entities.crystals.push(
+                    sunrise_gameplay_common::game::dragon_common::Crystal::new(
                         id,
                         Vec3::new(0.5, 64.0, 0.5),
                         false,
                         0,
-                    ));
+                    ),
+                );
             };
             pig(game, 1, Vec3::new(2.5, 64.0, 0.5));
             crystal(game, 50);
@@ -110,7 +114,10 @@ pub(crate) mod datapack_damage_tests {
             assert!(game.hurt_target(Target::Crystal(51), 1.0, "dmgtest:zap", None, None, None));
             assert!(game.entities.crystals.is_empty());
             assert!(
-                game.entities.mobs.first().is_none_or(|pig| pig.health < 10.0),
+                game.entities
+                    .mobs
+                    .first()
+                    .is_none_or(|pig| pig.health < 10.0),
                 "the crystal's blast"
             );
 

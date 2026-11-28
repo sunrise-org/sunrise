@@ -35,7 +35,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn pose_regression_sleeping_stand() {
         with_resident_game(|game| {
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .push(sunrise_sim::entities::ArmorStand::new(55, Vec3::ZERO, 0.0));
             let living = game.living(game.entity(55).unwrap()).unwrap();
             assert_eq!(
@@ -83,7 +84,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn pose_regression_scaled_stand() {
         with_resident_game(|game| {
-            game.entities.armor_stands
+            game.entities
+                .armor_stands
                 .push(sunrise_sim::entities::ArmorStand::new(55, Vec3::ZERO, 0.0));
             let living = game.living(game.entity(55).unwrap()).unwrap();
             assert!(game.living_set_attribute_base(living, "minecraft:scale", 2.0));
@@ -155,9 +157,11 @@ pub(crate) mod tests {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(12, zombie.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0));
-        game.entities.mobs
+        game.entities
+            .mobs
             .push(Mob::new(13, zombie, Vec3::new(5.5, 64.0, 0.5), 0.0));
     }
 
@@ -196,7 +200,12 @@ pub(crate) mod tests {
                 floor_and_zombies(game);
                 let zombie = game.living(game.entity(12).unwrap()).unwrap();
                 let at = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-                    game.entities.mobs.iter().find(|m| m.id == 12).unwrap().position
+                    game.entities
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == 12)
+                        .unwrap()
+                        .position
                 };
                 // From six blocks up it lands on the floor, one block lower per
                 // step down (`randomTeleport`).
@@ -209,7 +218,12 @@ pub(crate) mod tests {
             );
                 assert_eq!(at(game), Vec3::new(4.5, 64.0, 4.5));
                 assert_eq!(
-                    game.entities.mobs.iter().find(|m| m.id == 12).unwrap().previous,
+                    game.entities
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == 12)
+                        .unwrap()
+                        .previous,
                     at(game)
                 );
                 // No ground below (outside the floor): it stays.
@@ -342,7 +356,8 @@ pub(crate) mod tests {
         with_game(|game| {
             floor_and_zombies(game);
             let ty = game.res.mob_types().get("minecraft:camel").unwrap().clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(20, ty, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let camel = game.living(game.entity(20).unwrap()).unwrap();
             let standing = camel.dimensions_for_pose(game, Pose::Standing).unwrap();
@@ -378,7 +393,8 @@ pub(crate) mod tests {
         with_game(|game| {
             floor_and_zombies(game);
             let ty = game.res.mob_types().get("minecraft:goat").unwrap().clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(21, ty, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let goat = game.living(game.entity(21).unwrap()).unwrap();
             let standing = goat.dimensions_for_pose(game, Pose::Standing).unwrap();
@@ -408,7 +424,8 @@ pub(crate) mod tests {
                 .get("minecraft:warden")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(22, ty, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let warden = game.living(game.entity(22).unwrap()).unwrap();
             let mob = game.entities.mobs.iter_mut().find(|m| m.id == 22).unwrap();
@@ -439,7 +456,8 @@ pub(crate) mod tests {
                 .get("minecraft:villager")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(23, ty, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let villager = game.living(game.entity(23).unwrap()).unwrap();
             let standing = villager.dimensions_for_pose(game, Pose::Standing).unwrap();
@@ -472,7 +490,8 @@ pub(crate) mod tests {
             assert_eq!(mob.no_action_time(game), Some(0));
             assert!(mob.set_no_action_time(game, 650));
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 12)
                     .unwrap()
@@ -495,7 +514,8 @@ pub(crate) mod tests {
             assert!(mob.set_pathfinding_malus(game, PathType::Water, -1.0));
             assert_eq!(mob.pathfinding_malus(game, PathType::Water), Some(-1.0));
             assert_eq!(
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 12)
                     .unwrap()

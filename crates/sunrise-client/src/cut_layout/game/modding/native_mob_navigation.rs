@@ -123,9 +123,11 @@ mod tests {
                 let taken = game.entities.mobs.lift();
                 assert_eq!(mob.is_done(game), None);
                 assert!(!mob.stop(game));
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
-                game.entities.armor_stands
+                game.entities
+                    .armor_stands
                     .push(sunrise_sim::entities::ArmorStand::new(102, Vec3::ZERO, 0.0));
                 let wrong = MobRef::new(game.entity(102).unwrap());
                 assert!(!wrong.move_to(game, [5.0, 65.0, 3.0], 1.0));
@@ -137,13 +139,15 @@ mod tests {
                     .get("minecraft:parrot")
                     .unwrap()
                     .clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(100, parrot, Vec3::new(3.5, 66.0, 5.5), 0.0));
                 let flying = game.mob(game.entity(100).unwrap()).unwrap();
                 assert!(flying.move_to(game, [9.5, 66.0, 5.5], 1.0));
                 assert_eq!(flying.is_done(game), Some(false));
                 let cod = game.res.mob_types().get("minecraft:cod").unwrap().clone();
-                game.entities.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(101, cod, Vec3::new(3.5, 65.0, 7.5), 0.0));
                 let fish = game.mob(game.entity(101).unwrap()).unwrap();
                 assert!(!fish.move_to(game, [9.5, 65.0, 7.5], 1.0));
@@ -164,7 +168,8 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(99, kind, Vec3::new(3.5, 65.0, 3.5), 0.0));
             let entity = game.entity(99).unwrap();
             let mob = game.mob(entity).unwrap();
@@ -205,7 +210,8 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(99, kind, Vec3::new(3.5, 65.0, 3.5), 0.0));
             let entity = game.entity(99).unwrap();
             let mob = game.mob(entity).unwrap();

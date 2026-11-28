@@ -13,7 +13,8 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn open_cart_command_block(&mut self, id: u32) {
         let Some(block) = self
             .common
-            .entities.carts
+            .entities
+            .carts
             .iter()
             .find(|c| c.id == id && c.kind == CartKind::CommandBlock)
             .map(|c| c.command.clone())

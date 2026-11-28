@@ -81,13 +81,19 @@ fn fence_ties_without_a_lead_only_on_main_hand() {
         game.offhand = Some(ItemStack::new("minecraft:lead", 1));
         game.with_hand(Hand::Off, |game| game.use_hand(Some(&hit)))
             .unwrap();
-        assert_eq!(game.entities.mobs[0].extra.leash, Some(Holder::Knot(hit.pos)));
+        assert_eq!(
+            game.entities.mobs[0].extra.leash,
+            Some(Holder::Knot(hit.pos))
+        );
         game.entities.mobs[0].extra.leash = Some(Holder::Player);
         game.offhand = None;
         game.server.guest_use = Some(GuestUse::on_block(Hand::Main));
         game.with_hand(Hand::Main, |game| game.use_hand(Some(&hit)))
             .unwrap();
-        assert_eq!(game.entities.mobs[0].extra.leash, Some(Holder::Knot(hit.pos)));
+        assert_eq!(
+            game.entities.mobs[0].extra.leash,
+            Some(Holder::Knot(hit.pos))
+        );
     });
 }
 

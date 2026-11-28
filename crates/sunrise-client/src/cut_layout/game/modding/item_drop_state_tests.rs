@@ -167,7 +167,11 @@ fn ids(items: &[ItemEntity]) -> Vec<u32> {
 }
 
 fn on_ground(game: &sunrise_gameplay::game::ServerGame<'_>, ids: &[u32]) -> usize {
-    game.entities.dropped.iter().filter(|d| ids.contains(&d.id)).count()
+    game.entities
+        .dropped
+        .iter()
+        .filter(|d| ids.contains(&d.id))
+        .count()
 }
 
 /// A copper golem's death drops (its preserved diamond included) join with the state the
@@ -261,7 +265,12 @@ fn an_unlimited_lifetime_drop_outlives_an_ordinary_one() {
                 forever.len(),
                 "unlimited: still there"
             );
-            for item in game.entities.dropped.iter().filter(|d| forever.contains(&d.id)) {
+            for item in game
+                .entities
+                .dropped
+                .iter()
+                .filter(|d| forever.contains(&d.id))
+            {
                 assert_eq!(item.age, -32768);
             }
         });
@@ -282,7 +291,8 @@ fn the_largest_age_wraps_on_its_first_tick() {
             game.server.ticked_entities_through = game.server.next_entity;
             game.tick_items();
             let ages: Vec<i32> = game
-                .entities.dropped
+                .entities
+                .dropped
                 .iter()
                 .filter(|d| oldest.contains(&d.id))
                 .map(|d| d.age)

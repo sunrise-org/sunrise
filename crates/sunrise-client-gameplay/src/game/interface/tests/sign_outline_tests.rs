@@ -171,8 +171,11 @@ fn check_signs(game: &mut crate::game::ClientGame<'_>) {
                     }
                     "scoping_without_subject" => {
                         // Loss of the held object before a new camera subject is available.
-                        game.entities.armor_stands
-                            .push(ArmorStand::new(SUBJECT as u32, Vec3::ZERO, 0.0));
+                        game.entities.armor_stands.push(ArmorStand::new(
+                            SUBJECT as u32,
+                            Vec3::ZERO,
+                            0.0,
+                        ));
                         set_camera(game, SUBJECT);
                         remove(game, SUBJECT);
                         visual

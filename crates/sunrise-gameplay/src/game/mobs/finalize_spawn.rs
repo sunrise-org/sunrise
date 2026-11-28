@@ -137,7 +137,8 @@ impl ServerGame<'_> {
     /// the bounds.
     pub(in crate::game::server_side) fn finalize_free_chicken(&self, bounds: Aabb) -> Option<u32> {
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|c| {
                 c.species() == Species::Chicken

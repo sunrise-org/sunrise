@@ -591,7 +591,8 @@ impl crate::game::ServerGame<'_> {
             Target::Projectile(id) => {
                 if let Some(i) = self
                     .common
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .position(|a| a.id == id)
                 {
@@ -605,7 +606,13 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Stand(id) => {
-                if let Some(a) = self.common.entities.armor_stands.iter_mut().find(|a| a.id == id) {
+                if let Some(a) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter_mut()
+                    .find(|a| a.id == id)
+                {
                     a.position = v;
                     a.previous = v;
                     // Entity.teleport's stopRiding(), as for a mob: a stand a
@@ -640,7 +647,14 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Fangs(id) => {
-                if let Some(i) = self.common.entities.fangs.list.iter().position(|e| e.id == id) {
+                if let Some(i) = self
+                    .common
+                    .entities
+                    .fangs
+                    .list
+                    .iter()
+                    .position(|e| e.id == id)
+                {
                     self.common.entities.fangs.list.update(i, |f| {
                         f.pos = [v.x, v.y, v.z];
                         if let Some([yaw, _]) = rotation.filter(|r| r[0].is_finite()) {
@@ -665,7 +679,13 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Crystal(id) => {
-                if let Some(c) = self.common.entities.crystals.iter_mut().find(|c| c.id == id) {
+                if let Some(c) = self
+                    .common
+                    .entities
+                    .crystals
+                    .iter_mut()
+                    .find(|c| c.id == id)
+                {
                     (c.position, c.fall.0) = (v, true); // performTeleport: setOnGround(true)
                     c.previous = v;
                 }
@@ -689,7 +709,13 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Cushion(id) => {
                 // BlockAttachedEntity.setPos: the block it rests on follows the position.
-                if let Some(c) = self.common.entities.cushions.iter_mut().find(|c| c.id == id) {
+                if let Some(c) = self
+                    .common
+                    .entities
+                    .cushions
+                    .iter_mut()
+                    .find(|c| c.id == id)
+                {
                     c.position = v;
                     c.pos = [v.x.floor() as i32, v.y.floor() as i32, v.z.floor() as i32];
                     if let Some(r) = rotation {
@@ -718,7 +744,13 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Trident(id) => {
-                if let Some(t) = self.common.entities.tridents.iter_mut().find(|t| t.id == id) {
+                if let Some(t) = self
+                    .common
+                    .entities
+                    .tridents
+                    .iter_mut()
+                    .find(|t| t.id == id)
+                {
                     t.position = v;
                     t.previous = v;
                     if let Some(r) = rotation {
@@ -727,14 +759,26 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Spawner(id) => {
-                if let Some(i) = self.common.entities.ominous_spawners.iter().position(|e| e.id == id) {
+                if let Some(i) = self
+                    .common
+                    .entities
+                    .ominous_spawners
+                    .iter()
+                    .position(|e| e.id == id)
+                {
                     self.common.entities.ominous_spawners.update(i, |s| {
                         s.position = [v.x, v.y, v.z];
                     });
                 }
             }
             Target::Cloud(id) => {
-                if let Some(i) = self.common.entities.breath_clouds.iter().position(|e| e.id == id) {
+                if let Some(i) = self
+                    .common
+                    .entities
+                    .breath_clouds
+                    .iter()
+                    .position(|e| e.id == id)
+                {
                     self.common.entities.breath_clouds.update(i, |c| {
                         c.at = pos;
                     });
@@ -766,7 +810,12 @@ impl crate::game::ServerGame<'_> {
                 *velocity = teleport_velocity(*velocity, relative, false);
             });
             if let Target::Dragon(id) = t
-                && let Some(dragon) = self.common.entities.dragon.as_mut().filter(|dragon| dragon.id == id)
+                && let Some(dragon) = self
+                    .common
+                    .entities
+                    .dragon
+                    .as_mut()
+                    .filter(|dragon| dragon.id == id)
             {
                 dragon.teleport_motion(relative);
             }

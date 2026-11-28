@@ -435,7 +435,8 @@ impl ServerGame<'_> {
                             return Err("anger state: UUID mismatch".into());
                         }
                         let m = g
-                            .entities.mobs
+                            .entities
+                            .mobs
                             .iter()
                             .find(|m| m.id == id && m.alive() && !m.removed)
                             .ok_or("anger state: missing live actor")?;
@@ -1350,7 +1351,13 @@ impl ServerGame<'_> {
                     let matches = |f: &super::FallingBlock| {
                         &*facts.get(f.state).name == block && f.no_gravity == no_gravity
                     };
-                    let count = self.common.entities.falling.iter().filter(|f| matches(f)).count();
+                    let count = self
+                        .common
+                        .entities
+                        .falling
+                        .iter()
+                        .filter(|f| matches(f))
+                        .count();
                     if op["discard"].as_bool() == Some(true) {
                         self.common.entities.falling.retain(|f| !matches(f));
                     }

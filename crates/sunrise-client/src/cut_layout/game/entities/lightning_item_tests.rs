@@ -49,7 +49,15 @@ fn lightning_items_take_five_damage_per_strike() {
             game.thunder_hit(&mut bolt);
             assert_eq!(game.entities.dropped.len(), 6);
             for id in [survivor, resistant_id, invulnerable_id] {
-                assert_eq!(game.entities.dropped.iter().find(|e| e.id == id).unwrap().health, 5);
+                assert_eq!(
+                    game.entities
+                        .dropped
+                        .iter()
+                        .find(|e| e.id == id)
+                        .unwrap()
+                        .health,
+                    5
+                );
             }
             for (item, count) in [
                 ("minecraft:stone", 2),
@@ -57,7 +65,8 @@ fn lightning_items_take_five_damage_per_strike() {
                 ("minecraft:glass", 3),
             ] {
                 let e = game
-                    .entities.dropped
+                    .entities
+                    .dropped
                     .iter()
                     .find(|e| e.stack.item.as_ref() == item && e.stack.count == count)
                     .unwrap();

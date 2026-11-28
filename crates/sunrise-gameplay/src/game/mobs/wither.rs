@@ -44,7 +44,8 @@ impl ServerGame<'_> {
     /// `getKillCredit` naming a wither that is still in the level.
     fn is_wither(&self, id: u32) -> bool {
         self.common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .any(|o| o.id == id && o.alive() && o.species() == Species::Wither)
     }
@@ -185,7 +186,8 @@ impl ServerGame<'_> {
             90.0
         };
         let id = self.create_triggered("minecraft:wither", at, yaw);
-        if let Some(m) = id.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id)) {
+        if let Some(m) = id.and_then(|id| self.common.entities.mobs.iter_mut().find(|m| m.id == id))
+        {
             m.persistent = true;
             sunrise_sim::mobs::wither::make_invulnerable(m);
         }
@@ -329,7 +331,8 @@ impl ServerGame<'_> {
                         self.finish_mob_damage_at(index);
                         let alive = self
                             .common
-                            .entities.mobs
+                            .entities
+                            .mobs
                             .get(index)
                             .is_some_and(|m| m.id == id && m.alive());
                         survived_hit = hit && alive;
@@ -430,7 +433,8 @@ impl ServerGame<'_> {
         let result = blast(self);
         let row = self
             .common
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .position(|q| q.id == p.id && q.join == p.join);
         if let Some(row) = row {
@@ -445,7 +449,8 @@ impl ServerGame<'_> {
             Some(Who::Mob(id)) => {
                 if let Some(w) = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == id && m.alive())
                 {

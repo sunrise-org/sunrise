@@ -86,7 +86,8 @@ pub(crate) fn stop_events() {
         .with(|v| *v.borrow_mut() = None);
 }
 pub(crate) fn owner(game: &sunrise_gameplay::game::ServerGame<'_>) -> u32 {
-    game.entities.mobs
+    game.entities
+        .mobs
         .iter()
         .find(|m| game.persist.uuid_of(m.id) == Some([114, 0, 0, 99]))
         .unwrap()
@@ -161,13 +162,15 @@ fn loaded_arrow_first_tick_dispatches_once_with_its_real_owner() {
                 .unwrap_or_default();
             assert!(game.run_command(&format!("summon arrow 6.5 201.5 10.5 {{UUID:[I;114,0,0,{n}],NoGravity:1b,Motion:[0d,0d,0d],Owner:[I;114,0,0,99]{extra}}}")));
             let id = game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| game.persist.uuid_of(p.id) == Some([114, 0, 0, n]))
                 .unwrap()
                 .id;
             let p = game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == id)
                 .unwrap();
@@ -178,7 +181,8 @@ fn loaded_arrow_first_tick_dispatches_once_with_its_real_owner() {
             start_events();
             game.tick_projectiles().unwrap();
             let p = game
-                .entities.projectiles
+                .entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == id)
                 .unwrap();
@@ -257,7 +261,8 @@ pub(crate) fn natural(kind: &str) {
         let launch = take_shots();
         game.tick_projectiles().unwrap();
         let p = game
-            .entities.projectiles
+            .entities
+            .projectiles
             .iter()
             .find(|p| p.id == id)
             .unwrap();
@@ -347,7 +352,8 @@ fn rocket_and_mob_trident_post_only_on_their_first_tick() {
             assert_eq!(take_shots().len(), 1, "trident first tick: {route}");
             if route == "breeze" {
                 let p = game
-                    .entities.projectiles
+                    .entities
+                    .projectiles
                     .iter()
                     .find(|p| p.id == id)
                     .unwrap();
@@ -379,7 +385,8 @@ fn finish_hit_dispatches_once_and_the_next_tick_does_not_repeat_it() {
         game.finish_arrow_hit(arrow, sunrise_sim::entities::arrows::EntityHit::Deflected);
         let first = take_shots();
         assert!(
-            game.entities.projectiles
+            game.entities
+                .projectiles
                 .iter()
                 .find(|p| p.id == id)
                 .unwrap()

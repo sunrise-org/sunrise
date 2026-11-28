@@ -30,7 +30,10 @@ fn a_mob_the_listener_removed_is_not_sheared() {
             gate.arm();
             assert_eq!(game.player_shear(0), Some(true));
             assert!(gate.fired());
-            assert!(game.entities.mobs.iter().all(|m| m.removed), "the sheep is gone");
+            assert!(
+                game.entities.mobs.iter().all(|m| m.removed),
+                "the sheep is gone"
+            );
             assert_eq!(
                 game.held().map(|h| h.damage),
                 Some(0),

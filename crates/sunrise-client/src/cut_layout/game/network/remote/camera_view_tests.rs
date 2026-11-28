@@ -141,7 +141,8 @@ pub(crate) fn kept(
         Some(m) => &m.extra.client_effects.list,
         None => {
             &game
-                .entities.armor_stands
+                .entities
+                .armor_stands
                 .iter()
                 .find(|a| a.id == id)?
                 .client_effects
@@ -465,7 +466,12 @@ fn effects_count_down_on_the_ticks_their_entity_ticks() {
         game.world.set(3, 64, 3, water.unwrap()).unwrap();
         game.tick_remote_entities(false);
         assert_eq!(left(game), [99, 98, 97, 98, 98]);
-        let pig = game.entities.mobs.iter().find(|m| m.id == PIG as u32).unwrap();
+        let pig = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == PIG as u32)
+            .unwrap();
         assert!(pig.fluids.in_water);
         game.tick_remote_entities(true);
         assert_eq!(left(game), [98, 97, 96, 97, 97]);

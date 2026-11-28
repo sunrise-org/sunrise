@@ -82,7 +82,8 @@ impl crate::game::ServerGame<'_> {
             Target::Boat(_) => true,
             Target::Mob(id) => self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .any(|m| m.id == id && sunrise_sim::mobs::equine::controlled(m)),
             _ => false,
@@ -208,15 +209,10 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Hook(id) => self.set_fishing_hook_ground(id, on_ground),
             // A general row keeps the flag itself, with no support block to refresh.
-            Target::General(id) => {
-                Ok(self
-                    .entities.general
-                    .row_mut(id)
-                    .is_some_and(|row| {
-                        row.on_ground = on_ground;
-                        true
-                    }))
-            }
+            Target::General(id) => Ok(self.entities.general.row_mut(id).is_some_and(|row| {
+                row.on_ground = on_ground;
+                true
+            })),
             _ => {
                 let Some(handle) = self.common.native_walk_entity(entity.id()) else {
                     return Ok(false);
@@ -351,14 +347,27 @@ impl crate::game::ServerGame<'_> {
                 let c = self.common.entities.crystals.iter().find(|c| c.id == id)?;
                 return Some(corners(c.bounds()));
             }
-            Target::Cushion(id) => self.common.entities.cushions.iter().find(|c| c.id == id)?.bounds(),
+            Target::Cushion(id) => self
+                .common
+                .entities
+                .cushions
+                .iter()
+                .find(|c| c.id == id)?
+                .bounds(),
             Target::Frame(id) => self
                 .common
-                .entities.item_frames
+                .entities
+                .item_frames
                 .iter()
                 .find(|f| f.id == id)?
                 .bounds(),
-            Target::Painting(id) => self.common.entities.paintings.iter().find(|p| p.id == id)?.bounds(),
+            Target::Painting(id) => self
+                .common
+                .entities
+                .paintings
+                .iter()
+                .find(|p| p.id == id)?
+                .bounds(),
             _ => return None,
         };
         if lo.iter().chain(&hi).any(|v| !v.is_finite()) {
@@ -589,7 +598,8 @@ pub(in crate::game) mod tests {
                 .unwrap()
                 .clone();
             // A zombie 0.6 wide straddling x = 1: its box is over blocks 0 and 1.
-            game.entities.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(40, kind, Vec3::new(0.9, 65.0, 0.5), 0.0));
             let entity = game.entity(40).unwrap();
             // Only block 1 is under the box: it supports, not the block of the feet's own column.
@@ -867,7 +877,8 @@ pub(in crate::game) mod tests {
             assert_eq!(entity.on_ground(game), Some(true));
             assert_eq!(entity.on_block(game), Some(under_feet));
             assert_eq!(entity.set_on_ground(game, false), Ok(true));
-            game.entities.armor_stands[0].equipment[2] = Some(ItemStack::new("minecraft:leather_boots", 1));
+            game.entities.armor_stands[0].equipment[2] =
+                Some(ItemStack::new("minecraft:leather_boots", 1));
             assert_eq!(entity.set_on_ground(game, true), Ok(true));
             assert_eq!(entity.on_block(game), Some(supported));
             game.world.set(1, 64, 0, air).unwrap();

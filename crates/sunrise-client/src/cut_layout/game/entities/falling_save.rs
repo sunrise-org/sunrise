@@ -102,8 +102,12 @@ mod tests {
                             // An observer activates the same dispatch without writing entity state.
                             let round = game.native_tick_round();
                             assert_eq!(round.listening(), listening);
-                            let joins: Vec<_> =
-                                game.entities.falling.iter().map(|block| block.join).collect();
+                            let joins: Vec<_> = game
+                                .entities
+                                .falling
+                                .iter()
+                                .map(|block| block.join)
+                                .collect();
                             // Continuing falls keep every resident's identity and order;
                             // only the selected owner's state advances.
                             let untouched = game.entities.falling[1].position;
@@ -112,7 +116,8 @@ mod tests {
                                 assert_eq!(game.entities.falling.len(), 6);
                                 assert_eq!(game.entities.falling[1].position, untouched);
                                 assert_eq!(
-                                    game.entities.falling
+                                    game.entities
+                                        .falling
                                         .iter()
                                         .map(|block| block.join)
                                         .collect::<Vec<_>>(),

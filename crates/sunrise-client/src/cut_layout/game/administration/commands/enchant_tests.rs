@@ -39,7 +39,8 @@ fn enchant_reports_single_target_errors_and_counts_only_compatible_living_target
             assert!(game.as_console(|g| g.run_command(command)), "{command}");
         }
         let empty_hand = ItemStack::new(TRIDENT, 0);
-        game.entities.mobs
+        game.entities
+            .mobs
             .last_mut()
             .unwrap()
             .set_equipment_stack(MAINHAND, Some(empty_hand.clone()));
@@ -58,7 +59,10 @@ fn enchant_reports_single_target_errors_and_counts_only_compatible_living_target
             enchant_outcome(game, target, level, false, 0, &format!("failed.{key}"), arg);
         }
         enchant_outcome(game, "@e", 3, true, 2, "success.multiple", None);
-        assert_eq!(riptide(game.entities.mobs[0].equipment_stacks()[0].as_ref()), 3);
+        assert_eq!(
+            riptide(game.entities.mobs[0].equipment_stacks()[0].as_ref()),
+            3
+        );
         assert_eq!(riptide(game.entities.armor_stands[0].equipment.get(0)), 3);
         enchant_outcome(game, "@e", 3, false, 0, "failed", None);
         assert_eq!(

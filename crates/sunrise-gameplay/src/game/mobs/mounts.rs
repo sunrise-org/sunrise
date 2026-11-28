@@ -84,7 +84,9 @@ impl ServerGame<'_> {
         let Some(i) = self.common.mount_index() else {
             return false;
         };
-        if self.common.entities.mobs[i].species() != species || !equine::boost(&mut self.common.entities.mobs[i]) {
+        if self.common.entities.mobs[i].species() != species
+            || !equine::boost(&mut self.common.entities.mobs[i])
+        {
             return false;
         }
         let slot = self.common.held_slot();
@@ -146,7 +148,8 @@ impl ServerGame<'_> {
         if !matches!(species, Species::Camel | Species::CamelHusk)
             && self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .any(|p| p.extra.mount == Some(id) && !p.removed && p.alive())
         {
@@ -363,7 +366,8 @@ impl ServerGame<'_> {
             || equine::is_vehicle(m)
             || self
                 .common
-                .entities.mobs
+                .entities
+                .mobs
                 .iter()
                 .any(|r| r.alive() && !r.removed && r.extra.mount == Some(id))
         {
@@ -415,7 +419,8 @@ impl ServerGame<'_> {
     }
     /// `AbstractHorse.handleEating`.
     pub(in crate::game::server_side) fn feed_mount(&mut self, index: usize, item: &str) -> bool {
-        let Some((heal, age_up, temper, love)) = eating(self.common.entities.mobs[index].species(), item)
+        let Some((heal, age_up, temper, love)) =
+            eating(self.common.entities.mobs[index].species(), item)
         else {
             return false;
         };
@@ -530,8 +535,10 @@ impl ServerGame<'_> {
         // client). When `entity_mount` keeps it on, the mount still reads this tick's input.
         let i = if keys.shift
             || !self.common.entities.mobs[i].alive()
-            || (dismounts_underwater(&self.items().entity_type_tags, &self.common.entities.mobs[i])
-                && self.rider_eyes_in_water())
+            || (dismounts_underwater(
+                &self.items().entity_type_tags,
+                &self.common.entities.mobs[i],
+            ) && self.rider_eyes_in_water())
         {
             self.dismount_mount();
             let Some(i) = self
@@ -595,7 +602,8 @@ impl ServerGame<'_> {
         let tags = &self.items().entity_type_tags;
         let swimmers: Vec<u32> = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .filter(|m| !blocked.contains(&m.id) && m.alive() && m.fluids.eye_in_water)
             .filter_map(|m| {
@@ -694,10 +702,22 @@ impl ServerGame<'_> {
         yaw: f32,
         p: &PlayerMotion,
     ) -> Option<Vec3> {
-        if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == vehicle) {
+        if let Some(i) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .position(|b| b.id == vehicle)
+        {
             return Some(self.boat_player_dismount_target(i, yaw));
         }
-        if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == vehicle) {
+        if let Some(i) = self
+            .common
+            .entities
+            .carts
+            .iter()
+            .position(|c| c.id == vehicle)
+        {
             return Some(self.cart_player_dismount_target(i));
         }
         let mount = self.common.entities.mobs.iter().find(|m| m.id == vehicle)?;
@@ -736,7 +756,8 @@ impl ServerGame<'_> {
         }
         if let Some(view) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == mob)
             .map(|m| self.mob_entity(m))
@@ -745,7 +766,8 @@ impl ServerGame<'_> {
         }
         if let Some(kind) = self
             .common
-            .entities.mobs
+            .entities
+            .mobs
             .iter()
             .find(|m| m.id == mob)
             .map(|m| m.kind.id.clone())
@@ -797,7 +819,10 @@ impl ServerGame<'_> {
                 let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == mob) else {
                     return;
                 };
-                let moved = (self.common.entities.mobs[i].position, self.common.entities.mobs[i].previous);
+                let moved = (
+                    self.common.entities.mobs[i].position,
+                    self.common.entities.mobs[i].previous,
+                );
                 self.common.entities.mobs[i].position = from;
                 self.common.entities.mobs[i].previous = from;
                 if self.common.riding == Some(mob) {
@@ -816,7 +841,8 @@ impl ServerGame<'_> {
                 }
                 let riders: Vec<u32> = self
                     .common
-                    .entities.mobs
+                    .entities
+                    .mobs
                     .iter()
                     .filter(|m| m.extra.mount == Some(mob))
                     .map(|m| m.id)

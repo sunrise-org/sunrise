@@ -17,7 +17,8 @@ pub(crate) mod tests {
         super::super::native_entity_refs::tests::with_game(|game| {
             let (id, uuid, actual_holder, unknown) =
                 (1, [326, 1, 0, 1], [326, 2, 0, 1], [111, 222, 333, 444]);
-            game.entities.boats
+            game.entities
+                .boats
                 .push(Boat::new(id, "oak".into(), Vec3::new(6.5, 100.0, 4.5), 0.0));
             game.persist.uuids.insert(id, uuid);
             game.level.player_uuid = Some([326, 3, 0, 1]);
@@ -27,9 +28,11 @@ pub(crate) mod tests {
             assert!(!game.persist.raw.contains_key(&id));
             assert_eq!(read(game).get("UUID"), Some(&Tag::IntArray(uuid.to_vec())));
             assert!(read(game).get("leash").is_none());
-            game.entities.boats
+            game.entities
+                .boats
                 .update(0, |boat| boat.leash = Some(Holder::Player));
-            game.entities.boats
+            game.entities
+                .boats
                 .update(0, |boat| boat.leash_player = Some(actual_holder));
             let expected = Tag::compound([("UUID", Tag::IntArray(actual_holder.to_vec()))]);
             assert_eq!(read(game).get("leash"), Some(&expected));
@@ -40,11 +43,16 @@ pub(crate) mod tests {
                 .insert(id, Tag::compound([("leash", delayed.clone())]));
             assert_eq!(read(game).get("leash"), Some(&expected));
             game.entities.boats.update(0, |boat| boat.leash = None);
-            game.entities.boats.update(0, |boat| boat.leash_player = None);
-            game.entities.boats
+            game.entities
+                .boats
+                .update(0, |boat| boat.leash_player = None);
+            game.entities
+                .boats
                 .update(0, |boat| boat.leash_pending = Some(Pending::Uuid(unknown)));
             assert_eq!(read(game).get("leash"), Some(&delayed));
-            game.entities.boats.update(0, |boat| boat.leash_pending = None);
+            game.entities
+                .boats
+                .update(0, |boat| boat.leash_pending = None);
             assert!(read(game).get("leash").is_none());
         });
     }

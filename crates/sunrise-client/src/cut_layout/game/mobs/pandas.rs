@@ -99,7 +99,8 @@ pub(crate) mod pickup_tests {
         }
         let id = game.mob_by_uuid([9, 9, 9, 9]).unwrap();
         let holding = |g: &sunrise_gameplay::game::ServerGame<'_>| {
-            g.entities.mobs
+            g.entities
+                .mobs
                 .iter()
                 .any(|m| m.id == id && m.extra.main_hand_id() == Some("minecraft:bamboo"))
         };

@@ -1628,7 +1628,12 @@ pub trait TransactionsGameExt<'g>: crate::game::SideGame<'g> {
         if level.equipment.contains_key(&(dim, id)) {
             return;
         }
-        if let Some(mob) = common.entities.mobs.iter().find(|m| m.id == id && !m.removed) {
+        if let Some(mob) = common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)
+        {
             level.keep_equipment(dim, id, &mob.extra.equipment, Some(&mob.extra.gear));
         } else if let Some(stand) = common.entities.armor_stands.iter().find(|a| a.id == id) {
             level.keep_equipment(dim, id, &stand.equipment, None);

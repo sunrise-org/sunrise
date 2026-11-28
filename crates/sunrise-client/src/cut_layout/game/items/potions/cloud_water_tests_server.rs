@@ -105,7 +105,12 @@ pub(crate) fn run_a_cloud_in_water_resets_its_fall_distance_and_a_dry_one_keeps_
 
                 // Saved chunk view (`potion_cloud_to_nbt`).
                 let saved = {
-                    let cloud = game.entities.breath_clouds.iter().find(|c| c.id == *id).unwrap();
+                    let cloud = game
+                        .entities
+                        .breath_clouds
+                        .iter()
+                        .find(|c| c.id == *id)
+                        .unwrap();
                     sunrise_gameplay::game::server_side::potions_server::potion_cloud_to_nbt(
                         cloud,
                         *uuid,
@@ -179,7 +184,9 @@ pub(crate) fn run_a_cloud_in_water_resets_its_fall_distance_and_a_dry_one_keeps_
         let admitted_id = game.take_entity_id();
         let admitted_uuid = [2359, 1, 0, 1];
         game.persist.uuids.insert(admitted_id, admitted_uuid);
-        game.entities.breath_clouds.push(make_dragon_cloud(admitted_id));
+        game.entities
+            .breath_clouds
+            .push(make_dragon_cloud(admitted_id));
         game.server.ticked_entities_through = admitted_id;
 
         let late_id = game.take_entity_id();

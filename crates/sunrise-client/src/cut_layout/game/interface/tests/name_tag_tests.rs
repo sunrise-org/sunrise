@@ -182,7 +182,8 @@ fn spawn(
     at: [f64; 3],
 ) -> usize {
     let kind = game.res.mob_types().get(kind).unwrap().clone();
-    game.entities.mobs
+    game.entities
+        .mobs
         .push(Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0));
     game.entities.mobs.len() - 1
 }
@@ -227,7 +228,10 @@ fn naming_posts_entity_interact_at_the_named_entity() {
         game.interact_mob(target(7)).unwrap(),
         "the tag names the cow"
     );
-    assert_eq!(game.entities.mobs[cow].custom_name.as_deref(), Some("Bessie"));
+    assert_eq!(
+        game.entities.mobs[cow].custom_name.as_deref(),
+        Some("Bessie")
+    );
     assert_eq!(
         take_interacts(),
         vec![(
@@ -239,11 +243,15 @@ fn naming_posts_entity_interact_at_the_named_entity() {
     // An armour stand is no mob: `Player.interactOn` posts the same event for
     // any item that named a living entity.
     game.inventory[0] = Some(named_tag("Holo"));
-    game.entities.armor_stands
+    game.entities
+        .armor_stands
         .push(ArmorStand::new(21, Vec3::new(3.0, 64.0, 4.0), 0.0));
     assert!(game.interact_armor_stand(target(21)), "the tag names it");
     assert_eq!(
-        game.entities.armor_stands[0].custom_name.as_ref().map(Text::plain),
+        game.entities.armor_stands[0]
+            .custom_name
+            .as_ref()
+            .map(Text::plain),
         Some("Holo".to_owned())
     );
     assert_eq!(
@@ -344,7 +352,8 @@ fn a_trades_title_draws_the_names_style() {
 fn a_creative_player_keeps_the_tag_it_names_a_stand_with() {
     let mut resources = None;
     let mut game = game(&mut resources);
-    game.entities.armor_stands
+    game.entities
+        .armor_stands
         .push(ArmorStand::new(9, Vec3::new(0.5, 64.0, 0.5), 0.0));
     let mut tag = ItemStack::new("minecraft:name_tag", 2);
     tag.data_mut().custom_name = Some(Tag::compound([("text", Tag::String("Bob".into()))]));
