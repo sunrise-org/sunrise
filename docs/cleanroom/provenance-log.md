@@ -169,3 +169,16 @@ error. No other loader's code was read; nothing from the packs went into Sunrise
 - Sources: the spec (rev 1) §2.4, §3.2 (`shadowPlayer`, `shadowLightBlockEntities`); Sunrise's current main (`entity_culling.rs`, `game/entity_culling.rs`, `game/perspective.rs`, `Game::entity_geometry`, block state light emission in `StateFacts`).
 - Test packs: not opened; only our own debug packs (shadow map and height visualisers, local, uncommitted) used for the checks.
 - No other loader, renderer or pre-removal Sunrise history read.
+
+## 2026-11-27 implementation-side correction of spec §3.2, §6.1.4 and OQ-23 (#6453: `blend.*` on composite-style programs)
+- A correction filed by the implementation side, for the spec team to accept; not a spec revision (the spec stays at
+  revision 1, and its revision line and changelog are the spec team's). Written by an implementation agent session
+  (Claude Opus 5.5) on the request in #6453. The Sunrise-specific behaviour went to decisions.md D-13.
+- Sources, all at Sunrise upstream/main `40d1df503939526c08f184de1f690626cd7a0044`:
+  `crates/sunrise-shaders/src/post.rs` (`load_post`'s composite-style group loop and its comment, the shadowcomp
+  loader, `blend`, `buffer_blends`, the test `composite_programs_blend_as_their_program_says`),
+  `crates/sunrise-shaders/src/post/buffer_blend_tests.rs`, `crates/sunrise-shaders/src/config.rs` (`buffer_index`),
+  `crates/sunrise-render-shaderpack/src/pack_post/construction.rs` (`build_pass`) and
+  `crates/sunrise-render-shaderpack/src/pack_post/tests.rs` (`a_composite_program_blends_onto_its_buffer`). The
+  observation the spec cites is the message of commit `05822265026c63d8bffc943c571c66b6e3dd131f`.
+- No new probe was run. No pack files, no loader source, binaries or docs, and no web pages were opened.

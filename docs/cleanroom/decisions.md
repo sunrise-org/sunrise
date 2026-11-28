@@ -474,3 +474,38 @@ the full list.
   (`sunrise-render-shaderpack`: the value and its type, in programs and in custom uniforms) and the daily
   `game::client_side::boss_battle_tests::boss_battle_follows_the_servers_boss_bars` (`sunrise-client-gameplay`: packets to the frame's
   inputs).
+
+## D-13: `blend.*` on composite-style and setup programs where the observation stops
+
+- **Open point:** spec rev 1, 3.2 (the text after the rendering-state table): composite-style programs draw with
+  blending disabled `[OF-SH]`, and an Iris 1.11.7 observation says `blend.<program>` blends deferred and composite
+  programs and their `blend.<program>.<buffer>` lines have no effect. The spec leaves open begin and prepare (assumed),
+  `shadowcomp`, `final`, `setup`, values that are not four factors, and buffers whose format can't blend.
+- **Decision:**
+  - `begin`, `prepare`, `deferred`, `composite`: blended with `blend.<program>`, as the observation says for
+    deferred and composite; their `blend.<program>.<buffer>` lines are dropped.
+  - `shadowcomp`: `blend.<program>` is not read, so blending is off, but `blend.<program>.<buffer>` lines are kept
+    and four valid factors blend that output. The suffix is resolved by the colortex names (`config::buffer_index`:
+    `colortexN` and the aliases `gcolor`...`gaux4`), and the index it gives selects the shadow buffer the program
+    writes, so `blend.shadowcomp.colortex0` blends shadowcolor0, while `blend.shadowcomp.shadowcolor0` names no
+    buffer and is ignored. This is Sunrise's behaviour as it stands, not a format rule.
+  - `final`: the loader reads `blend.final` and drops its per-buffer lines, but `final` writes the screen target
+    without blending, so neither has an effect.
+  - `setup`: compute only, no colour outputs; `blend.*` has no effect.
+  - A value that is not four valid factor names (wrong count, an unknown or lower-case name) counts as no
+    `blend.<program>` (blending off in these programs); such a per-buffer line is dropped.
+  - Factors apply only to an output whose buffer format wgpu reports as blendable
+    (`TextureFormatFeatureFlags::BLENDABLE`); any other output is written without
+    blending.
+- **Reason:** begin and prepare follow deferred and composite because they are the same kind of pass over the
+  colortex buffers and the observation's source comment lists them together. `shadowcomp`, `final` and `setup` keep
+  the documented rule where the loader's existing paths give it: the shadowcomp loader never set a program blend,
+  `final` draws to the window, and setup has no attachments. Invalid values fall back to the documented default
+  rather than failing the pack.
+- **Tests:** `post::tests::composite_programs_blend_as_their_program_says` (`sunrise-shaders`: program factors on
+  deferred and composite, `off` on composite2, per-buffer lines dropped on composite and composite1),
+  `post::buffer_blend_tests::buffer_blends_use_colortex_numbers_and_preserve_explicit_off` (`sunrise-shaders`:
+  per-buffer suffixes resolve to colortex numbers, `off` kept) and the daily GPU test
+  `pack_post::tests::a_composite_program_blends_onto_its_buffer` (`sunrise-render-shaderpack`: the observed 0.625).
+  No test holds yet the shadowcomp per-buffer blend, `final` without blending, invalid values in a composite
+  program, or the blendable-format gate.
