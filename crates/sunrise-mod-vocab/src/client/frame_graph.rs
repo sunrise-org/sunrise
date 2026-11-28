@@ -271,6 +271,11 @@ impl FramePassDescriptor {
     }
 
     /// Require this pass to execute before engine anchor `stage`.
+    ///
+    /// For [`RenderLevelStage::AfterSky`], the first stage, this selects the pre-stage
+    /// position: the pass runs after the sky pass and before that stage's
+    /// `render_level_stage` listeners fire. For any later stage the pass runs in the
+    /// preceding stage's slot, after that stage's listeners.
     pub fn before_stage(self, stage: RenderLevelStage) -> Self {
         self.before(FramePassRef::Anchor(stage))
     }
