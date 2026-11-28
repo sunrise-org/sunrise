@@ -17,7 +17,7 @@ sys.path.insert(0, str(ROOT))
 from tools import lab, oracle_harness as harness, test_model_baking_parity as baking, test_rust_parity as base
 
 STYLE_TEST = (
-    'game::native_hooks::render_tooltip_texture::render_tooltip_texture_tests::'
+    'cut_layout::game::native_hooks::render_tooltip_texture::render_tooltip_texture_tests::'
     'an_items_tooltip_style_draws_its_own_sprites'
 )
 

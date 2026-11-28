@@ -15,11 +15,11 @@ use sunrise_sim::save::text;
 #[cfg(test)]
 #[path = "persist/anger_tests.rs"]
 mod anger_tests;
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "persist/lookup_order_tests.rs"]
 pub(crate) mod lookup_order_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "persist/tests.rs"]
 pub(crate) mod tests;
 #[cfg(test)]
@@ -1641,7 +1641,7 @@ mod invalid_passenger_tests {
 #[path = "persist/summon_uuid_conflict_tests.rs"]
 mod summon_uuid_conflict_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "persist/thrown_item_tests.rs"]
 pub(crate) mod thrown_item_tests;
 

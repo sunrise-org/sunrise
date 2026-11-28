@@ -49,5 +49,4 @@ fn a_summoned_eye_saves_its_normalised_item_live_and_after_a_reload() {
     run_a_summoned_eye_saves_its_normalised_item_live_and_after_a_reload();
 }
 
-#[allow(unused_imports)]
 pub(crate) use crate::game::server_side::commands_server::data::eye_item_tests::run_a_summoned_eye_saves_its_normalised_item_live_and_after_a_reload;

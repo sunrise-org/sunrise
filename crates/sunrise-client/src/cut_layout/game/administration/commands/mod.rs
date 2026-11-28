@@ -19,11 +19,11 @@ pub(crate) mod air_filter_tests;
 #[cfg(test)]
 pub(crate) mod teleport_pitch_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "summon_item_orb_tests.rs"]
 pub(crate) mod summon_item_orb_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "summon_bolt_tests.rs"]
 pub(crate) mod summon_bolt_tests;
 
@@ -107,11 +107,11 @@ pub(crate) mod peaceful_tests {
 #[path = "teleport_mob_tests.rs"]
 pub(crate) mod teleport_mob_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "teleport_item_tests.rs"]
 pub(crate) mod teleport_item_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "teleport_level_tests.rs"]
 pub(crate) mod teleport_level_tests;
 

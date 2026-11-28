@@ -81,7 +81,6 @@ READERS = {
     "sunrise-client-gameplay": [
         "crates/sunrise-core/src/prepared_test_root.rs", "crates/sunrise-mod-vocab/src/hooks",
     ],
-    "sunrise-parity-fixtures": [*SUNRISE_CLIENT, "crates/sunrise-gameplay-common/src/game/parity_fixtures.rs"],
     "sunrise-sim": [
         "crates/sunrise-client/tests/fixtures/advancement-icons/data",
         "crates/sunrise-client/tests/fixtures/dialog_codec_cases.json",
@@ -157,7 +156,7 @@ SCANNED = {"sunrise-game-data": ["crates"]}
 # Literals the scan takes for a walk up to crates/ that are not one (a ".." among path-traversal checks).
 # "machines/.." in a test's sample paths, "mods/" in an instance's file names: no read either.
 NOT_READS = {
-    "sunrise-client": {"crates"}, "sunrise-client-lib": {"crates"}, "sunrise-parity-fixtures": {"crates"},
+    "sunrise-client": {"crates"}, "sunrise-client-lib": {"crates"},
     "sunrise-gameplay-common": {"crates"}, "sunrise-sim": {"crates"},
     "sunrise-level": {"crates/sunrise-client-render"},
     "sunrise-mod-package": {"crates"},

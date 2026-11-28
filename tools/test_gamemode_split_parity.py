@@ -17,16 +17,16 @@ sys.path.insert(0, str(ROOT))
 from tools import lab, oracle_harness as harness, test_rust_parity as base, test_model_baking_parity as baking
 
 TESTS = [
-    'game::remote::abilities::gamemode_split_tests::change_game_mode_updates_only_local_mode_and_abilities_26_3',
-    'game::remote::abilities::gamemode_split_tests::genpvp_packet_sequence_matches_26_3_oracle_step_by_step',
-    'game::remote::abilities::gamemode_split_tests::hud_camera_mounts_match_26_3_oracle',
-    'game::remote::abilities::gamemode_split_tests::live_player_info_updates_toggle_no_physics_while_local_spectator_26_3',
-    'game::remote::abilities::gamemode_split_tests::login_and_respawn_set_previous_mode_and_fresh_abilities_26_3',
-    'game::remote::abilities::gamemode_split_tests::resolved_player_info_retains_identity_across_remove_and_readd_26_3',
-    'game::remote::abilities::gamemode_split_tests::respawn_keep_data_spectator_info_clears_pending_y_26_3',
-    'game::remote::abilities::gamemode_split_tests::retained_player_login_preserves_custom_ability_speeds_26_3',
-    'game::remote::abilities::gamemode_split_tests::split_local_and_player_info_physics_matrix_26_3',
-    'game::remote::abilities::gamemode_split_tests::split_mode_hud_rendering_reach_miss_inventory_and_input_rules',
+    'cut_layout::game::remote::abilities::gamemode_split_tests::change_game_mode_updates_only_local_mode_and_abilities_26_3',
+    'cut_layout::game::remote::abilities::gamemode_split_tests::genpvp_packet_sequence_matches_26_3_oracle_step_by_step',
+    'cut_layout::game::remote::abilities::gamemode_split_tests::hud_camera_mounts_match_26_3_oracle',
+    'cut_layout::game::remote::abilities::gamemode_split_tests::live_player_info_updates_toggle_no_physics_while_local_spectator_26_3',
+    'cut_layout::game::remote::abilities::gamemode_split_tests::login_and_respawn_set_previous_mode_and_fresh_abilities_26_3',
+    'cut_layout::game::remote::abilities::gamemode_split_tests::resolved_player_info_retains_identity_across_remove_and_readd_26_3',
+    'cut_layout::game::remote::abilities::gamemode_split_tests::respawn_keep_data_spectator_info_clears_pending_y_26_3',
+    'cut_layout::game::remote::abilities::gamemode_split_tests::retained_player_login_preserves_custom_ability_speeds_26_3',
+    'cut_layout::game::remote::abilities::gamemode_split_tests::split_local_and_player_info_physics_matrix_26_3',
+    'cut_layout::game::remote::abilities::gamemode_split_tests::split_mode_hud_rendering_reach_miss_inventory_and_input_rules',
 ]
 
 

@@ -1,14 +1,15 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 use sunrise_core::geometry::Aabb;
 use sunrise_core::geometry::Vec3;
 use sunrise_sim::mobs::Who;
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod arrow_hit_sound_tests {
     use std::fmt::Write as _;
     use std::path::PathBuf;
     use std::sync::{Arc, atomic::AtomicUsize, mpsc};
     use sunrise_command::args::GameMode;
     use sunrise_core::geometry::Vec3;
+    #[cfg(test)]
     use sunrise_game_data::gamerules::Value;
     use sunrise_protocol::packets::play::Clientbound;
     use sunrise_sim::{

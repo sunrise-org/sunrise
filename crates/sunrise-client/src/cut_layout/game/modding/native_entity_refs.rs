@@ -126,7 +126,7 @@ pub(crate) mod general_handle_tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod tests {
 
     pub use sunrise_gameplay::game::native_entity_refs::tests::{
@@ -137,18 +137,29 @@ pub(crate) mod tests {
     pub use sunrise_gameplay::game::native_entity_refs::tests::{
         with_game, with_game_at, with_game_role, with_resident_game,
     };
+    #[cfg(test)]
     use sunrise_gameplay_common::game::GameGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::commands_common::CommandsCommonGameExt2;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::game_mode_common::GameModeCommonGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::held_items::HeldItemsGameExt1;
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1;
     use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt5;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_level_refs_common::NativeLevelRefsCommonGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_lifecycle_common::NativeLifecycleCommonGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_player_food::NativePlayerFoodGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt1;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::native_server::NativeServerGameExt3;
+    #[cfg(test)]
     #[cfg(feature = "client")]
     use sunrise_gameplay_common::game::player_identity::PlayerIdentityGameExt1;
     #[cfg(feature = "client")]
@@ -181,6 +192,7 @@ pub(crate) mod tests {
     }
 
     /// The parent runs and checks an isolated child; the child loads the Part fixtures' types.
+    #[cfg(test)]
     pub(crate) fn declared_part_root(name: &str) -> Option<std::path::PathBuf> {
         if run_fresh_cases(name, "SUNRISE_DECLARED_PART_GAME_CHILD", &["valid"]) {
             return None;

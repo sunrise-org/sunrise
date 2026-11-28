@@ -36,12 +36,18 @@ pub mod upload_pace;
 
 extern crate self as sunrise_client_gameplay;
 pub mod game;
-#[cfg(all(test, feature = "client"))]
+#[cfg(all(any(test, feature = "parity-fixtures"), feature = "client"))]
 #[path = "../../sunrise-core/src/prepared_test_root.rs"]
 pub(crate) mod prepared_test_root;
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 mod test_game_dir;
 
 #[cfg(test)]
 #[path = "game/mobs/creatures/pearl_tests.rs"]
 mod pearl_tests;
+
+/// Fixtures available to the parity dispatcher in this build.
+#[cfg(feature = "parity-fixtures")]
+pub fn parity_fixtures() -> &'static [(&'static str, fn())] {
+    game::client_side::PARITY_FIXTURES
+}

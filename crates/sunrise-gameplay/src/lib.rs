@@ -34,8 +34,14 @@ pub mod wandering_trader;
 
 extern crate self as sunrise_gameplay;
 pub mod game;
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "../../sunrise-core/src/prepared_test_root.rs"]
 pub(crate) mod prepared_test_root;
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 mod test_game_dir;
+
+/// Fixtures available to the parity dispatcher in this build.
+#[cfg(feature = "parity-fixtures")]
+pub fn parity_fixtures() -> &'static [(&'static str, fn())] {
+    game::server_side::PARITY_FIXTURES
+}

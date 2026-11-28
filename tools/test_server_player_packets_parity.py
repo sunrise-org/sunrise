@@ -21,7 +21,7 @@ from tools import lab, oracle_harness, test_rust_parity as base
 
 NAME = 'server-player-packets-parity'
 ORACLE = 'VanillaServerPlayerPacketsOracle'
-TEST = 'game::server_side::lan::player_packet_tests::server_player_packet_witness'
+TEST = 'cut_layout::game::server_side::lan::player_packet_tests::server_player_packet_witness'
 CASES = {
     '141': ['credits_pose', 'credits_move_count', 'credits_idle_credit', 'ordinary_idle_credit',
             'repeated_position', 'invalid_rotation'],

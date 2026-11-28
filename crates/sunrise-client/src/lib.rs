@@ -26,7 +26,7 @@ static ALLOCATOR: sunrise_threads::GameAllocator = sunrise_threads::GAME_ALLOCAT
 mod cut_layout;
 pub mod game_facade;
 pub use cut_layout::game;
-#[cfg(all(test, not(feature = "client")))]
+#[cfg(all(any(test, feature = "parity-fixtures"), not(feature = "client")))]
 pub(crate) use sunrise_client_lib::settings;
 #[cfg(all(test, not(feature = "client")))]
 pub(crate) use sunrise_game_data::scoreboard;
@@ -37,13 +37,19 @@ pub(crate) use sunrise_level::chunk;
 #[cfg(all(test, not(feature = "client")))]
 pub(crate) use sunrise_sim::{datapack_net, entities, motion, raw_payloads};
 pub use sunrise_sim::{lan, orb_limits, save};
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 mod test_game_dir;
 
 // The one way a unit test gets prepared data: `SUNRISE_TEST_RESOURCES`, else the checkout's
 // `.local/sunrise-client/<version>`, with every input it names required.
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "../../sunrise-core/src/prepared_test_root.rs"]
 pub(crate) mod prepared_test_root;
 
 pub use sunrise_level::{crash, logging, spans};
+
+/// Fixtures available to the parity dispatcher in this build.
+#[cfg(feature = "parity-fixtures")]
+pub fn parity_fixtures() -> &'static [(&'static str, fn())] {
+    game::PARITY_FIXTURES
+}

@@ -1,4 +1,4 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
 use sunrise_core::nbt::Tag;
 #[cfg(test)]
 pub(crate) mod tests {
@@ -325,7 +325,7 @@ pub(crate) mod tests {
     }
 }
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "data/eye_item_tests_server.rs"]
 pub(crate) mod eye_item_tests;
 
@@ -549,4 +549,5 @@ pub(crate) mod falling_live_adoption_tests {
         });
     }
 }
+#[cfg(test)]
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;

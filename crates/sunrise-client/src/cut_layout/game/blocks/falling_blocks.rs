@@ -1,7 +1,8 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
+#[cfg(test)]
 #[cfg(feature = "client")]
 use sunrise_core::position::BlockPos;
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "falling_blocks/moving_piston_tests.rs"]
 pub(crate) mod moving_piston_tests;
 

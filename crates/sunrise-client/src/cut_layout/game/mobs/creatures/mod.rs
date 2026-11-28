@@ -27,7 +27,7 @@ pub(crate) mod mob_subscription_tests;
 #[cfg(test)]
 pub(crate) mod breeding_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod projectile_batch_tests;
 
 #[cfg(test)]
@@ -39,7 +39,7 @@ pub(crate) mod armor_destroy_tests;
 #[cfg(test)]
 pub(crate) mod conversion_tag_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod mob_pearl_hook_tests;
 
 #[cfg(test)]
@@ -75,11 +75,11 @@ pub(crate) mod breeding_heart_tests;
 #[path = "frame_projectile_tests.rs"]
 pub(crate) mod frame_projectile_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "projectile_targets_tests.rs"]
 pub(crate) mod projectile_targets_tests;
 
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "projectiles_120_124_tests.rs"]
 pub(crate) mod projectiles_120_124_tests;
 pub(crate) mod pufferfish_player;

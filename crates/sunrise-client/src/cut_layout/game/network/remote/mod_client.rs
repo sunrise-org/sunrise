@@ -29,7 +29,7 @@ pub(crate) mod native_entity_tests;
 pub(crate) mod camera_view_tests;
 
 #[cfg(feature = "client")]
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 #[path = "client_camera_tests_client.rs"]
 pub(crate) mod client_camera_tests;
 
@@ -47,21 +47,25 @@ mod client_logging_out_tests;
 mod attack_target_tests;
 
 #[cfg(feature = "client")]
-#[cfg(test)]
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod tests {
     pub(crate) use crate::game::remote::tests::connect_menu_test;
     pub(crate) use crate::game::remote::tests::connect_play_test;
     pub(crate) use crate::game::remote::tests::spawn_menu_test;
+    #[cfg(test)]
     use sunrise_gameplay_common::game::GameGameExt1;
 
+    #[cfg(test)]
     pub(crate) mod client_explosion_tests {
         include!("client_explosion_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod chat_window_and_input_tests {
         include!("chat_window_and_input_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod play_bundle_tests {
         include!("play_bundle_tests_client.rs");
     }
@@ -78,63 +82,79 @@ pub(crate) mod tests {
         include!("camera_death_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod client_hud_camera_tests {
         include!("client_hud_camera_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod client_day_time_tests {
         include!("client_day_time_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod client_level_environment_tests {
         include!("client_level_environment_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod client_level_lifecycle_tests {
+        #[cfg(test)]
         use sunrise_gameplay_common::game::tables::WorldTablesExt;
         include!("client_level_lifecycle_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod client_menu_tests {
         include!("client_menu_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod client_vanilla_reads_tests {
         include!("client_vanilla_reads_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod container_drop_tests {
         include!("container_drop_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod dimension_transition_tests {
         include!("dimension_transition_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod menu_packets_tests {
         include!("menu_packets_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod client_close_tests {
         include!("client_close_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod particle_group_tests {
         include!("particle_group_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod spear_jab_tests {
         include!("spear_jab_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod client_admission_tests {
         include!("client_admission_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod client_emitters_tests {
         include!("client_emitters_tests_client.rs");
     }
 
+    #[cfg(test)]
     pub(crate) mod tracking_state_tests {
         include!("tracking_state_tests_client.rs");
     }

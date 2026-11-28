@@ -1,17 +1,26 @@
-#![cfg(test)]
+#![cfg(any(test, feature = "parity-fixtures"))]
+#[cfg(test)]
 use mod_api::ExplosionStart;
+#[cfg(test)]
 use sunrise_core::geometry::Vec3;
+#[cfg(test)]
 use sunrise_core::position::BlockPos;
+#[cfg(test)]
 use sunrise_game_data::text::Text;
+#[cfg(test)]
 use sunrise_gameplay::game::server_side::explosion::{
     BlockInteraction, ExplicitBlastSource, ExplosionCause, ExplosionSource,
 };
-use sunrise_items::items::ItemStack;
-use sunrise_world::registry::BlockStateId;
 #[cfg(test)]
+use sunrise_items::items::ItemStack;
+#[cfg(test)]
+use sunrise_world::registry::BlockStateId;
+#[cfg(any(test, feature = "parity-fixtures"))]
 pub(crate) mod tests {
 
+    #[cfg(test)]
     use sunrise_core::random::RandomSource;
+    #[cfg(test)]
     use sunrise_gameplay::game::server_side::explosion::tests::exploded_positions_stepwise;
 
     use super::*;
@@ -400,6 +409,8 @@ mod explicit_source_tests {
 #[cfg(test)]
 #[path = "tests/explosion_mob_source_tests.rs"]
 mod explosion_mob_source_tests;
+#[cfg(test)]
 use sunrise_gameplay_common::game::chat_common::ChatCommonGameExt1 as _;
 
+#[cfg(test)]
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;

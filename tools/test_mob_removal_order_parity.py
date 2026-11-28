@@ -44,7 +44,7 @@ def main():
             print('Vanilla removal trace recorded')
             return
         parity.run([lab.parity_fixtures(),
-                    'game::server_side::vehicle_removal_tests::mob_removal_order_witness', '--exact', '--ignored'],
+                    'cut_layout::game::server_side::vehicle_removal_tests::mob_removal_order_witness', '--exact', '--ignored'],
                    env=lab.game_env(SUNRISE_TEST_RESOURCES=str(args.resources.resolve()),
                                     SUNRISE_VEHICLE_REMOVAL_TRACE=str(sunrise)))
         count = parity.compare(vanilla, sunrise)
