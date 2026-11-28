@@ -20,7 +20,9 @@ from tools.state_digest_compare import IGNORABLE_GROUPS, compare as compare_dige
 
 STATE_PATHS = ('Pos', 'Health', 'foodLevel', 'XpLevel', 'XpTotal', 'Inventory', 'active_effects[0].id', 'active_effects[1].id', 'Dimension')
 PLAYERS = ['Alice0', 'Bob0']  # dedicated: two scripted bots; integrated: Alice0 joins the host's LAN
-SETTLE_ATTEMPTS = 400  # frozen server ticks to wait for a join or a settle, before giving up
+CONFIG_TICKS = 2
+PLACEMENT_TICKS = 1
+WARMUP_TICKS = 12
 
 
 def free_port():
@@ -111,11 +113,16 @@ class Bots:
 
     def join(self, server, prefix):
         at = len(server.lines)
-        log = open(self.directory / f'bot-{prefix}.log', 'w')
-        self.processes.append(subprocess.Popen(
-            [self.binary, '--server', f'127.0.0.1:{self.port}', '--bots', '1', '--behaviour', 'stand', '--name', prefix,
-             '--seconds', '3600', '--view-distance', '4', '--seed', '12345'], stdout=log, stderr=subprocess.STDOUT))
-        server.wait_for(f'{prefix}0[/127.0.0.1:', at, 120)
+        with (self.directory / f'bot-{prefix}.log').open('w') as log:
+            self.processes.append(subprocess.Popen(
+                [self.binary, '--server', f'127.0.0.1:{self.port}', '--bots', '1', '--behaviour', 'stand', '--name', prefix,
+                 '--view-distance', '4', '--seed', '12345', '--scene-ticks'], stdout=log, stderr=subprocess.STDOUT))
+        name = f'{prefix}0'
+        server.run([
+            f'scene-config {name}', f'scene-ticks {CONFIG_TICKS}',
+            f'scene-join {name}', f'scene-ticks {PLACEMENT_TICKS}',
+        ])
+        server.wait_for(f'{name}[/127.0.0.1:', at, 1)
 
     def stop(self):
         for process in self.processes:
@@ -127,17 +134,6 @@ class Bots:
                 process.kill()
 
 
-def settle(server, names, targets):
-    """Frozen ticks run until each player stands where the scene put it, so the stepped ticks see steady moves."""
-    for _ in range(SETTLE_ATTEMPTS):
-        lines = server.run([f'data get entity {n} Pos' for n in names])
-        text = '\n'.join(lines)
-        if all(any(f'{t:.1f}' in text for t in want) for want in targets):
-            return
-        time.sleep(0.05)
-    raise SystemExit(f'players did not settle:\n{text}')
-
-
 def final_state(server):
     """The players’ final command-visible state."""
     lines = []
@@ -146,19 +142,6 @@ def final_state(server):
             lines += [l.split(']: ', 1)[-1] for l in server.run([f'data get entity {name} {path}'])
                       if 'following entity data' in l or 'No entity' in l]
     return '\n'.join(lines) + '\n'
-
-
-def wait_loaded(server, dim, at):
-    """Frozen ticks until the chunk under the player is loaded, then a few more for its neighbours."""
-    for _ in range(SETTLE_ATTEMPTS):
-        if any('Test passed' in l for l in server.run([f'execute in {dim} if loaded {at[0]} {at[1]} {at[2]}'])):
-            break
-        time.sleep(0.05)
-    else:
-        raise SystemExit(f'{dim} did not load')
-    for _ in range(40):
-        server.run(['say settle'])
-        time.sleep(0.1)
 
 
 def by_dimension(digest):
@@ -213,6 +196,21 @@ def server_properties(port):
     return dict(base.PROPERTIES, **{'server-port': str(port), 'white-list': 'false', 'enforce-whitelist': 'false'})
 
 
+def before_join(server, nether):
+    server.run(['forceload add -64 -64 143 127', 'scene-warm minecraft:overworld'])
+    if nether:
+        server.run([
+            'execute in minecraft:the_nether run forceload add -64 -64 79 79',
+            'scene-warm minecraft:the_nether',
+        ])
+
+
+def check_player_ages(server):
+    bob_age = PLACEMENT_TICKS + WARMUP_TICKS
+    alice_age = bob_age + CONFIG_TICKS + PLACEMENT_TICKS
+    server.run([f'scene-expect {name} {age}' for name, age in zip(PLAYERS, (alice_age, bob_age))])
+
+
 def run_dedicated(args, home, timings):
     out = args.out
     run_dir = out / 'server'
@@ -228,37 +226,44 @@ def run_dedicated(args, home, timings):
     if coverage:
         base.seed_coverage_world(run_dir / 'world')
     digest = None if args.no_digest else out / 'digest.txt'
-    server = base.Server(args.binary, args.resources, run_dir, base.scratch_env(home, digest, args.detail), freeze=True)
+    env = base.scratch_env(home, digest, args.detail)
+    env['SUNRISE_TEST_SCENE_TICKS'] = '1'
+    server = base.Server(args.binary, args.resources, run_dir, env, freeze=True)
     players = Bots(args.bots, port, out)
     ticks = args.ticks
     nether = args.nether
     missed = []
     try:
         server.wait_for('Done (')
-        server.run(['forceload query'])
-        time.sleep(3)
-        server.run_seeded(base.scene_commands(False, coverage), require_sync=digest is not None)
+        server.wait_for('Scene tick gate ready', timeout=30)
+        before_join(server, nether)
+        server.run_seeded([*base.scene_commands(False, coverage), 'scene-warm minecraft:overworld'], require_sync=True)
         players.join(server, 'Alice')
         players.join(server, 'Bob')
-        server.run(player_commands(PLAYERS, nether, coverage))
+        server.run([
+            *player_commands(PLAYERS, nether, coverage),
+            'scene-warm minecraft:overworld',
+        ])
+        server.run([f'scene-ticks {WARMUP_TICKS}'])
+        check_player_ages(server)
         at = stand(coverage, nether)
-        settle(server, PLAYERS, [(x, z) for x, _, z, _ in at])
-        if nether:
-            wait_loaded(server, 'minecraft:the_nether', tuple(int(v) for v in NETHER_SPOT))
         owner = uuid_ints(server.run([f'data get entity {PLAYERS[0]} UUID'])) if coverage else None
-        server.run_seeded(near_player_commands(at, owner), require_sync=digest is not None)
+        server.run_seeded(near_player_commands(at, owner), require_sync=True)
         before = server.game_time()
         start = time.time()
-        server.run(['tick rate 10000', f'tick step {ticks}'])
-        while server.game_time() < before + ticks:
-            time.sleep(0.05)
+        server.run([f'tick step {ticks}', f'scene-ticks {ticks}'], timeout=max(300, ticks))
+        after = server.game_time()
+        if after != before + ticks:
+            raise SystemExit(f'expected game time {before + ticks} after {ticks} steps, got {after}')
         timings['step_seconds'] = time.time() - start
         (out / 'players.txt').write_text(final_state(server))
         if coverage:
             lines, missed = base.coverage_checks(server.run, run_dir / 'world', PLAYERS[0])
     finally:
-        players.stop()
-        server.stop()
+        try:
+            server.stop()
+        finally:
+            players.stop()
     if coverage:
         more, also = base.pickup_stat_check(run_dir / 'world', PLAYERS[0], base.uuid_text(owner))
         (out / 'coverage.txt').write_text('\n'.join(lines + more) + '\n')

@@ -4,7 +4,7 @@ import sys
 import tempfile
 import unittest
 from pathlib import Path
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 
 from tools import state_digest_compare, state_digest_players, state_digest_scene
 
@@ -128,6 +128,28 @@ class LaunchTests(unittest.TestCase):
             with self.assertRaisesRegex(SystemExit, 'digest-sync: refused'):
                 server.run_seeded(commands, require_sync=True)
             server.run_seeded(commands, require_sync=False)
+
+    def test_bots_are_admitted_after_two_configuration_ticks(self):
+        with tempfile.TemporaryDirectory() as temp, patch.object(state_digest_players.subprocess, 'Popen') as spawn:
+            bots = state_digest_players.Bots('sunrise-bots', 25565, Path(temp))
+            server = Mock(lines=[])
+            bots.join(server, 'Alice')
+        self.assertIn('--scene-ticks', spawn.call_args.args[0])
+        server.run.assert_called_once_with([
+            'scene-config Alice0', 'scene-ticks 2', 'scene-join Alice0', 'scene-ticks 1',
+        ])
+        server.wait_for.assert_called_once_with('Alice0[/127.0.0.1:', 0, 1)
+
+    def test_player_ages_include_every_frozen_tick_since_placement(self):
+        server = Mock()
+        state_digest_players.check_player_ages(server)
+        server.run.assert_called_once_with(['scene-expect Alice0 16', 'scene-expect Bob0 13'])
+
+    def test_nether_chunk_preparation_happens_before_admission(self):
+        server = Mock()
+        state_digest_players.before_join(server, True)
+        self.assertEqual([entry.args[0][-1] for entry in server.run.call_args_list],
+                         ['scene-warm minecraft:overworld', 'scene-warm minecraft:the_nether'])
 
     def test_compare_option_can_follow_ignore_option(self):
         argv = ['state_digest_players.py', '--ignore-group', 'players', '--compare', 'a', 'b']
