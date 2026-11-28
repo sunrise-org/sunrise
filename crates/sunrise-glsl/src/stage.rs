@@ -71,15 +71,6 @@ pub fn compile_stage(
     let mut text = String::with_capacity(source.header.len() + source.code.len());
     text.push_str(source.header);
     text.push_str(source.code);
-    if let Some((offset, message)) = crate::guard::scan(&text) {
-        let start = offset.unwrap_or(0).min(text.len());
-        let line = text[..start].matches('\n').count();
-        return Err(vec![
-            (source.locate)(line)
-                .error(message)
-                .with_stage(source.stage),
-        ]);
-    }
     let mut parses = 0;
     let mut module = loop {
         parses += 1;

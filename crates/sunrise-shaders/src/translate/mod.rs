@@ -392,6 +392,17 @@ fn translate(
 ) -> Result<Program, Vec<Error>> {
     guard_stage(vertex, ShaderStage::Vertex).map_err(|e| vec![e])?;
     guard_stage(fragment, ShaderStage::Fragment).map_err(|e| vec![e])?;
+    translate_inner(vertex, fragment, target, gbuffers, shadow, limits)
+}
+
+pub(super) fn translate_inner(
+    vertex: &Preprocessed,
+    fragment: &Preprocessed,
+    target: Target,
+    gbuffers: Option<&GbuffersInputs>,
+    shadow: bool,
+    limits: InterfaceLimits,
+) -> Result<Program, Vec<Error>> {
     let matrices = if shadow {
         GBUFFERS_MATRICES.replace("gbuffer", "shadow")
     } else {
@@ -4955,6 +4966,52 @@ in VertexData {{ {member} }} vIn;
                     &[("composite.vsh", VSH_120), ("composite.fsh", &fragment)],
                     Target::Window,
                 );
+                assert!(result.is_ok(), "{:?}", result.err());
+            })
+            .unwrap();
+        handle.join().unwrap();
+    }
+
+    #[test]
+    fn deeply_nested_compute_stage_is_refused_with_location_before_translation() {
+        let depth = sunrise_glsl::guard::MAX_NESTING;
+        let compute = format!(
+            "#version 430\nlayout(local_size_x = 1) in;\nvoid main() {{\n    float x = {}1.0{};\n}}\n",
+            "(".repeat(depth),
+            ")".repeat(depth),
+        );
+        let pack =
+            Pack::from_zip_bytes("nest.zip", zip(&[("shaders/composite.csh", &compute)])).unwrap();
+        let errors = translate_compute(&preprocess(&pack, "composite.csh", &Macros::standard()))
+            .unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, "shaders/composite.csh");
+        assert_eq!(errors[0].line, 4);
+        assert_eq!(errors[0].stage, Some(ShaderStage::Compute));
+        assert!(
+            errors[0].message.contains("nesting exceeds"),
+            "{}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn compute_stage_at_nesting_limit_translates_on_shader_pack_stack() {
+        const SHADER_PACK_STACK_BYTES: usize = 8 * 1024 * 1024;
+        let handle = std::thread::Builder::new()
+            .stack_size(SHADER_PACK_STACK_BYTES)
+            .spawn(|| {
+                let depth = sunrise_glsl::guard::MAX_NESTING - 1;
+                let compute = format!(
+                    "#version 430\nlayout(local_size_x = 1) in;\nvoid main() {{\n    float x = {}1.0{};\n}}\n",
+                    "(".repeat(depth),
+                    ")".repeat(depth),
+                );
+                let pack =
+                    Pack::from_zip_bytes("nest.zip", zip(&[("shaders/composite.csh", &compute)]))
+                        .unwrap();
+                let result =
+                    translate_compute(&preprocess(&pack, "composite.csh", &Macros::standard()));
                 assert!(result.is_ok(), "{:?}", result.err());
             })
             .unwrap();

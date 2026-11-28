@@ -56,7 +56,7 @@ pub fn translate_geometry(
     // The vertex's place isn't the fragment's through a geometry stage.
     gbuffers.water_patches = false;
     gbuffers.attributes = Vec::new();
-    let program = super::translate(
+    let program = super::translate_inner(
         &combined,
         fragment,
         Target::Buffers,
@@ -897,5 +897,54 @@ mod tests {
             "if (c) if (!hz_primary) {} else imageStore(a, p, v); else if (!hz_primary) {} else \
              imageStore(b, p, v);\nint n = (hz_primary ? atomicAdd(m, 1) : (m));\n"
         );
+    }
+
+    #[test]
+    fn deeply_nested_geometry_stage_is_refused_with_location_before_combine() {
+        let depth = sunrise_glsl::guard::MAX_NESTING;
+        let vsh = "#version 430\nvoid main() {\n    gl_Position = ftransform();\n}\n";
+        let gsh = format!(
+            "#version 430\nlayout(triangles) in;\nlayout(triangle_strip, max_vertices = 3) out;\n\
+             void main() {{\n    float x = {}1.0{};\n    for (int i = 0; i < 3; i++) {{\n        \
+             gl_Position = gl_in[i].gl_Position * x;\n        EmitVertex();\n    }}\n    \
+             EndPrimitive();\n}}\n",
+            "(".repeat(depth),
+            ")".repeat(depth),
+        );
+        let fsh = "#version 430\nvoid main() {\n    gl_FragData[0] = vec4(1.0);\n}\n";
+        let errors = fold(vsh, &gsh, fsh).unwrap_err();
+        assert_eq!(errors.len(), 1);
+        assert_eq!(errors[0].file, "shaders/shadow.gsh");
+        assert_eq!(errors[0].line, 5);
+        assert_eq!(errors[0].stage, Some(naga::ShaderStage::Vertex));
+        assert!(
+            errors[0].message.contains("nesting exceeds"),
+            "{}",
+            errors[0].message
+        );
+    }
+
+    #[test]
+    fn geometry_stage_at_nesting_limit_translates_on_shader_pack_stack() {
+        const SHADER_PACK_STACK_BYTES: usize = 8 * 1024 * 1024;
+        let handle = std::thread::Builder::new()
+            .stack_size(SHADER_PACK_STACK_BYTES)
+            .spawn(|| {
+                let depth = sunrise_glsl::guard::MAX_NESTING - 1;
+                let vsh = "#version 430\nvoid main() {\n    gl_Position = ftransform();\n}\n";
+                let gsh = format!(
+                    "#version 430\nlayout(triangles) in;\nlayout(triangle_strip, max_vertices = 3) out;\n\
+                     void main() {{\n    float x = {}1.0{};\n    for (int i = 0; i < 3; i++) {{\n        \
+                     gl_Position = gl_in[i].gl_Position * x;\n        EmitVertex();\n    }}\n    \
+                     EndPrimitive();\n}}\n",
+                    "(".repeat(depth),
+                    ")".repeat(depth),
+                );
+                let fsh = "#version 430\nvoid main() {\n    gl_FragData[0] = vec4(1.0);\n}\n";
+                let result = fold(vsh, &gsh, fsh);
+                assert!(result.is_ok(), "{:?}", result.err());
+            })
+            .unwrap();
+        handle.join().unwrap();
     }
 }

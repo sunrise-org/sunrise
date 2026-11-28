@@ -97,27 +97,3 @@ fn validation_errors_name_where_the_caller_says_their_line_came_from() {
         [("pack.csh", 103)]
     );
 }
-
-#[test]
-fn deeply_nested_stage_is_refused_with_location_before_parsing() {
-    let depth = crate::guard::MAX_NESTING;
-    let header = "#version 450\n";
-    let code = format!(
-        "layout(local_size_x = 1) in;\n\
-         void main() {{\n\
-         float x = {}1.0{};\n\
-         }}\n",
-        "(".repeat(depth),
-        ")".repeat(depth),
-    );
-    let errors = compute(header, &code, &BindingMap::new()).unwrap_err();
-    assert_eq!(errors.len(), 1);
-    assert_eq!(errors[0].file, "pack.csh");
-    assert_eq!(errors[0].line, 103);
-    assert_eq!(errors[0].stage, Some(ShaderStage::Compute));
-    assert!(
-        errors[0].message.contains("nesting exceeds"),
-        "{}",
-        errors[0].message
-    );
-}
