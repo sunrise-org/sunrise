@@ -539,10 +539,7 @@ impl Autosaves {
                 Err(error) => {
                     let completed = self.completed(true);
                     self.ready.extend(completed);
-                    if let Some(writer) = self.writer.take() {
-                        drop(writer.send);
-                        let _ = writer.thread.join();
-                    }
+                    self.retire_writer();
                     error.0
                 }
             }
@@ -586,10 +583,7 @@ impl Autosaves {
                     self.error = Some("the player writer stopped".into());
                     log::warn!("Sunrise: the player writer stopped");
                     self.pending = 0;
-                    if let Some(writer) = self.writer.take() {
-                        drop(writer.send);
-                        let _ = writer.thread.join();
-                    }
+                    self.retire_writer();
                 }
             }
         }
@@ -602,14 +596,17 @@ impl Autosaves {
             None => Ok(self.pending == 0),
         }
     }
-}
-
-impl Drop for Autosaves {
-    fn drop(&mut self) {
+    fn retire_writer(&mut self) {
         if let Some(writer) = self.writer.take() {
             drop(writer.send);
             let _ = writer.thread.join();
         }
+    }
+}
+
+impl Drop for Autosaves {
+    fn drop(&mut self) {
+        self.retire_writer();
     }
 }
 
@@ -805,6 +802,38 @@ mod tests {
     use crate::lan::{Joined, PlayerSender};
     use std::sync::{Arc, atomic::AtomicI32, mpsc};
     use sunrise_protocol::packets::configuration::ClientInformation;
+
+    mod departure_order_tests {
+        use super::*;
+        use std::{
+            sync::atomic::{AtomicBool, Ordering},
+            time::Duration,
+        };
+
+        #[test]
+        fn autosaves_closes_writer_before_joining() {
+            let (send, receive) = mpsc::channel();
+            let (_complete, done) = mpsc::channel();
+            let closed = Arc::new(AtomicBool::new(false));
+            let observed = closed.clone();
+            let mut saves = Autosaves::default();
+            saves.writer = Some(PlayerWriter {
+                send,
+                done,
+                thread: std::thread::spawn(move || {
+                    observed.store(
+                        matches!(
+                            receive.recv_timeout(Duration::from_secs(5)),
+                            Err(mpsc::RecvTimeoutError::Disconnected)
+                        ),
+                        Ordering::Release,
+                    );
+                }),
+            });
+            drop(saves);
+            assert!(closed.load(Ordering::Acquire));
+        }
+    }
 
     fn guest() -> Guest {
         let (tx, _rx) = mpsc::channel();
