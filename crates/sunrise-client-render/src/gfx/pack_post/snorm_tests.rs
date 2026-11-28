@@ -71,7 +71,9 @@ fn snorm_buffers_clamp_and_quantise() {
             .contains(wgpu::TextureUsages::RENDER_ATTACHMENT)
     });
     if !gpu.adapter.features().contains(wanted) || !renders {
-        eprintln!("SNORM test skipped: this adapter doesn't render to SNORM formats");
+        crate::gfx::test_gpu::skip_or_fail(
+            "this adapter does not render to the required SNORM formats",
+        );
         return;
     }
     let (device, queue) = pollster::block_on(gpu.adapter.request_device(&wgpu::DeviceDescriptor {

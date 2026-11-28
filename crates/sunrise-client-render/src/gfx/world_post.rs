@@ -847,7 +847,7 @@ mod tests {
         let mut post = Post::new(&device, wgpu::TextureFormat::Rgba16Float);
         post.taa = true;
         if !post.supports_taa() {
-            eprintln!("TAA baked-light GPU skipped: TAA unsupported");
+            crate::gfx::test_gpu::skip_or_fail("baked-light history fixture needs TAA support");
             return;
         }
         let key = (

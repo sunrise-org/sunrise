@@ -94,7 +94,7 @@ wgpu = { version = "30.0.1", default-features = false, features = ["gles"] }
 # Sound output and input: sunrise-client's `audio` feature.
 audio = ["dep:cpal", "dep:alsa", "dep:libc", "dep:sunrise-audio-input"]
 # Helpers sunrise-client's tests build their fixtures with.
-test-support = ["sunrise-level/test-support"]
+test-support = ["sunrise-level/test-support", "sunrise-render-shaderpack/test-support"]
 
 [lints]
 workspace = true
@@ -117,6 +117,7 @@ name = "standard_pack_gpu_entities"
 path = "examples/standard_pack_gpu_entities.rs"
 
 [dev-dependencies]
+sunrise-render-shaderpack = { path = "../sunrise-render-shaderpack", features = ["test-support"] }
 sunrise-core = { path = "../sunrise-core", features = ["test-support"] }
 tempfile = "3"
 mod_platform = { package = "sunrise-mod-api", path = "../sunrise-mod-api", features = ["testing"] }

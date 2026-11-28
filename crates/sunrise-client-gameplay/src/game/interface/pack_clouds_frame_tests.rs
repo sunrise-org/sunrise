@@ -133,7 +133,9 @@ fn a_packs_clouds_draw_with_and_without_improved_transparency() {
                 .contains(wgpu::Features::FLOAT32_BLENDABLE)
         {
             // `oit::supported`: Improved Transparency needs blendable float targets.
-            eprintln!("skipped: no Improved Transparency on this adapter");
+            sunrise_client_render::gfx::test_gpu::skip_or_fail(
+                "this adapter lacks Improved Transparency (FLOAT32_BLENDABLE)",
+            );
             return;
         }
         game.client.screen = super::Screen::Playing;

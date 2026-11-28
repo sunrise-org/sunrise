@@ -343,7 +343,9 @@ fn a_shadowcolor_image_checks_that_its_own_buffer_can_be_stored() {
             .contains(wgpu::TextureUsages::STORAGE_BINDING)
     };
     if storable(wgpu::TextureFormat::Rgb10a2Unorm) {
-        eprintln!("Skipped: this device stores RGB10_A2 as well as RGBA8");
+        crate::gfx::test_gpu::skip_or_fail(
+            "shadowcolor fixture needs a device where RGBA8, but not RGB10_A2, supports storage",
+        );
         return;
     }
     let composite = format!(

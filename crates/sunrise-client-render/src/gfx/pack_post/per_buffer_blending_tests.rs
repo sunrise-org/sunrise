@@ -24,7 +24,9 @@ fn a_device_that_draws_per_buffer_blends_supports_the_required_flag() {
         let mut unable = macros.clone();
         unable.set_per_buffer_blending(false);
         assert_eq!(macros, unable, "{flags:?}");
-        eprintln!("PER_BUFFER_BLENDING_FIXTURE the adapter lacks INDEPENDENT_BLEND: {flags:?}");
+        crate::gfx::test_gpu::skip_or_fail(format_args!(
+            "per-buffer blending requires INDEPENDENT_BLEND, got {flags:?}"
+        ));
         return;
     }
     let (pixels, notes) = picture_with(&gpu, properties, macros);

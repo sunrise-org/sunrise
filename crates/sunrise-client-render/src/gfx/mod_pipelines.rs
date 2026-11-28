@@ -8628,8 +8628,7 @@ void main() {
             let reason = format!(
                 "wide sampler fixture needs {PAIRS} pairs, compute shaders and {BINDINGS} compute bindings including one storage image; adapter reported {reported}"
             );
-            assert!(!test_gpu::require_adapter(), "{reason}");
-            eprintln!("skipped: {reason}");
+            test_gpu::skip_or_fail(reason);
             return;
         }
         eprintln!("wide sampler adapter {reported}");
@@ -8650,8 +8649,7 @@ void main() {
                     "wide sampler fixture needs {format:?} {usage:?}; {} / {:?} allows {allowed:?}, missing {missing:?}",
                     info.name, info.backend
                 );
-                assert!(!test_gpu::require_adapter(), "{reason}");
-                eprintln!("skipped: {reason}");
+                test_gpu::skip_or_fail(reason);
                 return;
             }
         }

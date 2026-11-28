@@ -1480,7 +1480,7 @@ struct ReferenceParams { peak: f32, unused: f32, world: f32, debug: f32, share: 
             wgpu::Features::TEXTURE_FORMAT_16BIT_NORM
                 | wgpu::Features::TEXTURE_ADAPTER_SPECIFIC_FORMAT_FEATURES,
         ) {
-            eprintln!("legacy display GPU skipped: 16-bit UNORM unavailable");
+            crate::gfx::test_gpu::skip_or_fail("legacy display needs 16-bit UNORM render targets");
             return;
         }
         // Compare the compatibility display lift with direct colour under the layered HUD:

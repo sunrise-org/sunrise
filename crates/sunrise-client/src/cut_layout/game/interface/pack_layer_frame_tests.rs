@@ -204,7 +204,9 @@ fn layer_rules_move_states_between_the_packs_terrain_programs() {
     write_pack(&tagged, "layer.translucent=%slabs:type=bottom\n");
     with_client_game(|game| {
         let Some(_event_loop) = scene(game, flat) else {
-            eprintln!("skipped: {NAME}: this adapter has no flat section draws");
+            sunrise_client_render::gfx::test_gpu::skip_or_fail(format_args!(
+                "{NAME}: this adapter has no flat section draws"
+            ));
             return;
         };
         let bottom = slab(game, "minecraft:oak_slab", "bottom");
@@ -352,7 +354,9 @@ fn layer_rules_move_states_between_the_packs_shadow_programs() {
     });
     with_client_game(|game| {
         let Some(_event_loop) = scene(game, flat) else {
-            eprintln!("skipped: {SHADOW_NAME}: this adapter has no flat section draws");
+            sunrise_client_render::gfx::test_gpu::skip_or_fail(format_args!(
+                "{SHADOW_NAME}: this adapter has no flat section draws"
+            ));
             return;
         };
         let expected = [[255, 0, 0, 255], [255, 255, 0, 255], [0, 255, 0, 255]];

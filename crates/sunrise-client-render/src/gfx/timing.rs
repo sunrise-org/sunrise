@@ -313,6 +313,7 @@ mod tests {
         let instance = wgpu::Instance::new(descriptor);
         let adapter = crate::gfx::test_gpu::request_adapter(&instance, &Default::default())?;
         if !adapter.features().contains(wgpu::Features::TIMESTAMP_QUERY) {
+            crate::gfx::test_gpu::skip_or_fail("GPU timer fixture needs timestamp queries");
             return None;
         }
         let (device, queue) = pollster::block_on(adapter.request_device(&wgpu::DeviceDescriptor {
@@ -339,7 +340,6 @@ mod tests {
     fn successful_readback_releases_slot() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((_device, _queue, mut timer)) = mapped_timer() else {
-            eprintln!("Skipping GPU timer test: no timestamp-capable adapter");
             return;
         };
         let mut samples = Vec::new();
@@ -356,7 +356,6 @@ mod tests {
     fn destroyed_readback_stops_timing_without_unmapping() {
         let _gpu = crate::gfx::test_gpu::lock();
         let Some((device, queue, mut timer)) = mapped_timer() else {
-            eprintln!("Skipping GPU timer test: no timestamp-capable adapter");
             return;
         };
         // Reproduce a buffer destroyed after its successful map callback (#6320).

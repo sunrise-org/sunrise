@@ -132,7 +132,9 @@ fn tag_id_frames(name: &str) {
             ]
         };
         let Some(_event_loop) = scene_of(game, flat, blocks) else {
-            eprintln!("skipped: {name}: this adapter has no flat section draws");
+            sunrise_client_render::gfx::test_gpu::skip_or_fail(format_args!(
+                "{name}: this adapter has no flat section draws"
+            ));
             return;
         };
         let native = slabs_drawn(game);

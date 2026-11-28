@@ -3268,7 +3268,9 @@ pub(super) mod tests {
                 .features()
                 .contains(wgpu::Features::SHADER_EARLY_DEPTH_TEST);
             let Some(t) = timing.as_mut().filter(|_| early) else {
-                eprintln!("no timestamps or early depth test: skipped");
+                crate::gfx::test_gpu::skip_or_fail(
+                    "GPU culling timing needs timestamps and early depth testing",
+                );
                 return;
             };
             t.set_detail(true);

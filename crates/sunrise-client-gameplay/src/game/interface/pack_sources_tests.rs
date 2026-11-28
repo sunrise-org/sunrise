@@ -37,7 +37,9 @@ fn terrain_sources_are_kept_only_while_a_pack_is_loaded() {
         // Flat draws are what read the sources: a device without them keeps none, and has
         // nothing for this case to check.
         if renderer.set_flat_draws(true).is_err() {
-            eprintln!("skipped: {NAME}: this adapter has no flat section draws");
+            sunrise_client_render::gfx::test_gpu::skip_or_fail(format_args!(
+                "{NAME}: this adapter has no flat section draws"
+            ));
             return;
         }
         assert!(!renderer.keeps_pack_sources(), "no pack yet");

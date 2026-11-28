@@ -503,10 +503,10 @@ pub(super) mod tests {
             .contains(wgpu::TextureFormatFeatureFlags::STORAGE_WRITE_ONLY)
         {
             let info = adapter.get_info();
-            eprintln!(
-                "skipped: {} / {:?} lacks Rg32Sint storage write access",
+            crate::gfx::test_gpu::skip_or_fail(format_args!(
+                "{} / {:?} lacks Rg32Sint storage write access",
                 info.name, info.backend
-            );
+            ));
             return None;
         }
         Some(crate::gfx::test_gpu::device(&adapter))
