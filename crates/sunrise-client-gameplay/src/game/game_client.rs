@@ -2266,6 +2266,9 @@ impl crate::game::ClientGame<'_> {
             self.draw_screen_with_post_hook(&mut batch);
             return batch;
         }
+        if self.client.pad.0.menu.keyboard && self.players_title_active() {
+            self.pad_clear_focus();
+        }
         if let Some(title) = &mut self.client.title.0
             && std::mem::take(&mut title.onboarding_finished)
         {
@@ -2307,6 +2310,9 @@ impl crate::game::ClientGame<'_> {
             let mods = self.client.settings.mods.installed.len();
             if let Some(title) = &mut self.client.title.0 {
                 title.mods = mods;
+                title.tick_realms_notifications(
+                    self.client.settings.file.bool("realmsNotifications"),
+                );
             }
             let drawn = self.draw_title_screen_with_pre_hook(&mut batch);
             if drawn && let Some(title) = &self.client.title.0 {
@@ -2966,6 +2972,9 @@ impl crate::game::ClientGame<'_> {
             self.client.physical_keys.clear();
             self.client.physical_buttons.clear();
             self.client.drag_button = None;
+            if let Some(title) = self.client.title.0.as_mut() {
+                title.release();
+            }
             self.client.container_buttons.clear();
             self.client.screen_state.0.context_menu_input.clear();
             self.mod_browser_focus_lost();
@@ -5371,6 +5380,13 @@ impl crate::game::ClientGame<'_> {
         if self.preset_editor_key(key) {
             return Ok(true);
         }
+        if self.client.screen == Screen::Playing
+            && overlay.is_none()
+            && !self.client.screen_state.0.widgets.has_focus()
+            && self.title_tab_shortcut(key)
+        {
+            return Ok(true);
+        }
         let focus_handled = self.key_focus_key(event_loop, key);
         if let Some(handled) = focus_handled
             && (handled || !container)
@@ -5471,6 +5487,25 @@ impl crate::game::ClientGame<'_> {
         self.client.title.0.is_some()
             && !matches!(self.client.screen, Screen::DebugOptions | Screen::Mod)
     }
+    fn title_tab_shortcut(&mut self, key: KeyCode) -> bool {
+        let ctrl = self.has_control_down_with_quirk();
+        let shift = self.has_shift_down();
+        if let Some(sound) = self
+            .client
+            .title
+            .0
+            .as_mut()
+            .and_then(|t| t.tab_bar_key(key, ctrl, shift))
+        {
+            self.pad_clear_focus();
+            if sound {
+                self.play_audio_button_click();
+            }
+            return true;
+        }
+        false
+    }
+
     pub(in crate::game::client_side) fn title_screen_key(
         &mut self,
         key: KeyCode,
@@ -5483,21 +5518,9 @@ impl crate::game::ClientGame<'_> {
             self.title_shortcut(shortcut);
             return Ok(true);
         }
+        let size = self.gui_size();
         let ctrl = self.has_control_down_with_quirk();
         let shift = self.has_shift_down();
-        if let Some(sound) = self
-            .client
-            .title
-            .0
-            .as_mut()
-            .and_then(|t| t.tab_bar_key(key, ctrl, shift))
-        {
-            if sound {
-                self.play_audio_button_click();
-            }
-            return Ok(true);
-        }
-        let size = self.gui_size();
         let Some(title) = self.client.title.0.as_mut() else {
             return Ok(false);
         };
@@ -5505,7 +5528,9 @@ impl crate::game::ClientGame<'_> {
             KeyCode::Enter | KeyCode::NumpadEnter | KeyCode::Space
                 if key != KeyCode::Space
                     || (!title.has_caret_field()
-                        && (title.list_focused() || title.focused_button.is_some())) =>
+                        && (title.list_focused()
+                            || title.focused_button.is_some()
+                            || title.player_action_focused())) =>
             {
                 let (action, sound) = title.confirm_key_size(size);
                 let handled = sound || !matches!(action, Action::None);
@@ -5527,18 +5552,14 @@ impl crate::game::ClientGame<'_> {
                 Ok(title.field_key(key, ctrl, shift))
             }
             KeyCode::ArrowLeft | KeyCode::ArrowRight | KeyCode::ArrowUp | KeyCode::ArrowDown => {
-                title.arrow_key(key, size, shift);
-                Ok(false)
+                Ok(title.arrow_key(key, size, shift))
             }
             key if title.page_missing_mods(key, size) => Ok(true),
             KeyCode::Backspace if field_focused => {
                 self.title_edit(None, true);
                 Ok(true)
             }
-            KeyCode::Tab => {
-                title.tab_dir(shift, size);
-                Ok(false)
-            }
+            KeyCode::Tab => Ok(title.tab_dir(shift, size)),
             KeyCode::Escape => {
                 title.escape();
                 self.reopen_data_packs()?;

@@ -264,7 +264,7 @@ impl crate::game::ClientGame<'_> {
         // player agreed to before connecting (`allowServerPacks`, then `pushPack`).
         if let Some(pack) = sunrise_client::realms::take_pending_pack(address) {
             state.packs.allow();
-            state.packs.push(pack.id, &pack.url, parse_sha1(&pack.hash));
+            state.packs.push_local(pack.id, pack.staged_path);
         }
     }
     /// `Minecraft.clearDownloadedResourcePacks`: every server pack goes at once.

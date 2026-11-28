@@ -860,6 +860,62 @@ impl Title {
         if let Some(from) = fade_from {
             self.draw_onboarding_logo(atlas, batch, w, from);
         }
+        if matches!(self.mode, Mode::Main) {
+            let badges = self.realms_notifications();
+            let top = (h / 4.0).floor() + 48.0;
+            let base_y = top + 50.0;
+            let button_right = (w / 2.0).floor() + 100.0;
+            let mut icon_right = button_right - 3.0;
+            if badges.unseen() {
+                batch.sprite_scaled(
+                    atlas,
+                    "icon/unseen_notification",
+                    icon_right - 12.0,
+                    base_y + 3.0,
+                    10.0,
+                    10.0,
+                    u32::MAX,
+                );
+                icon_right -= 16.0;
+            }
+            if badges.shows_legacy() {
+                if badges.has_unread_news() {
+                    batch.sprite_scaled(
+                        atlas,
+                        "icon/news",
+                        icon_right - 14.0,
+                        base_y + 1.0,
+                        14.0,
+                        14.0,
+                        u32::MAX,
+                    );
+                    icon_right -= 16.0;
+                }
+                if badges.invite_count() != 0 {
+                    batch.sprite_scaled(
+                        atlas,
+                        "icon/invite",
+                        icon_right - 14.0,
+                        base_y + 1.0,
+                        14.0,
+                        14.0,
+                        u32::MAX,
+                    );
+                    icon_right -= 16.0;
+                }
+                if badges.has_trial() {
+                    batch.sprite_scaled(
+                        atlas,
+                        "icon/trial_available",
+                        icon_right - 10.0,
+                        base_y + 4.0,
+                        8.0,
+                        8.0,
+                        u32::MAX,
+                    );
+                }
+            }
+        }
         phases(crate::screen_draw::RenderPhase::Foreground, batch);
         if let Mode::Create {
             name,

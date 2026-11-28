@@ -16,11 +16,13 @@ fn server(id: i64, owner_uuid: Option<&str>) -> RealmServer {
     }
 }
 
-fn listed(servers: Vec<RealmServer>) -> Screen {
+pub(super) fn listed(servers: Vec<RealmServer>) -> Screen {
     Screen {
         state: FetchState::Loaded(servers),
         subscreen: SubScreen::Main,
         selected: Some(0),
+        selected_realm_id: None,
+        selected_notice: None,
         joining: None,
         leaving: None,
         last_click: None,
@@ -45,7 +47,8 @@ fn listed(servers: Vec<RealmServer>) -> Screen {
         popup_buttons: std::cell::Cell::new([[0.0; 4]; 2]),
         main_scroll: crate::ui::Scroll::default(),
         subscription_buttons: std::cell::Cell::new((0.0, 0.0)),
-        players_button_rects: std::cell::RefCell::new(Vec::new()),
+        players_list: super::PlayersList::default(),
+        players_parent: None,
         backup_row_buttons: std::cell::RefCell::new(Vec::new()),
         settings_scroll: crate::ui::Scroll::default(),
         settings_slider: None,
@@ -187,28 +190,433 @@ fn leave_asks_first_and_cancel_leaves_nothing() {
 }
 
 #[test]
-fn the_pack_question_connects_only_after_continue_with_the_pack_queued() {
-    let pack = RealmsPack {
+fn notice_selection_requires_uuid_and_message_to_match() {
+    let original = notice("notice-a");
+    let same_message_new_uuid = notice("notice-b");
+    for (replacement, same_identity) in [
+        (original.clone(), true),
+        (same_message_new_uuid, false),
+        (original.clone(), false),
+    ] {
+        let mut screen = listed(vec![server(7, None)]);
+        screen.selected = None;
+        screen.notifications = vec![original.clone()];
+        let mut identity = screen.notice_identity().unwrap();
+        if !same_identity && replacement.uuid == original.uuid {
+            identity.1.push_str(" (previous message)");
+        }
+        screen.selected_notice = Some(identity);
+        let mut replacement = replacement;
+        replacement.seen = true;
+        screen.notifications_job = Some(Arc::new(Mutex::new(Some(Ok(vec![replacement])))));
+        screen.poll();
+        assert_eq!(screen.selected_notice.is_some(), same_identity);
+        assert!(screen.selected_server().is_none());
+    }
+}
+
+#[test]
+fn notice_selection_restores_by_identity_after_server_reorder() {
+    let mut screen = listed(vec![server(9, None), server(7, None)]);
+    screen.notifications = vec![notice("notice-a")];
+    screen.selected = None;
+    screen.selected_notice = screen.notice_identity();
+    screen.state = FetchState::Loading(Arc::new(Mutex::new(Some(Ok(vec![
+        server(7, None),
+        server(9, None),
+    ])))));
+    screen.poll();
+    assert_eq!(
+        screen.selected, None,
+        "no Realm index represents the notice row"
+    );
+    assert!(notice_identity_matches(
+        screen.selected_notice.as_ref(),
+        screen.notice()
+    ));
+    assert!(screen.selected_server().is_none());
+}
+
+fn saving_settings_screen() -> Screen {
+    let realm = server(7, None);
+    let mut screen = listed(vec![realm.clone()]);
+    screen.subscreen = configure_screen(realm.clone(), ConfigureTab::Settings);
+    if let SubScreen::Configure {
+        detail,
+        settings,
+        saving,
+        ..
+    } = &mut screen.subscreen
+    {
+        let mut detail_realm = realm;
+        detail_realm.slots = (1..=3)
+            .map(|slot| {
+                (
+                    slot,
+                    RealmSlot {
+                        slot_id: slot,
+                        ..Default::default()
+                    },
+                )
+            })
+            .collect();
+        *detail = Some(Ok(detail_realm.clone()));
+        let mut draft = SettingsDraft::of(&detail_realm);
+        draft.name = "Changed".into();
+        *settings = Some(draft);
+        *saving = Some(Arc::new(Mutex::new(None)));
+    }
+    screen
+}
+
+#[test]
+fn settings_save_locks_edit_tab_and_return_until_answer() {
+    let mut screen = saving_settings_screen();
+    let saving_job = match &screen.subscreen {
+        SubScreen::Configure {
+            saving: Some(job), ..
+        } => Arc::clone(job),
+        _ => panic!("saving job"),
+    };
+    assert!(screen.settings_saving());
+    assert!(!screen.escape());
+    let _ = screen.click(Some(61), 0.0, 0.0, (800.0, 600.0));
+    assert!(matches!(
+        screen.subscreen,
+        SubScreen::Configure {
+            tab: ConfigureTab::Settings,
+            ..
+        }
+    ));
+    assert!(screen.focused_box((800.0, 600.0)).is_none());
+    let SubScreen::Configure {
+        settings: Some(draft),
+        ..
+    } = &screen.subscreen
+    else {
+        panic!("settings draft");
+    };
+    *saving_job.lock().unwrap() = Some(Ok(draft.clone()));
+    screen.poll();
+    assert!(!screen.settings_saving());
+}
+
+#[test]
+fn settings_tab_change_waits_for_save_completion() {
+    let mut screen = saving_settings_screen();
+    let saving_job = match &screen.subscreen {
+        SubScreen::Configure {
+            saving: Some(job), ..
+        } => Arc::clone(job),
+        _ => panic!("saving job"),
+    };
+    screen.after_save = Some(AfterSave::Tab(ConfigureTab::Worlds));
+    let SubScreen::Configure {
+        settings: Some(draft),
+        ..
+    } = &screen.subscreen
+    else {
+        panic!("settings draft");
+    };
+    *saving_job.lock().unwrap() = Some(Ok(draft.clone()));
+    screen.poll();
+    assert!(matches!(
+        screen.subscreen,
+        SubScreen::Configure {
+            tab: ConfigureTab::Worlds,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn settings_save_failure_preserves_the_draft_and_discards_the_queued_tab() {
+    let mut screen = saving_settings_screen();
+    let SubScreen::Configure {
+        saving: Some(job), ..
+    } = &screen.subscreen
+    else {
+        panic!("settings save in progress");
+    };
+    *job.lock().unwrap() = Some(Err(RealmsError::Parse));
+    screen.after_save = Some(AfterSave::Tab(ConfigureTab::Worlds));
+    screen.poll();
+    assert!(matches!(screen.subscreen, SubScreen::Error { .. }));
+    assert!(screen.after_save.is_none());
+    assert!(!screen.escape());
+    assert!(matches!(&screen.subscreen, SubScreen::Configure {
+        tab: ConfigureTab::Settings, server, settings: Some(draft), saving: None, ..
+    } if server.name != draft.name && draft.name == "Changed"));
+}
+
+#[test]
+fn invite_code_mutation_locks_navigation_and_errors_return_to_codes() {
+    let realm = server(7, None);
+    let mut screen = listed(vec![realm.clone()]);
+    screen.subscreen = SubScreen::InviteCodes {
+        server: realm.clone(),
+        codes: Some(Ok(vec![InviteCode {
+            code: "abc".into(),
+            ..Default::default()
+        }])),
+        list_job: None,
+        job: Some(Arc::new(Mutex::new(None))),
+        error: None,
+        selected: Some(0),
+    };
+    let busy_job = match &screen.subscreen {
+        SubScreen::InviteCodes { job: Some(job), .. } => Arc::clone(job),
+        _ => panic!("invite code mutation job"),
+    };
+    assert!(!screen.escape());
+    let _ = screen.click(Some(161), 0.0, 0.0, (800.0, 600.0));
+    assert!(matches!(screen.subscreen, SubScreen::InviteCodes { .. }));
+    *busy_job.lock().unwrap() = Some(Err(RealmsError::Parse));
+    screen.poll();
+    assert!(matches!(&screen.subscreen, SubScreen::Error { next, .. }
+        if matches!(**next, SubScreen::InviteCodes { .. })));
+    screen.click(Some(91), 0.0, 0.0, (800.0, 600.0));
+    assert!(matches!(screen.subscreen, SubScreen::InviteCodes { .. }));
+
+    let mut fetching = listed(vec![realm.clone()]);
+    fetching.subscreen = SubScreen::InviteCodes {
+        server: realm,
+        codes: None,
+        list_job: Some(Arc::new(Mutex::new(None))),
+        job: None,
+        error: None,
+        selected: None,
+    };
+    let buttons = fetching.buttons(800.0, 600.0);
+    assert!(buttons.iter().any(|button| button.5 == 161 && button.4));
+    assert!(buttons.iter().any(|button| button.5 == 160 && !button.4));
+    assert!(!fetching.escape());
+    assert!(matches!(
+        fetching.subscreen,
+        SubScreen::Configure {
+            tab: ConfigureTab::Players,
+            ..
+        }
+    ));
+}
+
+#[test]
+fn retry_switch_retries_false_and_retry_after_then_stops_at_twenty_five() {
+    let calls = std::cell::Cell::new(0);
+    assert_eq!(
+        retry_switch(None, || {
+            let call = calls.get();
+            calls.set(call + 1);
+            if call == 0 {
+                Ok(false)
+            } else if call == 1 {
+                Err(RealmsError::Retry(0))
+            } else {
+                Ok(true)
+            }
+        }),
+        Ok(())
+    );
+    assert_eq!(calls.get(), 3);
+    let calls = std::cell::Cell::new(0);
+    assert_eq!(
+        retry_switch(None, || {
+            calls.set(calls.get() + 1);
+            Ok(false)
+        }),
+        Err(RealmsError::Timeout)
+    );
+    assert_eq!(calls.get(), 25);
+    let abort = AtomicBool::new(true);
+    let calls = std::cell::Cell::new(0);
+    assert_eq!(
+        retry_switch(Some(&abort), || {
+            calls.set(calls.get() + 1);
+            Ok(true)
+        }),
+        Err(RealmsError::Timeout)
+    );
+    assert_eq!(calls.get(), 0);
+}
+
+#[test]
+fn selected_server_refresh_follows_realm_id_after_reorder() {
+    let mut screen = listed(vec![server(7, None), server(9, None)]);
+    screen.selected = Some(1);
+    screen.remember_realm_selection();
+    screen.state = FetchState::Loading(Arc::new(Mutex::new(Some(Ok(vec![
+        server(9, None),
+        server(11, None),
+    ])))));
+    screen.poll();
+    assert_eq!(screen.selected, Some(0));
+    assert_eq!(screen.selected_server().map(|server| server.id), Some(9));
+}
+
+#[test]
+fn pending_invite_success_removes_only_accepted_row_without_refetch_answer() {
+    let mut screen = listed(vec![server(7, None)]);
+    let rows = vec![
+        PendingInviteDto {
+            invitation_id: "accept".into(),
+            world_name: "A".into(),
+            world_owner_name: "Owner".into(),
+            world_owner_uuid: None,
+            date: 0,
+        },
+        PendingInviteDto {
+            invitation_id: "keep".into(),
+            world_name: "B".into(),
+            world_owner_name: "Owner".into(),
+            world_owner_uuid: None,
+            date: 0,
+        },
+    ];
+    let action: Job<(String, bool, Result<(), RealmsError>)> =
+        Arc::new(Mutex::new(Some(("accept".into(), true, Ok(())))));
+    screen.subscreen = SubScreen::PendingInvites {
+        invites: Some(Ok(rows)),
+        job: None,
+        actions: vec![action],
+        scroll: crate::ui::Scroll::default(),
+        selected: Some(1),
+    };
+    screen.poll();
+    let SubScreen::PendingInvites {
+        invites: Some(Ok(rows)),
+        selected,
+        ..
+    } = &screen.subscreen
+    else {
+        panic!("pending list");
+    };
+    assert_eq!(rows.len(), 1);
+    assert_eq!(rows[0].invitation_id, "keep");
+    assert_eq!(*selected, Some(0));
+}
+
+#[test]
+fn backup_actions_beyond_byte_index_keep_changes_and_restore_semantics() {
+    let list: Vec<Backup> = (0..32)
+        .map(|index| {
+            let mut backup = Backup {
+                backup_id: index.to_string(),
+                ..Default::default()
+            };
+            if index == 30 {
+                backup.metadata.insert("name".into(), "newer".into());
+            }
+            backup
+        })
+        .collect();
+    let mut screen = backups_screen(server(7, None), list);
+    assert!(matches!(
+        screen.click_backup_action(BackupRowAction::Changes(30)),
+        Outcome::None
+    ));
+    assert!(
+        matches!(screen.subscreen, SubScreen::BackupInfo { backup, .. } if backup.backup_id == "30" && backup.change_list.get("name").is_some())
+    );
+    let mut screen = backups_screen(
+        server(7, None),
+        (0..32)
+            .map(|index| Backup {
+                backup_id: index.to_string(),
+                ..Default::default()
+            })
+            .collect(),
+    );
+    let _ = screen.click_backup_action(BackupRowAction::Restore(30));
+    assert!(
+        matches!(screen.subscreen, SubScreen::Popup(Popup::RestoreBackup { backup, .. }) if backup.backup_id == "30")
+    );
+}
+
+#[test]
+fn fractional_backup_scroll_uses_integer_row_boundaries() {
+    let mut screen = backups_screen(server(7, None), vec![Backup::default(); 32]);
+    if let SubScreen::Backups { scroll, .. } = &mut screen.subscreen {
+        scroll.amount = 10.75;
+    }
+    screen.click_list(400.0, 60.5, (800.0, 600.0));
+    assert!(matches!(
+        screen.subscreen,
+        SubScreen::Backups {
+            selected: Some(0),
+            ..
+        }
+    ));
+}
+
+#[test]
+fn region_preference_viewport_leaves_thirty_pixels_below_title() {
+    let mut screen = listed(vec![server(7, None)]);
+    screen.subscreen = SubScreen::RegionPreference {
+        server: server(7, None),
+        settings: SettingsDraft::of(&server(7, None)),
+        regions: Vec::new(),
+        selected: None,
+        scroll: crate::ui::Scroll::default(),
+        detail: None,
+        tier: None,
+    };
+    let _ = screen.click(None, 400.0, 65.0, (800.0, 600.0));
+    assert_eq!(
+        match &screen.subscreen {
+            SubScreen::RegionPreference { selected, .. } => selected.clone(),
+            _ => None,
+        },
+        Some((client::AUTOMATIC_PLAYER, None))
+    );
+}
+
+#[test]
+fn the_pack_download_connects_only_after_staging_succeeds() {
+    let staged = StagedRealmsPack {
         address: "9.8.7.6:25565".into(),
         id: 5,
-        url: "https://packs.test/p.zip".into(),
-        hash: "0".repeat(40),
+        staged_path: "downloads/test-pack".into(),
     };
     let mut screen = listed(vec![]);
-    screen.subscreen = SubScreen::Popup(Popup::ResourcePack { pack: pack.clone() });
-    let _ = screen.click(Some(51), 0.0, 0.0, (800.0, 600.0));
-    assert!(matches!(screen.subscreen, SubScreen::Main));
+    let job = Arc::new(Mutex::new(None));
+    screen.subscreen = SubScreen::DownloadingPack {
+        job: Arc::clone(&job),
+        parent: Box::new(SubScreen::Main),
+    };
+    assert!(matches!(screen.poll(), Outcome::None));
+    *job.lock().unwrap() = Some(Ok(staged.clone()));
+    assert!(matches!(screen.poll(), Outcome::Connect(address) if address == staged.address));
+    assert_eq!(take_pending_pack(&staged.address), Some(staged));
+    assert!(matches!(screen.poll(), Outcome::None));
+}
 
-    screen.subscreen = SubScreen::Popup(Popup::ResourcePack { pack: pack.clone() });
-    let outcome = screen.click(Some(50), 0.0, 0.0, (800.0, 600.0));
-    assert!(matches!(outcome, Outcome::Connect(ref a) if a == "9.8.7.6:25565"));
-    assert_eq!(take_pending_pack("other:1"), None);
-    // A taken pack is gone, whatever the address.
-    assert_eq!(take_pending_pack("9.8.7.6:25565"), None);
-
-    screen.subscreen = SubScreen::Popup(Popup::ResourcePack { pack: pack.clone() });
-    let _ = screen.click(Some(50), 0.0, 0.0, (800.0, 600.0));
-    assert_eq!(take_pending_pack("9.8.7.6:25565"), Some(pack));
+#[test]
+fn pack_download_failure_cleans_staging_and_error_returns_to_parent() {
+    let directory = pack::download_directory(&std::env::temp_dir()).unwrap();
+    std::fs::write(directory.join("partial"), b"partial download").unwrap();
+    let result = pack::download(
+        RealmsPack {
+            address: "9.8.7.6:25565".into(),
+            id: 5,
+            url: "invalid-url".into(),
+            hash: String::new(),
+        },
+        &directory,
+        &[],
+    );
+    assert!(result.is_err());
+    assert!(!directory.exists());
+    let mut screen = listed(vec![]);
+    screen.subscreen = SubScreen::DownloadingPack {
+        job: Arc::new(Mutex::new(Some(result))),
+        parent: Box::new(configure_screen(server(7, None), ConfigureTab::Settings)),
+    };
+    assert!(matches!(screen.poll(), Outcome::None));
+    assert!(
+        matches!(&screen.subscreen, SubScreen::Error { detail, next, .. }
+        if *detail == crate::lang::get("mco.download.resourcePack.fail")
+            && matches!(**next, SubScreen::Configure { tab: ConfigureTab::Settings, .. }))
+    );
 }
 
 #[test]
@@ -250,7 +658,7 @@ fn a_join_answer_becomes_a_checked_connect_or_the_pack_question() {
         Outcome::None
     ));
     match &screen.subscreen {
-        SubScreen::Popup(Popup::ResourcePack { pack }) => {
+        SubScreen::Popup(Popup::ResourcePack { pack, .. }) => {
             assert_eq!(pack.address, "1.2.3.4:25565");
             assert_eq!(pack.id, pack_id(&server(7, None)));
         }
@@ -391,6 +799,7 @@ fn the_settings_buttons_leave_the_scroll_view() {
         detail: None,
         detail_job: None,
         deleting: None,
+        switching_slot: None,
         member_job: None,
         settings: Some(SettingsDraft::of(&server)),
         players_scroll: crate::ui::Scroll::default(),
@@ -512,6 +921,8 @@ fn inviting_an_empty_or_duplicate_name_asks_nothing() {
             error: None,
         },
         selected: Some(0),
+        selected_realm_id: None,
+        selected_notice: None,
         joining: None,
         leaving: None,
         last_click: None,
@@ -536,7 +947,8 @@ fn inviting_an_empty_or_duplicate_name_asks_nothing() {
         popup_buttons: std::cell::Cell::new([[0.0; 4]; 2]),
         main_scroll: crate::ui::Scroll::default(),
         subscription_buttons: std::cell::Cell::new((0.0, 0.0)),
-        players_button_rects: std::cell::RefCell::new(Vec::new()),
+        players_list: super::PlayersList::default(),
+        players_parent: None,
         backup_row_buttons: std::cell::RefCell::new(Vec::new()),
         settings_scroll: crate::ui::Scroll::default(),
         settings_slider: None,
@@ -1207,4 +1619,149 @@ fn transfer_percent_and_bar_keep_double_precision() {
     assert_eq!(transfer_bar_width(f64::NAN), 0.0);
     assert_eq!(transfer_bar_width(0.0025_f64.next_down()), 0.0);
     assert_eq!(transfer_bar_width(0.0025), 1.0);
+}
+
+pub(super) fn loaded_players(count: u128) -> Screen {
+    let mut realm = server(7, None);
+    realm.players = (1..=count)
+        .map(|id| PlayerInfo {
+            name: format!("Player{id:03}"),
+            uuid: Some(format!("{id:032x}")),
+            accepted: true,
+            ..Default::default()
+        })
+        .collect();
+    let mut screen = listed(vec![realm.clone()]);
+    screen.subscreen = configure_screen(realm.clone(), ConfigureTab::Players);
+    if let SubScreen::Configure {
+        detail,
+        tier,
+        regions,
+        subscription,
+        players_scroll,
+        ..
+    } = &mut screen.subscreen
+    {
+        *detail = Some(Ok(realm.clone()));
+        *tier = Some(Ok(Default::default()));
+        *regions = Some(Ok(Vec::new()));
+        *subscription = Some(Ok(Default::default()));
+        players_scroll.amount = 18.0;
+    }
+    if let FetchState::Loaded(servers) = &mut screen.state {
+        servers[0].players = realm.players;
+    }
+    screen
+}
+
+fn assert_restored_players(screen: &Screen, count: usize) {
+    assert!(screen.players_ready());
+    assert!(screen.players_parent.is_none());
+    assert!(matches!(&screen.subscreen, SubScreen::Configure {
+        server, detail: Some(Ok(detail)), detail_job: None, players_scroll, ..
+    } if detail.players.len() == count && detail.players == server.players && players_scroll.amount == 18.0));
+}
+
+#[test]
+fn cancelling_player_removal_restores_the_loaded_tab_and_scroll() {
+    for escape in [false, true] {
+        let mut screen = loaded_players(8);
+        screen.click_player_action(PlayerAction::Remove(2));
+        assert!(
+            matches!(&screen.subscreen, SubScreen::Popup(Popup::Uninvite { player, .. }) if player_uuid(player) == Some(2))
+        );
+        if escape {
+            assert!(!screen.escape());
+        } else {
+            screen.click(Some(51), 0.0, 0.0, (800.0, 240.0));
+        }
+        assert_restored_players(&screen, 8);
+    }
+}
+
+#[test]
+fn confirming_player_removal_updates_both_rosters_before_the_worker() {
+    let mut screen = loaded_players(8);
+    screen.click_player_action(PlayerAction::Remove(2));
+    let SubScreen::Popup(Popup::Uninvite { parent, player }) = screen.subscreen.clone() else {
+        panic!("removal confirmation");
+    };
+    assert_eq!(
+        screen.finish_player_removal(*parent, player_uuid(&player)),
+        Some((7, 2))
+    );
+    assert_restored_players(&screen, 7);
+    assert!(
+        matches!(&screen.subscreen, SubScreen::Configure { server, .. }
+        if server.players.iter().all(|p| player_uuid(p) != Some(2)))
+    );
+}
+
+#[test]
+fn invite_failures_keep_the_loaded_players_parent() {
+    let mut screen = loaded_players(8);
+    screen.click(Some(67), 0.0, 0.0, (800.0, 240.0));
+    let SubScreen::Invite { job, .. } = &mut screen.subscreen else {
+        panic!("invite")
+    };
+    *job = Some(Arc::new(Mutex::new(Some(Err(RealmsError::Parse)))));
+    screen.poll();
+    assert!(matches!(
+        &screen.subscreen,
+        SubScreen::Invite { error: Some(_), .. }
+    ));
+    screen.escape();
+    assert_restored_players(&screen, 8);
+
+    let server = match &screen.subscreen {
+        SubScreen::Configure { server, .. } => server.clone(),
+        _ => unreachable!(),
+    };
+    screen.open_players_child(SubScreen::InviteCodes {
+        server,
+        codes: None,
+        list_job: Some(Arc::new(Mutex::new(Some(Err(RealmsError::Parse))))),
+        job: None,
+        error: None,
+        selected: None,
+    });
+    screen.poll();
+    assert!(matches!(screen.subscreen, SubScreen::Error { .. }));
+    screen.click(Some(91), 0.0, 0.0, (800.0, 240.0));
+    assert_restored_players(&screen, 8);
+}
+
+#[test]
+fn ops_and_invite_answers_update_both_copies_without_refetching() {
+    let mut screen = loaded_players(8);
+    let SubScreen::Configure { member_job, .. } = &mut screen.subscreen else {
+        unreachable!()
+    };
+    *member_job = Some(Arc::new(Mutex::new(Some(Ok(client::Ops {
+        ops: vec!["player001".into(), "Player002".into()],
+    })))));
+    screen.poll();
+    assert_restored_players(&screen, 8);
+    let mut invited = match &screen.subscreen {
+        SubScreen::Configure { server, .. } => {
+            assert!(!server.players[0].operator);
+            assert!(server.players[1].operator);
+            server.players.clone()
+        }
+        _ => unreachable!(),
+    };
+    invited.push(PlayerInfo {
+        name: "Player009".into(),
+        ..Default::default()
+    });
+    screen.click(Some(67), 0.0, 0.0, (800.0, 240.0));
+    let SubScreen::Invite { job, .. } = &mut screen.subscreen else {
+        panic!("invite")
+    };
+    *job = Some(Arc::new(Mutex::new(Some(Ok(invited.clone())))));
+    screen.poll();
+    assert_restored_players(&screen, 9);
+    assert!(
+        matches!(&screen.subscreen, SubScreen::Configure { server, .. } if server.players == invited && server.name == "Friends")
+    );
 }

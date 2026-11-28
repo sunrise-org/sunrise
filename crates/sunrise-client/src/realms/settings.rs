@@ -222,6 +222,7 @@ pub(super) fn configure_screen(server: RealmServer, tab: ConfigureTab) -> SubScr
         detail: None,
         detail_job: None,
         deleting: None,
+        switching_slot: None,
         member_job: None,
         settings: None,
         players_scroll: crate::ui::Scroll::default(),

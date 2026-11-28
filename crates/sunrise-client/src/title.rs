@@ -423,6 +423,7 @@ pub struct Title {
     open_request: Option<String>,
     /// A Realm's checked address, once the Realms screen's join came back.
     connect_request: Option<String>,
+    realms_notifications: crate::realms::NotificationBadges,
     /// EditWorldScreen's and WorldOpenFlows' `SystemToast` and its slide.
     pending_toast: Option<WorldToast>,
     icons: RefCell<std::collections::HashMap<PathBuf, (std::time::SystemTime, Option<Vec<u8>>)>>,
@@ -704,6 +705,21 @@ impl Title {
     pub fn mode_activation(&self) -> u64 {
         self.mode_activation
     }
+
+    pub fn tick_realms_notifications(&mut self, enabled: bool) {
+        if matches!(self.mode, Mode::Main) {
+            let persistence = self
+                .saves
+                .parent()
+                .map(|dir| dir.join("realms_persistence.json"));
+            self.realms_notifications
+                .tick(enabled, persistence.as_deref());
+        }
+    }
+
+    pub(crate) fn realms_notifications(&self) -> &crate::realms::NotificationBadges {
+        &self.realms_notifications
+    }
     /// The screen `set_mode` left for the game to announce and apply.
     pub fn take_requested(&mut self) -> Option<Mode> {
         self.requested.take()
@@ -818,6 +834,7 @@ impl Title {
             erase_check: Cell::new([0.0; 4]),
             open_request: None,
             connect_request: None,
+            realms_notifications: crate::realms::NotificationBadges::new(),
             pending_toast: None,
             icons: RefCell::new(std::collections::HashMap::new()),
             splash: choose_splash(splashes, splash_index, (today.month(), today.day())),
@@ -2409,27 +2426,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 }
                 *handled |= !matches!(&outcome, crate::realms::Outcome::None);
                 match outcome {
-                    crate::realms::Outcome::Back => {
-                        self.activate_mode(Mode::Main);
-                        Action::None
-                    }
-                    crate::realms::Outcome::Connect(address) => Action::Connect {
-                        address,
-                        name: None,
-                        lan: false,
-                        realm: true,
-                    },
-                    crate::realms::Outcome::OpenUri(uri) => Action::OpenUri(uri),
-                    crate::realms::Outcome::Copy(text) => Action::CopyText(text),
-                    crate::realms::Outcome::CreateWorld(request) => {
-                        // `RealmsCreateWorldFlow.createWorld`: Create New World's settings
-                        // upload into the Realm's slot instead of a local world.
-                        self.realms_create = Some(request);
-                        self.create_return_to_main = false;
-                        self.activate_mode(self.new_world());
-                        Action::None
-                    }
-                    crate::realms::Outcome::None => Action::None,
+                    outcome => self.realms_outcome(outcome),
                 }
             }
             (Mode::MultiplayerWarning { .. }, Some(71)) => {
@@ -2972,6 +2969,78 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
     pub fn confirm_key(&mut self) -> Action {
         self.confirm_key_size((854.0, 480.0)).0
     }
+    /// The Players list owns keyboard navigation while its tab is ready.
+    pub fn players_owns_keyboard(&self) -> bool {
+        matches!(&self.mode, Mode::Realms(screen) if screen.players_tab_ready())
+    }
+    pub fn player_action_focused(&self) -> bool {
+        self.focused_button.is_none()
+            && matches!(&self.mode, Mode::Realms(screen) if screen.player_action_focused())
+    }
+    pub fn activate_player_focus(&mut self) -> Option<crate::realms::Outcome> {
+        let Mode::Realms(screen) = &mut self.mode else {
+            return None;
+        };
+        screen.activate_player_focus()
+    }
+    pub fn visible_player_target(&self, size: (f32, f32)) -> Option<[f32; 4]> {
+        let Mode::Realms(screen) = &self.mode else {
+            return None;
+        };
+        screen.focused_player_rect(size)
+    }
+    pub fn reveal_player_target(
+        &mut self,
+        point: (f32, f32),
+        size: (f32, f32),
+    ) -> Option<[f32; 4]> {
+        let Mode::Realms(screen) = &mut self.mode else {
+            return None;
+        };
+        let rect = screen.focus_player_at(point, size)?;
+        self.focused_button = None;
+        Some(rect)
+    }
+    pub fn clear_player_action_focus(&mut self) {
+        if let Mode::Realms(screen) = &mut self.mode {
+            screen.clear_players_focus();
+        }
+    }
+    pub fn step_player_target(
+        &mut self,
+        key: winit::keyboard::KeyCode,
+        size: (f32, f32),
+    ) -> Option<[f32; 4]> {
+        let Mode::Realms(screen) = &mut self.mode else {
+            return None;
+        };
+        let rect = screen.move_player_focus(key, size)?;
+        self.focused_button = None;
+        Some(rect)
+    }
+    fn realms_outcome(&mut self, outcome: crate::realms::Outcome) -> Action {
+        match outcome {
+            crate::realms::Outcome::Back => {
+                self.activate_mode(Mode::Main);
+                Action::None
+            }
+            crate::realms::Outcome::Connect(address) => Action::Connect {
+                address,
+                name: None,
+                lan: false,
+                realm: true,
+            },
+            crate::realms::Outcome::OpenUri(uri) => Action::OpenUri(uri),
+            crate::realms::Outcome::Copy(text) => Action::CopyText(text),
+            crate::realms::Outcome::CreateWorld(request) => {
+                self.realms_create = Some(request);
+                self.create_return_to_main = false;
+                self.activate_mode(self.new_world());
+                Action::None
+            }
+            crate::realms::Outcome::None => Action::None,
+        }
+    }
     /// `confirm_key` with actual viewport size for button geometry lookup.
     /// Returns the triggered action and whether a UI button click sound should play.
     pub fn confirm_key_size(&mut self, size: (f32, f32)) -> (Action, bool) {
@@ -2981,6 +3050,12 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         }
         if self.rules.get_mut().is_some() {
             return (Action::None, false);
+        }
+        if self.player_action_focused() {
+            return match self.activate_player_focus() {
+                Some(outcome) => (self.realms_outcome(outcome), true),
+                None => (Action::None, false),
+            };
         }
         if matches!(self.mode, Mode::Edit { .. }) && self.focused_button.is_none() {
             self.confirm_edit();
@@ -3070,7 +3145,15 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         self.tab_dir(false, (854.0, 480.0));
     }
     /// Tab navigation through widgets and fields in either forward or reverse order.
-    pub fn tab_dir(&mut self, reverse: bool, size: (f32, f32)) {
+    pub fn tab_dir(&mut self, reverse: bool, size: (f32, f32)) -> bool {
+        if self.players_owns_keyboard() {
+            let key = if reverse {
+                winit::keyboard::KeyCode::ArrowLeft
+            } else {
+                winit::keyboard::KeyCode::ArrowRight
+            };
+            return self.step_player_target(key, size).is_some();
+        }
         if let Mode::Realms(screen) = &mut self.mode {
             // `RealmsScreen`'s buttons take the keyboard like every other screen's: Tab
             // steps through the enabled ones (`MenuTabBar`'s tabs included). A product
@@ -3104,10 +3187,10 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 (None, false) => enabled.first().copied(),
                 (None, true) => enabled.last().copied(),
             };
-            return;
+            return false;
         }
         if self.rules.get_mut().is_some() {
-            return;
+            return false;
         }
         if matches!(self.mode, Mode::Multiplayer(_)) {
             let (w, h) = size;
@@ -3120,7 +3203,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             if let Mode::Multiplayer(screen) = &mut self.mode {
                 screen.tab_dir(reverse, &enabled, &mut self.focused_button);
             }
-            return;
+            return false;
         }
         let (w, h) = size;
         let buttons = self.buttons(w, h);
@@ -3213,7 +3296,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             }
             _ => {
                 if enabled.is_empty() {
-                    return;
+                    return false;
                 }
                 let next = match self.focused_button {
                     Some(cur) => {
@@ -3250,22 +3333,31 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 self.focused_button = next;
             }
         }
+        false
     }
     /// 2D spatial arrow key navigation across enabled buttons.
-    pub fn arrow_key(&mut self, key: winit::keyboard::KeyCode, size: (f32, f32), shift: bool) {
+    pub fn arrow_key(
+        &mut self,
+        key: winit::keyboard::KeyCode,
+        size: (f32, f32),
+        shift: bool,
+    ) -> bool {
         use winit::keyboard::KeyCode;
+        if self.players_owns_keyboard() {
+            return self.step_player_target(key, size).is_some();
+        }
         if self.rules.get_mut().is_some() {
-            return;
+            return false;
         }
         if self.has_caret_field() {
-            return;
+            return false;
         }
         if self.focused_button.is_none()
             && let Mode::Multiplayer(screen) = &mut self.mode
             && matches!(key, KeyCode::ArrowUp | KeyCode::ArrowDown)
             && screen.arrow(key == KeyCode::ArrowUp, shift, size, &self.saves)
         {
-            return;
+            return false;
         }
         // `RealmsPdpScreen.PdpList` and `RealmsMainScreen`'s server list: the arrows move
         // through the rows while the list has the focus (`ObjectSelectionList.nextFocusPath`);
@@ -3276,7 +3368,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
             && (screen.pdp_arrow(key == KeyCode::ArrowUp)
                 || screen.main_arrow(key == KeyCode::ArrowUp))
         {
-            return;
+            return false;
         }
         if self.list_focused()
             && self.focused_button.is_none()
@@ -3287,11 +3379,11 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
                 match key {
                     KeyCode::ArrowUp => {
                         *selected = Some(selected.map_or(0, |i| i.saturating_sub(1)));
-                        return;
+                        return false;
                     }
                     KeyCode::ArrowDown => {
                         *selected = Some(selected.map_or(0, |i| (i + 1).min(len - 1)));
-                        return;
+                        return false;
                     }
                     _ => {}
                 }
@@ -3301,15 +3393,15 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         let buttons = self.buttons(w, h);
         let enabled: Vec<&Button> = buttons.iter().filter(|b| b.enabled).collect();
         if enabled.is_empty() {
-            return;
+            return false;
         }
         let Some(cur_id) = self.focused_button else {
             self.focused_button = Some(enabled[0].id);
-            return;
+            return false;
         };
         let Some(cur_b) = enabled.iter().find(|b| b.id == cur_id) else {
             self.focused_button = Some(enabled[0].id);
-            return;
+            return false;
         };
         let (cx, cy) = (cur_b.x + cur_b.w / 2.0, cur_b.y + 10.0);
         let mut best: Option<(u8, f32)> = None;
@@ -3341,6 +3433,7 @@ Would you like to enable the Narrator or visit the Accessibility Settings?",
         if let Some((next_id, _)) = best {
             self.focused_button = Some(next_id);
         }
+        false
     }
     /// The focus moves the selection on this list, the controller's as well as the keyboard's:
     /// the superflat and single-biome ones, where a selected row only sits there. On the world
@@ -3819,15 +3912,17 @@ mod classic_tests {
         screen.state = crate::realms::FetchState::Loaded(Vec::new());
         title.mode = Mode::Realms(screen);
         title.focused_button = None;
-        title.tab_dir(false, (854.0, 480.0));
+        assert!(!title.tab_dir(false, (854.0, 480.0)));
         assert!(
             title.focused_button.is_some(),
             "the first Tab focuses a Realms button"
         );
         let first = title.focused_button;
-        title.tab_dir(false, (854.0, 480.0));
+        assert!(!title.tab_dir(false, (854.0, 480.0)));
         assert!(title.focused_button.is_some());
         assert_ne!(title.focused_button, first, "and the next moves on");
+        assert!(!title.arrow_key(winit::keyboard::KeyCode::ArrowDown, (854.0, 480.0), false));
+        assert!(title.focused_button.is_some());
     }
 
     /// Enter activates the Realms button the keyboard focus is on, the way it
@@ -3851,6 +3946,27 @@ mod classic_tests {
             screen.subscreen,
             crate::realms::SubScreen::AddRealm { .. }
         ));
+    }
+
+    #[test]
+    fn players_keyboard_ownership_is_exposed_by_title() {
+        let mut title = Title::new(
+            PathBuf::new(),
+            Path::new("/nonexistent/sunrise-test-resources"),
+            "",
+        );
+        let mut screen = crate::realms::Screen::with_saves(None);
+        screen.state = crate::realms::FetchState::Loaded(Vec::new());
+        title.mode = Mode::Realms(screen);
+        assert!(!title.players_owns_keyboard());
+        assert!(!title.player_action_focused());
+        assert_eq!(title.visible_player_target((854.0, 480.0)), None);
+        assert_eq!(title.reveal_player_target((0.0, 0.0), (854.0, 480.0)), None);
+        assert_eq!(
+            title.step_player_target(winit::keyboard::KeyCode::ArrowDown, (854.0, 480.0)),
+            None
+        );
+        title.clear_player_action_focus();
     }
 
     /// `RealmsPdpScreen.PdpList`: the arrows move through the product page's rows while the

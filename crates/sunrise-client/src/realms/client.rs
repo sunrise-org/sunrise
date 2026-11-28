@@ -112,6 +112,11 @@ pub struct PlayerInfo {
     pub online: bool,
 }
 
+/// `RealmsServer.sortInvited`: accepted invitations first, then names ignoring case.
+pub(super) fn sort_invited(players: &mut [PlayerInfo]) {
+    players.sort_by_cached_key(|p| (!p.accepted, p.name.to_lowercase()));
+}
+
 /// `Ops`: the Realm's operators, by name (`RealmsClient.op`/`deop`).
 #[derive(Clone, Debug, Deserialize, Default, PartialEq)]
 pub struct Ops {
@@ -1235,7 +1240,8 @@ impl RealmsClient {
         if status == 503 || status == 277 {
             let pause = response
                 .header("Retry-After")
-                .and_then(|s| s.trim().parse().ok())
+                .and_then(|s| s.trim().parse::<u64>().ok())
+                .filter(|seconds| *seconds <= 120)
                 .unwrap_or(5);
             return Err(RealmsError::Retry(pause));
         }
@@ -1403,7 +1409,9 @@ impl RealmsClient {
     pub(crate) fn get_own_realm(&self, realm_id: i64) -> Result<RealmServer, RealmsError> {
         let url = self.url(&format!("worlds/{realm_id}"));
         let json = Self::execute(self.request("GET", &url, READ_TIMEOUT), None)?;
-        serde_json::from_str(&json).map_err(|_| RealmsError::Parse)
+        let mut realm: RealmServer = serde_json::from_str(&json).map_err(|_| RealmsError::Parse)?;
+        sort_invited(&mut realm.players);
+        Ok(realm)
     }
 
     /// `RealmsClient.op`: `POST ops/{id}/{uuid}` with an empty body, then the ops.
@@ -1431,7 +1439,10 @@ impl RealmsClient {
         let url = self.url(&format!("invites/{realm_id}"));
         let json = Self::execute(self.request("POST", &url, READ_TIMEOUT), Some(&body))?;
         serde_json::from_str::<RealmServer>(&json)
-            .map(|server| server.players)
+            .map(|mut server| {
+                sort_invited(&mut server.players);
+                server.players
+            })
             .map_err(|_| RealmsError::Parse)
     }
 

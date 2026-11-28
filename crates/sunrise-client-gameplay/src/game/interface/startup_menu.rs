@@ -316,6 +316,52 @@ impl StartupMenu {
         )
     }
 
+    fn clear_key_focus(&mut self) {
+        self.key_focus = None;
+        self.key_origin = None;
+        self.key_nudge = None;
+        self.key_slider_edit = false;
+    }
+
+    fn menu_key_focus_before_screen(&mut self, key: KeyCode) -> Option<bool> {
+        if !self.options_open
+            && self.pending.is_none()
+            && self.win.is_none()
+            && self.title_tab_key(key)
+        {
+            return Some(true);
+        }
+        if self.players_owns_keyboard() {
+            self.clear_key_focus();
+            return Some(false);
+        }
+        None
+    }
+
+    fn players_owns_keyboard(&self) -> bool {
+        !self.options_open
+            && self
+                .title
+                .as_ref()
+                .is_some_and(Title::players_owns_keyboard)
+    }
+
+    fn title_tab_key(&mut self, key: KeyCode) -> bool {
+        let ctrl = if cfg!(target_os = "macos") {
+            self.modifiers.super_key()
+        } else {
+            self.modifiers.control_key()
+        };
+        let handled = self
+            .title
+            .as_mut()
+            .and_then(|title| title.tab_bar_key(key, ctrl, self.modifiers.shift_key()));
+        if handled == Some(true) {
+            self.clear_key_focus();
+        }
+        handled.is_some()
+    }
+
     /// `Screen.keyPressed` on the title screens: the action a key starts (Enter confirms, see `confirm_key` in title.rs).
     fn title_key(&mut self, event: &KeyEvent, viewport: (f32, f32)) -> Action {
         let shortcut = self.shortcut(event);
@@ -336,21 +382,6 @@ impl StartupMenu {
             }
             return Action::None;
         }
-        // `TabNavigationBar.keyPressed` comes before the open tab's own
-        // widgets: Ctrl plus a digit or Tab picks a tab instead of reaching
-        // them.
-        let ctrl = if cfg!(target_os = "macos") {
-            self.modifiers.super_key()
-        } else {
-            self.modifiers.control_key()
-        };
-        if let PhysicalKey::Code(key) = event.physical_key
-            && title
-                .tab_bar_key(key, ctrl, self.modifiers.shift_key())
-                .is_some()
-        {
-            return Action::None;
-        }
         match event.physical_key {
             PhysicalKey::Code(KeyCode::Escape) => title.escape(),
             PhysicalKey::Code(KeyCode::F5) => title.refresh_servers(),
@@ -363,7 +394,9 @@ impl StartupMenu {
             }
             PhysicalKey::Code(KeyCode::Space)
                 if !title.has_caret_field()
-                    && (title.list_focused() || title.focused_button.is_some()) =>
+                    && (title.list_focused()
+                        || title.focused_button.is_some()
+                        || title.player_action_focused()) =>
             {
                 return title.confirm_key_size(viewport).0;
             }
@@ -962,6 +995,9 @@ impl Loading {
     /// pointer sits on the focus; a step past a list's visible rows doesn't
     /// scroll it here). Whether the key was used.
     fn menu_key_focus(&mut self, event_loop: &dyn EventLoopCtl, key: KeyCode) -> bool {
+        if let Some(handled) = self.menu.menu_key_focus_before_screen(key) {
+            return handled;
+        }
         // This safety prompt owns its default and spatial navigation in Title.
         if !self.menu.options_open
             && self
@@ -1390,6 +1426,9 @@ impl Loading {
         // (`sunrise_hooks::title`), as on the game's own title screen.
         self.sync_title_mods();
         let logs = sunrise_level::logging::recent_lines();
+        if self.menu.win.is_none() && self.menu.players_owns_keyboard() {
+            self.menu.clear_key_focus();
+        }
         let Some(gui) = &self.gui else {
             // The pack's screens do not exist yet: the boot screen holds the
             // window, the wordmark and the console's lines while they load.
@@ -1449,6 +1488,7 @@ impl Loading {
                 .draw_contents(&self.settings, batch, &gui.atlas, cursor);
             self.menu.options.draw_overlays(batch, &gui.atlas, cursor);
         } else if let Some(title) = &mut self.menu.title {
+            title.tick_realms_notifications(self.settings.file.bool("realmsNotifications"));
             title.poll_backup();
             if std::mem::take(&mut title.onboarding_finished) {
                 // Options.onboardingAccessibilityFinished.
@@ -1623,6 +1663,97 @@ mod tests {
                 ));
             })
         });
+    }
+
+    #[test]
+    fn tab_shortcuts_precede_startup_focus_and_clear_its_state() {
+        let root = std::env::temp_dir();
+        let mut menu = StartupMenu {
+            title: Some(Title::new(root.join("saves"), &root, "")),
+            ..Default::default()
+        };
+        menu.title.as_mut().unwrap().mode = sunrise_client::title::Mode::Create {
+            name: "Test".into(),
+            seed: String::new(),
+            creative: false,
+            focus: 0,
+            options: Default::default(),
+        };
+        menu.key_focus = Some(Target {
+            rect: [10.0, 20.0, 100.0, 20.0],
+            kind: Kind::Button,
+        });
+        menu.key_origin = Some([10.0, 20.0, 100.0, 20.0]);
+        menu.key_nudge = Some(([10.0, 20.0, 100.0, 20.0], 40.0));
+        menu.key_slider_edit = true;
+        menu.modifiers = if cfg!(target_os = "macos") {
+            ModifiersState::SUPER
+        } else {
+            ModifiersState::CONTROL
+        };
+
+        assert_eq!(menu.menu_key_focus_before_screen(KeyCode::Tab), Some(true));
+        let sunrise_client::title::Mode::Create { options, .. } =
+            &menu.title.as_ref().unwrap().mode
+        else {
+            panic!("create mode")
+        };
+        assert_eq!(options.tab, 1);
+        assert!(menu.key_focus.is_none());
+        assert!(menu.key_origin.is_none());
+        assert!(menu.key_nudge.is_none());
+        assert!(!menu.key_slider_edit);
+    }
+
+    #[test]
+    fn players_keyboard_ownership_clears_only_host_focus() {
+        let mut title = Title::new(
+            std::env::temp_dir().join("sunrise-players-focus-test"),
+            &std::env::temp_dir(),
+            "",
+        );
+        let mut screen = sunrise_client::realms::Screen::new();
+        screen.subscreen = sunrise_client::realms::SubScreen::Configure {
+            server: Default::default(),
+            tab: sunrise_client::realms::ConfigureTab::Players,
+            subscription: Some(Ok(Default::default())),
+            subscription_job: None,
+            detail: Some(Ok(Default::default())),
+            detail_job: None,
+            deleting: None,
+            switching_slot: None,
+            member_job: None,
+            settings: None,
+            players_scroll: Default::default(),
+            tier: Some(Ok(Default::default())),
+            tier_job: None,
+            regions: Some(Ok(Vec::new())),
+            regions_job: None,
+            saving: None,
+            error: None,
+            job: None,
+        };
+        title.mode = sunrise_client::title::Mode::Realms(screen);
+        let mut menu = StartupMenu {
+            title: Some(title),
+            key_focus: Some(Target {
+                rect: [10.0, 20.0, 100.0, 20.0],
+                kind: Kind::Button,
+            }),
+            key_origin: Some([10.0, 20.0, 100.0, 20.0]),
+            key_nudge: Some(([10.0, 20.0, 100.0, 20.0], 40.0)),
+            key_slider_edit: true,
+            ..Default::default()
+        };
+        assert_eq!(
+            menu.menu_key_focus_before_screen(KeyCode::ArrowDown),
+            Some(false)
+        );
+        assert!(menu.key_focus.is_none());
+        assert!(menu.key_origin.is_none());
+        assert!(menu.key_nudge.is_none());
+        assert!(!menu.key_slider_edit);
+        assert!(menu.title.as_ref().unwrap().players_owns_keyboard());
     }
 
     #[test]

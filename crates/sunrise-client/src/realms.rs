@@ -15,12 +15,17 @@ mod draw_notice;
 mod pack;
 mod page;
 mod picture;
+#[path = "realms/players_list.rs"]
+mod players_list;
 mod preset_world;
+
+pub(crate) use players_list::{PlayerAction, PlayerColumn};
+use players_list::{PlayersList, player_uuid};
 mod settings;
 pub mod upload;
 mod upload_screen;
 
-pub use pack::{RealmsPack, connect_address, pack_id, take_pending_pack};
+pub use pack::{RealmsPack, StagedRealmsPack, connect_address, pack_id, take_pending_pack};
 
 /// `CommonLinks.EXTEND_REALMS_LINK`.
 const EXTEND_REALMS: &str = "https://aka.ms/ExtendJavaRealms";
@@ -83,8 +88,8 @@ use crate::text::Text;
 use client::{
     Backup, InviteCode, PendingInviteDto, PlayerInfo, RealmAddress, RealmServer, RealmSetting,
     RealmSlot, RealmTierConfiguration, RealmTierRange, RealmWorldOptions, RealmsClient,
-    RealmsError, RealmsNotification, RegionDataDto, Subscription, WorldDownload, WorldTemplate,
-    WorldTemplateList,
+    RealmsError, RealmsNotification, RealmsText, RegionDataDto, Subscription, WorldDownload,
+    WorldTemplate, WorldTemplateList,
 };
 use std::path::PathBuf;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -234,13 +239,16 @@ pub enum Popup {
     /// `RealmsMainScreen.leaveClicked`.
     Leave(RealmServer),
     /// `GetServerDetailsTask.resourcePackDownloadConfirmationScreen`.
-    ResourcePack { pack: RealmsPack },
+    ResourcePack {
+        pack: RealmsPack,
+        parent: Box<SubScreen>,
+    },
     /// `RealmsSubscriptionTab`'s delete question (only offered once the Realm has expired).
     Delete(RealmServer),
     /// `RealmsPlayersTab.PlayerEntry.uninvite`'s confirm (`RealmsConfirmScreen`).
     Uninvite {
-        server: RealmServer,
         player: PlayerInfo,
+        parent: Box<SubScreen>,
     },
     /// `RealmsWorldsTab.switchToFullSlot`'s question, then `RealmsClient.switchSlot`.
     SwitchSlot { server: RealmServer, slot: i32 },
@@ -412,6 +420,7 @@ pub enum SubScreen {
     PendingInvites {
         invites: Option<Result<Vec<PendingInviteDto>, RealmsError>>,
         job: Option<Job<Result<Vec<PendingInviteDto>, RealmsError>>>,
+        actions: Vec<Job<(String, bool, Result<(), RealmsError>)>>,
         /// The list's scroll (`ObjectSelectionList`): the port drew what fit before.
         scroll: crate::ui::Scroll,
         /// The clicked row (`ContainerObjectSelectionList`'s selection).
@@ -477,8 +486,10 @@ pub enum SubScreen {
         detail_job: Option<Job<Result<RealmServer, RealmsError>>>,
         /// `RealmsClient.deleteRealm` on a worker, from the subscription tab's question.
         deleting: Option<Job<Result<(), RealmsError>>>,
-        /// `RealmsClient.op`/`deop`/`uninvite` on a worker, from the players tab.
-        member_job: Option<Job<Result<(), RealmsError>>>,
+        /// `RealmsClient.switchSlot` on a worker, from the worlds tab.
+        switching_slot: Option<Job<Result<(), RealmsError>>>,
+        /// `RealmsClient.op`/`deop` on a worker, from the players tab.
+        member_job: Option<Job<Result<client::Ops, RealmsError>>>,
         /// The settings tab's editable fields, once the tab has been opened.
         settings: Option<SettingsDraft>,
         /// The players tab's list scroll (`InvitedObjectSelectionList`).
@@ -491,7 +502,7 @@ pub enum SubScreen {
         regions: Option<Result<Vec<RegionDataDto>, RealmsError>>,
         regions_job: Option<Job<Result<Vec<RegionDataDto>, RealmsError>>>,
         /// `RealmsClient.updateConfiguration` on a worker.
-        saving: Option<Job<Result<(), RealmsError>>>,
+        saving: Option<Job<Result<SettingsDraft, RealmsError>>>,
         error: Option<String>,
         /// `RealmsClient.open`/`close` on a worker.
         job: Option<Job<Result<(), RealmsError>>>,
@@ -655,6 +666,10 @@ pub enum SubScreen {
         /// (`RealmsTermsScreen`'s Disagree and Escape).
         last: Box<SubScreen>,
     },
+    DownloadingPack {
+        job: Job<Result<StagedRealmsPack, String>>,
+        parent: Box<SubScreen>,
+    },
     /// `RealmsTermsScreen`: a new account must agree to the Realms terms before its first
     /// join (the service answers 6002).
     Terms {
@@ -674,6 +689,335 @@ pub enum SubScreen {
     },
 }
 
+fn notice_identity_matches(
+    selected: Option<&(String, String)>,
+    notice: Option<&RealmsNotification>,
+) -> bool {
+    matches!((selected, notice), (Some((id, message)), Some(notice))
+        if id == &notice.uuid && message == &notice.visit_message())
+}
+
+#[derive(Clone, Copy, Debug)]
+enum BackupRowAction {
+    Changes(usize),
+    Restore(usize),
+}
+
+/// `SwitchSlotTask.run` and `SwitchMinigameTask.run` try 25 times.
+fn retry_switch(
+    abort: Option<&AtomicBool>,
+    mut request: impl FnMut() -> Result<bool, RealmsError>,
+) -> Result<(), RealmsError> {
+    let cancelled = || abort.is_some_and(|flag| flag.load(Ordering::Relaxed));
+    for _ in 0..25 {
+        if cancelled() {
+            break;
+        }
+        let result = request();
+        if cancelled() {
+            break;
+        }
+        match result {
+            Ok(true) => return Ok(()),
+            Ok(false) => {}
+            Err(RealmsError::Retry(seconds)) => {
+                let end = Instant::now() + Duration::from_secs(seconds);
+                while !cancelled() {
+                    let remaining = end.saturating_duration_since(Instant::now());
+                    if remaining.is_zero() {
+                        break;
+                    }
+                    thread::sleep(remaining.min(Duration::from_millis(100)));
+                }
+            }
+            Err(error) => return Err(error),
+        }
+    }
+    Err(RealmsError::Timeout)
+}
+
+fn switch_slot_retry(
+    client: &RealmsClient,
+    realm_id: i64,
+    slot: i32,
+    abort: Option<&AtomicBool>,
+) -> Result<(), RealmsError> {
+    retry_switch(abort, || client.switch_slot(realm_id, slot))
+}
+
+fn switch_upload_slot(
+    client: &RealmsClient,
+    realm_id: i64,
+    slot: i32,
+    progress: &upload::UploadProgress,
+) -> Result<(), upload::UploadError> {
+    switch_slot_retry(client, realm_id, slot, Some(progress.stop())).map_err(|error| {
+        if progress.is_cancelled() {
+            upload::UploadError::Cancelled
+        } else {
+            upload::UploadError::Failed(error.text())
+        }
+    })
+}
+
+fn realms_backoff(period_seconds: u64, max_cycles: u32, failures: u32) -> Duration {
+    let cycles = (1u32.checked_shl(failures.min(31)).unwrap_or(u32::MAX)).min(max_cycles);
+    Duration::from_secs(period_seconds.saturating_mul(u64::from(cycles)))
+}
+
+/// The title screen's `RealmsNotificationsScreen` badge state.
+#[derive(Clone, Debug, Default)]
+pub struct NotificationBadges {
+    availability: Option<availability::Pending>,
+    enabled: bool,
+    notifications: Option<Vec<RealmsNotification>>,
+    pending_invites: Option<u32>,
+    trial_available: bool,
+    unread_news: bool,
+    notifications_job: Option<Job<Result<Vec<RealmsNotification>, RealmsError>>>,
+    pending_job: Option<Job<Result<Vec<PendingInviteDto>, RealmsError>>>,
+    trial_job: Option<Job<Result<bool, RealmsError>>>,
+    news_job: Option<Job<Result<Option<String>, RealmsError>>>,
+    next_notifications: Option<Instant>,
+    next_pending: Option<Instant>,
+    next_trial: Option<Instant>,
+    next_news: Option<Instant>,
+    pending_failures: u32,
+    trial_failures: u32,
+    news_link: Option<String>,
+    news_persistence_loaded: bool,
+}
+
+impl NotificationBadges {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    /// Tick only the subscription set vanilla selects for the options flag.
+    pub fn tick(&mut self, enabled: bool, persistence: Option<&std::path::Path>) {
+        self.enabled = enabled;
+        let now = Instant::now();
+        if !self.news_persistence_loaded {
+            self.news_persistence_loaded = true;
+            if let Some(path) = persistence
+                && let Ok(json) = std::fs::read_to_string(path)
+                && let Ok(value) = serde_json::from_str::<serde_json::Value>(&json)
+            {
+                self.news_link = value
+                    .get("newsLink")
+                    .and_then(|v| v.as_str())
+                    .map(str::to_owned);
+                self.unread_news = value
+                    .get("hasUnreadNews")
+                    .and_then(|v| v.as_bool())
+                    .unwrap_or(false);
+            }
+        }
+        let available = self
+            .availability
+            .get_or_insert_with(availability::current)
+            .valid_client()
+            .unwrap_or(false);
+        if !available {
+            return;
+        }
+        if self.notifications_job.is_none()
+            && self.next_notifications.is_none_or(|next| now >= next)
+        {
+            self.notifications_job = client().map(|client| spawn(move || client.notifications()));
+            self.next_notifications = Some(now + Duration::from_secs(300));
+        }
+        if enabled {
+            if self.pending_job.is_none() && self.next_pending.is_none_or(|next| now >= next) {
+                self.pending_job = client().map(|client| spawn(move || client.pending_invites()));
+                self.next_pending = Some(now + Duration::from_secs(10));
+            }
+            if self.trial_job.is_none() && self.next_trial.is_none_or(|next| now >= next) {
+                self.trial_job = client().map(|client| spawn(move || client.trial_available()));
+                self.next_trial = Some(now + Duration::from_secs(60));
+            }
+            if self.news_job.is_none() && self.next_news.is_none_or(|next| now >= next) {
+                self.news_job = client().map(|client| spawn(move || client.news_link()));
+                self.next_news = Some(now + Duration::from_secs(300));
+            }
+        } else {
+            self.pending_job = None;
+            self.trial_job = None;
+            self.news_job = None;
+            self.next_pending = None;
+            self.next_trial = None;
+            self.next_news = None;
+        }
+        if let Some(job) = &self.notifications_job
+            && let Some(result) = take(job)
+        {
+            self.notifications_job = None;
+            self.next_notifications = Some(now + Duration::from_secs(300));
+            if let Ok(notifications) = result {
+                self.notifications = Some(notifications);
+            }
+        }
+        if let Some(job) = &self.pending_job
+            && let Some(result) = take(job)
+        {
+            self.pending_job = None;
+            match result {
+                Ok(invites) => {
+                    self.pending_invites = Some(invites.len() as u32);
+                    self.pending_failures = 0;
+                    self.next_pending = Some(now + Duration::from_secs(10));
+                }
+                Err(_) => {
+                    self.pending_failures = self.pending_failures.saturating_add(1);
+                    self.next_pending = Some(now + realms_backoff(10, 360, self.pending_failures));
+                }
+            }
+        }
+        if let Some(job) = &self.trial_job
+            && let Some(result) = take(job)
+        {
+            self.trial_job = None;
+            match result {
+                Ok(available) => {
+                    self.trial_available = available;
+                    self.trial_failures = 0;
+                    self.next_trial = Some(now + Duration::from_secs(60));
+                }
+                Err(_) => {
+                    self.trial_failures = self.trial_failures.saturating_add(1);
+                    self.next_trial = Some(now + realms_backoff(60, 60, self.trial_failures));
+                }
+            }
+        }
+        if let Some(job) = &self.news_job
+            && let Some(result) = take(job)
+        {
+            self.news_job = None;
+            self.next_news = Some(now + Duration::from_secs(300));
+            if let Ok(link) = result {
+                let changed = link.is_some() && link != self.news_link;
+                if changed {
+                    self.unread_news = true;
+                }
+                self.news_link = link;
+                if let Some(path) = persistence {
+                    let json = serde_json::json!({"newsLink": self.news_link, "hasUnreadNews": self.unread_news});
+                    let _ = std::fs::write(path, json.to_string());
+                }
+            }
+        }
+    }
+
+    pub fn unseen(&self) -> bool {
+        self.notifications
+            .as_ref()
+            .is_some_and(|items| items.iter().any(|item| !item.seen))
+    }
+    pub fn invite_count(&self) -> u32 {
+        self.pending_invites.unwrap_or_default()
+    }
+    pub fn has_unread_news(&self) -> bool {
+        self.unread_news
+    }
+    pub fn has_trial(&self) -> bool {
+        self.trial_available
+    }
+    pub fn shows_legacy(&self) -> bool {
+        self.enabled
+    }
+}
+
+#[cfg(test)]
+mod notification_badges_tests {
+    use super::*;
+
+    fn pending_job<T>(value: T) -> Job<T> {
+        Arc::new(Mutex::new(Some(value)))
+    }
+
+    #[test]
+    fn notification_task_is_retained_when_legacy_notifications_are_disabled() {
+        let mut badges = NotificationBadges {
+            availability: Some(availability::Pending::ready(
+                availability::Availability::Success,
+            )),
+            enabled: false,
+            notifications_job: Some(pending_job(Ok(vec![RealmsNotification {
+                uuid: "u".into(),
+                seen: false,
+                ..Default::default()
+            }]))),
+            next_notifications: Some(Instant::now() + Duration::from_secs(300)),
+            next_pending: Some(Instant::now() + Duration::from_secs(10)),
+            next_trial: Some(Instant::now() + Duration::from_secs(60)),
+            next_news: Some(Instant::now() + Duration::from_secs(300)),
+            ..Default::default()
+        };
+        badges.tick(false, None);
+        assert!(badges.unseen());
+        assert!(!badges.shows_legacy());
+        assert!(badges.pending_invites.is_none());
+        assert!(badges.notifications_job.is_none());
+    }
+
+    #[test]
+    fn an_existing_news_link_keeps_its_read_state() {
+        let path = std::env::temp_dir().join(format!("realms-news-{}.json", std::process::id()));
+        let _ = std::fs::write(&path, r#"{"newsLink":"same","hasUnreadNews":false}"#);
+        let far = Instant::now() + Duration::from_secs(600);
+        let mut badges = NotificationBadges {
+            availability: Some(availability::Pending::ready(
+                availability::Availability::Success,
+            )),
+            enabled: true,
+            news_link: None,
+            next_notifications: Some(far),
+            next_pending: Some(far),
+            next_trial: Some(far),
+            next_news: Some(far),
+            news_job: Some(pending_job(Ok(Some("same".into())))),
+            ..Default::default()
+        };
+        badges.tick(true, Some(&path));
+        assert!(!badges.has_unread_news());
+        let data: serde_json::Value =
+            serde_json::from_slice(&std::fs::read(&path).unwrap()).unwrap();
+        assert_eq!(data["newsLink"], "same");
+        assert_eq!(data["hasUnreadNews"], false);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn pending_and_trial_failures_use_vanilla_backoff_cycles() {
+        let far = Instant::now() + Duration::from_secs(600);
+        let mut badges = NotificationBadges {
+            availability: Some(availability::Pending::ready(
+                availability::Availability::Success,
+            )),
+            enabled: true,
+            next_notifications: Some(far),
+            next_pending: Some(far),
+            next_trial: Some(far),
+            next_news: Some(far),
+            pending_job: Some(pending_job(Err(RealmsError::Parse))),
+            trial_job: Some(pending_job(Err(RealmsError::Parse))),
+            ..Default::default()
+        };
+        let now = Instant::now();
+        badges.tick(true, None);
+        assert!((19..=20).contains(&badges.next_pending.unwrap().duration_since(now).as_secs()));
+        assert!((119..=120).contains(&badges.next_trial.unwrap().duration_since(now).as_secs()));
+    }
+
+    #[test]
+    fn badge_poll_periods_and_backoff_match_realms_fetcher_tasks() {
+        assert_eq!(realms_backoff(10, 360, 1), Duration::from_secs(20));
+        assert_eq!(realms_backoff(10, 360, 9), Duration::from_secs(3600));
+        assert_eq!(realms_backoff(60, 60, 1), Duration::from_secs(120));
+        assert_eq!(realms_backoff(60, 60, 10), Duration::from_secs(3600));
+    }
+}
+
 /// The join request on its worker, and its abort flag (`LongRunningTask.aborted`).
 type Joining = (Job<Result<RealmAddress, RealmsError>>, Arc<AtomicBool>);
 
@@ -682,6 +1026,10 @@ pub struct Screen {
     pub state: FetchState,
     pub subscreen: SubScreen,
     pub selected: Option<usize>,
+    /// Realm identity preserved while a refreshed list is loading.
+    selected_realm_id: Option<i64>,
+    /// The selected notice identity: UUID and `NotificationMessageEntry.getText`.
+    selected_notice: Option<(String, String)>,
     pub joining: Option<Joining>,
     /// Leaving a Realm (`RealmsMainScreen.leaveServer`): the list reloads when it's done.
     leaving: Option<Job<Result<(), RealmsError>>>,
@@ -734,11 +1082,12 @@ pub struct Screen {
     /// The subscription tab's Extend and Delete button tops, as the draw laid the
     /// column out (`RealmsSubscriptionTab`'s centred stack).
     subscription_buttons: std::cell::Cell<(f32, f32)>,
-    /// The players tab's per-row buttons as last drawn: the rect and its id (the op
-    /// toggle's width follows its label, which only the draw measures).
-    players_button_rects: std::cell::RefCell<Vec<([f32; 4], u8)>>,
+    /// The Players tab's rendered controls and keyboard focus.
+    players_list: PlayersList,
+    /// The configuration screen preserved while an invite screen is open.
+    players_parent: Option<Box<SubScreen>>,
     /// `RealmsBackupScreen.Entry`'s Changes/Restore buttons as last drawn.
-    backup_row_buttons: std::cell::RefCell<Vec<([f32; 4], u8)>>,
+    backup_row_buttons: std::cell::RefCell<Vec<([f32; 4], BackupRowAction)>>,
     /// The settings tab's `ScrollableLayout`: the column is taller than the tab area on
     /// short windows (vanilla scrolls it).
     settings_scroll: crate::ui::Scroll,
@@ -805,6 +1154,8 @@ impl std::fmt::Debug for SkinWorkers {
 /// `RealmsSettingsTab.save`'s callers: the settings are written before the action runs.
 #[derive(Clone, Debug)]
 enum AfterSave {
+    Back,
+    Tab(ConfigureTab),
     /// `RealmsConfigureWorldScreen`'s Play: `onClose()` saves, then joins.
     Play(RealmServer),
     /// The open/close toggle: save, then `openTheWorld(false)`/`closeTheWorld()`.
@@ -872,9 +1223,7 @@ fn upload_created_world(
                 .map_err(|e| upload::UploadError::Failed(e.text()))?;
         }
         if slot != server.active_slot {
-            client
-                .switch_slot(server.id, slot)
-                .map_err(|e| upload::UploadError::Failed(e.text()))?;
+            switch_upload_slot(client, server.id, slot, progress)?;
         }
         // `RealmsWorldOptions.createFromSettings`: the world's own settings, the game's
         // version as the world version.

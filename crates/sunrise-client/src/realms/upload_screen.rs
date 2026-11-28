@@ -141,9 +141,7 @@ impl Screen {
                 }
                 // `RealmsUploadScreen.init`: `SwitchSlotTask` first, when the slot isn't active.
                 if slot != active {
-                    client
-                        .switch_slot(server.id, slot)
-                        .map_err(|e| upload::UploadError::Failed(e.text()))?;
+                    super::switch_upload_slot(&client, server.id, slot, &progress)?;
                 }
                 upload::upload_world(&client, server.id, &realm_slot, &world_dir, &progress)
             })
