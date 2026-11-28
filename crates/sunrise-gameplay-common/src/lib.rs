@@ -48,7 +48,7 @@ pub mod worn_boots;
 
 extern crate self as sunrise_gameplay_common;
 pub mod game;
-#[cfg(test)]
+#[cfg(any(test, feature = "test-support"))]
 #[path = "../../sunrise-core/src/prepared_test_root.rs"]
 pub(crate) mod prepared_test_root;
 #[cfg(test)]

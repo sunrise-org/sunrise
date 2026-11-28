@@ -157,6 +157,11 @@ pub mod recipe_inputs;
 /// command-registry order, then the enchantment keys in the loaded registry's order.
 /// Both tables load together, so one call keeps the two orderings from drifting.
 pub fn resolve_item_registry(items: &sunrise_items::items::Items) -> Result<(), String> {
+    resolve_item_keys(items)?;
+    resolve_enchantment_registry(items)
+}
+
+pub(super) fn resolve_item_keys(items: &sunrise_items::items::Items) -> Result<(), String> {
     mod_api::__private::resolve_items(items.registry_order.iter().map(|id| &**id)).map_err(
         |errors| {
             errors
@@ -165,8 +170,7 @@ pub fn resolve_item_registry(items: &sunrise_items::items::Items) -> Result<(), 
                 .collect::<Vec<_>>()
                 .join("\n")
         },
-    )?;
-    resolve_enchantment_registry(items)
+    )
 }
 
 /// Publish the loaded enchantment registry's keys in `RegistryDataLoader`'s order,
