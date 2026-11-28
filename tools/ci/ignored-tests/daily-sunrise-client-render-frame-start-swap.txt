@@ -1,0 +1,9 @@
+# The daily GPU tests of the frame-start swap of buffers whose first write replaces them whole (#6858).
+sunrise-client-render gfx::pack_post::frame_start_swap_tests::a_blended_first_write_keeps_the_copy lib daily gpu
+sunrise-client-render gfx::pack_post::frame_start_swap_tests::a_buffer_whose_first_write_covers_it_swaps_and_draws_as_with_the_copy lib daily gpu
+sunrise-client-render gfx::pack_post::frame_start_swap_tests::a_buffer_whose_first_write_leaves_pixels_out_keeps_the_copy lib daily gpu
+sunrise-client-render gfx::pack_post::frame_start_swap_tests::a_discard_in_the_first_write_keeps_the_copy lib daily gpu
+sunrise-client-render gfx::pack_post::frame_start_swap_tests::a_flip_without_a_write_before_the_first_write_keeps_the_copy lib daily gpu
+sunrise-client-render gfx::pack_post::frame_start_swap_tests::a_pre_flip_keeps_the_copy lib daily gpu
+sunrise-client-render gfx::pack_post::frame_start_swap_tests::a_scaled_first_write_keeps_the_copy lib daily gpu
+sunrise-client-render gfx::pack_post::frame_start_swap_tests::a_three_channel_buffer_swaps_unless_an_image_binds_it lib daily gpu

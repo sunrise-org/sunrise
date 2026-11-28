@@ -12,7 +12,7 @@ use super::mod_pack::{
     ModUniformDecl, ModUniformMatch, ModUniformTable, ModVertexStage, match_mod_uniform,
     mod_depth_source,
 };
-use super::packed;
+use super::{coverage, packed};
 use super::{image_binding, image_format, sampled_image, storage_formats_of};
 use crate::pack_draw::DrawUniforms;
 use crate::pack_entities::PackEntities;
@@ -1450,6 +1450,29 @@ pub fn build_pass(
     } else {
         (written & !kept) ^ mask(&p.flips)
     };
+    // What the draw replaces whole, read before the stages are handed to the device.
+    let rewrites = if final_pass
+        || geometry.is_some()
+        || p.geometry_triangles != 0
+        || p.scale != [1.0, 0.0, 0.0]
+        || !coverage::writes_every_covered_pixel(&program.fragment)
+        || !coverage::covers_screen(&program.vertex)
+    {
+        0
+    } else {
+        (writes.iter())
+            .filter(|&&(location, buffer)| {
+                targets.get(location as usize).is_some_and(|t| {
+                    t.as_ref().is_some_and(|t| {
+                        t.blend.is_none()
+                            && (t.write_mask == wgpu::ColorWrites::ALL
+                                || pack.rgb & 1 << buffer != 0
+                                    && t.write_mask == wgpu::ColorWrites::COLOR)
+                    })
+                })
+            })
+            .fold(0u16, |m, &(_, b)| m | 1 << b)
+    };
     let created = checked(device, || {
         let layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
             label: Some(&p.name),
@@ -1680,6 +1703,7 @@ pub fn build_pass(
         viewport: (!final_pass && p.scale != [1.0, 0.0, 0.0]).then_some(p.scale),
         image_copies,
         snapshots: 0,
+        rewrites,
     })
 }
 
@@ -1714,6 +1738,7 @@ fn no_draw(device: &wgpu::Device, name: String, group: Group, flip: u16, storage
         shadow_reads: 0,
         shadow_copies: 0,
         written: 0,
+        rewrites: 0,
         mipmaps: 0,
         draw: false,
         atlas: None,
@@ -1880,6 +1905,7 @@ pub fn build_compute(
         reads: reads | written,
         shadow_reads: shadow_reads | shadow_own | shadow_before,
         written,
+        rewrites: 0,
         mipmaps: 0,
         draw: false,
         atlas: None,
@@ -2040,6 +2066,10 @@ pub struct PackPost {
     pub copied: u16,
     /// Bit n set: B is buffer n's "main".
     pub main: u16,
+    /// Buffers a frame starts on the side the last one ended on, instead of copying it back to
+    /// A: the first program of every frame to write or flip their other side replaces it whole
+    /// (`coverage::swaps`, #6858).
+    pub swaps: u16,
     pub targets: Option<Targets>,
     pub noise: wgpu::TextureView,
     pub dummy: wgpu::TextureView,
@@ -3448,6 +3478,32 @@ impl PackPost {
             .map(std::cell::RefCell::take)
             .unwrap_or_default();
         let bound_mod_slots = mod_passes.iter().map(|m| m.slot).collect();
+        // colortex0's A is the world's; a cleared buffer starts every frame cleared; a pre-flip
+        // exposes the other side unwritten; a three-channel buffer's alpha is the same on both
+        // sides only while no image writes it.
+        let kept_on_a = (0..BUFFERS)
+            .filter(|&b| clears[b].is_some())
+            .fold(1u16, |m, b| m | 1 << b);
+        let candidates = doubled
+            & used
+            & !kept_on_a
+            & !(mask(&post.deferred_pre) | mask(&post.composite_pre))
+            & !(rgb & storage);
+        let touches = (passes.iter())
+            .filter(|p| p.group != Group::Final && !matches!(p.pipeline, Pipeline::Compute { .. }))
+            .map(|p| {
+                let size = |b: usize| sizes[b];
+                let first = p.writes.first().map(|w| size(w.1));
+                coverage::Touch {
+                    written: p.written,
+                    flip: p.flip,
+                    rewrites: p.rewrites,
+                    sometimes: p.group == Group::Setup
+                        || p.writes.iter().any(|w| Some(size(w.1)) != first),
+                }
+            });
+        let swaps = coverage::swaps(touches, candidates);
+        log::info!("shader pack: colortex buffers kept on their side at frame start {swaps:#b}");
         let built = PackPost {
             notes,
             setup_pending: true,
@@ -3514,6 +3570,7 @@ impl PackPost {
             other_clears,
             blit_group: None,
             main: 0,
+            swaps,
             targets: None,
             noise: pack_textures::noise(&textures)
                 .cloned()

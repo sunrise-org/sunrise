@@ -5,7 +5,8 @@
 //!
 //! Every colortex buffer a program reads or writes has two textures, A and B. Programs read
 //! "main" and write "alt", and each buffer a program wrote flips afterwards (6.1.6). Every
-//! frame starts with A as "main".
+//! frame starts with A as "main", or as if it did: a buffer whose other side the frame's first
+//! write replaces whole keeps the side the last frame ended on (`coverage`).
 //!
 //! The crate split by what each part does:
 //
@@ -16,6 +17,7 @@
 //   `run`), as inherent methods taking the decoupled `UniformFrameView`.
 
 pub mod construction;
+mod coverage;
 pub mod execution;
 mod image_formats;
 pub mod indirect;
