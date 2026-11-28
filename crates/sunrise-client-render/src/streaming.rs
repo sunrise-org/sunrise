@@ -63,6 +63,7 @@ pub struct MeshSettings {
     pub(super) blend_radius: i32,
     pub(super) smooth_lighting: bool,
     pub(super) cutout_leaves: bool,
+    pub(super) better: crate::better_grass::Better,
     pub(super) opaque_ice: bool,
     pub(super) translucent_layers: Arc<[bool]>,
     pub(super) layer_overrides: Arc<[Option<sunrise_shaders::RenderLayer>]>,
@@ -342,6 +343,8 @@ pub struct MeshStreamer {
     /// The `ao` and `cutoutLeaves` options.
     pub smooth_lighting: bool,
     pub cutout_leaves: bool,
+    /// Better Grass and Better Snow (`Mesher::better`).
+    pub better: crate::better_grass::Better,
     /// Draw regular ice opaque in the solid pass (`Mesher::opaque_ice`).
     pub opaque_ice: bool,
     /// Sprite layers a shader pack draws in the translucent pass (`[[materials]]
@@ -420,6 +423,7 @@ impl MeshStreamer {
             biome_blend: 2,
             smooth_lighting: true,
             cutout_leaves: true,
+            better: Default::default(),
             opaque_ice: false,
             translucent_layers: Arc::from([]),
             layer_overrides: Arc::from([]),

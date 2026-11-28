@@ -7,7 +7,7 @@
 use crate::{
     gfx::EffectiveOutput,
     graphics::{
-        EntityCullingMode, FrameGeneration, GpuCullingMode, GraphicsApi, HdrMode,
+        BetterGrassMode, EntityCullingMode, FrameGeneration, GpuCullingMode, GraphicsApi, HdrMode,
         HdrSetup as Setup, LeafCullingMode, Pacing, ParallelTickMode, ParticleCullingMode,
         PresentMode, Preset, Upscaling,
     },
@@ -90,6 +90,8 @@ pub enum H {
     Fog,
     Weather,
     AnimatedTextures,
+    BetterGrass,
+    BetterSnow,
     DitherCutoutMips,
     PresentMode,
     Pacing,
@@ -315,6 +317,16 @@ pub fn rows() -> Vec<(Page, Vec<(&'static str, Vec<Setting>)>)> {
                             H::AnimatedTextures,
                             Low,
                             "Animates water, lava, fire and other moving textures.",
+                        ),
+                        h(
+                            H::BetterGrass,
+                            Low,
+                            "Shows grass tops on grass sides: Fast on every side, Fancy beside lower grass.",
+                        ),
+                        h(
+                            H::BetterSnow,
+                            Low,
+                            "Draws a snow layer under plants and fences beside snow.",
                         ),
                         h(
                             H::DitherCutoutMips,
@@ -821,6 +833,8 @@ impl H {
             H::Fog => labelled("Fog", on_off(g.fog)),
             H::Weather => labelled("Weather", on_off(g.weather)),
             H::AnimatedTextures => labelled("Animated Textures", on_off(g.animated_textures)),
+            H::BetterGrass => labelled("Better Grass", g.better_grass.label()),
+            H::BetterSnow => labelled("Better Snow", on_off(g.better_snow)),
             H::DitherCutoutMips => labelled("Distant Plant Dither", on_off(g.dither_cutout_mips)),
             H::PresentMode => labelled("Present Mode", g.present_mode.label()),
             H::Pacing => labelled(
@@ -951,6 +965,10 @@ impl H {
             H::Weather => g.weather = !g.weather,
             H::AnimatedTextures => g.animated_textures = !g.animated_textures,
             H::DynamicResolution => g.dynamic_resolution = !g.dynamic_resolution,
+            H::BetterGrass => {
+                g.better_grass = step(&BetterGrassMode::ALL, g.better_grass, back);
+            }
+            H::BetterSnow => g.better_snow = !g.better_snow,
             H::DitherCutoutMips => g.dither_cutout_mips = !g.dither_cutout_mips,
             H::PresentMode => g.present_mode = step(&PresentMode::ALL, g.present_mode, back),
             // Off, FXAA, TAA.
@@ -1094,6 +1112,7 @@ impl Item {
             Item::Sunrise(H::Weather) => g.weather,
             Item::Sunrise(H::AnimatedTextures) => g.animated_textures,
             Item::Sunrise(H::DynamicResolution) => g.dynamic_resolution,
+            Item::Sunrise(H::BetterSnow) => g.better_snow,
             Item::Sunrise(H::DitherCutoutMips) => g.dither_cutout_mips,
             Item::Sunrise(H::HdrLighting) => g.hdr_lighting,
             Item::Sunrise(H::BatteryMode) => g.battery,
@@ -1166,6 +1185,8 @@ impl Item {
                     H::Preset
                         | H::ScreenshotQuality
                         | H::Pacing
+                        | H::BetterGrass
+                        | H::BetterSnow
                         | H::PresentMode
                         | H::Workers
                         | H::ParallelTick
@@ -2519,6 +2540,63 @@ mod tests {
         );
         assert_eq!(s.sunrise.leaf_culling, LeafCullingMode::Hidden);
         assert_eq!(s.sunrise.preset, Preset::Custom);
+    }
+
+    #[test]
+    fn better_grass_cycles_off_fast_fancy_and_round_trips() {
+        let mut s = Settings::default();
+        let item = Item::Sunrise(H::BetterGrass);
+        assert_eq!(item.switch(&s, &NONE), None);
+        assert_eq!(item.label(&s, &NONE).plain(), "Better Grass: Off");
+        // No preset sets it, so it leaves the preset as it is.
+        s.sunrise.preset = Preset::Balanced;
+        for label in ["Fast", "Fancy", "Off"] {
+            item.cycle(&mut s, false, FB, &NONE);
+            assert_eq!(
+                item.label(&s, &NONE).plain(),
+                format!("Better Grass: {label}")
+            );
+            assert_eq!(
+                crate::graphics::Graphics::parse(&s.sunrise.serialize()).better_grass,
+                s.sunrise.better_grass
+            );
+        }
+        assert_eq!(s.sunrise.preset, Preset::Balanced);
+        item.cycle(&mut s, true, FB, &NONE);
+        assert_eq!(s.sunrise.better_grass, BetterGrassMode::Fancy);
+
+        // It sits with the other texture settings on the Quality page.
+        let group = rows()
+            .into_iter()
+            .flat_map(|(page, groups)| groups.into_iter().map(move |(_, b)| (page, b)))
+            .find(|(_, b)| b.iter().any(|r| r.item == item))
+            .unwrap();
+        assert_eq!(group.0, Page::Quality);
+        assert!(
+            group
+                .1
+                .iter()
+                .any(|r| r.item == Item::Sunrise(H::BetterSnow))
+        );
+    }
+
+    #[test]
+    fn better_snow_toggles_and_round_trips() {
+        let mut s = Settings::default();
+        let item = Item::Sunrise(H::BetterSnow);
+        assert_eq!(item.switch(&s, &NONE), Some(false));
+        assert_eq!(item.label(&s, &NONE).plain(), "Better Snow: Off");
+        s.sunrise.preset = Preset::Balanced;
+        item.cycle(&mut s, false, FB, &NONE);
+        assert_eq!(s.sunrise.preset, Preset::Balanced);
+        assert_eq!(item.label(&s, &NONE).plain(), "Better Snow: On");
+        assert!(
+            crate::graphics::Graphics::parse(&s.sunrise.serialize()).better_snow,
+            "the choice is saved"
+        );
+        item.cycle(&mut s, false, FB, &NONE);
+        assert_eq!(item.switch(&s, &NONE), Some(false));
+        assert!(!crate::graphics::Graphics::parse(&s.sunrise.serialize()).better_snow);
     }
 
     #[test]

@@ -266,6 +266,7 @@ impl World {
             blend_radius: 0,
             smooth_lighting: false,
             cutout_leaves: true,
+            better: Default::default(),
             opaque_ice: false,
             translucent_layers: &[],
             layer_overrides: &[],

@@ -90,6 +90,7 @@ impl QuadShape {
         }
     }
 }
+#[derive(Clone)]
 pub struct BakedFace {
     pub quad: ModelQuad,
     pub layer: u32,
@@ -169,7 +170,7 @@ fn bake_variant(
     bake_resolved(sprites, &library.resolve(name)?, turns, lock)
 }
 /// Bakes a resolved `model`, turned and UV-locked as a variant says.
-fn bake_resolved(
+pub(crate) fn bake_resolved(
     sprites: &mut Sprites,
     model: &sunrise_assets::resolve::ResolvedCuboidModel,
     turns: [u8; 3],

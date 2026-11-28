@@ -5,6 +5,7 @@
 //! follow `FluidRenderer` (see `fluid`).
 pub use crate::render_geometry::Vertex;
 pub use mod_api::client::mesher::TintSource;
+mod better;
 mod extra_models;
 pub(crate) use extra_models::AttachedTintScratch;
 mod fluid;
@@ -2284,6 +2285,8 @@ pub struct Mesher<'a> {
     pub smooth_lighting: bool,
     /// The `cutoutLeaves` option (fancy graphics); off makes leaves opaque.
     pub cutout_leaves: bool,
+    /// The Better Grass and Better Snow options.
+    pub better: crate::better_grass::Better,
     /// The `opaqueIce` option: regular ice draws opaque in the solid pass.
     pub opaque_ice: bool,
     /// Sprite layers a shader pack moves into the translucent pass, by layer.
@@ -2604,12 +2607,28 @@ impl Mesher<'_> {
                         Some(layer) => Pass::Layer(layer),
                         None => Pass::Own { force_solid },
                     };
+                    // Better Grass: where the blocks around it say so, a side shows other full
+                    // faces than the block's own.
+                    let better = better::sides(self.render, self.better.grass, pad, cell, id);
+                    let mut replaced = [false; 4];
                     for model in base_first.into_iter().chain(models) {
                         for face in &model.faces {
-                            self.model_face(
-                                pad, groups, &mut tints, &mut out, &at, state, face, pass,
-                            );
+                            let instead = better
+                                .as_ref()
+                                .and_then(|sides| sides.replacing(face, &mut replaced));
+                            for face in instead.unwrap_or(std::slice::from_ref(face)) {
+                                self.model_face(
+                                    pad, groups, &mut tints, &mut out, &at, state, face, pass,
+                                );
+                            }
                         }
+                    }
+                    // Better Snow: a snow layer under a plant with snow beside it.
+                    if self.better.snow && !state.air {
+                        self.snow_under(
+                            catalog, slots, region, pad, groups, &mut tints, &mut out, &at, base_y,
+                            masks,
+                        );
                     }
                     if self.shader_pack {
                         out.record_source(
@@ -2694,11 +2713,25 @@ impl Mesher<'_> {
         region: &[[Option<&Chunk>; 3]; 3],
         pad: &Padded,
         base_y: i32,
+        at: [i32; 3],
+        masks: &M,
+    ) -> [bool; 6] {
+        let id = pad.blocks[pi(at[0], at[1], at[2])];
+        self.visible_faces_as(id, region, pad, base_y, at, masks)
+    }
+
+    /// The faces of the state `id` that show at the cell `[x, y, z]`, as if it stood there.
+    #[inline]
+    fn visible_faces_as<M: visibility_plan::CellMasks>(
+        &mut self,
+        id: u32,
+        region: &[[Option<&Chunk>; 3]; 3],
+        pad: &Padded,
+        base_y: i32,
         [x, y, z]: [i32; 3],
         masks: &M,
     ) -> [bool; 6] {
         let cell = pi(x, y, z);
-        let id = pad.blocks[cell];
         let info = &self.tables.info;
         let state = &info[id as usize];
         let full_faces = &self.tables.full_faces;

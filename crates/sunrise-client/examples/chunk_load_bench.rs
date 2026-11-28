@@ -249,6 +249,7 @@ fn mesher<'a>(context: &'a WorkerContext, seed: i64) -> Mesher<'a> {
         blend_radius: 2,
         smooth_lighting: true,
         cutout_leaves: true,
+        better: Default::default(),
         opaque_ice: false,
         translucent_layers: &[],
         layer_overrides: &[],
