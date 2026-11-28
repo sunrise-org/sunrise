@@ -318,17 +318,7 @@ impl crate::game::ServerGame<'_> {
                     .remove(index)
             });
         if canceled || admission.is_err() {
-            // A listener may have written other rows before unwinding. Retire this
-            // admission only, and do not use an index that may now name another row.
-            if let Some(slot) = self.refresh_join_slot(id, slot) {
-                let retained = admission.is_ok()
-                    && matches!(slot, Slot::Walk(super::entity::EntityHandle::Mob(index))
-                        if self.detach_natural_candidate(id, index));
-                if !retained {
-                    self.discard_slot(slot, id);
-                }
-            }
-            self.forget_entity(id);
+            self.retire_refused_join(slot, id, &admission);
             if let Err(payload) = admission {
                 std::panic::resume_unwind(payload);
             }
@@ -566,6 +556,20 @@ impl crate::game::ServerGame<'_> {
         };
         apart.map(Slot::Apart)
     }
+    #[inline(always)]
+    fn retire_refused_join(&mut self, slot: Slot, id: u32, admission: &std::thread::Result<()>) {
+        // A listener may have changed which row occupies the original index.
+        if let Some(slot) = self.refresh_join_slot(id, slot) {
+            let retained = admission.is_ok()
+                && matches!(slot, Slot::Walk(super::entity::EntityHandle::Mob(index))
+                    if self.detach_natural_candidate(id, index));
+            if !retained {
+                self.discard_slot(slot, id);
+            }
+        }
+        self.forget_entity(id);
+    }
+
     /// Takes the entity out of the level, before it ever ticked.
     fn discard_slot(&mut self, slot: Slot, id: u32) {
         match slot {

@@ -1323,10 +1323,7 @@ impl crate::game::ServerGame<'_> {
     /// entity is saved and removed, and waits for its dimension to load.
     pub(in crate::game::server_side) fn remove_portal_vehicle_tree(&mut self, root: u32) {
         let tree = self.vehicle_tree_ids(root);
-        self.remove_vehicle_rows(&tree);
-        for id in tree {
-            self.detach_entity(id);
-        }
+        self.extract_vehicle_rows_for_reconstruction(tree);
     }
     /// Where an entity that changes level alone stands, and the width and
     /// height of its box: an item, a primed TNT, a trident, a firework, an

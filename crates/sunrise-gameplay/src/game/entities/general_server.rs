@@ -14,6 +14,8 @@ use sunrise_gameplay_common::game::{
 };
 use sunrise_sim::join_seq::JoinSeq;
 
+type ExtractedGeneralTree = Vec<(usize, GeneralRow, bool)>;
+
 impl crate::game::ServerGame<'_> {
     /// Change a general row's seat. The caller owns mount notifications.
     pub(in crate::game::server_side) fn set_general_mount(
@@ -235,31 +237,14 @@ impl crate::game::ServerGame<'_> {
                 destination.id()
             ));
         }
-        // Extract: highest index first, each row with the place it left.
-        tree.sort_unstable();
-        let mut extracted = Vec::new();
-        for &index in tree.iter().rev() {
-            let row = self.common.resident_entities.general.rows.remove(index);
-            let transient = self.common.persist.transient.remove(&row.id);
-            extracted.push((index, row, transient));
-        }
-        extracted.reverse();
+        let extracted = self.extract_general_tree_for_transfer(&mut tree);
         // The removals are leaves of the source level
         // (`PersistentEntitySectionManager.stopTracking`): flush them there.
         self.native_leaves_flush();
         // The only failing step: if the destination cannot open, every row
         // returns to the source, at its place and with its join identity.
         if let Err(error) = self.enter_level(destination) {
-            for (index, row, transient) in extracted {
-                if transient {
-                    self.common.persist.transient.insert(row.id);
-                }
-                self.common
-                    .resident_entities
-                    .general
-                    .rows
-                    .insert(index, row);
-            }
+            self.restore_general_tree_after_failed_transfer(extracted);
             return Err(format!("{error}"));
         }
         // The tree joins the destination: identities unchanged, join
@@ -288,6 +273,33 @@ impl crate::game::ServerGame<'_> {
             log::error!("could not reopen {}: {error}", source.id());
         }
         Ok(true)
+    }
+
+    #[inline(always)]
+    fn extract_general_tree_for_transfer(&mut self, tree: &mut [usize]) -> ExtractedGeneralTree {
+        tree.sort_unstable();
+        let mut extracted = Vec::new();
+        for &index in tree.iter().rev() {
+            let row = self.common.resident_entities.general.rows.remove(index);
+            let transient = self.common.persist.transient.remove(&row.id);
+            extracted.push((index, row, transient));
+        }
+        extracted.reverse();
+        extracted
+    }
+
+    #[inline(always)]
+    fn restore_general_tree_after_failed_transfer(&mut self, extracted: ExtractedGeneralTree) {
+        for (index, row, transient) in extracted {
+            if transient {
+                self.common.persist.transient.insert(row.id);
+            }
+            self.common
+                .resident_entities
+                .general
+                .rows
+                .insert(index, row);
+        }
     }
 
     /// `EntityType.loadEntityRecursive`: an entity that cannot be created never
@@ -607,3 +619,87 @@ fn chunk_of(at: Vec3) -> ChunkKey {
 
 #[path = "general/tick.rs"]
 mod tick;
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::game::native_entity_refs::tests::with_resident_game;
+    use sunrise_gameplay_common::game::Dim;
+
+    #[test]
+    #[ignore = "daily"]
+    fn failed_general_tree_transfer_flushes_leaves_before_restoring_original_rows() {
+        with_resident_game(|game| {
+            let tag = Tag::compound([("id", Tag::String("test:transfer_row".into()))]);
+            let add = |game: &mut crate::game::ServerGame<'_>, uuid, mount| {
+                game.insert_general_row(
+                    0,
+                    GeneralEntityRecord {
+                        position: [0.0, 64.0, 0.0],
+                        velocity: [0.0; 3],
+                        rotation: [0.0; 2],
+                        uuid: [0, 0, 0, uuid],
+                        owner: None,
+                        custom_name: None,
+                        custom_name_visible: false,
+                        base: Default::default(),
+                        on_ground: false,
+                        fall_distance: 0.0,
+                        envelope: GeneralTypeEnvelope {
+                            type_key: "test:transfer_row".into(),
+                            payload_version: 0,
+                            payload_bytes: Vec::new(),
+                        },
+                        passengers: Vec::new(),
+                    },
+                    &tag,
+                    mount,
+                    None,
+                )
+            };
+            let root = add(game, 1, None);
+            let unrelated = add(game, 2, None);
+            let rider = add(game, 3, Some(root));
+            game.common.persist.transient.insert(rider);
+            game.common
+                .persist
+                .live
+                .extend([root, unrelated, rider].map(|id| (id, "test:transfer_row".into(), true)));
+            let rows = |game: &crate::game::ServerGame<'_>| {
+                game.common
+                    .resident_entities
+                    .general
+                    .rows
+                    .iter()
+                    .map(|row| (row.id, row.join, row.uuid, row.mount))
+                    .collect::<Vec<_>>()
+            };
+            let before = rows(game);
+            let source = game.common.dim;
+            let missing = Dim::Extra(mod_api::__private::dimension_key("test:missing_generator"));
+            assert!(
+                game.teleport_general_tree_across(
+                    root,
+                    missing,
+                    [0.0, 70.0, 0.0],
+                    None,
+                    false,
+                    super::super::vehicle_teleport::TeleportMotion::Stop,
+                )
+                .is_err()
+            );
+            assert_eq!(game.common.dim, source);
+            assert_eq!(rows(game), before);
+            assert_eq!(game.common.persist.transient, HashSet::from([rider]));
+            assert_eq!(
+                game.common
+                    .persist
+                    .live
+                    .iter()
+                    .map(|entry| entry.0)
+                    .collect::<Vec<_>>(),
+                [unrelated]
+            );
+        });
+    }
+}

@@ -2005,6 +2005,64 @@ mod tests {
     }
 
     #[test]
+    fn list_and_slot_publish_removals_before_dropping_owners() {
+        use residency::Change::Remove;
+        use std::rc::Rc;
+
+        struct Owner {
+            id: u32,
+            join: JoinSeq,
+            journal: residency::Journal,
+            on_drop: Rc<std::cell::RefCell<Vec<(u32, Vec<residency::Change>)>>>,
+        }
+        impl Joined for Owner {
+            fn join_seq(&self) -> JoinSeq {
+                self.join
+            }
+            fn set_join_seq(&mut self, join: JoinSeq) {
+                self.join = join;
+            }
+        }
+        impl Drop for Owner {
+            fn drop(&mut self) {
+                self.on_drop
+                    .borrow_mut()
+                    .push((self.id, changes(&self.journal)));
+            }
+        }
+        let journal = residency::Journal::default();
+        let on_drop = Rc::new(std::cell::RefCell::new(Vec::new()));
+        let owner = |id| Owner {
+            id,
+            join: JoinSeq::UNJOINED,
+            journal: journal.clone(),
+            on_drop: on_drop.clone(),
+        };
+
+        let mut list = JoinList::<Owner>::default();
+        list.bind_residency(&journal, journal_owner(), |row| (row.id, row.join));
+        list.push(owner(1));
+        list.push(owner(2));
+        let first = residency::Identity::new(1, list[0].join).unwrap();
+        let second = residency::Identity::new(2, list[1].join).unwrap();
+        changes(&journal);
+        drop(list);
+        assert_eq!(
+            *on_drop.borrow(),
+            [(1, vec![Remove(first), Remove(second)]), (2, vec![])]
+        );
+
+        on_drop.borrow_mut().clear();
+        let mut slot = ResidentSlot::default();
+        slot.bind_residency(&journal, journal_owner(), |row: &Owner| (row.id, row.join));
+        assert!(slot.install(owner(3)).is_ok());
+        let third = residency::Identity::new(3, slot.as_ref().unwrap().join).unwrap();
+        changes(&journal);
+        drop(slot);
+        assert_eq!(*on_drop.borrow(), [(3, vec![Remove(third)])]);
+    }
+
+    #[test]
     fn journal_singleton_replacement_and_extraction_have_distinct_terminals() {
         use residency::Change::{Extract, Install, PutBack, Remove};
         let journal = residency::Journal::default();

@@ -584,10 +584,7 @@ impl ServerGame<'_> {
                     }
                 }
             }
-            game.remove_vehicle_rows(&tree);
-            for id in tree {
-                game.detach_entity(id);
-            }
+            game.extract_vehicle_rows_for_reconstruction(tree);
             game.native_leaves_flush();
             game.enter_level(destination)?;
             // restoreFrom reloads saved state into fresh entities, rather than

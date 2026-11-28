@@ -229,6 +229,18 @@ impl Parked {
         self.save = save;
     }
 
+    fn extract_mob_passenger_for_transfer(&mut self, id: u32) -> Option<Mob> {
+        if let Some(index) = self.mobs.iter().position(|m| m.id == id) {
+            Some(self.mobs.remove_for_transfer(index))
+        } else {
+            // Boats and carts are only roots, which the caller takes.
+            match self.persist.off_level.remove(&id) {
+                Some(OffLevel::Mob(mob)) => Some(mob),
+                _ => None,
+            }
+        }
+    }
+
     /// The exact body restored by a cross-level transfer during natural-spawn admission.
     pub(in crate::game) fn natural_spawn_mob(
         &self,
@@ -1464,16 +1476,7 @@ impl crate::game::ServerGame<'_> {
             if let Some(state) = p.portal_states.remove(&id) {
                 self.server.portals.entities.insert(id, state);
             }
-            let mob = if let Some(index) = p.mobs.iter().position(|m| m.id == id) {
-                Some(p.mobs.remove_for_transfer(index))
-            } else {
-                // Boats and carts are only roots, which the caller takes.
-                match p.persist.off_level.remove(&id) {
-                    Some(OffLevel::Mob(mob)) => Some(mob),
-                    _ => None,
-                }
-            };
-            if let Some(mut mob) = mob {
+            if let Some(mut mob) = p.extract_mob_passenger_for_transfer(id) {
                 mob.join = sunrise_sim::join_seq::JoinSeq::UNJOINED;
                 moved.push(mob);
             }
@@ -1503,7 +1506,7 @@ impl crate::game::ServerGame<'_> {
         let level = self.common.dim;
         self.common.entity_attachments.move_collider(id, level);
         if self.uuid_admission_refused(self.common.persist.uuids.get(&id).copied()) {
-            self.common.persist.off_level.insert(id, object);
+            self.retain_refused_admission(id, object);
             return;
         }
         match object {
@@ -2754,6 +2757,33 @@ mod tests {
             *notices.lock().unwrap(),
             [Notice::Chunk([1, 0]), Notice::Entities([1, 0], 1)]
         );
+    }
+
+    #[test]
+    #[ignore = "daily"]
+    fn destructive_entity_snapshot_captures_rows_before_section_eviction() {
+        use crate::game::native_entity_refs::tests::with_resident_game;
+        use std::collections::HashSet;
+        use sunrise_items::items::ItemStack;
+
+        with_resident_game(|game| {
+            game.spawn_item(
+                ItemStack::new("minecraft:diamond", 1),
+                [0.5, 64.0, 0.5],
+                [0.0; 3],
+                0,
+            );
+            let id = game.common.dropped[0].id;
+            let uuid = game.uuid_for(id);
+            let sections = game.entity_chunks(&HashSet::from([(0, 0)]), true);
+            assert_eq!(sections.len(), 1);
+            let (chunk, records) = &sections[0];
+            assert_eq!(*chunk, (0, 0));
+            assert_eq!(records.len(), 1);
+            assert_eq!(sunrise_sim::entity_nbt::uuid(&records[0]), Some(uuid));
+            assert!(game.common.dropped.is_empty());
+            assert!(!game.common.persist.uuids.contains_key(&id));
+        });
     }
 
     #[test]

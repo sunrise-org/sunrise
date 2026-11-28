@@ -211,7 +211,7 @@ fn drop_hook(host: &mut LanHost, conn: u32) {
     }
 }
 
-fn take_vehicle<
+fn extract_vehicle_root_for_transfer<
     T: Rideable
         + sunrise_sim::join_seq::Joined
         + sunrise_mod_runtime::attachments::HasAttachmentLifetime,
@@ -1508,11 +1508,17 @@ impl crate::game::ServerGame<'_> {
         };
         // Keep the root out of both levels until its passengers have been
         // admitted: teleportCrossDimension copies passengers before the root.
-        let vehicle = if let Some(body) = take_vehicle(&mut parked.boats, id, at, yaw, motion) {
+        let vehicle = if let Some(body) =
+            extract_vehicle_root_for_transfer(&mut parked.boats, id, at, yaw, motion)
+        {
             OffLevel::Boat(body)
-        } else if let Some(body) = take_vehicle(&mut parked.carts, id, at, yaw, motion) {
+        } else if let Some(body) =
+            extract_vehicle_root_for_transfer(&mut parked.carts, id, at, yaw, motion)
+        {
             OffLevel::Cart(body)
-        } else if let Some(body) = take_vehicle(&mut parked.mobs, id, at, yaw, motion) {
+        } else if let Some(body) =
+            extract_vehicle_root_for_transfer(&mut parked.mobs, id, at, yaw, motion)
+        {
             OffLevel::Mob(body)
         } else {
             return;
@@ -1813,8 +1819,9 @@ mod tests {
         .into_iter()
         .collect();
         let at = Vec3::new(1.5, 100.0, 0.5);
-        let cart = take_vehicle(&mut carts, 3, at, 0.0, Vec3::new(1.6, -0.1, -0.7))
-            .expect("the cart travels");
+        let cart =
+            extract_vehicle_root_for_transfer(&mut carts, 3, at, 0.0, Vec3::new(1.6, -0.1, -0.7))
+                .expect("the cart travels");
         assert_eq!(cart.position, at);
         assert_eq!(cart.velocity, Vec3::new(0.4, -0.1, -0.4));
     }
@@ -1838,7 +1845,7 @@ mod tests {
         let mut carts = sunrise_sim::join_seq::JoinList::<minecarts::Minecart>::default();
         let mut mobs = sunrise_sim::join_seq::JoinList::<Mob>::default();
         let at = Vec3::new(1.5, 65.0, -2.5);
-        let boat = take_vehicle(&mut boats, 7, at, 90.0, Vec3::ZERO)
+        let boat = extract_vehicle_root_for_transfer(&mut boats, 7, at, 90.0, Vec3::ZERO)
             .expect("the vehicle the player rides travels with it");
         assert!(
             boats.is_empty(),
@@ -1849,9 +1856,9 @@ mod tests {
         assert_eq!(boat.yaw, 90.0, "it looks where its rider looks");
         assert_eq!(boat.velocity, Vec3::ZERO, "it comes with no motion");
         // A vehicle that is not in the level does not travel.
-        assert!(take_vehicle(&mut carts, 9, at, 0.0, Vec3::ZERO).is_none());
+        assert!(extract_vehicle_root_for_transfer(&mut carts, 9, at, 0.0, Vec3::ZERO).is_none());
         assert!(carts.is_empty());
-        assert!(take_vehicle(&mut mobs, 9, at, 0.0, Vec3::ZERO).is_none());
+        assert!(extract_vehicle_root_for_transfer(&mut mobs, 9, at, 0.0, Vec3::ZERO).is_none());
         assert!(mobs.is_empty());
     }
 }
@@ -1875,7 +1882,8 @@ mod transfer_lifetime_tests {
         let id = list[0].id();
         let key = ("test".into(), "transfer".into());
         let retained = index.lock().unwrap().snapshot(&key);
-        let moved = take_vehicle(&mut list, id, Vec3::ZERO, 0.0, Vec3::ZERO).unwrap();
+        let moved =
+            extract_vehicle_root_for_transfer(&mut list, id, Vec3::ZERO, 0.0, Vec3::ZERO).unwrap();
         assert!(list.is_empty());
         assert!(index.lock().unwrap().snapshot(&key).is_empty());
         VALUE.set(&mut map, Holder::Entity(id), 18).unwrap();

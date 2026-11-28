@@ -7,3 +7,6 @@ sunrise-client cut_layout::game::server_side::saving_server::tests::closing_and_
 sunrise-client cut_layout::game::server_side::server_lifecycle::tests::integrated_stop_finishes_after_an_unencodable_record lib daily resources
 sunrise-client cut_layout::game::server_side::server_lifecycle::tests::integrated_stop_propagates_metadata_errors_even_after_a_record_failure lib daily resources
 sunrise-gameplay game::server_side::levels::tests::idle_eviction_keeps_the_refused_column_and_retires_its_neighbor lib daily child-process
+sunrise-gameplay game::server_side::general_server::tests::failed_general_tree_transfer_flushes_leaves_before_restoring_original_rows lib daily resources
+sunrise-gameplay game::server_side::levels::tests::destructive_entity_snapshot_captures_rows_before_section_eviction lib daily resources
+sunrise-gameplay game::server_side::native_entity_remove::tests::pending_item_removal_retracts_membership_before_the_retirement_callback lib daily resources

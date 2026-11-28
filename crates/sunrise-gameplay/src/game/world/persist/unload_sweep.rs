@@ -153,38 +153,7 @@ impl crate::game::ServerGame<'_> {
             }
             keep
         });
-        self.common.persist.off_level.retain(|id, _| {
-            let keep = !leaving.contains(id);
-            if !keep {
-                removed.push(*id);
-            }
-            keep
-        });
-        if !self.common.persist.off_level.is_empty() {
-            // A retained boat or cart root is in no section and never saved:
-            // it lives only while a passenger or player still rides it.
-            let ridden: HashSet<u32> = self
-                .mob_objects()
-                .filter_map(|m| m.extra.mount)
-                .chain(
-                    self.common
-                        .resident_entities
-                        .general
-                        .rows
-                        .iter()
-                        .filter(|row| !leaving.contains(&row.id))
-                        .filter_map(|row| row.mount),
-                )
-                .chain(ridden_roots.iter().copied())
-                .collect();
-            self.common.persist.off_level.retain(|id, object| {
-                let keep = object.as_mob().is_some() || ridden.contains(id);
-                if !keep {
-                    removed.push(*id);
-                }
-                keep
-            });
-        }
+        self.evict_refused_admission_objects(&leaving, &ridden_roots, &mut removed);
         self.common.dropped.retain(|e| {
             let keep = !gone(e.position);
             if !keep {
@@ -231,6 +200,46 @@ impl crate::game::ServerGame<'_> {
             .retain(|_, (at, _)| !keys.contains(&chunk_of(*at)));
         for id in removed {
             self.forget_entity(id);
+        }
+    }
+
+    #[inline(always)]
+    fn evict_refused_admission_objects(
+        &mut self,
+        leaving: &HashSet<u32>,
+        ridden_roots: &HashSet<u32>,
+        removed: &mut Vec<u32>,
+    ) {
+        self.common.persist.off_level.retain(|id, _| {
+            let keep = !leaving.contains(id);
+            if !keep {
+                removed.push(*id);
+            }
+            keep
+        });
+        if !self.common.persist.off_level.is_empty() {
+            // Rejected boats and carts have no section and survive only while ridden.
+            let ridden: HashSet<u32> = self
+                .mob_objects()
+                .filter_map(|m| m.extra.mount)
+                .chain(
+                    self.common
+                        .resident_entities
+                        .general
+                        .rows
+                        .iter()
+                        .filter(|row| !leaving.contains(&row.id))
+                        .filter_map(|row| row.mount),
+                )
+                .chain(ridden_roots.iter().copied())
+                .collect();
+            self.common.persist.off_level.retain(|id, object| {
+                let keep = object.as_mob().is_some() || ridden.contains(id);
+                if !keep {
+                    removed.push(*id);
+                }
+                keep
+            });
         }
     }
 }

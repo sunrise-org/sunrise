@@ -473,7 +473,7 @@ impl crate::game::ServerGame<'_> {
             }
             self.remember(id, uuid, tag);
             if refused {
-                self.common.persist.off_level.insert(id, OffLevel::Boat(b));
+                self.retain_refused_admission(id, OffLevel::Boat(b));
             } else {
                 self.bind_saved_entity_attachments(id, &mut b.attachment_lifetime);
                 self.common.boats.push(b);
@@ -512,7 +512,7 @@ impl crate::game::ServerGame<'_> {
             }
             self.remember(id, uuid, tag);
             if refused {
-                self.common.persist.off_level.insert(id, OffLevel::Cart(c));
+                self.retain_refused_admission(id, OffLevel::Cart(c));
             } else {
                 self.bind_saved_entity_attachments(id, &mut c.attachment_lifetime);
                 self.common.carts.push(c);
@@ -665,7 +665,7 @@ impl crate::game::ServerGame<'_> {
             }
         } else {
             self.flush_unjoined_mob_parts(&mut m);
-            self.common.persist.off_level.insert(id, OffLevel::Mob(m));
+            self.retain_refused_admission(id, OffLevel::Mob(m));
         }
         id
     }
@@ -1059,6 +1059,15 @@ impl crate::game::ServerGame<'_> {
         out.finish()
     }
 
+    #[inline(always)]
+    pub(in crate::game::server_side) fn retain_refused_admission(
+        &mut self,
+        id: u32,
+        object: OffLevel,
+    ) {
+        self.common.persist.off_level.insert(id, object);
+    }
+
     /// Trace only edges touching off-level objects. A rejected leaf is owned
     /// by its resident vehicle; an orphaned rejected ancestor can instead be
     /// owned by a resident descendant or a player riding it.
@@ -1118,8 +1127,7 @@ impl crate::game::ServerGame<'_> {
             .filter(|id| !retained.contains(id))
             .collect();
         for id in gone {
-            self.common.persist.off_level.remove(&id);
-            self.forget_entity(id);
+            self.retire_unreferenced_refused_object(id);
         }
         let gone: Vec<_> = self
             .common
@@ -1130,9 +1138,20 @@ impl crate::game::ServerGame<'_> {
             .filter(|id| !retained.contains(id))
             .collect();
         for id in gone {
-            self.common.persist.removed_vehicles.remove(&id);
-            self.forget_entity(id);
+            self.retire_unreferenced_vehicle(id);
         }
+    }
+
+    #[inline(always)]
+    fn retire_unreferenced_refused_object(&mut self, id: u32) {
+        self.common.persist.off_level.remove(&id);
+        self.forget_entity(id);
+    }
+
+    #[inline(always)]
+    pub(in crate::game::server_side) fn retire_unreferenced_vehicle(&mut self, id: u32) {
+        self.common.persist.removed_vehicles.remove(&id);
+        self.forget_entity(id);
     }
 }
 

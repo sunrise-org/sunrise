@@ -1561,6 +1561,17 @@ impl crate::game::ServerGame<'_> {
         }
     }
 
+    #[inline(always)]
+    pub(in crate::game::server_side) fn extract_vehicle_rows_for_reconstruction(
+        &mut self,
+        ids: Vec<u32>,
+    ) {
+        self.remove_vehicle_rows(&ids);
+        for id in ids {
+            self.detach_entity(id);
+        }
+    }
+
     /// Drop objects after the caller captured the tree, before forgetting or transferring its state.
     pub(in crate::game::server_side) fn remove_vehicle_rows(&mut self, gone: &[u32]) {
         use crate::game::natural_spawning::NaturalAdmission;
@@ -2594,6 +2605,11 @@ impl crate::game::ServerGame<'_> {
         self.snapshot_entity_chunks(keys, EntitySnapshot::Save)
     }
     pub fn remove_unloading_entities(&mut self, keys: &HashSet<ChunkKey>) {
+        self.evict_entity_sections(keys);
+    }
+
+    #[inline(always)]
+    fn evict_entity_sections(&mut self, keys: &HashSet<ChunkKey>) {
         for key in keys {
             self.common.persist.unknown.remove(key);
         }

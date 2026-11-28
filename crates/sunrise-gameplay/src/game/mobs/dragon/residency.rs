@@ -10,6 +10,12 @@ impl crate::game::ServerGame<'_> {
     /// Physical retirement must forget sidecar data before IDs can be reused,
     /// not merely unregister the attachment index when the parts are dropped.
     pub fn discard_resident_dragon(&mut self) {
+        self.forget_dragon_sidecars_before_discard();
+        self.common.dragon.discard();
+    }
+
+    #[inline(always)]
+    fn forget_dragon_sidecars_before_discard(&mut self) {
         if let Some(id) = self
             .common
             .dragon
@@ -20,11 +26,8 @@ impl crate::game::ServerGame<'_> {
             for part in 0..8 {
                 self.forget_entity(dragon_part_id(id, part));
             }
-            // The parent's own sidecars go with it too, its `noPhysics` write
-            // included; the parts above are its separate entity ids.
             self.forget_entity(id);
         }
-        self.common.dragon.discard();
     }
 
     /// The dragon the level holds and the index (`getSubEntities` order) of
