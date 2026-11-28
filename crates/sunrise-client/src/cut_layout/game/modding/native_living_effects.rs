@@ -50,7 +50,7 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(21, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(21, kind, Vec3::ZERO, 0.0));
             let zombie = game.living(game.entity(21).unwrap()).unwrap();
             // The same load-owned slot is used for application, enumeration and diagnostics.
             let speed = ActiveEffect::new(
@@ -89,7 +89,9 @@ pub(crate) mod tests {
             );
             assert_eq!(first, [speed]);
 
-            game.armor_stands.push(ArmorStand::new(22, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(22, Vec3::ZERO, 0.0));
             let stand = game.living(game.entity(22).unwrap()).unwrap();
             assert_eq!(
                 stand.visit_effects(game, &mut |_| panic!("unavailable effects visited")),
@@ -107,7 +109,7 @@ pub(crate) mod tests {
         with_game(|game| {
             fixture_resident_column(&mut game.world, (0, 0));
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-            game.mobs.push(Mob::new(23, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(23, kind, Vec3::ZERO, 0.0));
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.player.as_mut().unwrap().entity_id = 20;
             sunrise_gameplay::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
@@ -131,12 +133,12 @@ pub(crate) mod tests {
         with_game(|game| {
             fixture_resident_column(&mut game.world, (0, 0));
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-            game.mobs.push(Mob::new(22, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(22, kind, Vec3::ZERO, 0.0));
             let cow = game.living(game.entity(22).unwrap()).unwrap();
             let key = mod_platform::__private::part_tests::effect_key("speed");
             assert!(game.living_add_effect(cow, &effect("speed", 2, 1)));
             assert!(!game.living_add_effect(cow, &effect("speed", 5, 0)));
-            let mob = &game.mobs[0];
+            let mob = &game.entities.mobs[0];
             assert_eq!(mob.extra.effect_chains[0].id, "minecraft:speed");
             assert_eq!(mob.extra.effect_chains[0].registry_index, Some(0));
             assert_eq!(game.living_effect(cow, key).unwrap().id, key);
@@ -152,15 +154,20 @@ pub(crate) mod tests {
         with_game(|game| {
             fixture_resident_column(&mut game.world, (0, 0));
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-            game.mobs.push(Mob::new(24, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(24, kind, Vec3::ZERO, 0.0));
             let cow = game.living(game.entity(24).unwrap()).unwrap();
             let speed = mod_platform::__private::part_tests::effect_key("speed");
             assert!(game.living_add_effect(cow, &effect("speed", 200, 0)));
-            game.mobs[0].removed = true;
+            game.entities.mobs[0].removed = true;
             assert!(!game.living_add_effect(cow, &effect("slowness", 200, 0)));
             assert!(!game.living_remove_effect(cow, speed));
             assert!(!game.living_remove_all_effects(cow));
-            let held: Vec<_> = game.mobs[0].extra.effects.iter().map(|e| e.id).collect();
+            let held: Vec<_> = game.entities.mobs[0]
+                .extra
+                .effects
+                .iter()
+                .map(|e| e.id)
+                .collect();
             assert_eq!(held, ["minecraft:speed"]);
         });
     }
@@ -173,17 +180,20 @@ pub(crate) mod tests {
         with_game(|game| {
             fixture_resident_column(&mut game.world, (0, 0));
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-            game.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
             let cow = game.living(game.entity(12).unwrap()).unwrap();
             let item = |id| ItemStack::new(id, 1);
-            let mut expected = game.mobs[0].random.clone();
+            let mut expected = game.entities.mobs[0].random.clone();
             let mut level_random = game.world.random.clone();
             expected.next_float();
             assert_eq!(
                 game.living_apply_consume_effect(cow, &item("minecraft:pufferfish"), 0),
                 Some(true)
             );
-            assert_eq!(game.mobs[0].random.next_float(), expected.next_float());
+            assert_eq!(
+                game.entities.mobs[0].random.next_float(),
+                expected.next_float()
+            );
             assert_eq!(game.world.random.next_float(), level_random.next_float());
             assert!(game.living_potion_affected(
                 cow,
@@ -248,7 +258,7 @@ pub(crate) mod tests {
                 (14, "minecraft:cow"),
             ] {
                 let kind = game.res.mob_types().get(kind).unwrap().clone();
-                game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
             }
             let zombie = game.living(game.entity(12).unwrap()).unwrap();
             let spider = game.living(game.entity(13).unwrap()).unwrap();
@@ -306,12 +316,12 @@ pub(crate) mod tests {
             // remove_effect takes its absorption hearts with it; a second
             // remove has nothing to do.
             assert!(game.living_add_effect(zombie, &effect("minecraft:absorption", 100, 1)));
-            game.mobs[0].absorption = 8.0;
+            game.entities.mobs[0].absorption = 8.0;
             assert!(game.living_remove_effect(
                 zombie,
                 mod_platform::__private::part_tests::effect_key("minecraft:absorption")
             ));
-            assert_eq!(game.mobs[0].absorption, 0.0);
+            assert_eq!(game.entities.mobs[0].absorption, 0.0);
             assert!(!game.living_remove_effect(
                 zombie,
                 mod_platform::__private::part_tests::effect_key("minecraft:absorption")

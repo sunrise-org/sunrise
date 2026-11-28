@@ -156,7 +156,8 @@ fn a_block_part_hears_a_piston_destroy_it_before_the_move_overwrites_its_cells()
                 });
             };
             let torches = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-                game.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .filter(|d| &*d.stack.item == "minecraft:torch")
                     .count()

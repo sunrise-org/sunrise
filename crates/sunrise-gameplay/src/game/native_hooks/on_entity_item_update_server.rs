@@ -82,16 +82,16 @@ impl mod_api::ItemEntityServerAccess for ItemEntityTickAccess<'_, '_> {
 
 impl mod_api::ResidentItemEntity for ResidentDroppedItem<'_, '_> {
     fn position(&self) -> [f64; 3] {
-        let p = self.game.dropped[self.index].position;
+        let p = self.game.entities.dropped[self.index].position;
         [p.x, p.y, p.z]
     }
     fn velocity(&self) -> [f64; 3] {
-        let v = self.game.dropped[self.index].velocity;
+        let v = self.game.entities.dropped[self.index].velocity;
         [v.x, v.y, v.z]
     }
     fn with_stack(&self, call: &mut dyn for<'a> FnMut(mod_api::ItemStackView<'a>)) {
         use sunrise_gameplay_common::game::api_values::{project_stack, stack_read_metadata};
-        let stack = &self.game.dropped[self.index].stack;
+        let stack = &self.game.entities.dropped[self.index].stack;
         let Ok(metadata) = stack_read_metadata(stack) else {
             return;
         };
@@ -99,13 +99,13 @@ impl mod_api::ResidentItemEntity for ResidentDroppedItem<'_, '_> {
         call(mod_api::ItemStackView::resident(metadata, &project));
     }
     fn pickup_delay(&self) -> i32 {
-        self.game.dropped[self.index].pickup_delay
+        self.game.entities.dropped[self.index].pickup_delay
     }
     fn age(&self) -> i32 {
-        self.game.dropped[self.index].age
+        self.game.entities.dropped[self.index].age
     }
     fn target(&self) -> Option<u128> {
-        self.game.dropped[self.index]
+        self.game.entities.dropped[self.index]
             .target
             .map(sunrise_sim::lan::playerdata::ints_uuid)
     }
@@ -151,7 +151,7 @@ impl crate::game::ServerGame<'_> {
     /// ends here. An item no part is attached to is told nothing: its stack is not
     /// converted and no scope is made.
     pub(crate) fn item_update_halts(&mut self, index: usize) -> bool {
-        let item = &self.common.dropped[index];
+        let item = &self.common.entities.dropped[index];
         if !mod_api::__private::item_listens(mod_api::HookId::OnEntityItemUpdate, &item.stack.item)
         {
             return false;
@@ -164,7 +164,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         // Hold the entry's routing identity across callbacks, even if a part changes the stack.
-        let item_id = self.common.dropped[index].stack.item.clone();
+        let item_id = self.common.entities.dropped[index].stack.item.clone();
         let mut canceled = false;
         let mut access = ItemEntityTickAccess {
             game: self,
@@ -188,7 +188,7 @@ impl crate::game::ServerGame<'_> {
         if !round.told_listening() && update_hook {
             let ticking = self.entity_ticking_area();
             let mut i = 0;
-            while let Some(item) = self.common.dropped.get(i) {
+            while let Some(item) = self.common.entities.dropped.get(i) {
                 let (id, x, z) = (
                     item.id,
                     item.position.x.floor() as i32,
@@ -215,7 +215,7 @@ pub mod on_entity_item_update_tests {
     pub fn rest(game: &mut crate::game::ServerGame<'_>, item: &str, x: f64, z: f64) -> u32 {
         game.spawn_item(ItemStack::new(item, 1), [x, 64.0, z], [0.0; 3], 20);
         game.server.ticked_entities_through = game.server.next_entity;
-        game.dropped.last().unwrap().id
+        game.entities.dropped.last().unwrap().id
     }
 }
 

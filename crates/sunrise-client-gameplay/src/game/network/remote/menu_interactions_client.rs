@@ -409,6 +409,7 @@ impl crate::game::ClientGame<'_> {
         let entity = p.entity as u32;
         let Some(species) = self
             .common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == entity)

@@ -56,7 +56,7 @@ impl crate::game::ServerGame<'_> {
     pub fn tick_dropped_items(&mut self, round: &mut native_ticks::TickRound) {
         // Item update hooks can discard a drop before the pass starts.
         self.native_item_removals_flush(|_| {});
-        let mut items = self.common.dropped.lift();
+        let mut items = self.common.entities.dropped.lift();
         // ServerLevel.tick: only entities in entity-ticking chunks tick.
         let ticking = self.entity_ticking_area();
         let mut pass = ItemPass {
@@ -118,9 +118,10 @@ impl crate::game::ServerGame<'_> {
                 let given = self.give_items_back(items, &mut pass, i, round, |game, round| {
                     if game
                         .common
+                        .entities
                         .dropped
                         .locate(join)
-                        .is_some_and(|k| game.common.dropped[k].id == id)
+                        .is_some_and(|k| game.common.entities.dropped[k].id == id)
                         && (!tell_pre || game.native_tick_pre_one(round, id, native_ticks::ITEM))
                     {
                         if tell_pre {
@@ -129,9 +130,10 @@ impl crate::game::ServerGame<'_> {
                         if update_hook
                             && let Some(k) = game
                                 .common
+                                .entities
                                 .dropped
                                 .locate(join)
-                                .filter(|&k| game.common.dropped[k].id == id)
+                                .filter(|&k| game.common.entities.dropped[k].id == id)
                         {
                             if game.item_update_halts(k) {
                                 round.halt(id);
@@ -140,9 +142,10 @@ impl crate::game::ServerGame<'_> {
                                 game.native_item_removals_flush(|_| {});
                                 if !game
                                     .common
+                                    .entities
                                     .dropped
                                     .locate(join)
-                                    .is_some_and(|k| game.common.dropped[k].id == id)
+                                    .is_some_and(|k| game.common.entities.dropped[k].id == id)
                                 {
                                     game.native_tick_post_one(round, id, native_ticks::ITEM);
                                 }
@@ -349,9 +352,10 @@ impl crate::game::ServerGame<'_> {
                                 if let Some(epoch) = game.common.native_lifecycle.epoch()
                                     && game
                                         .common
+                                        .entities
                                         .dropped
                                         .locate(join)
-                                        .is_some_and(|k| game.common.dropped[k].id == id)
+                                        .is_some_and(|k| game.common.entities.dropped[k].id == id)
                                 {
                                     let item = mod_api::ItemEntityRef::new(
                                         mod_api::EntityRef::new(epoch, id),
@@ -362,9 +366,10 @@ impl crate::game::ServerGame<'_> {
                                     game.native_item_removals_flush(|_| {});
                                     if !game
                                         .common
+                                        .entities
                                         .dropped
                                         .locate(join)
-                                        .is_some_and(|k| game.common.dropped[k].id == id)
+                                        .is_some_and(|k| game.common.entities.dropped[k].id == id)
                                     {
                                         game.native_tick_post_one(round, id, native_ticks::ITEM);
                                     }
@@ -422,13 +427,20 @@ impl crate::game::ServerGame<'_> {
                 let mut drops = Vec::new();
                 let given = self.give_items_back(items, &mut pass, i, round, |game, round| {
                     drops = if let Some(k) =
-                        native_ticks::place(&game.common.dropped, i, |item| item.id == id)
+                        native_ticks::place(&game.common.entities.dropped, i, |item| item.id == id)
                     {
                         game.destroy_item_entity_drops(k, &damage_type)
                     } else {
                         Vec::new()
                     };
-                    if tell_post && !game.common.dropped.iter().any(|item| item.id == id) {
+                    if tell_post
+                        && !game
+                            .common
+                            .entities
+                            .dropped
+                            .iter()
+                            .any(|item| item.id == id)
+                    {
                         game.native_tick_post_one(round, id, native_ticks::ITEM);
                     }
                 });
@@ -474,7 +486,7 @@ impl crate::game::ServerGame<'_> {
                 self.native_entity_left(id);
             }
             self.native_item_removals_flush(|_| {});
-            items = self.common.dropped.lift();
+            items = self.common.entities.dropped.lift();
         }
         let Some(p) = self.common.player.as_ref() else {
             self.common.put_back_dropped(items);
@@ -521,7 +533,7 @@ impl crate::game::ServerGame<'_> {
         call: impl FnOnce(&mut Self, &mut native_ticks::TickRound),
     ) -> GivenBack {
         let (id, join) = (items[i].id, items[i].join);
-        let same_rows = self.common.dropped.is_empty();
+        let same_rows = self.common.entities.dropped.is_empty();
         let compacted = pass.any_removed;
         if compacted {
             let mut k = 0;
@@ -535,7 +547,7 @@ impl crate::game::ServerGame<'_> {
         }
         let mut left = std::mem::take(&mut pass.pending_left);
         self.common.put_back_dropped(items);
-        let restored = self.common.dropped.stamp();
+        let restored = self.common.entities.dropped.stamp();
         if !left.is_empty() {
             for &left_id in &left {
                 self.native_entity_left(left_id);
@@ -546,8 +558,8 @@ impl crate::game::ServerGame<'_> {
         pass.pending_left = left;
         call(self, round);
         self.native_item_removals_flush(|_| {});
-        let unchanged = same_rows && !compacted && self.common.dropped.stamp() == restored;
-        let items = self.common.dropped.lift();
+        let unchanged = same_rows && !compacted && self.common.entities.dropped.stamp() == restored;
+        let items = self.common.entities.dropped.lift();
         if unchanged {
             return GivenBack {
                 items,
@@ -616,8 +628,8 @@ impl crate::game::ServerGame<'_> {
         let area = Aabb::new(centre.subtract(half), centre.add_vector(half));
         // A server's orbs are its own; a LAN or server guest only shows them.
         if self.common.is_logical_server() {
-            for i in 0..self.common.orbs.len() {
-                let o = &self.common.orbs[i];
+            for i in 0..self.common.entities.orbs.len() {
+                let o = &self.common.entities.orbs[i];
                 if !o.bounds().intersects(area) {
                     continue;
                 }
@@ -629,10 +641,10 @@ impl crate::game::ServerGame<'_> {
                     self.restore_orb(join, orb_value, count, age);
                     continue;
                 }
-                let Some(i) = self.common.orbs.locate(join) else {
+                let Some(i) = self.common.entities.orbs.locate(join) else {
                     continue;
                 };
-                let o = &mut self.common.orbs[i];
+                let o = &mut self.common.entities.orbs[i];
                 // A mod's write in the merge hook is the merged orb; else one more in its count.
                 if (o.value, o.count) == (orb_value, count) {
                     if count >= sunrise_sim::orb_limits::MAX_COUNT {
@@ -655,8 +667,8 @@ impl crate::game::ServerGame<'_> {
         count: u32,
         age: i32,
     ) {
-        if let Some(i) = self.common.orbs.locate(join) {
-            let orb = &mut self.common.orbs[i];
+        if let Some(i) = self.common.entities.orbs.locate(join) {
+            let orb = &mut self.common.entities.orbs[i];
             (orb.value, orb.count, orb.age) = (value, count, age);
         }
     }
@@ -702,28 +714,29 @@ impl crate::game::ServerGame<'_> {
     /// `ExperienceOrb.tick`'s scan before movement, once every twenty ticks.
     /// Hooks can change the resident list, so retain join identities, not indices.
     pub fn merge_orb(&mut self, i: usize) {
-        if !self.common.orbs[i].ticks.is_multiple_of(20) {
+        if !self.common.entities.orbs[i].ticks.is_multiple_of(20) {
             return;
         }
-        let into_join = self.common.orbs[i].join;
-        let area = self.common.orbs[i]
+        let into_join = self.common.entities.orbs[i].join;
+        let area = self.common.entities.orbs[i]
             .bounds()
             .inflate(Vec3::new(0.5, 0.5, 0.5));
         let candidates: Vec<_> = self
             .common
+            .entities
             .orbs
             .iter()
             .filter(|o| o.join != into_join && o.bounds().intersects(area))
             .map(|o| o.join)
             .collect();
         for from_join in candidates {
-            let Some(i) = self.common.orbs.locate(into_join) else {
+            let Some(i) = self.common.entities.orbs.locate(into_join) else {
                 return;
             };
-            let Some(j) = self.common.orbs.locate(from_join) else {
+            let Some(j) = self.common.entities.orbs.locate(from_join) else {
                 continue;
             };
-            let (a, b) = (&self.common.orbs[i], &self.common.orbs[j]);
+            let (a, b) = (&self.common.entities.orbs[i], &self.common.entities.orbs[j]);
             let (into, into_value, into_count, into_age) = (a.id, a.value, a.count, a.age);
             let (from, from_value, from_count) = (b.id, b.value, b.count);
             let vanilla = b.can_merge(a.id, a.value);
@@ -733,13 +746,15 @@ impl crate::game::ServerGame<'_> {
                 self.restore_orb(into_join, into_value, into_count, into_age);
                 continue;
             }
-            let Some(i) = self.common.orbs.locate(into_join) else {
+            let Some(i) = self.common.entities.orbs.locate(into_join) else {
                 return;
             };
-            let written =
-                (self.common.orbs[i].value, self.common.orbs[i].count) != (into_value, into_count);
-            let fresh = self.common.orbs.locate(from_join).filter(|&j| {
-                let (a, b) = (&self.common.orbs[i], &self.common.orbs[j]);
+            let written = (
+                self.common.entities.orbs[i].value,
+                self.common.entities.orbs[i].count,
+            ) != (into_value, into_count);
+            let fresh = self.common.entities.orbs.locate(from_join).filter(|&j| {
+                let (a, b) = (&self.common.entities.orbs[i], &self.common.entities.orbs[j]);
                 (b.value, b.count) == (from_value, from_count)
                     && b.bounds()
                         .intersects(a.bounds().inflate(Vec3::new(0.5, 0.5, 0.5)))
@@ -748,7 +763,7 @@ impl crate::game::ServerGame<'_> {
             // source's count. A stale source, or a count past what a save holds, refuses
             // the merge and puts a written `into` back.
             let count = if written {
-                Some(self.common.orbs[i].count)
+                Some(self.common.entities.orbs[i].count)
             } else {
                 into_count
                     .checked_add(from_count)
@@ -758,10 +773,10 @@ impl crate::game::ServerGame<'_> {
                 self.restore_orb(into_join, into_value, into_count, into_age);
                 continue;
             };
-            let age = self.common.orbs[j].age;
-            self.common.orbs[i].count = count;
-            self.common.orbs[i].age = self.common.orbs[i].age.min(age);
-            self.common.orbs.remove(j);
+            let age = self.common.entities.orbs[j].age;
+            self.common.entities.orbs[i].count = count;
+            self.common.entities.orbs[i].age = self.common.entities.orbs[i].age.min(age);
+            self.common.entities.orbs.remove(j);
         }
     }
     /// `Entity.unstuckIfPossible`, which `ExperienceOrb`'s constructor runs on an
@@ -812,7 +827,7 @@ impl crate::game::ServerGame<'_> {
             velocity = Vec3::new(-velocity.x, -velocity.y, -velocity.z);
         }
         self.server.next_entity += 1;
-        self.common.orbs.push(ExperienceOrb {
+        self.common.entities.orbs.push(ExperienceOrb {
             size_answer: None,
             attachment_lifetime: Default::default(),
             fall_distance: 0.0,
@@ -881,7 +896,7 @@ impl crate::game::ServerGame<'_> {
         });
         // The batch is lifted while it is searched, as the pass's other kinds are; the orb is
         // taken from the restored list, where a `pickup_xp` listener reaches it.
-        let orbs = self.common.orbs.lift();
+        let orbs = self.common.entities.orbs.lift();
         #[cfg(any(test, feature = "test-support"))]
         crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
         // ExperienceOrb.playerTouch takes nothing while takeXpDelay runs, and sets it to 2 when
@@ -901,9 +916,10 @@ impl crate::game::ServerGame<'_> {
                     .map(|o| o.join)
             });
         self.common
+            .entities
             .orbs
             .restore(orbs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
-        if let Some(index) = touched.and_then(|join| self.common.orbs.locate(join)) {
+        if let Some(index) = touched.and_then(|join| self.common.entities.orbs.locate(join)) {
             self.host_take_orb(index);
         }
     }
@@ -914,8 +930,8 @@ impl crate::game::ServerGame<'_> {
     /// the rest as points, then one off the orb's count, discarding it at 0. False when a mod
     /// vetoed the pickup or removed the orb.
     pub(in crate::game) fn host_take_orb(&mut self, index: usize) -> bool {
-        let join = self.common.orbs[index].join;
-        let orb_id = self.common.orbs[index].id;
+        let join = self.common.entities.orbs[index].join;
+        let orb_id = self.common.entities.orbs[index].id;
         // On a server only (the guests' pass asks the same), and only when a mod hears it.
         let server = self.common.is_logical_server()
             || self.server.serving.is_some()
@@ -944,11 +960,11 @@ impl crate::game::ServerGame<'_> {
         if !live(self) {
             return false;
         }
-        let Some(index) = self.common.orbs.locate(join) else {
+        let Some(index) = self.common.entities.orbs.locate(join) else {
             return false;
         };
         self.server.xp_delay = 2;
-        let o = self.common.orbs[index].clone();
+        let o = self.common.entities.orbs[index].clone();
         // ClientPacketListener.handleTakeItemEntity: every orb taken sounds at the orb, whether
         // Mending took its points or not.
         let mut r = random_source::create();
@@ -965,11 +981,11 @@ impl crate::game::ServerGame<'_> {
             return false;
         }
         // A merged orb gives its value once per count and goes at zero.
-        if let Some(index) = self.common.orbs.locate(join) {
-            if self.common.orbs[index].count <= 1 {
+        if let Some(index) = self.common.entities.orbs.locate(join) {
+            if self.common.entities.orbs[index].count <= 1 {
                 self.remove_orb(index);
             } else {
-                self.common.orbs[index].count -= 1;
+                self.common.entities.orbs[index].count -= 1;
             }
         }
         true
@@ -980,7 +996,7 @@ impl crate::game::ServerGame<'_> {
     /// whether or not the orb is in reach. False while `takeXpDelay` runs, for a player with no
     /// body here, and when a mod vetoes the pickup through `pickup_xp`.
     pub(in crate::game) fn native_touch_orb_now(&mut self, id: u32) -> bool {
-        let Some(index) = self.common.orbs.iter().position(|o| o.id == id) else {
+        let Some(index) = self.common.entities.orbs.iter().position(|o| o.id == id) else {
             return false;
         };
         // In a guest's turn, `xp_delay` is the guest's own `takeXpDelay`.
@@ -1033,6 +1049,7 @@ impl crate::game::ServerGame<'_> {
     ) -> bool {
         let Some((item, count)) = self
             .common
+            .entities
             .dropped
             .iter()
             .rev()
@@ -1095,14 +1112,14 @@ impl crate::game::ServerGame<'_> {
 
     /// Item entity `i` leaves the level (`Entity.discard`); mods hear it.
     pub fn remove_dropped(&mut self, i: usize) -> ItemEntity {
-        let e = self.common.dropped.remove(i);
+        let e = self.common.entities.dropped.remove(i);
         self.native_entity_left(e.id);
         e
     }
 
     /// Experience orb `i` leaves the level (`Entity.discard`); mods hear it.
     pub(in crate::game) fn remove_orb(&mut self, i: usize) -> ExperienceOrb {
-        let o = self.common.orbs.remove(i);
+        let o = self.common.entities.orbs.remove(i);
         self.native_entity_left(o.id);
         o
     }
@@ -1111,7 +1128,11 @@ impl crate::game::ServerGame<'_> {
     /// out of the level (`native_entity_join_level`).
     pub(in crate::game) fn just_spawned_item(&mut self) -> Option<&mut ItemEntity> {
         let id = self.server.next_entity;
-        self.common.dropped.last_mut().filter(|d| d.id == id)
+        self.common
+            .entities
+            .dropped
+            .last_mut()
+            .filter(|d| d.id == id)
     }
 
     /// `new ItemEntity(level, x, y, z, stack, dx, dy, dz)`.
@@ -1280,7 +1301,13 @@ impl crate::game::ServerGame<'_> {
         } else {
             self.toss_item(thrown, at, v, uuid)?
         };
-        let item = self.common.dropped.iter_mut().rev().find(|d| d.id == id)?;
+        let item = self
+            .common
+            .entities
+            .dropped
+            .iter_mut()
+            .rev()
+            .find(|d| d.id == id)?;
         item.thrower = uuid;
         Some(item.id)
     }

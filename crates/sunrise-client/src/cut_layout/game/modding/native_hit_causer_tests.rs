@@ -220,11 +220,21 @@ fn shot(kind: ProjectileKind, owner: Who) -> Projectile {
 }
 
 fn mob_at(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Vec3 {
-    game.mobs.iter().find(|m| m.id == id).unwrap().position
+    game.entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .position
 }
 
 fn move_mob(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, to: Vec3) {
-    game.mobs.iter_mut().find(|m| m.id == id).unwrap().position = to;
+    game.entities
+        .mobs
+        .iter_mut()
+        .find(|m| m.id == id)
+        .unwrap()
+        .position = to;
 }
 
 fn projectile(game: &mut sunrise_gameplay::game::ServerGame<'_>, seen: &Mutex<Vec<Seen>>) {
@@ -279,7 +289,8 @@ fn sting(game: &mut sunrise_gameplay::game::ServerGame<'_>, seen: &Mutex<Vec<See
     game.player.as_mut().unwrap().position = Vec3::new(3.5, 70.0, 3.5);
     let fish = summon_mob(game, "minecraft:pufferfish", "{NoAI:1b}");
     let cow = summon_mob(game, "minecraft:cow", "{NoAI:1b}");
-    game.mobs
+    game.entities
+        .mobs
         .iter_mut()
         .find(|m| m.id == fish)
         .unwrap()
@@ -369,7 +380,7 @@ fn trident(
     assert!(game.run_command("forceload add 0 0"));
     game.player.as_mut().unwrap().position = Vec3::new(0.5, 64.0, 8.5);
     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-    game.mobs.push(sunrise_sim::mobs::Mob::new(
+    game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
         72,
         kind,
         Vec3::new(3.0, 64.0, 0.5),
@@ -381,7 +392,7 @@ fn trident(
     t.owner = 7;
     t.owner_uuid = Some(sunrise_sim::lan::playerdata::uuid_ints(7));
     t.left_owner = true;
-    game.tridents.push(t);
+    game.entities.tridents.push(t);
     mark.set(game, Holder::Player(7), 9).unwrap();
     game.tick_tridents();
     assert_caused(seen, 72, 7, 20.0, Some(9));
@@ -430,7 +441,12 @@ fn guest_post(
     mark: &AttachmentKey<i32>,
 ) {
     let pig = summon_mob(game, "minecraft:pig", "{NoAI:1b}");
-    game.mobs.iter_mut().find(|m| m.id == pig).unwrap().health = 0.5;
+    game.entities
+        .mobs
+        .iter_mut()
+        .find(|m| m.id == pig)
+        .unwrap()
+        .health = 0.5;
     mark.set(game, Holder::Player(12), 5).unwrap();
     blast(game, [1.5, 70.0, 0.5], 12, true, Some(12));
     let posts = calls(seen, "post", pig);

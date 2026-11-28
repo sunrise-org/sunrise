@@ -234,7 +234,7 @@ impl ServerGame<'_> {
                 })
             }
             sunrise_sim::mobs::Who::Mob(id) => {
-                let m = self.common.mobs.iter().find(|m| m.id == id)?;
+                let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
                 Some(sunrise_sim::mobs::Aim {
                     eye: [m.position.x, m.eye_y(), m.position.z],
                     look: m.look_angle(),
@@ -265,22 +265,22 @@ impl ServerGame<'_> {
     pub fn hurt_by_player(&mut self, index: usize, amount: f32, source: Damage) -> (bool, bool) {
         let attack = self.attack_of_who(Some(sunrise_sim::mobs::Who::Player));
         let plan = self.prepare_knockback_credit(
-            self.common.mobs[index].id as i32,
+            self.common.entities.mobs[index].id as i32,
             source.attacker,
             &attack,
         );
         let aim = self.attacker_aim(source.attacker);
         let (id, join, old_health) = (
-            self.common.mobs[index].id,
-            self.common.mobs[index].join,
-            self.common.mobs[index].health,
+            self.common.entities.mobs[index].id,
+            self.common.entities.mobs[index].join,
+            self.common.entities.mobs[index].health,
         );
         // The causing entity's aim, for what turns a blow by where it points
         // (`SulfurCube.knockback`).
-        let mob_id = self.common.mobs[index].id;
-        self.common.mobs[index].creative_attacker = self.common.creative;
-        self.common.mobs[index].attacker_aim = aim;
-        self.common.mobs[index].dealt_absorbed = 0;
+        let mob_id = self.common.entities.mobs[index].id;
+        self.common.entities.mobs[index].creative_attacker = self.common.creative;
+        self.common.entities.mobs[index].attacker_aim = aim;
+        self.common.entities.mobs[index].dealt_absorbed = 0;
         let decision =
             crate::game::server_side::entity_server::causer_decision!(self, attack.attacker);
         let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
@@ -302,18 +302,21 @@ impl ServerGame<'_> {
                 source,
             )
         };
-        self.common.mobs[index].attacker_aim = None;
-        self.common.mobs[index].creative_attacker = false;
+        self.common.entities.mobs[index].attacker_aim = None;
+        self.common.entities.mobs[index].creative_attacker = false;
         let Some((mut index, hurt)) = self.complete_mob_hurt(index, hurt) else {
             return (false, false);
         };
-        if hurt && self.common.mobs[index].has_protected_hurt() {
+        if hurt && self.common.entities.mobs[index].has_protected_hurt() {
             self.flush_mob_death_protection(mob_id);
             let Some(i) = self
                 .common
                 .mob_index
-                .find(&self.common.mobs, id)
-                .filter(|&i| self.common.mobs[i].join == join && !self.common.mobs[i].removed)
+                .find(&self.common.entities.mobs, id)
+                .filter(|&i| {
+                    self.common.entities.mobs[i].join == join
+                        && !self.common.entities.mobs[i].removed
+                })
             else {
                 return (hurt, false);
             };
@@ -324,40 +327,44 @@ impl ServerGame<'_> {
         // `Who::Player` is the player whose blow this is. Left in the outbox,
         // the end-of-tick sweep would deal them with no player in place (a
         // serving thread's players are all guests).
-        let raised = std::mem::take(&mut self.common.mobs[index].outbox);
+        let raised = std::mem::take(&mut self.common.entities.mobs[index].outbox);
         let (hits, rest): (Vec<_>, Vec<_>) = raised.into_iter().partition(|e| {
             matches!(
                 e,
                 MobEvent::DamagePlayer { .. } | MobEvent::DamageMob { .. }
             )
         });
-        self.common.mobs[index].outbox = rest;
-        let killed = hurt && old_health > 0.0 && !self.common.mobs[index].alive();
+        self.common.entities.mobs[index].outbox = rest;
+        let killed = hurt && old_health > 0.0 && !self.common.entities.mobs[index].alive();
         let _ = self.handle_mob_events(hits);
         let Some(index) = self
             .common
             .mob_index
-            .find(&self.common.mobs, id)
-            .filter(|&i| self.common.mobs[i].join == join && !self.common.mobs[i].removed)
+            .find(&self.common.entities.mobs, id)
+            .filter(|&i| {
+                self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed
+            })
         else {
             return (hurt, killed);
         };
         // LivingEntity.actuallyHurt: Stats.DAMAGE_DEALT_ABSORBED for the attacking player,
         // awarded here, during that player's own attack (a server's guest has its own
         // statistics only inside `as_guest`).
-        let absorbed = std::mem::take(&mut self.common.mobs[index].dealt_absorbed);
+        let absorbed = std::mem::take(&mut self.common.entities.mobs[index].dealt_absorbed);
         if absorbed > 0 {
             self.award_custom_stat("damage_dealt_absorbed", absorbed);
         }
-        let id = self.common.mobs[index].id;
-        if hurt && self.common.mobs[index].health != old_health {
+        let id = self.common.entities.mobs[index].id;
+        if hurt && self.common.entities.mobs[index].health != old_health {
             self.mob_damage_event(id);
         }
         if let Some(index) = self
             .common
             .mob_index
-            .find(&self.common.mobs, id)
-            .filter(|&i| self.common.mobs[i].join == join && !self.common.mobs[i].removed)
+            .find(&self.common.entities.mobs, id)
+            .filter(|&i| {
+                self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed
+            })
         {
             // The accepted hit already committed its player credit, including Thorns.
             self.finish_mob_damage_at(index);
@@ -370,6 +377,7 @@ impl ServerGame<'_> {
     pub(in crate::game) fn settle_dealt_absorbed(&mut self, by_player: bool) {
         let absorbed: i32 = self
             .common
+            .entities
             .mobs
             .iter_mut()
             .map(|m| std::mem::take(&mut m.dealt_absorbed))
@@ -383,8 +391,8 @@ impl ServerGame<'_> {
     /// the post-attack enchantments, then `postHurtEnemy` with the weapon's
     /// wear.
     pub(in crate::game::server_side) fn weapon_hit(&mut self, index: usize, source: Damage) {
-        let victim = self.common.mobs[index].id;
-        let kind = self.common.mobs[index].kind.id.clone();
+        let victim = self.common.entities.mobs[index].id;
+        let kind = self.common.entities.mobs[index].kind.id.clone();
         let damage_type = sunrise_sim::health::source_damage_type(source);
         let Some(stack) = self.common.held().cloned() else {
             // An empty hand still meets the victim's own post-attack
@@ -429,9 +437,9 @@ impl ServerGame<'_> {
     /// waived from where the hit landed, the ground or air smash sounds, and
     /// the knockback around the target.
     pub(in crate::game::server_side) fn mace_hurt_enemy(&mut self, index: usize) {
-        let target_on_ground = self.common.mobs[index].ground.on_ground;
+        let target_on_ground = self.common.entities.mobs[index].ground.on_ground;
         if let Some(fall) = self.mace_smash_self(target_on_ground) {
-            let target = &self.common.mobs[index];
+            let target = &self.common.entities.mobs[index];
             self.smash_knockback(target.position, Spared::Mob(target.id), fall);
         }
     }
@@ -548,7 +556,7 @@ impl ServerGame<'_> {
         self.server_level_event_at(2013, on_pos, 750);
         let heavy = if fall > HEAVY_THRESHOLD { 2.0 } else { 1.0 };
         let player = Some(self.acting_uuid());
-        for m in self.common.mobs.iter_mut().filter(|m| {
+        for m in self.common.entities.mobs.iter_mut().filter(|m| {
             target != Spared::Mob(m.id) && m.alive() && !m.removed && !ally_of_player(m, player)
         }) {
             let resistance = m.knockback_resistance();
@@ -556,6 +564,7 @@ impl ServerGame<'_> {
         }
         for s in self
             .common
+            .entities
             .armor_stands
             .iter_mut()
             .filter(|s| !s.marker && target != Spared::Stand(s.id))
@@ -673,7 +682,7 @@ impl ServerGame<'_> {
             )
         };
         let mut victims: Vec<((i32, i32, i32), u32, bool)> = Vec::new();
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if spared != Spared::Mob(m.id)
                 && m.alive()
                 && !m.removed
@@ -685,7 +694,7 @@ impl ServerGame<'_> {
                 victims.push((section(m.position), m.id, false));
             }
         }
-        for s in &self.common.armor_stands {
+        for s in &self.common.entities.armor_stands {
             if !s.marker
                 && spared != Spared::Stand(s.id)
                 && s.bounds().intersects(area)
@@ -697,7 +706,13 @@ impl ServerGame<'_> {
         victims.sort_by_key(|&(key, id, _)| (key, id));
         for (_, id, is_stand) in victims {
             if is_stand {
-                let Some(i) = self.common.armor_stands.iter().position(|s| s.id == id) else {
+                let Some(i) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter()
+                    .position(|s| s.id == id)
+                else {
                     continue;
                 };
                 // knockback(0.4F, ..) follows a hurtServer that landed, on a
@@ -720,38 +735,41 @@ impl ServerGame<'_> {
                 self.knock_back_armor_stand(id, knock, source, &attack);
                 continue;
             }
-            let Some(i) = self.common.mobs.iter().position(|m| m.id == id) else {
+            let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == id) else {
                 continue;
             };
-            let kind = self.common.mobs[i].kind.id.clone();
+            let kind = self.common.entities.mobs[i].kind.id.clone();
             let kind = format!("minecraft:{}", kind.trim_start_matches("minecraft:"));
             let amount = self.enchanted_damage(&kind, base, Some(id)) * scale;
             let source = self.attack_source(from);
             // hurtServer first; the knockback and post-attack effects follow
             // only when it landed.
-            let join = self.common.mobs[i].join;
+            let join = self.common.entities.mobs[i].join;
             let (hurt, _) = self.hurt_by_player(i, amount, source);
             if hurt {
                 let Some(i) = self
                     .common
                     .mob_index
-                    .find(&self.common.mobs, id)
-                    .filter(|&i| self.common.mobs[i].join == join && !self.common.mobs[i].removed)
+                    .find(&self.common.entities.mobs, id)
+                    .filter(|&i| {
+                        self.common.entities.mobs[i].join == join
+                            && !self.common.entities.mobs[i].removed
+                    })
                 else {
                     continue;
                 };
                 let aim = self.attacker_aim(source.attacker);
                 let plan = self.prepare_knockback_credit(id as i32, None, &attack);
                 let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
-                self.common.mobs[i].attacker_aim = aim;
+                self.common.entities.mobs[i].attacker_aim = aim;
                 let level = crate::game::server_side::entity_server::damage_level_of!(
                     self,
                     &attack,
                     &mut credit,
                     None
                 );
-                self.common.mobs[i].knockback(level, 0.4, xd, zd, &source, amount);
-                self.common.mobs[i].attacker_aim = None;
+                self.common.entities.mobs[i].knockback(level, 0.4, xd, zd, &source, amount);
+                self.common.entities.mobs[i].attacker_aim = None;
                 let held = self.common.held().cloned();
                 self.post_player_melee(
                     id,

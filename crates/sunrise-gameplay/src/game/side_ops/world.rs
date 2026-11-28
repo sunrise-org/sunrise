@@ -46,7 +46,10 @@ impl SideOps for crate::game::server_side::ServerState {
             .parked
             .iter()
             .find(|(dim, _)| dim.key() == dimension)?;
-        let mob = parked.mobs.get(parked.mobs.locate(join)?)?;
+        let mob = parked
+            .entities
+            .mobs
+            .get(parked.entities.mobs.locate(join)?)?;
         Some((*dim, mob))
     }
     fn side_parked_target_visible(&self, dim: Dim, target: &Target) -> Option<bool> {

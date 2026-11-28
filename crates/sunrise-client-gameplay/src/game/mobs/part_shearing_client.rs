@@ -19,10 +19,10 @@ impl ClientGame<'_> {
         player: Option<PlayerRef>,
         shears: &ItemStack,
     ) -> Option<((usize, usize), bool)> {
-        if !self.common.mobs[index].alive() {
+        if !self.common.entities.mobs[index].alive() {
             return None;
         }
-        let kind = std::sync::Arc::clone(&self.common.mobs[index].kind);
+        let kind = std::sync::Arc::clone(&self.common.entities.mobs[index].kind);
         let kind = &kind.id;
         if !mod_api::__private::has_scoped_hook(mod_api::HookId::IsShearable)
             || !mod_api::__private::entity_part_hooked(
@@ -33,7 +33,7 @@ impl ClientGame<'_> {
         {
             return None;
         }
-        let entity = self.entity(self.common.mobs[index].id)?;
+        let entity = self.entity(self.common.entities.mobs[index].id)?;
         let metadata = stack_read_metadata(shears).ok()?;
         let project = |metadata| project_stack(shears, metadata).ok();
         let shears_view = mod_api::ItemStackView::resident(metadata, &project);
@@ -58,8 +58,8 @@ impl ClientGame<'_> {
             return false;
         };
         let (id, kind) = (
-            self.common.mobs[index].id,
-            std::sync::Arc::clone(&self.common.mobs[index].kind),
+            self.common.entities.mobs[index].id,
+            std::sync::Arc::clone(&self.common.entities.mobs[index].kind),
         );
         let (Some(entity), Ok(metadata)) = (self.entity(id), stack_read_metadata(&shears)) else {
             return false;

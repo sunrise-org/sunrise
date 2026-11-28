@@ -165,14 +165,14 @@ pub(crate) fn summon_projectile(
 ) -> (TrackedProj, Option<u32>) {
     if proj == "arrow_skeleton" {
         assert!(game.run_command("summon minecraft:skeleton 0.5 64.0 2.5 {NoAI:1b,Silent:1b}"));
-        let skel_id = game.mobs.last().unwrap().id;
+        let skel_id = game.entities.mobs.last().unwrap().id;
         let skel_uuid = Some(game.mob_uuid(skel_id));
         let cmd =
             format!("summon minecraft:arrow 1.5 {y0} 4.5 {{pickup:1b,Motion:[1.0d,0.0d,0.0d]}}");
         assert!(game.run_command(&cmd), "{cmd}");
-        let idx = game.creatures.projectiles.len() - 1;
-        let id = game.creatures.projectiles[idx].id;
-        game.creatures.projectiles.update(idx, |p| {
+        let idx = game.entities.projectiles.len() - 1;
+        let id = game.entities.projectiles[idx].id;
+        game.entities.projectiles.update(idx, |p| {
             p.entity_random().set_seed(proj_seed);
             p.owner = Some(Who::Mob(skel_id));
             p.owner_uuid = skel_uuid;
@@ -217,10 +217,10 @@ pub(crate) fn summon_projectile(
     };
     assert!(game.run_command(&cmd), "{cmd}");
     if base == "trident" {
-        let idx = game.tridents.len() - 1;
-        let id = game.tridents[idx].id;
+        let idx = game.entities.tridents.len() - 1;
+        let id = game.entities.tridents[idx].id;
         let owner_uuid = game.level.player_uuid;
-        game.tridents.update(idx, |t| {
+        game.entities.tridents.update(idx, |t| {
             t.random = LegacyRandom::new(proj_seed);
             if owned {
                 t.owner_uuid = owner_uuid;
@@ -228,10 +228,10 @@ pub(crate) fn summon_projectile(
         });
         (TrackedProj::Trident(id), None)
     } else {
-        let idx = game.creatures.projectiles.len() - 1;
-        let id = game.creatures.projectiles[idx].id;
+        let idx = game.entities.projectiles.len() - 1;
+        let id = game.entities.projectiles[idx].id;
         let owner_uuid = game.level.player_uuid;
-        game.creatures.projectiles.update(idx, |p| {
+        game.entities.projectiles.update(idx, |p| {
             p.entity_random().set_seed(proj_seed);
             if owned {
                 p.owner = Some(Who::Player);
@@ -282,7 +282,7 @@ pub(crate) fn check_case(
         summon_projectile(game, &case.projectile, case.spawn_y, proj_seed);
     game.world.random.set_seed(level_seed);
     let mut seen_drops: std::collections::HashSet<u32> =
-        game.dropped.iter().map(|d| d.id).collect();
+        game.entities.dropped.iter().map(|d| d.id).collect();
     let mut expected_drops: BTreeMap<String, u32> = BTreeMap::new();
     let mut actual_drops: BTreeMap<String, u32> = BTreeMap::new();
 
@@ -294,7 +294,7 @@ pub(crate) fn check_case(
             .with(|e| e.borrow_mut().take().unwrap_or_default());
 
         // Record new non-terrain item drops surviving the tick.
-        for d in &game.dropped {
+        for d in &game.entities.dropped {
             if seen_drops.insert(d.id) {
                 let item = d.stack.item.to_string();
                 if item != "minecraft:oak_fence" && item != "minecraft:cobblestone" {
@@ -311,7 +311,7 @@ pub(crate) fn check_case(
         // Check projectile alive and bit-exact kinematics while alive.
         match tracked_proj {
             TrackedProj::Projectile(id) => {
-                let live = game.creatures.projectiles.iter().find(|p| p.id == id);
+                let live = game.entities.projectiles.iter().find(|p| p.id == id);
                 let alive = live.is_some();
                 if alive != expected.projectile.alive {
                     errors.push(format!(
@@ -346,7 +346,7 @@ pub(crate) fn check_case(
                 }
             }
             TrackedProj::Trident(id) => {
-                let live = game.tridents.iter().find(|t| t.id == id);
+                let live = game.entities.tridents.iter().find(|t| t.id == id);
                 let alive = live.is_some();
                 if alive != expected.projectile.alive {
                     errors.push(format!(
@@ -399,7 +399,7 @@ pub(crate) fn check_case(
         }
         match tracked_target {
             TrackedTarget::Stand(id) => {
-                if let Some(a) = game.armor_stands.iter().find(|a| a.id == id)
+                if let Some(a) = game.entities.armor_stands.iter().find(|a| a.id == id)
                     && a.fire_ticks != expected.target.fire_ticks
                 {
                     errors.push(format!(
@@ -409,7 +409,7 @@ pub(crate) fn check_case(
                 }
             }
             TrackedTarget::Frame(id) => {
-                if let Some(f) = game.item_frames.iter().find(|f| f.id == id) {
+                if let Some(f) = game.entities.item_frames.iter().find(|f| f.id == id) {
                     let item = f.item.as_ref().map(|s| s.item.to_string());
                     if item != expected.target.item {
                         errors.push(format!(
@@ -435,6 +435,7 @@ pub(crate) fn check_case(
                     && let Some(exp_leashed) = expected.target.pig_leashed
                 {
                     let leashed = game
+                        .entities
                         .mobs
                         .iter()
                         .find(|m| m.id == pig_id)

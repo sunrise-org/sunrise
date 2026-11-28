@@ -238,7 +238,8 @@ fn block_waypoints_use_live_non_player_eyes_within_manhattan_three() {
             with_client_game(|game| {
                 let _server = connect(game, Vec3::new(100.0, 64.0, 0.0));
                 add_armor_stand(game, 30, 3, [120.2, 64.0, 5.8]);
-                game.armor_stands
+                game.entities
+                    .armor_stands
                     .iter_mut()
                     .find(|a| a.id == 30)
                     .unwrap()
@@ -325,7 +326,8 @@ fn block_waypoints_use_live_non_player_eyes_within_manhattan_three() {
                     "old level entity must not resolve after dimension change"
                 );
                 add_armor_stand(game, 45, 3, [120.2, 64.0, 5.8]);
-                game.armor_stands
+                game.entities
+                    .armor_stands
                     .iter_mut()
                     .find(|a| a.id == 45)
                     .unwrap()

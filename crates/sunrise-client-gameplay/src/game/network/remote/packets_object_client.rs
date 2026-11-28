@@ -101,7 +101,12 @@ impl crate::game::ClientGame<'_> {
         // Entity.recreateFromPacket: objects must exist before applying motion.
         self.remote_motion(p.id, p.velocity);
         if self.minecart_improvements()
-            && self.common.carts.iter().any(|c| c.id == p.id as u32)
+            && self
+                .common
+                .entities
+                .carts
+                .iter()
+                .any(|c| c.id == p.id as u32)
             && let Some(r) = self.client.remote.as_mut()
         {
             r.cart_lerps.insert(p.id, CartLerp::new());
@@ -147,7 +152,7 @@ impl crate::game::ClientGame<'_> {
         } else if let Some(m) = self
             .common
             .mob_index
-            .get_mut(&mut self.common.mobs, p.id as u32)
+            .get_mut(&mut self.common.entities.mobs, p.id as u32)
         {
             m.hurt_time = 10;
             if &*m.kind.id == "minecraft:player" {
@@ -176,7 +181,7 @@ impl crate::game::ClientGame<'_> {
         // ClientPacketListener.handleProjectilePowerPacket: the power a
         // hurting projectile accelerates by, sent bundled with its motion.
         super::super::remote_projectiles::remote_projectile_power(
-            &mut self.common.creatures.projectiles,
+            &mut self.common.entities.projectiles,
             p.id,
             p.power,
         );
@@ -224,7 +229,7 @@ impl crate::game::ClientGame<'_> {
                 Some(&block) => Some(Holder::Knot(block)),
                 // Not a known knot yet: kept by id until the knot
                 // arrives (game/network/remote_objects.rs).
-                None if self.common.boats.iter().any(|b| b.id == d as u32) => {
+                None if self.common.entities.boats.iter().any(|b| b.id == d as u32) => {
                     Some(Holder::Boat(d as u32))
                 }
                 None => Some(Holder::Mob(d as u32)),
@@ -233,16 +238,17 @@ impl crate::game::ClientGame<'_> {
         if let Some(m) = self
             .common
             .mob_index
-            .get_mut(&mut self.common.mobs, p.source as u32)
+            .get_mut(&mut self.common.entities.mobs, p.source as u32)
         {
             m.extra.leash = holder;
         } else if let Some(i) = self
             .common
+            .entities
             .boats
             .iter()
             .position(|b| b.id == p.source as u32)
         {
-            self.common.boats.update(i, |b| {
+            self.common.entities.boats.update(i, |b| {
                 // A leashed boat or raft (AbstractBoat is Leashable).
                 b.leash = holder;
             });
@@ -288,7 +294,7 @@ impl crate::game::ClientGame<'_> {
         } else if let Some(m) = self
             .common
             .mob_index
-            .get_mut(&mut self.common.mobs, p.id as u32)
+            .get_mut(&mut self.common.entities.mobs, p.id as u32)
         {
             m.swing_hand_modified(hand == Hand::Off, animation);
         }
@@ -311,20 +317,27 @@ impl crate::game::ClientGame<'_> {
         // none); an entity this client doesn't track sounds at this player.
         let orb_at = self
             .common
+            .entities
             .orbs
             .iter()
             .find(|o| o.id == p.item as u32)
             .map(|o| o.position);
         let orb = orb_at.is_some();
-        let item = self.common.dropped.iter().find(|d| d.id == p.item as u32);
+        let item = self
+            .common
+            .entities
+            .dropped
+            .iter()
+            .find(|d| d.id == p.item as u32);
         let shot = self
             .common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .find(|s| s.id == p.item as u32);
         let shot = shot.map(|s| s.position).or_else(|| {
             self.common
+                .entities
                 .tridents
                 .iter()
                 .find(|t| t.id == p.item as u32)
@@ -373,6 +386,7 @@ impl crate::game::ClientGame<'_> {
         };
         if let Some(item) = self
             .common
+            .entities
             .dropped
             .iter()
             .find(|d| d.id == p.item as u32)
@@ -384,6 +398,7 @@ impl crate::game::ClientGame<'_> {
             );
         } else if let Some(orb) = self
             .common
+            .entities
             .orbs
             .iter()
             .find(|o| o.id == p.item as u32)
@@ -392,7 +407,7 @@ impl crate::game::ClientGame<'_> {
             self.add_pickup(super::super::pickups::Taken::Orb(Box::new(orb)), collector);
         } else if let Some(shot) = self
             .common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .find(|s| s.id == p.item as u32)
@@ -405,12 +420,13 @@ impl crate::game::ClientGame<'_> {
             );
         } else if let Some(i) = self
             .common
+            .entities
             .tridents
             .iter()
             .position(|t| t.id == p.item as u32)
         {
             // So does a trident: a server's client keeps them apart.
-            let trident = self.common.tridents.remove(i);
+            let trident = self.common.entities.tridents.remove(i);
             self.add_pickup(
                 super::super::pickups::Taken::Trident(Box::new(trident)),
                 collector,
@@ -421,6 +437,7 @@ impl crate::game::ClientGame<'_> {
         if !orb {
             let remaining = self
                 .common
+                .entities
                 .dropped
                 .iter_mut()
                 .find(|d| d.id == p.item as u32)
@@ -493,97 +510,113 @@ impl crate::game::ClientGame<'_> {
             self.entity_section_moved_id(p.id as u32);
             return Ok(());
         }
-        let (base, now_yaw, now_pitch, old_pos, old_yaw, old_pitch, now_vel) =
-            if let Some(m) = self.common.mob_index.get(&self.common.mobs, p.id as u32) {
-                let at = self
-                    .client
-                    .remote
-                    .as_ref()
-                    .and_then(|r| r.stepped.get(&p.id))
-                    .map_or_else(|| mob_pos_rot(m), |h| h.heading(mob_pos_rot(m)));
-                (
-                    at.position,
-                    at.yaw,
-                    at.pitch,
-                    [m.previous.x, m.previous.y, m.previous.z],
-                    m.previous_yaw,
-                    m.previous_head_pitch,
-                    [m.velocity.x, m.velocity.y, m.velocity.z],
-                )
-            } else if let Some(i) = self.client.interactions.get(&p.id) {
-                (
-                    [i.position.x, i.position.y, i.position.z],
-                    i.yaw,
-                    i.pitch,
-                    [i.previous.x, i.previous.y, i.previous.z],
-                    i.previous_yaw,
-                    i.previous_pitch,
-                    [0.0; 3],
-                )
-            } else if let Some(a) = self
-                .common
-                .armor_stands
-                .iter()
-                .find(|a| a.id == p.id as u32)
-            {
-                let cur = PosRot {
-                    position: [a.position.x, a.position.y, a.position.z],
-                    yaw: a.yaw,
-                    pitch: a.pitch,
-                };
-                let at = self
-                    .client
-                    .remote
-                    .as_ref()
-                    .and_then(|r| r.stepped.get(&p.id))
-                    .map_or(cur, |h| h.heading(cur));
-                (
-                    at.position,
-                    at.yaw,
-                    at.pitch,
-                    [a.previous.x, a.previous.y, a.previous.z],
-                    a.previous_yaw,
-                    a.previous_pitch,
-                    [a.velocity.x, a.velocity.y, a.velocity.z],
-                )
-            } else if let Some(b) = self.common.boats.iter().find(|b| b.id == p.id as u32) {
-                (
-                    [b.position.x, b.position.y, b.position.z],
-                    b.yaw,
-                    b.pitch,
-                    [b.previous.x, b.previous.y, b.previous.z],
-                    b.previous_yaw,
-                    b.pitch,
-                    [b.velocity.x, b.velocity.y, b.velocity.z],
-                )
-            } else if let Some(c) = self.common.carts.iter().find(|c| c.id == p.id as u32) {
-                (
-                    [c.position.x, c.position.y, c.position.z],
-                    c.yaw,
-                    c.pitch,
-                    [c.previous.x, c.previous.y, c.previous.z],
-                    c.previous_yaw,
-                    c.previous_pitch,
-                    [c.velocity.x, c.velocity.y, c.velocity.z],
-                )
-            } else if let Some(t) = self
+        let (base, now_yaw, now_pitch, old_pos, old_yaw, old_pitch, now_vel) = if let Some(m) = self
+            .common
+            .mob_index
+            .get(&self.common.entities.mobs, p.id as u32)
+        {
+            let at = self
                 .client
                 .remote
                 .as_ref()
-                .and_then(|r| r.entities.get(&p.id))
-            {
-                (
-                    t.position,
-                    t.yaw,
-                    t.pitch,
-                    t.previous,
-                    t.previous_yaw,
-                    t.previous_pitch,
-                    [0.0; 3],
-                )
-            } else {
-                ([0.0; 3], 0.0, 0.0, [0.0; 3], 0.0, 0.0, [0.0; 3])
+                .and_then(|r| r.stepped.get(&p.id))
+                .map_or_else(|| mob_pos_rot(m), |h| h.heading(mob_pos_rot(m)));
+            (
+                at.position,
+                at.yaw,
+                at.pitch,
+                [m.previous.x, m.previous.y, m.previous.z],
+                m.previous_yaw,
+                m.previous_head_pitch,
+                [m.velocity.x, m.velocity.y, m.velocity.z],
+            )
+        } else if let Some(i) = self.client.interactions.get(&p.id) {
+            (
+                [i.position.x, i.position.y, i.position.z],
+                i.yaw,
+                i.pitch,
+                [i.previous.x, i.previous.y, i.previous.z],
+                i.previous_yaw,
+                i.previous_pitch,
+                [0.0; 3],
+            )
+        } else if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == p.id as u32)
+        {
+            let cur = PosRot {
+                position: [a.position.x, a.position.y, a.position.z],
+                yaw: a.yaw,
+                pitch: a.pitch,
             };
+            let at = self
+                .client
+                .remote
+                .as_ref()
+                .and_then(|r| r.stepped.get(&p.id))
+                .map_or(cur, |h| h.heading(cur));
+            (
+                at.position,
+                at.yaw,
+                at.pitch,
+                [a.previous.x, a.previous.y, a.previous.z],
+                a.previous_yaw,
+                a.previous_pitch,
+                [a.velocity.x, a.velocity.y, a.velocity.z],
+            )
+        } else if let Some(b) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .find(|b| b.id == p.id as u32)
+        {
+            (
+                [b.position.x, b.position.y, b.position.z],
+                b.yaw,
+                b.pitch,
+                [b.previous.x, b.previous.y, b.previous.z],
+                b.previous_yaw,
+                b.pitch,
+                [b.velocity.x, b.velocity.y, b.velocity.z],
+            )
+        } else if let Some(c) = self
+            .common
+            .entities
+            .carts
+            .iter()
+            .find(|c| c.id == p.id as u32)
+        {
+            (
+                [c.position.x, c.position.y, c.position.z],
+                c.yaw,
+                c.pitch,
+                [c.previous.x, c.previous.y, c.previous.z],
+                c.previous_yaw,
+                c.previous_pitch,
+                [c.velocity.x, c.velocity.y, c.velocity.z],
+            )
+        } else if let Some(t) = self
+            .client
+            .remote
+            .as_ref()
+            .and_then(|r| r.entities.get(&p.id))
+        {
+            (
+                t.position,
+                t.yaw,
+                t.pitch,
+                t.previous,
+                t.previous_yaw,
+                t.previous_pitch,
+                [0.0; 3],
+            )
+        } else {
+            ([0.0; 3], 0.0, 0.0, [0.0; 3], 0.0, 0.0, [0.0; 3])
+        };
         let resolve = |origin: [f64; 3], origin_yaw: f32, origin_pitch: f32| {
             let coord = |bit: i32, i: usize| {
                 if p.relatives & bit != 0 {

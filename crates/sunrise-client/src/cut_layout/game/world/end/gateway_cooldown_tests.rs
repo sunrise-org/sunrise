@@ -34,11 +34,11 @@ pub(crate) fn run_gateway_counters_match_actual_vanilla_methods() {
     );
     let mut delays = [0; 4];
     sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
-        game.boats.push(boat);
-        game.carts.push(cart);
+        game.entities.boats.push(boat);
+        game.entities.carts.push(cart);
         let mut arrow = arrow;
         arrow.id = 3;
-        game.creatures.projectiles.push(arrow);
+        game.entities.projectiles.push(arrow);
         delays = [
             game.dimension_changing_delay(1),
             game.dimension_changing_delay(2),
@@ -155,10 +155,10 @@ fn game_gateway_phases() -> [[i32; 2]; 4] {
         game.load_listed(kind, Some(uuid), None, tag).unwrap();
         ids.push(game.server.next_entity);
     }
-    assert_eq!(game.boats.len(), 1);
-    assert_eq!(game.creatures.projectiles.len(), 1);
+    assert_eq!(game.entities.boats.len(), 1);
+    assert_eq!(game.entities.projectiles.len(), 1);
     assert!(matches!(
-        game.creatures.projectiles[0].kind,
+        game.entities.projectiles[0].kind,
         ProjectileKind::EnderPearl
     ));
     game.server
@@ -190,7 +190,7 @@ fn game_gateway_phases() -> [[i32; 2]; 4] {
         assert_eq!(rows[tick * 2 + 1], [4 - tick as i32, 4 - tick as i32]);
     }
     assert!(game.end.arrivals.is_empty());
-    assert_eq!(game.creatures.projectiles.len(), 1);
+    assert_eq!(game.entities.projectiles.len(), 1);
     rows
 }
 

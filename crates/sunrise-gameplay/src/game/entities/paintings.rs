@@ -120,7 +120,7 @@ impl crate::game::ServerGame<'_> {
         // added; ItemStack.useOn then counts the use.
         let ctx = self.player_context(None);
         self.post_game_event("minecraft:entity_place", at, ctx);
-        self.common.paintings.push(candidate);
+        self.common.entities.paintings.push(candidate);
         self.common
             .world
             .modified
@@ -215,15 +215,20 @@ impl crate::game::ServerGame<'_> {
         by_player: bool,
     ) -> Option<(Painting, [f64; 3])> {
         let (id, pos) = (
-            self.common.paintings[index].id,
-            self.common.paintings[index].pos,
+            self.common.entities.paintings[index].id,
+            self.common.entities.paintings[index].pos,
         );
         if self.hanging_break_cancelled("minecraft:painting", pos, by_player) {
             return None;
         }
         // Found again by id after the listener: gone, nothing is removed.
-        let index = self.common.paintings.iter().position(|p| p.id == id)?;
-        let p = self.common.paintings.remove(index);
+        let index = self
+            .common
+            .entities
+            .paintings
+            .iter()
+            .position(|p| p.id == id)?;
+        let p = self.common.entities.paintings.remove(index);
         let (lo, hi) = p.bounds();
         let at = [
             (lo[0] + hi[0]) / 2.0,
@@ -245,9 +250,14 @@ impl crate::game::ServerGame<'_> {
         let mut told = None;
         // EntityTickList copy-on-iterate: while a listener may remove paintings, the round visits
         // the paintings that were there when it began, each found again by its join.
-        let joins: Option<Vec<_>> = round
-            .told_listening()
-            .then(|| self.common.paintings.iter().map(|p| p.join).collect());
+        let joins: Option<Vec<_>> = round.told_listening().then(|| {
+            self.common
+                .entities
+                .paintings
+                .iter()
+                .map(|p| p.join)
+                .collect()
+        });
         let mut turns = joins.iter().flatten();
         let mut i = 0;
         loop {
@@ -256,20 +266,20 @@ impl crate::game::ServerGame<'_> {
             }
             if joins.is_some() {
                 let Some(&join) = turns.next() else { break };
-                let Some(at) = self.common.paintings.locate(join) else {
+                let Some(at) = self.common.entities.paintings.locate(join) else {
                     continue;
                 };
                 i = at;
-            } else if i >= self.common.paintings.len() {
+            } else if i >= self.common.entities.paintings.len() {
                 break;
             }
-            let (lo, hi) = self.common.paintings[i].bounds();
+            let (lo, hi) = self.common.entities.paintings[i].bounds();
             let centre = [0, 2].map(|k| ((lo[k] + hi[k]) / 2.0).floor() as i32);
             if !ticking(centre[0], centre[1]) {
                 i += 1;
                 continue;
             }
-            let id = self.common.paintings[i].id;
+            let id = self.common.entities.paintings[i].id;
             // ServerLevel.tick skips an entity that `isRemoved`, here one whose removal is queued.
             let target = super::commands::Target::Painting(id);
             if self.target_removed(&target)
@@ -283,19 +293,32 @@ impl crate::game::ServerGame<'_> {
                 i += 1;
                 continue;
             }
-            if self.common.paintings.get(i).is_none_or(|p| p.id != id) {
-                let Some(now) = self.common.paintings.iter().position(|p| p.id == id) else {
+            if self
+                .common
+                .entities
+                .paintings
+                .get(i)
+                .is_none_or(|p| p.id != id)
+            {
+                let Some(now) = self
+                    .common
+                    .entities
+                    .paintings
+                    .iter()
+                    .position(|p| p.id == id)
+                else {
                     continue;
                 };
                 i = now;
             }
             told = Some(id);
             // `Entity.tickCount` is raised before the rest of the tick, and is not saved.
-            self.common.paintings[i].ticks = self.common.paintings[i].ticks.saturating_add(1);
-            self.common.paintings[i].check_interval += 1;
-            if self.common.paintings[i].check_interval >= 100 {
-                self.common.paintings[i].check_interval = 0;
-                let p = self.common.paintings[i].clone();
+            self.common.entities.paintings[i].ticks =
+                self.common.entities.paintings[i].ticks.saturating_add(1);
+            self.common.entities.paintings[i].check_interval += 1;
+            if self.common.entities.paintings[i].check_interval >= 100 {
+                self.common.entities.paintings[i].check_interval = 0;
+                let p = self.common.entities.paintings[i].clone();
                 if !self.common.painting_survives(&p) && self.discard_painting(i) {
                     continue;
                 }

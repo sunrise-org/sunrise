@@ -51,19 +51,19 @@ pub trait NativeEntityPreviousCommonGameExt<'__sg>: crate::game::SideGame<'__sg>
     /// Previous position and rotation for resident body kinds shared across both sides.
     fn target_old_resident(&self, target: Target, join: Option<JoinSeq>) -> Option<Old> {
         match target {
-            Target::Mob(_) => list_old(&self.mobs, join?),
-            Target::Item(_) => list_old(&self.dropped, join?),
-            Target::Orb(_) => list_old(&self.orbs, join?),
-            Target::Projectile(_) => list_old(&self.creatures.projectiles, join?),
-            Target::Stand(_) => list_old(&self.armor_stands, join?),
-            Target::Boat(_) => list_old(&self.boats, join?),
-            Target::Cart(_) => list_old(&self.carts, join?),
-            Target::Tnt(_) => list_old(&self.tnts, join?),
-            Target::Falling(_) => list_old(&self.falling, join?),
-            Target::Rocket(_) => list_old(&self.rockets, join?),
-            Target::Trident(_) => list_old(&self.tridents, join?),
+            Target::Mob(_) => list_old(&self.entities.mobs, join?),
+            Target::Item(_) => list_old(&self.entities.dropped, join?),
+            Target::Orb(_) => list_old(&self.entities.orbs, join?),
+            Target::Projectile(_) => list_old(&self.entities.projectiles, join?),
+            Target::Stand(_) => list_old(&self.entities.armor_stands, join?),
+            Target::Boat(_) => list_old(&self.entities.boats, join?),
+            Target::Cart(_) => list_old(&self.entities.carts, join?),
+            Target::Tnt(_) => list_old(&self.entities.tnts, join?),
+            Target::Falling(_) => list_old(&self.entities.falling, join?),
+            Target::Rocket(_) => list_old(&self.entities.rockets, join?),
+            Target::Trident(_) => list_old(&self.entities.tridents, join?),
             Target::Dragon(_) => {
-                let dragon = self.dragon.as_ref()?;
+                let dragon = self.entities.dragon.as_ref()?;
                 Some(Old {
                     position: dragon.previous.components(),
                     rotation: [dragon.previous_yaw, dragon.pitch],
@@ -77,7 +77,10 @@ pub trait NativeEntityPreviousCommonGameExt<'__sg>: crate::game::SideGame<'__sg>
                 })
             }
             Target::Crystal(_) => {
-                let crystal = self.crystals.get(self.crystals.locate(join?)?)?;
+                let crystal = self
+                    .entities
+                    .crystals
+                    .get(self.entities.crystals.locate(join?)?)?;
                 Some(Old {
                     position: crystal.previous.components(),
                     rotation: crystal.rotation,
@@ -95,21 +98,21 @@ pub trait NativeEntityPreviousCommonGameExt<'__sg>: crate::game::SideGame<'__sg>
                 let body = self.native_living_body(target)?;
                 Some(crate::game::native_living_body::body_health(body)? > 0.0)
             }
-            Target::Dragon(_) => Some(self.dragon.as_ref()?.health > 0.0),
-            Target::Mob(_) => list_alive(&self.mobs, join?),
-            Target::Item(_) => list_alive(&self.dropped, join?),
-            Target::Orb(_) => list_alive(&self.orbs, join?),
-            Target::Projectile(_) => list_alive(&self.creatures.projectiles, join?),
-            Target::Stand(_) => list_alive(&self.armor_stands, join?),
-            Target::Boat(_) => list_alive(&self.boats, join?),
-            Target::Cart(_) => list_alive(&self.carts, join?),
-            Target::Tnt(_) => list_alive(&self.tnts, join?),
-            Target::Falling(_) => list_alive(&self.falling, join?),
-            Target::Rocket(_) => list_alive(&self.rockets, join?),
-            Target::Trident(_) => list_alive(&self.tridents, join?),
+            Target::Dragon(_) => Some(self.entities.dragon.as_ref()?.health > 0.0),
+            Target::Mob(_) => list_alive(&self.entities.mobs, join?),
+            Target::Item(_) => list_alive(&self.entities.dropped, join?),
+            Target::Orb(_) => list_alive(&self.entities.orbs, join?),
+            Target::Projectile(_) => list_alive(&self.entities.projectiles, join?),
+            Target::Stand(_) => list_alive(&self.entities.armor_stands, join?),
+            Target::Boat(_) => list_alive(&self.entities.boats, join?),
+            Target::Cart(_) => list_alive(&self.entities.carts, join?),
+            Target::Tnt(_) => list_alive(&self.entities.tnts, join?),
+            Target::Falling(_) => list_alive(&self.entities.falling, join?),
+            Target::Rocket(_) => list_alive(&self.entities.rockets, join?),
+            Target::Trident(_) => list_alive(&self.entities.tridents, join?),
             // A client keeps a row it shows until the server removes it.
             Target::General(_) => join
-                .and_then(|join| list_alive(&self.resident_entities.general.rows, join))
+                .and_then(|join| list_alive(&self.entities.general.rows, join))
                 .or(Some(true)),
             // Not living, and a handle names them only while they are in their level.
             Target::Frame(_)

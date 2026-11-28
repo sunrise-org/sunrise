@@ -37,17 +37,17 @@ impl crate::game::ClientGame<'_> {
         };
         let flying: sunrise_level::fast_hash::FxHashSet<u32> = self
             .common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .map(|p| p.id)
-            .chain(self.common.tridents.iter().map(|t| t.id))
+            .chain(self.common.entities.tridents.iter().map(|t| t.id))
             .collect();
         let told = |id: i32| {
             let id = id as u32;
             self.common
                 .mob_index
-                .get_ref(&self.common.mobs, id)
+                .get_ref(&self.common.entities.mobs, id)
                 .is_some()
                 || self.client.text_displays.0.contains_key(&(id as i32))
                 || flying.contains(&id)
@@ -272,7 +272,7 @@ impl crate::game::ClientGame<'_> {
         let boat = self
             .common
             .riding
-            .and_then(|id| self.common.boats.iter().find(|b| b.id == id))
+            .and_then(|id| self.common.entities.boats.iter().find(|b| b.id == id))
             .map(|b| sunrise_sim::motion::RiddenBoat {
                 under_water: b.under_water(),
                 max_y: b.bounds().max_position().y,
@@ -356,6 +356,7 @@ impl crate::game::ClientGame<'_> {
             if player.auto_spin_attack_ticks > 0 {
                 player.spin_targets.extend(
                     self.common
+                        .entities
                         .mobs
                         .iter()
                         .filter(|m| !m.removed)
@@ -657,8 +658,8 @@ impl crate::game::ClientGame<'_> {
     /// Humanoid held arm poses, selected at the frame's extraction from the equipment and use state
     /// the tick set (`AvatarRenderer.extractRenderState` → `getArmPose`).
     pub fn extract_remote_arm_poses(&mut self) {
-        for i in 0..self.common.mobs.len() {
-            let m = &self.common.mobs[i];
+        for i in 0..self.common.entities.mobs.len() {
+            let m = &self.common.entities.mobs[i];
             if !sunrise_sim::mobs::anim::extracts_humanoid(m) {
                 continue;
             }
@@ -674,9 +675,9 @@ impl crate::game::ClientGame<'_> {
                     .then(|| m.extra.slot_stack(slot))
                     .flatten()
                     .map_or_else(Default::default, |stack| self.item_use_animation(stack));
-                self.common.mobs[i].extra.use_animation = animation;
+                self.common.entities.mobs[i].extra.use_animation = animation;
             }
-            let m = &self.common.mobs[i];
+            let m = &self.common.entities.mobs[i];
             let poses = self.held_arm_poses(m.id, m);
             let charge_duration = (&*m.kind.id != "minecraft:player").then(|| {
                 let using_slot = if m.extra.using_off_hand {
@@ -688,9 +689,9 @@ impl crate::game::ClientGame<'_> {
                     sunrise_gameplay_common::game::CommonGame::charge_ticks(stack).max(1)
                 }) as i32
             });
-            self.common.mobs[i].extra.held_arm_pose = poses;
+            self.common.entities.mobs[i].extra.held_arm_pose = poses;
             if let Some(duration) = charge_duration {
-                self.common.mobs[i].extra.ints[5] = duration;
+                self.common.entities.mobs[i].extra.ints[5] = duration;
             }
         }
     }
@@ -806,7 +807,7 @@ impl crate::game::ClientGame<'_> {
             let w = self.client_mob_world_base(&[], &side);
             let players = self.client.remote.as_ref().map(|r| &r.level_players);
             fluids.clear();
-            fluids.extend(self.common.mobs.iter().map(|m| {
+            fluids.extend(self.common.entities.mobs.iter().map(|m| {
                 (running
                     || players.is_some_and(|p| p.contains_key(&(m.id as i32)))
                     || self
@@ -817,7 +818,7 @@ impl crate::game::ClientGame<'_> {
                 .then(|| w.fluids(m.bounds(), m.eye_y()))
             }));
             rain.clear();
-            rain.extend(self.common.mobs.iter().map(|m| {
+            rain.extend(self.common.entities.mobs.iter().map(|m| {
                 m.species() == sunrise_sim::mobs::Species::Wolf
                     && sunrise_sim::mobs::tame::in_rain(m, &w)
             }));
@@ -825,7 +826,7 @@ impl crate::game::ClientGame<'_> {
             // cow), one hair below the feet like `Entity.getBlockStateOn`; nothing
             // without rules.
             standings.clear();
-            standings.extend(self.common.mobs.iter().map(|m| {
+            standings.extend(self.common.entities.mobs.iter().map(|m| {
                 sunrise_client::mobs::cem::tracks_standing(&m.kind.id).then(|| {
                     let (x, y, z) = (
                         m.position.x.floor() as i32,
@@ -839,14 +840,14 @@ impl crate::game::ClientGame<'_> {
         };
         // The window's own player already splashes from its motion tick.
         let own = self.client.remote.as_ref().map(|r| r.entity_id);
-        for i in 0..self.common.mobs.len() {
-            let id = self.common.mobs[i].id;
+        for i in 0..self.common.entities.mobs.len() {
+            let id = self.common.entities.mobs[i].id;
             // When Pre is subscribed, each entity takes its fluid step in its own turn after Pre.
             if round.pre() && fluids[i].is_some() && driven != Some(id) {
                 continue;
             }
             client_fluid_step(
-                &mut self.common.mobs[i],
+                &mut self.common.entities.mobs[i],
                 fluids[i].take(),
                 standings[i].take(),
                 own,
@@ -860,6 +861,7 @@ impl crate::game::ClientGame<'_> {
         // mobs and the player (position and eye height).
         let wither_targets: Vec<(i32, [f64; 3], f64)> = if self
             .common
+            .entities
             .mobs
             .iter()
             .any(|m| m.species() == sunrise_sim::mobs::Species::Wither)
@@ -871,6 +873,7 @@ impl crate::game::ClientGame<'_> {
                 .zip(self.common.eye_position())
                 .map(|(r, eye)| (r.entity_id, eye, eye[1]));
             self.common
+                .entities
                 .mobs
                 .iter()
                 .map(|m| {
@@ -900,6 +903,7 @@ impl crate::game::ClientGame<'_> {
                 });
             let others = self.client.remote.as_ref().into_iter().flat_map(|r| {
                 self.common
+                    .entities
                     .mobs
                     .iter()
                     .filter(move |m| m.alive() && r.level_players.contains_key(&(m.id as i32)))
@@ -922,6 +926,7 @@ impl crate::game::ClientGame<'_> {
             .as_ref()
             .map(|r| {
                 self.common
+                    .entities
                     .mobs
                     .iter()
                     .filter(|m| {
@@ -958,7 +963,7 @@ impl crate::game::ClientGame<'_> {
         // When tick hooks are subscribed, each entity hears them with the list in place: keep
         // each slot's id so row shifts during hooks still resolve the remaining slots.
         let slots: Vec<u32> = if told {
-            self.common.mobs.iter().map(|m| m.id).collect()
+            self.common.entities.mobs.iter().map(|m| m.id).collect()
         } else {
             Vec::new()
         };
@@ -969,7 +974,7 @@ impl crate::game::ClientGame<'_> {
             else {
                 continue;
             };
-            let id = self.common.mobs[i].id;
+            let id = self.common.entities.mobs[i].id;
             let player = self
                 .client
                 .remote
@@ -1005,17 +1010,17 @@ impl crate::game::ClientGame<'_> {
                 if player {
                     TickKind::Fixed(PLAYER)
                 } else {
-                    TickKind::Mob(self.common.mobs[i].kind.clone())
+                    TickKind::Mob(self.common.entities.mobs[i].kind.clone())
                 }
             });
             if let Some(kind) = &kind
                 && round.pre()
             {
-                let stamp = self.common.mobs.stamp();
+                let stamp = self.common.entities.mobs.stamp();
                 let ticks = self.native_tick_pre_one(&mut round, id, kind.id());
-                if self.common.mobs.stamp() != stamp {
+                if self.common.entities.mobs.stamp() != stamp {
                     places = Some(sunrise_gameplay_common::game::native_ticks::places_of(
-                        self.common.mobs.iter().map(|m| m.id),
+                        self.common.entities.mobs.iter().map(|m| m.id),
                     ));
                 }
                 match sunrise_gameplay_common::game::native_ticks::slot_place(&places, &slots, slot)
@@ -1024,7 +1029,7 @@ impl crate::game::ClientGame<'_> {
                     _ => continue,
                 }
                 client_fluid_step(
-                    &mut self.common.mobs[i],
+                    &mut self.common.entities.mobs[i],
                     fluids[slot].take(),
                     standings[slot].take(),
                     own,
@@ -1035,8 +1040,8 @@ impl crate::game::ClientGame<'_> {
             if !passenger {
                 self.count_client_tick(id);
             }
-            let animation = if player && self.common.mobs[i].extra.using_item > 0 {
-                let extra = &self.common.mobs[i].extra;
+            let animation = if player && self.common.entities.mobs[i].extra.using_item > 0 {
+                let extra = &self.common.entities.mobs[i].extra;
                 let slot = if extra.using_off_hand {
                     sunrise_items::equipment::OFFHAND
                 } else {
@@ -1066,7 +1071,7 @@ impl crate::game::ClientGame<'_> {
                     });
             let r = self.client.remote.as_mut().unwrap();
             let stepped = &mut r.stepped;
-            let m = &mut self.common.mobs[i];
+            let m = &mut self.common.entities.mobs[i];
             let section_from = m.position;
             if player {
                 // AvatarRenderer.extractRenderState: isSpectator, from the player list.
@@ -1161,7 +1166,7 @@ impl crate::game::ClientGame<'_> {
                 self.native_player_tick_pre(mod_api::__private::PlayerTickPreCall { player });
             }
             let head_lerps = &mut self.client.remote.as_mut().unwrap().head_lerps;
-            let m = &mut self.common.mobs[i];
+            let m = &mut self.common.entities.mobs[i];
             // LivingEntity.baseTick's tickEffects, inside this tick (after its Pre, and a
             // player's tick Pre): its effects count down and fade.
             super::super::potions::client_tick_effects(
@@ -1308,11 +1313,11 @@ impl crate::game::ClientGame<'_> {
             if let Some(kind) = &kind
                 && round.post()
             {
-                let stamp = self.common.mobs.stamp();
+                let stamp = self.common.entities.mobs.stamp();
                 self.native_tick_post_one(&round, id, kind.id());
-                if self.common.mobs.stamp() != stamp {
+                if self.common.entities.mobs.stamp() != stamp {
                     places = Some(sunrise_gameplay_common::game::native_ticks::places_of(
-                        self.common.mobs.iter().map(|m| m.id),
+                        self.common.entities.mobs.iter().map(|m| m.id),
                     ));
                 }
             }
@@ -1336,7 +1341,7 @@ impl crate::game::ClientGame<'_> {
         if running {
             let side_server = self.game_side_client();
             let sections = self.client.client_pick.sections.get_mut();
-            self.common.orbs.retain_mut(|o| {
+            self.common.entities.orbs.retain_mut(|o| {
                 let distance = |feet: &[f64; 3]| -> f64 {
                     (feet[0] - o.position.x).powi(2)
                         + (feet[1] - o.position.y).powi(2)
@@ -1453,6 +1458,7 @@ impl crate::game::ClientGame<'_> {
             // The dragon: LivingEntity's interpolation, inside its aiStep.
             let dragon_lerp = self
                 .common
+                .entities
                 .dragon
                 .as_ref()
                 .and_then(|d| lerps.get_mut(&(d.id as i32)))
@@ -1463,7 +1469,7 @@ impl crate::game::ClientGame<'_> {
                     (l.target, l.rotation.map(|r| r.0), steps)
                 });
             self.tick_remote_dragon(dragon_lerp);
-            if let Some(dragon) = self.common.dragon.as_ref() {
+            if let Some(dragon) = self.common.entities.dragon.as_ref() {
                 self.pick_section_move(dragon.id, dragon.position.components());
             }
             // A mod's general rows: the non-living interpolation, and no mod code.
@@ -1529,7 +1535,7 @@ impl crate::game::ClientGame<'_> {
         let Some(r) = self.client.remote.as_mut() else {
             return;
         };
-        for a in &mut self.common.armor_stands {
+        for a in &mut self.common.entities.armor_stands {
             if !ticks(a.id) {
                 continue;
             }
@@ -1565,6 +1571,7 @@ impl crate::game::ClientGame<'_> {
         looks.clear();
         looks.extend(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .enumerate()
@@ -1575,6 +1582,7 @@ impl crate::game::ClientGame<'_> {
                     let look = match m.ai.target.filter(|_| m.extra.flag) {
                         Some(Who::Mob(id)) => self
                             .common
+                            .entities
                             .mobs
                             .iter()
                             .find(|t| t.id == id)
@@ -1585,7 +1593,7 @@ impl crate::game::ClientGame<'_> {
                 }),
         );
         for &(i, look) in &looks {
-            guardian::look_at(&mut self.common.mobs[i], look);
+            guardian::look_at(&mut self.common.entities.mobs[i], look);
         }
         self.client.guardian_look_scratch = looks;
     }

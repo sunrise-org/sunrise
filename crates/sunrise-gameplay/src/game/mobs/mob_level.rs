@@ -21,8 +21,8 @@ impl crate::game::ServerGame<'_> {
 impl MobLevel for ServerGame<'_> {
     fn parts(&mut self) -> MobParts<'_> {
         MobParts {
-            mobs: &mut self.common.mobs,
-            dropped: &mut self.common.dropped,
+            mobs: &mut self.common.entities.mobs,
+            dropped: &mut self.common.entities.dropped,
             next_entity: self.server.next_entity,
             ticked: &self.common.creatures.ticked,
             items: server_world_items!(self),

@@ -154,7 +154,7 @@ pub(crate) mod tnt_impact_tests {
         game.world.set(6, 65, 8, plate).unwrap();
         let mut cart = Minecart::new(1, CartKind::Rideable, Vec3::new(5.5, 64.5, 8.5));
         cart.velocity = Vec3::new(0.4, 0.0, 0.0);
-        game.carts.push(cart.clone());
+        game.entities.carts.push(cart.clone());
         assert!(game.tick_cart(
             &mut cart,
             [0.0; 2],
@@ -206,7 +206,7 @@ pub(crate) mod tnt_impact_tests {
         game.world.set(1, 64, 8, slope).unwrap();
         game.world.set(2, 64, 8, stone).unwrap();
         game.world.set(2, 65, 8, rail).unwrap();
-        game.carts.push(Minecart::new(
+        game.entities.carts.push(Minecart::new(
             1,
             CartKind::Rideable,
             Vec3::new(1.9, 64.9, 8.5),
@@ -303,14 +303,15 @@ pub(crate) mod cart_push_tests {
             let mut rolled = Minecart::new(1, CartKind::Chest, Vec3::new(8.3, 64.0, 8.5));
             rolled.items = items;
             rolled.loot = Some(loot.clone());
-            game.carts.push(rolled);
+            game.entities.carts.push(rolled);
             // Facing along X (yaw 0) and 0.4 apart on X: the old behaviour pushes.
-            game.carts
+            game.entities
+                .carts
                 .push(Minecart::new(2, CartKind::Chest, Vec3::new(8.7, 64.0, 8.5)));
             for _ in 0..5 {
                 game.tick_carts();
             }
-            let cart = |id| game.carts.iter().find(|c| c.id == id).unwrap();
+            let cart = |id| game.entities.carts.iter().find(|c| c.id == id).unwrap();
             assert!(
                 cart(2).position.x - cart(1).position.x > 0.4,
                 "the carts were pushed apart: {} {}",
@@ -351,23 +352,27 @@ pub(crate) mod cart_push_tests {
             target: usize,
             velocity: Vec3,
         ) -> Vec3 {
-            game.carts.update(target, |cart| cart.velocity = Vec3::ZERO);
-            game.carts.update(pusher, |cart| cart.velocity = velocity);
+            game.entities
+                .carts
+                .update(target, |cart| cart.velocity = Vec3::ZERO);
+            game.entities
+                .carts
+                .update(pusher, |cart| cart.velocity = velocity);
             let mut index =
                 sunrise_gameplay::game::server_side::minecarts_server::CartIndex::default();
             game.push_from_cart(pusher, &mut index);
-            game.carts[target].velocity
+            game.entities.carts[target].velocity
         }
 
         let mut resources = None;
         let mut game = sunrise_gameplay::game::game_tests::tests::server_game(&mut resources);
         // Cart 2 moves east, into cart 1's box; yaw 0 faces east, along the push.
-        game.carts.push(Minecart::new(
+        game.entities.carts.push(Minecart::new(
             1,
             CartKind::Rideable,
             Vec3::new(8.5, 64.0, 8.5),
         ));
-        game.carts.push(Minecart::new(
+        game.entities.carts.push(Minecart::new(
             2,
             CartKind::Rideable,
             Vec3::new(8.1, 64.0, 8.5),
@@ -426,32 +431,33 @@ pub(crate) mod cart_push_tests {
         let kind = game.res.mob_types().get("minecraft:cow").cloned().unwrap();
         let mut cart = Minecart::new(2, CartKind::Rideable, Vec3::new(8.5, 64.0, 8.5));
         cart.velocity = Vec3::new(0.2, 0.0, 0.0);
-        game.carts.push(cart);
+        game.entities.carts.push(cart);
         let at = Vec3::new(8.5, 64.0, 8.5);
-        game.mobs.push(Mob::new(7, kind, at, 0.0));
+        game.entities.mobs.push(Mob::new(7, kind, at, 0.0));
         let mut index = sunrise_gameplay::game::server_side::minecarts_server::CartIndex::default();
         game.push_from_cart(0, &mut index);
         assert_eq!(
-            game.mobs[0].extra.mount,
+            game.entities.mobs[0].extra.mount,
             Some(2),
             "the cow boards the empty moving cart"
         );
-        game.mobs[0].extra.mount = None;
-        game.mobs[0].velocity = Vec3::ZERO;
+        game.entities.mobs[0].extra.mount = None;
+        game.entities.mobs[0].velocity = Vec3::ZERO;
         // The cart's own `never` rule: no boarding and no push.
         let name = game.holder_name(Target::Cart(2)).expect("a cart's UUID");
         game.score.board.add_team("cart-2").collision_rule = CollisionRule::Never;
         game.score.board.add_to_team(&name, "cart-2");
-        game.carts
+        game.entities
+            .carts
             .update(0, |cart| cart.velocity = Vec3::new(0.2, 0.0, 0.0));
         let mut index = sunrise_gameplay::game::server_side::minecarts_server::CartIndex::default();
         game.push_from_cart(0, &mut index);
         assert_eq!(
-            game.mobs[0].extra.mount, None,
+            game.entities.mobs[0].extra.mount, None,
             "the cart's collisionRule never keeps the cow off"
         );
         assert_eq!(
-            game.mobs[0].velocity,
+            game.entities.mobs[0].velocity,
             Vec3::ZERO,
             "and the cow is not pushed either"
         );
@@ -515,19 +521,19 @@ pub(crate) mod container_drop_tests {
                     let mut b = Boat::new(1, Arc::from("oak"), at, 0.0);
                     b.chest = true;
                     b.items = slots.clone();
-                    game.boats.push(b);
+                    game.entities.boats.push(b);
                 } else {
                     let mut c = Minecart::new(1, CartKind::Chest, at);
                     c.items = slots.clone();
-                    game.carts.push(c);
+                    game.entities.carts.push(c);
                 }
                 game.world.random.set_seed(1234);
                 if boat {
                     assert_eq!(game.hurt_boat_result(0, 100.0, false), Some(true));
-                    assert!(game.boats.is_empty());
+                    assert!(game.entities.boats.is_empty());
                 } else {
                     assert!(game.hurt_cart_result(0, 100.0, false, false, CartHit::default()));
-                    assert!(game.carts.is_empty());
+                    assert!(game.entities.carts.is_empty());
                 }
                 let mut expected = LegacyRandom::new(1234);
                 vanilla_spill_draws(&mut expected, &counts);
@@ -538,7 +544,7 @@ pub(crate) mod container_drop_tests {
                     "boat: {boat}"
                 );
                 // The two piles and the hull item.
-                assert_eq!(game.dropped.len(), 3, "boat: {boat}");
+                assert_eq!(game.entities.dropped.len(), 3, "boat: {boat}");
             });
         }
     }
@@ -580,7 +586,7 @@ pub(crate) mod rejected_passenger_tests {
                 std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
             );
             let cart = 5000;
-            game.carts.push(Minecart::new(
+            game.entities.carts.push(Minecart::new(
                 cart,
                 CartKind::Rideable,
                 Vec3::new(8.0, 64.0, 8.0),
@@ -592,7 +598,7 @@ pub(crate) mod rejected_passenger_tests {
             assert!(game.persist.off_level.contains_key(&ghost));
             let candidate = game.load_mob(pig(3, vec![]), None).unwrap();
             assert!(game.has_seated_passengers(cart));
-            let mut copy = game.carts[0].clone();
+            let mut copy = game.entities.carts[0].clone();
             copy.velocity = Vec3::new(1.0, 0.0, 0.0);
             assert_eq!(
                 game.natural_slowdown(&mut copy, game.has_seated_passengers(cart), 0.96)
@@ -600,7 +606,8 @@ pub(crate) mod rejected_passenger_tests {
                 0.997
             );
             assert!(!game.start_riding_target(Target::Mob(candidate), Target::Cart(cart), false));
-            game.carts
+            game.entities
+                .carts
                 .update(0, |c| c.velocity = Vec3::new(0.2, 0.0, 0.0));
             game.pickup_from_cart(
                 0,
@@ -622,7 +629,7 @@ pub(crate) mod rejected_passenger_tests {
             game.load_mob(pig(1, vec![]), Some(camel)).unwrap();
             assert_eq!(game.seated_passengers(camel).len(), 3);
             assert!(!game.start_riding_target(Target::Mob(candidate), Target::Mob(camel), false));
-            let mut active = game.carts[0].clone();
+            let mut active = game.entities.carts[0].clone();
             active.position = Vec3::new(40.0, 70.0, 40.0);
             active.yaw = 90.0;
             active.flipped = true;
@@ -634,7 +641,7 @@ pub(crate) mod rejected_passenger_tests {
             let leaf = game.mob_passenger_ids(ghost)[0];
             assert_eq!(game.mob_object(leaf).unwrap().position.x, 40.0);
             assert!(game.mob_object(leaf).unwrap().position.y >= 70.0);
-            assert_eq!(game.carts[0].position, Vec3::new(8.0, 64.0, 8.0));
+            assert_eq!(game.entities.carts[0].position, Vec3::new(8.0, 64.0, 8.0));
         });
     }
 
@@ -646,7 +653,7 @@ pub(crate) mod rejected_passenger_tests {
                 (0, 0),
                 std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
             );
-            game.carts.push(Minecart::new(
+            game.entities.carts.push(Minecart::new(
                 5000,
                 CartKind::Rideable,
                 Vec3::new(8.0, 70.0, 8.0),
@@ -720,16 +727,17 @@ pub(crate) mod hook_mutation_regressions {
         mod_platform::testing::with_mods(mods, || {
             sunrise_gameplay::game::native_entity_refs::tests::with_resident_game(|game| {
                 game.options.dedicated = Some(Vec::new());
-                game.carts
+                game.entities
+                    .carts
                     .push(Minecart::new(71, CartKind::Rideable, Vec3::ZERO));
                 let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
                 for id in [72, 73, 74] {
                     let mut mob = Mob::new(id, kind.clone(), Vec3::ZERO, 0.0);
                     mob.extra.mount = (id != 74).then_some(71);
                     mob.extra.vehicle_order = i64::from(id);
-                    game.mobs.push(mob);
+                    game.entities.mobs.push(mob);
                 }
-                let mut active = game.carts[0].clone();
+                let mut active = game.entities.carts[0].clone();
                 game.activate_cart(&mut active, true);
                 assert_eq!(game.mob_object(73).unwrap().extra.mount, Some(74));
                 assert_eq!(
@@ -759,17 +767,18 @@ pub(crate) mod hook_mutation_regressions {
         mod_platform::testing::with_mods(mods, || {
             sunrise_gameplay::game::native_entity_refs::tests::with_resident_game(|game| {
                 game.options.dedicated = Some(Vec::new());
-                game.carts
+                game.entities
+                    .carts
                     .push(Minecart::new(71, CartKind::Rideable, Vec3::ZERO));
                 let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
                 let original = Vec3::new(2.0, 60.0, 3.0);
                 let mut rider = Mob::new(72, kind.clone(), original, 0.0);
                 rider.extra.mount = Some(71);
-                game.mobs.push(rider);
+                game.entities.mobs.push(rider);
                 let mut child = Mob::new(73, kind, original, 0.0);
                 child.extra.mount = Some(72);
-                game.mobs.push(child);
-                let mut active = game.carts[0].clone();
+                game.entities.mobs.push(child);
+                let mut active = game.entities.carts[0].clone();
                 active.position = Vec3::new(40.0, 70.0, 40.0);
                 game.activate_cart(&mut active, true);
                 assert!(game.mob_object(72).unwrap().removed);
@@ -815,7 +824,8 @@ pub(crate) mod hook_mutation_regressions {
                         sunrise_game_data::gamerules::Value::Bool(true),
                     );
                     if cart {
-                        game.carts
+                        game.entities
+                            .carts
                             .push(Minecart::new(71, CartKind::Rideable, Vec3::ZERO));
                         game.hurt_cart(
                             0,
@@ -826,23 +836,24 @@ pub(crate) mod hook_mutation_regressions {
                             ),
                         );
                     } else {
-                        game.boats
-                            .push(sunrise_gameplay_common::game::boats_common::Boat::new(
+                        game.entities.boats.push(
+                            sunrise_gameplay_common::game::boats_common::Boat::new(
                                 71,
                                 "oak".into(),
                                 Vec3::ZERO,
                                 0.0,
-                            ));
+                            ),
+                        );
                         game.hurt_boat(0, 5.0, false);
                     }
                     assert_eq!(*destroyed.lock().unwrap(), 0);
                     assert!(
-                        game.dropped.is_empty(),
+                        game.entities.dropped.is_empty(),
                         "discard must not create the vehicle item"
                     );
                     game.native_removals_flush();
                     assert_eq!(*destroyed.lock().unwrap(), 0);
-                    assert!(game.dropped.is_empty());
+                    assert!(game.entities.dropped.is_empty());
                     assert!(game.entity(71).is_none());
                 });
             });
@@ -926,7 +937,9 @@ pub(crate) mod cart_cost_bench {
                 }
                 game.world.set(x, 64, z, rail_ns).unwrap();
                 let at = Vec3::new(f64::from(x) + 0.5, 64.0, f64::from(z) + 0.5);
-                game.carts.push(Minecart::new(id, CartKind::Rideable, at));
+                game.entities
+                    .carts
+                    .push(Minecart::new(id, CartKind::Rideable, at));
                 id += 1;
             }
         }
@@ -942,7 +955,7 @@ pub(crate) mod cart_cost_bench {
                 let at = Vec3::new(-29.5 + f64::from(k as i32) * 3.0, 70.0, f64::from(z) + 0.5);
                 let mut c = Minecart::new(id, CartKind::Rideable, at);
                 c.velocity = Vec3::new(0.3, 0.0, 0.0);
-                game.carts.push(c);
+                game.entities.carts.push(c);
                 id += 1;
             }
         }
@@ -957,21 +970,21 @@ pub(crate) mod cart_cost_bench {
                 -30.0 + (k % 76) as f64 + 0.5,
                 -30.0 + ((k / 76) % 76) as f64 + 0.5,
             );
-            game.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 1000 + k as u32,
                 chicken.clone(),
                 Vec3::new(x, 75.0, z),
                 0.0,
             ));
         }
-        let total = game.carts.len();
+        let total = game.entities.carts.len();
         let (warm, ticks) = (5, n("TICKS", 40));
         let mut spent = std::time::Duration::ZERO;
         for t in 0..warm + ticks {
             game.world.game_time += 1;
             // Mobs move every tick on a live server: the list is written.
-            if !game.mobs.is_empty() {
-                let _ = &mut game.mobs[0];
+            if !game.entities.mobs.is_empty() {
+                let _ = &mut game.entities.mobs[0];
             }
             let start = std::time::Instant::now();
             game.tick_carts();

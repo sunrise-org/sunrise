@@ -110,11 +110,11 @@ fn drawn_needle(
     game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
     frame: ItemFrame,
 ) -> String {
-    game.item_frames = Default::default();
-    game.item_frames.push(frame);
+    game.entities.item_frames = Default::default();
+    game.entities.item_frames.push(frame);
     // The camera sits at the frame, so the frame passes `shouldRender`.
     let camera = glam::DVec3::from(sunrise_gameplay_common::game::frames_common::center(
-        &game.item_frames[0],
+        &game.entities.item_frames[0],
     ));
     let mut out = Vec::new();
     game.frame_geometry(camera, 0.0, &mut out);

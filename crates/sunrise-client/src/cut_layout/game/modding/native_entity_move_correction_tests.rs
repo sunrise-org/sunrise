@@ -100,7 +100,7 @@ fn hosted_guest_starting<R>(
                 "summon minecraft:oak_boat {} {} {}",
                 starting[0], starting[1], starting[2]
             )));
-            let start = game.boats[0].position;
+            let start = game.entities.boats[0].position;
             [start.x, start.y, start.z]
         } else {
             starting
@@ -159,7 +159,7 @@ fn hosted_guest_starting<R>(
         if boat {
             // Seated as the driver (the first seat, `vehicle_order` 1), its
             // client the one that drives the boat.
-            (guest.vehicle, guest.vehicle_order) = (Some(game.boats[0].id), 1);
+            (guest.vehicle, guest.vehicle_order) = (Some(game.entities.boats[0].id), 1);
             guest.vehicle_good = Some(at);
         }
         game.server.lan.as_mut().unwrap().hub.guests.push(guest);
@@ -377,9 +377,9 @@ fn a_cancelled_small_vehicle_move_sends_the_driver_a_correction() {
             driver_moves_vehicle(game, 0.2);
             assert!(
                 [
-                    game.boats[0].position.x,
-                    game.boats[0].position.y,
-                    game.boats[0].position.z
+                    game.entities.boats[0].position.x,
+                    game.entities.boats[0].position.y,
+                    game.entities.boats[0].position.z
                 ] == at,
                 "the cancelled small vehicle move did not move the boat"
             );
@@ -404,9 +404,9 @@ fn a_replaced_small_vehicle_move_sends_the_driver_a_correction() {
             driver_moves_vehicle(game, 0.2);
             assert!(
                 [
-                    game.boats[0].position.x,
-                    game.boats[0].position.y,
-                    game.boats[0].position.z
+                    game.entities.boats[0].position.x,
+                    game.entities.boats[0].position.y,
+                    game.entities.boats[0].position.z
                 ] == at,
                 "the replaced small vehicle move did not move the boat"
             );
@@ -433,9 +433,9 @@ fn a_vehicle_replacement_equal_to_the_request_sends_no_correction() {
             driver_moves_vehicle(game, 0.125);
             assert!(
                 [
-                    game.boats[0].position.x,
-                    game.boats[0].position.y,
-                    game.boats[0].position.z
+                    game.entities.boats[0].position.x,
+                    game.entities.boats[0].position.y,
+                    game.entities.boats[0].position.z
                 ] == [at[0] + 0.125, at[1], at[2]],
                 "the equal replacement's vehicle move went through"
             );
@@ -584,9 +584,9 @@ fn a_cancelled_vehicle_move_from_an_obstructed_start_sends_the_put_back() {
             driver_moves_vehicle(game, 0.2);
             assert!(
                 [
-                    game.boats[0].position.x,
-                    game.boats[0].position.y,
-                    game.boats[0].position.z
+                    game.entities.boats[0].position.x,
+                    game.entities.boats[0].position.y,
+                    game.entities.boats[0].position.z
                 ] == at,
                 "the cancelled vehicle move of a stuck boat did not move it"
             );

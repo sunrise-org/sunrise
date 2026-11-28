@@ -215,9 +215,9 @@ pub(crate) mod tests {
                 .dispense_default_method((4, 64, 4), Direction::Up, stack.clone())
                 .unwrap();
             assert_eq!((left, event), (None, CLICK));
-            assert!(game.mobs.is_empty());
-            assert_eq!(game.dropped.len(), 1);
-            assert_eq!(game.dropped[0].stack, stack);
+            assert!(game.entities.mobs.is_empty());
+            assert_eq!(game.entities.dropped.len(), 1);
+            assert_eq!(game.entities.dropped[0].stack, stack);
         });
     }
     /// `IItemExtension.canEquip` at the dispenser: vanilla dresses the zombie, the first in
@@ -394,14 +394,15 @@ pub(crate) mod tests {
         super::super::native_entity_refs::tests::with_game(|game| {
             let kind = game.res.mob_types().get("minecraft:cod").unwrap().clone();
             for id in [70, 71, 72] {
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(id, kind.clone(), Vec3::new(0.5, 70.0, 0.5), 0.0));
             }
             let holder = mod_api::EntityRef::new(game.native_lifecycle.epoch().unwrap(), 71);
             let index = Arc::new(Mutex::new(AttachmentIndex::default()));
             let mut values = Attachments::default();
             VALUE.set(&mut values, Holder::Entity(71), 10).unwrap();
-            let original = game.mobs.update(1, |mob| {
+            let original = game.entities.mobs.update(1, |mob| {
                 mob.attachment_lifetime().bind(&mut values, &index, holder);
                 mob.attachment_lifetime().registration().unwrap()
             });
@@ -409,17 +410,18 @@ pub(crate) mod tests {
             let before = index.lock().unwrap().snapshot(&key);
             game.mob_placed(71, &ItemStack::new("minecraft:axolotl_bucket", 1))
                 .unwrap();
-            assert!(game.mobs[1].extra.from_bucket);
+            assert!(game.entities.mobs[1].extra.from_bucket);
             assert_eq!(
-                game.mobs.iter().map(|m| m.id).collect::<Vec<_>>(),
+                game.entities.mobs.iter().map(|m| m.id).collect::<Vec<_>>(),
                 [70, 71, 72]
             );
             let current = game
+                .entities
                 .mobs
                 .update(1, |m| m.attachment_lifetime().registration().unwrap());
             assert!(original.same_registration(&current));
             assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
-            game.mobs.remove(1);
+            game.entities.mobs.remove(1);
             assert!(index.lock().unwrap().snapshot(&key).is_empty());
             assert_eq!(before[0].entry.read(&VALUE), Ok(&10));
         });
@@ -481,12 +483,12 @@ pub(crate) mod tests {
             old.damage = 7;
             old.data_mut().custom_name = Some(sunrise_core::nbt::Tag::String("kept".into()));
             mob.extra.set_body_stack(Some(old.clone()));
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             let incoming = ItemStack::new("minecraft:dirt", 5);
             assert!(game.sulfur_cube_swallow((0, 0, 0), &incoming));
-            assert!(game.dropped.iter().any(|drop| drop.stack == old));
+            assert!(game.entities.dropped.iter().any(|drop| drop.stack == old));
             assert_eq!(
-                game.mobs[0].equipment_stacks()[6],
+                game.entities.mobs[0].equipment_stacks()[6],
                 Some(ItemStack::new("minecraft:dirt", 1))
             );
         });
@@ -639,21 +641,21 @@ pub(crate) mod tests {
             s
         });
         stands[0].show_arms = true;
-        game.armor_stands.clear();
-        game.armor_stands.extend(stands.iter().cloned());
+        game.entities.armor_stands.clear();
+        game.entities.armor_stands.extend(stands.iter().cloned());
         // The head-locked first stand is skipped for a helmet; the second wears it.
         let mut stack = ItemStack::new("minecraft:iron_helmet", 1);
         assert!(game.dispense_equipment((8, 201, 8), Direction::Down, &mut stack));
-        assert!(game.armor_stands[0].equipment[5].is_none());
-        assert!(game.armor_stands[1].equipment[5].is_some());
+        assert!(game.entities.armor_stands[0].equipment[5].is_none());
+        assert!(game.entities.armor_stands[1].equipment[5].is_some());
         // The same stand takes chest armour: only its head is locked.
         let mut stack = ItemStack::new("minecraft:iron_chestplate", 1);
         assert!(game.dispense_equipment((8, 201, 8), Direction::Down, &mut stack));
-        assert!(game.armor_stands[0].equipment[4].is_some());
+        assert!(game.entities.armor_stands[0].equipment[4].is_some());
         // Every stand locked for that slot: nothing takes it (the dispenser ejects it).
-        game.armor_stands[0].disabled_slots = 1 << 4;
-        game.armor_stands[1].disabled_slots = 1 << 4;
-        game.armor_stands[1].equipment[5] = None;
+        game.entities.armor_stands[0].disabled_slots = 1 << 4;
+        game.entities.armor_stands[1].disabled_slots = 1 << 4;
+        game.entities.armor_stands[1].equipment[5] = None;
         let mut stack = ItemStack::new("minecraft:iron_helmet", 1);
         assert!(!game.dispense_equipment((8, 201, 8), Direction::Down, &mut stack));
         assert_eq!(stack.count, 1);
@@ -691,8 +693,10 @@ pub(crate) mod tests {
                 .hub
                 .guests
                 .update(0, |g| g.entity_id = guest_id);
-            game.armor_stands.clear();
-            game.armor_stands.extend(vec![stand_at(stand_id, 8.5, 8.5)]);
+            game.entities.armor_stands.clear();
+            game.entities
+                .armor_stands
+                .extend(vec![stand_at(stand_id, 8.5, 8.5)]);
             let (done, _) = dispense_at_guest(&mut game, "minecraft:iron_helmet");
             assert!(done);
             let guest = game.server.lan.as_ref().unwrap().hub.guest(2).unwrap();
@@ -701,7 +705,10 @@ pub(crate) mod tests {
                 guest_first,
                 "stand {stand_id}, guest {guest_id}"
             );
-            assert_eq!(game.armor_stands[0].equipment[5].is_some(), !guest_first);
+            assert_eq!(
+                game.entities.armor_stands[0].equipment[5].is_some(),
+                !guest_first
+            );
         }
     }
     /// `forEachAccessibleNonEmptySection` walks sections before join order:
@@ -714,13 +721,14 @@ pub(crate) mod tests {
         let mut game = server_with_guest(&mut resources);
         game.server.lan.as_mut().unwrap().hub.guests.clear();
         // Stand boxes are 0.5 wide: x 16.2 spans 15.95..16.45.
-        game.armor_stands.clear();
-        game.armor_stands
+        game.entities.armor_stands.clear();
+        game.entities
+            .armor_stands
             .extend(vec![stand_at(1, 16.2, 8.5), stand_at(2, 15.5, 8.5)]);
         let mut stack = ItemStack::new("minecraft:iron_helmet", 1);
         assert!(game.dispense_equipment((15, 201, 8), Direction::Down, &mut stack));
-        assert!(game.armor_stands[0].equipment[5].is_none());
-        assert!(game.armor_stands[1].equipment[5].is_some());
+        assert!(game.entities.armor_stands[0].equipment[5].is_none());
+        assert!(game.entities.armor_stands[1].equipment[5].is_some());
     }
     /// `DispenserBlock.getDispenseMethod`: the block the dispenser faces
     /// answers first and wins for any item; with no answer from it the item's
@@ -773,13 +781,13 @@ pub(crate) mod tests {
                 assert_eq!(out, None);
                 assert_eq!(heard.take(), [("block", [5, 64, 5], stone.0)]);
                 assert!(events.iter().any(|e| e == "L 1001 5,64,5 0"), "{events:?}");
-                assert!(game.dropped.is_empty());
+                assert!(game.entities.dropped.is_empty());
 
                 let (out, events) = dispense(game, "minecraft:cobblestone");
                 assert_eq!(out, None);
                 assert_eq!(heard.take(), [("block", [5, 64, 5], stone.0)]);
                 assert!(events.iter().any(|e| e == "L 1001 5,64,5 0"), "{events:?}");
-                assert!(game.dropped.is_empty());
+                assert!(game.entities.dropped.is_empty());
 
                 let (out, events) = dispense(game, "minecraft:stone");
                 assert_eq!(out, None);
@@ -788,14 +796,17 @@ pub(crate) mod tests {
                     [("block", [5, 64, 5], stone.0), ("item", [5, 64, 5], 0)]
                 );
                 assert!(events.iter().any(|e| e == "L 1000 5,64,5 0"), "{events:?}");
-                assert!(game.dropped.is_empty());
+                assert!(game.entities.dropped.is_empty());
 
                 game.world.set(6, 64, 5, air).unwrap();
                 let (out, events) = dispense(game, "minecraft:stick");
                 assert_eq!(out, None);
                 assert!(heard.take().is_empty());
-                assert_eq!(game.dropped.len(), 1);
-                assert_eq!(game.dropped[0].stack, ItemStack::new("minecraft:stick", 1));
+                assert_eq!(game.entities.dropped.len(), 1);
+                assert_eq!(
+                    game.entities.dropped[0].stack,
+                    ItemStack::new("minecraft:stick", 1)
+                );
                 assert!(events.iter().any(|e| e == "L 1000 5,64,5 0"), "{events:?}");
             });
         });

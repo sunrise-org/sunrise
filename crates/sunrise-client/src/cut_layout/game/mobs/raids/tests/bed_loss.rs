@@ -84,7 +84,7 @@ fn admitted_raid_loses_removed_loaded_bed_without_erasing_memory() {
     // The full Game/Java fixture proves real AI acquisition; this unit starts
     // from that claimed-bed state and exercises production raid/wave dispatch.
     villager.extra.bed = Some([2, 200, 1]);
-    game.mobs.push(villager);
+    game.entities.mobs.push(villager);
     assert_eq!(level.is_village(&game, bed), Ok(true));
     assert_eq!(level.is_village(&game, [18, 200, 1]), Ok(true));
     assert_eq!(level.is_village(&game, [34, 200, 1]), Ok(false));
@@ -144,7 +144,13 @@ fn admitted_raid_loses_removed_loaded_bed_without_erasing_memory() {
         Status::Loss
     );
     assert_eq!(
-        game.mobs.iter().find(|m| m.id == 162).unwrap().extra.bed,
+        game.entities
+            .mobs
+            .iter()
+            .find(|m| m.id == 162)
+            .unwrap()
+            .extra
+            .bed,
         Some([2, 200, 1])
     );
 }

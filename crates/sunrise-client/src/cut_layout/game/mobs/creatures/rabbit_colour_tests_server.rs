@@ -43,8 +43,8 @@ fn a_baby_rabbit_takes_a_parents_colour_or_a_fresh_biome_variant() {
             4_242 + 104_729 * i64::from(i),
         );
         game.world.random = LevelRandom::for_level(LegacyRandom::new(level_seed));
-        game.mobs.clear();
-        game.orbs.clear();
+        game.entities.mobs.clear();
+        game.entities.orbs.clear();
         // Ids the spawner hands out stay clear of the pair's.
         game.server.next_entity = 10_000 + 4 * i;
         for (id, variant) in [(part, 0u8), (mate_id, 1)] {
@@ -52,7 +52,7 @@ fn a_baby_rabbit_takes_a_parents_colour_or_a_fresh_biome_variant() {
             m.random = LegacyRandom::new(parent_seed + i64::from(id));
             m.extra.variant = variant;
             m.extra.in_love = 600;
-            game.mobs.push(m);
+            game.entities.mobs.push(m);
         }
         game.breed(
             part,
@@ -64,6 +64,7 @@ fn a_baby_rabbit_takes_a_parents_colour_or_a_fresh_biome_variant() {
             true,
         );
         let child = game
+            .entities
             .mobs
             .iter()
             .find(|m| m.id != part && m.id != mate_id)
@@ -96,6 +97,7 @@ fn a_baby_rabbit_takes_a_parents_colour_or_a_fresh_biome_variant() {
             let _ = parent.next_int_bound(7);
         }
         let mut drawn = game
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == part)

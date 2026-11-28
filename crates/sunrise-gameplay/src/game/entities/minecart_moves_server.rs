@@ -88,6 +88,7 @@ impl ServerGame<'_> {
                     .finish_cart_landing(landing, effect, |game, power| game.explode_cart(c, power))
                     || !self
                         .common
+                        .entities
                         .carts
                         .iter()
                         .any(|row| row.id == id && row.join == join)

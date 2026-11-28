@@ -1103,7 +1103,7 @@ pub(crate) mod wind_charge_burst_tests {
                 Some(Who::Player),
             ));
             game.server.ticked_entities_through = game.server.next_entity;
-            let id = game.creatures.projectiles.last().unwrap().id;
+            let id = game.entities.projectiles.last().unwrap().id;
             game.tick_projectiles().unwrap();
             let bursts: Vec<_> = std::mem::take(&mut game.server.pending_sounds)
                 .into_iter()
@@ -1112,7 +1112,7 @@ pub(crate) mod wind_charge_burst_tests {
             assert_eq!(bursts.len(), 1, "the charge bursts once");
             assert_eq!(bursts[0].position, [at.x, at.y, at.z]);
             assert!(
-                !game.creatures.projectiles.iter().any(|p| p.id == id),
+                !game.entities.projectiles.iter().any(|p| p.id == id),
                 "the charge is spent"
             );
         });
@@ -1128,7 +1128,7 @@ pub(crate) mod wind_charge_burst_tests {
             assert!(game.run_command(
                 "summon pig 2.5 200.5 2.5 {UUID:[I;116,0,0,97],NoAI:1b,NoGravity:1b,Health:1f}"
             ));
-            let id = game.mobs.last().expect("the pig").id;
+            let id = game.entities.mobs.last().expect("the pig").id;
             let at = Vec3::new(2.5, 200.5, 2.5);
             let mut p = Projectile::new(ProjectileKind::WindCharge, at, Some(Who::Player));
             p.previous = at;
@@ -1140,7 +1140,12 @@ pub(crate) mod wind_charge_burst_tests {
                 },
             )
             .unwrap();
-            let pig = game.mobs.iter().find(|m| m.id == id).expect("the pig");
+            let pig = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .expect("the pig");
             assert!(!pig.alive(), "a point of damage kills 1 health");
             let hit = pig.combat.entries.last().expect("the hit").source;
             assert_eq!(

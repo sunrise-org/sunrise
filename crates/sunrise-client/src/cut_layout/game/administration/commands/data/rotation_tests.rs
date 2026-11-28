@@ -96,14 +96,14 @@ pub(crate) fn run_a_cloud_and_a_falling_block_save_the_rotation_they_were_loaded
                     cloud_index += 1;
                     game.summon_with_nbt(&case.kind, [x, 64.0, 4.5], &case.summon_nbt)
                         .unwrap();
-                    let id = game.breath_clouds.last().unwrap().id;
+                    let id = game.entities.breath_clouds.last().unwrap().id;
                     let live = game.data_of(&DataRef::Entity(Target::Cloud(id))).unwrap();
                     assert_eq!(
                         rotation(&live),
                         Some(&expected_live),
                         "{label}: cloud /data get"
                     );
-                    let cloud = game.breath_clouds.last().unwrap();
+                    let cloud = game.entities.breath_clouds.last().unwrap();
                     let saved =
                         sunrise_gameplay::game::server_side::potions_server::potion_cloud_to_nbt(
                             cloud,
@@ -134,7 +134,7 @@ pub(crate) fn run_a_cloud_and_a_falling_block_save_the_rotation_they_were_loaded
             }
         }
         // A cloud with no loaded raw compound matches the default 26.3 witness.
-        let cloud = game.breath_clouds.last().unwrap();
+        let cloud = game.entities.breath_clouds.last().unwrap();
         let saved = sunrise_gameplay::game::server_side::potions_server::potion_cloud_to_nbt(
             cloud,
             [1, 2, 3, 4],

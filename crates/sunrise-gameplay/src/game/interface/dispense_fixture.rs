@@ -158,22 +158,22 @@ impl crate::game::ServerGame<'_> {
         self.common.block_ticks = Ticks::new(0);
         self.server.tick_chunks.clear();
         self.sync_tick_chunks();
-        self.common.mobs.clear();
-        self.common.dragon.discard();
-        self.common.dropped.clear();
-        self.common.creatures.projectiles.clear();
-        self.common.tnts.clear();
-        self.common.boats.clear();
-        self.common.carts.clear();
-        self.common.armor_stands.clear();
-        self.common.crystals.clear();
-        self.common.paintings.clear();
-        self.common.item_frames.clear();
-        self.common.rockets.clear();
+        self.common.entities.mobs.clear();
+        self.common.entities.dragon.discard();
+        self.common.entities.dropped.clear();
+        self.common.entities.projectiles.clear();
+        self.common.entities.tnts.clear();
+        self.common.entities.boats.clear();
+        self.common.entities.carts.clear();
+        self.common.entities.armor_stands.clear();
+        self.common.entities.crystals.clear();
+        self.common.entities.paintings.clear();
+        self.common.entities.item_frames.clear();
+        self.common.entities.rockets.clear();
         self.common.potions.clear_thrown();
         self.common.level_events.clear();
-        self.common.orbs.clear();
-        self.common.falling.clear();
+        self.common.entities.orbs.clear();
+        self.common.entities.falling.clear();
         // Hopper cooldowns of an earlier case.
         self.server.hoppers.clear();
         self.common.ui.rules = Default::default();
@@ -304,7 +304,7 @@ impl crate::game::ServerGame<'_> {
                 Some(Target::Mob(h)) => sunrise_sim::mobs::leash::Holder::Mob(*h),
                 _ => continue,
             };
-            if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == *id) {
+            if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == *id) {
                 m.extra.leash = Some(holder);
             }
         }
@@ -313,10 +313,16 @@ impl crate::game::ServerGame<'_> {
         self.common.world.block_log = Some(Vec::new());
         self.start_audio_capture();
         LOG.with(|log| *log.borrow_mut() = Some(Vec::new()));
-        let old_mobs: Vec<u32> = self.common.mobs.iter().map(|m| m.id).collect();
-        let old_stands: Vec<u32> = self.common.armor_stands.iter().map(|s| s.id).collect();
-        let old_vehicles: Vec<u32> = (self.common.boats.iter().map(|b| b.id))
-            .chain(self.common.carts.iter().map(|c| c.id))
+        let old_mobs: Vec<u32> = self.common.entities.mobs.iter().map(|m| m.id).collect();
+        let old_stands: Vec<u32> = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .map(|s| s.id)
+            .collect();
+        let old_vehicles: Vec<u32> = (self.common.entities.boats.iter().map(|b| b.id))
+            .chain(self.common.entities.carts.iter().map(|c| c.id))
             .collect();
 
         let pos = &case["pos"];
@@ -494,7 +500,7 @@ impl crate::game::ServerGame<'_> {
         }
         self.fixture_entities(&old_mobs, &old_stands, &old_vehicles, &mut out);
         if case["pickup_delay"].as_bool().unwrap_or(false) {
-            for item in &self.common.dropped {
+            for item in &self.common.entities.dropped {
                 out.push(format!(
                     "pickup {} {}",
                     canon_stack(Some(&item.stack), self.res.items()),
@@ -885,22 +891,26 @@ impl crate::game::ServerGame<'_> {
             Some(&Target::Mob(id)) => {
                 let index = self
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .position(|m| m.id == id)
                     .ok_or("the target is gone")?;
-                let kind = self.common.mobs[index].kind.id.clone();
+                let kind = self.common.entities.mobs[index].kind.id.clone();
                 let bonus = self.smash_damage_bonus(&kind, Some(id));
-                let join = self.common.mobs[index].join;
+                let join = self.common.entities.mobs[index].join;
                 let (hurt, _) = self.hurt_by_player(index, base + bonus, source);
                 let index = self
                     .common
                     .mob_index
-                    .find(&self.common.mobs, id)
-                    .filter(|&i| self.common.mobs[i].join == join && !self.common.mobs[i].removed)
+                    .find(&self.common.entities.mobs, id)
+                    .filter(|&i| {
+                        self.common.entities.mobs[i].join == join
+                            && !self.common.entities.mobs[i].removed
+                    })
                     .ok_or("the target is gone")?;
                 // The hurt sound the mob raised, where it stands.
-                for event in std::mem::take(&mut self.common.mobs[index].outbox) {
+                for event in std::mem::take(&mut self.common.entities.mobs[index].outbox) {
                     if let sunrise_sim::mobs::MobEvent::Sound(s, at, volume, pitch) = event {
                         self.server_play_sound(&format!("minecraft:{s}"), at, volume, pitch);
                     }
@@ -913,6 +923,7 @@ impl crate::game::ServerGame<'_> {
             Some(&Target::Stand(id)) => {
                 let index = self
                     .common
+                    .entities
                     .armor_stands
                     .iter()
                     .position(|s| s.id == id)
@@ -970,11 +981,17 @@ impl crate::game::ServerGame<'_> {
         ));
         for (i, t) in targets.iter().enumerate() {
             let (health, v) = match *t {
-                Target::Mob(id) => match self.common.mobs.iter().find(|m| m.id == id) {
+                Target::Mob(id) => match self.common.entities.mobs.iter().find(|m| m.id == id) {
                     Some(m) => (num(f64::from(m.health)), m.velocity),
                     None => continue,
                 },
-                Target::Stand(id) => match self.common.armor_stands.iter().find(|s| s.id == id) {
+                Target::Stand(id) => match self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter()
+                    .find(|s| s.id == id)
+                {
                     Some(s) => ("-".to_owned(), s.velocity),
                     None => {
                         out.push(format!("V {i} gone"));
@@ -992,7 +1009,7 @@ impl crate::game::ServerGame<'_> {
         }
         // What the first target wears, worn by its Thorns.
         if let Some(&Target::Mob(id)) = targets.first()
-            && let Some(m) = self.common.mobs.iter().find(|m| m.id == id)
+            && let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id)
         {
             use sunrise_sim::mobs::finalize as f;
             for (slot, name) in [
@@ -1285,7 +1302,7 @@ impl crate::game::ServerGame<'_> {
         if let Some(cart) = super::minecarts::CartKind::from_id(kind) {
             let mut c = super::minecarts::Minecart::new(id, cart, at);
             c.yaw = yaw;
-            self.common.carts.push(c);
+            self.common.entities.carts.push(c);
             return Ok(Target::Cart(id));
         }
         if let Some((wood, chest)) =
@@ -1296,7 +1313,7 @@ impl crate::game::ServerGame<'_> {
             if chest {
                 boat = boat.with_chest();
             }
-            self.common.boats.push(boat);
+            self.common.entities.boats.push(boat);
             return Ok(Target::Boat(id));
         }
         if kind == "minecraft:armor_stand" {
@@ -1308,7 +1325,7 @@ impl crate::game::ServerGame<'_> {
             if let Some(last_hit) = e["last_hit"].as_i64() {
                 stand.last_hit = last_hit;
             }
-            self.common.armor_stands.push(stand);
+            self.common.entities.armor_stands.push(stand);
             return Ok(Target::Stand(id));
         }
         let t = self
@@ -1390,7 +1407,7 @@ impl crate::game::ServerGame<'_> {
                 &mut mob,
             );
         }
-        self.common.mobs.push(mob);
+        self.common.entities.mobs.push(mob);
         Ok(Target::Mob(id))
     }
 
@@ -1402,12 +1419,14 @@ impl crate::game::ServerGame<'_> {
         let items = match *target {
             Target::Boat(id) => self
                 .common
+                .entities
                 .boats
                 .iter()
                 .find(|b| b.id == id)
                 .map(|b| &b.items),
             Target::Cart(id) => self
                 .common
+                .entities
                 .carts
                 .iter()
                 .find(|c| c.id == id)
@@ -1445,17 +1464,23 @@ impl crate::game::ServerGame<'_> {
     ) -> String {
         let mut line = format!("T {index} ");
         match *target {
-            Target::Boat(id) => match self.common.boats.iter().find(|b| b.id == id) {
+            Target::Boat(id) => match self.common.entities.boats.iter().find(|b| b.id == id) {
                 Some(b) => line.push_str(&b.entity_type()),
                 None => line.push_str("removed"),
             },
-            Target::Cart(id) => match self.common.carts.iter().find(|c| c.id == id) {
+            Target::Cart(id) => match self.common.entities.carts.iter().find(|c| c.id == id) {
                 Some(c) => line.push_str(c.kind.id()),
                 None => line.push_str("removed"),
             },
             Target::Stand(id) => {
                 line.push_str("minecraft:armor_stand");
-                let Some(stand) = self.common.armor_stands.iter().find(|s| s.id == id) else {
+                let Some(stand) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter()
+                    .find(|s| s.id == id)
+                else {
                     line.push_str(" removed");
                     return line;
                 };
@@ -1473,7 +1498,7 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Mob(id) => {
-                let Some(m) = self.common.mobs.iter().find(|m| m.id == id) else {
+                let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
                     return line + "removed";
                 };
                 line.push_str(&m.kind.id);
@@ -1504,6 +1529,7 @@ impl crate::game::ServerGame<'_> {
                     Species::CopperGolem => Some(
                         self.common.golem_shearable(
                             self.common
+                                .entities
                                 .mobs
                                 .iter()
                                 .position(|o| o.id == id)
@@ -1564,6 +1590,7 @@ impl crate::game::ServerGame<'_> {
         };
         for m in self
             .common
+            .entities
             .mobs
             .iter()
             .filter(|m| !old_mobs.contains(&m.id))
@@ -1571,7 +1598,7 @@ impl crate::game::ServerGame<'_> {
             let (p, v) = (m.position, m.velocity);
             out.push(line(&m.kind.id, [p.x, p.y, p.z], [v.x, v.y, v.z], ""));
         }
-        if let Some(d) = self.common.dragon.as_ref() {
+        if let Some(d) = self.common.entities.dragon.as_ref() {
             let p = d.position;
             out.push(line(
                 "minecraft:ender_dragon",
@@ -1582,6 +1609,7 @@ impl crate::game::ServerGame<'_> {
         }
         for s in self
             .common
+            .entities
             .armor_stands
             .iter()
             .filter(|s| !old_stands.contains(&s.id))
@@ -1594,7 +1622,7 @@ impl crate::game::ServerGame<'_> {
                 "",
             ));
         }
-        for d in &self.common.dropped {
+        for d in &self.common.entities.dropped {
             let (p, v) = (d.position, d.velocity);
             out.push(line(
                 "minecraft:item",
@@ -1603,7 +1631,7 @@ impl crate::game::ServerGame<'_> {
                 &canon_stack(Some(&d.stack), self.common.res.items()),
             ));
         }
-        for shot in &self.common.creatures.projectiles {
+        for shot in &self.common.entities.projectiles {
             let kind = match &shot.kind {
                 ProjectileKind::Arrow {
                     effect: Some(("minecraft:glowing", 200)),
@@ -1625,7 +1653,7 @@ impl crate::game::ServerGame<'_> {
         for (kind, p, v) in self.common.potions.thrown_entities() {
             out.push(line(kind, [p.x, p.y, p.z], [v.x, v.y, v.z], ""));
         }
-        for (p, v) in self.common.rockets.iter().map(|r| r.motion()) {
+        for (p, v) in self.common.entities.rockets.iter().map(|r| r.motion()) {
             out.push(line(
                 "minecraft:firework_rocket",
                 [p.x, p.y, p.z],
@@ -1633,7 +1661,7 @@ impl crate::game::ServerGame<'_> {
                 "",
             ));
         }
-        for t in &self.common.tnts {
+        for t in &self.common.entities.tnts {
             let (p, v) = (t.position, t.velocity);
             out.push(line(
                 "minecraft:tnt",
@@ -1644,6 +1672,7 @@ impl crate::game::ServerGame<'_> {
         }
         for b in self
             .common
+            .entities
             .boats
             .iter()
             .filter(|b| !old_vehicles.contains(&b.id))
@@ -1654,7 +1683,7 @@ impl crate::game::ServerGame<'_> {
         }
         // A merged orb prints once per count, as the oracle does: whether orbs
         // merge depends on entity ids, which differ from vanilla's.
-        for o in &self.common.orbs {
+        for o in &self.common.entities.orbs {
             let (p, v) = (o.position, o.velocity);
             for _ in 0..o.count.max(1) {
                 out.push(line(
@@ -1667,6 +1696,7 @@ impl crate::game::ServerGame<'_> {
         }
         for c in self
             .common
+            .entities
             .carts
             .iter()
             .filter(|c| !old_vehicles.contains(&c.id))
@@ -1674,17 +1704,17 @@ impl crate::game::ServerGame<'_> {
             let (p, v) = (c.position, c.velocity);
             out.push(line(c.kind.id(), [p.x, p.y, p.z], [v.x, v.y, v.z], ""));
         }
-        for c in &self.common.crystals {
+        for c in &self.common.entities.crystals {
             let p = c.position;
             out.push(line("minecraft:end_crystal", [p.x, p.y, p.z], [0.0; 3], ""));
         }
         // A hanging entity's position is its box's centre (HangingEntity.recalculateBoundingBox).
         let centre =
             |(lo, hi): ([f64; 3], [f64; 3])| std::array::from_fn(|i| (lo[i] + hi[i]) / 2.0);
-        for p in &self.common.paintings {
+        for p in &self.common.entities.paintings {
             out.push(line("minecraft:painting", centre(p.bounds()), [0.0; 3], ""));
         }
-        for f in &self.common.item_frames {
+        for f in &self.common.entities.item_frames {
             let kind = if f.glow {
                 "minecraft:glow_item_frame"
             } else {

@@ -66,17 +66,18 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
             return false;
         };
-        let Some(index) = self.common.mobs.iter().position(|m| m.id == id) else {
+        let Some(index) = self.common.entities.mobs.iter().position(|m| m.id == id) else {
             return false;
         };
         // The pathfinder reads terrain only. Take the mob list so its selected
         // mob can be mutably borrowed alongside the shared MobWorld, just as
         // the mob tick does. No mod hook fires during pathfinding.
-        let mut mobs = self.common.mobs.lift();
+        let mut mobs = self.common.entities.mobs.lift();
         #[cfg(any(test, feature = "test-support"))]
         crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
         let moved = mobs[index].nav_move_to(&self.mob_world_base(&[]), at, speed);
         self.common
+            .entities
             .mobs
             .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         moved
@@ -106,18 +107,19 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
             return Err(MoveToPathError::Unavailable);
         };
-        let Some(index) = self.common.mobs.iter().position(|m| m.id == id) else {
+        let Some(index) = self.common.entities.mobs.iter().position(|m| m.id == id) else {
             return Err(MoveToPathError::Unavailable);
         };
         let nodes: Vec<[f64; 3]> = nodes.iter().map(|n| [n.x, n.y, n.z]).collect();
         // The pathfinder reads terrain only. Take the mob list so its selected
         // mob can be mutably borrowed alongside the shared MobWorld, as the
         // mob tick does. No mod hook fires during classification.
-        let mut mobs = self.common.mobs.lift();
+        let mut mobs = self.common.entities.mobs.lift();
         #[cfg(any(test, feature = "test-support"))]
         crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
         let followed = mobs[index].nav_move_to_supplied(&self.mob_world_base(&[]), &nodes, speed);
         self.common
+            .entities
             .mobs
             .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         supplied_path_refusal(followed)
@@ -129,7 +131,7 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
             return false;
         };
-        let Some(mob) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(mob) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return false;
         };
         mob.nav_stop();
@@ -144,6 +146,7 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id)?
@@ -163,6 +166,7 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id)?
@@ -177,7 +181,12 @@ impl crate::game::ServerGame<'_> {
         let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
             return None;
         };
-        let mob = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let mob = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         navigation_flags_supported(mob).then_some(mob.ai.nav.can_open_doors)
     }
 
@@ -188,6 +197,7 @@ impl crate::game::ServerGame<'_> {
         };
         let Some(mob) = self
             .common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -206,7 +216,12 @@ impl crate::game::ServerGame<'_> {
         let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
             return None;
         };
-        let mob = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let mob = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         navigation_flags_supported(mob).then_some(mob.ai.nav.can_pass_doors)
     }
 
@@ -217,6 +232,7 @@ impl crate::game::ServerGame<'_> {
         };
         let Some(mob) = self
             .common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -235,7 +251,12 @@ impl crate::game::ServerGame<'_> {
         let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
             return None;
         };
-        let mob = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let mob = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         navigation_flags_supported(mob).then_some(mob.ai.nav.can_float)
     }
 
@@ -246,6 +267,7 @@ impl crate::game::ServerGame<'_> {
         };
         let Some(mob) = self
             .common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -273,6 +295,7 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)?
@@ -298,6 +321,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -318,6 +342,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id)

@@ -32,9 +32,9 @@ impl ServerGame<'_> {
         self.common.block_ticks = Ticks::new(0);
         self.server.tick_chunks.clear();
         self.sync_tick_chunks();
-        self.common.mobs.clear();
-        self.common.dropped.clear();
-        self.common.orbs.clear();
+        self.common.entities.mobs.clear();
+        self.common.entities.dropped.clear();
+        self.common.entities.orbs.clear();
         self.server.hoppers.clear();
         self.common.level_events.clear();
         self.common.ui.rules = Default::default();

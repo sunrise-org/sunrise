@@ -117,7 +117,7 @@ impl crate::game::ClientGame<'_> {
         // Java dispatches this through the target's RemotePlayer type. The
         // level_players map is profile bookkeeping and can lag the entity;
         // mobs must stay out because their hurtClient returns false.
-        if self.common.mobs[mob].kind.id != "minecraft:player" {
+        if self.common.entities.mobs[mob].kind.id != "minecraft:player" {
             return;
         }
         let (damage, strength) = self.remote_attack_damage();
@@ -129,7 +129,7 @@ impl crate::game::ClientGame<'_> {
         if damage * (0.2 + strength * strength * 0.8) > 0.0 && self.common.critical_attack(strength)
         {
             use sunrise_level::particle_options::{ParticleOptions, ParticleType};
-            let m = &self.common.mobs[mob];
+            let m = &self.common.entities.mobs[mob];
             self.client.particles.0.tracking_emitter(
                 ParticleOptions::simple(ParticleType::Crit),
                 TrackingTarget::Entity(m.id as i32),

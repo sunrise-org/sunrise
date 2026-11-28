@@ -113,7 +113,13 @@ impl crate::game::ServerGame<'_> {
         &mut self,
         decision: &sunrise_sim::mobs::fox::Consumption,
     ) -> bool {
-        if !self.common.mobs.iter().any(|m| decision.still_valid(m)) {
+        if !self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .any(|m| decision.still_valid(m))
+        {
             return false;
         }
         let Some(consumer) = self.entity(decision.mob).and_then(|e| self.living(e)) else {
@@ -125,7 +131,7 @@ impl crate::game::ServerGame<'_> {
         let failures = mod_api::runtime::isolated_failures();
         let result: Result<bool, ()> = self.storage_transaction(|game, _| {
             {
-                let mut mobs = game.mobs.lift();
+                let mut mobs = game.entities.mobs.lift();
                 if let Some(mob) = mobs.iter_mut().find(|m| m.id == decision.mob) {
                     let mut events = Vec::new();
                     sunrise_sim::mobs::fox::consumed_before_effects(
@@ -134,7 +140,8 @@ impl crate::game::ServerGame<'_> {
                         &mut events,
                         &decision.stack,
                     );
-                    game.mobs
+                    game.entities
+                        .mobs
                         .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
                     if game.handle_mob_events(events).is_err() {
                         return if mod_api::runtime::isolated_failures() != failures {
@@ -144,7 +151,8 @@ impl crate::game::ServerGame<'_> {
                         };
                     }
                 } else {
-                    game.mobs
+                    game.entities
+                        .mobs
                         .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
                     return Ok(false);
                 }
@@ -162,6 +170,7 @@ impl crate::game::ServerGame<'_> {
                     return Ok(false);
                 }
                 if let Some(mob) = game
+                    .entities
                     .mobs
                     .iter()
                     .find(|m| m.id == decision.mob && m.alive() && !m.removed)
@@ -188,7 +197,13 @@ impl crate::game::ServerGame<'_> {
             if mod_api::runtime::isolated_failures() != failures {
                 return Err(());
             }
-            let Some(m) = game.common.mobs.iter_mut().find(|m| m.id == decision.mob) else {
+            let Some(m) = game
+                .common
+                .entities
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == decision.mob)
+            else {
                 return Ok(false);
             };
             let position = m.position;
@@ -244,6 +259,7 @@ impl crate::game::ServerGame<'_> {
                 | ConsumeEffect::RemoveEffects(_) => {
                     if self
                         .common
+                        .entities
                         .mobs
                         .iter()
                         .any(|m| m.id == id && m.alive() && !m.removed)
@@ -293,6 +309,7 @@ impl crate::game::ServerGame<'_> {
         let usage = MobConsumption::Drink(stack);
         if !self
             .common
+            .entities
             .mobs
             .iter()
             .any(|mob| mob.id == id && usage.still_valid(mob, mob.position))
@@ -308,6 +325,7 @@ impl crate::game::ServerGame<'_> {
             if stack.potion().unwrap_or(&stack.item) == "minecraft:healing" {
                 if let Some(mob) = game
                     .common
+                    .entities
                     .mobs
                     .iter_mut()
                     .find(|m| m.id == id && !m.removed)
@@ -338,6 +356,7 @@ impl crate::game::ServerGame<'_> {
                 return Err(());
             }
             if let Some(mob) = game
+                .entities
                 .mobs
                 .iter_mut()
                 .find(|mob| mob.id == id && usage.still_valid(mob, mob.position))
@@ -469,6 +488,7 @@ impl crate::game::ServerGame<'_> {
                     || self.common.persist.destroying_vehicles.contains(&boat)
                 {
                     self.common
+                        .entities
                         .boats
                         .iter()
                         .find(|vehicle| vehicle.id == id)
@@ -477,6 +497,7 @@ impl crate::game::ServerGame<'_> {
                     || self.common.persist.destroying_vehicles.contains(&cart)
                 {
                     self.common
+                        .entities
                         .carts
                         .iter()
                         .find(|vehicle| vehicle.id == id)
@@ -489,11 +510,18 @@ impl crate::game::ServerGame<'_> {
             self.stop_riding_from_removed_vehicle(id, y);
             return;
         }
-        if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
+        if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
             self.dismount(i);
-        } else if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
+        } else if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
             self.dismount_cart(i);
-        } else if let Some(c) = self.common.cushions.iter().find(|c| c.id == id).cloned() {
+        } else if let Some(c) = self
+            .common
+            .entities
+            .cushions
+            .iter()
+            .find(|c| c.id == id)
+            .cloned()
+        {
             self.get_up_from_cushion(&c);
         } else if self.seat(id).is_some() {
             self.get_off_seat();
@@ -794,6 +822,7 @@ pub(in crate::game) struct MobTeleporter<'a, 'g> {
 impl MobTeleporter<'_, '_> {
     pub(in crate::game) fn at(&self) -> Result<Vec3, ()> {
         self.game
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == self.id && m.alive() && !m.removed)
@@ -818,6 +847,7 @@ impl TeleportConsumeWorld for MobTeleporter<'_, '_> {
     fn random_source(&mut self, id: u32) -> &mut LegacyRandom {
         &mut self
             .game
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id)
@@ -832,6 +862,7 @@ impl TeleportConsumeWorld for MobTeleporter<'_, '_> {
     }
     fn is_passenger(&mut self) -> Result<bool, ()> {
         self.game
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == self.id)
@@ -863,6 +894,7 @@ impl TeleportConsumeWorld for MobTeleporter<'_, '_> {
                 Some(super::commands_common::Target::Mob(id)) if id == self.id)
             || !self
                 .game
+                .entities
                 .mobs
                 .iter()
                 .any(|m| m.id == self.id && self.usage.still_valid(m, from))
@@ -920,6 +952,7 @@ impl TeleportConsumeWorld for MobTeleporter<'_, '_> {
     fn reset_fall_distance(&mut self) -> Result<(), ()> {
         let m = self
             .game
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == self.id)

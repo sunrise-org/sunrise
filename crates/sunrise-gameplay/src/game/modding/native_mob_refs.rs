@@ -53,6 +53,7 @@ impl crate::game::ServerGame<'_> {
                 return false;
             };
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|state| state.id == id)
@@ -126,7 +127,13 @@ impl crate::game::ServerGame<'_> {
         }
         match target {
             Target::Mob(id) => {
-                let Some(other) = self.common.mobs.iter().find(|m| m.id == id && !m.removed) else {
+                let Some(other) = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)
+                else {
                     return false;
                 };
                 let seen = [sunrise_gameplay_common::game::creatures::seen(
@@ -219,7 +226,7 @@ impl crate::game::ServerGame<'_> {
     ) -> bool {
         let (bounds, team) = match target {
             Target::Mob(id) => {
-                let Some(other) = self.common.mobs.iter().find(|m| m.id == id) else {
+                let Some(other) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
                     return false;
                 };
                 let Some(bounds) = warden_mob_target_bounds(other) else {
@@ -299,7 +306,7 @@ impl crate::game::ServerGame<'_> {
         let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
             return self.native_dragon_target(mob.entity());
         };
-        let mob = self.common.mobs.iter().find(|m| m.id == id)?;
+        let mob = self.common.entities.mobs.iter().find(|m| m.id == id)?;
         if mob.species() == Species::Warden {
             let (id, _) = self.warden_attack_target(mob, None)?;
             return Some(LivingRef::new(EntityRef::new(
@@ -335,7 +342,7 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
             return self.native_dragon_set_target(mob.entity(), target);
         };
-        let Some(mob_state) = self.common.mobs.iter().find(|m| m.id == id) else {
+        let Some(mob_state) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
             return false;
         };
         if mob_state.refuses_set_target() {
@@ -356,7 +363,7 @@ impl crate::game::ServerGame<'_> {
             let Some(kind) = self.native_entity_target(target.entity()) else {
                 return false;
             };
-            let Some(state) = self.common.mobs.iter().find(|m| m.id == id) else {
+            let Some(state) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
                 return false;
             };
             if !self.native_mob_valid_target(state, kind) {
@@ -366,7 +373,7 @@ impl crate::game::ServerGame<'_> {
         let Some(who) = self.native_mob_bind_target(id, target) else {
             return false;
         };
-        let Some(mob) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(mob) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return false;
         };
         mob.set_target(who);
@@ -457,7 +464,13 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
             return false;
         };
-        let Some(m) = self.common.mobs.iter().find(|m| m.id == id && !m.removed) else {
+        let Some(m) = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)
+        else {
             return false;
         };
         if !sunrise_sim::mobs::ai::writes_brain_target(m) {
@@ -470,6 +483,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id)
@@ -486,7 +500,7 @@ impl crate::game::ServerGame<'_> {
     ) -> Option<bool> {
         match self.native_entity_target(mob.entity())? {
             Target::Mob(id) => {
-                let mob = self.common.mobs.iter().find(|m| m.id == id)?;
+                let mob = self.common.entities.mobs.iter().find(|m| m.id == id)?;
                 Some(match flag {
                     MobFlag::Aggressive => mob.ai.aggressive,
                     MobFlag::Persistent => mob.persistent,
@@ -509,16 +523,16 @@ impl crate::game::ServerGame<'_> {
         value: bool,
     ) -> bool {
         let slot = match self.native_entity_target(mob.entity()) {
-            Some(Target::Mob(id)) => {
-                self.common
-                    .mobs
-                    .iter_mut()
-                    .find(|m| m.id == id)
-                    .map(|mob| match flag {
-                        MobFlag::Aggressive => &mut mob.ai.aggressive,
-                        MobFlag::Persistent => &mut mob.persistent,
-                    })
-            }
+            Some(Target::Mob(id)) => self
+                .common
+                .entities
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == id)
+                .map(|mob| match flag {
+                    MobFlag::Aggressive => &mut mob.ai.aggressive,
+                    MobFlag::Persistent => &mut mob.persistent,
+                }),
             Some(Target::Dragon(_)) => self.native_dragon_mut(mob.entity()).map(|d| match flag {
                 MobFlag::Aggressive => &mut d.aggressive,
                 MobFlag::Persistent => &mut d.persistent,
@@ -546,7 +560,12 @@ impl crate::game::ServerGame<'_> {
         let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
             return None;
         };
-        let mob = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let mob = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         mob.is_tamable_animal().then_some(mob.extra.sitting_pose)
     }
 
@@ -559,6 +578,7 @@ impl crate::game::ServerGame<'_> {
         };
         let Some(mob) = self
             .common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -595,6 +615,7 @@ impl crate::game::ServerGame<'_> {
             return None;
         };
         self.common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == id)
@@ -620,6 +641,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -637,6 +659,7 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)?
@@ -654,6 +677,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -671,7 +695,7 @@ impl crate::game::ServerGame<'_> {
         let Some(Target::Mob(id)) = self.native_entity_target(mob.entity()) else {
             return false;
         };
-        let Some(mob) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(mob) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return false;
         };
         if !mobs::species::can_be_a_baby(mob.species()) {
@@ -698,6 +722,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -717,6 +742,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -735,6 +761,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -752,6 +779,7 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)?
@@ -768,6 +796,7 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)?
@@ -785,6 +814,7 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)?
@@ -802,6 +832,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -819,6 +850,7 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)?
@@ -835,6 +867,7 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)?
@@ -851,6 +884,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -867,6 +901,7 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)?
@@ -883,6 +918,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         self.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)

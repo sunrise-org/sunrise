@@ -1056,17 +1056,22 @@ pub(crate) mod tests {
             let bystander = summon_mob(game, "minecraft:pig", "{NoAI:1b,UUID:[I;21,22,23,24]}");
             let victim_uuid = Tag::IntArray(game.persist.uuid_of(victim).unwrap().to_vec());
             let bystander_uuid = Tag::IntArray(game.persist.uuid_of(bystander).unwrap().to_vec());
-            let slot = game.mobs.iter().position(|m| m.id == victim).unwrap();
+            let slot = game
+                .entities
+                .mobs
+                .iter()
+                .position(|m| m.id == victim)
+                .unwrap();
             let ticks_since_hurt = 17;
-            assert!(game.mobs[slot].ai.last_hurt_by_ref.is_none());
-            game.mobs.update(slot, |m| {
+            assert!(game.entities.mobs[slot].ai.last_hurt_by_ref.is_none());
+            game.entities.mobs.update(slot, |m| {
                 m.age = (m.ai.last_hurt_by_time + ticks_since_hurt) as u32;
             });
             // The victim joined first, but re-enters the bystander's section last.
-            let at = game.mobs[slot].position;
+            let at = game.entities.mobs[slot].position;
             let outside = sunrise_core::geometry::Vec3::new(at.x, 50.0, at.z);
             for (from, to) in [(at, outside), (outside, at)] {
-                game.mobs.update(slot, |m| m.position = to);
+                game.entities.mobs.update(slot, |m| m.position = to);
                 game.entity_section_step(victim, [from.x, from.y, from.z], [to.x, to.y, to.z]);
             }
             let living = game

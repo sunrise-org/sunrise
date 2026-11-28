@@ -40,11 +40,11 @@ impl HiveHost for GameHive<'_, '_> {
             return None;
         }
         let id = self.game.load_mob(tag.clone(), None)?;
-        let i = self.game.mobs.iter().position(|m| m.id == id)?;
-        Some(self.game.mobs.remove(i))
+        let i = self.game.entities.mobs.iter().position(|m| m.id == id)?;
+        Some(self.game.entities.mobs.remove(i))
     }
     fn add(&mut self, m: Mob) -> bool {
-        self.game.mobs.push(m);
+        self.game.entities.mobs.push(m);
         true
     }
     fn sound(&mut self, name: &'static str, at: [f64; 3]) {

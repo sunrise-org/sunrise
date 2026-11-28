@@ -43,7 +43,7 @@ fn a_mob_presses_a_plate_only_inside_the_simulation_distance() {
             game.load_ticking_neighbourhood(cx, 0);
             game.world.set(x, 63, 8, stone).unwrap();
             game.world.set(x, 64, 8, plate).unwrap();
-            game.mobs.push(Mob::new(
+            game.entities.mobs.push(Mob::new(
                 id,
                 zombie.clone(),
                 Vec3::new(f64::from(x) + 0.5, 64.0, 8.5),

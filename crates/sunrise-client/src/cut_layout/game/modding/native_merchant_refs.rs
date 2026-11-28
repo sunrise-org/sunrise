@@ -31,9 +31,9 @@ pub(crate) mod tests {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
             let villager = spawn(game, 40, "minecraft:villager");
-            game.mobs[0].extra.profession =
+            game.entities.mobs[0].extra.profession =
                 sunrise_sim::mobs::villager::ProfessionState::from_id("example:engineer");
-            game.mobs[0].extra.trade = Some(Box::new(Trader {
+            game.entities.mobs[0].extra.trade = Some(Box::new(Trader {
                 offers: vec![offer("minecraft:wheat", "minecraft:emerald")],
                 ..Trader::default()
             }));
@@ -41,7 +41,16 @@ pub(crate) mod tests {
             assert!(!villager.set_profession(game, "minecraft:farmer"));
             assert!(game.interact_trader(0, "minecraft:air").unwrap());
             assert!(game.station.is_none());
-            assert_eq!(game.mobs[0].extra.trade.as_ref().unwrap().offers.len(), 1);
+            assert_eq!(
+                game.entities.mobs[0]
+                    .extra
+                    .trade
+                    .as_ref()
+                    .unwrap()
+                    .offers
+                    .len(),
+                1
+            );
             assert_eq!(
                 villager.profession(game).as_deref(),
                 Some("example:engineer")
@@ -61,7 +70,9 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(42, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(42, zombie, Vec3::ZERO, 0.0));
             assert!(game.merchant(game.entity(42).unwrap()).is_none());
 
             // Nothing is rolled yet; reading and a refused write draw nothing.
@@ -77,7 +88,13 @@ pub(crate) mod tests {
                 ),
                 Ok(false)
             );
-            assert!(game.mobs[0].extra.trade.as_ref().is_none_or(|t| t.unset));
+            assert!(
+                game.entities.mobs[0]
+                    .extra
+                    .trade
+                    .as_ref()
+                    .is_none_or(|t| t.unset)
+            );
 
             // A wandering trader has offers but no villager data.
             assert_eq!(
@@ -96,7 +113,7 @@ pub(crate) mod tests {
             assert_eq!(trader.villager_type(game), None);
 
             // Put in known offers, as a rolled villager has them.
-            game.mobs[0].extra.trade = Some(Box::new(Trader {
+            game.entities.mobs[0].extra.trade = Some(Box::new(Trader {
                 offers: vec![
                     offer("minecraft:wheat", "minecraft:emerald"),
                     offer("minecraft:coal", "minecraft:emerald"),
@@ -161,8 +178,8 @@ pub(crate) mod tests {
             );
             // A new profession forgets the offers; the same one keeps them.
             assert_eq!(villager.offers(game), Some(Vec::new()));
-            game.mobs[0].extra.trade.as_mut().unwrap().unset = false;
-            game.mobs[0].extra.trade.as_mut().unwrap().offers =
+            game.entities.mobs[0].extra.trade.as_mut().unwrap().unset = false;
+            game.entities.mobs[0].extra.trade.as_mut().unwrap().offers =
                 vec![offer("minecraft:wheat", "minecraft:emerald")];
             assert!(villager.set_profession(game, "minecraft:farmer"));
             assert_eq!(villager.offers(game).unwrap().len(), 1);
@@ -170,10 +187,10 @@ pub(crate) mod tests {
             assert_eq!(villager.level(game), Some(1));
             assert!(villager.set_level(game, 4));
             assert_eq!(villager.level(game), Some(4));
-            assert_eq!(game.mobs[0].extra.villager_level, 4);
+            assert_eq!(game.entities.mobs[0].extra.villager_level, 4);
             assert!(villager.set_level(game, 123456));
             assert_eq!(villager.level(game), Some(123456));
-            assert_eq!(game.mobs[0].extra.villager_level, 123456);
+            assert_eq!(game.entities.mobs[0].extra.villager_level, 123456);
             // Vanilla: `Math.max(1, level)`, no upper limit.
             assert!(villager.set_level(game, 0));
             assert_eq!(villager.level(game), Some(1));
@@ -223,9 +240,9 @@ pub(crate) mod tests {
                 ),
                 Ok(false)
             );
-            let taken = game.mobs.lift();
+            let taken = game.entities.mobs.lift();
             assert_eq!(villager.level(game), None);
-            game.mobs = taken;
+            game.entities.mobs = taken;
         });
     }
 }

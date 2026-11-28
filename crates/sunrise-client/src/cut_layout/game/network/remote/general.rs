@@ -210,7 +210,8 @@ pub(crate) mod tests {
                     assert_eq!(game.entity(7), Some(me));
                     assert_eq!(ghast.position(game), Some([2.5, 70.0, 0.5]));
                     assert_eq!(
-                        game.mobs
+                        game.entities
+                            .mobs
                             .iter()
                             .find(|mob| mob.id == 20)
                             .unwrap()
@@ -334,7 +335,7 @@ pub(crate) mod tests {
                     assert_eq!(xs, [1.5, 2.5, 3.5]);
                     assert_eq!(rows(game)[&5].previous[0], 2.5);
                     // A client holds rows only here: none is a resident row, ticked by mod code.
-                    assert!(game.resident_entities.general.rows.is_empty());
+                    assert!(game.entities.general.rows.is_empty());
                     let holder = Holder::Entity(5);
                     game.client
                         .remote

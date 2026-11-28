@@ -25,8 +25,8 @@ impl ServerGame<'_> {
             .ui
             .rules
             .bool_at(sunrise_game_data::gamerules::vanilla::MOB_GRIEFING);
-        for i in 0..self.common.mobs.len() {
-            let m = &self.common.mobs[i];
+        for i in 0..self.common.entities.mobs.len() {
+            let m = &self.common.entities.mobs[i];
             if m.species() != Species::Panda
                 || !m.alive()
                 || !self.common.creatures.ticked.contains(&m.id)
@@ -45,34 +45,42 @@ impl ServerGame<'_> {
                 let reach = m.bounds().inflate(Vec3::new(1.0, 0.0, 1.0));
                 let taken = self
                     .common
+                    .entities
                     .dropped
                     .iter()
                     .position(|e| wants(self, e) && reach.intersects(e.bounds()));
                 if let Some(j) = taken {
-                    let before = self.common.dropped[j].clone();
+                    let before = self.common.entities.dropped[j].clone();
                     // `Panda.pickUpItem`'s `onItemPickup` comes first: the
                     // advancement of whoever threw it.
                     self.mob_item_pickup_trigger(i, &before);
                     let e = self.remove_dropped(j);
                     self.server_mob_take_item(&e, id);
-                    panda::hold(&mut self.common.mobs[i], &e.stack.item, e.stack.count, true);
+                    panda::hold(
+                        &mut self.common.entities.mobs[i],
+                        &e.stack.item,
+                        e.stack.count,
+                        true,
+                    );
                 }
             }
-            let m = &self.common.mobs[i];
+            let m = &self.common.entities.mobs[i];
             let area = |r: f64| m.bounds().inflate(Vec3::new(r, r, r));
             let (near, wide) = (area(6.0), area(8.0));
             let food_near = self
                 .common
+                .entities
                 .dropped
                 .iter()
                 .any(|e| wants(self, e) && near.intersects(e.bounds()));
             let food_at = self
                 .common
+                .entities
                 .dropped
                 .iter()
                 .find(|e| wants(self, e) && wide.intersects(e.bounds()))
                 .map(|e| [e.position.x, e.position.y, e.position.z]);
-            panda::set_food(&mut self.common.mobs[i], food_near, food_at);
+            panda::set_food(&mut self.common.entities.mobs[i], food_near, food_at);
         }
     }
     /// `Panda.mobInteract` for a click with `item`; whether the click is taken.
@@ -82,7 +90,7 @@ impl ServerGame<'_> {
         item: &str,
     ) -> bool {
         let creative = self.common.creative;
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         if panda::scared(m) {
             return false;
         }
@@ -132,6 +140,7 @@ impl ServerGame<'_> {
             self.server.love_cause.insert(id, self.server.lan_acting);
             let kind = self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id)
@@ -151,6 +160,7 @@ impl ServerGame<'_> {
     pub fn panda_sneezed(&mut self, id: u32) {
         let Some(area) = self
             .common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == id)
@@ -158,7 +168,7 @@ impl ServerGame<'_> {
         else {
             return;
         };
-        let mut mobs = self.common.mobs.lift();
+        let mut mobs = self.common.entities.mobs.lift();
         #[cfg(any(test, feature = "test-support"))]
         crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
         let w = self.mob_world_base(&[]);
@@ -179,6 +189,7 @@ impl ServerGame<'_> {
             }
         }
         self.common
+            .entities
             .mobs
             .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
     }

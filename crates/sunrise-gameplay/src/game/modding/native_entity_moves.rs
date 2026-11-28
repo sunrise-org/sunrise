@@ -184,7 +184,7 @@ impl crate::game::ServerGame<'_> {
                 }) == Some(true)
             }
             Target::Mob(id) => {
-                let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+                let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
                     return false;
                 };
                 m.yaw = yaw;
@@ -203,7 +203,7 @@ impl crate::game::ServerGame<'_> {
                 true
             }
             Target::General(id) => {
-                let Some(row) = self.common.resident_entities.general.row_mut(id) else {
+                let Some(row) = self.common.entities.general.row_mut(id) else {
                     return false;
                 };
                 row.rotation = [yaw, pitch];
@@ -220,17 +220,43 @@ impl crate::game::ServerGame<'_> {
             return Some(g.head_yaw);
         }
         match t {
-            Target::Mob(id) => Some(self.common.mobs.iter().find(|m| m.id == id)?.head_yaw),
-            Target::Stand(id) => Some(self.armor_stands.iter().find(|a| a.id == id)?.head_yaw),
+            Target::Mob(id) => Some(
+                self.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)?
+                    .head_yaw,
+            ),
+            Target::Stand(id) => Some(
+                self.entities
+                    .armor_stands
+                    .iter()
+                    .find(|a| a.id == id)?
+                    .head_yaw,
+            ),
             _ => Some(0.0),
         }
     }
     /// `LivingEntity.yBodyRot`: the living entity's authoritative body on a server.
     pub(in crate::game) fn entity_body_yaw(&self, entity: EntityRef) -> Option<f32> {
         match self.native_entity_target(entity)? {
-            Target::Mob(id) => Some(self.common.mobs.iter().find(|m| m.id == id)?.body_yaw),
-            Target::Stand(id) => Some(self.armor_stands.iter().find(|a| a.id == id)?.body_yaw),
-            Target::Dragon(_) => Some(self.common.dragon.as_ref()?.body_yaw),
+            Target::Mob(id) => Some(
+                self.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)?
+                    .body_yaw,
+            ),
+            Target::Stand(id) => Some(
+                self.entities
+                    .armor_stands
+                    .iter()
+                    .find(|a| a.id == id)?
+                    .body_yaw,
+            ),
+            Target::Dragon(_) => Some(self.common.entities.dragon.as_ref()?.body_yaw),
             t @ (Target::Player | Target::Guest(_)) => Some(self.native_player_body(t)?.body_yaw),
             _ => None,
         }
@@ -244,7 +270,7 @@ impl crate::game::ServerGame<'_> {
     ) -> Result<bool, mod_api::LevelWriteError> {
         Ok(match self.native_entity_target(entity) {
             Some(Target::Mob(id)) => {
-                let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+                let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
                     return Ok(false);
                 };
                 use sunrise_sim::mobs::Species;
@@ -259,7 +285,7 @@ impl crate::game::ServerGame<'_> {
                 true
             }
             Some(Target::Stand(id)) => {
-                let Some(a) = self.armor_stands.iter_mut().find(|a| a.id == id) else {
+                let Some(a) = self.entities.armor_stands.iter_mut().find(|a| a.id == id) else {
                     return Ok(false);
                 };
                 a.previous_yaw = yaw;
@@ -268,7 +294,7 @@ impl crate::game::ServerGame<'_> {
                 a.previous_head_yaw = yaw;
                 true
             }
-            Some(Target::Dragon(_)) => self.common.dragon.as_mut().is_some_and(|d| {
+            Some(Target::Dragon(_)) => self.common.entities.dragon.as_mut().is_some_and(|d| {
                 d.body_yaw = yaw;
                 true
             }),
@@ -289,14 +315,16 @@ impl crate::game::ServerGame<'_> {
             return false;
         }
         match self.native_entity_target(entity) {
-            Some(Target::Mob(id)) => match self.common.mobs.iter_mut().find(|m| m.id == id) {
-                Some(m) => {
-                    m.head_yaw = yaw;
-                    m.needs_sync = true;
-                    true
+            Some(Target::Mob(id)) => {
+                match self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
+                    Some(m) => {
+                        m.head_yaw = yaw;
+                        m.needs_sync = true;
+                        true
+                    }
+                    None => false,
                 }
-                None => false,
-            },
+            }
             Some(t @ (Target::Player | Target::Guest(_))) => {
                 let conn = match t {
                     Target::Player => self.server.lan_acting,
@@ -353,7 +381,7 @@ impl crate::game::ServerGame<'_> {
             *v = Vec3::new(v.x + x, v.y + y, v.z + z);
         });
         if let EntityHandle::Mob(i) = h {
-            self.common.mobs[i].needs_sync = true;
+            self.common.entities.mobs[i].needs_sync = true;
         }
         true
     }
@@ -521,11 +549,11 @@ pub(in crate::game) mod tests {
             mob.fall_distance = 5.0;
             mob.velocity.y = -2.0;
             fixture_resident_column(&mut game.world, (0, 0));
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             let entity = game.entity(12).unwrap();
             fixture_resident_column(&mut game.world, (0, -1));
             assert!(entity.teleport_to(game, [5.0, 70.0, -3.0], Some([90.0, 120.0])));
-            let mob = &game.mobs[0];
+            let mob = &game.entities.mobs[0];
             assert!(mob.ai.nav.path.is_none());
             assert!(mob.extra.mount.is_none());
             assert!(!mob.extra.passenger);
@@ -549,7 +577,8 @@ pub(in crate::game) mod tests {
             );
             assert!(!entity.teleport_to(game, [f64::NAN, 0.0, 0.0], None));
             assert!(!entity.push(game, [0.0, f64::INFINITY, 0.0]));
-            game.armor_stands
+            game.entities
+                .armor_stands
                 .push(sunrise_sim::entities::ArmorStand::new(13, Vec3::ZERO, 0.0));
             let stand = game.entity(13).unwrap();
             assert!(!stand.set_rotation(game, 30.0, 10.0));
@@ -573,19 +602,21 @@ pub(in crate::game) mod tests {
             let marker = game.entity(14).unwrap();
             assert_eq!(marker.head_yaw(game), Some(0.0));
             assert!(!marker.set_head_yaw(game, 10.0));
-            game.paintings.push(sunrise_sim::entities::Painting {
-                attachment_lifetime: Default::default(),
-                join: Default::default(),
-                id: 15,
-                pos: [0, 64, 0],
-                facing: 0,
-                variant: "minecraft:kebab".into(),
-                asset: None,
-                width: 1,
-                height: 1,
-                check_interval: 0,
-                ticks: 0,
-            });
+            game.entities
+                .paintings
+                .push(sunrise_sim::entities::Painting {
+                    attachment_lifetime: Default::default(),
+                    join: Default::default(),
+                    id: 15,
+                    pos: [0, 64, 0],
+                    facing: 0,
+                    variant: "minecraft:kebab".into(),
+                    asset: None,
+                    width: 1,
+                    height: 1,
+                    check_interval: 0,
+                    ticks: 0,
+                });
             let painting = game.entity(15).unwrap();
             assert!(!painting.teleport_to(game, [1.0, 64.0, 0.0], None));
             assert!(!painting.set_rotation(game, 30.0, 10.0));

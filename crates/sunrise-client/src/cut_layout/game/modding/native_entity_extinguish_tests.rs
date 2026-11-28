@@ -25,17 +25,18 @@ const PITCH: u32 = 0x3fe09a90;
 fn extinguish_fire_uses_mob_kind_immunity_and_own_random_unlike_silent_clear() {
     with_resident_game(|game| {
         let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(21, kind, Vec3::new(3.0, 64.0, 5.0), 0.0));
         let entity = game.entity(21).unwrap();
         for (ticks, immune) in [(72, false), (0, false), (-12, false), (72, true)] {
-            let mob = &mut game.mobs[0];
+            let mob = &mut game.entities.mobs[0];
             Arc::make_mut(&mut mob.kind).flags.fire_immune = immune;
             mob.fire_ticks = ticks;
             mob.random = LegacyRandom::new(1234);
             mob.outbox.clear();
             assert!(entity.extinguish_fire(game));
-            let mob = &mut game.mobs[0];
+            let mob = &mut game.entities.mobs[0];
             assert_eq!(mob.fire_ticks, ticks.min(0));
             if ticks > 0 && !immune {
                 assert_eq!(mob.outbox.len(), 1);
@@ -52,16 +53,16 @@ fn extinguish_fire_uses_mob_kind_immunity_and_own_random_unlike_silent_clear() {
                 assert_eq!(mob.random.next_float(), FIRST);
             }
         }
-        let mob = &mut game.mobs[0];
+        let mob = &mut game.entities.mobs[0];
         Arc::make_mut(&mut mob.kind).flags.fire_immune = false;
         mob.fire_ticks = 72;
         mob.random = LegacyRandom::new(1234);
         mob.outbox.clear();
         assert!(entity.clear_fire(game));
-        assert_eq!(game.mobs[0].fire_ticks, 0);
-        assert!(game.mobs[0].outbox.is_empty());
-        assert_eq!(game.mobs[0].random.next_float(), FIRST);
-        game.mobs.clear();
+        assert_eq!(game.entities.mobs[0].fire_ticks, 0);
+        assert!(game.entities.mobs[0].outbox.is_empty());
+        assert_eq!(game.entities.mobs[0].random.next_float(), FIRST);
+        game.entities.mobs.clear();
         assert!(!entity.extinguish_fire(game));
     });
 }
@@ -81,8 +82,10 @@ fn extinguish_fire_preserves_player_guest_stand_and_item_sound_routes() {
             |_| {},
         )
         .unwrap();
-        game.armor_stands.push(ArmorStand::new(22, at, 0.0));
-        game.dropped.push(ItemEntity::new(
+        game.entities
+            .armor_stands
+            .push(ArmorStand::new(22, at, 0.0));
+        game.entities.dropped.push(ItemEntity::new(
             23,
             ItemStack::new("minecraft:stone", 1),
             at,
@@ -97,7 +100,7 @@ fn extinguish_fire_preserves_player_guest_stand_and_item_sound_routes() {
                     "entity {id}, ticks {ticks}"
                 );
                 game.server.effect_rng = LegacyRandom::new(1234);
-                game.dropped[0].random = LegacyRandom::new(1234);
+                game.entities.dropped[0].random = LegacyRandom::new(1234);
                 game.start_audio_capture();
                 let actor = game.server.lan_acting;
                 assert!(entity.extinguish_fire(game));
@@ -120,22 +123,22 @@ fn extinguish_fire_preserves_player_guest_stand_and_item_sound_routes() {
                     if ticks > 0 && id != 23 { THIRD } else { FIRST }
                 );
                 assert_eq!(
-                    game.dropped[0].random.next_float(),
+                    game.entities.dropped[0].random.next_float(),
                     if ticks > 0 && id == 23 { THIRD } else { FIRST }
                 );
             }
         }
         let entity = game.entity(23).unwrap();
-        let item = &mut game.dropped[0];
+        let item = &mut game.entities.dropped[0];
         item.stack = ItemStack::new("minecraft:netherite_ingot", 1);
         item.fire_ticks = 72;
         item.random = LegacyRandom::new(1234);
         game.server.effect_rng = LegacyRandom::new(1234);
         game.start_audio_capture();
         assert!(entity.extinguish_fire(game));
-        assert_eq!(game.dropped[0].fire_ticks, 0);
+        assert_eq!(game.entities.dropped[0].fire_ticks, 0);
         assert!(game.server.pending_sounds.is_empty());
-        assert_eq!(game.dropped[0].random.next_float(), FIRST);
+        assert_eq!(game.entities.dropped[0].random.next_float(), FIRST);
         assert_eq!(game.server.effect_rng.next_float(), FIRST);
     });
 }

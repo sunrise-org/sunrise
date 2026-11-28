@@ -25,7 +25,7 @@ fn a_silent_tnt_cart_primes_without_its_sound() {
     // Silent: the fuse is lit, the entity event goes out, no sound is played.
     tnt_cart(&mut game, 42, true);
     game.start_audio_capture();
-    let mut silent = game.carts[0].clone();
+    let mut silent = game.entities.carts[0].clone();
     game.activate_cart(&mut silent, true);
     assert_eq!(silent.fuse, 80, "a silent cart still primes");
     assert!(
@@ -45,7 +45,7 @@ fn a_silent_tnt_cart_primes_without_its_sound() {
     // source (`SoundSource.BLOCKS` ordinal 4), volume and pitch 1.
     tnt_cart(&mut game, 43, false);
     game.start_audio_capture();
-    let mut normal = game.carts[0].clone();
+    let mut normal = game.entities.carts[0].clone();
     game.activate_cart(&mut normal, true);
     assert_eq!(normal.fuse, 80);
     let sounds = std::mem::take(&mut game.server.pending_sounds);

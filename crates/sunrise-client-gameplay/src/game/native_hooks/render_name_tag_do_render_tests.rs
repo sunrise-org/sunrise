@@ -59,7 +59,7 @@ impl Hooks for Silent {
 /// A mannequin named "Bob" in view, whose tag has two lines: its description (the score line)
 /// and its name.
 fn add_bob(game: &mut ClientGame<'_>) {
-    game.mobs.clear();
+    game.entities.mobs.clear();
     let kind = game
         .res
         .mob_types()
@@ -70,7 +70,7 @@ fn add_bob(game: &mut ClientGame<'_>) {
     let mut bob = sunrise_client::mobs::Mob::new(77, kind, at, 0.0);
     bob.custom_name = Some("Bob".into());
     bob.name_visible = true;
-    game.mobs.push(bob);
+    game.entities.mobs.push(bob);
 }
 
 /// One frame's name tags: the depth-tested vertices and the see-through ones, as bytes.

@@ -30,6 +30,7 @@ fn counts(game: &sunrise_gameplay::game::ServerGame<'_>, x: i32, id: u32) -> (u3
         _ => 0,
     };
     let in_cart: u32 = game
+        .entities
         .carts
         .iter()
         .find(|c| c.id == id)
@@ -53,8 +54,8 @@ fn a_ridden_hopper_cart_takes_one_item_a_tick() {
     chest(&mut game, 12);
     let ridden = Minecart::new(1, CartKind::Hopper, Vec3::new(8.5, 64.0625, 8.5));
     let empty = Minecart::new(2, CartKind::Hopper, Vec3::new(12.5, 64.0625, 8.5));
-    game.carts.push(ridden);
-    game.carts.push(empty);
+    game.entities.carts.push(ridden);
+    game.entities.carts.push(empty);
     game.player = Some(sunrise_sim::motion::PlayerMotion::new(
         game.motion,
         Vec3::new(8.5, 64.5, 8.5),

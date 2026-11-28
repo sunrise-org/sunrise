@@ -95,7 +95,7 @@ fn visibility_unwind_save() {
     let visibility = sunrise_sim::join_seq::visibility::Visibility::default();
     let calls = Arc::new(AtomicUsize::new(0));
     with_save_game(&root, |game| {
-        game.dropped.bind_visibility(&visibility);
+        game.entities.dropped.bind_visibility(&visibility);
         game.spawn_item(
             ItemStack::new("minecraft:diamond", 7),
             [2.0, 64.0, 2.0],
@@ -139,7 +139,7 @@ fn visibility_unwind_save() {
             );
             assert!(mod_api::__private::take_hook_panics().is_empty());
             assert!(visibility.settled());
-            assert!(game.dropped.is_empty(), "both pickups complete");
+            assert!(game.entities.dropped.is_empty(), "both pickups complete");
         });
         assert!(
             !root.join("level.dat").exists(),

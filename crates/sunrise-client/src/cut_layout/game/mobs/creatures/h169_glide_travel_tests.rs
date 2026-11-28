@@ -28,15 +28,15 @@ fn h169_registered_eligible_husk_actually_travels_as_a_glider() {
                     .iter()
                     .find_map(|(id, u)| (*u == [169, 0, 0, n]).then_some(*id))
                     .unwrap();
-                game.mobs.iter().position(|m| m.id == id).unwrap()
+                game.entities.mobs.iter().position(|m| m.id == id).unwrap()
             })
             .collect();
         let main = indexes[0];
-        let id = game.mobs[main].id;
-        assert!(game.mobs[main].extra.fall_flying);
-        assert!(!game.mobs[main].no_ai && !game.mobs[main].ground.on_ground);
+        let id = game.entities.mobs[main].id;
+        assert!(game.entities.mobs[main].extra.fall_flying);
+        assert!(!game.entities.mobs[main].no_ai && !game.entities.mobs[main].ground.on_ground);
         let stack = sunrise_sim::mobs::finalize::equipment_stack(
-            &game.mobs[main],
+            &game.entities.mobs[main],
             sunrise_core::equipment_slot::EquipmentSlot::Chest,
         )
         .unwrap();
@@ -49,26 +49,26 @@ fn h169_registered_eligible_husk_actually_travels_as_a_glider() {
         game.update_chunk_tickets();
         assert!(game.entity_ticking_area()(4, 8));
         game.tick_creature_entities().unwrap();
-        assert_eq!(game.mobs[main].id, id);
+        assert_eq!(game.entities.mobs[main].id, id);
         assert_eq!(game.uuid_for(id), [169, 0, 0, 1]);
         assert!(
-            game.mobs[main].extra.fall_flying,
+            game.entities.mobs[main].extra.fall_flying,
             "real modeled flag remains eligible after the tick"
         );
         assert_eq!(
-            game.mobs[indexes[1]].position,
+            game.entities.mobs[indexes[1]].position,
             Vec3::new(8.5, 300.0, 8.5),
             "NoAI is a stationary control"
         );
-        assert!(!game.mobs[indexes[2]].extra.fall_flying);
+        assert!(!game.entities.mobs[indexes[2]].extra.fall_flying);
         assert_eq!(game.world.game_time, 1);
         // Independent fresh Java first-tick values, not native helper output.
         assert_eq!(
-            game.mobs[main].position,
+            game.entities.mobs[main].position,
             Vec3::new(4.5, 299.9823599996567, 8.501782000017165)
         );
         assert_eq!(
-            game.mobs[main].velocity,
+            game.entities.mobs[main].velocity,
             Vec3::new(0.0, -0.017640000343322755, 0.0017820000171661376)
         );
     });
@@ -87,16 +87,16 @@ fn h169_added_actual_wall_collision_uses_mob_damage_source() {
             .iter()
             .find_map(|(id, u)| (*u == [169, 0, 0, 4]).then_some(*id))
             .unwrap();
-        let index = game.mobs.iter().position(|m| m.id == id).unwrap();
+        let index = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
         assert!(
-            game.mobs[index].kind.armor > 0.0,
+            game.entities.mobs[index].kind.armor > 0.0,
             "real Husk armor is the bypass control"
         );
-        assert_eq!(game.mobs[index].health, 20.0);
+        assert_eq!(game.entities.mobs[index].health, 20.0);
         game.world.game_time += 1;
         game.update_chunk_tickets();
         game.tick_creature_entities().unwrap();
-        let m = &game.mobs[index];
+        let m = &game.entities.mobs[index];
         assert!(m.ground.horizontal_collision, "actual wall collision");
         assert!(m.position.x > 4.5 && m.position.x < 6.0);
         assert_eq!(m.velocity.x, 0.0, "resolved collision, no damage knockback");

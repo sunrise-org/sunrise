@@ -317,11 +317,20 @@ fn attack_by_id_hits_the_entity_it_turned_to() {
             Some("attack")
         );
         assert_eq!(calls(listener), 0, "the command itself picks nothing");
-        let health = game.mobs.iter().find(|m| m.id == 31).unwrap().health;
+        let health = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == 31)
+            .unwrap()
+            .health;
         frame(game);
         tick(game);
         assert_eq!(calls(listener), 2, "the frame's and the tick's own picks");
-        assert_eq!(game.mob_hit().map(|(i, _, _)| game.mobs[i].id), Some(31));
+        assert_eq!(
+            game.mob_hit().map(|(i, _, _)| game.entities.mobs[i].id),
+            Some(31)
+        );
         assert_eq!(
             clicks_sent(game, server),
             Vec::<String>::new(),

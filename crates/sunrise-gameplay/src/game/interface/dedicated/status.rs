@@ -129,20 +129,25 @@ impl ServerGame<'_> {
     /// The entities of the level in place: mobs, items, orbs, projectiles, vehicles, falling blocks,
     /// hangings, armor stands, cushions, tridents, rockets and primed TNT.
     fn entity_count(&self) -> usize {
-        self.common.mobs.iter().filter(|m| !m.removed).count()
-            + self.common.dropped.len()
-            + self.common.orbs.len()
-            + self.common.creatures.projectiles.len()
-            + self.common.carts.len()
-            + self.common.boats.len()
-            + self.common.falling.len()
-            + self.common.paintings.len()
-            + self.common.item_frames.len()
-            + self.common.armor_stands.len()
-            + self.common.cushions.len()
-            + self.common.tridents.len()
-            + self.common.rockets.len()
-            + self.common.tnts.len()
+        self.common
+            .entities
+            .mobs
+            .iter()
+            .filter(|m| !m.removed)
+            .count()
+            + self.common.entities.dropped.len()
+            + self.common.entities.orbs.len()
+            + self.common.entities.projectiles.len()
+            + self.common.entities.carts.len()
+            + self.common.entities.boats.len()
+            + self.common.entities.falling.len()
+            + self.common.entities.paintings.len()
+            + self.common.entities.item_frames.len()
+            + self.common.entities.armor_stands.len()
+            + self.common.entities.cushions.len()
+            + self.common.entities.tridents.len()
+            + self.common.entities.rockets.len()
+            + self.common.entities.tnts.len()
     }
 
     fn server_status(&self, state: &ServerState) -> Value {

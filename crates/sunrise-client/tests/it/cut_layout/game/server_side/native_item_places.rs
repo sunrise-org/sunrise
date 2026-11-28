@@ -97,7 +97,7 @@ pub(crate) mod tests {
             player.inventory[3] = Some(ItemStack::new("minecraft:paper", 16));
             game.server.lan.as_mut().unwrap().hub.guests.push(player);
             let host_before = game.inventory.clone();
-            let dropped_before = game.dropped.len();
+            let dropped_before = game.entities.dropped.len();
             let inventory = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 game.server.lan.as_ref().unwrap().hub.guests[0]
                     .inventory
@@ -118,7 +118,7 @@ pub(crate) mod tests {
                 }))
             });
             assert_eq!(result, Ok(Ok(())));
-            assert_eq!(game.dropped.len(), dropped_before);
+            assert_eq!(game.entities.dropped.len(), dropped_before);
             assert_eq!(
                 inventory(game),
                 expected,
@@ -180,7 +180,7 @@ pub(crate) mod tests {
                 Ok(Err(ItemPlaceEditError::NotHeld))
             );
             assert_eq!(inventory(game), expected);
-            assert_eq!(game.dropped.len(), dropped_before);
+            assert_eq!(game.entities.dropped.len(), dropped_before);
         });
     }
     #[test]
@@ -481,14 +481,14 @@ pub(crate) mod tests {
             armor.data_mut().trim = Some(("minecraft:iron".into(), "minecraft:coast".into()));
             assert!(game.living_set_equipment(living, slot, Some(armor)));
             // The separate gear data can differ from the resident stack.
-            let worn = game.mobs[0].extra.gear.as_deref_mut().unwrap();
+            let worn = game.entities.mobs[0].extra.gear.as_deref_mut().unwrap();
             worn.slots[gear::CHEST][0].1 = 3;
             worn.trims[gear::CHEST] = Some(("minecraft:gold".into(), "minecraft:sentry".into()));
-            game.mobs[0].first_tick = false;
+            game.entities.mobs[0].first_tick = false;
             // Track once to pair, again to cache a full idle state, then confirm it can go bare.
             for _ in 0..3 {
                 game.server.level_pass.packets_drained = true;
-                game.mobs[0].needs_sync = false;
+                game.entities.mobs[0].needs_sync = false;
                 game.tick_lan(false);
             }
             let host = game.server.lan.as_ref().unwrap();
@@ -558,7 +558,11 @@ pub(crate) mod tests {
                 received.data().unwrap().trim.as_ref().and_then(trim::named),
                 Some(("minecraft:gold", "minecraft:sentry"))
             );
-            let resident = game.mobs[0].extra.equipment.get(slot as usize).unwrap();
+            let resident = game.entities.mobs[0]
+                .extra
+                .equipment
+                .get(slot as usize)
+                .unwrap();
             assert_eq!(resident.tag_enchantment_level("minecraft:protection"), 1);
             assert_eq!(
                 resident.data().unwrap().trim.as_ref().and_then(trim::named),
@@ -579,7 +583,11 @@ pub(crate) mod tests {
                 })
             })
             .unwrap();
-            let resident = game.mobs[0].extra.equipment.get(slot as usize).unwrap();
+            let resident = game.entities.mobs[0]
+                .extra
+                .equipment
+                .get(slot as usize)
+                .unwrap();
             assert!(
                 resident
                     .data()
@@ -1577,7 +1585,12 @@ pub(crate) mod tests {
                 Some(ItemStack::new("minecraft:diamond_chestplate", 1))
             ));
             // A mob can have gear that the raw stack does not carry at all.
-            gear::upgrade(&mut game.mobs[0], gear::CHEST, "minecraft:protection", 2);
+            gear::upgrade(
+                &mut game.entities.mobs[0],
+                gear::CHEST,
+                "minecraft:protection",
+                2,
+            );
             let armor = |host: &dyn mod_api::ServerHost| {
                 living.attribute_value(host, "minecraft:armor").unwrap()
             };
@@ -1642,7 +1655,7 @@ pub(crate) mod tests {
                     before,
                     "parent abort restores the original modifiers"
                 );
-                let mob = &game.mobs[0];
+                let mob = &game.entities.mobs[0];
                 let stack = mob.extra.equipment.get(slot as usize).unwrap();
                 assert_eq!(stack.item.as_ref(), "minecraft:diamond_chestplate");
                 assert!(stack.data().is_none(), "rollback restores the raw stack");
@@ -1918,7 +1931,7 @@ pub(crate) mod tests {
             assert_eq!(items.amount(host, 0), 1);
 
             // A gone entity answers nothing.
-            game.mobs.clear();
+            game.entities.mobs.clear();
             let host: &mut dyn ServerHost = game;
             assert_eq!(items.amount(host, 4), 0);
             assert_eq!(
@@ -1935,7 +1948,7 @@ pub(crate) mod tests {
         use mod_api::EquipmentSlot;
         with_resident_game(|game| {
             zombie(game);
-            game.common.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.common.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 31,
                 game.common
                     .res
@@ -1970,7 +1983,7 @@ pub(crate) mod tests {
                 EquipmentSlot::Chest,
                 Some(chest.clone())
             ));
-            let (a, b) = (&game.mobs[0], &game.mobs[1]);
+            let (a, b) = (&game.entities.mobs[0], &game.entities.mobs[1]);
             assert_eq!(
                 a.equipment_stacks().get(4).cloned(),
                 b.equipment_stacks().get(4).cloned(),
@@ -2135,7 +2148,7 @@ pub(crate) mod tests {
         use sunrise_gameplay_common::game::minecarts::{CartKind, Minecart};
         with_resident_game(|game| {
             game.options.dedicated = Some(Vec::new());
-            game.carts.push(Minecart::new(
+            game.entities.carts.push(Minecart::new(
                 500,
                 CartKind::Chest,
                 sunrise_core::geometry::Vec3::ZERO,
@@ -2238,7 +2251,7 @@ pub(crate) mod tests {
         use sunrise_gameplay_common::game::minecarts::{CartKind, Minecart};
         with_resident_game(|game| {
             game.options.dedicated = Some(Vec::new());
-            game.carts.push(Minecart::new(
+            game.entities.carts.push(Minecart::new(
                 500,
                 CartKind::Chest,
                 sunrise_core::geometry::Vec3::ZERO,
@@ -3324,7 +3337,7 @@ pub(crate) mod tests {
             let mut boat = Boat::new(600, "oak".into(), Vec3::new(1.0, 65.0, 2.0), 0.0);
             boat.chest = true;
             boat.items.resize(27, None);
-            game.boats.push(boat);
+            game.entities.boats.push(boat);
             assert_eq!(
                 game.edit_entity_slots(600, |slots, at| {
                     assert_eq!(at, [1.0, 65.0, 2.0]);
@@ -3346,14 +3359,14 @@ pub(crate) mod tests {
                 slots[0] = Some(ItemStack::new("minecraft:sand", 7));
             });
             assert_eq!(
-                game.boats[0].items[0],
+                game.entities.boats[0].items[0],
                 Some(ItemStack::new("minecraft:stone", 4))
             );
             assert_eq!(
                 game.edit_entity_slots(600, |slots, _| slots[0].clone()),
                 Some(Some(ItemStack::new("minecraft:sand", 7)))
             );
-            game.boats.remove(0);
+            game.entities.boats.remove(0);
             assert_eq!(
                 game.edit_entity_slots(600, |_, _| panic!("stale owner reached its menu")),
                 None::<()>
@@ -3367,7 +3380,8 @@ pub(crate) mod tests {
         with_resident_game(|game| {
             game.options.dedicated = Some(Vec::new());
             let position = sunrise_core::geometry::Vec3::new(0.5, 65.0, 0.5);
-            game.carts
+            game.entities
+                .carts
                 .push(Minecart::new(500, CartKind::Chest, position));
             let host: &mut dyn ServerHost = game;
             let cart = host.entity(500).unwrap();
@@ -3384,20 +3398,21 @@ pub(crate) mod tests {
                 Err::<(), ()>(())
             });
             assert!(aborted.is_err());
-            assert!(game.carts[0].items.iter().all(Option::is_none));
+            assert!(game.entities.carts[0].items.iter().all(Option::is_none));
             let host: &mut dyn ServerHost = game;
             let went = host.transaction(|host, tx| items.insert(host, tx, &sticks, 70));
             assert_eq!(went, Ok(70));
             assert_eq!(
-                game.carts[0].items[0],
+                game.entities.carts[0].items[0],
                 Some(ItemStack::new("minecraft:stick", 64))
             );
             assert_eq!(
-                game.carts[0].items[1],
+                game.entities.carts[0].items[1],
                 Some(ItemStack::new("minecraft:stick", 6))
             );
             // A plain minecart has no items.
-            game.carts
+            game.entities
+                .carts
                 .push(Minecart::new(501, CartKind::Rideable, position));
             let host: &mut dyn ServerHost = game;
             let plain = host.entity(501).unwrap();
@@ -3420,15 +3435,15 @@ pub(crate) mod tests {
             };
             let mut cart = Minecart::new(600, CartKind::Chest, pos);
             cart.loot = Some(pending);
-            game.carts.push(cart);
+            game.entities.carts.push(cart);
 
             let _ = ItemPlace::EntitySlot {
                 entity: 600,
                 slot: 0,
             }
             .with_stack(game, |stack| stack.count());
-            assert!(game.carts[0].loot.is_none());
-            let (cart_slot, cart_rolled) = game.carts[0]
+            assert!(game.entities.carts[0].loot.is_none());
+            let (cart_slot, cart_rolled) = game.entities.carts[0]
                 .items
                 .iter()
                 .enumerate()
@@ -3465,7 +3480,7 @@ pub(crate) mod tests {
             let mut read_boat = Boat::new(601, Arc::from("oak"), pos, 0.0);
             read_boat.chest = true;
             read_boat.items = vec![None; 27];
-            game.boats.push(read_boat);
+            game.entities.boats.push(read_boat);
             game.persist.raw.insert(
                 601,
                 Tag::compound([
@@ -3484,7 +3499,7 @@ pub(crate) mod tests {
             let read_raw = game.persist.raw.get(&601);
             assert!(read_raw.and_then(|tag| tag.get("LootTable")).is_none());
             assert!(read_raw.and_then(|tag| tag.get("LootTableSeed")).is_none());
-            let (boat_slot, boat_rolled) = game.boats[0]
+            let (boat_slot, boat_rolled) = game.entities.boats[0]
                 .items
                 .iter()
                 .enumerate()
@@ -3504,7 +3519,7 @@ pub(crate) mod tests {
             let mut write_boat = Boat::new(602, Arc::from("oak"), pos, 0.0);
             write_boat.chest = true;
             write_boat.items = vec![None; 27];
-            game.boats.push(write_boat);
+            game.entities.boats.push(write_boat);
             game.persist.raw.insert(
                 602,
                 Tag::compound([
@@ -3591,7 +3606,7 @@ pub(crate) mod tests {
         with_game(|game| {
             let mut cart = Minecart::new(600, CartKind::Chest, Vec3::new(1.0, 65.0, 2.0));
             cart.items[0] = Some(ItemStack::new("minecraft:stone", 4));
-            game.carts.push(cart);
+            game.entities.carts.push(cart);
             let key = (i32::MAX - 15, CART_KEY_Y, 600);
             game.world
                 .block_entities
@@ -3604,7 +3619,7 @@ pub(crate) mod tests {
                 Some(27)
             );
             assert_eq!(
-                game.carts[0].items[0],
+                game.entities.carts[0].items[0],
                 Some(ItemStack::new("minecraft:stone", 4))
             );
             let Some(BlockEntity::Chest(open)) = game.world.block_entities.get(&key) else {
@@ -3613,7 +3628,7 @@ pub(crate) mod tests {
             assert_eq!(open[0], Some(ItemStack::new("minecraft:sand", 7)));
             game.store_cart_items(key);
             assert_eq!(
-                game.carts[0].items[0],
+                game.entities.carts[0].items[0],
                 Some(ItemStack::new("minecraft:sand", 7))
             );
             game.edit_cart_slots(600, |slots| {
@@ -3621,11 +3636,11 @@ pub(crate) mod tests {
             });
             game.close_cart_container(key);
             assert_eq!(
-                game.carts[0].items[0],
+                game.entities.carts[0].items[0],
                 Some(ItemStack::new("minecraft:gravel", 9))
             );
             assert!(!game.world.block_entities.contains_key(&key));
-            game.carts.remove(0);
+            game.entities.carts.remove(0);
             assert_eq!(
                 game.edit_cart_slots(600, |_| panic!("stale owner reached its menu")),
                 None::<()>
@@ -3795,7 +3810,8 @@ pub(crate) mod tests {
             open_to_lan(game);
             hopper_with(game, "down", Some(ItemStack::new("minecraft:stick", 3)));
             let position = sunrise_core::geometry::Vec3::new(0.5, 63.0, 0.5);
-            game.carts
+            game.entities
+                .carts
                 .push(Minecart::new(500, CartKind::Chest, position));
             // A guest standing in the same cell, and no pig anywhere.
             let mut player = guest(1);
@@ -3810,7 +3826,7 @@ pub(crate) mod tests {
             );
             game.hopper_try_move_items((0, 64, 0));
             assert_eq!(
-                game.carts[0].items[0],
+                game.entities.carts[0].items[0],
                 Some(ItemStack::new("minecraft:stick", 1))
             );
             assert_eq!(
@@ -3844,14 +3860,14 @@ pub(crate) mod tests {
                 .block_entities
                 .insert((0, 64, 0), BlockEntity::Chest(slots));
             pig(game, 700, 63.0);
-            let dropped = game.dropped.len();
+            let dropped = game.entities.dropped.len();
             game.dispense_from(sunrise_core::position::BlockPos::new(0, 64, 0), dropper)
                 .unwrap();
             assert_eq!(
                 *bin.held.lock().unwrap(),
                 Some(("minecraft:stick".into(), 1))
             );
-            assert_eq!(game.dropped.len(), dropped);
+            assert_eq!(game.entities.dropped.len(), dropped);
             match game.world.block_entities.get(&(0, 64, 0)) {
                 Some(BlockEntity::Chest(slots)) => {
                     assert_eq!(slots[4], Some(ItemStack::new("minecraft:stick", 1)));
@@ -3900,7 +3916,7 @@ pub(crate) mod tests {
                 };
                 c.items[0] = Some(ItemStack::new("minecraft:oak_planks", 1));
                 c.items[3] = Some(ItemStack::new("minecraft:oak_planks", 1));
-                let dropped = game.dropped.len();
+                let dropped = game.entities.dropped.len();
                 let mut random = game.world.random.clone();
                 game.dispense_from(BlockPos::new(0, 64, 0), crafter)
                     .unwrap();
@@ -3913,7 +3929,7 @@ pub(crate) mod tests {
                     panic!("the crafter is gone");
                 };
                 assert!(c.items.iter().all(Option::is_none));
-                let output = &game.dropped[dropped..];
+                let output = &game.entities.dropped[dropped..];
                 if refused == 0 {
                     assert!(output.is_empty());
                     // One candidate-selection draw, including a single candidate, and no
@@ -3978,10 +3994,14 @@ pub(crate) mod tests {
         use sunrise_core::geometry::Vec3;
         use sunrise_sim::entities::ArmorStand;
         with_resident_game(|game| {
-            game.armor_stands.push(ArmorStand::new(40, Vec3::ZERO, 0.0));
-            game.armor_stands.push(ArmorStand::new(41, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(40, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(41, Vec3::ZERO, 0.0));
             let stand_slot = |game: &sunrise_gameplay::game::ServerGame<'_>, id: usize| {
-                game.armor_stands[id].equipment.get(4).cloned()
+                game.entities.armor_stands[id].equipment.get(4).cloned()
             };
             let chestplate = ItemResource::of(
                 &ItemStack::new("minecraft:diamond_chestplate", 1)

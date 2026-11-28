@@ -701,6 +701,7 @@ impl crate::game::ServerGame<'_> {
             if self.entity_is_passenger(rider) == Some(false)
                 && !self
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .any(|m| m.id == rider.id() && !m.alive())
@@ -955,8 +956,8 @@ impl crate::game::ServerGame<'_> {
         let direct_vehicle = g.vehicle;
         let vehicle = direct_vehicle.filter(|id| {
             self.common.mob_object(*id).is_some_and(|mob| !mob.removed)
-                || self.common.boats.iter().any(|b| b.id == *id)
-                || self.common.carts.iter().any(|c| c.id == *id)
+                || self.common.entities.boats.iter().any(|b| b.id == *id)
+                || self.common.entities.carts.iter().any(|c| c.id == *id)
         });
         let player =
             (target == Dim::End && plan.is_none() && g.spectator()).then(|| PlayerId::guest(g));
@@ -1525,12 +1526,14 @@ impl crate::game::ServerGame<'_> {
             return;
         };
         let before = parked
+            .entities
             .boats
             .iter()
             .find(|body| body.id == id)
             .map(|body| (body.position, [body.yaw, 0.0]))
             .or_else(|| {
                 parked
+                    .entities
                     .carts
                     .iter()
                     .find(|body| body.id == id)
@@ -1538,6 +1541,7 @@ impl crate::game::ServerGame<'_> {
             })
             .or_else(|| {
                 parked
+                    .entities
                     .mobs
                     .iter()
                     .find(|body| body.id == id)
@@ -1548,11 +1552,13 @@ impl crate::game::ServerGame<'_> {
         };
         // Keep the root out of both levels until its passengers have been
         // admitted: teleportCrossDimension copies passengers before the root.
-        let vehicle = if let Some(body) = take_vehicle(&mut parked.boats, id, at, yaw, motion) {
+        let vehicle = if let Some(body) =
+            take_vehicle(&mut parked.entities.boats, id, at, yaw, motion)
+        {
             OffLevel::Boat(body)
-        } else if let Some(body) = take_vehicle(&mut parked.carts, id, at, yaw, motion) {
+        } else if let Some(body) = take_vehicle(&mut parked.entities.carts, id, at, yaw, motion) {
             OffLevel::Cart(body)
-        } else if let Some(body) = take_vehicle(&mut parked.mobs, id, at, yaw, motion) {
+        } else if let Some(body) = take_vehicle(&mut parked.entities.mobs, id, at, yaw, motion) {
             OffLevel::Mob(body)
         } else {
             return;

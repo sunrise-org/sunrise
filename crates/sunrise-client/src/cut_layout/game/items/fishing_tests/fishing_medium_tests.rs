@@ -176,13 +176,13 @@ fn a_mods_medium_floats_the_bobber_and_its_catch_rolls_the_checked_table() {
             // Its catch rolls the junk table, which has no fish (vanilla's mostly does).
             let rod = ItemStack::new("minecraft:fishing_rod", 1);
             let mut hook = game.hook.extract().unwrap();
-            let before = game.dropped.len();
+            let before = game.entities.dropped.len();
             for _ in 0..6 {
                 hook.nibble = 1;
                 game.retrieve_hook_extracted(&rod, &mut hook);
             }
             game.hook.put_back(hook);
-            let caught: Vec<String> = game.dropped[before..]
+            let caught: Vec<String> = game.entities.dropped[before..]
                 .iter()
                 .map(|item| item.stack.item.to_string())
                 .collect();

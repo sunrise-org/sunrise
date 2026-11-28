@@ -132,7 +132,7 @@ fn cart_index_finds_the_mobs_a_scan_finds() {
         for id in 0..200u32 {
             let at = Vec3::new(next(40.0), 64.0, next(40.0));
             let kind = kinds[id as usize % kinds.len()].clone();
-            game.mobs.push(Mob::new(id + 1, kind, at, 0.0));
+            game.entities.mobs.push(Mob::new(id + 1, kind, at, 0.0));
         }
         let carts: Vec<Minecart> = (0..60)
             .map(|id| {
@@ -148,30 +148,35 @@ fn cart_index_finds_the_mobs_a_scan_finds() {
         let mut check = |game: &sunrise_gameplay::game::ServerGame<'_>, what: &str| {
             for c in &carts {
                 let area = c.bounds().inflate(Vec3::new(0.2, 0.0, 0.2));
-                let scan: Vec<u32> = (0..game.mobs.len() as u32)
-                    .filter(|&j| area.intersects(game.mobs[j as usize].bounds()))
+                let scan: Vec<u32> = (0..game.entities.mobs.len() as u32)
+                    .filter(|&j| area.intersects(game.entities.mobs[j as usize].bounds()))
                     .collect();
-                let ridden = game.mobs.iter().any(|m| m.extra.mount == Some(c.id));
+                let ridden = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .any(|m| m.extra.mount == Some(c.id));
                 assert_eq!(
                     game.has_seated_passengers(c.id),
                     ridden,
                     "{what}: cart {}",
                     c.id
                 );
-                assert!(index.mobs_near(&game.mobs, area, &mut near));
-                near.retain(|&j| area.intersects(game.mobs[j as usize].bounds()));
+                assert!(index.mobs_near(&game.entities.mobs, area, &mut near));
+                near.retain(|&j| area.intersects(game.entities.mobs[j as usize].bounds()));
                 assert_eq!(near, scan, "{what}: cart {}", c.id);
             }
         };
         game.vehicles_ticking(true);
         check(game, "as placed");
-        game.mobs[10].position = carts[3].position;
-        game.mobs[11].extra.mount = Some(carts[4].id);
+        game.entities.mobs[10].position = carts[3].position;
+        game.entities.mobs[11].extra.mount = Some(carts[4].id);
         check(game, "one moved, one boarded");
         let kind = kinds[0].clone();
-        game.mobs
+        game.entities
+            .mobs
             .insert(0, Mob::new(500, kind, carts[5].position, 0.0));
-        game.mobs.retain(|m| m.id % 7 != 0);
+        game.entities.mobs.retain(|m| m.id % 7 != 0);
         check(game, "added and removed");
     });
 }

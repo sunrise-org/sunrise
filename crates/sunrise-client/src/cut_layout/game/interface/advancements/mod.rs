@@ -96,7 +96,7 @@ pub(crate) mod tests {
         .unwrap();
         game.build_registries();
         let kind = game.res.mob_types()["minecraft:pig"].clone();
-        game.mobs.push(sunrise_sim::mobs::Mob::new(
+        game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
             12500,
             kind,
             Vec3::new(4.5, 200.0, 4.5),
@@ -134,15 +134,15 @@ pub(crate) mod tests {
             ),
         ] {
             let text = sunrise_game_data::scoreboard::comp_text(&name);
-            game.mobs[0].custom_name = Some(text.plain());
-            game.mobs[0].custom_name_text = Some(text);
+            game.entities.mobs[0].custom_name = Some(text.plain());
+            game.entities.mobs[0].custom_name_text = Some(text);
             for key in ["components", "minecraft:components"] {
                 assert!(matches(&game, key, name.clone()), "{key}: {name}");
                 assert!(!matches(&game, key, unequal.clone()), "{key}: {unequal}");
             }
         }
-        game.mobs[0].custom_name = None;
-        game.mobs[0].custom_name_text = None;
+        game.entities.mobs[0].custom_name = None;
+        game.entities.mobs[0].custom_name_text = None;
         for key in ["components", "minecraft:components"] {
             assert!(!matches(&game, key, serde_json::json!("Bob")));
         }
@@ -192,7 +192,7 @@ pub(crate) mod tests {
             mob.no_gravity = true;
             mob
         };
-        game.mobs.push(actor(32300));
+        game.entities.mobs.push(actor(32300));
         let matches = |game: &sunrise_gameplay::game::ServerGame<'_>, id, effects: Value| {
             let view = game.entity_view_of(Target::Mob(id));
             assert_eq!(view.kind, "minecraft:zombie");
@@ -205,9 +205,9 @@ pub(crate) mod tests {
         };
         let speed_two = serde_json::json!({"minecraft:speed": {"amplifier": 2}});
         assert!(!matches(&game, 32300, speed_two.clone()));
-        game.mobs[0].add_effect_with("minecraft:speed", -1, 2, false, false);
+        game.entities.mobs[0].add_effect_with("minecraft:speed", -1, 2, false, false);
         assert_eq!(
-            game.mobs[0].extra.effects,
+            game.entities.mobs[0].extra.effects,
             vec![sunrise_sim::mobs::StoredEffect::new(
                 "minecraft:speed",
                 -1,
@@ -224,7 +224,7 @@ pub(crate) mod tests {
             32300,
             serde_json::json!({"minecraft:speed": {"amplifier": 5}})
         ));
-        game.mobs[0].add_effect("minecraft:fire_resistance", 400, 0);
+        game.entities.mobs[0].add_effect("minecraft:fire_resistance", 400, 0);
         assert!(matches(
             &game,
             32300,
@@ -235,7 +235,7 @@ pub(crate) mod tests {
         ));
         let mut finite = actor(32301);
         finite.add_effect("minecraft:speed", 400, 0);
-        game.mobs.push(finite);
+        game.entities.mobs.push(finite);
         assert!(matches(
             &game,
             32301,
@@ -555,7 +555,7 @@ pub(crate) mod custom_data_equipment_tests {
                     .find(|(_, value)| **value == uuid)
                     .expect("actual admitted UUID")
                     .0;
-                let mob = game.mobs.iter().find(|m| m.id == id).unwrap();
+                let mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
                 assert!(mob.no_ai);
                 let stack = finalize::item_stack(mob, finalize::MAINHAND)
                     .expect("actual loaded equipment stack");
@@ -594,7 +594,7 @@ pub(crate) mod custom_data_equipment_tests {
                     assert!(stack.custom_data().is_none());
                     assert!(game.run_command(&format!("execute unless data entity {actor} equipment.mainhand.components.\"minecraft:custom_data\"")));
                 }
-                let mob = game.mobs.iter().find(|m| m.id == id).unwrap();
+                let mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
                 let view = game.mob_entity(mob);
                 assert_eq!(
                     (
@@ -716,7 +716,7 @@ pub(crate) mod movement_predicate_tests {
             .find(|(_, u)| **u == [673, 0, 0, 1])
             .unwrap()
             .0;
-        let mob = game.mobs.iter().find(|m| m.id == id).unwrap();
+        let mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
         assert_eq!(mob.velocity, Vec3::ZERO);
         assert_eq!(mob.fall_distance, 0.0);
         assert!(mob.no_ai && mob.no_gravity);

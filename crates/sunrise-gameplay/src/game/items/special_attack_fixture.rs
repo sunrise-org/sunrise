@@ -69,15 +69,19 @@ impl crate::game::ServerGame<'_> {
         let center = match kind {
             "boat" => {
                 let id = self.take_entity_id();
-                self.common.boats.push(Boat::new(id, "oak".into(), at, 0.0));
-                self.common.boats[0].bounds().center()
+                self.common
+                    .entities
+                    .boats
+                    .push(Boat::new(id, "oak".into(), at, 0.0));
+                self.common.entities.boats[0].bounds().center()
             }
             "cart" => {
                 let id = self.take_entity_id();
                 self.common
+                    .entities
                     .carts
                     .push(Minecart::new(id, CartKind::Rideable, at));
-                self.common.carts[0].bounds().center()
+                self.common.entities.carts[0].bounds().center()
             }
             "stand" => {
                 let id = self.take_entity_id();
@@ -87,8 +91,8 @@ impl crate::game::ServerGame<'_> {
                 } else {
                     0
                 };
-                self.common.armor_stands.push(stand);
-                self.common.armor_stands[0].bounds().center()
+                self.common.entities.armor_stands.push(stand);
+                self.common.entities.armor_stands[0].bounds().center()
             }
             "dragon" => {
                 let mut dragon = Dragon::new(Vec3::ZERO, 0.0, 0);
@@ -98,12 +102,12 @@ impl crate::game::ServerGame<'_> {
                 }
                 dragon.parts[0].0 = at;
                 dragon.parts[0].1 = at;
-                self.common.dragon.replace(dragon);
+                self.common.entities.dragon.replace(dragon);
                 self.common.special_targets()[0].1.center()
             }
             "painting" => {
                 let id = self.take_entity_id();
-                self.common.paintings.push(Painting {
+                self.common.entities.paintings.push(Painting {
                     attachment_lifetime: Default::default(),
                     join: Default::default(),
                     id,
@@ -116,7 +120,7 @@ impl crate::game::ServerGame<'_> {
                     check_interval: 0,
                     ticks: 0,
                 });
-                let (lo, hi) = self.common.paintings[0].bounds();
+                let (lo, hi) = self.common.entities.paintings[0].bounds();
                 Vec3::new(
                     (lo[0] + hi[0]) / 2.0,
                     (lo[1] + hi[1]) / 2.0,
@@ -125,7 +129,7 @@ impl crate::game::ServerGame<'_> {
             }
             "frame" | "fixed_frame" | "filled_frame" => {
                 let id = self.take_entity_id();
-                self.common.item_frames.push(ItemFrame {
+                self.common.entities.item_frames.push(ItemFrame {
                     attachment_lifetime: Default::default(),
                     join: Default::default(),
                     id,
@@ -146,7 +150,7 @@ impl crate::game::ServerGame<'_> {
                     custom_name: None,
                     random: sunrise_core::random::LegacyRandom::new(0),
                 });
-                let (lo, hi) = self.common.item_frames[0].bounds();
+                let (lo, hi) = self.common.entities.item_frames[0].bounds();
                 Vec3::new(
                     (lo[0] + hi[0]) / 2.0,
                     (lo[1] + hi[1]) / 2.0,
@@ -166,23 +170,36 @@ impl crate::game::ServerGame<'_> {
         self.common.pitch = (-dy).atan2((dx * dx + dz * dz).sqrt()).to_degrees() as f32;
         self.attack();
         // A ray miss must not pass as an accepted hit with an unchanged cost.
-        let accepted = match kind {
-            "boat" => Some(self.common.boats.first().is_none_or(|b| b.hurt_time > 0)),
-            "cart" => Some(self.common.carts.first().is_none_or(|c| c.hurt_time > 0)),
-            "stand" => Some(
-                self.common
-                    .armor_stands
-                    .first()
-                    .is_none_or(|s| !op["break"].as_bool().unwrap_or(false) && s.last_hit == 100),
-            ),
-            "dragon" => Some(
-                self.common
-                    .dragon
-                    .as_ref()
-                    .is_some_and(|d| d.health < 200.0),
-            ),
-            _ => None,
-        };
+        let accepted =
+            match kind {
+                "boat" => Some(
+                    self.common
+                        .entities
+                        .boats
+                        .first()
+                        .is_none_or(|b| b.hurt_time > 0),
+                ),
+                "cart" => Some(
+                    self.common
+                        .entities
+                        .carts
+                        .first()
+                        .is_none_or(|c| c.hurt_time > 0),
+                ),
+                "stand" => {
+                    Some(self.common.entities.armor_stands.first().is_none_or(|s| {
+                        !op["break"].as_bool().unwrap_or(false) && s.last_hit == 100
+                    }))
+                }
+                "dragon" => Some(
+                    self.common
+                        .entities
+                        .dragon
+                        .as_ref()
+                        .is_some_and(|d| d.health < 200.0),
+                ),
+                _ => None,
+            };
         let outcome = accepted.map_or("control", |hit| if hit { "accepted" } else { "unchanged" });
         let player = self
             .common

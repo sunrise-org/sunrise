@@ -19,20 +19,21 @@ fn a_bound_cart_survives_the_parked_level_swap() {
     bound_cart_case(CartKind::Rideable, |game| {
         game.enter_level(sunrise_gameplay_common::game::Dim::Nether)
             .unwrap();
-        assert!(game.carts.is_empty());
+        assert!(game.entities.carts.is_empty());
         assert_eq!(
             game.server
                 .levels
                 .0
                 .parked_mut(sunrise_gameplay_common::game::Dim::Overworld)
                 .unwrap()
+                .entities
                 .carts[0]
                 .id,
             71
         );
         game.enter_level(sunrise_gameplay_common::game::Dim::Overworld)
             .unwrap();
-        assert_eq!(game.carts[0].id, 71);
+        assert_eq!(game.entities.carts[0].id, 71);
     });
 }
 
@@ -42,7 +43,8 @@ pub(crate) fn bound_cart_case(
 ) {
     super::super::native_entity_refs::tests::with_resident_game(|game| {
         game.server.chunk_ticking.tickets.update(None);
-        game.carts
+        game.entities
+            .carts
             .push(Minecart::new(71, kind, Vec3::new(0.5, 70.0, 0.5)));
         let holder = {
             let host: &dyn mod_api::ServerHost = game;
@@ -51,7 +53,7 @@ pub(crate) fn bound_cart_case(
         let index = Arc::new(Mutex::new(AttachmentIndex::default()));
         let mut values = Attachments::default();
         VALUE.set(&mut values, Holder::Entity(71), 10).unwrap();
-        let original = game.carts.update(0, |cart| {
+        let original = game.entities.carts.update(0, |cart| {
             cart.attachment_lifetime().bind(&mut values, &index, holder);
             cart.attachment_lifetime().registration().unwrap()
         });
@@ -60,6 +62,7 @@ pub(crate) fn bound_cart_case(
         assert_eq!(before.len(), 1);
         action(game);
         let current = game
+            .entities
             .carts
             .update(0, |cart| cart.attachment_lifetime().registration().unwrap());
         assert!(original.same_registration(&current));
@@ -70,22 +73,26 @@ pub(crate) fn bound_cart_case(
         game.server.next_entity = game.server.next_entity.max(72);
         game.summon_with_nbt("minecraft:minecart", [8.5, 70.0, 0.5], "{}")
             .unwrap();
-        let spawned = game.carts[0].id;
+        let spawned = game.entities.carts[0].id;
         assert_ne!(spawned, 71);
         let spawned_holder = game.entity(spawned).unwrap();
         let mut spawned_values = Attachments::default();
         VALUE
             .set(&mut spawned_values, Holder::Entity(spawned), 40)
             .unwrap();
-        let spawned_registration = game.carts.update(0, |cart| {
+        let spawned_registration = game.entities.carts.update(0, |cart| {
             cart.attachment_lifetime()
                 .bind(&mut spawned_values, &index, spawned_holder);
             cart.attachment_lifetime().registration().unwrap()
         });
         game.restore_entities(taken);
-        assert_eq!(game.carts.last().unwrap().id, spawned);
-        for (i, expected) in [(0, original), (game.carts.len() - 1, spawned_registration)] {
+        assert_eq!(game.entities.carts.last().unwrap().id, spawned);
+        for (i, expected) in [
+            (0, original),
+            (game.entities.carts.len() - 1, spawned_registration),
+        ] {
             let actual = game
+                .entities
                 .carts
                 .update(i, |cart| cart.attachment_lifetime().registration().unwrap());
             assert!(expected.same_registration(&actual));
@@ -108,21 +115,22 @@ pub(crate) fn bound_cart_case(
         );
         let live = game.entity(71).unwrap();
         assert!(game.entity_remove(live, mod_api::RemovalReason::Discarded));
-        let clone = game.carts[0].clone();
+        let clone = game.entities.carts[0].clone();
         assert!(!game.store_cart_back(0, clone));
         game.native_removals_flush();
-        assert!(!game.carts.iter().any(|cart| cart.id == 71));
+        assert!(!game.entities.carts.iter().any(|cart| cart.id == 71));
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
         VALUE.set(&mut values, Holder::Entity(71), 30).unwrap();
         let surviving = index.lock().unwrap().snapshot(&key);
         assert_eq!(surviving.len(), 1);
         assert_eq!(surviving[0].holder, spawned_holder);
         let i = game
+            .entities
             .carts
             .iter()
             .position(|cart| cart.id == spawned)
             .unwrap();
-        drop(game.carts.remove(i));
+        drop(game.entities.carts.remove(i));
         assert!(index.lock().unwrap().snapshot(&key).is_empty());
         assert_eq!(before[0].entry.read(&VALUE), Ok(&10));
         assert_eq!(
@@ -183,10 +191,11 @@ fn destroyed_carts_retain_authoritative_state_and_retire_their_registration() {
                 cart.hurt_time = 3;
                 cart.damage = 7.0;
                 cart.fuse = 0;
-                game.carts.push(cart);
+                game.entities.carts.push(cart);
                 let other = Vec3::new(400.5, 70.0, 0.5);
                 prepare_entity_ticking_neighborhood(game, ChunkPos::new(25, 0));
-                game.carts
+                game.entities
+                    .carts
                     .push(Minecart::new(73, CartKind::Rideable, other));
                 // Prevent the other cart's own tick from changing the hook's write.
                 game.riding = Some(73);
@@ -201,12 +210,12 @@ fn destroyed_carts_retain_authoritative_state_and_retire_their_registration() {
                 let holder = game.entity(71).unwrap();
                 let mut values = Attachments::default();
                 VALUE.set(&mut values, Holder::Entity(71), 10).unwrap();
-                let registration = game.carts.update(0, |cart| {
+                let registration = game.entities.carts.update(0, |cart| {
                     cart.attachment_lifetime().bind(&mut values, &index, holder);
                     cart.attachment_lifetime().registration().unwrap()
                 });
-                let join = game.carts[0].join;
-                let mut expected_random = game.carts[0].random.clone();
+                let join = game.entities.carts[0].join;
+                let mut expected_random = game.entities.carts[0].random.clone();
                 if mode != 2 {
                     expected_random.next_double();
                 }
@@ -225,10 +234,10 @@ fn destroyed_carts_retain_authoritative_state_and_retire_their_registration() {
                 }
                 assert_eq!(calls.load(std::sync::atomic::Ordering::Relaxed), 1);
                 assert!(game.entity(71).is_none());
-                assert!(!game.carts.iter().any(|cart| cart.id == 71));
+                assert!(!game.entities.carts.iter().any(|cart| cart.id == 71));
                 assert_vehicle_residency_retired(game, 71);
                 assert_eq!(game.mob_object(72).unwrap().extra.mount, Some(71));
-                assert_eq!(game.carts[0].velocity, Vec3::new(7.0, 8.0, 9.0));
+                assert_eq!(game.entities.carts[0].velocity, Vec3::new(7.0, 8.0, 9.0));
                 let Some(sunrise_gameplay_common::game::entity_memory::RemovedVehicle::Cart(cart)) =
                     game.persist.removed_vehicles.get(&71)
                 else {
@@ -303,7 +312,7 @@ fn disabled_tnt_rule_discards_primed_carts_but_keeps_unprimed_ticks() {
                 cart.fuse = if primed { 0 } else { -1 };
                 // MinecartTNT.causeFallDamage attempts a blast on this landing.
                 cart.fall_distance = 10.0;
-                game.carts.push(cart);
+                game.entities.carts.push(cart);
                 if ridden {
                     game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, start));
                     super::super::native_entity_refs::tests::bind_local_player(game, 70, 70);
@@ -314,28 +323,31 @@ fn disabled_tnt_rule_discards_primed_carts_but_keeps_unprimed_ticks() {
                 }
                 if primed {
                     // Vanilla discards an already-primed cart even though no blast runs.
-                    assert!(game.carts.is_empty());
+                    assert!(game.entities.carts.is_empty());
                     assert_vehicle_residency_retired(game, 71);
                     if ridden {
                         assert_eq!(game.riding, None);
                     }
                 } else {
-                    assert_eq!(game.carts.len(), 1);
-                    assert_eq!(game.carts[0].tick_count, 10);
-                    assert_ne!(game.carts[0].position, start);
-                    assert_eq!(game.carts[0].fall_distance.to_bits(), 0.0_f64.to_bits());
+                    assert_eq!(game.entities.carts.len(), 1);
+                    assert_eq!(game.entities.carts[0].tick_count, 10);
+                    assert_ne!(game.entities.carts[0].position, start);
+                    assert_eq!(
+                        game.entities.carts[0].fall_distance.to_bits(),
+                        0.0_f64.to_bits()
+                    );
                     if ridden {
                         assert_eq!(game.riding, Some(71));
                         assert!(game.tick_cart_riding(Keys::default()));
                     } else {
                         game.tick_carts();
                     }
-                    assert_eq!(game.carts[0].tick_count, 11);
+                    assert_eq!(game.entities.carts[0].tick_count, 11);
                     // A burning arrow cannot explode this unprimed cart, but
                     // MinecartTNT.hurtServer still forwards its ordinary damage.
-                    let before = game.carts[0].damage;
+                    let before = game.entities.carts[0].damage;
                     game.arrow_hits_cart(0, 1.0, Vec3::ZERO, true, false, None, None);
-                    assert_eq!(game.carts[0].damage, before + 10.0);
+                    assert_eq!(game.entities.carts[0].damage, before + 10.0);
                 }
             });
         }
@@ -361,9 +373,9 @@ fn terminal_vehicle_damage_and_native_removal_retire_residency() {
                 )
                 .unwrap();
                 let id = if cart {
-                    game.carts[0].id
+                    game.entities.carts[0].id
                 } else {
-                    game.boats[0].id
+                    game.entities.boats[0].id
                 };
                 assert!(matches!(
                     game.with_resident_slot(

@@ -63,32 +63,46 @@ impl crate::game::ClientGame<'_> {
             }
             Target::Guest(_) => return None,
             Target::Mob(id) => {
-                let mob = common.mobs.iter().find(|mob| mob.id == id)?;
+                let mob = common.entities.mobs.iter().find(|mob| mob.id == id)?;
                 (mob.fire_ticks, mob.fire_immune(), None)
             }
             Target::Stand(id) => {
-                let stand = common.armor_stands.iter().find(|stand| stand.id == id)?;
+                let stand = common
+                    .entities
+                    .armor_stands
+                    .iter()
+                    .find(|stand| stand.id == id)?;
                 (stand.fire_ticks, stand.mod_fire_immune, None)
             }
             Target::Item(id) => {
-                let item = common.dropped.iter().find(|item| item.id == id)?;
+                let item = common.entities.dropped.iter().find(|item| item.id == id)?;
                 let immune =
                     self.stack_can_be_hurt_by(&item.stack, "minecraft:in_fire") == Some(false);
                 (item.fire_ticks, immune, None)
             }
             Target::Orb(id) => (
-                common.orbs.iter().find(|orb| orb.id == id)?.fire_ticks,
+                common
+                    .entities
+                    .orbs
+                    .iter()
+                    .find(|orb| orb.id == id)?
+                    .fire_ticks,
                 false,
                 None,
             ),
             Target::Boat(id) => (
-                common.boats.iter().find(|boat| boat.id == id)?.fire_ticks,
+                common
+                    .entities
+                    .boats
+                    .iter()
+                    .find(|boat| boat.id == id)?
+                    .fire_ticks,
                 false,
                 None,
             ),
             Target::Projectile(id) => {
                 let shot = common
-                    .creatures
+                    .entities
                     .projectiles
                     .iter()
                     .find(|shot| shot.id == id)?;
@@ -105,6 +119,7 @@ impl crate::game::ClientGame<'_> {
             }
             Target::Trident(id) => (
                 common
+                    .entities
                     .tridents
                     .iter()
                     .find(|trident| trident.id == id)?
@@ -114,6 +129,7 @@ impl crate::game::ClientGame<'_> {
             ),
             Target::Falling(id) => (
                 common
+                    .entities
                     .falling
                     .iter()
                     .find(|block| block.id == id)?
@@ -123,6 +139,7 @@ impl crate::game::ClientGame<'_> {
             ),
             Target::Crystal(id) => (
                 common
+                    .entities
                     .crystals
                     .iter()
                     .find(|crystal| crystal.id == id)?
@@ -131,12 +148,18 @@ impl crate::game::ClientGame<'_> {
                 Some(BuiltinKind::EndCrystal),
             ),
             Target::Bolt(id) => (
-                common.bolts.iter().find(|bolt| bolt.id == id)?.fire_ticks,
+                common
+                    .entities
+                    .bolts
+                    .iter()
+                    .find(|bolt| bolt.id == id)?
+                    .fire_ticks,
                 false,
                 None,
             ),
             Target::Fangs(id) => (
                 common
+                    .entities
                     .fangs
                     .list
                     .iter()
@@ -178,7 +201,7 @@ impl crate::game::ClientGame<'_> {
         Some(match self.native_entity_read_target(entity)? {
             Target::Player => self.own_player_is_spectator(),
             Target::Mob(id) => {
-                let mob = self.common.mobs.iter().find(|mob| mob.id == id)?;
+                let mob = self.common.entities.mobs.iter().find(|mob| mob.id == id)?;
                 &*mob.kind.id == "minecraft:player" && mob.extra.spectator
             }
             _ => false,
@@ -244,6 +267,7 @@ impl crate::game::ClientGame<'_> {
             Target::Player => self.client.settings.main_hand_left,
             Target::Mob(id) => self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)?
@@ -268,6 +292,7 @@ impl crate::game::ClientGame<'_> {
                 Target::Mob(id) => {
                     let Some(mob) = self
                         .common
+                        .entities
                         .mobs
                         .iter_mut()
                         .find(|m| m.id == id && !m.removed)
@@ -277,7 +302,12 @@ impl crate::game::ClientGame<'_> {
                     (&mut mob.mod_fire_immune, &mut mob.fire_ticks)
                 }
                 Target::Stand(id) => {
-                    let Some(stand) = self.common.armor_stands.iter_mut().find(|s| s.id == id)
+                    let Some(stand) = self
+                        .common
+                        .entities
+                        .armor_stands
+                        .iter_mut()
+                        .find(|s| s.id == id)
                     else {
                         return false;
                     };
@@ -352,14 +382,9 @@ impl crate::game::ClientGame<'_> {
         match self.native_target_body(self.native_entity_read_target(entity)?)? {
             Body::Player(player) => Some(player.is_in_lava()),
             Body::Mob(mob) => Some(mob.fluids.in_lava),
-            Body::Other(Target::General(id)) => Some(
-                self.common
-                    .resident_entities
-                    .general
-                    .row(id)?
-                    .fluids
-                    .in_lava,
-            ),
+            Body::Other(Target::General(id)) => {
+                Some(self.common.entities.general.row(id)?.fluids.in_lava)
+            }
             Body::Other(_) => None,
         }
     }
@@ -369,6 +394,7 @@ impl crate::game::ClientGame<'_> {
             Target::Player => Some(self.common.player.as_ref()?.health.invulnerable_time),
             Target::Mob(id) => Some(
                 self.common
+                    .entities
                     .mobs
                     .iter()
                     .find(|m| m.id == id)?
@@ -381,7 +407,14 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game) fn entity_damage_cooldown_time(&self, entity: EntityRef) -> Option<i32> {
         match self.native_entity_read_target(entity)? {
             Target::Player => Some(self.common.player.as_ref()?.health.hurt.cooldown),
-            Target::Mob(id) => Some(self.common.mobs.iter().find(|m| m.id == id)?.invulnerable),
+            Target::Mob(id) => Some(
+                self.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)?
+                    .invulnerable,
+            ),
             _ => None,
         }
     }

@@ -66,11 +66,11 @@ fn game<'a>(
 }
 
 fn spawn(game: &mut sunrise_gameplay::game::ServerGame<'_>, kind: &str, id: u32, at: [f64; 3]) {
-    game.mobs.clear();
+    game.entities.mobs.clear();
     let kind = game.res.mob_types().get(kind).unwrap().clone();
     let mut m = Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0);
     m.health = m.attrs.max_health;
-    game.mobs.push(m);
+    game.entities.mobs.push(m);
 }
 
 fn target(id: u32) -> Option<InteractTarget> {
@@ -95,13 +95,16 @@ fn a_click_that_does_nothing_still_keeps_the_nautilus() {
         } else {
             Some(ItemStack::new(item, 2))
         };
-        assert!(!game.mobs[0].persistent, "{item:?} starts unkept");
+        assert!(!game.entities.mobs[0].persistent, "{item:?} starts unkept");
         assert!(
             !game.interact_entity(target(id)).unwrap(),
             "{item:?}: the click is refused"
         );
-        assert!(game.mobs[0].persistent, "{item:?}: the click keeps it");
-        assert_eq!(game.mobs[0].extra.in_love, 0, "{item:?}: no love");
+        assert!(
+            game.entities.mobs[0].persistent,
+            "{item:?}: the click keeps it"
+        );
+        assert_eq!(game.entities.mobs[0].extra.in_love, 0, "{item:?}: no love");
         assert_eq!(
             game.inventory[0].as_ref().map(|s| s.count),
             if item.is_empty() { None } else { Some(2) },
@@ -128,13 +131,13 @@ fn a_tame_zombie_nautilus_at_full_health_falls_in_love() {
         (12, "minecraft:nautilus", "minecraft:entity.nautilus.eat"),
     ] {
         spawn(&mut game, kind, id, [2.5, 64.0, 2.5]);
-        game.mobs[0].extra.tame = true;
-        game.mobs[0].extra.owner = Some([1, 2, 3, 4]);
+        game.entities.mobs[0].extra.tame = true;
+        game.entities.mobs[0].extra.owner = Some([1, 2, 3, 4]);
         game.inventory[0] = Some(ItemStack::new("minecraft:cod", 2));
         game.start_audio_capture();
         assert!(game.interact_entity(target(id)).unwrap(), "{kind}");
-        assert_eq!(game.mobs[0].extra.in_love, 600, "{kind}");
-        assert_eq!(game.mobs[0].extra.age, 0, "{kind}");
+        assert_eq!(game.entities.mobs[0].extra.in_love, 600, "{kind}");
+        assert_eq!(game.entities.mobs[0].extra.age, 0, "{kind}");
         assert_eq!(
             game.inventory[0].as_ref().map(|s| s.count),
             Some(1),

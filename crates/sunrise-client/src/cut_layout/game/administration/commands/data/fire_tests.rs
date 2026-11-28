@@ -61,8 +61,10 @@ pub(crate) fn summon_target_at(
 ) -> Target {
     let returned = game.summon_with_nbt(kind, pos, nbt).unwrap();
     match kind {
-        "minecraft:evoker_fangs" => Target::Fangs(game.fangs.list.last().unwrap().id),
-        "minecraft:area_effect_cloud" => Target::Cloud(game.breath_clouds.last().unwrap().id),
+        "minecraft:evoker_fangs" => Target::Fangs(game.entities.fangs.list.last().unwrap().id),
+        "minecraft:area_effect_cloud" => {
+            Target::Cloud(game.entities.breath_clouds.last().unwrap().id)
+        }
         _ => returned.unwrap_or_else(|| panic!("missing summon target for {kind}")),
     }
 }
@@ -275,7 +277,7 @@ pub(crate) fn run_fire_changes_on_eyes_fangs_spawners_clouds_and_bullets() {
         let live_neg = game.data_of(&DataRef::Entity(neg_bullet)).unwrap();
         assert_eq!(live_neg.get("Fire"), Some(&Tag::Short(0)));
         let idx = game
-            .creatures
+            .entities
             .projectiles
             .iter()
             .position(|p| p.id == neg_id)
@@ -396,7 +398,7 @@ pub(crate) fn run_fire_changes_on_eyes_fangs_spawners_clouds_and_bullets() {
             unreachable!();
         };
         let sa_idx = game
-            .creatures
+            .entities
             .projectiles
             .iter()
             .position(|p| p.id == sa_id)
@@ -422,7 +424,7 @@ pub(crate) fn run_fire_changes_on_eyes_fangs_spawners_clouds_and_bullets() {
         };
         assert!(
             !game
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|p| p.id == bv_id)
@@ -490,7 +492,8 @@ pub(crate) fn run_fire_changes_on_eyes_fangs_spawners_clouds_and_bullets() {
             unreachable!()
         };
         assert!(
-            game.fangs
+            game.entities
+                .fangs
                 .list
                 .iter()
                 .find(|f| f.id == fid)
@@ -509,14 +512,16 @@ pub(crate) fn run_fire_changes_on_eyes_fangs_spawners_clouds_and_bullets() {
                 .synced_fire
         );
         assert!(
-            game.ominous_spawners
+            game.entities
+                .ominous_spawners
                 .iter()
                 .find(|s| s.id == sid)
                 .unwrap()
                 .synced_fire
         );
         assert!(
-            game.fangs
+            game.entities
+                .fangs
                 .list
                 .iter()
                 .find(|f| f.id == fvid)
@@ -527,6 +532,7 @@ pub(crate) fn run_fire_changes_on_eyes_fangs_spawners_clouds_and_bullets() {
         tick_fire_entities(game);
         assert!(
             !game
+                .entities
                 .fangs
                 .list
                 .iter()
@@ -548,6 +554,7 @@ pub(crate) fn run_fire_changes_on_eyes_fangs_spawners_clouds_and_bullets() {
         );
         assert!(
             !game
+                .entities
                 .ominous_spawners
                 .iter()
                 .find(|s| s.id == sid)
@@ -555,7 +562,8 @@ pub(crate) fn run_fire_changes_on_eyes_fangs_spawners_clouds_and_bullets() {
                 .synced_fire
         );
         assert!(
-            game.fangs
+            game.entities
+                .fangs
                 .list
                 .iter()
                 .find(|f| f.id == fvid)

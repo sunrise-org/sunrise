@@ -85,7 +85,13 @@ pub(crate) fn boat(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> u32 {
 }
 
 pub(crate) fn boat_speed(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> f64 {
-    let v = game.boats.iter().find(|b| b.id == id).unwrap().velocity;
+    let v = game
+        .entities
+        .boats
+        .iter()
+        .find(|b| b.id == id)
+        .unwrap()
+        .velocity;
     (v.x * v.x + v.y * v.y + v.z * v.z).sqrt()
 }
 

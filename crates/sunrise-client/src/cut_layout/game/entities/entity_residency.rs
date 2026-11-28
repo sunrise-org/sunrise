@@ -37,7 +37,9 @@ mod tests {
         with_game(|game| {
             game.reset_entity_residency();
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(410, kind.clone(), Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(410, kind.clone(), Vec3::ZERO, 0.0));
             assert_eq!(
                 game.with_resident_slot(&DimensionKey::OVERWORLD, id(410), |_| 7),
                 SlotAccess::Done(7)
@@ -52,30 +54,36 @@ mod tests {
                 game.with_resident_slot(&DimensionKey::OVERWORLD, id(999), |_| panic!("missing")),
                 SlotAccess::<()>::Missing
             );
-            let join = game.mobs[0].join_seq();
-            let extracted = game.mobs.extract(join).unwrap();
+            let join = game.entities.mobs[0].join_seq();
+            let extracted = game.entities.mobs.extract(join).unwrap();
             assert_eq!(
                 game.with_resident_slot(&DimensionKey::OVERWORLD, id(410), |_| panic!("extracted")),
                 SlotAccess::<()>::Taken
             );
-            game.mobs.push(Mob::new(411, kind.clone(), Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(411, kind.clone(), Vec3::ZERO, 0.0));
             assert_eq!(
                 game.with_resident_slot(&DimensionKey::OVERWORLD, id(411), |_| 8),
                 SlotAccess::Done(8)
             );
-            game.mobs.put_back(0, extracted);
-            let lifted = game.mobs.lift();
+            game.entities.mobs.put_back(0, extracted);
+            let lifted = game.entities.mobs.lift();
             assert_eq!(
                 game.with_resident_slot(&DimensionKey::OVERWORLD, id(410), |_| panic!("lifted")),
                 SlotAccess::<()>::Taken
             );
-            game.mobs.push(Mob::new(412, kind, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(412, kind, Vec3::ZERO, 0.0));
             assert_eq!(
                 game.with_resident_slot(&DimensionKey::OVERWORLD, id(412), |_| 9),
                 SlotAccess::Done(9)
             );
-            game.mobs.restore(lifted, RestoreOrder::SurvivorsFirst);
-            game.mobs.update(0, |mob| mob.removed = true);
+            game.entities
+                .mobs
+                .restore(lifted, RestoreOrder::SurvivorsFirst);
+            game.entities.mobs.update(0, |mob| mob.removed = true);
             assert_eq!(
                 game.with_resident_slot(&DimensionKey::OVERWORLD, id(410), |_| 10),
                 SlotAccess::Done(10)
@@ -83,7 +91,7 @@ mod tests {
             game.summon_with_nbt("minecraft:tnt", [0.5, 70.0, 0.5], "{}")
                 .unwrap();
             game.lan_assign_ids();
-            let tnt = id(game.tnts[0].id);
+            let tnt = id(game.entities.tnts[0].id);
             assert_eq!(
                 game.with_resident_slot(&DimensionKey::OVERWORLD, tnt, |slot| slot.is_bound()),
                 SlotAccess::Done(false)
@@ -99,7 +107,7 @@ mod tests {
             );
             assert_eq!(game.dim, Dim::Nether);
             game.enter_level(Dim::Overworld).unwrap();
-            game.mobs.remove(0);
+            game.entities.mobs.remove(0);
             assert_eq!(
                 game.with_resident_slot(&DimensionKey::OVERWORLD, id(410), |_| panic!("removed")),
                 SlotAccess::<()>::Missing
@@ -126,7 +134,7 @@ mod tests {
             game.summon_with_nbt("minecraft:cushion", [0.5, 70.0, 0.5], "{}")
                 .unwrap();
             game.lan_assign_ids();
-            let id = NonZeroU32::new(game.cushions[0].id).unwrap();
+            let id = NonZeroU32::new(game.entities.cushions[0].id).unwrap();
             let holder = game.entity(id.get()).unwrap();
             let index = Arc::new(Mutex::new(AttachmentIndex::default()));
             let mut values = Attachments::default();
@@ -140,7 +148,7 @@ mod tests {
             let SlotAccess::Done(registration) = result else {
                 panic!("resident slot unavailable")
             };
-            game.cushions.update(0, |mob| {
+            game.entities.cushions.update(0, |mob| {
                 assert!(
                     registration
                         .same_registration(&mob.attachment_lifetime().registration().unwrap())
@@ -153,7 +161,7 @@ mod tests {
                 });
             }));
             assert!(panic.is_err());
-            game.cushions.update(0, |mob| {
+            game.entities.cushions.update(0, |mob| {
                 assert!(
                     registration
                         .same_registration(&mob.attachment_lifetime().registration().unwrap())
@@ -175,11 +183,15 @@ mod tests {
         with_game(|game| {
             game.reset_entity_residency();
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(410, kind.clone(), Vec3::ZERO, 0.0));
-            let join = game.mobs[0].join_seq();
-            let taken = game.mobs.lift();
+            game.entities
+                .mobs
+                .push(Mob::new(410, kind.clone(), Vec3::ZERO, 0.0));
+            let join = game.entities.mobs[0].join_seq();
+            let taken = game.entities.mobs.lift();
             assert_eq!(game.server_resident_entity(410), EntityLookup::Taken);
-            game.mobs.push(Mob::new(411, kind, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(411, kind, Vec3::ZERO, 0.0));
             assert!(matches!(
                 game.server_resident_entity(411),
                 EntityLookup::Found {
@@ -187,7 +199,9 @@ mod tests {
                     ..
                 }
             ));
-            game.mobs.restore(taken, RestoreOrder::SurvivorsFirst);
+            game.entities
+                .mobs
+                .restore(taken, RestoreOrder::SurvivorsFirst);
             assert!(
                 matches!(game.server_resident_entity(410), EntityLookup::Found { location, value: Target::Mob(410) } if location.join == join)
             );
@@ -196,7 +210,7 @@ mod tests {
                 game.server_resident_entity(410),
                 EntityLookup::Found { .. }
             ));
-            game.mobs.remove(0);
+            game.entities.mobs.remove(0);
             assert_eq!(game.server_resident_entity(410), EntityLookup::Missing);
             assert!(matches!(
                 game.server_resident_entity(411),
@@ -213,7 +227,9 @@ mod tests {
         with_game(|game| {
             game.dim = Dim::Nether;
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(410, kind, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(410, kind, Vec3::ZERO, 0.0));
             game.native_level_opened(Dim::Nether);
             assert!(
                 matches!(game.server_resident_entity(410), EntityLookup::Found { location, value: Target::Mob(410) } if location.owner.dimension == DimensionKey::NETHER)
@@ -236,7 +252,9 @@ mod tests {
             fixture_resident_column(&mut game.common.world, (0, 0));
             game.reset_entity_residency();
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(410, kind.clone(), Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(410, kind.clone(), Vec3::ZERO, 0.0));
             let entity = game.entity(410).unwrap();
             let living = game.living(entity).unwrap();
             let assert_refused_visits = |game: &sunrise_gameplay::game::ServerGame<'_>, error| {
@@ -265,7 +283,9 @@ mod tests {
             };
             game.enter_level(Dim::Nether).unwrap();
             assert_refused_visits(game, EntityReadError::Unavailable);
-            game.mobs.push(Mob::new(411, kind, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(411, kind, Vec3::ZERO, 0.0));
             assert!(
                 matches!(game.server_resident_entity(410), EntityLookup::Found { location, .. } if location.owner.dimension == DimensionKey::OVERWORLD)
             );
@@ -301,14 +321,18 @@ mod tests {
         with_game(|game| {
             game.reset_entity_residency();
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(410, kind.clone(), Vec3::ZERO, 0.0));
-            let taken = game.mobs.lift();
-            game.mobs.push(Mob::new(411, kind, Vec3::ZERO, 0.0));
-            game.mobs[0].removed = true;
+            game.entities
+                .mobs
+                .push(Mob::new(410, kind.clone(), Vec3::ZERO, 0.0));
+            let taken = game.entities.mobs.lift();
+            game.entities
+                .mobs
+                .push(Mob::new(411, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs[0].removed = true;
             assert_eq!(game.server_resident_entity(411), EntityLookup::Missing);
             // Conversion can restore a resident after a pre hook. A read while
             // removed must not destroy its physical residency row.
-            game.mobs[0].removed = false;
+            game.entities.mobs[0].removed = false;
             assert!(matches!(
                 game.server_resident_entity(411),
                 EntityLookup::Found { .. }
@@ -320,7 +344,9 @@ mod tests {
                 game.server_resident_entity(411),
                 EntityLookup::Found { .. }
             ));
-            game.mobs.restore(taken, RestoreOrder::SurvivorsFirst);
+            game.entities
+                .mobs
+                .restore(taken, RestoreOrder::SurvivorsFirst);
             assert_eq!(game.resident_entities.table.get_mut().end_tick(), Ok(()));
         });
     }
@@ -331,20 +357,20 @@ mod tests {
         with_game(|game| {
             game.reset_entity_residency();
             game.add_primed_tnt(BlockPos::new(0, 70, 0), 0.0, 80, None, None);
-            let mut tnt = game.tnts.remove(0);
+            let mut tnt = game.entities.tnts.remove(0);
             let retired = tnt.id;
             tnt.id = 0;
-            game.tnts.push(tnt);
+            game.entities.tnts.push(tnt);
             assert_eq!(game.server_resident_entity(retired), EntityLookup::Missing);
             assert_eq!(game.server_resident_entity(0), EntityLookup::Missing);
             game.lan_assign_ids();
-            let id = game.tnts[0].id;
+            let id = game.entities.tnts[0].id;
             assert_ne!(id, 0);
             assert!(
                 matches!(game.server_resident_entity(id), EntityLookup::Found { value: Target::Tnt(found), .. } if found == id)
             );
             game.lan_assign_ids();
-            assert_eq!(game.tnts[0].id, id);
+            assert_eq!(game.entities.tnts[0].id, id);
             assert_eq!(game.resident_entities.table.get_mut().end_tick(), Ok(()));
         });
     }

@@ -157,7 +157,7 @@ pub(crate) fn with_two_items(
                     [0.0; 3],
                     32767,
                 );
-                items[i] = game.dropped.last().unwrap().id;
+                items[i] = game.entities.dropped.last().unwrap().id;
             }
             let (a, b) = (&readers[0], &readers[1]);
             run(
@@ -272,8 +272,13 @@ fn starts_and_stops_are_heard_at_their_packets() {
             .hub
             .guests
             .update(0, |g| g.position = [4000.5, 64.0, 8.5]);
-        let index = game.dropped.iter().position(|d| d.id == near).unwrap();
-        let _ = game.dropped.remove(index);
+        let index = game
+            .entities
+            .dropped
+            .iter()
+            .position(|d| d.id == near)
+            .unwrap();
+        let _ = game.entities.dropped.remove(index);
         assert_eq!(
             sorted(tick_until_heard(game, heard)),
             [

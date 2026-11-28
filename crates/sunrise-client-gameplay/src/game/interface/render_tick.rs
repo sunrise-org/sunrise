@@ -1087,8 +1087,8 @@ impl crate::game::ClientGame<'_> {
                     }
                     self.common
                         .mob_index
-                        .find_ref(&self.common.mobs, id as u32)
-                        .map(|i| mob_tracking_body(&self.common.mobs[i]))
+                        .find_ref(&self.common.entities.mobs, id as u32)
+                        .map(|i| mob_tracking_body(&self.common.entities.mobs[i]))
                 }
             });
         self.client.particles.0.tick_tracking(&level, bodies);

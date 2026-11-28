@@ -223,7 +223,7 @@ fn client_prediction_fires_item_smelted_with_client_host_and_no_xp() {
                 assert_eq!(call.amount_removed, 2);
                 seen.item_smelted.clear();
             }
-            assert!(game.common.orbs.is_empty());
+            assert!(game.common.entities.orbs.is_empty());
 
             // Predicted shift-click fires once with nonzero amount_removed and spawns no orbs.
             set_result(game, 2);
@@ -236,13 +236,13 @@ fn client_prediction_fires_item_smelted_with_client_host_and_no_xp() {
                 assert_eq!(seen.item_smelted[0].count, 2);
                 seen.item_smelted.clear();
             }
-            assert!(game.common.orbs.is_empty());
+            assert!(game.common.entities.orbs.is_empty());
 
             // Predicted hotbar swap has removeCount == 0: no item_smelted and no orbs.
             set_result(game, 3);
             assert!(game.remote_menu_ops(&[(Some(302), 1, Input::Swap)]));
             assert!(recorded.lock().unwrap().item_smelted.is_empty());
-            assert!(game.common.orbs.is_empty());
+            assert!(game.common.entities.orbs.is_empty());
         });
     });
 }

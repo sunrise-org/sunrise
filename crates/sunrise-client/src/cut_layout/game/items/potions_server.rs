@@ -85,19 +85,21 @@ pub(crate) mod tests {
 
     pub(crate) fn cloud_spawns_during_pass(potion_pass: bool) {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
-            game.breath_clouds.clear();
+            game.entities.breath_clouds.clear();
             for _ in 0..2 {
                 game.spawn_creeper_cloud([0.0, 80.0, 0.0], Vec::new(), Vec::new(), Vec::new(), 0);
             }
             if !potion_pass {
-                game.breath_clouds.for_each_mut(|c| c.potion = None);
+                game.entities
+                    .breath_clouds
+                    .for_each_mut(|c| c.potion = None);
             }
-            let first = game.breath_clouds[0].id;
-            let second = game.breath_clouds[1].id;
+            let first = game.entities.breath_clouds[0].id;
+            let second = game.entities.breath_clouds[1].id;
             let next = game.server.next_entity;
             crate::game::server_side::entity_server::taken_pass_tests::with_spawn(
                 |game| {
-                    assert!(game.breath_clouds.is_empty());
+                    assert!(game.entities.breath_clouds.is_empty());
                     for _ in 0..2 {
                         game.spawn_creeper_cloud(
                             [0.0, 80.0, 0.0],
@@ -117,7 +119,8 @@ pub(crate) mod tests {
                 },
             );
             assert_eq!(
-                game.breath_clouds
+                game.entities
+                    .breath_clouds
                     .iter()
                     .map(|c| (c.id, c.age))
                     .collect::<Vec<_>>(),
@@ -130,15 +133,15 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn residency_cloud_load_expiry_bottling_and_late_ids() {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
-            game.breath_clouds.clear();
-            game.ominous_spawners.clear();
+            game.entities.breath_clouds.clear();
+            game.entities.ominous_spawners.clear();
             let (tag, _) =
                 sunrise_core::nbt::parse_snbt("{Pos:[0d,80d,0d],Duration:2,WaitTime:0,Radius:3f}")
                     .unwrap();
             let potion = game.load_potion_cloud(&tag).unwrap();
             for (age, duration) in [(20, 1), (0, 40)] {
-                game.breath_clouds
-                    .push(sunrise_gameplay_common::game::dragon_common::Breath {
+                game.entities.breath_clouds.push(
+                    sunrise_gameplay_common::game::dragon_common::Breath {
                         attachment_lifetime: Default::default(),
                         join: Default::default(),
                         id: 0,
@@ -153,18 +156,20 @@ pub(crate) mod tests {
                         from_dragon: false,
                         victims: Vec::new(),
                         potion: None,
-                    });
+                    },
+                );
             }
             game.add_remote_ominous_item_spawner(0, [0.0, 80.0, 0.0]);
             let before = game.server.next_entity;
-            assert_eq!(game.breath_clouds[1].id, 0);
+            assert_eq!(game.entities.breath_clouds[1].id, 0);
             game.lan_assign_ids();
-            assert_eq!(game.ominous_spawners[0].id, before + 1);
-            assert_eq!(game.breath_clouds[1].id, before + 2);
-            assert_eq!(game.breath_clouds[2].id, before + 3);
+            assert_eq!(game.entities.ominous_spawners[0].id, before + 1);
+            assert_eq!(game.entities.breath_clouds[1].id, before + 2);
+            assert_eq!(game.entities.breath_clouds[2].id, before + 3);
             game.tick_breath();
             assert_eq!(
-                game.breath_clouds
+                game.entities
+                    .breath_clouds
                     .iter()
                     .map(|c| (c.id, c.age))
                     .collect::<Vec<_>>(),
@@ -172,19 +177,21 @@ pub(crate) mod tests {
             );
             game.tick_potion_clouds();
             game.tick_potion_clouds();
-            assert_eq!(game.breath_clouds.len(), 1);
-            assert_eq!(game.breath_clouds[0].age, 1);
-            game.breath_clouds.update(0, |c| c.from_dragon = true);
+            assert_eq!(game.entities.breath_clouds.len(), 1);
+            assert_eq!(game.entities.breath_clouds[0].age, 1);
+            game.entities
+                .breath_clouds
+                .update(0, |c| c.from_dragon = true);
             assert!(
                 collect_dragon_breath(
                     Aabb::new(Vec3::new(-0.3, 80.0, -0.3), Vec3::new(0.3, 81.8, 0.3)),
-                    &mut game.breath_clouds
+                    &mut game.entities.breath_clouds
                 )
                 .is_some()
             );
-            assert_eq!(game.breath_clouds[0].radius, 2.5);
-            game.breath_clouds.clear();
-            assert!(game.breath_clouds.is_empty());
+            assert_eq!(game.entities.breath_clouds[0].radius, 2.5);
+            game.entities.breath_clouds.clear();
+            assert!(game.entities.breath_clouds.is_empty());
         });
     }
 
@@ -194,16 +201,16 @@ pub(crate) mod tests {
     fn lifecycle_cloud_commands_and_parked_owners() {
         crate::game::server_side::entity_server::taken_pass_tests::LifecycleFixture {
             seed: |game, entries| {
-                game.breath_clouds.clear();
+                game.entities.breath_clouds.clear();
                 for &(id, at) in entries {
                     game.spawn_creeper_cloud(at, Vec::new(), Vec::new(), Vec::new(), 0);
-                    let i = game.breath_clouds.len() - 1;
-                    let mut cloud = game.breath_clouds.remove(i);
+                    let i = game.entities.breath_clouds.len() - 1;
+                    let mut cloud = game.entities.breath_clouds.remove(i);
                     cloud.id = id;
-                    game.breath_clouds.push(cloud);
+                    game.entities.breath_clouds.push(cloud);
                 }
             },
-            ids: |game| game.breath_clouds.iter().map(|c| c.id).collect(),
+            ids: |game| game.entities.breath_clouds.iter().map(|c| c.id).collect(),
             target: sunrise_gameplay_common::game::commands_common::Target::Cloud,
             unloads_with_chunk: true,
             remote: None,
@@ -257,7 +264,7 @@ pub(crate) mod tests {
             ).unwrap();
             let id = game.load_potion_cloud(&tag).unwrap();
             game.tick_potion_clouds();
-            assert_eq!(game.breath_clouds[0].age, 1);
+            assert_eq!(game.entities.breath_clouds[0].age, 1);
 
             let mut states = sunrise_sim::lan::entity::States::default();
             game.lan_object_states(&mut states, false, 0);
@@ -281,7 +288,8 @@ pub(crate) mod tests {
             assert_eq!(name, "test:measured");
             assert_eq!(options, &[1, 1, 0, 0]);
 
-            let saved = potion_cloud_to_nbt(&game.breath_clouds[0], [1, 2, 3, 4], Some(&tag));
+            let saved =
+                potion_cloud_to_nbt(&game.entities.breath_clouds[0], [1, 2, 3, 4], Some(&tag));
             let particle_tag = saved.get("custom_particle").unwrap();
             assert_eq!(particle_tag.get("measure"), Some(&Tag::Int(257)));
             assert!(
@@ -430,57 +438,57 @@ pub(crate) mod tests {
                     mob.health = 5.0;
                     mob.add_effect("test:comfort", 80, 0);
                     mob.add_effect("test:nourishment", 20, 0);
-                    game.mobs.push(mob);
+                    game.entities.mobs.push(mob);
                     game.tick_creature_entities().unwrap();
                     assert_eq!(
-                        game.mobs[0].health, 6.0,
+                        game.entities.mobs[0].health, 6.0,
                         "comfort heals a mob; nourishment has no food to change"
                     );
-                    game.mobs[0].retain_effects(|_| false);
-                    game.mobs[0].add_effect("minecraft:regeneration", 99, 0);
-                    game.mobs[0].add_effect("test:comfort", 80, 0);
+                    game.entities.mobs[0].retain_effects(|_| false);
+                    game.entities.mobs[0].add_effect("minecraft:regeneration", 99, 0);
+                    game.entities.mobs[0].add_effect("test:comfort", 80, 0);
                     game.tick_creature_entities().unwrap();
                     assert_eq!(
-                        game.mobs[0].health, 6.0,
+                        game.entities.mobs[0].health, 6.0,
                         "active regeneration suppresses comfort on a mob"
                     );
-                    game.mobs[0].retain_effects(|_| false);
-                    game.mobs[0].add_effect("minecraft:regeneration", 1, 0);
-                    game.mobs[0].add_effect("test:comfort", 80, 0);
+                    game.entities.mobs[0].retain_effects(|_| false);
+                    game.entities.mobs[0].add_effect("minecraft:regeneration", 1, 0);
+                    game.entities.mobs[0].add_effect("test:comfort", 80, 0);
                     game.tick_creature_entities().unwrap();
                     assert_eq!(
-                        game.mobs[0].health, 7.0,
+                        game.entities.mobs[0].health, 7.0,
                         "earlier mob expiry is visible to comfort"
                     );
 
-                    game.mobs[0].retain_effects(|_| false);
-                    game.mobs[0].add_effect("minecraft:regeneration", 1, 0);
-                    game.mobs[0].add_effect("test:comfort", 80, 0);
+                    game.entities.mobs[0].retain_effects(|_| false);
+                    game.entities.mobs[0].add_effect("minecraft:regeneration", 1, 0);
+                    game.entities.mobs[0].add_effect("test:comfort", 80, 0);
                     cancel_expiry.store(true, std::sync::atomic::Ordering::SeqCst);
                     game.tick_creature_entities().unwrap();
                     assert_eq!(
-                        game.mobs[0].health, 7.0,
+                        game.entities.mobs[0].health, 7.0,
                         "cancelled expiry still suppresses comfort at duration zero"
                     );
-                    assert!(game.mobs[0].has_effect("minecraft:regeneration"));
+                    assert!(game.entities.mobs[0].has_effect("minecraft:regeneration"));
                     cancel_expiry.store(false, std::sync::atomic::Ordering::SeqCst);
-                    game.mobs[0].add_effect("test:comfort", 80, 0);
+                    game.entities.mobs[0].add_effect("test:comfort", 80, 0);
                     game.tick_creature_entities().unwrap();
                     assert_eq!(
-                        game.mobs[0].health, 8.0,
+                        game.entities.mobs[0].health, 8.0,
                         "a previously cancelled expiry is asked again before comfort"
                     );
 
-                    game.mobs[0].retain_effects(|_| false);
-                    game.mobs[0].add_effect("minecraft:regeneration", 200, 0);
-                    game.mobs[0].add_effect("minecraft:regeneration", 1, 1);
-                    game.mobs[0].add_effect("test:comfort", 80, 0);
+                    game.entities.mobs[0].retain_effects(|_| false);
+                    game.entities.mobs[0].add_effect("minecraft:regeneration", 200, 0);
+                    game.entities.mobs[0].add_effect("minecraft:regeneration", 1, 1);
+                    game.entities.mobs[0].add_effect("test:comfort", 80, 0);
                     game.tick_creature_entities().unwrap();
                     assert_eq!(
-                        game.mobs[0].health, 8.0,
+                        game.entities.mobs[0].health, 8.0,
                         "a promoted hidden regeneration still suppresses comfort"
                     );
-                    let regen = game.mobs[0]
+                    let regen = game.entities.mobs[0]
                         .extra
                         .effects
                         .iter()
@@ -575,18 +583,19 @@ pub(crate) mod tests {
                 .set_main_hand(Some(Arc::from("minecraft:iron_sword")));
             mob.extra.drop_chances = Some(Box::new([2.0; 8]));
             mob.add_effect(brewing::effect("test:effect").unwrap().id, 10, 2);
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             game.tick_creature_entities().unwrap();
-            assert!(!game.mobs[0].alive());
+            assert!(!game.entities.mobs[0].alive());
             assert!(
-                game.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .any(|item| &*item.stack.item == "minecraft:iron_sword")
             );
             for _ in 0..20 {
                 game.tick_creature_entities().unwrap();
             }
-            assert!(game.mobs.is_empty());
+            assert!(game.entities.mobs.is_empty());
         });
     }
 
@@ -741,9 +750,13 @@ pub(crate) mod tests {
                         .get("minecraft:wither")
                         .unwrap()
                         .clone();
-                    game.mobs.push(Mob::new(21, cow, Vec3::ZERO, 0.0));
-                    game.mobs.push(Mob::new(22, spider, Vec3::ZERO, 0.0));
-                    game.mobs.push(Mob::new(23, wither, Vec3::ZERO, 0.0));
+                    game.entities.mobs.push(Mob::new(21, cow, Vec3::ZERO, 0.0));
+                    game.entities
+                        .mobs
+                        .push(Mob::new(22, spider, Vec3::ZERO, 0.0));
+                    game.entities
+                        .mobs
+                        .push(Mob::new(23, wither, Vec3::ZERO, 0.0));
 
                     sunrise_gameplay_common::game::test_fixtures::fixture_resident_column(
                         &mut game.world,
@@ -848,7 +861,7 @@ pub(crate) mod tests {
                     deny.store(true, Ordering::SeqCst);
                     assert!(!game.add_player_effect(EffectInstance::from_def(comfort, 100, 0)));
                     deny.store(false, Ordering::SeqCst);
-                    game.mobs[0].load_effect(sunrise_sim::mobs::StoredEffect::new(
+                    game.entities.mobs[0].load_effect(sunrise_sim::mobs::StoredEffect::new(
                         "minecraft:regeneration",
                         100,
                         0,
@@ -929,7 +942,7 @@ pub(crate) mod xp_bottle_tests {
                 ),
                 (None, Vec3::new(0.0, 0.0, 1.0), 2, -1.0),
             ] {
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.splash(
                     &bottle,
                     at,
@@ -941,9 +954,9 @@ pub(crate) mod xp_bottle_tests {
                     false,
                     motion,
                 );
-                assert!(!game.orbs.is_empty());
+                assert!(!game.entities.orbs.is_empty());
                 let at = [at.x, at.y, at.z];
-                for o in game.orbs.iter() {
+                for o in game.entities.orbs.iter() {
                     let p = [o.position.x, o.position.y, o.position.z];
                     let v = [o.velocity.x, o.velocity.y, o.velocity.z];
                     assert!((p[axis] - (at[axis] + sign * 0.25)).abs() < 1e-9, "{p:?}");
@@ -1019,8 +1032,8 @@ pub(crate) mod mob_absorption_max_tests {
         test(&mut game);
     }
     fn pig(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> usize {
-        let i: Vec<usize> = (0..game.mobs.len())
-            .filter(|&i| game.persist.uuid_of(game.mobs[i].id) == Some([203, 0, 0, n]))
+        let i: Vec<usize> = (0..game.entities.mobs.len())
+            .filter(|&i| game.persist.uuid_of(game.entities.mobs[i].id) == Some([203, 0, 0, n]))
             .collect();
         assert_eq!(i.len(), 1, "one live pig with UUID {n}");
         i[0]
@@ -1076,10 +1089,10 @@ pub(crate) mod mob_absorption_max_tests {
                               rows: [(&str, i32, f32, i32); 5]| {
                 for (name, n, amount, max) in rows {
                     let i = pig(game, n);
-                    if game.mobs[i].absorption != amount {
+                    if game.entities.mobs[i].absorption != amount {
                         failures.push(format!(
                             "{phase} {name}: amount {}, expected {amount}",
-                            game.mobs[i].absorption
+                            game.entities.mobs[i].absorption
                         ));
                     }
                     let got = max_absorption(game, &format!("h203_{name}"));
@@ -1196,18 +1209,18 @@ pub(crate) mod mob_health_boost_tests {
         test(&mut game);
     }
     fn pig(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> usize {
-        let i: Vec<usize> = (0..game.mobs.len())
-            .filter(|&i| game.persist.uuid_of(game.mobs[i].id) == Some([205, 0, 0, n]))
+        let i: Vec<usize> = (0..game.entities.mobs.len())
+            .filter(|&i| game.persist.uuid_of(game.entities.mobs[i].id) == Some([205, 0, 0, n]))
             .collect();
         assert_eq!(i.len(), 1, "one live pig with UUID {n}");
         i[0]
     }
     fn health(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> f32 {
-        game.mobs[pig(game, n)].health
+        game.entities.mobs[pig(game, n)].health
     }
     fn boost(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> Option<(i32, i32)> {
         let i = pig(game, n);
-        game.mobs[i]
+        game.entities.mobs[i]
             .extra
             .effects
             .iter()
@@ -1344,13 +1357,18 @@ pub(crate) mod mob_health_boost_tests {
                 )));
                 let i = pig(game, n);
                 if tag.starts_with("h205_wolf") {
-                    sunrise_sim::mobs::tame::set_tame(&mut game.mobs[i], true);
+                    sunrise_sim::mobs::tame::set_tame(&mut game.entities.mobs[i], true);
                 }
                 ids.push(i);
             }
             let state = |game: &sunrise_gameplay::game::ServerGame<'_>| -> Vec<(f32, f32)> {
                 ids.iter()
-                    .map(|&i| (game.mobs[i].attrs.max_health, game.mobs[i].health))
+                    .map(|&i| {
+                        (
+                            game.entities.mobs[i].attrs.max_health,
+                            game.entities.mobs[i].health,
+                        )
+                    })
                     .collect()
             };
             let before = state(game);
@@ -1359,7 +1377,7 @@ pub(crate) mod mob_health_boost_tests {
                 [12.0, 20.0, 40.0, 40.0]
             );
             assert_eq!(
-                sunrise_sim::mobs::finalize::max_health(&game.mobs[ids[1]]),
+                sunrise_sim::mobs::finalize::max_health(&game.entities.mobs[ids[1]]),
                 20.0,
                 "sizing installs the cube's actual max-health attribute base"
             );
@@ -1369,7 +1387,7 @@ pub(crate) mod mob_health_boost_tests {
                 )));
             }
             assert_eq!(
-                sunrise_sim::mobs::finalize::max_health(&game.mobs[ids[3]]),
+                sunrise_sim::mobs::finalize::max_health(&game.entities.mobs[ids[3]]),
                 72.0,
                 "health boost adds to the tamed wolf's attribute base"
             );
@@ -1455,15 +1473,15 @@ pub(crate) mod depleted_absorption_tests {
     }
     /// The mob in the level with UUID word `n`.
     fn pig(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> usize {
-        let i: Vec<usize> = (0..game.mobs.len())
-            .filter(|&i| game.persist.uuid_of(game.mobs[i].id) == Some([204, 0, 0, n]))
+        let i: Vec<usize> = (0..game.entities.mobs.len())
+            .filter(|&i| game.persist.uuid_of(game.entities.mobs[i].id) == Some([204, 0, 0, n]))
             .collect();
         assert_eq!(i.len(), 1, "one live pig with UUID {n}");
         i[0]
     }
     /// Absorption's remaining ticks on the mob, if it has the effect.
     fn absorption(game: &sunrise_gameplay::game::ServerGame<'_>, i: usize) -> Option<i32> {
-        game.mobs[i]
+        game.entities.mobs[i]
             .extra
             .effects
             .iter()
@@ -1515,7 +1533,7 @@ pub(crate) mod depleted_absorption_tests {
             // Setup controls, independent of the tick: amount, health, effect.
             for (name, n, _, effect, hit) in cases {
                 let i = pig(game, n);
-                let m = &game.mobs[i];
+                let m = &game.entities.mobs[i];
                 let amount = match (effect, hit) {
                     (false, _) => 0.0,
                     (true, Some(h)) if name != "refused" => 4.0 - h as f32,
@@ -1559,7 +1577,7 @@ pub(crate) mod depleted_absorption_tests {
                     ));
                 }
                 let saved = game
-                    .command_target_nbt(Target::Mob(game.mobs[i].id))
+                    .command_target_nbt(Target::Mob(game.entities.mobs[i].id))
                     .unwrap();
                 let listed = matches!(saved.get("active_effects"), Some(sunrise_core::nbt::Tag::List(l)) if !l.is_empty());
                 if listed != expected.is_some() {
@@ -1568,7 +1586,7 @@ pub(crate) mod depleted_absorption_tests {
             }
             for (name, n, _, _, _) in [cases[0], cases[5]] {
                 let i = pig(game, n);
-                if game.mobs[i].absorption != 0.0 || game.mobs[i].health != 10.0 {
+                if game.entities.mobs[i].absorption != 0.0 || game.entities.mobs[i].health != 10.0 {
                     failures.push(format!("{name}: amount/health changed by the removal"));
                 }
             }
@@ -1610,7 +1628,7 @@ pub(crate) mod depleted_absorption_tests {
                 }
             }
             let effect = |game: &sunrise_gameplay::game::ServerGame<'_>, i: usize, id: &str| {
-                game.mobs[i]
+                game.entities.mobs[i]
                     .extra
                     .effects
                     .iter()
@@ -1621,12 +1639,12 @@ pub(crate) mod depleted_absorption_tests {
                 let i = pig(game, n);
                 let has = effects.contains(&"absorption");
                 assert_eq!(
-                    game.mobs[i].absorption,
+                    game.entities.mobs[i].absorption,
                     if has && !hit { 4.0 } else { 0.0 },
                     "{name}: amount"
                 );
                 assert_eq!(
-                    game.mobs[i].health,
+                    game.entities.mobs[i].health,
                     if hit && !has { 6.0 } else { 10.0 },
                     "{name}: health"
                 );
@@ -1883,7 +1901,7 @@ pub(crate) mod tick_effects_tests {
                 let mut villager = Mob::new(162, kind, Vec3::new(3.5, 64.0, 2.5), 0.0);
                 villager.no_ai = true;
                 villager.extra.bed = Some([2, 64, 1]);
-                game.mobs.push(villager);
+                game.entities.mobs.push(villager);
                 game.player = Some(sunrise_sim::motion::PlayerMotion::new(
                     game.motion,
                     Vec3::new(2.5, 64.0, 2.5),

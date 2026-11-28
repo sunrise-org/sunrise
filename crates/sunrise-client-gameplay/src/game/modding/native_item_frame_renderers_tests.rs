@@ -115,8 +115,8 @@ fn hanging(id: u32, glow: bool) -> ItemFrame {
 
 /// The vertices one frame of item frames draws for a single entity.
 fn frame_frame(game: &mut crate::game::ClientGame<'_>, id: u32, glow: bool) -> Vec<Vertex> {
-    game.common.item_frames.clear();
-    game.common.item_frames.push(hanging(id, glow));
+    game.common.entities.item_frames.clear();
+    game.common.entities.item_frames.push(hanging(id, glow));
     let mut out = Vec::new();
     game.frame_geometry(CAMERA, ALPHA, &mut out);
     out
@@ -377,8 +377,8 @@ fn a_registered_item_frame_draws_its_renderer_in_place_of_the_model() {
             let mut frame = hanging(91, false);
             frame.ticks = 6;
             frame.item = Some(ItemStack::new("minecraft:diamond", 1));
-            game.item_frames.clear();
-            game.item_frames.push(frame);
+            game.entities.item_frames.clear();
+            game.entities.item_frames.push(frame);
             let mut drawn = Vec::new();
             game.frame_geometry(CAMERA, ALPHA, &mut drawn);
             assert_eq!(drawn.len(), 4, "one quad, no frame and no item: {drawn:?}");
@@ -394,8 +394,8 @@ fn a_registered_item_frame_draws_its_renderer_in_place_of_the_model() {
             heard.lock().unwrap().state = None;
             let mut glow = hanging(94, true);
             glow.ticks = 3;
-            game.item_frames.clear();
-            game.item_frames.push(glow);
+            game.entities.item_frames.clear();
+            game.entities.item_frames.push(glow);
             let mut drawn = Vec::new();
             game.frame_geometry(CAMERA, ALPHA, &mut drawn);
             assert_eq!(drawn.len(), 4, "glow: one quad and no frame: {drawn:?}");
@@ -463,8 +463,8 @@ fn an_unregistered_item_frame_is_byte_identical_to_the_vanilla_route() {
         );
         let mut loaded = hanging(96, false);
         loaded.item = Some(ItemStack::new("minecraft:diamond", 1));
-        game.item_frames.clear();
-        game.item_frames.push(loaded);
+        game.entities.item_frames.clear();
+        game.entities.item_frames.push(loaded);
         let mut with_item = Vec::new();
         game.frame_geometry(CAMERA, ALPHA, &mut with_item);
         assert!(

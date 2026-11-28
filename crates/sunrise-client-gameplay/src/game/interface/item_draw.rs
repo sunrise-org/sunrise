@@ -980,7 +980,7 @@ impl crate::game::ClientGame<'_> {
         out: &mut Vec<Vertex>,
         run: std::ops::Range<usize>,
     ) {
-        let live = self.common.dropped[run]
+        let live = self.common.entities.dropped[run]
             .iter()
             .filter(|item| !self.hides_as_camera(item.id))
             .map(|item| {

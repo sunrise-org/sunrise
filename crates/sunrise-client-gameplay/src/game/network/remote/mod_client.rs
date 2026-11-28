@@ -1070,7 +1070,13 @@ impl crate::game::ClientGame<'_> {
             .remote
             .as_mut()
             .and_then(|r| r.pending_items.remove(&id));
-        if let Some(item) = self.common.dropped.iter_mut().find(|d| d.id == id as u32) {
+        if let Some(item) = self
+            .common
+            .entities
+            .dropped
+            .iter_mut()
+            .find(|d| d.id == id as u32)
+        {
             item.stack = stack;
             return;
         }
@@ -1093,8 +1099,12 @@ impl crate::game::ClientGame<'_> {
         );
         // Metadata can arrive after newer entities (including other items). Insert at the
         // reserved ClientLevel.addEntity slot, not the tail at metadata time.
-        let index = self.common.dropped.partition_point(|item| item.join < join);
-        self.common.dropped.insert(
+        let index = self
+            .common
+            .entities
+            .dropped
+            .partition_point(|item| item.join < join);
+        self.common.entities.dropped.insert(
             index,
             ItemEntity {
                 join,

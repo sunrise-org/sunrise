@@ -199,7 +199,6 @@ impl<T> Drop for RemainingActions<'_, T> {
 /// Mob-system state owned by the game.
 #[derive(Default)]
 pub struct Creatures {
-    pub projectiles: sunrise_sim::join_seq::JoinList<Projectile, false>,
     /// Reusable kind-name buffer for `native_other_tick_alone`.
     pub tick_hooks: super::native_ticks::TickBuffers,
     /// The guests (by connection) whose `ServerPlayer.tick` a mod's Pre canceled this tick:
@@ -350,7 +349,7 @@ pub enum OrbOrder {
 impl crate::game::CommonGame<'_> {
     /// Initializes sulfur cubes' missing attribute maps from defaults and saved attributes before applying body modifiers.
     pub fn init_sulfur_attribute_maps(&mut self) {
-        for m in &mut self.mobs {
+        for m in &mut self.entities.mobs {
             if m.species() == sunrise_sim::mobs::Species::SulfurCube {
                 sunrise_sim::mobs::finalize::attribute_map(m, self.motion.attributes());
             }
@@ -384,7 +383,7 @@ impl crate::game::CommonGame<'_> {
     }
     pub fn control_mobs_at(&self, radius: f64, center: Vec3) -> serde_json::Value {
         let list: Vec<serde_json::Value> = self
-            .mobs
+            .entities.mobs
             .iter()
             .filter(|m| m.distance_sqr(center) <= radius * radius)
             .map(|m| {
@@ -451,7 +450,7 @@ impl crate::game::CommonGame<'_> {
                 state
             })
             .collect();
-        serde_json::json!({ "count": self.mobs.len(), "near": list, "projectiles": self.creatures.projectiles.len() })
+        serde_json::json!({ "count": self.entities.mobs.len(), "near": list, "projectiles": self.entities.projectiles.len() })
     }
     /// Highest motion-blocking (no leaves) block + 1 (Heightmap MOTION_BLOCKING_NO_LEAVES).
     pub fn motion_top(&self, x: i32, z: i32) -> i32 {
@@ -491,7 +490,7 @@ impl crate::game::CommonGame<'_> {
                 }
             }
             Who::Mob(id) => {
-                if let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) {
+                if let Some(m) = self.entities.mobs.iter_mut().find(|m| m.id == id) {
                     m.ignite_for_ticks(seconds * 20);
                 }
             }
@@ -500,7 +499,7 @@ impl crate::game::CommonGame<'_> {
     }
 
     pub fn apply_setup(&mut self, id: u32, setup: &SpawnSetup) {
-        let Some(m) = self.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(m) = self.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return;
         };
         if setup.baby {
@@ -570,7 +569,7 @@ impl crate::game::CommonGame<'_> {
             .position(|(id, _)| *id == projectile.id)
             .map(|k| self.creatures.bounced_followers.swap_remove(k).1)
             .unwrap_or_default();
-        let projectiles = &mut self.creatures.projectiles;
+        let projectiles = &mut self.entities.projectiles;
         if let Some(existing) = projectiles.locate(projectile.join) {
             projectiles.store_back(existing, projectile);
             return;
@@ -655,9 +654,9 @@ pub trait ModGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             // applies (`mob_hit`): a mob in its death animation is not clicked
             // by either path, so naming one in a packet must not reach the
             // feed, shear, leash or name paths either.
-            Some(t) => crate::game::item_actions::named_entity(&self.mobs, t.id, |m| m.id)
+            Some(t) => crate::game::item_actions::named_entity(&self.entities.mobs, t.id, |m| m.id)
                 .filter(|&i| {
-                    let m = &self.mobs[i];
+                    let m = &self.entities.mobs[i];
                     named_mob_pickable(
                         m.alive(),
                         m.id,

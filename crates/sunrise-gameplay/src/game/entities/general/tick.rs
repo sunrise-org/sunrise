@@ -45,7 +45,7 @@ impl ServerGame<'_> {
     /// slot resolved without subscribers costs its bookkeeping and nothing
     /// else: no per-row type lookup, call, or event allocation.
     pub fn tick_general(&mut self) -> sunrise_game_data::Result<()> {
-        if self.common.resident_entities.general.rows.is_empty() {
+        if self.common.entities.general.rows.is_empty() {
             return Ok(());
         }
         // `begin_ordered_ticks`' cutoff: a row numbered at or above `born`
@@ -68,17 +68,17 @@ impl ServerGame<'_> {
         // writes reach its row through that slot. What joins during the pass
         // lands at or above `born`, ticks from the next pass, and never
         // reaches this loop's rows.
-        let total = self.common.resident_entities.general.rows.len();
+        let total = self.common.entities.general.rows.len();
         // The rider adjacency, resolved once into the reusable first-child
         // and next-sibling index: a stable world's pass allocates nothing
         // (the index rebuilds in place only when the rows or a mount
         // changed), and every edge is visited exactly once, through its
         // vehicle's chain — no row scans the list.
-        self.common.resident_entities.general.riders.refresh(
-            &self.common.resident_entities.general.rows,
-            self.common.resident_entities.general.mount_writes,
+        self.common.entities.general.riders.refresh(
+            &self.common.entities.general.rows,
+            self.common.entities.general.mount_writes,
         );
-        let index = &mut self.common.resident_entities.general.riders;
+        let index = &mut self.common.entities.general.riders;
         index.ticked.clear();
         index.ticked.resize(total, false);
 
@@ -88,7 +88,7 @@ impl ServerGame<'_> {
         let mut foreign = std::mem::take(&mut index.foreign_parents);
         foreign.clear();
         for index in 0..total {
-            let row = &self.common.resident_entities.general.rows[index];
+            let row = &self.common.entities.general.rows[index];
             if row.join >= born {
                 continue;
             }
@@ -111,7 +111,7 @@ impl ServerGame<'_> {
         }
         foreign.sort_unstable();
         for &(_, _, index) in &foreign {
-            let row = &self.common.resident_entities.general.rows[index];
+            let row = &self.common.entities.general.rows[index];
             let Some(vehicle) = row.mount else { continue };
             if self.common.general_row(vehicle).is_some() {
                 continue;
@@ -130,7 +130,7 @@ impl ServerGame<'_> {
                 self.tick_general_branch(index, Some(vehicle), &mut pass);
             }
         }
-        self.common.resident_entities.general.riders.foreign_parents = foreign;
+        self.common.entities.general.riders.foreign_parents = foreign;
         Ok(())
     }
 
@@ -141,14 +141,14 @@ impl ServerGame<'_> {
         mount: Option<u32>,
         pass: &mut GeneralTickPass<'_>,
     ) {
-        let mut pending = std::mem::take(&mut self.common.resident_entities.general.riders.pending);
+        let mut pending = std::mem::take(&mut self.common.entities.general.riders.pending);
         pending.push((index, mount));
         while let Some((index, mount)) = pending.pop() {
             let Some(id) = self.tick_general_at(index, mount, pass) else {
                 continue;
             };
             let from = pending.len();
-            let riders = &self.common.resident_entities.general.riders;
+            let riders = &self.common.entities.general.riders;
             let mut child = riders.first_child[index];
             while let Some(index) = child {
                 pending.push((index, Some(id)));
@@ -156,7 +156,7 @@ impl ServerGame<'_> {
             }
             pending[from..].reverse();
         }
-        self.common.resident_entities.general.riders.pending = pending;
+        self.common.entities.general.riders.pending = pending;
     }
 
     /// A joined row and its whole general branch, in boarding order. A
@@ -168,9 +168,9 @@ impl ServerGame<'_> {
         mount: Option<u32>,
         pass: &mut GeneralTickPass<'_>,
     ) -> Option<u32> {
-        let row = &self.common.resident_entities.general.rows[index];
+        let row = &self.common.entities.general.rows[index];
         if row.join >= pass.born
-            || self.common.resident_entities.general.riders.ticked[index]
+            || self.common.entities.general.riders.ticked[index]
             || !general_row_live(self, index, mount)
         {
             return None;
@@ -178,7 +178,7 @@ impl ServerGame<'_> {
         let (id, slot) = (row.id, row.type_slot);
         // A callback can dismount a passenger, but cannot make it tick again
         // if its new root/seat is reached later in this pass.
-        self.common.resident_entities.general.riders.ticked[index] = true;
+        self.common.entities.general.riders.ticked[index] = true;
         let kind = pass.catalog.key(slot);
         let ticks = !pass.round.pre() || self.native_tick_pre_one(&mut pass.round, id, kind);
         if !general_row_live(self, index, mount) {
@@ -209,7 +209,7 @@ impl ServerGame<'_> {
         }
         if self
             .common
-            .resident_entities
+            .entities
             .general
             .riders
             .mob_vehicles
@@ -217,7 +217,7 @@ impl ServerGame<'_> {
             && let Some(seat) = self.general_seat(id, false)
         {
             let mut at = 0;
-            while let Some(mob) = self.common.mobs.get_mut(at) {
+            while let Some(mob) = self.common.entities.mobs.get_mut(at) {
                 if !mob.removed && mob.extra.mount == Some(id) {
                     seat.position_mob(mob);
                     let rider = mob.id;
@@ -238,7 +238,7 @@ impl ServerGame<'_> {
         epoch: Option<mod_api::WorldEpoch>,
     ) {
         let min_y = self.common.world.layout().min_y();
-        let row = &mut self.common.resident_entities.general.rows[index];
+        let row = &mut self.common.entities.general.rows[index];
         let id = row.id;
         let bounds = sunrise_gameplay_common::game::entity::Entity::bounds(row);
         let (_, height) = general_type_catalog().dimensions(row.type_slot);
@@ -279,11 +279,11 @@ impl ServerGame<'_> {
     }
 
     fn position_general_row(&mut self, index: usize) {
-        let row = &self.common.resident_entities.general.rows[index];
+        let row = &self.common.entities.general.rows[index];
         let Some(vehicle) = row.mount else { return };
         let at = self.general_passenger_position(vehicle, row.id);
         if let Some(at) = at {
-            let row = &mut self.common.resident_entities.general.rows[index];
+            let row = &mut self.common.entities.general.rows[index];
             let (id, before) = (row.id, row.position);
             row.position = at;
             row.fall_distance = 0.0;
@@ -330,13 +330,9 @@ fn general_tick_subscribed(catalog: &GeneralTypeCatalog) -> Vec<bool> {
 /// rewrite its mount. The row's identity is its place: nothing in the pass
 /// reorders the storage, so an index read now is the row it names.
 fn general_row_live(game: &crate::game::ServerGame<'_>, index: usize, mount: Option<u32>) -> bool {
-    game.resident_entities
-        .general
-        .rows
-        .get(index)
-        .is_some_and(|row| {
-            row.mount == mount && !game.persist.removals.contains(&Target::General(row.id))
-        })
+    game.entities.general.rows.get(index).is_some_and(|row| {
+        row.mount == mount && !game.persist.removals.contains(&Target::General(row.id))
+    })
 }
 
 use sunrise_gameplay_common::game::transactions::TransactionsGameExt as _;

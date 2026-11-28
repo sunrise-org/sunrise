@@ -68,10 +68,10 @@ fn tp_moves_a_frame_and_a_painting() {
     assert!(game.run_command("summon minecraft:item_frame 0 2 2 {Facing:3b}"));
     assert!(game.run_command("tp @e[type=minecraft:painting,limit=1] 3 2 0"));
     assert!(game.run_command("tp @e[type=minecraft:item_frame,limit=1] 3 2 2"));
-    assert_eq!(game.paintings.len(), 1);
-    assert_eq!(game.paintings[0].pos, [3, 2, 0]);
-    assert_eq!(game.item_frames.len(), 1);
-    assert_eq!(game.item_frames[0].pos, [3, 2, 2]);
+    assert_eq!(game.entities.paintings.len(), 1);
+    assert_eq!(game.entities.paintings[0].pos, [3, 2, 0]);
+    assert_eq!(game.entities.item_frames.len(), 1);
+    assert_eq!(game.entities.item_frames[0].pos, [3, 2, 2]);
 }
 
 /// `Entity.teleportTo(ServerLevel, ..)` -> `teleportCrossDimension` for a
@@ -110,30 +110,44 @@ fn every_entity_kind_follows_a_cross_dimension_tp() {
             format!("execute in minecraft:the_nether run tp @e[type={ty},limit=1] {x} 64 0.5");
         assert!(game.run_command(&command), "{command}");
     }
-    assert!(game.armor_stands.is_empty(), "the stand left the overworld");
-    assert!(game.dropped.is_empty(), "the item left the overworld");
-    assert!(game.item_frames.is_empty(), "the frame left the overworld");
     assert!(
-        game.creatures.projectiles.is_empty(),
+        game.entities.armor_stands.is_empty(),
+        "the stand left the overworld"
+    );
+    assert!(
+        game.entities.dropped.is_empty(),
+        "the item left the overworld"
+    );
+    assert!(
+        game.entities.item_frames.is_empty(),
+        "the frame left the overworld"
+    );
+    assert!(
+        game.entities.projectiles.is_empty(),
         "the arrow left the overworld"
     );
-    assert!(game.tnts.is_empty(), "the tnt left the overworld");
+    assert!(game.entities.tnts.is_empty(), "the tnt left the overworld");
     let back = game.enter_command_level(Dim::Nether);
     assert_eq!(game.dim, Dim::Nether);
-    let stand = game.armor_stands.iter().next().expect("stand crossed");
+    let stand = game
+        .entities
+        .armor_stands
+        .iter()
+        .next()
+        .expect("stand crossed");
     assert_eq!(
         [stand.position.x, stand.position.y, stand.position.z],
         [10.5, 64.0, 0.5]
     );
-    let item = game.dropped.iter().next().expect("item crossed");
+    let item = game.entities.dropped.iter().next().expect("item crossed");
     assert_eq!(
         [item.position.x, item.position.y, item.position.z],
         [11.5, 64.0, 0.5]
     );
-    let frame = game.item_frames.first().expect("frame crossed");
+    let frame = game.entities.item_frames.first().expect("frame crossed");
     assert_eq!(frame.pos, [12, 64, 0]);
     let arrow = game
-        .creatures
+        .entities
         .projectiles
         .iter()
         .next()
@@ -142,7 +156,7 @@ fn every_entity_kind_follows_a_cross_dimension_tp() {
         [arrow.position.x, arrow.position.y, arrow.position.z],
         [13.5, 64.0, 0.5]
     );
-    let tnt = game.tnts.first().expect("tnt crossed");
+    let tnt = game.entities.tnts.first().expect("tnt crossed");
     assert_eq!(
         [tnt.position.x, tnt.position.y, tnt.position.z],
         [14.5, 64.0, 0.5]

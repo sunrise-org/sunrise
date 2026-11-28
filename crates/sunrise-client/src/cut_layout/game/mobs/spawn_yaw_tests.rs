@@ -67,7 +67,12 @@ fn game<'a>(
 }
 
 fn yaw_of(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> f32 {
-    game.mobs.iter().find(|m| m.id == id).expect("spawned").yaw
+    game.entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id)
+        .expect("spawned")
+        .yaw
 }
 
 #[test]
@@ -75,9 +80,9 @@ fn yaw_of(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> f32 {
 fn a_summoned_mob_without_nbt_faces_south() {
     let mut resources = None;
     let mut game = game(&mut resources);
-    let before = game.mobs.len();
+    let before = game.entities.mobs.len();
     assert!(game.run_command("summon pig 4.5 100 8.5"));
-    let pig = &game.mobs[before];
+    let pig = &game.entities.mobs[before];
     assert_eq!(pig.yaw, 0.0);
 }
 

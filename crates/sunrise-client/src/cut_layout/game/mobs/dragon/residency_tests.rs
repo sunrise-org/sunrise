@@ -11,7 +11,7 @@ use sunrise_gameplay_common::game::dragon_common::Dragon;
 #[ignore = "daily"]
 fn singleton_dragon_spawn_install_refusal_and_kill() {
     with_game(|game| {
-        game.dragon.discard();
+        game.entities.dragon.discard();
         let before = game.server.next_entity;
         let id = game
             .spawn_dragon_spawned([0.0, 80.0, 0.0], SpawnSite::Plain)
@@ -28,13 +28,13 @@ fn singleton_dragon_spawn_install_refusal_and_kill() {
         assert_eq!(game.server.next_entity, before + 9);
         let mut replacement = Dragon::new(Vec3::ZERO, 0.0, 0);
         replacement.id = 900;
-        let refused = game.dragon.install(replacement).err().unwrap();
+        let refused = game.entities.dragon.install(replacement).err().unwrap();
         assert_eq!(refused.id, 900);
-        assert_eq!(game.dragon.as_ref().unwrap().id, id);
+        assert_eq!(game.entities.dragon.as_ref().unwrap().id, id);
         game.kill_dragon(id + 1);
-        assert_eq!(game.dragon.as_ref().unwrap().id, id);
+        assert_eq!(game.entities.dragon.as_ref().unwrap().id, id);
         game.kill_dragon(id);
-        assert!(game.dragon.is_none());
+        assert!(game.entities.dragon.is_none());
     });
 }
 
@@ -42,24 +42,24 @@ fn singleton_dragon_spawn_install_refusal_and_kill() {
 #[ignore = "daily"]
 fn singleton_dragon_load_keeps_state_and_reserves_nine_ids() {
     with_resident_game(|game| {
-        game.dragon.discard();
+        game.entities.dragon.discard();
         let mut saved = Dragon::new(Vec3::new(2.0, 90.0, 3.0), 25.0, 0);
         saved.health = 73.0;
         let uuid = [17, 0, 0, 3];
         let tag = saved.to_nbt(uuid, None, &Default::default());
         let before = game.server.next_entity;
         game.load_dragon(tag.clone(), Some(uuid));
-        let dragon = game.dragon.as_ref().unwrap();
+        let dragon = game.entities.dragon.as_ref().unwrap();
         assert_eq!(dragon.id, before + 1);
         assert_eq!(dragon.position, saved.position);
         assert_eq!(dragon.health, 73.0);
         assert!(dragon.join.is_joined());
-        assert_eq!(game.dragon.locate(dragon.join), Some(0));
+        assert_eq!(game.entities.dragon.locate(dragon.join), Some(0));
         assert_eq!(game.server.next_entity, before + 9);
         assert_eq!(game.persist.uuids.get(&dragon.id), Some(&uuid));
         game.load_dragon(tag, Some(uuid));
         assert_eq!(game.server.next_entity, before + 9);
-        assert_eq!(game.dragon.as_ref().unwrap().id, before + 1);
+        assert_eq!(game.entities.dragon.as_ref().unwrap().id, before + 1);
         let chunks = game.entity_chunks(&[(0, 0)].into_iter().collect(), false);
         assert_eq!(chunks.len(), 1);
         assert_eq!(chunks[0].1.len(), 1);
@@ -74,7 +74,7 @@ fn singleton_dragon_load_keeps_state_and_reserves_nine_ids() {
         let entity = game.entity(before + 1).unwrap();
         assert!(entity.discard(game));
         game.native_removals_flush();
-        assert!(game.dragon.is_none());
+        assert!(game.entities.dragon.is_none());
     });
 }
 
@@ -82,10 +82,10 @@ fn singleton_dragon_load_keeps_state_and_reserves_nine_ids() {
 #[ignore = "daily"]
 fn singleton_fight_dragon_install_reserves_nine_ids() {
     with_game(|game| {
-        game.dragon.discard();
+        game.entities.dragon.discard();
         let before = game.server.next_entity;
         game.create_new_dragon();
-        let dragon = game.dragon.as_ref().unwrap();
+        let dragon = game.entities.dragon.as_ref().unwrap();
         assert_eq!(dragon.id, before + 1);
         assert_eq!(game.server.next_entity, before + 9);
         assert!(dragon.join.is_joined());
@@ -108,17 +108,17 @@ fn install_server_dragon(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: 
 #[ignore = "daily"]
 fn singleton_client_dragon_install_explicitly_replaces_network_owner() {
     with_client_game(|game| {
-        game.dragon.discard();
+        game.entities.dragon.discard();
         game.spawn_remote_dragon(420, [1.0, 80.0, 2.0], 45.0);
-        assert_eq!(game.dragon.as_ref().unwrap().id, 420);
+        assert_eq!(game.entities.dragon.as_ref().unwrap().id, 420);
         game.spawn_remote_dragon(840, [3.0, 90.0, 4.0], 90.0);
-        let dragon = game.dragon.as_ref().unwrap();
+        let dragon = game.entities.dragon.as_ref().unwrap();
         assert_eq!(dragon.id, 840);
         assert_eq!(dragon.position, Vec3::new(3.0, 90.0, 4.0));
         game.remove_remote_dragon(420);
-        assert_eq!(game.dragon.as_ref().unwrap().id, 840);
+        assert_eq!(game.entities.dragon.as_ref().unwrap().id, 840);
         game.remove_remote_dragon(840);
-        assert!(game.dragon.is_none());
+        assert!(game.entities.dragon.is_none());
     });
 }
 
@@ -126,11 +126,16 @@ fn singleton_client_dragon_install_explicitly_replaces_network_owner() {
 #[ignore = "daily"]
 fn singleton_late_dragon_id_reserves_all_eight_parts_once() {
     with_game(|game| {
-        game.dragon.discard();
-        assert!(game.dragon.install(Dragon::new(Vec3::ZERO, 0.0, 0)).is_ok());
+        game.entities.dragon.discard();
+        assert!(
+            game.entities
+                .dragon
+                .install(Dragon::new(Vec3::ZERO, 0.0, 0))
+                .is_ok()
+        );
         let before = game.server.next_entity;
         game.assign_dragon_and_crystal_ids();
-        assert_eq!(game.dragon.as_ref().unwrap().id, before + 1);
+        assert_eq!(game.entities.dragon.as_ref().unwrap().id, before + 1);
         assert_eq!(game.server.next_entity, before + 9);
         game.assign_dragon_and_crystal_ids();
         assert_eq!(game.server.next_entity, before + 9);
@@ -148,7 +153,13 @@ fn singleton_lifecycle_commands_unload_and_parked_owners() {
                 install_server_dragon(game, id, at);
             }
         },
-        ids: |game| game.dragon.as_ref().map(|d| vec![d.id]).unwrap_or_default(),
+        ids: |game| {
+            game.entities
+                .dragon
+                .as_ref()
+                .map(|d| vec![d.id])
+                .unwrap_or_default()
+        },
         target: sunrise_gameplay_common::game::commands_common::Target::Dragon,
         unloads_with_chunk: true,
         remote: None,
@@ -162,19 +173,22 @@ fn singleton_lifecycle_commands_unload_and_parked_owners() {
 fn singleton_death_fight_scan_and_resets_discard_owners() {
     with_game(|game| {
         install_server_dragon(game, 601, [1.0, 80.0, 1.0]);
-        game.dragon.as_mut().unwrap().death_time = 199;
+        game.entities.dragon.as_mut().unwrap().death_time = 199;
         game.tick_dragon_death();
-        assert!(game.dragon.is_none(), "death completion");
+        assert!(game.entities.dragon.is_none(), "death completion");
         install_server_dragon(game, 602, [1.0, 80.0, 1.0]);
         game.scan_state();
-        assert!(game.dragon.is_none(), "fight scan without exit portal");
+        assert!(
+            game.entities.dragon.is_none(),
+            "fight scan without exit portal"
+        );
         install_server_dragon(game, 603, [1.0, 80.0, 1.0]);
         game.clear_entities();
-        assert!(game.dragon.is_none(), "world reset");
+        assert!(game.entities.dragon.is_none(), "world reset");
         install_server_dragon(game, 605, [1.0, 80.0, 1.0]);
         game.set_allow_commands(true);
         assert!(game.run_command("kill @e[type=minecraft:ender_dragon]"));
-        assert!(game.dragon.is_none(), "command selector");
+        assert!(game.entities.dragon.is_none(), "command selector");
         install_server_dragon(game, 606, [1.0, 80.0, 1.0]);
         game.world.modified.clear();
         game.tick_dragon();
@@ -186,7 +200,7 @@ fn singleton_death_fight_scan_and_resets_discard_owners() {
     with_client_game(|game| {
         game.spawn_remote_dragon(604, [1.0, 80.0, 1.0], 0.0);
         game.clear_remote_projectiles();
-        assert!(game.dragon.is_none(), "remote reset");
+        assert!(game.entities.dragon.is_none(), "remote reset");
     });
 }
 
@@ -217,7 +231,7 @@ fn singleton_join_rejection_discards_the_installed_dragon() {
                         .is_none()
                 );
                 assert!(
-                    game.dragon.is_none(),
+                    game.entities.dragon.is_none(),
                     "join rejection left its owner installed"
                 );
             });
@@ -381,11 +395,11 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
         clockwise: false,
     };
     let spawn_with_phase = |game: &mut ServerGame<'_>, phase: Phase| -> u32 {
-        game.dragon.discard();
+        game.entities.dragon.discard();
         let id = game
             .spawn_dragon_spawned([0.0, 80.0, 0.0], SpawnSite::Plain)
             .unwrap();
-        let d = game.dragon.as_mut().unwrap();
+        let d = game.entities.dragon.as_mut().unwrap();
         d.health = 1.0;
         d.set_phase(phase);
         id
@@ -412,7 +426,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                 game.server.fight.dragon_uuid = game.persist.uuids.get(&id).copied();
                 game.server.fight.killed = false;
                 game.server.fight.previously_killed = false;
-                game.orbs.clear();
+                game.entities.orbs.clear();
                 game.hurt_dragon(
                     0,
                     50.0,
@@ -420,7 +434,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                     Some(FightWho::Host),
                     DamageKind::PlayerAttack,
                 );
-                let d = game.dragon.as_ref().unwrap();
+                let d = game.entities.dragon.as_ref().unwrap();
                 let deaths = probe.deaths.lock().unwrap();
                 assert_eq!(deaths.len(), 1);
                 assert_eq!(deaths[0].kind, "minecraft:ender_dragon");
@@ -456,26 +470,32 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                         .join("data/sunrise/entity_metadata.dat");
                     let meta = sunrise_sim::save::read_dat(&meta_path).unwrap();
                     assert_eq!(meta.get("version"), Some(&Tag::Int(1)));
-                    game.dragon.discard();
+                    game.entities.dragon.discard();
                     game.persist.dragon_death_canceled = None;
                     game.persist.entity_metadata_on_disk = false;
                     game.world.queue_entity_nbt((0, 0), records);
                     game.spawn_loaded_entities();
                     assert!(
-                        game.dragon.as_ref().unwrap().death_canceled,
+                        game.entities.dragon.as_ref().unwrap().death_canceled,
                         "persisted veto survives save/load through versioned engine metadata"
                     );
                     // Advancing 20 ticks removes the unhealed body without XP or fight completion.
                     for _ in 0..19 {
                         game.tick_dragon();
                     }
-                    assert!(game.dragon.is_some());
-                    assert_eq!(game.dragon.as_ref().unwrap().death_time, 19);
-                    assert!(game.orbs.is_empty());
+                    assert!(game.entities.dragon.is_some());
+                    assert_eq!(game.entities.dragon.as_ref().unwrap().death_time, 19);
+                    assert!(game.entities.orbs.is_empty());
                     assert!(!game.server.fight.killed);
                     game.tick_dragon();
-                    assert!(game.dragon.is_none(), "cancelled dragon removed at tick 20");
-                    assert!(game.orbs.is_empty(), "cancelled dragon drops no XP");
+                    assert!(
+                        game.entities.dragon.is_none(),
+                        "cancelled dragon removed at tick 20"
+                    );
+                    assert!(
+                        game.entities.orbs.is_empty(),
+                        "cancelled dragon drops no XP"
+                    );
                     assert!(
                         !game.server.fight.killed,
                         "cancelled dragon does not win the fight"
@@ -524,7 +544,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                     Some(FightWho::Host),
                     DamageKind::PlayerAttack,
                 );
-                let d = game.dragon.as_ref().unwrap();
+                let d = game.entities.dragon.as_ref().unwrap();
                 assert_eq!(d.health, 0.0);
                 assert!(!matches!(d.phase, Phase::Dying { .. }));
                 if cancelled {
@@ -556,7 +576,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                 .root
                 .join("data/sunrise/entity_metadata.dat");
             for (i, raw_val) in [Tag::Byte(1), Tag::Byte(0)].into_iter().enumerate() {
-                game.dragon.discard();
+                game.entities.dragon.discard();
                 game.persist.dragon_death_canceled = None;
                 game.persist.entity_metadata_on_disk = false;
                 let mut legacy = Dragon::new(Vec3::new(0.0, 80.0, 0.0), 0.0, 0).to_nbt(
@@ -571,7 +591,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                 game.world.queue_entity_nbt((0, 0), vec![legacy]);
                 game.spawn_loaded_entities();
                 assert!(
-                    !game.dragon.as_ref().unwrap().death_canceled,
+                    !game.entities.dragon.as_ref().unwrap().death_canceled,
                     "raw sunrise:death_canceled field is never treated as a veto"
                 );
                 game.save_entities(true).unwrap();
@@ -586,7 +606,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                     "loading/saving non-vetoed dragon creates no engine metadata file"
                 );
             }
-            game.dragon.discard();
+            game.entities.dragon.discard();
             let summoned = game
                 .summon_with_nbt(
                     "minecraft:ender_dragon",
@@ -596,7 +616,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                 .unwrap();
             assert!(summoned.is_some());
             assert!(
-                !game.dragon.as_ref().unwrap().death_canceled,
+                !game.entities.dragon.as_ref().unwrap().death_canceled,
                 "/summon raw sunrise:death_canceled is never treated as a veto"
             );
 
@@ -652,7 +672,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                 );
             }
             assert_eq!(
-                game.dragon.as_ref().unwrap().last_source,
+                game.entities.dragon.as_ref().unwrap().last_source,
                 Some(("minecraft:explosion", None, None)),
                 "baseline LAN damage source stays separate from hook blast payload"
             );
@@ -660,7 +680,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
             // 2c. Lethal firework rocket blast carries rocket ID and type while keeping baseline last_source.
             clear(&probe);
             spawn_one_hp(game);
-            let reach = game.dragon.as_ref().unwrap().whole_box();
+            let reach = game.entities.dragon.as_ref().unwrap().whole_box();
             game.rocket_blast_dragon(
                 Vec3::new(0.0, 80.0, 0.0),
                 7.0,
@@ -681,7 +701,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                 );
             }
             assert_eq!(
-                game.dragon.as_ref().unwrap().last_source,
+                game.entities.dragon.as_ref().unwrap().last_source,
                 Some(("minecraft:fireworks", Some(55), None)),
                 "baseline LAN damage source stays separate from hook rocket payload"
             );
@@ -693,13 +713,14 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
             game.reset_entity_residency();
             spawn_one_hp(game);
             let crystal_tag =
-                game.dragon
+                game.entities
+                    .dragon
                     .as_ref()
                     .unwrap()
                     .to_nbt([2, 0, 0, 1], None, game.res.items());
             let mut crystal = Crystal::from_nbt(&crystal_tag, 0).unwrap();
             crystal.id = 942;
-            game.dragon.as_mut().unwrap().nearest_crystal = Some(0);
+            game.entities.dragon.as_mut().unwrap().nearest_crystal = Some(0);
             game.crystal_destroyed(0, &crystal, Some(FightWho::Host), false);
             game.dim = prev_dim;
             game.reset_entity_residency();
@@ -715,7 +736,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                 );
             }
             assert_eq!(
-                game.dragon.as_ref().unwrap().last_source,
+                game.entities.dragon.as_ref().unwrap().last_source,
                 Some(("minecraft:player_explosion", Some(55), None)),
                 "baseline LAN damage source stays separate from hook crystal payload"
             );
@@ -729,13 +750,14 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(
+            game.entities.mobs.push(Mob::new(
                 920,
                 zombie.clone(),
                 Vec3::new(0.0, 80.0, 0.0),
                 0.0,
             ));
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(921, zombie, Vec3::new(1.0, 80.0, 0.0), 0.0));
             assert!(game.hurt_target(
                 Target::Dragon(dragon_id),
@@ -774,7 +796,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                 DamageKind::PlayerAttack,
             );
             {
-                let d = game.dragon.as_ref().unwrap();
+                let d = game.entities.dragon.as_ref().unwrap();
                 assert_eq!(d.health, 0.0);
                 assert!(matches!(d.phase, Phase::Hover { .. }));
                 assert_eq!(
@@ -811,7 +833,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
                 "discarded dragon awards no kill credit"
             );
             game.native_removals_flush();
-            assert!(game.dragon.is_none());
+            assert!(game.entities.dragon.is_none());
             probe.discard.store(false, Ordering::SeqCst);
 
             // 5. Guest-turn and missing-guest kill credit match posted UUID and awarded kill.
@@ -852,7 +874,7 @@ fn the_dragons_killing_blow_fires_the_living_death_hooks() {
             clear(&probe);
             spawn_one_hp(game);
             {
-                let d = game.dragon.as_mut().unwrap();
+                let d = game.entities.dragon.as_mut().unwrap();
                 d.hurt_by_player = Some((FightWho::Guest(99), d.ticks));
             }
             game.hurt_dragon(0, 50.0, true, None, DamageKind::Explosion);

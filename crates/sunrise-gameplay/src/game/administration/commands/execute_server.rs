@@ -169,6 +169,7 @@ impl crate::game::ServerGame<'_> {
                 // a marker or a display with that UUID is not an owner.
                 Target::Mob(id) => self
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .find(|m| m.id == id)
@@ -193,13 +194,16 @@ impl crate::game::ServerGame<'_> {
             // saved UUID that is still waiting for tickLeash to restore it.
             Some("leasher") => {
                 let leash = match entity {
-                    Target::Mob(id) => {
-                        self.common.mobs.iter().find(|m| m.id == id).and_then(|m| {
-                            m.extra.leash.map(|holder| (holder, m.extra.leash_player))
-                        })
-                    }
+                    Target::Mob(id) => self
+                        .common
+                        .entities
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .and_then(|m| m.extra.leash.map(|holder| (holder, m.extra.leash_player))),
                     Target::Boat(id) => self
                         .common
+                        .entities
                         .boats
                         .iter()
                         .find(|b| b.id == id)
@@ -225,7 +229,7 @@ impl crate::game::ServerGame<'_> {
             Some("origin") => match entity {
                 Target::Projectile(id) => self
                     .common
-                    .creatures
+                    .entities
                     .projectiles
                     .iter()
                     .find(|p| p.id == id)
@@ -255,6 +259,7 @@ impl crate::game::ServerGame<'_> {
                     .collect(),
                 Target::Item(id) => self
                     .common
+                    .entities
                     .dropped
                     .iter()
                     .find(|d| d.id == id)
@@ -269,6 +274,7 @@ impl crate::game::ServerGame<'_> {
                     .collect(),
                 Target::Mob(id) => self
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .find(|m| m.id == id && m.kind.id == "minecraft:vex")
@@ -287,6 +293,7 @@ impl crate::game::ServerGame<'_> {
                 if let Target::Mob(id) | Target::Boat(id) = entity {
                     passengers.extend(
                         self.common
+                            .entities
                             .mobs
                             .iter()
                             .filter(|m| m.extra.mount == Some(id) && m.alive() && !m.removed)
@@ -296,6 +303,7 @@ impl crate::game::ServerGame<'_> {
                 if let Some(id) = self.resident_target_id(entity) {
                     passengers.extend(
                         self.common
+                            .entities
                             .bolts
                             .iter()
                             .filter(|b| b.mount == Some(id))
@@ -308,6 +316,7 @@ impl crate::game::ServerGame<'_> {
                 Target::Mob(id)
                     if self
                         .common
+                        .entities
                         .mobs
                         .iter()
                         .any(|m| m.id == id && m.rider.is_some()) =>
@@ -321,6 +330,7 @@ impl crate::game::ServerGame<'_> {
                 match entity {
                     Target::Mob(id) => self
                         .common
+                        .entities
                         .mobs
                         .iter()
                         .find(|m| m.id == id)

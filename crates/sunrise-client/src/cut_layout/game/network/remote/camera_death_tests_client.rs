@@ -67,7 +67,7 @@ pub(in crate::game) fn run_a_spectated_dying_living_entity_squeezes_the_fov_26_3
                 panic!("bad witness row {row}");
             };
             let bits = |s: &str| u32::from_str_radix(s, 16).unwrap();
-            let mob = game.mobs.iter_mut().find(|m| m.id == 31).unwrap();
+            let mob = game.entities.mobs.iter_mut().find(|m| m.id == 31).unwrap();
             (mob.health, mob.death_time) = match dead {
                 "none" => (20.0, 0),
                 n => (0.0, n.parse().unwrap()),

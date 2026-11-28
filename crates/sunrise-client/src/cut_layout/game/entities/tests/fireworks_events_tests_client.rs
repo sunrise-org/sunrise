@@ -38,7 +38,7 @@ fn a_falling_rocket_hits_the_ground_and_one_in_water_splashes() {
         let mut falls = Vec::new();
         for _ in 0..6 {
             game.tick_rockets();
-            falls.push(game.rockets[0].fall_distance);
+            falls.push(game.entities.rockets[0].fall_distance);
         }
         let events: Vec<_> = sunrise_gameplay_common::game::side_ops::events::TEST_POSTED_EVENTS
             .with(|v| {
@@ -51,7 +51,7 @@ fn a_falling_rocket_hits_the_ground_and_one_in_water_splashes() {
         stop_events();
         // The fourth move ends on the stone without a collision; the fifth lands.
         assert_eq!(falls, [0.5, 1.0, 1.5, 2.0, 0.0, 0.0]);
-        assert_eq!(game.rockets[1].fall_distance, 0.0);
+        assert_eq!(game.entities.rockets[1].fall_distance, 0.0);
         assert_eq!(
             events,
             [("minecraft:splash", 20), ("minecraft:hit_ground", 6)]
@@ -84,7 +84,7 @@ fn a_silent_rocket_bursts_without_blast_or_twinkle() {
         );
         launching.silent = true;
         launching.lifetime = 100;
-        game.rockets.push(launching);
+        game.entities.rockets.push(launching);
         game.start_audio_capture();
         game.tick_rockets();
         let heard = std::mem::take(&mut game.server.pending_sounds);

@@ -1431,7 +1431,7 @@ fn vanilla_container_provider_and_entity_never_ask_their_storage() {
                 game.server.hoppers.clear();
                 place(game, ABOVE, target);
                 game.world.block_entities.remove(&ABOVE);
-                game.carts.clear();
+                game.entities.carts.clear();
                 match target {
                     "minecraft:chest" => {
                         game.world.block_entities.insert(
@@ -1451,7 +1451,7 @@ fn vanilla_container_provider_and_entity_never_ask_their_storage() {
                         let mut cart =
                             Minecart::new(700, CartKind::Chest, Vec3::new(8.5, 65.0, 8.5));
                         cart.items[0] = Some(ItemStack::new("minecraft:stone", 1));
-                        game.carts.push(cart);
+                        game.entities.carts.push(cart);
                     }
                 }
                 game.tick_hopper(HOPPER);
@@ -1491,12 +1491,12 @@ fn failed_block_pull_stops_but_minecart_falls_back_to_item_entities() {
                 0,
             );
             game.tick_hopper(HOPPER);
-            assert_eq!(game.dropped.len(), 1);
+            assert_eq!(game.entities.dropped.len(), 1);
             assert_eq!(count(game, HOPPER, 0), 0);
             assert_eq!(trace(&probe), ["face:Down", "open", "extract:0", "abort"]);
             let mut cart = Minecart::new(701, CartKind::Hopper, Vec3::new(8.5, 64.0, 8.5));
             game.hopper_cart_suck(&mut cart);
-            assert!(game.dropped.is_empty());
+            assert!(game.entities.dropped.is_empty());
             assert_eq!(cart.items[0], Some(ItemStack::new("minecraft:stone", 1)));
             assert_eq!(trace(&probe), ["face:Down", "open", "extract:0", "abort"]);
         },
@@ -1999,7 +1999,7 @@ fn dropper_routes_saved_pot_directly_even_with_a_storage_provider() {
                     ),
                 ]),
             );
-            let dropped = game.dropped.len();
+            let dropped = game.entities.dropped.len();
             game.dispense_from(BlockPos::new(8, 64, 8), state).unwrap();
             let saved = spill::saved_entity(&game.world, pot).unwrap();
             assert_eq!(
@@ -2009,7 +2009,7 @@ fn dropper_routes_saved_pot_directly_even_with_a_storage_provider() {
                 64
             );
             assert_eq!(count(game, HOPPER, 0), 1);
-            assert_eq!(game.dropped.len(), dropped);
+            assert_eq!(game.entities.dropped.len(), dropped);
             assert!(
                 trace(&probe).is_empty(),
                 "the pot's provider was never asked"
@@ -2020,7 +2020,7 @@ fn dropper_routes_saved_pot_directly_even_with_a_storage_provider() {
                 1,
                 "a full pot refuses on its direct path"
             );
-            assert_eq!(game.dropped.len(), dropped);
+            assert_eq!(game.entities.dropped.len(), dropped);
             assert!(trace(&probe).is_empty());
         },
     );

@@ -137,6 +137,7 @@ fn ghast(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> u32 {
         "summon minecraft:happy_ghast 8.5 64 8.5 {Tame:1b,NoAI:1b,UUID:[I;51774,0,0,7]}"
     ));
     let m = game
+        .entities
         .mobs
         .iter_mut()
         .find(|m| m.species() == Species::HappyGhast)
@@ -173,11 +174,12 @@ fn a_click_on_a_harnessed_ghast_keeps_the_players_view() {
     scene(&mut game);
     let id = ghast(&mut game);
     let index = game
+        .entities
         .mobs
         .iter()
         .position(|m| m.id == id)
         .expect("the ghast");
-    game.mobs[index]
+    game.entities.mobs[index]
         .extra
         .set_body(Some("minecraft:white_harness".into()));
     game.yaw = 90.0;
@@ -202,12 +204,19 @@ fn a_mob_that_boards_a_happy_ghast_after_its_player_takes_the_next_seat() {
     assert!(game.run_command(&format!("ride {PIG} mount {GHAST}")));
     game.position_riders();
     let pig = game
+        .entities
         .mobs
         .iter()
         .find(|m| m.species() == Species::Pig)
         .expect("the pig");
     assert_eq!(pig.extra.mount, Some(id), "the pig rides the ghast");
-    let ghast = game.mobs.iter().find(|m| m.id == id).unwrap().position;
+    let ghast = game
+        .entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .position;
     assert_eq!(
         pig.position.x,
         ghast.x - 1.7,
@@ -240,11 +249,12 @@ fn a_click_on_a_full_happy_ghast_seats_no_fifth_rider() {
     let id = ghast(&mut game);
     ride_pigs(&mut game, 4);
     let index = game
+        .entities
         .mobs
         .iter()
         .position(|m| m.id == id)
         .expect("the ghast");
-    game.mobs[index]
+    game.entities.mobs[index]
         .extra
         .set_body(Some("minecraft:white_harness".into()));
     assert_eq!(game.seated_passengers(id).len(), 4, "/ride is not capped");
@@ -266,6 +276,7 @@ fn a_mob_on_a_ghastling_sits_at_the_scaled_seat() {
         "summon minecraft:happy_ghast 8.5 64 8.5 {Tame:1b,NoAI:1b,Age:-24000,UUID:[I;51774,0,0,7]}"
     ));
     let id = game
+        .entities
         .mobs
         .iter_mut()
         .find(|m| m.species() == Species::HappyGhast)
@@ -274,13 +285,20 @@ fn a_mob_on_a_ghastling_sits_at_the_scaled_seat() {
             m.id
         })
         .expect("the ghastling");
-    assert!(game.mobs.iter().any(|m| m.id == id && m.is_baby()));
+    assert!(game.entities.mobs.iter().any(|m| m.id == id && m.is_baby()));
     assert!(game.run_command(&format!("ride @s mount {GHAST}")));
     assert!(game.run_command("summon minecraft:pig 4.5 64 8.5 {NoAI:1b,UUID:[I;51774,0,0,8]}"));
     assert!(game.run_command(&format!("ride {PIG} mount {GHAST}")));
     game.position_riders();
-    let ghast = game.mobs.iter().find(|m| m.id == id).unwrap().position;
+    let ghast = game
+        .entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .position;
     let pig = game
+        .entities
         .mobs
         .iter()
         .find(|m| m.species() == Species::Pig)

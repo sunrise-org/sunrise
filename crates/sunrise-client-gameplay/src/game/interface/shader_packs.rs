@@ -3200,7 +3200,7 @@ fn projectile_body_uses_its_own_shader_entity_id() {
             arrow(None),
             arrow(Some(("minecraft:glowing", 200))),
         ] {
-            game.creatures.projectiles.push(Projectile::new(
+            game.entities.projectiles.push(Projectile::new(
                 kind,
                 sunrise_core::geometry::Vec3::new(0.5, 64.0, 0.5),
                 None,

@@ -27,7 +27,7 @@ fn owner_launch_sets_owner_before_insertion_and_uses_projectile_random() {
         let mut mob = Mob::new(21, kind, Vec3::new(0.0, 64.0, 0.0), 0.0);
         mob.previous = Vec3::new(-0.2, 63.7, 0.4);
         mob.ground.on_ground = false;
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         let source = game.entity(21).unwrap();
         let owner = game.living(source).unwrap();
         game.entity_uuid(source).unwrap();
@@ -43,7 +43,7 @@ fn owner_launch_sets_owner_before_insertion_and_uses_projectile_random() {
             .unwrap();
         assert_eq!(game.projectile_owner(shot), Some(source));
         let projectile = game
-            .creatures
+            .entities
             .projectiles
             .iter()
             .find(|p| p.id == shot.entity().id())
@@ -62,7 +62,7 @@ fn owner_launch_sets_owner_before_insertion_and_uses_projectile_random() {
         let mut random = projectile.random.0.clone();
         assert_eq!(random.next_double(), 0.9468595742485053);
         assert_eq!(game.world.random.next_long(), level_before.next_long());
-        let count = game.creatures.projectiles.len();
+        let count = game.entities.projectiles.len();
         assert!(
             game.spawn_projectile_from_rotation(owner, &entity_type, &stack, 0.0, f32::NAN, 1.0)
                 .is_none()
@@ -72,7 +72,7 @@ fn owner_launch_sets_owner_before_insertion_and_uses_projectile_random() {
             game.spawn_projectile_from_rotation(owner, &unknown, &stack, 0.0, 1.5, 1.0)
                 .is_none()
         );
-        assert_eq!(game.creatures.projectiles.len(), count);
+        assert_eq!(game.entities.projectiles.len(), count);
         // Flame's projectile_spawned Ignite(100) runs once the snowball is in
         // the level: 100 seconds, 2000 ticks.
         let mut enchanted = stack.clone();
@@ -81,7 +81,7 @@ fn owner_launch_sets_owner_before_insertion_and_uses_projectile_random() {
             .spawn_projectile_from_rotation(owner, &entity_type, &enchanted, 0.0, 1.5, 1.0)
             .unwrap();
         let projectile = game
-            .creatures
+            .entities
             .projectiles
             .iter()
             .find(|p| p.id == shot.entity().id())
@@ -94,7 +94,7 @@ fn owner_launch_sets_owner_before_insertion_and_uses_projectile_random() {
             .spawn_projectile_from_rotation(owner, &potion_type, &potion, 0.0, 1.5, 1.0)
             .unwrap();
         let projectile = game
-            .creatures
+            .entities
             .projectiles
             .iter()
             .find(|p| p.id == shot.entity().id())
@@ -188,14 +188,14 @@ fn owner_launch_reports_explicit_guest_to_join_listeners() {
                     guest.dimension = "minecraft:the_nether".to_owned();
                 })
                 .unwrap();
-            let count = game.creatures.projectiles.len();
+            let count = game.entities.projectiles.len();
             let mut before = game.world.random.clone();
             sunrise_level::random_source::set_thread_uniquifier(2709830126447559882).unwrap();
             assert!(
                 game.spawn_projectile_from_rotation(owner, &kind, &stack, 0.0, 1.5, 1.0)
                     .is_none()
             );
-            assert_eq!(game.creatures.projectiles.len(), count);
+            assert_eq!(game.entities.projectiles.len(), count);
             assert_eq!(game.world.random.next_long(), before.next_long());
             assert_eq!(
                 sunrise_level::random_source::create().next_double(),
@@ -216,7 +216,7 @@ fn owner_launch_reports_explicit_guest_to_join_listeners() {
                 game.spawn_projectile_from_rotation(owner, &kind, &stack, 0.0, 1.5, 1.0)
                     .is_none()
             );
-            assert_eq!(game.creatures.projectiles.len(), count);
+            assert_eq!(game.entities.projectiles.len(), count);
             game.native_joins_flush(false, 0);
             assert_eq!(*observed.lock().unwrap(), [Some(12), Some(12)]);
         });

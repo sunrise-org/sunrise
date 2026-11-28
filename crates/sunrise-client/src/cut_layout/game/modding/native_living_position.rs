@@ -21,7 +21,7 @@ pub(crate) mod tests {
                 .get("minecraft:mannequin")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(55, ty, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(55, ty, Vec3::ZERO, 0.0));
             let living = game.living(game.entity(55).unwrap()).unwrap();
             assert!(game.living_set_attribute_base(living, "minecraft:scale", 2.0));
             assert_eq!(
@@ -35,7 +35,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn pose_regression_sleeping_stand() {
         with_resident_game(|game| {
-            game.armor_stands
+            game.entities
+                .armor_stands
                 .push(sunrise_sim::entities::ArmorStand::new(55, Vec3::ZERO, 0.0));
             let living = game.living(game.entity(55).unwrap()).unwrap();
             assert_eq!(
@@ -52,7 +53,7 @@ pub(crate) mod tests {
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = 55;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let living = game.living(game.entity(55).unwrap()).unwrap();
             assert_eq!(
                 living.dimensions_for_pose(game, Pose::Standing),
@@ -61,7 +62,7 @@ pub(crate) mod tests {
             // A saved attribute exercises the live map without the public
             // attribute writer, which deliberately refuses dragon writes.
             use sunrise_core::nbt::Tag;
-            game.dragon.as_mut().unwrap().live.load(
+            game.entities.dragon.as_mut().unwrap().live.load(
                 Some(&Tag::List(vec![Tag::compound([
                     ("id", Tag::String("minecraft:scale".into())),
                     ("base", Tag::Double(2.0_f64.to_bits())),
@@ -83,7 +84,8 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn pose_regression_scaled_stand() {
         with_resident_game(|game| {
-            game.armor_stands
+            game.entities
+                .armor_stands
                 .push(sunrise_sim::entities::ArmorStand::new(55, Vec3::ZERO, 0.0));
             let living = game.living(game.entity(55).unwrap()).unwrap();
             assert!(game.living_set_attribute_base(living, "minecraft:scale", 2.0));
@@ -91,12 +93,12 @@ pub(crate) mod tests {
                 living.dimensions_for_pose(game, Pose::Standing),
                 Some([1.0, f64::from(3.95_f32), f64::from(3.555_f32)])
             );
-            game.armor_stands[0].small = true;
+            game.entities.armor_stands[0].small = true;
             assert_eq!(
                 living.dimensions_for_pose(game, Pose::Standing),
                 Some([0.5, f64::from(1.975_f32), f64::from(1.975_f32)])
             );
-            game.armor_stands[0].marker = true;
+            game.entities.armor_stands[0].marker = true;
             assert_eq!(
                 living.dimensions_for_pose(game, Pose::Standing),
                 Some([0.0; 3])
@@ -121,7 +123,7 @@ pub(crate) mod tests {
             let mut mob = Mob::new(55, ty, Vec3::ZERO, 0.0);
             sunrise_sim::mobs::sync::set_pose(&mut mob, sunrise_sim::mobs::sync::DIGGING);
             mob.extra.model_scale = 2.0;
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             let living = game.living(game.entity(55).unwrap()).unwrap();
             assert_eq!(
                 living.dimensions_for_pose(game, Pose::Standing),
@@ -155,9 +157,11 @@ pub(crate) mod tests {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(12, zombie.clone(), Vec3::new(0.5, 64.0, 0.5), 0.0));
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(13, zombie, Vec3::new(5.5, 64.0, 0.5), 0.0));
     }
 
@@ -183,7 +187,7 @@ pub(crate) mod tests {
                 Some(false),
                 "a wall in between"
             );
-            game.mobs.retain(|m| m.id != 13);
+            game.entities.mobs.retain(|m| m.id != 13);
             assert_eq!(a.has_line_of_sight(game, b), None, "a gone target");
         });
     }
@@ -196,7 +200,12 @@ pub(crate) mod tests {
                 floor_and_zombies(game);
                 let zombie = game.living(game.entity(12).unwrap()).unwrap();
                 let at = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-                    game.mobs.iter().find(|m| m.id == 12).unwrap().position
+                    game.entities
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == 12)
+                        .unwrap()
+                        .position
                 };
                 // From six blocks up it lands on the floor, one block lower per
                 // step down (`randomTeleport`).
@@ -209,7 +218,12 @@ pub(crate) mod tests {
             );
                 assert_eq!(at(game), Vec3::new(4.5, 64.0, 4.5));
                 assert_eq!(
-                    game.mobs.iter().find(|m| m.id == 12).unwrap().previous,
+                    game.entities
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == 12)
+                        .unwrap()
+                        .previous,
                     at(game)
                 );
                 // No ground below (outside the floor): it stays.
@@ -342,7 +356,8 @@ pub(crate) mod tests {
         with_game(|game| {
             floor_and_zombies(game);
             let ty = game.res.mob_types().get("minecraft:camel").unwrap().clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(20, ty, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let camel = game.living(game.entity(20).unwrap()).unwrap();
             let standing = camel.dimensions_for_pose(game, Pose::Standing).unwrap();
@@ -361,13 +376,13 @@ pub(crate) mod tests {
             // A camel that sits is in the sitting pose, so its own box is the
             // sitting one — but the standing pose still answers the standing
             // box, as `getDefaultDimensions` reads the pose asked for.
-            let mob = game.mobs.iter_mut().find(|m| m.id == 20).unwrap();
+            let mob = game.entities.mobs.iter_mut().find(|m| m.id == 20).unwrap();
             mob.extra.camel_sitting = true;
             let own = mob.dims();
             assert_eq!(own, (sitting[0], sitting[1], sitting[2]));
             let still_standing = camel.dimensions_for_pose(game, Pose::Standing).unwrap();
             assert_eq!(still_standing, standing);
-            game.mobs.retain(|m| m.id != 20);
+            game.entities.mobs.retain(|m| m.id != 20);
             assert_eq!(camel.dimensions_for_pose(game, Pose::Sitting), None);
         });
     }
@@ -378,7 +393,8 @@ pub(crate) mod tests {
         with_game(|game| {
             floor_and_zombies(game);
             let ty = game.res.mob_types().get("minecraft:goat").unwrap().clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(21, ty, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let goat = game.living(game.entity(21).unwrap()).unwrap();
             let standing = goat.dimensions_for_pose(game, Pose::Standing).unwrap();
@@ -391,7 +407,7 @@ pub(crate) mod tests {
             }
             // The pose the goat is in (`Entity.setPose` of a long jump) gives
             // the same box through `dims`.
-            let mob = game.mobs.iter_mut().find(|m| m.id == 21).unwrap();
+            let mob = game.entities.mobs.iter_mut().find(|m| m.id == 21).unwrap();
             mob.extra.pose = sunrise_sim::mobs::sync::LONG_JUMPING;
             assert_eq!(mob.dims(), (long_jump[0], long_jump[1], long_jump[2]));
         });
@@ -408,10 +424,11 @@ pub(crate) mod tests {
                 .get("minecraft:warden")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(22, ty, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let warden = game.living(game.entity(22).unwrap()).unwrap();
-            let mob = game.mobs.iter_mut().find(|m| m.id == 22).unwrap();
+            let mob = game.entities.mobs.iter_mut().find(|m| m.id == 22).unwrap();
             sunrise_sim::mobs::sync::set_pose(mob, sunrise_sim::mobs::sync::DIGGING);
             // Warden.getDefaultDimensions reads its own state, not the pose
             // asked for: a metre tall, its eyes at 0.85, however asked —
@@ -439,11 +456,12 @@ pub(crate) mod tests {
                 .get("minecraft:villager")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(23, ty, Vec3::new(0.5, 64.0, 0.5), 0.0));
             let villager = game.living(game.entity(23).unwrap()).unwrap();
             let standing = villager.dimensions_for_pose(game, Pose::Standing).unwrap();
-            let mob = game.mobs.iter_mut().find(|m| m.id == 23).unwrap();
+            let mob = game.entities.mobs.iter_mut().find(|m| m.id == 23).unwrap();
             mob.extra.ints[1] = 1;
             let own = mob.dims();
             // LivingEntity.SLEEPING_DIMENSIONS, and the pose the villager is
@@ -472,7 +490,8 @@ pub(crate) mod tests {
             assert_eq!(mob.no_action_time(game), Some(0));
             assert!(mob.set_no_action_time(game, 650));
             assert_eq!(
-                game.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 12)
                     .unwrap()
@@ -495,7 +514,8 @@ pub(crate) mod tests {
             assert!(mob.set_pathfinding_malus(game, PathType::Water, -1.0));
             assert_eq!(mob.pathfinding_malus(game, PathType::Water), Some(-1.0));
             assert_eq!(
-                game.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 12)
                     .unwrap()
@@ -506,7 +526,7 @@ pub(crate) mod tests {
             assert_eq!(mob.pathfinding_malus(game, PathType::Lava), Some(-1.0));
             assert!(!mob.set_pathfinding_malus(game, PathType::Water, f32::NAN));
 
-            game.mobs.retain(|m| m.id != 12);
+            game.entities.mobs.retain(|m| m.id != 12);
             assert_eq!(mob.no_action_time(game), None);
             assert!(!mob.set_no_action_time(game, 1));
             assert_eq!(mob.pathfinding_malus(game, PathType::Water), None);

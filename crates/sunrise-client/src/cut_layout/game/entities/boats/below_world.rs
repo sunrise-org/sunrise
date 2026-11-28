@@ -38,11 +38,12 @@ pub(crate) mod tests {
                 g.sync_tick_chunks();
                 g.tick_boats();
                 g.tick_carts();
-                let boats: Vec<f64> = g.boats.iter().map(|b| b.position.x).collect();
+                let boats: Vec<f64> = g.entities.boats.iter().map(|b| b.position.x).collect();
                 assert_eq!(boats, [0.5]);
-                let carts: Vec<f64> = g.carts.iter().map(|c| c.position.x).collect();
+                let carts: Vec<f64> = g.entities.carts.iter().map(|c| c.position.x).collect();
                 assert_eq!(carts, [6.5]);
                 let spilled: u32 = g
+                    .entities
                     .dropped
                     .iter()
                     .filter(|i| &*i.stack.item == "minecraft:diamond")
@@ -74,9 +75,12 @@ pub(crate) mod tests {
                     ("Motion", doubles(&[-2e-323, -13104.999899947774, -2e-323])),
                 ]);
                 g.load_boat(tag, None, "minecraft:oak_boat");
-                assert_eq!(g.boats.len(), 1);
-                assert_eq!(g.boats[0].position.y, -20_000_000.0);
-                assert_eq!(g.boats[0].velocity, Vec3::new(-2e-323, 0.0, -2e-323));
+                assert_eq!(g.entities.boats.len(), 1);
+                assert_eq!(g.entities.boats[0].position.y, -20_000_000.0);
+                assert_eq!(
+                    g.entities.boats[0].velocity,
+                    Vec3::new(-2e-323, 0.0, -2e-323)
+                );
                 g.player = Some(PlayerMotion::new(g.motion, Vec3::new(-77.75, 64.0, -55.67)));
                 g.world
                     .chunks
@@ -84,16 +88,17 @@ pub(crate) mod tests {
                 g.update_chunk_tickets();
                 assert!(g.entity_ticking_area()(-78, -56));
                 g.tick_boats();
-                assert!(g.boats.is_empty());
+                assert!(g.entities.boats.is_empty());
                 for y in [f64::from(i32::MIN) - 1.0, f64::from(i32::MAX) + 1.0] {
-                    g.boats
+                    g.entities
+                        .boats
                         .push(Boat::new(2, "oak".into(), Vec3::new(0.5, y, 0.5), 0.0));
                     assert!(g.boat_bubble_columns(0).is_empty());
                     assert_eq!(
-                        g.boat_ground_friction(&g.boats[0], g.boats[0].bounds()),
+                        g.boat_ground_friction(&g.entities.boats[0], g.entities.boats[0].bounds()),
                         0.0
                     );
-                    g.boats.clear();
+                    g.entities.boats.clear();
                 }
             });
         }

@@ -129,7 +129,7 @@ impl ServerGame<'_> {
                 .player_knockback_from_mod(living, target, knock, SOURCE)
                 .is_some(),
             Target::Mob(_) => {
-                let Some(i) = self.common.mob_index.find(&self.common.mobs, id) else {
+                let Some(i) = self.common.mob_index.find(&self.common.entities.mobs, id) else {
                     return false;
                 };
                 let plan = self.prepare_knockback_credit(id as i32, None, &NO_ATTACK);
@@ -140,7 +140,7 @@ impl ServerGame<'_> {
                     &mut credit,
                     None
                 );
-                self.common.mobs[i].knockback(
+                self.common.entities.mobs[i].knockback(
                     level,
                     strength,
                     x,
@@ -160,7 +160,7 @@ impl ServerGame<'_> {
                     &mut credit,
                     None
                 );
-                self.common.dragon.as_mut().is_some_and(|d| {
+                self.common.entities.dragon.as_mut().is_some_and(|d| {
                     crate::game::server_side::dragon::knockback(d, level, knock, SOURCE, resistance)
                 })
             }
@@ -255,13 +255,14 @@ impl ServerGame<'_> {
     ) -> bool {
         let Some(index) = self
             .common
+            .entities
             .armor_stands
             .iter()
             .position(|stand| stand.id == id)
         else {
             return false;
         };
-        let resistance = self.common.armor_stands[index]
+        let resistance = self.common.entities.armor_stands[index]
             .live
             .read(
                 self.common.motion.attributes(),
@@ -283,7 +284,7 @@ impl ServerGame<'_> {
         if level.knockback_canceled(pushed, &mut knock) {
             return false;
         }
-        let stand = &mut self.common.armor_stands[index];
+        let stand = &mut self.common.entities.armor_stands[index];
         knock.apply(
             &mut stand.velocity,
             resistance,
@@ -319,7 +320,7 @@ impl ServerGame<'_> {
                     .map(|(_, t)| t),
             ),
             Target::Mob(id) => {
-                let mob = self.common.mobs.iter().find(|m| m.id == id)?;
+                let mob = self.common.entities.mobs.iter().find(|m| m.id == id)?;
                 Some(
                     sunrise_sim::mobs::spear_use::is_using_item(mob)
                         .then(|| mob.extra.using_item.unsigned_abs() - 1),
@@ -487,7 +488,12 @@ impl ServerGame<'_> {
                 )
             }
             Target::Mob(id) => {
-                let m = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
+                let m = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)?;
                 Some(self.mob_portal_eligible(m))
             }
             _ => None,
@@ -508,7 +514,12 @@ impl ServerGame<'_> {
         let Target::Mob(id) = self.native_living_read_target(living)? else {
             return None;
         };
-        let m = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let m = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         let [min, max] = self.entity_bounding_box(target)?;
         let bounds = sunrise_core::geometry::Aabb::new(
             sunrise_core::geometry::Vec3::new(min[0], min[1], min[2]),
@@ -526,7 +537,12 @@ impl ServerGame<'_> {
     pub(in crate::game) fn living_can_freeze(&self, living: LivingRef) -> Option<bool> {
         match self.native_living_read_target(living)? {
             Target::Mob(id) => {
-                let m = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
+                let m = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)?;
                 let w = self.mob_world_base(&[]);
                 Some(sunrise_sim::mobs::ai::can_freeze(m, &w))
             }
@@ -540,7 +556,12 @@ impl ServerGame<'_> {
     pub(in crate::game) fn living_can_breathe_underwater(&self, living: LivingRef) -> Option<bool> {
         match self.native_living_read_target(living)? {
             Target::Mob(id) => {
-                let mob = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
+                let mob = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)?;
                 Some(self.items().entity_type_tags.has_bit(
                     mob.kind.flags.entity_tag_slot,
                     EntityTypeTags::CAN_BREATHE_UNDER_WATER,
@@ -616,6 +637,7 @@ impl ServerGame<'_> {
                 self.journal_mob_health(id);
                 let Some(m) = self
                     .common
+                    .entities
                     .mobs
                     .iter_mut()
                     .find(|m| m.id == id && !m.removed)
@@ -657,6 +679,7 @@ impl ServerGame<'_> {
             Some(Target::Mob(id)) => {
                 let Some(m) = self
                     .common
+                    .entities
                     .mobs
                     .iter_mut()
                     .find(|m| m.id == id && !m.removed)
@@ -724,7 +747,12 @@ impl ServerGame<'_> {
                 .kill_credit(self.common.world.game_time)
                 .and_then(|id| self.credited_entity(id)),
             Target::Mob(id) => {
-                let m = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
+                let m = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)?;
                 let who = m.recent_hurt_by()?;
                 let attacker = match who {
                     Who::Mob(attacker) => {
@@ -790,14 +818,16 @@ impl ServerGame<'_> {
             }
             Target::Mob(id) => {
                 let (_, join) = self.last_hurt_living_target(id)?;
-                self.common.mobs[self.common.mobs.locate(join)?].last_hurt_mob
+                self.common.entities.mobs[self.common.entities.mobs.locate(join)?].last_hurt_mob
             }
             Target::Stand(id) => {
                 let (_, join) = self.last_hurt_living_target(id)?;
-                self.common.armor_stands[self.common.armor_stands.locate(join)?].last_hurt_mob
+                self.common.entities.armor_stands[self.common.entities.armor_stands.locate(join)?]
+                    .last_hurt_mob
             }
             Target::Dragon(id) => {
                 self.common
+                    .entities
                     .dragon
                     .as_ref()
                     .filter(|d| d.id == id)?
@@ -849,9 +879,9 @@ impl ServerGame<'_> {
     ) -> Option<EquipmentRead<'_>> {
         let body = match target {
             // A removed mob still lends what it wears.
-            Target::Mob(id) => {
-                sunrise_sim::health::LivingBody::Mob(self.common.mobs.iter().find(|m| m.id == id)?)
-            }
+            Target::Mob(id) => sunrise_sim::health::LivingBody::Mob(
+                self.common.entities.mobs.iter().find(|m| m.id == id)?,
+            ),
             target => self.native_living_body(target)?,
         };
         super::native_living_body::body_equipment(body, slot)
@@ -869,7 +899,7 @@ impl ServerGame<'_> {
         let Target::Mob(id) = self.native_living_target(living)? else {
             return None;
         };
-        let mob = self.common.mobs.iter().find(|m| m.id == id)?;
+        let mob = self.common.entities.mobs.iter().find(|m| m.id == id)?;
         let slot = match slot {
             EquipmentSlot::MainHand => "mainhand",
             EquipmentSlot::OffHand => "offhand",
@@ -916,6 +946,7 @@ impl ServerGame<'_> {
         match target {
             Target::Mob(id) => {
                 self.common
+                    .entities
                     .mobs
                     .iter_mut()
                     .find(|mob| mob.id == id)?
@@ -923,6 +954,7 @@ impl ServerGame<'_> {
             }
             Target::Stand(id) => {
                 self.common
+                    .entities
                     .armor_stands
                     .iter_mut()
                     .find(|stand| stand.id == id)?
@@ -931,6 +963,7 @@ impl ServerGame<'_> {
             }
             Target::Dragon(id) => {
                 self.common
+                    .entities
                     .dragon
                     .as_mut()
                     .filter(|dragon| dragon.id == id)?
@@ -1080,7 +1113,7 @@ impl ServerGame<'_> {
         let stack = equipment_stack(stack);
         let equippable = stack.as_ref().and_then(|s| self.equippable_slot_sound(s));
         if let Target::Mob(id) = t {
-            let Some(mob) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+            let Some(mob) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
                 return false;
             };
             let changed = {
@@ -1136,12 +1169,14 @@ impl ServerGame<'_> {
         let equip_event_at = match t {
             Target::Stand(id) => self
                 .common
+                .entities
                 .armor_stands
                 .iter()
                 .find(|a| a.id == id)
                 .map(|a| (a.equipment.get(slot as usize), a.position, a.first_tick)),
             Target::Dragon(id) => self
                 .common
+                .entities
                 .dragon
                 .as_ref()
                 .filter(|d| d.id == id)
@@ -1284,6 +1319,7 @@ impl ServerGame<'_> {
             return None;
         };
         self.common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == id && m.is_tamable())
@@ -1329,7 +1365,7 @@ impl ServerGame<'_> {
         randomly: bool,
         thrown_from_hand: bool,
     ) -> Option<u32> {
-        let m = self.common.mobs.iter_mut().find(|m| m.id == id)?;
+        let m = self.common.entities.mobs.iter_mut().find(|m| m.id == id)?;
         let v = sunrise_sim::entities::drop_motion(&mut m.random, m.yaw, m.head_pitch, randomly);
         let at = [m.position.x, m.eye_y() - f64::from(0.3f32), m.position.z];
         let thrower = thrown_from_hand.then(|| self.uuid_for(id));

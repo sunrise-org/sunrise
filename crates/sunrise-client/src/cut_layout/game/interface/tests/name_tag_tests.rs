@@ -182,9 +182,10 @@ fn spawn(
     at: [f64; 3],
 ) -> usize {
     let kind = game.res.mob_types().get(kind).unwrap().clone();
-    game.mobs
+    game.entities
+        .mobs
         .push(Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0));
-    game.mobs.len() - 1
+    game.entities.mobs.len() - 1
 }
 
 fn target(id: u32) -> Option<InteractTarget> {
@@ -227,7 +228,10 @@ fn naming_posts_entity_interact_at_the_named_entity() {
         game.interact_mob(target(7)).unwrap(),
         "the tag names the cow"
     );
-    assert_eq!(game.mobs[cow].custom_name.as_deref(), Some("Bessie"));
+    assert_eq!(
+        game.entities.mobs[cow].custom_name.as_deref(),
+        Some("Bessie")
+    );
     assert_eq!(
         take_interacts(),
         vec![(
@@ -239,11 +243,15 @@ fn naming_posts_entity_interact_at_the_named_entity() {
     // An armour stand is no mob: `Player.interactOn` posts the same event for
     // any item that named a living entity.
     game.inventory[0] = Some(named_tag("Holo"));
-    game.armor_stands
+    game.entities
+        .armor_stands
         .push(ArmorStand::new(21, Vec3::new(3.0, 64.0, 4.0), 0.0));
     assert!(game.interact_armor_stand(target(21)), "the tag names it");
     assert_eq!(
-        game.armor_stands[0].custom_name.as_ref().map(Text::plain),
+        game.entities.armor_stands[0]
+            .custom_name
+            .as_ref()
+            .map(Text::plain),
         Some("Holo".to_owned())
     );
     assert_eq!(
@@ -265,7 +273,7 @@ fn an_armour_stands_name_ignores_f1_and_team_visibility() {
     let mut stand = ArmorStand::new(42, Vec3::new(0.0, 64.0, 4.0), 0.0);
     stand.custom_name = Some(Text::literal("Holo"));
     stand.name_visible = true;
-    game.armor_stands.push(stand);
+    game.entities.armor_stands.push(stand);
     let camera = glam::DVec3::new(0.5, 65.0, 0.5);
     assert_eq!(game.shown_name_tags(camera), vec!["Holo".to_owned()]);
     // F1 hides the HUD: `ArmorStandRenderer.shouldShowName` never asks.
@@ -286,8 +294,8 @@ fn an_armour_stands_name_ignores_f1_and_team_visibility() {
     );
     // A mob's name still follows `LivingEntityRenderer`: the same team hides it.
     let cow = spawn(&mut game, "minecraft:cow", 9, [1.0, 64.0, 4.0]);
-    game.mobs[cow].custom_name = Some("Moo".into());
-    game.mobs[cow].name_visible = true;
+    game.entities.mobs[cow].custom_name = Some("Moo".into());
+    game.entities.mobs[cow].name_visible = true;
     let cow_uuid = [0, 0, 0, 9];
     game.persist.uuids.insert(9, cow_uuid);
     assert!(game.score.board.add_to_team(&uuid_text(cow_uuid), "hidden"));
@@ -297,7 +305,7 @@ fn an_armour_stands_name_ignores_f1_and_team_visibility() {
         "the team hides the cow's name, not the armour stand's"
     );
     // The same stand with its name hidden (`CustomNameVisible` off) shows none.
-    game.armor_stands[0].name_visible = false;
+    game.entities.armor_stands[0].name_visible = false;
     assert!(game.shown_name_tags(camera).is_empty());
 }
 
@@ -344,7 +352,8 @@ fn a_trades_title_draws_the_names_style() {
 fn a_creative_player_keeps_the_tag_it_names_a_stand_with() {
     let mut resources = None;
     let mut game = game(&mut resources);
-    game.armor_stands
+    game.entities
+        .armor_stands
         .push(ArmorStand::new(9, Vec3::new(0.5, 64.0, 0.5), 0.0));
     let mut tag = ItemStack::new("minecraft:name_tag", 2);
     tag.data_mut().custom_name = Some(Tag::compound([("text", Tag::String("Bob".into()))]));
@@ -362,7 +371,7 @@ fn a_creative_player_keeps_the_tag_it_names_a_stand_with() {
         Some(2),
         "a creative player keeps the tag"
     );
-    let named = game.armor_stands[0]
+    let named = game.entities.armor_stands[0]
         .custom_name
         .as_ref()
         .map(sunrise_game_data::text::Text::plain);

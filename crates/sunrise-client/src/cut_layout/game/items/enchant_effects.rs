@@ -61,7 +61,7 @@ pub(crate) mod tests {
                     game.armor[1] = Some(chest);
                     let mob = Mob::new(41, cow.clone(), shooter, 0.0);
                     let before = mob.health;
-                    game.mobs.push(mob);
+                    game.entities.mobs.push(mob);
                     let mut shot = Projectile::new(kind, victim, Some(Who::Mob(41)));
                     shot.id = 90;
                     shot.previous = victim.add_vector(Vec3::new(1.0, 1.0, 0.0));
@@ -75,7 +75,7 @@ pub(crate) mod tests {
                     .unwrap();
                     // The shooter is out of blast range, so only the victim's enchantment
                     // can have hurt it. Thorns' level makes the trigger deterministic.
-                    let mob = game.mobs.pop().unwrap();
+                    let mob = game.entities.mobs.pop().unwrap();
                     assert!(
                         mob.health < before,
                         "{:?} did not trigger Thorns",
@@ -109,7 +109,7 @@ pub(crate) mod tests {
                 let mut mob = Mob::new(41, zombie, at, 0.0);
                 mob.random.set_seed(42);
                 mob.silent = true;
-                game.mobs.push(mob);
+                game.entities.mobs.push(mob);
                 game.start_audio_capture();
                 let effect = serde_json::json!({
                     "sound": "minecraft:entity.zombie.ambient", "volume": 0.75,
@@ -118,16 +118,16 @@ pub(crate) mod tests {
                 game.play_enchantment_sound(&effect, 1, 41, at.components());
                 assert!(game.server.pending_sounds.is_empty());
                 let mut expected = LegacyRandom::new(42);
-                assert_eq!(game.mobs[0].random.next_int(), expected.next_int());
+                assert_eq!(game.entities.mobs[0].random.next_int(), expected.next_int());
 
-                game.mobs[0].silent = false;
+                game.entities.mobs[0].silent = false;
                 game.play_enchantment_sound(&effect, 1, 41, at.components());
                 let [heard] = game.server.pending_sounds.as_slice() else {
                     panic!("expected one sound from the audible actor");
                 };
                 assert_eq!(heard.source, mod_api::SoundSource::Hostile.index());
                 assert_eq!(heard.pitch, expected.next_float() + 0.5);
-                assert_eq!(game.mobs[0].random.next_int(), expected.next_int());
+                assert_eq!(game.entities.mobs[0].random.next_int(), expected.next_int());
             });
         });
     }
@@ -199,12 +199,12 @@ pub(crate) mod tests {
                 .clone();
             let mut mob = Mob::new(901, kind, Vec3::ZERO, 0.0);
             finalize::set_item_stack(&mut mob, 5, ItemStack::new("minecraft:iron_helmet", 1));
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             for rule in [Rule::Set(i32::MIN), Rule::Cancel] {
                 wear.set(rule);
                 game.wear_mob_piece(901, 5, 1);
                 assert_eq!(
-                    finalize::item_stack(game.mobs.last().unwrap(), 5)
+                    finalize::item_stack(game.entities.mobs.last().unwrap(), 5)
                         .unwrap()
                         .damage,
                     0
@@ -214,14 +214,14 @@ pub(crate) mod tests {
             wear.set(Rule::Set(164));
             game.wear_mob_piece(901, 5, 1);
             assert_eq!(
-                finalize::item_stack(game.mobs.last().unwrap(), 5)
+                finalize::item_stack(game.entities.mobs.last().unwrap(), 5)
                     .unwrap()
                     .damage,
                 164
             );
             wear.set(Rule::Set(i32::MAX));
             game.wear_mob_piece(901, 5, 1);
-            assert!(finalize::item_stack(game.mobs.last().unwrap(), 5).is_none());
+            assert!(finalize::item_stack(game.entities.mobs.last().unwrap(), 5).is_none());
             assert_eq!(wear.take_asked(), [1, 1]);
             game.wear_mob_piece(901, 5, 1);
             assert!(wear.take_asked().is_empty());
@@ -246,7 +246,7 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(2, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(2, kind, Vec3::ZERO, 0.0));
             game.thorns(2);
             assert!(game.armor[1].is_none());
             let mut boots = ItemStack::new("minecraft:diamond_boots", 1);

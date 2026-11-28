@@ -209,7 +209,7 @@ fn summon_item_succeeds_with_and_without_nbt_without_leaving_an_entity() {
             let lines = game.server.chat_capture.take().unwrap_or_default();
             assert!(ok, "{command}: {lines:?}");
             assert_eq!(game.server.next_entity, before + 1, "{command}");
-            assert!(game.dropped.is_empty(), "{command}");
+            assert!(game.entities.dropped.is_empty(), "{command}");
             let components: Vec<serde_json::Value> = lines
                 .iter()
                 .map(|line| {

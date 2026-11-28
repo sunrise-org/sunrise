@@ -101,16 +101,18 @@ impl ServerGame<'_> {
     fn mob_strike(&mut self, id: u32, who: Who) -> Option<(Vec<MobEvent>, Option<bool>)> {
         let index = self
             .common
+            .entities
             .mobs
             .iter()
             .position(|m| m.id == id && !m.removed)?;
         let snapshot: Vec<_> = self
             .common
+            .entities
             .mobs
             .iter()
             .map(|m| seen(m, self.common.level.player_uuid, self.items()))
             .collect();
-        let mut lifted = self.common.mobs.lift();
+        let mut lifted = self.common.entities.mobs.lift();
         let mut lent = sunrise_sim::health::LentLevel::take(&mut self.common.world);
         let mut w = self.mob_world_base(&snapshot);
         let pos = lifted[index].position;
@@ -140,6 +142,7 @@ impl ServerGame<'_> {
         drop(w);
         lent.give_back(&mut self.common.world);
         self.common
+            .entities
             .mobs
             .restore(lifted, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         Some((events, answer))
@@ -179,7 +182,7 @@ mod tests {
             let epoch = game.common.native_lifecycle.epoch().unwrap();
             let spawn = |game: &mut ServerGame<'_>, kind: &str, id: u32, x: f64| {
                 let kind = game.common.res.mob_types().get(kind).unwrap().clone();
-                game.common.mobs.push(sunrise_sim::mobs::Mob::new(
+                game.common.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                     id,
                     kind,
                     sunrise_core::geometry::Vec3::new(x, 64.0, 0.5),
@@ -193,7 +196,13 @@ mod tests {
             let player = game.player(1).unwrap().entity();
             let mob = |game: &ServerGame<'_>, entity| game.mob(entity).unwrap();
             let health = |game: &ServerGame<'_>, id| {
-                game.common.mobs.iter().find(|m| m.id == id).unwrap().health
+                game.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .unwrap()
+                    .health
             };
             let striker = mob(game, zombie);
             assert_eq!(striker.do_hurt_target(game, player), Ok(true));

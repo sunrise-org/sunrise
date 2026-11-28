@@ -64,8 +64,8 @@ fn warning_dispatch_uses_neutral_at_tick_four() {
     game.server.pending_sounds.clear();
     let (tag, _) = sunrise_core::nbt::parse_snbt(r#"{id:"minecraft:ominous_item_spawner",UUID:[I;128,0,0,1],Pos:[6.25d,102.75d,4.875d],item:{id:"minecraft:diamond",count:1},spawn_item_after_ticks:40L}"#).unwrap();
     game.load_ominous_item_spawner(tag);
-    assert_eq!(game.ominous_spawners.len(), 1);
-    let s = &game.ominous_spawners[0];
+    assert_eq!(game.entities.ominous_spawners.len(), 1);
+    let s = &game.entities.ominous_spawners[0];
     assert_eq!(s.uuid, [128, 0, 0, 1]);
     assert_eq!(s.position, [6.25, 102.75, 4.875]);
     assert_eq!(&*s.item.item, "minecraft:diamond");
@@ -74,7 +74,7 @@ fn warning_dispatch_uses_neutral_at_tick_four() {
     assert_eq!(s.tick_count, 0);
     for tick in 1..=5 {
         game.tick_ominous_item_spawners();
-        assert_eq!(game.ominous_spawners[0].tick_count, tick);
+        assert_eq!(game.entities.ominous_spawners[0].tick_count, tick);
         let warning: Vec<_> = game
             .server
             .pending_sounds
@@ -108,21 +108,22 @@ fn warning_dispatch_uses_neutral_at_tick_four() {
 #[ignore = "daily"]
 fn residency_spawner_load_expiry_and_spawn_order() {
     sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
-        game.ominous_spawners.clear();
-        game.dropped.clear();
+        game.entities.ominous_spawners.clear();
+        game.entities.dropped.clear();
         for (item, delay) in [("diamond", 1), ("emerald", 3), ("gold_ingot", 1)] {
             let (tag, _) = sunrise_core::nbt::parse_snbt(&format!(
                 "{{Pos:[0d,80d,0d],item:{{id:\"minecraft:{item}\",count:1}},spawn_item_after_ticks:{delay}L}}"
             )).unwrap();
             game.load_ominous_item_spawner(tag);
         }
-        let survivor = game.ominous_spawners[1].id;
+        let survivor = game.entities.ominous_spawners[1].id;
         game.tick_ominous_item_spawners();
-        assert_eq!(game.ominous_spawners.len(), 1);
-        assert_eq!(game.ominous_spawners[0].id, survivor);
-        assert_eq!(game.ominous_spawners[0].tick_count, 1);
+        assert_eq!(game.entities.ominous_spawners.len(), 1);
+        assert_eq!(game.entities.ominous_spawners[0].id, survivor);
+        assert_eq!(game.entities.ominous_spawners[0].tick_count, 1);
         assert_eq!(
-            game.dropped
+            game.entities
+                .dropped
                 .iter()
                 .map(|e| e.stack.item.as_ref())
                 .collect::<Vec<_>>(),
@@ -130,9 +131,9 @@ fn residency_spawner_load_expiry_and_spawn_order() {
         );
         game.tick_ominous_item_spawners();
         game.tick_ominous_item_spawners();
-        assert!(game.ominous_spawners.is_empty());
+        assert!(game.entities.ominous_spawners.is_empty());
         assert_eq!(
-            game.dropped.last().unwrap().stack.item.as_ref(),
+            game.entities.dropped.last().unwrap().stack.item.as_ref(),
             "minecraft:emerald"
         );
     });
@@ -143,7 +144,7 @@ fn residency_spawner_load_expiry_and_spawn_order() {
 fn taken_spawner_tick_keeps_survivors_before_both_spawns() {
     use sunrise_items::items::ItemStack;
     sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
-        game.ominous_spawners.clear();
+        game.entities.ominous_spawners.clear();
         for _ in 0..2 {
             game.add_ominous_item_spawner(
                 ItemStack::new("minecraft:air", 1),
@@ -151,12 +152,12 @@ fn taken_spawner_tick_keeps_survivors_before_both_spawns() {
                 100,
             );
         }
-        let first = game.ominous_spawners[0].id;
-        let second = game.ominous_spawners[1].id;
+        let first = game.entities.ominous_spawners[0].id;
+        let second = game.entities.ominous_spawners[1].id;
         let next = game.server.next_entity;
         crate::game::server_side::entity_server::taken_pass_tests::with_spawn(
             |game| {
-                assert!(game.ominous_spawners.is_empty());
+                assert!(game.entities.ominous_spawners.is_empty());
                 for delay in [200, 300] {
                     game.add_ominous_item_spawner(
                         ItemStack::new("minecraft:air", 1),
@@ -168,7 +169,8 @@ fn taken_spawner_tick_keeps_survivors_before_both_spawns() {
             || game.tick_ominous_item_spawners(),
         );
         assert_eq!(
-            game.ominous_spawners
+            game.entities
+                .ominous_spawners
                 .iter()
                 .map(|s| (s.id, s.tick_count))
                 .collect::<Vec<_>>(),
@@ -192,12 +194,18 @@ fn lifecycle_spawner_commands_unload_park_and_remote_metadata() {
     };
     LifecycleFixture {
         seed: |game, entries| {
-            game.ominous_spawners.clear();
+            game.entities.ominous_spawners.clear();
             for &(id, at) in entries {
                 game.add_remote_ominous_item_spawner(id, at);
             }
         },
-        ids: |game| game.ominous_spawners.iter().map(|s| s.id).collect(),
+        ids: |game| {
+            game.entities
+                .ominous_spawners
+                .iter()
+                .map(|s| s.id)
+                .collect()
+        },
         target: Target::Spawner,
         unloads_with_chunk: true,
         remote: None,
@@ -205,12 +213,18 @@ fn lifecycle_spawner_commands_unload_park_and_remote_metadata() {
     .run();
     run_remote_lifecycle(
         |game, entries| {
-            game.ominous_spawners.clear();
+            game.entities.ominous_spawners.clear();
             for &(id, at) in entries {
                 game.add_remote_ominous_item_spawner(id, at);
             }
         },
-        |game| game.ominous_spawners.iter().map(|s| s.id).collect(),
+        |game| {
+            game.entities
+                .ominous_spawners
+                .iter()
+                .map(|s| s.id)
+                .collect()
+        },
         RemoteLifecycle {
             prepare: |game| {
                 let (client, _server) = Pipe::pair();
@@ -236,6 +250,7 @@ fn lifecycle_spawner_commands_unload_park_and_remote_metadata() {
                     )],
                 );
                 let changed = game
+                    .entities
                     .ominous_spawners
                     .iter()
                     .find(|s| s.id == update)
@@ -256,13 +271,16 @@ fn residency_command_positions_and_client_spawner_clock() {
         game.add_remote_ominous_item_spawner(701, [1.0, 80.0, 1.0]);
         game.spawn_creeper_cloud([2.0, 80.0, 2.0], Vec::new(), Vec::new(), Vec::new(), 0);
         assert!(game.run_command("tp @e[type=minecraft:ominous_item_spawner] 64.0 80.0 64.0"));
-        assert_eq!(game.ominous_spawners[0].position, [64.0, 80.0, 64.0]);
+        assert_eq!(
+            game.entities.ominous_spawners[0].position,
+            [64.0, 80.0, 64.0]
+        );
         assert!(game.run_command("tp @e[type=minecraft:area_effect_cloud] -32.0 90.0 -48.0"));
-        assert_eq!(game.breath_clouds[0].at, [-32.0, 90.0, -48.0]);
+        assert_eq!(game.entities.breath_clouds[0].at, [-32.0, 90.0, -48.0]);
         #[cfg(feature = "client")]
         with_spawner_client(game, |client| {
             client.tick_remote_ominous_item_spawners();
-            assert_eq!(client.ominous_spawners[0].tick_count, 1);
+            assert_eq!(client.entities.ominous_spawners[0].tick_count, 1);
         });
     });
 }
@@ -274,7 +292,10 @@ fn with_spawner_client(
 ) {
     crate::game::server_side::native_entity_refs::tests::with_client_game(|client| {
         client.world.game_time = server.world.game_time;
-        client.ominous_spawners.append(&mut server.ominous_spawners);
+        client
+            .entities
+            .ominous_spawners
+            .append(&mut server.entities.ominous_spawners);
         test(client);
     });
 }

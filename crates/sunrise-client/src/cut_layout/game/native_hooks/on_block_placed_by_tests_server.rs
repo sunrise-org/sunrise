@@ -184,7 +184,7 @@ fn block_items_notify_after_setup_and_before_consumption() {
         ] {
             game.world.set(x, y, 12, state).unwrap();
         }
-        let before = game.mobs.len();
+        let before = game.entities.mobs.len();
         sunrise_gameplay::game::dispense_fixture::start_recording();
         place(game, [10, 66, 12], ItemStack::new(SKULL, 1));
         let effects = sunrise_gameplay::game::dispense_fixture::stop_recording();
@@ -201,7 +201,7 @@ fn block_items_notify_after_setup_and_before_consumption() {
             .position(|line| line == "G 10,66,12 minecraft:block_place")
             .unwrap();
         assert!(cleared < notice && notice < placed, "{effects:?}");
-        assert_eq!(game.mobs.len(), before + 1);
+        assert_eq!(game.entities.mobs.len(), before + 1);
         assert_eq!(game.held(), None);
     });
 }

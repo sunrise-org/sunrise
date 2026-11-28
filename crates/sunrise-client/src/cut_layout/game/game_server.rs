@@ -16,29 +16,37 @@ pub(crate) mod nested_orb_spawn_tests {
             for (x, value) in [(7.5, 1), (9.5, 3), (11.5, 7)] {
                 game.add_orb([x, 80.0, 3.5], value);
             }
-            let _ = game.orbs.remove(1);
-            let mut expected: Vec<_> = game.orbs.iter().map(|o| (o.id, o.join)).collect();
+            let _ = game.entities.orbs.remove(1);
+            let mut expected: Vec<_> = game.entities.orbs.iter().map(|o| (o.id, o.join)).collect();
             sunrise_gameplay::game::entity_server::taken_pass_tests::with_spawn(
                 |g| g.add_orb([3.5, 80.0, 3.5], 1),
                 || game.tick_experience(),
             );
-            assert_eq!(game.orbs.len(), 3);
-            let join = game.orbs[2].join;
-            expected.push((game.orbs[2].id, join));
+            assert_eq!(game.entities.orbs.len(), 3);
+            let join = game.entities.orbs[2].join;
+            expected.push((game.entities.orbs[2].id, join));
             assert_eq!(
-                game.orbs.iter().map(|o| (o.id, o.join)).collect::<Vec<_>>(),
+                game.entities
+                    .orbs
+                    .iter()
+                    .map(|o| (o.id, o.join))
+                    .collect::<Vec<_>>(),
                 expected
             );
-            assert_eq!(game.orbs[2].age, 0);
+            assert_eq!(game.entities.orbs[2].age, 0);
             game.server.ordered.announced = sunrise_sim::join_seq::JoinSeq::MAX;
             game.server.chunk_ticking.tickets.update(None);
             game.begin_ordered_ticks();
             game.run_ordered_ticks(sunrise_sim::join_seq::JoinSeq::MAX, false)
                 .unwrap();
-            let spawned = game.orbs.iter().find(|o| o.join == join).unwrap();
+            let spawned = game.entities.orbs.iter().find(|o| o.join == join).unwrap();
             assert_eq!(spawned.age, 1);
             assert_eq!(
-                game.orbs.iter().map(|o| (o.id, o.join)).collect::<Vec<_>>(),
+                game.entities
+                    .orbs
+                    .iter()
+                    .map(|o| (o.id, o.join))
+                    .collect::<Vec<_>>(),
                 expected
             );
         });

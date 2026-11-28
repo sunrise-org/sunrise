@@ -169,13 +169,13 @@ impl crate::game::ServerGame<'_> {
         // events resolve their provisional ids with.
         let mut ids = self.resolve_spawn_ids([&mut finalized, &mut created], &rides);
         for mob in finalized {
-            let i = self.common.mobs.len();
-            self.common.mobs.push(mob);
+            let i = self.common.entities.mobs.len();
+            self.common.entities.mobs.push(mob);
             self.admit_new_mobs(i);
         }
         for mob in created {
-            let i = self.common.mobs.len();
-            self.common.mobs.push(mob);
+            let i = self.common.entities.mobs.len();
+            self.common.entities.mobs.push(mob);
             self.admit_new_mobs(i);
         }
         for (tree, key) in loads {
@@ -425,7 +425,7 @@ impl crate::game::ServerGame<'_> {
     }
     /// `LivingEntity.makePoofParticles` (entity event 20) for a mob.
     pub(in crate::game) fn mob_poof(&mut self, id: u32) {
-        let Some(m) = self.common.mobs.iter().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
             return;
         };
         let at = m.position;

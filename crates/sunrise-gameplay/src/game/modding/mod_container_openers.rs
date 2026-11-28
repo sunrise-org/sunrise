@@ -198,6 +198,7 @@ impl ServerGame<'_> {
             }
             let golems = self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .filter(|m| {

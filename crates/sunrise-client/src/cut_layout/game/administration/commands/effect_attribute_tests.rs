@@ -99,6 +99,7 @@ fn modifier_value_get_finds_a_mods_transient_modifier() {
             r#"summon minecraft:zombie 2.5 64 2.5 {NoAI:1b,Tags:["t"],UUID:[I;1988,0,0,5]}"#
         ));
         let m = game
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.kind.id == "minecraft:zombie")
@@ -131,7 +132,8 @@ fn attribute_reports_and_removes_a_reloaded_mobs_saved_effect_modifier() {
             r#"summon minecraft:zombie 2.5 64 2.5 {NoAI:1b,Tags:["r"],UUID:[I;4473,0,0,1],attributes:[{id:"minecraft:scale",base:1d,modifiers:[{id:"testfx:effect/stun_scale",amount:0.5d,operation:"add_multiplied_base"}]}]}"#
         ));
         let scale = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-            game.mobs
+            game.entities
+                .mobs
                 .iter()
                 .find(|m| m.kind.id == "minecraft:zombie")
                 .expect("the summoned zombie")

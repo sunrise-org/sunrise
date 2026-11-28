@@ -43,12 +43,13 @@ impl ClientGame<'_> {
             Target::Other(id) => self.client.interactions.contains_key(&(id as i32)),
             Target::Projectile(id) => self
                 .common
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .any(|p| p.id == id && self.projectile_is_pickable(p)),
             Target::Trident(id) => self
                 .common
+                .entities
                 .tridents
                 .iter()
                 .any(|t| t.id == id && self.trident_is_pickable(t)),

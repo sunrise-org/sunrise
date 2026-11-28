@@ -413,7 +413,8 @@ pub(crate) fn fixture_game(
 }
 
 pub(crate) fn eggs(game: &sunrise_gameplay::game::ServerGame<'_>) -> u32 {
-    game.dropped
+    game.entities
+        .dropped
         .iter()
         .filter(|d| d.stack.item.as_ref() == "minecraft:egg")
         .map(|d| d.stack.count)
@@ -640,6 +641,7 @@ impl ConsumerProbe {
         assert_eq!(std::mem::take(&mut *self.posts.lock().unwrap()), [71, 72]);
         assert_eq!(eggs(game), egg_count);
         let joined: Vec<_> = game
+            .entities
             .dropped
             .iter()
             .filter(|d| d.stack.item.as_ref() == "minecraft:egg")
@@ -729,19 +731,19 @@ fn retained_consumer_tail() {
                 0.0,
             );
             mob.extra.egg_time = 1;
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
         }
         game.tick_creature_entities().unwrap();
         assert_panic_report("consumer", "item_spawn");
         probe.assert_tick(game, 2);
-        assert!(game.mobs.iter().all(|m| m.extra.egg_time > 1));
+        assert!(game.entities.mobs.iter().all(|m| m.extra.egg_time > 1));
 
         // An ordinary tick neither loses nor replays either accepted egg.
         game.tick_creature_entities().unwrap();
         probe.assert_tick(game, 2);
         assert!(take_hook_panics().is_empty());
 
-        game.mobs[0].extra.egg_time = 1;
+        game.entities.mobs[0].extra.egg_time = 1;
         game.tick_creature_entities().unwrap();
         probe.assert_tick(game, 3);
         assert!(take_hook_panics().is_empty());
@@ -779,7 +781,7 @@ pub(crate) fn run_conditional(test: &str, nested: bool) {
                 0.0,
             );
             mob.no_ai = true;
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
         }
         let stone = game
             .pack
@@ -851,22 +853,22 @@ pub(crate) fn run_conditional(test: &str, nested: bool) {
             assert_eq!(game.world.block(4, 80, 3), game.world.air);
         }
         assert!(
-            game.mobs[0].ai.jumping,
+            game.entities.mobs[0].ai.jumping,
             "same frame lost its completed break"
         );
         assert!(
-            game.mobs[1].ai.jumping,
+            game.entities.mobs[1].ai.jumping,
             "fresh batch inherited an earlier break"
         );
 
-        for mob in &mut game.mobs {
+        for mob in &mut game.entities.mobs {
             mob.ai.jumping = false;
         }
         queue_egg(game);
         game.tick_creature_entities().unwrap();
         probe.assert_tick(game, 2);
         assert!(
-            game.mobs.iter().all(|m| !m.ai.jumping),
+            game.entities.mobs.iter().all(|m| !m.ai.jumping),
             "completed conditional replayed"
         );
         assert!(take_hook_panics().is_empty());

@@ -40,6 +40,7 @@ impl crate::game::ServerGame<'_> {
         }
         let Some(kind) = self
             .common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == id)

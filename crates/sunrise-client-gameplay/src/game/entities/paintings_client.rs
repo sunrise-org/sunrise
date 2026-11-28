@@ -16,7 +16,7 @@ impl crate::game::ClientGame<'_> {
     ) {
         let sprites = &self.client.gui.atlas.sprites;
         let partial = alpha as f32;
-        for p in &self.common.paintings {
+        for p in &self.common.entities.paintings {
             if self.hides_as_camera(p.id) {
                 continue;
             }

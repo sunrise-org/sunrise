@@ -154,9 +154,9 @@ impl crate::game::ClientGame<'_> {
                 let mob = self
                     .common
                     .mob_index
-                    .find(&self.common.mobs, hit.id)
+                    .find(&self.common.entities.mobs, hit.id)
                     .map(|i| {
-                        let feet = self.common.mobs[i].position;
+                        let feet = self.common.entities.mobs[i].position;
                         (
                             i,
                             hit.distance_sq.sqrt(),
@@ -441,9 +441,15 @@ impl crate::game::ClientGame<'_> {
     pub fn crosshair_living(&self) -> Option<bool> {
         if let Some(hit) = self.cached_entity_pick() {
             let (entity, distance, _) = hit?;
-            if !self.common.mobs.iter().any(|mob| mob.id == entity.id())
+            if !self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .any(|mob| mob.id == entity.id())
                 && !self
                     .common
+                    .entities
                     .armor_stands
                     .iter()
                     .any(|stand| stand.id == entity.id())
@@ -484,8 +490,13 @@ impl crate::game::ClientGame<'_> {
             None => {
                 let hit = self.crosshair_entity_hit()?;
                 let uid = u32::try_from(hit.id).ok()?;
-                if !self.common.mobs.iter().any(|m| m.id == uid)
-                    && !self.common.armor_stands.iter().any(|a| a.id == uid)
+                if !self.common.entities.mobs.iter().any(|m| m.id == uid)
+                    && !self
+                        .common
+                        .entities
+                        .armor_stands
+                        .iter()
+                        .any(|a| a.id == uid)
                 {
                     return None;
                 }
@@ -504,10 +515,11 @@ impl crate::game::ClientGame<'_> {
     /// `Hud.canRenderCrosshairForSpectator`: MenuProvider entity or spectator-interactable block.
     pub fn spectator_crosshair(&self) -> bool {
         if let Some(hit) = self.crosshair_entity_hit() {
-            return self.common.carts.iter().any(|c| {
+            return self.common.entities.carts.iter().any(|c| {
                 c.id as i32 == hit.id && matches!(c.kind, CartKind::Chest | CartKind::Hopper)
             }) || self
                 .common
+                .entities
                 .boats
                 .iter()
                 .any(|b| b.id as i32 == hit.id && b.chest);

@@ -70,7 +70,7 @@ fn the_golems_preserved_equipment_and_a_broken_stand_reach_living_drops() {
                 golem
             };
             let golem = spawn_golem(game);
-            game.mobs.push(golem.clone());
+            game.entities.mobs.push(golem.clone());
             game.mob_die(&golem);
             // The preserved stack comes last in the list the mods hear.
             assert!(
@@ -78,15 +78,16 @@ fn the_golems_preserved_equipment_and_a_broken_stand_reach_living_drops() {
                     && seen.lock().unwrap()[0]
                         .ends_with("\"minecraft:diamond\"] minecraft:generic false")
             );
-            let dropped = game.dropped.len();
+            let dropped = game.entities.dropped.len();
             assert!(dropped >= 1);
             // A canceled list drops nothing, the preserved stack included.
             cancel.store(true, Ordering::SeqCst);
             let golem = spawn_golem(game);
             game.mob_die(&golem);
-            assert_eq!(game.dropped.len(), dropped);
+            assert_eq!(game.entities.dropped.len(), dropped);
             // An armor stand that breaks fires it with nothing in the list.
-            game.armor_stands
+            game.entities
+                .armor_stands
                 .push(sunrise_sim::entities::ArmorStand::new(
                     9000,
                     Vec3::new(4.5, 64.0, 4.5),

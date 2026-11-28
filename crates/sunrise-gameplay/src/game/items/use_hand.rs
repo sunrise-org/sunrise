@@ -716,6 +716,7 @@ impl crate::game::ServerGame<'_> {
                             return None;
                         };
                         self.common
+                            .entities
                             .mobs
                             .iter_mut()
                             .find(|m| m.id == id)?
@@ -794,6 +795,7 @@ impl crate::game::ServerGame<'_> {
                             return None;
                         };
                         self.common
+                            .entities
                             .mobs
                             .iter()
                             .find(|m| m.id == id)

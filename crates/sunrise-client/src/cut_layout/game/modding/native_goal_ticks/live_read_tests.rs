@@ -30,7 +30,7 @@ pub(crate) fn read_borrowed_target(
         .find(|(conn, _)| *conn == tick_conn)
         .unwrap();
     let identity = game.guest_identity(tick_conn).unwrap();
-    let mut loan = game.mobs.lift();
+    let mut loan = game.entities.mobs.lift();
     let index = loan
         .iter()
         .position(|mob| mob.id == warden.entity().id())
@@ -56,7 +56,8 @@ pub(crate) fn read_borrowed_target(
             })
         })
         .unwrap();
-    game.mobs
+    game.entities
+        .mobs
         .restore(loan, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
     result
 }
@@ -237,7 +238,7 @@ fn scoped_host_resolves_other_real_players_from_the_game() {
         let mut carried = Mob::new(9003, kind, Vec3::ZERO, 0.0);
         carried.extra.mount = Some(13);
         fixture_resident_column(&mut game.world, (0, 0));
-        game.mobs.push(carried);
+        game.entities.mobs.push(carried);
         let mut world = game.mob_world_base(&[]);
         world.goal_host = Some(game);
         world.live_mobs = Some(&live);
@@ -332,18 +333,18 @@ fn body_yaw_targets_live_living_owners_and_respects_overrides() {
             .clone();
         let mut mob = Mob::new(40, kind.clone(), Vec3::ZERO, 5.0);
         mob.head_yaw = 45.0;
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         let entity = game.entity(40).expect("the mob's handle");
         assert_eq!(entity.set_body_yaw(game, -725.5), Ok(true));
         assert_eq!(entity.body_yaw(game), Some(-725.5));
         assert_eq!(entity.head_yaw(game), Some(45.0));
         assert_eq!(entity.rotation(game), Some([5.0, 0.0]));
-        assert_eq!(game.mobs[0].previous_body_yaw, 5.0);
-        assert!(!game.mobs[0].needs_sync);
+        assert_eq!(game.entities.mobs[0].previous_body_yaw, 5.0);
+        assert!(!game.entities.mobs[0].needs_sync);
 
         for (id, name) in [(48, "minecraft:silverfish"), (49, "minecraft:endermite")] {
             let kind = game.res.mob_types().get(name).unwrap().clone();
-            game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 5.0));
+            game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 5.0));
             let insect = game.entity(id).unwrap();
             assert_eq!(insect.set_body_yaw(game, 405.5), Ok(true));
             assert_eq!(insect.rotation(game), Some([405.5, 0.0]));
@@ -355,21 +356,22 @@ fn body_yaw_targets_live_living_owners_and_respects_overrides() {
         use sunrise_sim::entity_nbt::{armor_stand_from_nbt, armor_stand_to_nbt};
         let stand = sunrise_sim::entities::ArmorStand::new(50, Vec3::ZERO, 12.0);
         let saved = armor_stand_to_nbt(&stand, [0; 4], None, game.items());
-        game.armor_stands
+        game.entities
+            .armor_stands
             .push(armor_stand_from_nbt(&saved, 50).unwrap());
         let stand = game.entity(50).unwrap();
         assert_eq!(stand.body_yaw(game), Some(0.0));
         assert_eq!(stand.head_yaw(game), Some(12.0));
-        assert_eq!(game.armor_stands[0].previous_yaw, 12.0);
+        assert_eq!(game.entities.armor_stands[0].previous_yaw, 12.0);
         assert_eq!(stand.set_body_yaw(game, -405.5), Ok(true));
         assert_eq!(stand.body_yaw(game), Some(0.0));
         assert_eq!(stand.rotation(game), Some([12.0, 0.0]));
         assert_eq!(stand.head_yaw(game), Some(-405.5));
-        assert_eq!(game.armor_stands[0].previous_yaw, -405.5);
-        assert_eq!(game.armor_stands[0].previous_body_yaw, -405.5);
-        assert_eq!(game.armor_stands[0].previous_head_yaw, -405.5);
+        assert_eq!(game.entities.armor_stands[0].previous_yaw, -405.5);
+        assert_eq!(game.entities.armor_stands[0].previous_body_yaw, -405.5);
+        assert_eq!(game.entities.armor_stands[0].previous_head_yaw, -405.5);
         // EntityDataAccessor reloads the existing body rather than resetting it.
-        game.armor_stands[0].body_yaw = 50.0;
+        game.entities.armor_stands[0].body_yaw = 50.0;
         game.apply_entity_nbt(
             sunrise_gameplay_common::game::commands_common::Target::Stand(50),
             saved,
@@ -401,7 +403,8 @@ fn body_yaw_targets_live_living_owners_and_respects_overrides() {
         .unwrap();
         game.guest_server_tick(12, true);
         assert_eq!(guest.body_yaw(game), Some(50.0));
-        game.boats
+        game.entities
+            .boats
             .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                 51,
                 "oak".into(),
@@ -436,18 +439,19 @@ fn body_yaw_targets_live_living_owners_and_respects_overrides() {
         let mut dragon =
             sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 540.75, 0);
         dragon.id = 100;
-        game.dragon.replace(dragon);
+        game.entities.dragon.replace(dragon);
         let dragon = game.entity(100).expect("the dragon's handle");
         assert!(game.mob(dragon).is_some());
         assert_eq!(dragon.body_yaw(game), Some(540.75));
         assert_eq!(dragon.set_body_yaw(game, 71.0), Ok(true));
-        assert_eq!(game.dragon.as_ref().unwrap().yaw, 540.75);
+        assert_eq!(game.entities.dragon.as_ref().unwrap().yaw, 540.75);
         let stale_dragon = EntityRef::new(stale.epoch(), dragon.id());
         assert_eq!(stale_dragon.body_yaw(game), None);
         let part = game.entity(101).expect("the dragon head's handle");
         assert_eq!(part.body_yaw(game), None);
 
         let other = game
+            .entities
             .mobs
             .iter()
             .find(|mob| mob.id == 40)
@@ -488,13 +492,14 @@ fn body_yaw_targets_live_living_owners_and_respects_overrides() {
         assert_eq!(dragon.body_yaw(game), None);
         game.options.execution_role = role;
 
-        game.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|mob| mob.id == 40)
             .unwrap()
             .removed = true;
         assert_eq!(entity.body_yaw(game), None);
-        game.dragon.discard();
+        game.entities.dragon.discard();
         assert_eq!(dragon.body_yaw(game), None);
     });
 }
@@ -534,14 +539,15 @@ fn a_players_last_hurt_mob_resolves_the_mob_lent_to_its_tick() {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(72, kind, Vec3::new(3.0, 80.0, 0.5), 0.0));
         game.player.as_mut().unwrap().health.last_hurt_mob = Some((72, 39));
         let player = game.living(game.entity(20).unwrap()).unwrap();
         let zombie = game.entity(72).unwrap();
         assert_eq!(player.last_hurt_mob(game), Some((zombie, 39)));
 
-        let mut loan = game.mobs.lift();
+        let mut loan = game.entities.mobs.lift();
         let index = loan.iter().position(|mob| mob.id == 72).unwrap();
         let reads = loan
             .with_one_and_rest(index, |actor, _, _| {
@@ -555,7 +561,8 @@ fn a_players_last_hurt_mob_resolves_the_mob_lent_to_its_tick() {
                 (player.last_hurt_mob(game), player.last_hurt_mob(&context))
             })
             .unwrap();
-        game.mobs
+        game.entities
+            .mobs
             .restore(loan, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         assert_eq!(reads, (None, Some((zombie, 39))));
     });

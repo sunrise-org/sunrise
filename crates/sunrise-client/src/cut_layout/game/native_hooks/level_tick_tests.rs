@@ -61,9 +61,10 @@ mod tests {
         mod_platform::testing::with_mods(mods, || {
             with_resident_game(|game| {
                 let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(91, kind.clone(), Vec3::new(3.5, 70.0, 5.5), 0.0));
-                game.mobs.push(Mob::new(92, kind, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(92, kind, Vec3::ZERO, 0.0));
                 game.persist
                     .uuids
                     .insert(91, [0x0123_4567, 0x89ab_cdefu32 as i32, 0x1020_3040, -1]);
@@ -82,12 +83,12 @@ mod tests {
 
                 game.enter_level(Dim::Overworld).unwrap();
                 use sunrise_sim::join_seq::Joined;
-                let join = game.mobs[0].join_seq();
-                let taken = game.mobs.extract(join).unwrap();
+                let join = game.entities.mobs[0].join_seq();
+                let taken = game.entities.mobs.extract(join).unwrap();
                 game.native_level_tick_pre(home);
-                game.mobs.put_back(0, taken);
+                game.entities.mobs.put_back(0, taken);
                 game.native_level_tick_pre(home);
-                game.mobs.retain(|mob| mob.id != 91);
+                game.entities.mobs.retain(|mob| mob.id != 91);
                 let uuids_before = game.persist.uuids.clone();
                 game.native_level_tick_pre(home);
                 assert_eq!(*game.persist.uuids, uuids_before);

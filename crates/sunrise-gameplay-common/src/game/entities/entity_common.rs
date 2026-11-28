@@ -159,6 +159,7 @@ impl crate::game::CommonGame<'_> {
         };
         if !scene.unobstructed(bounds).unwrap_or(false)
             || self
+                .entities
                 .armor_stands
                 .iter()
                 .any(|o| stand_overlaps(o.bounds(), bounds))
@@ -198,7 +199,7 @@ impl crate::game::CommonGame<'_> {
                 }
             }
         }
-        painting_coexists(p, &self.paintings, &self.item_frames)
+        painting_coexists(p, &self.entities.paintings, &self.entities.item_frames)
     }
 
     /// `LivingEntity.dismountVehicle` from a removed vehicle whose position was at `vehicle_y`.

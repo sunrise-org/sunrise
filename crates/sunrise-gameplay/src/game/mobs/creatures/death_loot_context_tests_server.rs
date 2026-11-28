@@ -215,7 +215,7 @@ fn death_loot_nested_death_keeps_outer_context() {
         killer
             .extra
             .set_main_hand_stack(Some(ItemStack::new("minecraft:diamond_sword", 7)));
-        game.mobs.push(killer);
+        game.entities.mobs.push(killer);
         let mut victim = Mob::new(90, ty, Vec3::ZERO, 0.0);
         let mut damage = Damage::of(DamageKind::MobAttack);
         damage.attacker = Some(Who::Mob(41));
@@ -297,7 +297,7 @@ fn death_loot_uses_call_scoped_source_and_hand() {
             killer
                 .extra
                 .set_main_hand_stack(Some(ItemStack::new("minecraft:diamond_sword", 7)));
-            game.mobs.push(killer);
+            game.entities.mobs.push(killer);
             for (id, kind, attacker) in [
                 (70, DamageKind::MobAttack, Some(Who::Mob(41))),
                 (71, DamageKind::Arrow, Some(Who::Mob(41))),
@@ -314,7 +314,7 @@ fn death_loot_uses_call_scoped_source_and_hand() {
                 let mut victim = Mob::new(id, ty.clone(), Vec3::ZERO, 0.0);
                 victim.invulnerable_flag = refused;
                 victim.last_damage = Some((Damage::fall(), 0));
-                game.mobs.push(victim);
+                game.entities.mobs.push(victim);
                 let landed = game.mob_hits_mob(
                     id,
                     if refused { 5.0 } else { 0.0 },
@@ -323,7 +323,7 @@ fn death_loot_uses_call_scoped_source_and_hand() {
                 if refused {
                     assert!(!landed);
                 }
-                let victim = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+                let victim = game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
                 victim.invulnerable_flag = false;
                 victim.invulnerable = 0;
                 let before = seen.lock().unwrap().len();
@@ -334,7 +334,7 @@ fn death_loot_uses_call_scoped_source_and_hand() {
                 );
             }
             // IDs belong to the killing blow, not a lookup of a surviving mob.
-            game.mobs.retain(|m| m.id != 41);
+            game.entities.mobs.retain(|m| m.id != 41);
             let mut victim = Mob::new(73, ty.clone(), Vec3::ZERO, 0.0);
             let mut damage = Damage::of(DamageKind::Arrow);
             damage.attacker = Some(Who::Mob(41));
@@ -354,10 +354,12 @@ fn death_loot_uses_call_scoped_source_and_hand() {
             .into();
             mod_platform::testing::with_mods(mods, || {
                 let before = seen.lock().unwrap().len();
-                game.mobs.push(Mob::new(78, ty.clone(), Vec3::ZERO, 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(78, ty.clone(), Vec3::ZERO, 0.0));
                 assert!(game.mob_hits_mob(78, 1000.0, Damage::fall()));
                 assert_eq!(seen.lock().unwrap().len(), before);
-                game.mobs.push(Mob::new(79, ty, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(79, ty, Vec3::ZERO, 0.0));
                 assert!(game.mob_hits_mob(79, 1000.0, Damage::fall()));
                 assert_eq!(seen.lock().unwrap().len(), before + 1);
             });

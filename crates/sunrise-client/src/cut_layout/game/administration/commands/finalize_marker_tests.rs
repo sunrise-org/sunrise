@@ -60,7 +60,8 @@ fn with_game(f: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
 
 /// The zombie standing at `x` in the loaded chunk.
 fn zombie<'a>(game: &'a sunrise_gameplay::game::ServerGame<'_>, x: f64) -> &'a Mob {
-    game.mobs
+    game.entities
+        .mobs
         .iter()
         .find(|m| m.species() == Species::Zombie && m.position.x == x)
         .unwrap_or_else(|| panic!("no zombie at x={x}"))
@@ -101,6 +102,7 @@ fn a_summoned_mob_ignores_a_typed_finalize_marker() {
             "a typed sunrise:finalize ran Mob.finalizeSpawn on a summoned mob"
         );
         let passenger = game
+            .entities
             .mobs
             .iter()
             .find(|m| m.extra.mount.is_some())

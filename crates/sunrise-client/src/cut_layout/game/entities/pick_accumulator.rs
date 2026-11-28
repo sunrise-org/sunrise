@@ -31,6 +31,7 @@ mod tests {
                 "summon minecraft:sulfur_cube 4.5 200 4.5 {NoAI:1b,NoGravity:1b,Silent:1b,PersistenceRequired:1b,Size:1}"
             ));
             let cube = game
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.species() == sunrise_sim::mobs::Species::SulfurCube)
@@ -53,7 +54,7 @@ mod tests {
                 ));
             };
             let picked = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-                game.mob_hit().map(|(i, _, _)| game.mobs[i].id)
+                game.mob_hit().map(|(i, _, _)| game.entities.mobs[i].id)
             };
             eyes_at(game, centre);
             assert_eq!(
@@ -61,7 +62,7 @@ mod tests {
                 Some(id),
                 "an empty cube is picked from inside"
             );
-            let cube = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+            let cube = game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
             cube.extra.set_body(Some("minecraft:oak_planks".into()));
             assert_eq!(picked(game), None, "a cube holding a block is not");
             eyes_at(game, Vec3::new(centre.x, centre.y, min.z - 1.0));

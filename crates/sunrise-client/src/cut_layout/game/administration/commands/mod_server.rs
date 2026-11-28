@@ -33,7 +33,7 @@ pub(crate) mod peaceful_tests {
                 ("NoAI", Tag::Byte(1)),
             ]);
             let id = game.load_mob(saved, None).unwrap();
-            let trader = game.mobs.iter().find(|mob| mob.id == id).unwrap();
+            let trader = game.entities.mobs.iter().find(|mob| mob.id == id).unwrap();
             assert!(trader.persistent && trader.no_ai);
             game.server
                 .chunk_ticking
@@ -45,10 +45,10 @@ pub(crate) mod peaceful_tests {
 
             game.set_difficulty_forced(2);
             game.tick_creature_entities().unwrap();
-            assert!(game.mobs.iter().any(|mob| mob.id == id));
+            assert!(game.entities.mobs.iter().any(|mob| mob.id == id));
             game.set_difficulty_forced(0);
             game.tick_creature_entities().unwrap();
-            assert!(!game.mobs.iter().any(|mob| mob.id == id));
+            assert!(!game.entities.mobs.iter().any(|mob| mob.id == id));
         });
     }
 }

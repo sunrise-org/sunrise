@@ -359,7 +359,8 @@ fn actual_dragon_admits_exactly_eight_checked_parts_with_independent_uuids() {
                 sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
             )
             .unwrap();
-        let uuids = std::array::from_fn::<_, 8, _>(|i| game.dragon.as_ref().unwrap().parts[i].3);
+        let uuids =
+            std::array::from_fn::<_, 8, _>(|i| game.entities.dragon.as_ref().unwrap().parts[i].3);
         let parts: Vec<_> = game
             .resident_entities
             .table
@@ -407,7 +408,7 @@ fn actual_dragon_admits_exactly_eight_checked_parts_with_independent_uuids() {
             );
             use sunrise_mod_runtime::attachments::HasAttachmentLifetime;
             assert!(
-                game.dragon.as_mut().unwrap().parts[usize::from(offset)]
+                game.entities.dragon.as_mut().unwrap().parts[usize::from(offset)]
                     .attachment_lifetime()
                     .is_bound()
             );
@@ -454,7 +455,7 @@ fn actual_dragon_admits_exactly_eight_checked_parts_with_independent_uuids() {
             game.server_resident_entity(parent + 9),
             EntityLookup::Missing
         );
-        game.dragon.discard();
+        game.entities.dragon.discard();
         for id in parent..=parent + 8 {
             assert_eq!(game.server_resident_entity(id), EntityLookup::Missing);
         }

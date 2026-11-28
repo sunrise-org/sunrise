@@ -92,9 +92,9 @@ fn silent_bolt_suppresses_sound_and_posts_strike_event_on_first_tick() {
 
     // Client bolt tick plays thunder + impact once for audible bolts and suppresses both for Silent:1b.
     crate::game::server_side::native_entity_refs::tests::with_client_game(|game| {
-        game.bolts.clear();
+        game.entities.bolts.clear();
         game.spawn_remote_bolt(1, [4.5, 210.0, 4.5]);
-        game.bolts.update(0, |b| b.silent = true);
+        game.entities.bolts.update(0, |b| b.silent = true);
         game.client.audio.0.capture = Some(Vec::new());
         game.client_tick_bolts();
         assert!(
@@ -112,7 +112,7 @@ fn silent_bolt_suppresses_sound_and_posts_strike_event_on_first_tick() {
             "Silent:1b bolt must suppress thunder and impact sounds on client"
         );
 
-        game.bolts.clear();
+        game.entities.bolts.clear();
         game.spawn_remote_bolt(2, [8.5, 210.0, 4.5]);
         game.client.audio.0.capture = Some(Vec::new());
         game.client_tick_bolts();

@@ -18,15 +18,16 @@ pub(crate) mod tests {
         game.set_allow_commands(true);
         assert!(game.run_command("summon piglin 8.5 80 8.5 {NoAI:1b,PersistenceRequired:1b}"));
         let i = game
+            .entities
             .mobs
             .iter()
             .position(|m| m.species() == Species::Piglin)
             .expect("the summoned piglin");
         // An empty list has nothing to throw and leaves the body alone.
         game.piglin_throw_items(i, Vec::new());
-        assert!(!game.mobs[i].ai.swinging);
+        assert!(!game.entities.mobs[i].ai.swinging);
         game.piglin_throw_items(i, vec![ItemStack::new("minecraft:gold_ingot", 1)]);
-        let m = &game.mobs[i];
+        let m = &game.entities.mobs[i];
         assert!(m.ai.swinging, "the throw starts a swing");
         // The off hand's arm: the right one only when the piglin is left-handed.
         assert_eq!(m.extra.swing_right_arm, Some(m.main_arm_left()));

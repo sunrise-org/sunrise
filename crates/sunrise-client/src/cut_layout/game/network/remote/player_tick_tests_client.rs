@@ -37,7 +37,7 @@ fn client_player_ticks_on_the_death_screen_too() {
                 .as_ref()
                 .unwrap()
                 .clone();
-            game.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 66,
                 kind,
                 sunrise_core::geometry::Vec3::ZERO,

@@ -64,14 +64,14 @@ impl LifecycleFixture {
                     };
                 }
                 lookup!(game.server.others.0);
-                lookup!(game.fangs.list);
-                lookup!(game.ominous_spawners);
-                lookup!(game.breath_clouds);
-                if let Some(dragon) = game.dragon.as_ref() {
+                lookup!(game.entities.fangs.list);
+                lookup!(game.entities.ominous_spawners);
+                lookup!(game.entities.breath_clouds);
+                if let Some(dragon) = game.entities.dragon.as_ref() {
                     assert!(dragon.join.is_joined());
                     assert!(dragon.join < sunrise_sim::join_seq::JoinSeq::upcoming());
                     assert!(unique.insert(dragon.join));
-                    assert_eq!(game.dragon.locate(dragon.join), Some(0));
+                    assert_eq!(game.entities.dragon.locate(dragon.join), Some(0));
                 }
                 (self.ids)(game)
             };
@@ -193,12 +193,12 @@ fn lifecycle_scratch_is_removed_when_an_assertion_unwinds() {
 fn lifecycle_fixture_walks_fangs_owners() {
     LifecycleFixture {
         seed: |game, entries| {
-            game.fangs.list.clear();
+            game.entities.fangs.list.clear();
             for &(id, at) in entries {
                 game.insert_fangs(id, at, 0.0, 0, 0);
             }
         },
-        ids: |game| game.fangs.list.iter().map(|f| f.id).collect(),
+        ids: |game| game.entities.fangs.list.iter().map(|f| f.id).collect(),
         target: sunrise_gameplay_common::game::commands_common::Target::Fangs,
         unloads_with_chunk: true,
         remote: None,
@@ -316,7 +316,7 @@ fn mob_tick_restores_spawn_buffer_before_multiple_survivors_without_renumbering(
                 0.0,
             );
             mob.no_ai = true;
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
         }
     }
     sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
@@ -324,7 +324,7 @@ fn mob_tick_restores_spawn_buffer_before_multiple_survivors_without_renumbering(
             .chunks
             .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
         seed(game, 71..=73, 1.5);
-        let original: Vec<_> = game.mobs.iter().map(|m| (m.id, m.join)).collect();
+        let original: Vec<_> = game.entities.mobs.iter().map(|m| (m.id, m.join)).collect();
         // Synthetic additions at the actual lift, then the complete production
         // tick (not a reconstructed restore or a helper replacing that tick).
         with_spawn(
@@ -332,11 +332,12 @@ fn mob_tick_restores_spawn_buffer_before_multiple_survivors_without_renumbering(
             || game.tick_creature_entities().unwrap(),
         );
         assert_eq!(
-            game.mobs.iter().map(|m| m.id).collect::<Vec<_>>(),
+            game.entities.mobs.iter().map(|m| m.id).collect::<Vec<_>>(),
             [81, 82, 71, 72, 73]
         );
         assert_eq!(
-            game.mobs
+            game.entities
+                .mobs
                 .iter()
                 .skip(2)
                 .map(|m| (m.id, m.join))
@@ -344,17 +345,21 @@ fn mob_tick_restores_spawn_buffer_before_multiple_survivors_without_renumbering(
             original
         );
         assert_eq!(
-            game.mobs.iter().map(|m| m.age).collect::<Vec<_>>(),
+            game.entities.mobs.iter().map(|m| m.age).collect::<Vec<_>>(),
             [0, 0, 1, 1, 1]
         );
-        let all: Vec<_> = game.mobs.iter().map(|m| (m.id, m.join)).collect();
+        let all: Vec<_> = game.entities.mobs.iter().map(|m| (m.id, m.join)).collect();
         game.tick_creature_entities().unwrap();
         assert_eq!(
-            game.mobs.iter().map(|m| (m.id, m.join)).collect::<Vec<_>>(),
+            game.entities
+                .mobs
+                .iter()
+                .map(|m| (m.id, m.join))
+                .collect::<Vec<_>>(),
             all
         );
         assert_eq!(
-            game.mobs.iter().map(|m| m.age).collect::<Vec<_>>(),
+            game.entities.mobs.iter().map(|m| m.age).collect::<Vec<_>>(),
             [1, 1, 2, 2, 2]
         );
     });

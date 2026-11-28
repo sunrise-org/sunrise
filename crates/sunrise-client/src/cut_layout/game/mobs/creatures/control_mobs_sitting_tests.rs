@@ -16,11 +16,11 @@ fn the_mobs_command_reports_the_sitting_pose() {
         // A guest's copy: the pose bit came in the metadata; the order never does.
         wolf.extra.sitting = false;
         wolf.extra.sitting_pose = true;
-        game.mobs.push(wolf);
+        game.entities.mobs.push(wolf);
         assert_eq!(reported_sitting(game), serde_json::json!(true));
         // Ordered to sit but not in the pose yet (in water, in the air): not drawn sitting.
-        game.mobs[0].extra.sitting = true;
-        game.mobs[0].extra.sitting_pose = false;
+        game.entities.mobs[0].extra.sitting = true;
+        game.entities.mobs[0].extra.sitting_pose = false;
         assert_eq!(reported_sitting(game), serde_json::json!(false));
     });
 }

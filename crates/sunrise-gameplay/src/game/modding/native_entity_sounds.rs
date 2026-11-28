@@ -46,7 +46,7 @@ impl crate::game::ServerGame<'_> {
         Some(match target {
             Target::Player | Target::Guest(_) => SoundSource::Players,
             Target::Mob(id) => {
-                let m = self.common.mobs.iter().find(|m| m.id == id)?;
+                let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
                 let evil = m.species() == Species::Rabbit
                     && m.extra.variant == sunrise_sim::mobs::rabbit::EVIL;
                 if evil || hostile_species(m.species()) {

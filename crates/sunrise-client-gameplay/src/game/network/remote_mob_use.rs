@@ -36,7 +36,7 @@ impl ClientGame<'_> {
     }
 
     fn remote_mob_answers(&mut self, i: usize, hand: Hand, act: bool) -> bool {
-        let Some(m) = self.common.mobs.get(i).filter(|m| m.alive()) else {
+        let Some(m) = self.common.entities.mobs.get(i).filter(|m| m.alive()) else {
             return false;
         };
         let stack = match hand {
@@ -104,7 +104,12 @@ impl ClientGame<'_> {
                 m.extra.saddled()
                     && !sneaking
                     && self.common.riding != Some(m.id)
-                    && !self.common.mobs.iter().any(|o| o.extra.mount == Some(m.id))
+                    && !self
+                        .common
+                        .entities
+                        .mobs
+                        .iter()
+                        .any(|o| o.extra.mount == Some(m.id))
             }
             // HappyGhast.mobInteract: a harnessed adult is ridden.
             Species::HappyGhast => !baby && m.extra.body_id().is_some(),
@@ -210,7 +215,7 @@ impl ClientGame<'_> {
     /// CONSUME on a client, and a horse's or panda's food SUCCESS_SERVER
     /// (#9437). A tame wolf, cat or parrot sitting down is SUCCESS.
     pub(in crate::game::client_side) fn remote_mob_swings(&self, i: usize, hand: Hand) -> bool {
-        let Some(m) = self.common.mobs.get(i).filter(|m| m.alive()) else {
+        let Some(m) = self.common.entities.mobs.get(i).filter(|m| m.alive()) else {
             return false;
         };
         let stack = match hand {
@@ -246,7 +251,7 @@ impl ClientGame<'_> {
     /// villager particle. The server draws it on its own level only, so no
     /// packet brings it.
     pub(in crate::game::client_side) fn remote_feed_particles(&mut self, i: usize, hand: Hand) {
-        let Some(m) = self.common.mobs.get(i).filter(|m| m.alive()) else {
+        let Some(m) = self.common.entities.mobs.get(i).filter(|m| m.alive()) else {
             return;
         };
         let stack = match hand {

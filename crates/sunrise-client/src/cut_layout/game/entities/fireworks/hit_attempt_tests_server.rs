@@ -106,7 +106,7 @@ fn remaining_hit_callers_observe_refusals_and_zero_damage() {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let mut corpse = sunrise_sim::mobs::Mob::new(903, kind, Vec3::ZERO, 0.0);
             corpse.health = 0.0;
-            game.mobs.push(corpse);
+            game.entities.mobs.push(corpse);
             let mut rocket = Rocket::remote(902, Vec3::ZERO, Vec3::ZERO);
             std::sync::Arc::make_mut(&mut rocket.explosions).push(FireworkExplosion::default());
             game.explode_rocket(&rocket);
@@ -114,8 +114,16 @@ fn remaining_hit_callers_observe_refusals_and_zero_damage() {
                 1,
                 "resident dead mob is included in the rocket splash query",
             );
-            assert_eq!(game.mobs.iter().find(|m| m.id == 903).unwrap().health, 0.0);
-            game.mobs.clear();
+            assert_eq!(
+                game.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == 903)
+                    .unwrap()
+                    .health,
+                0.0
+            );
+            game.entities.mobs.clear();
 
             fresh_player(game, GameMode::Spectator);
             game.build_registries();
@@ -226,7 +234,7 @@ fn remaining_hit_callers_observe_refusals_and_zero_damage() {
             game.server.lan.as_mut().unwrap().hub.guests.push(guest);
             // The egg hits above may hatch chicks (`ThrownEgg.onHit`, drawn from the level's
             // random); they would be splash targets too, so only the guest stays near the blast.
-            game.mobs.clear();
+            game.entities.mobs.clear();
             for dead in [true, false] {
                 fresh_player(game, GameMode::Spectator); // excluded from splash
                 let mut body = Box::new(PlayerMotion::new(game.motion, Vec3::ZERO));

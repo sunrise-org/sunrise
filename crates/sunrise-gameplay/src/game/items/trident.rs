@@ -232,7 +232,7 @@ impl crate::game::ServerGame<'_> {
         // Projectile.shoot ends with yRotO = getYRot(), xRotO = getXRot().
         trident.previous_yaw = trident.yaw;
         trident.previous_pitch = trident.pitch;
-        self.common.tridents.push(trident);
+        self.common.entities.tridents.push(trident);
         self.player_projectile_shot();
         // level.playSound(null, trident, sound, PLAYERS, 1, 1).
         let throw = LevelSound::new(
@@ -417,32 +417,32 @@ impl crate::game::ServerGame<'_> {
         };
         let before = motion(&t);
         let target = self.native_impact_target(hit);
-        self.common.tridents.put_back(*index, t);
+        self.common.entities.tridents.put_back(*index, t);
         let frame = self.open_storage_transaction();
         *transaction = Some(frame);
         let canceled = self.native_trident_impact(id, guest, hit);
         if self.entity(id).is_some()
-            && let Some(at) = self.common.tridents.locate(join)
+            && let Some(at) = self.common.entities.tridents.locate(join)
         {
             let refused = canceled
-                || motion(&self.common.tridents[at]) != before
+                || motion(&self.common.entities.tridents[at]) != before
                 || target.is_none()
                 || target != self.native_impact_target(hit);
-            if let Some(live) = self.common.tridents.extract(join) {
+            if let Some(live) = self.common.entities.tridents.extract(join) {
                 *index = at;
                 return Some((live, refused));
             }
         }
         *transaction = None;
         self.close_storage_frame(frame, true);
-        if let Some(at) = self.common.tridents.locate(join) {
+        if let Some(at) = self.common.entities.tridents.locate(join) {
             *index = at + 1;
         }
         None
     }
 
     pub fn tick_tridents(&mut self) {
-        if !self.common.tridents.is_empty() {
+        if !self.common.entities.tridents.is_empty() {
             self.with_late_storage_scope(|game, transaction| {
                 game.tick_tridents_in_scope(transaction)
             });
@@ -461,9 +461,14 @@ impl crate::game::ServerGame<'_> {
         let mut told = None;
         // EntityTickList copy-on-iterate: while a listener may remove tridents, the round visits
         // the tridents that were there when it began, each found again by its join.
-        let joins: Option<Vec<_>> = round
-            .told_listening()
-            .then(|| self.common.tridents.iter().map(|t| t.join).collect());
+        let joins: Option<Vec<_>> = round.told_listening().then(|| {
+            self.common
+                .entities
+                .tridents
+                .iter()
+                .map(|t| t.join)
+                .collect()
+        });
         let mut turns = joins.iter().flatten();
         let mut i = 0;
         let mut through = None;
@@ -473,14 +478,14 @@ impl crate::game::ServerGame<'_> {
             }
             if joins.is_some() {
                 let Some(&join) = turns.next() else { break };
-                let Some(at) = self.common.tridents.locate(join) else {
+                let Some(at) = self.common.entities.tridents.locate(join) else {
                     continue;
                 };
                 i = at;
-            } else if i >= self.common.tridents.len() {
+            } else if i >= self.common.entities.tridents.len() {
                 break;
             }
-            let t = &self.common.tridents[i];
+            let t = &self.common.entities.tridents[i];
             let target = Target::Trident(t.id);
             if through.is_some_and(|last| t.join > last)
                 || self.removal_pending(&target)
@@ -489,20 +494,29 @@ impl crate::game::ServerGame<'_> {
                 i += 1;
                 continue;
             }
-            let at = self.common.tridents[i].position;
+            let at = self.common.entities.tridents[i].position;
             if !ticking(at.x.floor() as i32, at.z.floor() as i32) {
-                self.common.tridents[i].previous = at;
+                self.common.entities.tridents[i].previous = at;
                 i += 1;
                 continue;
             }
-            let (id, join) = (self.common.tridents[i].id, self.common.tridents[i].join);
+            let (id, join) = (
+                self.common.entities.tridents[i].id,
+                self.common.entities.tridents[i].join,
+            );
             if !self.native_tick_pre_one(&mut round, id, "minecraft:trident") {
                 i += 1;
                 continue;
             }
             // The Pre's listener may have removed tridents.
-            if self.common.tridents.get(i).is_none_or(|t| t.join != join) {
-                let Some(at) = self.common.tridents.locate(join) else {
+            if self
+                .common
+                .entities
+                .tridents
+                .get(i)
+                .is_none_or(|t| t.join != join)
+            {
+                let Some(at) = self.common.entities.tridents.locate(join) else {
                     continue;
                 };
                 i = at;
@@ -513,7 +527,7 @@ impl crate::game::ServerGame<'_> {
                 continue;
             }
             told = Some(id);
-            let mut t = self.common.tridents.remove(i);
+            let mut t = self.common.entities.tridents.remove(i);
             t.previous = t.position;
             t.previous_yaw = t.yaw;
             t.previous_pitch = t.pitch;
@@ -680,7 +694,7 @@ impl crate::game::ServerGame<'_> {
                     // `Breeze.deflection`: turns a trident back without dealing damage.
                     let breeze =
                         match who {
-                            Who::Mob(id) => self.common.mobs.iter().find(|m| {
+                            Who::Mob(id) => self.common.entities.mobs.iter().find(|m| {
                                 m.id == id && m.alive() && m.species() == Species::Breeze
                             }),
                             Who::Player => None,
@@ -790,10 +804,11 @@ impl crate::game::ServerGame<'_> {
                                     // EndCrystal.hurtServer explodes before ThrownTrident.onHitEntity
                                     // deflects. Keep the in-flight owner in the explosion's level walk.
                                     let join = t.join;
-                                    self.common.tridents.put_back(i, t);
+                                    self.common.entities.tridents.put_back(i, t);
                                     hurt(self);
                                     let Some(index) = self
                                         .common
+                                        .entities
                                         .tridents
                                         .locate(join)
                                         .filter(|_| !self.removal_pending(&target))
@@ -805,9 +820,9 @@ impl crate::game::ServerGame<'_> {
                                     };
                                     i = index;
                                     t = if transaction.is_some() {
-                                        self.common.tridents.extract(join).unwrap()
+                                        self.common.entities.tridents.extract(join).unwrap()
                                     } else {
-                                        self.common.tridents.remove(i)
+                                        self.common.entities.tridents.remove(i)
                                     };
                                 } else {
                                     hurt(self);
@@ -815,7 +830,7 @@ impl crate::game::ServerGame<'_> {
                             }
                             Who::Mob(id) => {
                                 if let Some(mob_idx) =
-                                    self.common.mob_index.find(&self.common.mobs, id)
+                                    self.common.mob_index.find(&self.common.entities.mobs, id)
                                 {
                                     let plan = self
                                         .prepare_knockback_credit(id as i32, owner_who, &attack);
@@ -827,7 +842,7 @@ impl crate::game::ServerGame<'_> {
                                     let mut credit =
                                         plan.lend(&mut self.server.last_hurt_by_player);
                                     let from_pos = Some([t.position.x, t.position.y, t.position.z]);
-                                    let join = self.common.mobs[mob_idx].join;
+                                    let join = self.common.entities.mobs[mob_idx].join;
                                     let (victim, lend) = crate::game::server_side::entity_server::victim_and_causer!(
                                         self, mob_idx, causing, decision
                                     );
@@ -857,6 +872,7 @@ impl crate::game::ServerGame<'_> {
                                             hurt_mob = Some((id, join));
                                         } else if self
                                             .common
+                                            .entities
                                             .mobs
                                             .iter()
                                             .find(|m| m.id == id && m.join == join && !m.removed)
@@ -880,6 +896,7 @@ impl crate::game::ServerGame<'_> {
                                     } else {
                                         let stand_pos = self
                                             .common
+                                            .entities
                                             .armor_stands
                                             .iter()
                                             .find(|a| a.id == id)
@@ -937,6 +954,7 @@ impl crate::game::ServerGame<'_> {
                             && let Some((id, join)) = hurt_mob
                             && let Some(m) = self
                                 .common
+                                .entities
                                 .mobs
                                 .iter()
                                 .find(|m| m.id == id && m.join == join && !m.removed)
@@ -1020,9 +1038,9 @@ impl crate::game::ServerGame<'_> {
                         });
                         let stack = t.stack.clone();
                         if transaction.is_some() {
-                            self.common.tridents.put_back(i, t);
+                            self.common.entities.tridents.put_back(i, t);
                         } else {
-                            self.common.tridents.insert(i, t);
+                            self.common.entities.tridents.insert(i, t);
                         }
                         self.hit_block_enchantment_effects(
                             &stack,
@@ -1032,7 +1050,7 @@ impl crate::game::ServerGame<'_> {
                             at,
                             [block.x, block.y, block.z],
                         );
-                        let Some(row) = self.common.tridents.locate(join) else {
+                        let Some(row) = self.common.entities.tridents.locate(join) else {
                             if let Some(frame) = transaction.take() {
                                 self.close_storage_frame(frame, true);
                             }
@@ -1041,11 +1059,12 @@ impl crate::game::ServerGame<'_> {
                         i = row;
                         t = if transaction.is_some() {
                             self.common
+                                .entities
                                 .tridents
                                 .extract(join)
                                 .expect("the trident was located")
                         } else {
-                            self.common.tridents.remove(row)
+                            self.common.entities.tridents.remove(row)
                         };
                     }
                 }
@@ -1099,7 +1118,7 @@ impl crate::game::ServerGame<'_> {
                     && self.trident_taken(&t, by)
                 {
                     if let Some(frame) = transaction.take() {
-                        self.common.tridents.retire_extracted(t.id, t.join);
+                        self.common.entities.tridents.retire_extracted(t.id, t.join);
                         self.close_storage_frame(frame, true);
                     }
                     continue;
@@ -1107,9 +1126,9 @@ impl crate::game::ServerGame<'_> {
             }
             let (id, from, to) = (t.id, t.previous, t.position);
             if transaction.is_some() {
-                self.common.tridents.put_back(i, t);
+                self.common.entities.tridents.put_back(i, t);
             } else {
-                self.common.tridents.insert(i, t);
+                self.common.entities.tridents.insert(i, t);
             }
             self.entity_section_step(id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
             if let Some(frame) = transaction.take() {

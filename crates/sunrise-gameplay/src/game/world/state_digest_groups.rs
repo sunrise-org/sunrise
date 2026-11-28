@@ -412,7 +412,7 @@ pub(super) fn level(
 
 fn hangings(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items) -> Group {
     let mut group = Group::default();
-    for e in &game.common.paintings {
+    for e in &game.common.entities.paintings {
         let h = group.row(e.id, e.join);
         "painting".hash(h);
         (
@@ -434,7 +434,7 @@ fn hangings(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items) -> 
             Shared::default(),
         );
     }
-    for e in &game.common.item_frames {
+    for e in &game.common.entities.item_frames {
         let h = group.row(e.id, e.join);
         "item_frame".hash(h);
         (
@@ -468,7 +468,7 @@ fn hangings(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items) -> 
 
 fn decorations(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items, out: &mut String) {
     let mut cushions = Group::default();
-    for e in &game.common.cushions {
+    for e in &game.common.entities.cushions {
         let h = cushions.row(e.id, e.join);
         vec3(h, e.position);
         (e.pos, e.yaw.to_bits(), e.color, e.check_interval).hash(h);
@@ -541,7 +541,7 @@ fn decorations(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items, 
     others.append(out, "other_entities");
 
     let mut knots = Group::default();
-    for e in &game.common.resident_entities.knots {
+    for e in &game.common.entities.knots {
         let h = knots.row(e.id, e.join);
         (e.fence, e.invulnerable, e.no_gravity, e.silent, e.glowing).hash(h);
         entity_shared(
@@ -561,6 +561,7 @@ fn decorations(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items, 
     game.server.broken_knots.hash(&mut knots.hash);
     for e in game
         .common
+        .entities
         .mobs
         .iter()
         .filter(|e| e.extra.leash.is_some() || e.extra.leash_pending.is_some())
@@ -570,6 +571,7 @@ fn decorations(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items, 
     }
     for e in game
         .common
+        .entities
         .boats
         .iter()
         .filter(|e| e.leash.is_some() || e.leash_pending.is_some())
@@ -678,7 +680,7 @@ fn hash_display(h: &mut DefaultHasher, d: &DisplayState, items: &Items) {
 
 fn transient(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items, out: &mut String) {
     let mut fangs = Group::default();
-    for e in game.common.fangs.list.iter() {
+    for e in game.common.entities.fangs.list.iter() {
         let h = fangs.row(e.id, e.join_seq());
         (
             vec_bits(e.pos),
@@ -708,7 +710,7 @@ fn transient(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items, ou
     fangs.append(out, "fangs");
 
     let mut lightning = Group::default();
-    for e in game.common.bolts.iter() {
+    for e in game.common.entities.bolts.iter() {
         let h = lightning.row(e.id, e.join_seq());
         (
             vec_bits(e.at),
@@ -761,7 +763,7 @@ fn transient(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items, ou
     lightning.append(out, "lightning");
 
     let mut spawners = Group::default();
-    for e in game.common.ominous_spawners.iter() {
+    for e in game.common.entities.ominous_spawners.iter() {
         let h = spawners.row(e.id, e.join);
         (
             vec_bits(e.position),
@@ -887,7 +889,7 @@ fn server_projectiles(game: &ServerGame<'_>, items: &Items, out: &mut String) {
 
 fn end_entities(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items, out: &mut String) {
     let mut crystals = Group::default();
-    for e in &game.common.crystals {
+    for e in &game.common.entities.crystals {
         let h = crystals.row(e.id, e.join);
         vec3(h, e.position);
         (
@@ -916,7 +918,7 @@ fn end_entities(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items,
     crystals.append(out, "end_crystals");
 
     let mut dragon = Group::default();
-    for e in game.common.dragon.iter() {
+    for e in game.common.entities.dragon.iter() {
         let h = dragon.row(e.id, e.join);
         vec3(h, e.position);
         vec3(h, e.velocity);
@@ -961,7 +963,7 @@ fn end_entities(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items,
         )
             .hash(h);
         e.nearest_crystal
-            .and_then(|i| game.common.crystals.get(i))
+            .and_then(|i| game.common.entities.crystals.get(i))
             .map(|c| c.id)
             .hash(h);
         for delay in 0..e.history.len() {
@@ -998,7 +1000,7 @@ fn end_entities(game: &ServerGame<'_>, shared: &mut EntityGroups, items: &Items,
     dragon.append(out, "dragon");
 
     let mut clouds = Group::default();
-    for e in game.common.breath_clouds.iter() {
+    for e in game.common.entities.breath_clouds.iter() {
         let h = clouds.row(e.id, e.join_seq());
         (
             vec_bits(e.at),
@@ -1201,6 +1203,7 @@ fn seats(game: &ServerGame<'_>) -> Group {
     let retained_ids: BTreeSet<_> = retained.iter().map(|e| e.id).collect();
     let mobs = game
         .common
+        .entities
         .mobs
         .iter()
         .chain(retained)
@@ -1208,7 +1211,7 @@ fn seats(game: &ServerGame<'_>) -> Group {
         .filter_map(|e| Some((e.id, e.extra.mount?)));
     let rows = game
         .common
-        .resident_entities
+        .entities
         .general
         .rows
         .iter()
@@ -1222,6 +1225,7 @@ fn seats(game: &ServerGame<'_>) -> Group {
         .filter_map(|e| Some((e.id, e.mount?)));
     let bolts = game
         .common
+        .entities
         .bolts
         .iter()
         .filter_map(|e| Some((e.id, e.mount?)));

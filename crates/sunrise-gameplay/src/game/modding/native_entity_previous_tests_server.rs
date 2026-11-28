@@ -43,7 +43,11 @@ fn floats(values: [f32; 2]) -> Tag {
 
 /// The mob `id` of the game's list.
 fn mob<'a>(game: &'a mut ServerGame<'_>, id: u32) -> &'a mut Mob {
-    game.mobs.iter_mut().find(|m| m.id == id).expect("the mob")
+    game.entities
+        .mobs
+        .iter_mut()
+        .find(|m| m.id == id)
+        .expect("the mob")
 }
 
 /// A villager walking on a server: after each tick's `commonTick`, its previous position and

@@ -44,7 +44,7 @@ fn the_raid_bar_keeps_a_viewer_until_the_next_twenty_tick_beat() {
     let mut villager = sunrise_sim::mobs::Mob::new(162, kind, Vec3::new(3.5, 200.0, 2.5), 0.0);
     villager.no_ai = true;
     villager.extra.bed = Some([2, 200, 1]);
-    game.mobs.push(villager);
+    game.entities.mobs.push(villager);
     // The local player, at the raid's centre.
     let ints = [0, 0, 0, 1];
     game.level.player_uuid = Some(ints);

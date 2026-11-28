@@ -689,6 +689,7 @@ impl crate::game::ServerGame<'_> {
         let key = |at: Vec3, id: u32| (section_order(at), id);
         let mut found: Vec<(_, Target)> = self
             .common
+            .entities
             .mobs
             .iter()
             .enumerate()
@@ -697,6 +698,7 @@ impl crate::game::ServerGame<'_> {
             .collect();
         found.extend(
             self.common
+                .entities
                 .armor_stands
                 .iter()
                 .enumerate()
@@ -866,17 +868,22 @@ impl crate::game::ServerGame<'_> {
         if self.dragon_spawn_ambient(id) {
             return Ok(());
         }
-        let Some(i) = self.common.mobs.iter().position(|m| m.id == id) else {
+        let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == id) else {
             return Ok(());
         };
         let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();
-        let mut m = self.common.mobs.extract(self.common.mobs[i].join).unwrap();
+        let mut m = self
+            .common
+            .entities
+            .mobs
+            .extract(self.common.entities.mobs[i].join)
+            .unwrap();
         let mut events = Vec::new();
         {
             let w = self.mob_world_base(&[]);
             sunrise_sim::mobs::ai::ambient_sound(&mut m, &w, &mut events);
         }
-        self.common.mobs.put_back(i, m);
+        self.common.entities.mobs.put_back(i, m);
         self.handle_mob_events(events)
     }
     /// A mob a bucket emptied (`MobBucketItem.spawn`): the bucket's components
@@ -887,7 +894,7 @@ impl crate::game::ServerGame<'_> {
     /// always true.
     pub fn mob_placed(&mut self, id: u32, stack: &ItemStack) -> Result<()> {
         let variants = world_variants!(self);
-        if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+        if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
             m.persistent = false;
             sunrise_sim::entity_nbt::apply_item_components(m, stack);
             sunrise_sim::entity_nbt::apply_item_variant_components(m, stack, variants);
@@ -935,7 +942,7 @@ impl crate::game::ServerGame<'_> {
         };
         // EntityType.create: `finalizeSpawn` first, the egg's components after.
         let variants = world_variants!(self);
-        if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+        if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
             // SpawnEggItemBehavior's `EntityType.spawn` never calls
             // `setPersistenceRequired`, as a spawn egg used by hand doesn't;
             // only the elder guardian's and copper golem's constructors do.
@@ -1119,7 +1126,7 @@ impl crate::game::ServerGame<'_> {
             .world
             .modified
             .insert((front.0 >> 4, front.2 >> 4));
-        self.common.armor_stands.push(stand);
+        self.common.entities.armor_stands.push(stand);
         // EntityType.appendDefaultStackConfig: the dispenser's yaw first, then
         // the item's createDefaultStackConfig with no user.
         self.apply_item_stack_config(
@@ -1140,7 +1147,7 @@ impl crate::game::ServerGame<'_> {
         let front = offset(pos, facing);
         for target in self.targets_at(front) {
             let Target::Mob(i) = target else { continue };
-            let m = &mut self.common.mobs[i];
+            let m = &mut self.common.entities.mobs[i];
             if matches!(
                 m.species(),
                 Species::Donkey | Species::Mule | Species::Llama | Species::TraderLlama
@@ -1204,13 +1211,13 @@ impl crate::game::ServerGame<'_> {
             .modified
             .insert((front.0 >> 4, front.2 >> 4));
         let (id, kind, yaw) = (boat.id, boat.entity_type(), boat.yaw);
-        self.common.boats.push(boat);
+        self.common.entities.boats.push(boat);
         // BoatDispenseItemBehavior: createDefaultStackConfig with no user,
         // then setYRot(direction.toYRot()).
         self.apply_item_stack_config(super::commands::Target::Boat(id), &kind, &stack, false);
         self.set_boat_yaw(id, yaw);
         if self.server.serving.is_some() || self.common.options.dedicated.is_some() {
-            let boat = self.common.boats.last().unwrap();
+            let boat = self.common.entities.boats.last().unwrap();
             self.native_vehicle_create(
                 boat.entity_type().as_str(),
                 [boat.position.x, boat.position.y, boat.position.z],
@@ -1262,12 +1269,12 @@ impl crate::game::ServerGame<'_> {
             .world
             .modified
             .insert((front.0 >> 4, front.2 >> 4));
-        self.common.carts.push(cart);
+        self.common.entities.carts.push(cart);
         // AbstractMinecart.createMinecart: createDefaultStackConfig with no user.
         let id = self.server.next_entity;
         self.apply_item_stack_config(super::commands::Target::Cart(id), kind.id(), &stack, false);
         if self.server.serving.is_some() || self.common.options.dedicated.is_some() {
-            let cart = self.common.carts.last().unwrap();
+            let cart = self.common.entities.carts.last().unwrap();
             self.native_vehicle_create(
                 cart.kind.id(),
                 [cart.position.x, cart.position.y, cart.position.z],
@@ -1322,7 +1329,7 @@ impl crate::game::ServerGame<'_> {
         // tryIgniteExplosiveEntities: the first sulfur cube that can explode is primed.
         let cube = self.targets_at(target).into_iter().find_map(|t| match t {
             Target::Mob(i) => {
-                let m = &self.common.mobs[i];
+                let m = &self.common.entities.mobs[i];
                 (m.species() == Species::SulfurCube
                     && m.alive()
                     && !sulfur_cube::primed(m)
@@ -1339,10 +1346,10 @@ impl crate::game::ServerGame<'_> {
                 .ui
                 .rules
                 .bool_at(sunrise_game_data::gamerules::vanilla::TNT_EXPLODES)
-                && sulfur_cube::prime(&mut self.common.mobs[i], false)
+                && sulfur_cube::prime(&mut self.common.entities.mobs[i], false)
             {
                 // primeTime's sound and PRIME_FUSE, which the priming queued.
-                let events = std::mem::take(&mut self.common.mobs[i].outbox);
+                let events = std::mem::take(&mut self.common.entities.mobs[i].outbox);
                 self.handle_mob_events(events)?;
             }
             return Ok((self.hurt_and_break(stack, 1), CLICK));
@@ -1688,7 +1695,7 @@ impl crate::game::ServerGame<'_> {
         player: Option<u128>,
         tool: &ItemStack,
     ) {
-        let old = self.common.mobs[index].clone();
+        let old = self.common.entities.mobs[index].clone();
         let at = old.position;
         let height = f64::from(old.height());
         let table = if old.extra.variant == 1 {
@@ -1774,11 +1781,11 @@ pub mod tests {
                     .0
             };
             assert_eq!(dispense(game).unwrap().count, 1);
-            assert!(game.mobs.is_empty());
+            assert!(game.entities.mobs.is_empty());
             game.set_difficulty_forced(2);
             assert!(dispense(game).is_none());
-            assert_eq!(game.mobs.len(), 1);
-            assert_eq!(game.mobs[0].kind.id, peaceful_tests::TRADER);
+            assert_eq!(game.entities.mobs.len(), 1);
+            assert_eq!(game.entities.mobs[0].kind.id, peaceful_tests::TRADER);
         });
     }
 
@@ -1803,16 +1810,27 @@ pub mod tests {
         let at = Vec3::new(6.5, 64.0, f64::from(z) + 0.5);
         let mut zombie = sunrise_sim::mobs::Mob::new(10 + row, kind, at, 0.0);
         zombie.extra.pick_up_loot = true;
-        game.mobs.push(zombie);
-        game.armor_stands
+        game.entities.mobs.push(zombie);
+        game.entities
+            .armor_stands
             .push(sunrise_sim::entities::ArmorStand::new(20 + row, at, 0.0));
         let mut stack = stack;
         let done = game.dispense_equipment((5, 64, z), Direction::East, &mut stack);
-        let zombie = game.mobs.iter().find(|m| m.id == 10 + row).unwrap();
+        let zombie = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == 10 + row)
+            .unwrap();
         let worn = [Slot::Head, Slot::Chest, Slot::Legs, Slot::Feet]
             .into_iter()
             .find(|slot| mob_slot_item(zombie, *slot).is_some());
-        let stand = game.armor_stands.iter().find(|s| s.id == 20 + row).unwrap();
+        let stand = game
+            .entities
+            .armor_stands
+            .iter()
+            .find(|s| s.id == 20 + row)
+            .unwrap();
         (
             done,
             worn,
@@ -1901,15 +1919,17 @@ impl crate::game::ServerGame<'_> {
             .targets_at(target)
             .into_iter()
             .filter_map(|t| match t {
-                Target::Mob(i) if self.common.mobs[i].species() == Species::Armadillo => Some(i),
+                Target::Mob(i) if self.common.entities.mobs[i].species() == Species::Armadillo => {
+                    Some(i)
+                }
                 _ => None,
             })
             .collect();
         for i in armadillos {
-            if self.common.mobs[i].is_baby() {
+            if self.common.entities.mobs[i].is_baby() {
                 continue;
             }
-            let at = self.common.mobs[i].position;
+            let at = self.common.entities.mobs[i].position;
             let drops = self.sequence_loot(
                 "minecraft:brush/armadillo",
                 "minecraft:brush/armadillo",
@@ -1924,7 +1944,7 @@ impl crate::game::ServerGame<'_> {
                 1.0,
                 1.0,
             );
-            let who = sunrise_sim::mobs::Who::Mob(self.common.mobs[i].id);
+            let who = sunrise_sim::mobs::Who::Mob(self.common.entities.mobs[i].id);
             let ctx = self.who_context(Some(who), None);
             self.post_game_event("minecraft:entity_interact", [at.x, at.y, at.z], ctx);
             return (self.hurt_and_break(stack, 16), optional_event("brush"));
@@ -1994,13 +2014,13 @@ impl crate::game::ServerGame<'_> {
                 }),
             // ArmorStand.canUseSlot: not a locked slot, and a hand needs arms.
             Target::Stand(i) => slot.stand_index().is_some_and(|s| {
-                let stand = &self.common.armor_stands[i];
+                let stand = &self.common.entities.armor_stands[i];
                 allows(stand.id, "minecraft:armor_stand")
                     && !stand.is_disabled(s)
                     && stand.equipment[s].is_none()
             }),
             Target::Mob(i) => {
-                let m = &self.common.mobs[i];
+                let m = &self.common.entities.mobs[i];
                 m.alive()
                     && mob_can_use_slot(m, slot)
                     && allows(m.id, &m.kind.id)
@@ -2045,14 +2065,14 @@ impl crate::game::ServerGame<'_> {
                 return true;
             }
             Target::Stand(i) => {
-                let stand = &mut self.common.armor_stands[i];
+                let stand = &mut self.common.entities.armor_stands[i];
                 if let Some(s) = slot.stand_index() {
                     stand.equipment[s] = Some(one);
                 }
                 (Some(stand.position), sound)
             }
             Target::Mob(i) => {
-                let m = &mut self.common.mobs[i];
+                let m = &mut self.common.entities.mobs[i];
                 mob_set_slot(m, slot, one);
                 // setGuaranteedDrop / setPersistenceRequired.
                 m.persistent = true;
@@ -2069,7 +2089,9 @@ impl crate::game::ServerGame<'_> {
                 self.server_play_sound(&sound, [at.x, at.y, at.z], 1.0, 1.0);
             }
             let who = match target {
-                Target::Mob(i) => Some(sunrise_sim::mobs::Who::Mob(self.common.mobs[i].id)),
+                Target::Mob(i) => {
+                    Some(sunrise_sim::mobs::Who::Mob(self.common.entities.mobs[i].id))
+                }
                 Target::Player | Target::Guest(_) | Target::Stand(_) => None,
             };
             let ctx = self.who_context(who, None);
@@ -2297,7 +2319,7 @@ impl crate::game::ServerGame<'_> {
             }
             let Target::Mob(i) = t else { continue };
             let part = self.part_shearable(i, None, shears);
-            let m = &self.common.mobs[i];
+            let m = &self.common.entities.mobs[i];
             if !m.alive() || part.is_some_and(|(_, shearable)| !shearable) {
                 continue;
             }
@@ -2317,13 +2339,13 @@ impl crate::game::ServerGame<'_> {
                     // passenger attachment, and nothing is swallowed for 5 s.
                     let height = f64::from(m.height());
                     let id = m.id;
-                    if let Some(body) = self.common.mobs[i].take_body_equipment() {
+                    if let Some(body) = self.common.entities.mobs[i].take_body_equipment() {
                         self.spawn_at_location(at, height, body);
                     }
                     // setItemSlot(BODY, EMPTY): an unequip.
                     let ctx = self.who_context(Some(sunrise_sim::mobs::Who::Mob(id)), None);
                     self.post_game_event("minecraft:unequip", [at.x, at.y, at.z], ctx);
-                    self.common.mobs[i].extra.ints[3] = sulfur_cube::PICKUP_TIMER;
+                    self.common.entities.mobs[i].extra.ints[3] = sulfur_cube::PICKUP_TIMER;
                     self.server_play_sound(
                         "minecraft:entity.sulfur_cube.eject",
                         [at.x, at.y, at.z],
@@ -2351,7 +2373,7 @@ impl crate::game::ServerGame<'_> {
                             };
                             self.spawn_at_location(at, 1.0, one);
                             // Sheep.shear nudges each item with the sheep's own random.
-                            let r = &mut self.common.mobs[i].random;
+                            let r = &mut self.common.entities.mobs[i].random;
                             let push = [
                                 f64::from((r.next_float() - r.next_float()) * 0.1),
                                 f64::from(r.next_float() * 0.05),
@@ -2366,7 +2388,7 @@ impl crate::game::ServerGame<'_> {
                             }
                         }
                     }
-                    self.common.mobs[i].extra.sheared = true;
+                    self.common.entities.mobs[i].extra.sheared = true;
                 }
                 Species::Bogged if !m.extra.sheared => {
                     let height = f64::from(m.height());
@@ -2383,7 +2405,7 @@ impl crate::game::ServerGame<'_> {
                     for stack in drops {
                         self.spawn_at_location(at, height, stack);
                     }
-                    self.common.mobs[i].extra.sheared = true;
+                    self.common.entities.mobs[i].extra.sheared = true;
                 }
                 Species::SnowGolem if !m.extra.sheared => {
                     let eye = m.eye_height();
@@ -2392,7 +2414,7 @@ impl crate::game::ServerGame<'_> {
                         entity_id,
                         None,
                     );
-                    self.common.mobs[i].extra.sheared = true;
+                    self.common.entities.mobs[i].extra.sheared = true;
                     let drops = self.sequence_loot(
                         "minecraft:shearing/snow_golem",
                         "minecraft:shearing/snow_golem",
@@ -2409,10 +2431,10 @@ impl crate::game::ServerGame<'_> {
                         entity_id,
                         None,
                     );
-                    let antenna = self.common.mobs[i].saddle_item();
-                    let id = self.common.mobs[i].id;
+                    let antenna = self.common.entities.mobs[i].saddle_item();
+                    let id = self.common.entities.mobs[i].id;
                     // setItemSlot(EQUIPMENT_SLOT_ANTENNA, EMPTY): an unequip.
-                    self.common.mobs[i].set_saddle(None);
+                    self.common.entities.mobs[i].set_saddle(None);
                     let ctx = self.who_context(Some(sunrise_sim::mobs::Who::Mob(id)), None);
                     self.post_game_event("minecraft:unequip", [at.x, at.y, at.z], ctx);
                     if let Some(antenna) = antenna {
@@ -2447,7 +2469,7 @@ impl crate::game::ServerGame<'_> {
         use sunrise_sim::mobs::{Who, leash::Holder};
         let (holder, centre, own) = match t {
             Target::Mob(i) => {
-                let m = &self.common.mobs[i];
+                let m = &self.common.entities.mobs[i];
                 let b = m.bounds();
                 (Holder::Mob(m.id), b.center(), Some(i))
             }
@@ -2462,6 +2484,7 @@ impl crate::game::ServerGame<'_> {
         let area = Aabb::new(centre, centre).inflate(Vec3::new(16.0, 16.0, 16.0));
         let mut leashed: Vec<(u32, usize)> = self
             .common
+            .entities
             .mobs
             .iter()
             .enumerate()
@@ -2471,14 +2494,14 @@ impl crate::game::ServerGame<'_> {
             .map(|(j, m)| (m.id, j))
             .collect();
         leashed.sort_unstable();
-        let own_leashed = own.is_some_and(|i| self.common.mobs[i].extra.leash.is_some());
+        let own_leashed = own.is_some_and(|i| self.common.entities.mobs[i].extra.leash.is_some());
         if leashed.is_empty() && !own_leashed {
             return false;
         }
         // Leashable.dropLeash: a lead item at the leashed entity's feet.
         let drop = |game: &mut Self, j: usize| {
-            if sunrise_sim::mobs::leash::remove(&mut game.mobs[j]).is_some() {
-                let at = game.mobs[j].position;
+            if sunrise_sim::mobs::leash::remove(&mut game.entities.mobs[j]).is_some() {
+                let at = game.entities.mobs[j].position;
                 game.spawn_at_location(at, 0.0, ItemStack::new("minecraft:lead", 1));
             }
         };
@@ -2490,7 +2513,7 @@ impl crate::game::ServerGame<'_> {
         }
         let (at, who) = match t {
             Target::Mob(i) => {
-                let m = &self.common.mobs[i];
+                let m = &self.common.entities.mobs[i];
                 (m.position, Who::Mob(m.id))
             }
             _ => (
@@ -2514,21 +2537,23 @@ impl crate::game::ServerGame<'_> {
             .targets_at(target)
             .into_iter()
             .filter_map(|t| match t {
-                Target::Mob(i) if self.common.mobs[i].species() == Species::SulfurCube => Some(i),
+                Target::Mob(i) if self.common.entities.mobs[i].species() == Species::SulfurCube => {
+                    Some(i)
+                }
                 _ => None,
             })
             .collect();
         for i in cubes {
-            let m = &self.common.mobs[i];
+            let m = &self.common.entities.mobs[i];
             if m.is_baby() || m.extra.body_id() == Some(&*stack.item) {
                 continue;
             }
             let (at, height) = (m.position, f64::from(m.height()));
             // The swallowed block comes out on top (the passenger attachment).
-            if let Some(old) = self.common.mobs[i].take_body_equipment() {
+            if let Some(old) = self.common.entities.mobs[i].take_body_equipment() {
                 self.spawn_at_location(at, height, old);
             }
-            let m = &mut self.common.mobs[i];
+            let m = &mut self.common.entities.mobs[i];
             m.extra.set_body_stack(Some(ItemStack {
                 count: 1,
                 ..stack.clone()

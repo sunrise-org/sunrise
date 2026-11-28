@@ -81,7 +81,7 @@ impl ServerGame<'_> {
             .persist
             .uuids
             .insert(self.server.next_entity, uuid);
-        self.common.tnts.push(PrimedTnt {
+        self.common.entities.tnts.push(PrimedTnt {
             size_answer: None,
             attachment_lifetime: Default::default(),
             rotation: [0.0, 0.0],
@@ -111,7 +111,7 @@ impl ServerGame<'_> {
     /// `moveEntityByPiston`'s `applyEffectsFromBlocks(previousPos, position)`,
     /// so powder snow it was pushed into makes it stuck.
     pub(in crate::game) fn finish_tnt_piston_move(&mut self, i: usize, from: Vec3) {
-        let t = &mut self.common.tnts[i];
+        let t = &mut self.common.entities.tnts[i];
         let factor = sunrise_sim::motion::block_speed_factor_at(
             &self.common.world,
             &self.common.res.motion().blocks,
@@ -125,12 +125,12 @@ impl ServerGame<'_> {
     /// `moveEntityByPiston`'s `applyEffectsFromBlocks(previousPos, position)`
     /// for primed TNT `i`, also run when `limitPistonMovement` left no push.
     pub(in crate::game) fn tnt_piston_block_effects(&mut self, i: usize, from: Vec3) {
-        let t = &self.common.tnts[i];
+        let t = &self.common.entities.tnts[i];
         let (id, footprint, ground, mut velocity) =
             (t.id, (t.position, t.bounds()), t.ground, t.velocity);
         let writes = self.body_step_on((id, "minecraft:tnt"), footprint, &ground, &mut velocity);
         let side = server_game_side!(self);
-        let t = &mut self.common.tnts[i];
+        let t = &mut self.common.entities.tnts[i];
         let known = t.velocity;
         t.velocity = velocity;
         super::entity::apply_contact_writes(
@@ -161,8 +161,8 @@ impl ServerGame<'_> {
     }
     pub(in crate::game::server_side) fn take_removed_tnt(&mut self, id: u32) -> Option<PrimedTnt> {
         self.with_destroying_vehicle(super::commands::Target::Tnt(id), |game| {
-            let i = game.tnts.iter().position(|t| t.id == id)?;
-            Some(game.tnts.remove(i))
+            let i = game.entities.tnts.iter().position(|t| t.id == id)?;
+            Some(game.entities.tnts.remove(i))
         })?
     }
 
@@ -173,7 +173,7 @@ impl ServerGame<'_> {
     /// `i` is its place in the list; the caller has checked it is ticking.
     /// `entities` are the boxes that stop its move (`Game::entity_collisions` with `Mover::Passive`).
     pub fn tick_one_tnt(&mut self, i: usize, entities: &[Aabb]) -> Result<()> {
-        let t = &mut self.common.tnts[i];
+        let t = &mut self.common.entities.tnts[i];
         let motion = sunrise_sim::motion::BodyMotion {
             world: &self.common.world,
             collision: self.common.collision,
@@ -189,19 +189,21 @@ impl ServerGame<'_> {
             self.nonliving_fall_on(id, position, movement.effect);
             self.post_landing_event(position, bounds, false);
         }
-        let Some(i) = super::native_ticks::place(&self.common.tnts, i, |t| t.id == id) else {
+        let Some(i) = super::native_ticks::place(&self.common.entities.tnts, i, |t| t.id == id)
+        else {
             return Ok(());
         };
-        let response = self.common.tnts[i]
+        let response = self.common.entities.tnts[i]
             .move_restitution(self.common.body_motion(&game_side!(self)), movement);
         let mut velocity = self.finish_body_restitution((id, "minecraft:tnt"), position, response);
-        let Some(i) = super::native_ticks::place(&self.common.tnts, i, |t| t.id == id) else {
+        let Some(i) = super::native_ticks::place(&self.common.entities.tnts, i, |t| t.id == id)
+        else {
             return Ok(());
         };
         self.common
             .body_motion(&game_side!(self))
             .apply_block_speed(position, &mut velocity);
-        let ground = self.common.tnts[i].ground;
+        let ground = self.common.entities.tnts[i].ground;
         let writes = self.body_step_on(
             (id, "minecraft:tnt"),
             (position, bounds),
@@ -209,7 +211,7 @@ impl ServerGame<'_> {
             &mut velocity,
         );
         let side = server_game_side!(self);
-        let t = &mut self.common.tnts[i];
+        let t = &mut self.common.entities.tnts[i];
         t.velocity = velocity;
         super::entity::apply_contact_writes(
             writes,
@@ -239,10 +241,11 @@ impl ServerGame<'_> {
         for pos in tops {
             self.bubble_column_particles(pos);
         }
-        let Some(i) = super::native_ticks::place(&self.common.tnts, i, |t| t.id == id) else {
+        let Some(i) = super::native_ticks::place(&self.common.entities.tnts, i, |t| t.id == id)
+        else {
             return Ok(());
         };
-        let t = &self.common.tnts[i];
+        let t = &self.common.entities.tnts[i];
         if t.fuse <= 0 {
             let center = [
                 t.position.x,
@@ -300,10 +303,13 @@ impl ServerGame<'_> {
     }
     /// The saved compound of primed TNT `i`: chunk saves, `/data get`, portals.
     pub fn tnt_nbt(&mut self, i: usize) -> sunrise_core::nbt::Tag {
-        let id = self.common.tnts[i].id;
+        let id = self.common.entities.tnts[i].id;
         let uuid = self.uuid_for(id);
-        let owner = self.tnt_owner_uuid(self.common.tnts[i].owner, self.common.tnts[i].guest);
-        let t = &self.common.tnts[i];
+        let owner = self.tnt_owner_uuid(
+            self.common.entities.tnts[i].owner,
+            self.common.entities.tnts[i].guest,
+        );
+        let t = &self.common.entities.tnts[i];
         sunrise_sim::entity_nbt::tnt_to_nbt(
             t.position,
             t.velocity,
@@ -335,7 +341,9 @@ impl ServerGame<'_> {
                     .map(|g| uuid_ints(g.uuid)),
                 None => self.common.level.player_uuid,
             },
-            Who::Mob(id) if self.common.mobs.iter().any(|m| m.id == id) => Some(self.uuid_for(id)),
+            Who::Mob(id) if self.common.entities.mobs.iter().any(|m| m.id == id) => {
+                Some(self.uuid_for(id))
+            }
             Who::Mob(id) => self.common.persist.uuids.get(&id).copied(),
         }
     }
@@ -359,6 +367,7 @@ impl ServerGame<'_> {
     pub(in crate::game::server_side) fn set_tnt_blast_owner(&mut self, id: u32) {
         let (owner, guest) = self
             .common
+            .entities
             .tnts
             .iter()
             .find(|t| t.id == id)

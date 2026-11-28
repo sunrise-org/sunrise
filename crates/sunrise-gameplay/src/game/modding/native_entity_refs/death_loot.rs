@@ -49,7 +49,8 @@ impl ServerGame<'_> {
         }
         let mob = match target {
             Target::Mob(id) => Some(
-                self.mobs
+                self.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == id)
                     .ok_or(DeathLootError::StaleEntity)?,

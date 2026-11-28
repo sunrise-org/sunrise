@@ -156,7 +156,7 @@ fn an_adventure_click_primes_tnt_only_with_a_can_break_that_names_it() {
                     "TntBlock.useItemOn's SUCCESS still ends the click"
                 );
                 assert!(
-                    game.tnts.is_empty(),
+                    game.entities.tnts.is_empty(),
                     "an adventure player without can_break primes nothing"
                 );
                 assert_eq!(game.world.block(pos[0], pos[1], pos[2]), tnt);
@@ -171,7 +171,7 @@ fn an_adventure_click_primes_tnt_only_with_a_can_break_that_names_it() {
                     "minecraft:tnt",
                 ));
                 let events = click(&mut game, pos).1;
-                assert_eq!(game.tnts.len(), 1);
+                assert_eq!(game.entities.tnts.len(), 1);
                 assert_eq!(game.world.block(pos[0], pos[1], pos[2]), air);
                 assert_eq!(game.held().map(|s| s.damage), Some(1));
                 assert_eq!(

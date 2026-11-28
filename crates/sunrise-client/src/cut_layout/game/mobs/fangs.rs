@@ -18,22 +18,23 @@ pub(crate) mod tests {
     #[ignore = "daily"]
     fn taken_fangs_tick_keeps_survivors_before_both_spawns() {
         sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
-            game.fangs.list.clear();
+            game.entities.fangs.list.clear();
             game.add_fangs([0.0, 80.0, 0.0], 0.0, 30, 0);
             game.add_fangs([1.0, 80.0, 0.0], 0.0, 30, 0);
-            let first = game.fangs.list[0].id;
-            let second = game.fangs.list[1].id;
+            let first = game.entities.fangs.list[0].id;
+            let second = game.entities.fangs.list[1].id;
             let next = game.server.next_entity;
             crate::game::server_side::entity_server::taken_pass_tests::with_spawn(
                 |game| {
-                    assert!(game.fangs.list.is_empty());
+                    assert!(game.entities.fangs.list.is_empty());
                     game.add_fangs([2.0, 80.0, 0.0], 0.0, 40, 0);
                     game.add_fangs([3.0, 80.0, 0.0], 0.0, 50, 0);
                 },
                 || game.tick_fangs(),
             );
             assert_eq!(
-                game.fangs
+                game.entities
+                    .fangs
                     .list
                     .iter()
                     .map(|f| (f.id, f.warmup))

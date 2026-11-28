@@ -60,7 +60,8 @@ fn spawn(game: &mut sunrise_client_gameplay::game::ClientGame<'_>, id: i32, kind
     if kind == "minecraft:oak_boat" {
         // The boat models are not loaded here, so the boat is tracked and listed by hand.
         game.spawn_entity(id, kind, [at().x, at().y, at().z], [0.0; 3]);
-        game.boats
+        game.entities
+            .boats
             .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                 id as u32,
                 "oak".into(),
@@ -96,12 +97,12 @@ fn attributes(
 
 fn pin_pose(game: &mut sunrise_client_gameplay::game::ClientGame<'_>, id: i32) {
     let id = id as u32;
-    if let Some(m) = game.mobs.iter_mut().find(|m| m.id == id) {
+    if let Some(m) = game.entities.mobs.iter_mut().find(|m| m.id == id) {
         (m.position, m.previous) = (at(), at());
         (m.yaw, m.previous_yaw, m.head_yaw, m.previous_head_yaw) = (45.0, 45.0, 45.0, 45.0);
         (m.head_pitch, m.previous_head_pitch) = (22.5, 22.5);
     }
-    game.boats.for_each_mut(|b| {
+    game.entities.boats.for_each_mut(|b| {
         if b.id == id {
             (b.position, b.previous, b.yaw, b.previous_yaw, b.pitch) =
                 (at(), at(), 45.0, 45.0, 22.5);

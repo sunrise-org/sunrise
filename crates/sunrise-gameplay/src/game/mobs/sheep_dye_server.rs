@@ -9,7 +9,7 @@ impl ServerGame<'_> {
         let Some(mut stack) = self.with_hand(hand, |g| g.held().cloned()) else {
             return false;
         };
-        if !sheep_dye::interact(&mut self.common.mobs[index], &mut stack, false) {
+        if !sheep_dye::interact(&mut self.common.entities.mobs[index], &mut stack, false) {
             return false;
         }
         self.play_mob_bound_sound(index, "minecraft:item.dye.use", 7, 1.0, 1.0, true);

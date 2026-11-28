@@ -77,12 +77,13 @@ mod tests {
             let distant_x = 1_000_000;
             prepare_entity_ticking_neighborhood(game, ChunkPos::new(distant_x >> 4, 0));
             let distant_position = Vec3::new(f64::from(distant_x), 64.0, 0.0);
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(90, kind.clone(), distant_position, 0.0));
             let mut dragon = Dragon::new(Vec3::new(0.0, 80.0, 0.0), 0.0, 0);
             dragon.id = 20;
-            game.dragon.replace(dragon);
-            game.mobs.push(Mob::new(3, kind, Vec3::ZERO, 0.0));
+            game.entities.dragon.replace(dragon);
+            game.entities.mobs.push(Mob::new(3, kind, Vec3::ZERO, 0.0));
             let ids: Vec<_> = collect_game_all_entities(game, level)
                 .unwrap()
                 .into_iter()
@@ -92,8 +93,8 @@ mod tests {
             assert_eq!(ids, vec![90, 20, 3]);
 
             // Extracting an early member skips it cleanly and visits remaining members in order.
-            let first_join = game.mobs[0].join_seq();
-            let first = game.mobs.extract(first_join).unwrap();
+            let first_join = game.entities.mobs[0].join_seq();
+            let first = game.entities.mobs.extract(first_join).unwrap();
             let remaining: Vec<_> = collect_game_all_entities(game, level)
                 .unwrap()
                 .into_iter()
@@ -101,11 +102,11 @@ mod tests {
                 .filter(|id| [90, 20, 3].contains(id) || (21..=28).contains(id))
                 .collect();
             assert_eq!(remaining, vec![20, 3]);
-            game.mobs.put_back(0, first);
+            game.entities.mobs.put_back(0, first);
 
             // Extracting a later member does not block a lazy Break(()) or the earlier members.
-            let join = game.mobs[1].join_seq();
-            let extracted = game.mobs.extract(join).unwrap();
+            let join = game.entities.mobs[1].join_seq();
+            let extracted = game.entities.mobs.extract(join).unwrap();
             let mut visited = Vec::new();
             assert_eq!(
                 level.visit_all_entities(game, &mut |entity| {
@@ -122,7 +123,7 @@ mod tests {
                 .filter(|id| [90, 20, 3].contains(id) || (21..=28).contains(id))
                 .collect();
             assert_eq!(remaining, vec![90, 20]);
-            game.mobs.put_back(1, extracted);
+            game.entities.mobs.put_back(1, extracted);
 
             let mut visits = 0;
             let host: &dyn mod_api::Host = game;
@@ -169,10 +170,10 @@ mod tests {
     fn ordinary_entities_precede_dragon_parts() {
         with_resident_game(|game| {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
             let mut dragon = Dragon::new(Vec3::new(0.0, 80.0, 0.0), 0.0, 0);
             dragon.id = 20;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let level = game.level(game.dim.id()).unwrap();
             // Parts start at the origin, away from the dragon's own body.
             let ids =
@@ -194,27 +195,29 @@ mod tests {
     fn spatial_visit_stops_before_later_matches() {
         with_resident_game(|game| {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
-            game.item_frames.push(sunrise_sim::entities::ItemFrame {
-                attachment_lifetime: Default::default(),
-                join: Default::default(),
-                id: 13,
-                pos: [0, 0, 0],
-                facing: 3,
-                glow: false,
-                item: None,
-                rotation: 0,
-                drop_chance: 1.0,
-                fixed: false,
-                invisible: false,
-                custom_name: None,
-                random: sunrise_core::random::LegacyRandom::new(0),
-                check_interval: 0,
-                ticks: 0,
-            });
+            game.entities.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
+            game.entities
+                .item_frames
+                .push(sunrise_sim::entities::ItemFrame {
+                    attachment_lifetime: Default::default(),
+                    join: Default::default(),
+                    id: 13,
+                    pos: [0, 0, 0],
+                    facing: 3,
+                    glow: false,
+                    item: None,
+                    rotation: 0,
+                    drop_chance: 1.0,
+                    fixed: false,
+                    invisible: false,
+                    custom_name: None,
+                    random: sunrise_core::random::LegacyRandom::new(0),
+                    check_interval: 0,
+                    ticks: 0,
+                });
             let mut dragon = Dragon::new(Vec3::new(0.0, 80.0, 0.0), 0.0, 0);
             dragon.id = 20;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
 
             let level = game.level(game.dim.id()).unwrap();
             let host: &dyn mod_api::Host = game;
@@ -262,7 +265,8 @@ mod tests {
                 (10, 1.5),
                 (30, 0.0),
             ] {
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(id, kind.clone(), Vec3::new(x, 64.0, 0.0), 0.0));
             }
             let level = game.level(game.dim.id()).unwrap();
@@ -377,7 +381,8 @@ mod tests {
     fn entities_in_includes_dragon_and_separate_parts() {
         with_resident_game(|game| {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, kind, Vec3::new(5.0, 64.0, 5.0), 0.0));
             let level = game.level(game.dim.id()).unwrap();
             let query = |game: &sunrise_gameplay::game::ServerGame<'_>, lo, hi| {
@@ -393,7 +398,7 @@ mod tests {
             );
             let mut dragon = Dragon::new(Vec3::new(0.0, 80.0, 0.0), 0.0, 0);
             dragon.id = 20;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             assert_eq!(
                 query(game, [-10.0, 60.0, -10.0], [10.0, 100.0, 10.0]),
                 vec![12, 20]
@@ -450,7 +455,7 @@ mod tests {
             game.spawn_entity(20, "minecraft:ender_dragon", [0.0, 80.0, 0.0], [0.0; 3]);
             // The dragon's own box moves to y 200 (a move whose part placement has not run
             // yet), so a box near y 80 holds only parts.
-            game.dragon.as_mut().unwrap().position = Vec3::new(0.0, 200.0, 0.0);
+            game.entities.dragon.as_mut().unwrap().position = Vec3::new(0.0, 200.0, 0.0);
             game.pick_section_sync_id(20);
             let level = game.level("minecraft:overworld").unwrap();
             let ids = |host: &dyn Host, min, max| {

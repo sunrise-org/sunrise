@@ -154,9 +154,9 @@ pub(crate) fn run_chunk_loaded_families_keep_vanilla_lookup_and_save_order() {
             Vec3::new(21.5, 70.0, 2.5),
             None,
         );
-        game.creatures.projectiles.push(arrow);
+        game.entities.projectiles.push(arrow);
         game.restore_vehicle_tree_state(tag, state).unwrap();
-        let projectiles = &mut game.common.creatures.projectiles;
+        let projectiles = &mut game.common.entities.projectiles;
         let next = &mut game.server.next_entity;
         for index in 0..projectiles.len() {
             if projectiles[index].id == 0 {
@@ -170,7 +170,7 @@ pub(crate) fn run_chunk_loaded_families_keep_vanilla_lookup_and_save_order() {
                 projectiles.id_assigned(index);
             }
         }
-        let arrow = game.creatures.projectiles.last().unwrap().id;
+        let arrow = game.entities.projectiles.last().unwrap().id;
         game.persist.uuids.insert(arrow, [2703, 0, 0, 14]);
         lookup.push(snapshot(game));
         // The TNT falls from section 4 into section -2, behind the armor stand.
@@ -178,6 +178,7 @@ pub(crate) fn run_chunk_loaded_families_keep_vanilla_lookup_and_save_order() {
         let uuids = &game.common.persist.uuids;
         let tnt = game
             .common
+            .entities
             .tnts
             .iter_mut()
             .find(|t| uuids.get(&t.id) == Some(&[2703, 0, 0, 1]));
@@ -246,10 +247,10 @@ pub(crate) fn run_a_crossing_without_a_listener_saves_after_the_entity_already_i
         assert_eq!(save(game), vec![vec![0, 0, 1, 2]]);
         // The pig walks up into section 4, which already holds the zombie.
         let id = game.mob_by_uuid([2703, 0, 0, 1]).unwrap();
-        let pig = game.mobs.iter().position(|m| m.id == id).unwrap();
-        let from = game.mobs[pig].position;
+        let pig = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
+        let from = game.entities.mobs[pig].position;
         let to = Vec3::new(from.x, 70.0, from.z);
-        game.mobs.update(pig, |m| m.position = to);
+        game.entities.mobs.update(pig, |m| m.position = to);
         game.entity_section_step(id, [from.x, from.y, from.z], [to.x, to.y, to.z]);
         // Vanilla's onMove puts it at the end of that section, after the zombie.
         assert_eq!(save(game), vec![vec![0, 0, 2, 1]]);

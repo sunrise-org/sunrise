@@ -501,11 +501,18 @@ impl crate::game::ClientGame<'_> {
     /// leaves the click to the item, and so does a painting.
     fn pad_guide_object(&self, id: i32, distance: f64) -> Option<Verb> {
         let sneaking = self.held_mapping(Action::Sneak);
-        if let Some(cart) = self.common.carts.iter().find(|c| c.id as i32 == id) {
+        if let Some(cart) = self
+            .common
+            .entities
+            .carts
+            .iter()
+            .find(|c| c.id as i32 == id)
+        {
             use super::super::minecarts::CartKind;
             let ridden = self.common.riding == Some(cart.id)
                 || self
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .any(|m| m.extra.mount == Some(cart.id));
@@ -517,9 +524,15 @@ impl crate::game::ClientGame<'_> {
                 _ => Some(Verb::Use),
             };
         }
-        if let Some(i) = self.common.boats.iter().position(|b| b.id as i32 == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .position(|b| b.id as i32 == id)
+        {
             // ChestBoat.interact, then AbstractBoat.interact.
-            let boat = &self.common.boats[i];
+            let boat = &self.common.entities.boats[i];
             let room = self.boat_has_room(i);
             if boat.chest && (sneaking || self.common.riding.is_some() || !room) {
                 return Some(Verb::Open);
@@ -535,7 +548,13 @@ impl crate::game::ClientGame<'_> {
             return None;
         }
         // ItemFrame.interact: a fixed frame, or an empty one with nothing to put in it, passes.
-        if let Some(frame) = self.common.item_frames.iter().find(|f| f.id as i32 == id) {
+        if let Some(frame) = self
+            .common
+            .entities
+            .item_frames
+            .iter()
+            .find(|f| f.id as i32 == id)
+        {
             let held = self.common.held().is_some() || self.common.offhand.is_some();
             if frame.fixed || (frame.item.is_none() && !held) {
                 return None;
@@ -546,13 +565,13 @@ impl crate::game::ClientGame<'_> {
 
     /// What mob `i` takes from either hand (`remote_mob_would_take`, which stands for the click).
     fn pad_guide_mob(&mut self, i: usize) -> Option<Verb> {
-        if self.is_level_player(self.common.mobs.get(i)?.id as i32) {
+        if self.is_level_player(self.common.entities.mobs.get(i)?.id as i32) {
             return None;
         }
         let hand = Hand::BOTH
             .into_iter()
             .find(|hand| self.remote_mob_would_take(i, *hand))?;
-        let m = self.common.mobs.get(i)?;
+        let m = self.common.entities.mobs.get(i)?;
         let stack = match hand {
             Hand::Main => self.common.stack_in(self.common.selected),
             Hand::Off => self.common.offhand.as_ref(),
@@ -630,7 +649,7 @@ impl crate::game::ClientGame<'_> {
                     Species::Strider
                 };
                 let i = self.common.mount_index()?;
-                if self.common.mobs[i].species() != wanted {
+                if self.common.entities.mobs[i].species() != wanted {
                     return None;
                 }
                 Verb::Boost

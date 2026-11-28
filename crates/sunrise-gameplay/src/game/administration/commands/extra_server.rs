@@ -519,6 +519,7 @@ impl crate::game::ServerGame<'_> {
         if let Target::Mob(id) = t {
             return self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)

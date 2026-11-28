@@ -435,7 +435,7 @@ pub(crate) fn unchanged<'g, G: sunrise_gameplay_common::game::SideGame<'g>>(game
     let held = game.inventory[0].as_ref().unwrap();
     assert_eq!((&*held.item, held.count), ("test:syrup_bottle", 2));
     assert_eq!(seen.drops.load(Ordering::SeqCst), 0);
-    assert_eq!(game.dropped.len(), 0);
+    assert_eq!(game.entities.dropped.len(), 0);
     assert_eq!(
         game.inventory
             .iter()
@@ -577,9 +577,12 @@ fn cauldron_transfer_awards_two_statistics_once() {
             ("test:syrup_cauldron".into(), Some("1".into()))
         );
         assert_eq!(seen.drops.load(Ordering::SeqCst), 1);
-        assert_eq!(game.dropped.len(), 1);
+        assert_eq!(game.entities.dropped.len(), 1);
         assert_eq!(
-            (&*game.dropped[0].stack.item, game.dropped[0].stack.count),
+            (
+                &*game.entities.dropped[0].stack.item,
+                game.entities.dropped[0].stack.count
+            ),
             ("minecraft:glass_bottle", 1)
         );
         assert_eq!(game.stats.get("custom", "minecraft:use_cauldron"), 1);

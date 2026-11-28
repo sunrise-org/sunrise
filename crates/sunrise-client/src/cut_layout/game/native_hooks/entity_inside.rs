@@ -40,7 +40,7 @@ pub(crate) mod entity_inside_tests {
             game.world.set(3, 64, 1, stone).unwrap();
             game.world.set(4, 64, 1, dirt).unwrap();
             game.world.set(5, 64, 1, dirt).unwrap();
-            let drops_before = game.dropped.len();
+            let drops_before = game.entities.dropped.len();
             let at = |x| BlockPos::new(x, 64, 1);
             let requested = vec![
                 mod_api::LandingWrite::SetBlock(stone.try_into_api().unwrap()),
@@ -78,11 +78,11 @@ pub(crate) mod entity_inside_tests {
             assert_eq!(game.world.block(4, 64, 1), air);
             assert_eq!(game.world.block(5, 64, 1), air);
             assert_eq!(
-                game.dropped.len(),
+                game.entities.dropped.len(),
                 drops_before + 1,
                 "only drop=true creates dirt resources"
             );
-            let dropped = &game.dropped[drops_before];
+            let dropped = &game.entities.dropped[drops_before];
             assert_eq!(dropped.stack.item.as_ref(), "minecraft:dirt");
             assert_eq!(
                 dropped.position.x.floor() as i32,
@@ -481,9 +481,9 @@ pub(crate) mod sweep_tests {
             sunrise_gameplay::game::native_entity_refs::tests::with_game(|game| {
                 let _ = sunrise_sim::block_contact::HOOKS.set(BLOCK_CONTACT_HOOKS);
                 let item = item_at_blocks(game);
-                game.dropped.push(item);
-                let rows = game.dropped.len();
-                let mut items = game.dropped.lift();
+                game.entities.dropped.push(item);
+                let rows = game.entities.dropped.len();
+                let mut items = game.entities.dropped.lift();
                 let before = items[0].velocity.x;
                 sunrise_sim::block_contact::in_level(
                     sunrise_sim::parallel::TickThread::mint(),
@@ -505,8 +505,8 @@ pub(crate) mod sweep_tests {
                         hook: "entity_inside",
                     }]
                 );
-                assert_eq!(game.dropped.len(), rows, "the lifted row returned");
-                let item = game.dropped.first().unwrap();
+                assert_eq!(game.entities.dropped.len(), rows, "the lifted row returned");
+                let item = game.entities.dropped.first().unwrap();
                 assert_eq!(
                     item.velocity.x, before,
                     "the failed part's staged writes never applied"
@@ -774,9 +774,9 @@ pub(crate) mod sweep_tests {
                 let shot = arrow_shot(11, (0.5, 100.0, 0.5), (2.5, 100.0, 0.5));
                 let velocity = shot.velocity.x;
                 let id = shot.id;
-                game.creatures.projectiles.push(shot);
-                let rows = game.creatures.projectiles.len();
-                let mut projectiles = game.creatures.projectiles.lift();
+                game.entities.projectiles.push(shot);
+                let rows = game.entities.projectiles.len();
+                let mut projectiles = game.entities.projectiles.lift();
                 sunrise_sim::block_contact::in_level(
                     sunrise_sim::parallel::TickThread::mint(),
                     Some("minecraft:overworld"),
@@ -784,7 +784,7 @@ pub(crate) mod sweep_tests {
                         projectiles.update(0, |p| game.sweep_projectile_inside(p, None));
                     },
                 );
-                game.creatures.projectiles.restore(
+                game.entities.projectiles.restore(
                     projectiles,
                     sunrise_sim::join_seq::RestoreOrder::SpawnsFirst,
                 );
@@ -801,12 +801,12 @@ pub(crate) mod sweep_tests {
                     }]
                 );
                 assert_eq!(
-                    game.creatures.projectiles.len(),
+                    game.entities.projectiles.len(),
                     rows,
                     "the lifted row returned, exactly once"
                 );
                 let arrow = game
-                    .creatures
+                    .entities
                     .projectiles
                     .iter()
                     .next()

@@ -12,8 +12,8 @@ impl ClientGame<'_> {
         id: u32,
         pose: Option<Pose>,
     ) -> Option<(Pose, [f32; 3], Option<SizeAnswer>)> {
-        if let Some(i) = self.common.mob_index.find(&self.common.mobs, id) {
-            let m = &self.common.mobs[i];
+        if let Some(i) = self.common.mob_index.find(&self.common.entities.mobs, id) {
+            let m = &self.common.entities.mobs[i];
             let pose = synced_pose(m);
             return Some((pose, m.vanilla_dims_in(pose), m.size_answer));
         }
@@ -31,7 +31,11 @@ impl ClientGame<'_> {
         id: u32,
         answer: SizeAnswer,
     ) {
-        if let Some(m) = self.common.mob_index.get_mut(&mut self.common.mobs, id) {
+        if let Some(m) = self
+            .common
+            .mob_index
+            .get_mut(&mut self.common.entities.mobs, id)
+        {
             m.size_answer = Some(answer);
         } else if let Some(row) = self
             .client
@@ -168,7 +172,13 @@ impl ClientGame<'_> {
         id: u32,
         kind: &str,
     ) -> Option<[f32; 3]> {
-        if let Some(a) = self.common.armor_stands.iter().find(|a| a.id == id) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == id)
+        {
             return Some(a.default_dimensions());
         }
         if let Some(i) = self.client.interactions.get(&(id as i32)) {

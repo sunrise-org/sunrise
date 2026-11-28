@@ -158,6 +158,7 @@ impl crate::game::ServerGame<'_> {
             Target::Frame(id) => {
                 let frame = self
                     .common
+                    .entities
                     .item_frames
                     .iter()
                     .find(|frame| frame.id == id)?;
@@ -166,6 +167,7 @@ impl crate::game::ServerGame<'_> {
             Target::Painting(id) => {
                 let painting = self
                     .common
+                    .entities
                     .paintings
                     .iter()
                     .find(|painting| painting.id == id)?;
@@ -177,6 +179,7 @@ impl crate::game::ServerGame<'_> {
         let id = self.server.next_entity + 1;
         self.spawn_at_location(Vec3::new(x, y, z), f64::from(y_offset), stack);
         self.common
+            .entities
             .dropped
             .iter()
             .rev()
@@ -195,7 +198,13 @@ impl crate::game::ServerGame<'_> {
         killed: bool,
         prepare: impl FnOnce(&mut Self),
     ) {
-        if !self.common.mobs.iter().any(|m| m.id == id && !m.removed) {
+        if !self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .any(|m| m.id == id && !m.removed)
+        {
             return;
         }
         if self
@@ -206,7 +215,12 @@ impl crate::game::ServerGame<'_> {
                 }
             })
             .is_some()
-            && self.common.mobs.iter().any(|m| m.id == id && !m.removed)
+            && self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .any(|m| m.id == id && !m.removed)
         {
             self.finish_mob_removal(id);
         }
@@ -237,11 +251,11 @@ impl crate::game::ServerGame<'_> {
     /// What a killed mob's effects do on removal (Oozing's slimes, Weaving's cobwebs, Wind
     /// Charged's burst).
     pub(in crate::game::server_side) fn mob_removal_effects(&mut self, id: u32) {
-        let Some(i) = self.common.mobs.iter().position(|m| m.id == id) else {
+        let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == id) else {
             return;
         };
-        if !self.common.mobs[i].extra.effects.is_empty() {
-            let m = &self.common.mobs[i];
+        if !self.common.entities.mobs[i].extra.effects.is_empty() {
+            let m = &self.common.entities.mobs[i];
             let names: Vec<&'static str> = m
                 .extra
                 .effects
@@ -250,7 +264,7 @@ impl crate::game::ServerGame<'_> {
                 .collect();
             let (bounds, silent, mut random) = (m.bounds(), m.silent, m.random.clone());
             self.effects_on_death(&names, bounds, silent, Some(id), Some(&mut random));
-            if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+            if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
                 m.random = random;
             }
         }
@@ -262,7 +276,7 @@ impl crate::game::ServerGame<'_> {
         &mut self,
         mut retired: impl FnMut(&ItemEntity),
     ) {
-        let dropped = &mut self.common.dropped;
+        let dropped = &mut self.common.entities.dropped;
         self.common.persist.removals.retain(|target| {
             let Target::Item(id) = *target else {
                 return true;
@@ -289,7 +303,7 @@ impl crate::game::ServerGame<'_> {
                 // before any callback in the sweep can resolve them again.
                 Target::Projectile(id) => self.remove_projectile(id),
                 Target::Trident(id) => {
-                    self.common.tridents.retain(|t| t.id != id);
+                    self.common.entities.tridents.retain(|t| t.id != id);
                     self.forget_entity(id);
                 }
                 Target::Boat(_) | Target::Cart(_)
@@ -303,9 +317,15 @@ impl crate::game::ServerGame<'_> {
         for t in pending {
             match t {
                 Target::Projectile(_) | Target::Trident(_) => {}
-                Target::Crystal(id) => self.common.crystals.retain(|c| c.id != id),
+                Target::Crystal(id) => self.common.entities.crystals.retain(|c| c.id != id),
                 Target::Dragon(id) => {
-                    if self.common.dragon.as_ref().is_some_and(|d| d.id == id) {
+                    if self
+                        .common
+                        .entities
+                        .dragon
+                        .as_ref()
+                        .is_some_and(|d| d.id == id)
+                    {
                         self.discard_resident_dragon();
                     }
                 }
@@ -328,7 +348,7 @@ impl crate::game::ServerGame<'_> {
                 // Both command kill and handle removal already notified this row's
                 // leave. Retire its owning slot so tracking drops the row too.
                 Target::General(id) => {
-                    let rows = &mut self.common.resident_entities.general.rows;
+                    let rows = &mut self.common.entities.general.rows;
                     if let Some(index) = rows.iter().position(|row| row.id == id) {
                         rows.remove(index);
                         self.forget_entity(id);
@@ -375,13 +395,13 @@ mod tests {
             cart.items[0] = Some(ItemStack::new("minecraft:stone", 64));
             cart.items[5] = Some(ItemStack::new("minecraft:stone", 19));
             cart.items[26] = Some(ItemStack::new("minecraft:sand", 7));
-            game.carts.push(cart);
+            game.entities.carts.push(cart);
             let entity = game.entity(600).unwrap();
             assert!(game.entity_remove(entity, RemovalReason::Killed));
             assert!(game.entity(600).is_none());
-            assert_eq!(game.carts.len(), 1);
+            assert_eq!(game.entities.carts.len(), 1);
             let mut totals = std::collections::BTreeMap::new();
-            for item in game.dropped.iter() {
+            for item in game.entities.dropped.iter() {
                 *totals.entry(item.stack.item.to_string()).or_insert(0) += item.stack.count;
             }
             assert_eq!(
@@ -391,10 +411,10 @@ mod tests {
                     ("minecraft:sand".to_owned(), 7),
                 ])
             );
-            let count = game.dropped.len();
+            let count = game.entities.dropped.len();
             game.native_removals_flush();
-            assert!(game.carts.is_empty());
-            assert_eq!(game.dropped.len(), count);
+            assert!(game.entities.carts.is_empty());
+            assert_eq!(game.entities.dropped.len(), count);
         });
     }
 
@@ -470,7 +490,7 @@ mod tests {
             with_resident_game(|game| {
                 game.native_joins_skip();
                 let boat_id = game.take_entity_id();
-                game.boats.push(Boat::new(
+                game.entities.boats.push(Boat::new(
                     boat_id,
                     "oak".into(),
                     Vec3::new(0.0, 64.0, 0.0),
@@ -478,7 +498,8 @@ mod tests {
                 ));
                 let mob_id = game.take_entity_id();
                 let cow = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(mob_id, cow, Vec3::new(0.0, 64.0, 0.0), 0.0));
                 game.native_joins_flush(false, 0);
                 let boat = game.entity(boat_id).unwrap();
@@ -488,13 +509,19 @@ mod tests {
 
                 assert!(boat.discard(game));
                 // Told, and off the vehicle, with the boat still in its list.
-                assert!(game.boats.iter().any(|b| b.id == boat_id));
+                assert!(game.entities.boats.iter().any(|b| b.id == boat_id));
                 assert_eq!(*observer.0.lock().unwrap(), vec![(boat_id, true)]);
                 assert_eq!(game.entity_vehicle(mob), None);
-                assert!(!game.mobs.iter().any(|m| m.extra.mount == Some(boat_id)));
+                assert!(
+                    !game
+                        .entities
+                        .mobs
+                        .iter()
+                        .any(|m| m.extra.mount == Some(boat_id))
+                );
 
                 game.native_leaves_flush();
-                assert!(!game.boats.iter().any(|b| b.id == boat_id));
+                assert!(!game.entities.boats.iter().any(|b| b.id == boat_id));
                 assert_eq!(*observer.0.lock().unwrap(), vec![(boat_id, true)]);
             });
         });
@@ -577,10 +604,10 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
             let mob = game.entity(12).unwrap();
             assert!(mob.discard(game));
-            assert!(game.mobs[0].removed);
+            assert!(game.entities.mobs[0].removed);
             assert!(!mob.discard(game));
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
@@ -605,7 +632,8 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, kind, Vec3::new(3.5, 70.0, -2.5), 0.0));
             let mob = game.entity(12).unwrap();
             let item = mob
@@ -616,13 +644,18 @@ mod tests {
                 )
                 .unwrap()
                 .unwrap();
-            let dropped = game.dropped.iter().find(|d| d.id == item.id()).unwrap();
+            let dropped = game
+                .entities
+                .dropped
+                .iter()
+                .find(|d| d.id == item.id())
+                .unwrap();
             assert_eq!(&*dropped.stack.item, "minecraft:carrot");
             assert_eq!(dropped.stack.count, 2);
             assert_eq!(dropped.position, Vec3::new(3.5, 70.5, -2.5));
             assert_eq!(dropped.pickup_delay, 10);
             // Invalid engine values are refused before an API value can exist.
-            let before = game.dropped.len();
+            let before = game.entities.dropped.len();
             assert_eq!(
                 ItemStack::new("minecraft:carrot", 0).try_into_api(),
                 Err(StackReadError::Empty)
@@ -640,7 +673,7 @@ mod tests {
                 ),
                 Ok(None)
             );
-            assert_eq!(game.dropped.len(), before);
+            assert_eq!(game.entities.dropped.len(), before);
         });
     }
 
@@ -654,7 +687,7 @@ mod tests {
 
         with_resident_game(|game| {
             for (id, glow, facing) in [(12, false, 5), (13, true, 4)] {
-                game.item_frames.push(ItemFrame {
+                game.entities.item_frames.push(ItemFrame {
                     attachment_lifetime: Default::default(),
                     join: Default::default(),
                     id,
@@ -672,7 +705,7 @@ mod tests {
                     random: sunrise_core::random::LegacyRandom::new(0),
                 });
             }
-            game.paintings.push(Painting {
+            game.entities.paintings.push(Painting {
                 attachment_lifetime: Default::default(),
                 join: Default::default(),
                 id: 14,
@@ -700,7 +733,12 @@ mod tests {
                     )
                     .unwrap()
                     .unwrap();
-                let dropped = game.dropped.iter().find(|d| d.id == item.id()).unwrap();
+                let dropped = game
+                    .entities
+                    .dropped
+                    .iter()
+                    .find(|d| d.id == item.id())
+                    .unwrap();
                 assert_eq!(dropped.position, expected);
                 assert_eq!(dropped.stack.count, 2);
                 assert_eq!(dropped.pickup_delay, 10);
@@ -756,12 +794,14 @@ mod tests {
                 .unwrap()
                 .clone();
             let zombie_id = game.take_entity_id();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(zombie_id, zombie_kind, Vec3::ZERO, 0.0));
             let zombie = game.entity(zombie_id).unwrap();
             assert_eq!(zombie.kill(game), Ok(true));
             assert!(
                 !game
+                    .entities
                     .mobs
                     .iter()
                     .find(|m| m.id == zombie_id)
@@ -773,7 +813,7 @@ mod tests {
             // Killing a non-mob entity (experience orb) removes it and makes
             // the handle stale afterwards.
             let orb_id = game.take_entity_id();
-            game.orbs.push(ExperienceOrb::new(
+            game.entities.orbs.push(ExperienceOrb::new(
                 orb_id,
                 Vec3::new(1.0, 70.0, 1.0),
                 Vec3::ZERO,
@@ -781,7 +821,7 @@ mod tests {
             ));
             let orb = game.entity(orb_id).unwrap();
             assert_eq!(orb.kill(game), Ok(true));
-            assert!(game.orbs.iter().all(|o| o.id != orb_id));
+            assert!(game.entities.orbs.iter().all(|o| o.id != orb_id));
             assert_eq!(orb.kill(game), Err(LevelWriteError::Stale));
 
             // Stale handle from another epoch is refused with Stale.
@@ -795,7 +835,9 @@ mod tests {
             // transaction and refuses with InTransaction inside one.
             let cow_kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
             let cow_id = game.take_entity_id();
-            game.mobs.push(Mob::new(cow_id, cow_kind, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(cow_id, cow_kind, Vec3::ZERO, 0.0));
             let cow = game.entity(cow_id).unwrap();
             let nether = super::super::Dim::Nether;
             game.enter_command_level(nether).unwrap();

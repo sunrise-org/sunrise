@@ -28,7 +28,7 @@ impl crate::game::ServerGame<'_> {
             self.hot_level(5, 2)?;
             self.hot_mobs(128, 2)?;
             let dimension = self.common.dim.id().to_owned();
-            let entities: Vec<u32> = self.common.mobs.iter().map(|mob| mob.id).collect();
+            let entities: Vec<u32> = self.common.entities.mobs.iter().map(|mob| mob.id).collect();
             recorder.measure(hook, CALLS, || {
                 let mut count = 0u64;
                 for call in 0..CALLS as usize {
@@ -52,6 +52,7 @@ impl crate::game::ServerGame<'_> {
             self.hot_mobs(128, 2)?;
             let holders: Vec<_> = self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .map(|mob| mod_api::Holder::Entity(mob.id))

@@ -89,7 +89,7 @@ impl Drop for ProjectileDispatch<'_, '_> {
     fn drop(&mut self) {
         if let Some(pass) = self.pass.take() {
             self.game
-                .creatures
+                .entities
                 .projectiles
                 .restore(pass, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
         }
@@ -239,7 +239,7 @@ impl crate::game::ServerGame<'_> {
         if id < SPECIAL {
             id
         } else {
-            self.common.dragon.as_ref().map_or(0, |d| d.id)
+            self.common.entities.dragon.as_ref().map_or(0, |d| d.id)
         }
     }
 
@@ -253,7 +253,7 @@ impl crate::game::ServerGame<'_> {
         if let Some(kind) = self.entity_kind_for_who(Who::Mob(id)) {
             return (id, kind);
         }
-        if let Some(mob) = self.common.mobs.iter().find(|m| m.id == id) {
+        if let Some(mob) = self.common.entities.mobs.iter().find(|m| m.id == id) {
             return (id, mob_kind(mob));
         }
         (id, String::new())
@@ -367,7 +367,7 @@ impl crate::game::ServerGame<'_> {
         shoots: &mut Vec<ProjectileShot>,
     ) -> FxHashMap<JoinSeq, PendingImpact> {
         // Close the already-lifted pass, not a new one over the spawn buffer.
-        self.common.creatures.projectiles.restore(
+        self.common.entities.projectiles.restore(
             projectiles.take_owned_pass(),
             sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
         );
@@ -380,7 +380,7 @@ impl crate::game::ServerGame<'_> {
                     && self.native_projectile_impact_canceled(&impact.before, impact.hit),
             );
         }
-        *projectiles = self.common.creatures.projectiles.lift();
+        *projectiles = self.common.entities.projectiles.lift();
         let places: FxHashMap<_, _> = projectiles
             .iter()
             .enumerate()
@@ -462,8 +462,8 @@ impl crate::game::ServerGame<'_> {
 
     /// The contact still belongs to the same projectile with the same motion.
     fn captured_projectile_index(&self, p: &Projectile) -> Option<usize> {
-        let i = self.common.creatures.projectiles.locate(p.join)?;
-        let live = &self.common.creatures.projectiles[i];
+        let i = self.common.entities.projectiles.locate(p.join)?;
+        let live = &self.common.entities.projectiles[i];
         (live.position == p.position
             && live.velocity == p.velocity
             && live.owner == p.owner
@@ -490,7 +490,7 @@ impl crate::game::ServerGame<'_> {
             (p, pending.keep, hit) = self.broken_vehicle_retick(before.clone());
             pending.target = self.native_impact_target(hit);
             self.common
-                .creatures
+                .entities
                 .projectiles
                 .store_back(index, p.clone());
             self.entity_section_step(p.id, from.components(), p.position.components());
@@ -505,7 +505,7 @@ impl crate::game::ServerGame<'_> {
                     None
                 };
                 if !pending.keep || ceiling.is_some() {
-                    self.common.creatures.projectiles.remove(index);
+                    self.common.entities.projectiles.remove(index);
                 }
                 return ceiling.map(|hit| (p, hit));
             }
@@ -527,16 +527,16 @@ impl crate::game::ServerGame<'_> {
             let (through, keep, _) = self.native_projectile_through(before);
             if keep {
                 let to = through.position;
-                self.common.creatures.projectiles.store_back(index, through);
+                self.common.entities.projectiles.store_back(index, through);
                 if !pending.keep
-                    && let Some(owner) = self.common.creatures.projectiles.extract(p.join)
+                    && let Some(owner) = self.common.entities.projectiles.extract(p.join)
                 {
-                    let end = self.common.creatures.projectiles.len();
-                    self.common.creatures.projectiles.put_back(end, owner);
+                    let end = self.common.entities.projectiles.len();
+                    self.common.entities.projectiles.put_back(end, owner);
                 }
                 self.entity_section_step(p.id, p.position.components(), to.components());
             } else {
-                self.common.creatures.projectiles.remove(index);
+                self.common.entities.projectiles.remove(index);
             }
             return None;
         }
@@ -558,7 +558,7 @@ impl crate::game::ServerGame<'_> {
         {
             return None;
         }
-        let mut p = self.common.creatures.projectiles[i].clone();
+        let mut p = self.common.entities.projectiles[i].clone();
         if let (Some(_), Hit::Block { pos, .. }) = (&p.arrow, hit) {
             let from = p.position;
             {
@@ -575,16 +575,16 @@ impl crate::game::ServerGame<'_> {
                 .map(|a| std::mem::take(&mut a.events))
                 .unwrap_or_default();
             if pending.keep {
-                self.common.creatures.projectiles.store_back(i, p.clone());
+                self.common.entities.projectiles.store_back(i, p.clone());
                 self.entity_section_step(p.id, from.components(), p.position.components());
             } else {
-                self.common.creatures.projectiles.remove(i);
+                self.common.entities.projectiles.remove(i);
             }
             for event in events {
                 self.server_arrow_event(p.position, event);
             }
         } else if !pending.keep {
-            self.common.creatures.projectiles.remove(i);
+            self.common.entities.projectiles.remove(i);
         }
         Some(p)
     }
@@ -595,10 +595,10 @@ impl crate::game::ServerGame<'_> {
         if self.projectile_removal_pending(id) {
             return;
         }
-        let Some(i) = self.common.creatures.projectiles.locate(join) else {
+        let Some(i) = self.common.entities.projectiles.locate(join) else {
             return;
         };
-        let mut p = self.common.creatures.projectiles[i].clone();
+        let mut p = self.common.entities.projectiles[i].clone();
         let keep = {
             let rain = self.arrow_rain();
             sunrise_sim::entities::arrows::finish_block_contact(&mut p, &self.arrow_scene(&rain))
@@ -610,9 +610,9 @@ impl crate::game::ServerGame<'_> {
             .unwrap_or_default();
         let (owner, guest, at) = (p.owner, p.guest, p.position);
         if keep {
-            self.common.creatures.projectiles.store_back(i, p);
+            self.common.entities.projectiles.store_back(i, p);
         } else {
-            self.common.creatures.projectiles.remove(i);
+            self.common.entities.projectiles.remove(i);
         }
         for event in events {
             if event == ArrowEvent::ShootEvent {

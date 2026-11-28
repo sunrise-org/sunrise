@@ -29,7 +29,7 @@ pub(crate) mod tests {
         ] {
             let state = registry.default_state(name).unwrap();
             common.world.set(8, 64, 8, state).unwrap();
-            let _ = common.mobs[0].update_retained_ground(
+            let _ = common.entities.mobs[0].update_retained_ground(
                 &common.world,
                 common.collision,
                 &items().entity_type_tags,
@@ -37,24 +37,30 @@ pub(crate) mod tests {
                 None,
             );
             assert_eq!(
-                common.breeze_ground(&common.mobs[0]),
+                common.breeze_ground(&common.entities.mobs[0]),
                 ([8, 64, 8], state),
                 "{name}"
             );
         }
         // Replacing the shape between moves doesn't select a new support.
         common.world.set(8, 64, 8, stone).unwrap();
-        assert_eq!(common.breeze_ground(&common.mobs[0]), ([8, 64, 8], stone));
+        assert_eq!(
+            common.breeze_ground(&common.entities.mobs[0]),
+            ([8, 64, 8], stone)
+        );
         // The same breeze on the full block's top reads that block.
-        common.mobs[0].position = Vec3::new(8.5, 65.0, 8.5);
-        let _ = common.mobs[0].update_retained_ground(
+        common.entities.mobs[0].position = Vec3::new(8.5, 65.0, 8.5);
+        let _ = common.entities.mobs[0].update_retained_ground(
             &common.world,
             common.collision,
             &items().entity_type_tags,
             true,
             None,
         );
-        assert_eq!(common.breeze_ground(&common.mobs[0]), ([8, 64, 8], stone));
+        assert_eq!(
+            common.breeze_ground(&common.entities.mobs[0]),
+            ([8, 64, 8], stone)
+        );
     }
 
     #[cfg(feature = "client")]
@@ -97,7 +103,7 @@ pub(crate) mod tests {
             (None, Some(tables)) => &tables.items,
             (None, None) => common.res.items(),
         };
-        let _ = common.mobs[0].update_retained_ground(
+        let _ = common.entities.mobs[0].update_retained_ground(
             &common.world,
             common.collision,
             &items.entity_type_tags,
@@ -105,7 +111,7 @@ pub(crate) mod tests {
             None,
         );
         assert_eq!(
-            game.breeze_ground(&game.mobs[0]),
+            game.breeze_ground(&game.entities.mobs[0]),
             ([8, 64, 8], fence),
             "the feet's own cell is air; the fence is what holds them up"
         );
@@ -151,7 +157,7 @@ pub(crate) mod tests {
             (None, Some(tables)) => &tables.items,
             (None, None) => common.res.items(),
         };
-        let _ = common.mobs[0].update_retained_ground(
+        let _ = common.entities.mobs[0].update_retained_ground(
             &common.world,
             common.collision,
             &items.entity_type_tags,

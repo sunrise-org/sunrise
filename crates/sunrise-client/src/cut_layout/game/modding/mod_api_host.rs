@@ -45,9 +45,9 @@ mod attachment_membership_tests {
                     assert_membership(game, id);
                 }};
             }
-            summon!("pig", mobs);
-            summon!("item_frame", item_frames);
-            summon!("painting", paintings);
+            summon!("pig", entities.mobs);
+            summon!("item_frame", entities.item_frames);
+            summon!("painting", entities.paintings);
             for name in ["marker", "leash_knot"] {
                 game.summon_with_nbt(&format!("minecraft:{name}"), [0.5, 70.0, 0.5], "{}")
                     .unwrap();
@@ -55,28 +55,28 @@ mod attachment_membership_tests {
                 let id = game.test_last_other_id();
                 assert_membership(game, id);
             }
-            summon!("area_effect_cloud", breath_clouds);
-            summon!("end_crystal", crystals);
-            summon!("cushion", cushions);
+            summon!("area_effect_cloud", entities.breath_clouds);
+            summon!("end_crystal", entities.crystals);
+            summon!("cushion", entities.cushions);
             game.add_fangs([0.5, 70.0, 0.5], 0.0, 0, 0);
-            let id = game.fangs.list[0].id;
+            let id = game.entities.fangs.list[0].id;
             assert_membership(game, id);
             game.add_ominous_item_spawner(
                 sunrise_items::items::ItemStack::new("minecraft:stone", 1),
                 [0.5, 70.0, 0.5],
                 60,
             );
-            let id = game.ominous_spawners[0].id;
+            let id = game.entities.ominous_spawners[0].id;
             assert_membership(game, id);
             let fence = [0, 70, 0];
             game.tie_knot(fence);
-            let mob = game.mobs[0].id;
+            let mob = game.entities.mobs[0].id;
             assert!(game.set_leash(
                 Target::Mob(mob),
                 sunrise_sim::mobs::leash::Holder::Knot(fence),
                 None
             ));
-            let id = game.resident_entities.knots[0].id;
+            let id = game.entities.knots[0].id;
             assert_membership(game, id);
             // Also cover a player-tied natural knot, besides the explicitly summoned knot.
             let natural_fence = [3, 70, 3];
@@ -148,7 +148,9 @@ mod attachment_membership_tests {
         with_game(|game| {
             game.reset_entity_residency();
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(410, kind, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(410, kind, Vec3::ZERO, 0.0));
             let check = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 for id in [0, 410, 999] {
                     assert_eq!(
@@ -159,19 +161,21 @@ mod attachment_membership_tests {
                 }
             };
             check(game);
-            game.paintings.push(sunrise_sim::entities::Painting {
-                attachment_lifetime: Default::default(),
-                join: Default::default(),
-                id: 420,
-                pos: [0, 64, 0],
-                facing: 2,
-                variant: "minecraft:kebab".into(),
-                asset: None,
-                width: 1,
-                height: 1,
-                check_interval: 0,
-                ticks: 0,
-            });
+            game.entities
+                .paintings
+                .push(sunrise_sim::entities::Painting {
+                    attachment_lifetime: Default::default(),
+                    join: Default::default(),
+                    id: 420,
+                    pos: [0, 64, 0],
+                    facing: 2,
+                    variant: "minecraft:kebab".into(),
+                    asset: None,
+                    width: 1,
+                    height: 1,
+                    check_interval: 0,
+                    ticks: 0,
+                });
             game.persist.removals.push(Target::Painting(420));
             assert_eq!(
                 game.attachment_entity_exists(420),
@@ -185,17 +189,17 @@ mod attachment_membership_tests {
                 game.attachment_slot(mod_api::Holder::Entity(420), AttachmentAccess::Store)
                     .is_err()
             );
-            let join = game.mobs[0].join_seq();
-            let taken = game.mobs.extract(join).unwrap();
+            let join = game.entities.mobs[0].join_seq();
+            let taken = game.entities.mobs.extract(join).unwrap();
             assert!(matches!(
                 game.attachment_slot(mod_api::Holder::Entity(410), AttachmentAccess::Existing),
                 Err(mod_api::AttachmentError::HolderBusy)
             ));
-            game.mobs.put_back(0, taken);
+            game.entities.mobs.put_back(0, taken);
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = 500;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             for id in 500..=508 {
                 assert_eq!(game.attachment_entity_exists(id), old_membership(game, id));
             }
@@ -207,7 +211,7 @@ mod attachment_membership_tests {
             check(game);
             game.persist.destroying_vehicles.insert(Target::Mob(410));
             check(game);
-            game.mobs.update(0, |mob| mob.removed = true);
+            game.entities.mobs.update(0, |mob| mob.removed = true);
             check(game);
             game.enter_level(sunrise_gameplay_common::game::Dim::Nether)
                 .unwrap();
@@ -238,9 +242,11 @@ mod attachment_membership_tests {
             game.reset_entity_residency();
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             for population in [300, 3000, 10000] {
-                while game.mobs.len() < population {
-                    let id = game.mobs.len() as u32 + 100;
-                    game.mobs.push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
+                while game.entities.mobs.len() < population {
+                    let id = game.entities.mobs.len() as u32 + 100;
+                    game.entities
+                        .mobs
+                        .push(Mob::new(id, kind.clone(), Vec3::ZERO, 0.0));
                 }
                 let holder = mod_api::Holder::Entity(100);
                 game.attachment_slot(holder, AttachmentAccess::Existing)

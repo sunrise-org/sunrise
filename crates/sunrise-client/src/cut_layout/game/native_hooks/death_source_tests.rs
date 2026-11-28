@@ -186,7 +186,7 @@ pub(crate) fn mob(
     mob.persistent = true;
     mob.no_ai = true;
     mob.ground.on_ground = true;
-    game.mobs.push(mob);
+    game.entities.mobs.push(mob);
 }
 
 pub(crate) fn bow() -> ItemStack {
@@ -215,11 +215,11 @@ pub(crate) fn player_arrow(
     game.inventory[9] = Some(ItemStack::new("minecraft:arrow", 8));
     game.release_bow(weapon, 20);
     assert_eq!(
-        game.creatures.projectiles.len(),
+        game.entities.projectiles.len(),
         1,
         "actual bow release spawned an arrow"
     );
-    game.creatures.projectiles.update(0, |arrow| {
+    game.entities.projectiles.update(0, |arrow| {
         arrow.position = Vec3::new(4.5, 80.5, 4.5);
         arrow.previous = arrow.position;
         arrow.velocity = Vec3::new(4.0, 0.0, 0.0);
@@ -229,7 +229,15 @@ pub(crate) fn player_arrow(
 
 pub(crate) fn finish_projectile_death(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32) {
     game.tick_projectiles().unwrap();
-    assert!(game.mobs.iter().find(|mob| mob.id == id).unwrap().health <= 0.0);
+    assert!(
+        game.entities
+            .mobs
+            .iter()
+            .find(|mob| mob.id == id)
+            .unwrap()
+            .health
+            <= 0.0
+    );
     game.tick_creature_entities().unwrap();
 }
 
@@ -242,7 +250,7 @@ fn player_bow_death_retains_the_incoming_source_and_full_weapon() {
             observed(false, false, |game, seen| {
                 player(game);
                 mob(game, 41, "minecraft:zombie", Vec3::new(6.0, 80.0, 4.5));
-                game.mobs[0].health = 1.0;
+                game.entities.mobs[0].health = 1.0;
                 let weapon = bow();
                 let expected = weapon.try_into_api().unwrap();
                 let arrow = player_arrow(game, &weapon);
@@ -286,9 +294,11 @@ fn skeleton_arrow_death_credits_the_skeleton_not_the_player() {
                 game.player.as_mut().unwrap().position = Vec3::new(12.0, 80.0, 12.0);
                 mob(game, 42, "minecraft:skeleton", Vec3::new(2.5, 80.0, 4.5));
                 mob(game, 43, "minecraft:zombie", Vec3::new(6.0, 80.0, 4.5));
-                game.mobs[1].health = 1.0;
+                game.entities.mobs[1].health = 1.0;
                 let weapon = bow();
-                game.mobs[0].extra.set_main_hand_stack(Some(weapon.clone()));
+                game.entities.mobs[0]
+                    .extra
+                    .set_main_hand_stack(Some(weapon.clone()));
                 let mut shot = Projectile::new(
                     ProjectileKind::Arrow {
                         base_damage: 2.0,
@@ -302,7 +312,7 @@ fn skeleton_arrow_death_credits_the_skeleton_not_the_player() {
                 shot.velocity = Vec3::new(4.0, 0.0, 0.0);
                 shot.arrow.as_mut().unwrap().fired_from_weapon = Some(weapon.clone());
                 game.add_projectile(shot);
-                let arrow = game.creatures.projectiles[0].id;
+                let arrow = game.entities.projectiles[0].id;
                 finish_projectile_death(game, 43);
                 let seen = seen.lock().unwrap();
                 assert_eq!(seen.deaths.len(), 1);
@@ -322,30 +332,39 @@ pub(crate) fn cancelled_mob(heal: bool) {
         player(game);
         // Sheep's guaranteed mutton makes the absence of loot non-probabilistic.
         mob(game, 44, "minecraft:sheep", Vec3::new(6.0, 80.0, 4.5));
-        game.mobs[0].health = 1.0;
+        game.entities.mobs[0].health = 1.0;
         player_arrow(game, &bow());
         game.tick_projectiles().unwrap();
         game.tick_creature_entities().unwrap();
         assert_eq!(seen.lock().unwrap().deaths.len(), 1);
-        assert_eq!(game.mobs[0].health, if heal { 5.0 } else { 0.0 });
-        assert!(game.dropped.is_empty());
-        let elapsed = game.mobs[0].death_time;
+        assert_eq!(game.entities.mobs[0].health, if heal { 5.0 } else { 0.0 });
+        assert!(game.entities.dropped.is_empty());
+        let elapsed = game.entities.mobs[0].death_time;
         if !heal {
             assert!(elapsed < 20);
             for _ in elapsed..19 {
                 game.tick_creature_entities().unwrap();
-                assert!(game.mobs.iter().any(|mob| mob.id == 44 && !mob.removed));
+                assert!(
+                    game.entities
+                        .mobs
+                        .iter()
+                        .any(|mob| mob.id == 44 && !mob.removed)
+                );
             }
             game.tick_creature_entities().unwrap();
             assert!(
-                !game.mobs.iter().any(|mob| mob.id == 44 && !mob.removed),
+                !game
+                    .entities
+                    .mobs
+                    .iter()
+                    .any(|mob| mob.id == 44 && !mob.removed),
                 "body removed at tick 20"
             );
         } else {
             for _ in 0..25 {
                 game.tick_creature_entities().unwrap();
             }
-            let mob = game.mobs.iter().find(|mob| mob.id == 44).unwrap();
+            let mob = game.entities.mobs.iter().find(|mob| mob.id == 44).unwrap();
             assert_eq!((mob.health, mob.death_time, mob.removed), (5.0, 0, false));
         }
         for _ in 0..5 {
@@ -353,10 +372,10 @@ pub(crate) fn cancelled_mob(heal: bool) {
         }
         assert_eq!(seen.lock().unwrap().deaths.len(), 1, "no death redispatch");
         assert!(
-            game.dropped.is_empty(),
+            game.entities.dropped.is_empty(),
             "a cancelled death never rolls loot"
         );
-        assert!(game.orbs.is_empty());
+        assert!(game.entities.orbs.is_empty());
     });
 }
 
@@ -437,8 +456,8 @@ pub(crate) fn cancelled_player(heal: bool) {
             assert_eq!(guest.death_time, 0);
         }
         assert_eq!(seen.lock().unwrap().deaths.len(), 1);
-        assert!(game.dropped.is_empty());
-        assert!(game.orbs.is_empty());
+        assert!(game.entities.dropped.is_empty());
+        assert!(game.entities.orbs.is_empty());
     });
 }
 
@@ -469,7 +488,7 @@ fn cancelled_body_reconstruction_keeps_the_hit_and_original_twenty_tick_deadline
             observed(true, false, |game, seen| {
                 player(game);
                 mob(game, 44, "minecraft:sheep", Vec3::new(6.0, 80.0, 4.5));
-                game.mobs[0].health = 1.0;
+                game.entities.mobs[0].health = 1.0;
                 player_arrow(game, &bow());
                 game.tick_projectiles().unwrap();
                 game.tick_creature_entities().unwrap();
@@ -482,7 +501,7 @@ fn cancelled_body_reconstruction_keeps_the_hit_and_original_twenty_tick_deadline
                 let tag = game.vehicle_tree_nbt(44).unwrap();
                 let state = game.capture_vehicle_tree_state(44).unwrap();
                 assert!(game.mob_object(44).unwrap().accepted_hit.is_none());
-                game.mobs.retain(|body| body.id != 44);
+                game.entities.mobs.retain(|body| body.id != 44);
                 game.detach_entity(44);
                 game.native_leaves_flush();
                 let restored = game.restore_vehicle_tree_state(tag, state).unwrap().root;
@@ -509,8 +528,8 @@ fn cancelled_body_reconstruction_keeps_the_hit_and_original_twenty_tick_deadline
                     1,
                     "a transfer does not retry a cancelled die"
                 );
-                assert!(game.dropped.is_empty());
-                assert!(game.orbs.is_empty());
+                assert!(game.entities.dropped.is_empty());
+                assert!(game.entities.orbs.is_empty());
             })
         },
     );
@@ -525,7 +544,7 @@ fn later_cancelled_mob_revival_is_transactional_and_a_second_kill_drops_loot() {
             observed(true, false, |game, seen| {
                 player(game);
                 mob(game, 44, "minecraft:sheep", Vec3::new(6.0, 80.0, 4.5));
-                game.mobs[0].health = 1.0;
+                game.entities.mobs[0].health = 1.0;
                 player_arrow(game, &bow());
                 game.tick_projectiles().unwrap();
                 game.tick_creature_entities().unwrap();
@@ -550,7 +569,7 @@ fn later_cancelled_mob_revival_is_transactional_and_a_second_kill_drops_loot() {
                     1,
                     "abort restored the processed attempt"
                 );
-                assert!(game.dropped.is_empty());
+                assert!(game.entities.dropped.is_empty());
                 assert!(living.set_health(game, 5.0));
                 let body = game.mob_object(44).unwrap();
                 assert_eq!(
@@ -564,7 +583,8 @@ fn later_cancelled_mob_revival_is_transactional_and_a_second_kill_drops_loot() {
                     "the genuine second death reaches its listener"
                 );
                 assert!(
-                    game.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .any(|drop| &*drop.stack.item == "minecraft:mutton")
                 );
@@ -582,7 +602,7 @@ fn cancelled_corpse_ordinary_saved_load_does_not_retry_death_or_restart_its_cloc
             observed(true, false, |game, seen| {
                 player(game);
                 mob(game, 44, "minecraft:sheep", Vec3::new(6.0, 80.0, 4.5));
-                game.mobs[0].health = 1.0;
+                game.entities.mobs[0].health = 1.0;
                 player_arrow(game, &bow());
                 game.tick_projectiles().unwrap();
                 game.tick_creature_entities().unwrap();
@@ -590,7 +610,7 @@ fn cancelled_corpse_ordinary_saved_load_does_not_retry_death_or_restart_its_cloc
                     game.tick_creature_entities().unwrap();
                 }
                 let saved = game.vehicle_tree_nbt(44).unwrap();
-                game.mobs.retain(|body| body.id != 44);
+                game.entities.mobs.retain(|body| body.id != 44);
                 game.forget_entity(44);
                 game.native_leaves_flush();
                 // Ordinary disk reconstruction: deliberately no runtime transfer token.
@@ -611,8 +631,8 @@ fn cancelled_corpse_ordinary_saved_load_does_not_retry_death_or_restart_its_cloc
                     1,
                     "ordinary loading never retries the cancelled die"
                 );
-                assert!(game.dropped.is_empty());
-                assert!(game.orbs.is_empty());
+                assert!(game.entities.dropped.is_empty());
+                assert!(game.entities.orbs.is_empty());
             })
         },
     );
@@ -666,7 +686,7 @@ fn later_cancelled_player_revival_is_transactional_and_a_second_kill_drops_inven
                     1,
                     "abort restored the cancelled attempt"
                 );
-                assert!(game.dropped.is_empty());
+                assert!(game.entities.dropped.is_empty());
                 assert!(living.set_health(game, 5.0));
                 let guest = &game.server.lan.as_ref().unwrap().hub.guests[0];
                 assert_eq!(
@@ -695,7 +715,8 @@ fn later_cancelled_player_revival_is_transactional_and_a_second_kill_drops_inven
                 assert!(!guest.body_present());
                 assert!(guest.carried.is_none());
                 assert_eq!(
-                    game.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .filter(|drop| &*drop.stack.item == "minecraft:diamond")
                         .map(|drop| drop.stack.count)
@@ -787,7 +808,7 @@ pub(crate) fn skeleton_shot_at_guest(game: &mut sunrise_gameplay::game::ServerGa
     shot.left_owner = true;
     shot.velocity = Vec3::new(4.0, 0.0, 0.0);
     game.add_projectile(shot);
-    game.creatures.projectiles[0].id
+    game.entities.projectiles[0].id
 }
 
 /// An arrow kills a guest: `living_drops` hears the source `living_death` heard (#4843): an
@@ -899,7 +920,7 @@ fn mob_death_and_handle_preserve_namespaced_types() {
                     );
                     mob.persistent = true;
                     mob.no_ai = true;
-                    game.mobs.push(mob);
+                    game.entities.mobs.push(mob);
                 }
                 assert!(game.run_command("kill @e"));
                 assert_eq!(

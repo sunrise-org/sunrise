@@ -37,7 +37,7 @@ fn the_inventory_poll_releases_live_queues_only_when_it_opens_a_screen() {
             0.0,
         );
         boat.chest = true;
-        game.boats.push(boat);
+        game.entities.boats.push(boat);
         game.riding = Some(47);
         for key in [
             KeyCode::KeyQ,

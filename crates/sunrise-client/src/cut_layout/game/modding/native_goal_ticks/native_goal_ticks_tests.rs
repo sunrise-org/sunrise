@@ -149,15 +149,15 @@ pub(crate) fn zombie(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32,
         .clone();
     let mut m = Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0);
     m.ground.on_ground = true;
-    game.mobs.push(m);
-    let join = game.mobs.last().unwrap().join;
+    game.entities.mobs.push(m);
+    let join = game.entities.mobs.last().unwrap().join;
     game.flush_resident_mob_parts(id, join);
 }
 
 /// Re-stage and flush `register_goals` on a resident mob after a test clears its selectors.
 fn restage_and_flush_goals(game: &mut sunrise_gameplay::game::ServerGame<'_>, index: usize) {
     let (id, join) = {
-        let m = &mut game.mobs[index];
+        let m = &mut game.entities.mobs[index];
         m.stage_mod_goals();
         (m.id, m.join)
     };
@@ -182,7 +182,7 @@ fn tick_goals_as(
 ) {
     // The native-authoritative side, whose mob tick builds the goal host.
     game.options.dedicated = Some(Vec::new());
-    let mut mobs = game.mobs.lift();
+    let mut mobs = game.entities.mobs.lift();
     let snapshot: Vec<_> = mobs
         .iter()
         .map(|m| creatures::seen(m, game.level.player_uuid, game.items()))
@@ -208,7 +208,8 @@ fn tick_goals_as(
         selector.tick(&mut mobs[index], &mut cx);
         mobs[index].ai.goals = selector;
     }
-    game.mobs
+    game.entities
+        .mobs
         .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
 }
 
@@ -232,15 +233,31 @@ fn goals_register_after_the_species_own_and_only_on_their_type() {
         // A zombie without the parts: the species list alone.
         bare = {
             zombie(game, 90, [3.5, 65.0, 3.5]);
-            let names: Vec<_> = game.mobs.last().unwrap().ai.goals.entries().collect();
-            game.mobs.clear();
+            let names: Vec<_> = game
+                .entities
+                .mobs
+                .last()
+                .unwrap()
+                .ai
+                .goals
+                .entries()
+                .collect();
+            game.entities.mobs.clear();
             names
         };
     });
     install_game_mods();
     with_game(|game| {
         zombie(game, 91, [3.5, 65.0, 3.5]);
-        let entries: Vec<_> = game.mobs.last().unwrap().ai.goals.entries().collect();
+        let entries: Vec<_> = game
+            .entities
+            .mobs
+            .last()
+            .unwrap()
+            .ai
+            .goals
+            .entries()
+            .collect();
         assert_eq!(entries[0], bare[0], "the species goals lead");
         assert_eq!(
             entries.last().unwrap(),
@@ -267,14 +284,14 @@ fn two_mobs_keep_independent_state_and_random_streams() {
         zombie(game, 10, [3.5, 65.0, 3.5]);
         zombie(game, 11, [23.5, 65.0, 23.5]);
         // Only the mod goal, so the species' own draws stay out of the count.
-        game.mobs[0].ai.goals.clear();
-        game.mobs[1].ai.goals.clear();
+        game.entities.mobs[0].ai.goals.clear();
+        game.entities.mobs[1].ai.goals.clear();
         restage_and_flush_goals(game, 0);
         restage_and_flush_goals(game, 1);
         // Construction already consumed the living entity's yaw draw.
         // Snapshot at the goal boundary, not before the entity constructor.
-        let mut after_first = game.mobs[0].random.clone();
-        let mut after_second = game.mobs[1].random.clone();
+        let mut after_first = game.entities.mobs[0].random.clone();
+        let mut after_second = game.entities.mobs[1].random.clone();
         tick_goals(game, 0);
         tick_goals(game, 1);
         assert_eq!(calls(10), ["can_use", "start", "tick"]);
@@ -287,11 +304,11 @@ fn two_mobs_keep_independent_state_and_random_streams() {
         );
         assert_ne!(first_draw, second_draw);
         assert_eq!(
-            game.mobs[0].random.next_int_bound(1000).unwrap(),
+            game.entities.mobs[0].random.next_int_bound(1000).unwrap(),
             after_first.next_int_bound(1000).unwrap()
         );
         assert_eq!(
-            game.mobs[1].random.next_int_bound(1000).unwrap(),
+            game.entities.mobs[1].random.next_int_bound(1000).unwrap(),
             after_second.next_int_bound(1000).unwrap()
         );
     });
@@ -307,7 +324,7 @@ fn reads_answer_the_tick_view_and_refuse_what_it_lacks() {
         fixture_resident_column(&mut game.world, (0, 0));
         zombie(game, 20, [3.5, 65.0, 3.5]);
         zombie(game, 21, [13.5, 65.0, 13.5]);
-        game.mobs[1].health = 12.5;
+        game.entities.mobs[1].health = 12.5;
         let other = game.entity(21).unwrap();
         set_other(other);
         tick_goals(game, 0);
@@ -335,17 +352,17 @@ fn a_higher_priority_goal_interrupts_a_running_mod_goal() {
         zombie(game, 30, [3.5, 65.0, 3.5]);
         // Just the two competing goals: the mod goal (registered at 7 by the
         // part) and a vanilla standin above it at 3.
-        game.mobs[0].ai.goals.clear();
+        game.entities.mobs[0].ai.goals.clear();
         restage_and_flush_goals(game, 0);
         assert!(
-            game.mobs[0]
+            game.entities.mobs[0]
                 .ai
                 .goals
                 .entries()
                 .any(|(_, name, _)| name == "Counter"),
             "the re-attach registered the mod goal"
         );
-        game.mobs[0].ai.goals.add(3, Vanilla);
+        game.entities.mobs[0].ai.goals.add(3, Vanilla);
         tick_goals(game, 0);
         // The mod goal started (can_use, start, its reduced-cadence tick),
         // then the higher-priority standin replaced it: stop ran, and the
@@ -359,11 +376,11 @@ fn a_higher_priority_goal_interrupts_a_running_mod_goal() {
             "the mod goal ran and was interrupted"
         );
         assert!(
-            game.mobs[0].ai.goals.is_running("Vanilla"),
+            game.entities.mobs[0].ai.goals.is_running("Vanilla"),
             "the higher-priority goal holds MOVE"
         );
         assert!(
-            !game.mobs[0].ai.goals.is_running("Counter"),
+            !game.entities.mobs[0].ai.goals.is_running("Counter"),
             "the interrupted goal stopped"
         );
     });
@@ -421,12 +438,12 @@ fn set_target_follows_the_write_rules() {
         let other = game.entity(41).unwrap();
         set_other(other);
         // Only the writing goal, so no species goal races it.
-        game.mobs[0].ai.goals.clear();
-        game.mobs[0].ai.targets.clear();
+        game.entities.mobs[0].ai.goals.clear();
+        game.entities.mobs[0].ai.targets.clear();
         restage_and_flush_goals(game, 0);
         tick_goals(game, 0);
         assert_eq!(
-            game.mobs[0].ai.target,
+            game.entities.mobs[0].ai.target,
             Some(Who::Mob(41)),
             "a snapshot mob target stores"
         );
@@ -441,11 +458,11 @@ fn mobs_without_mod_goals_tick_as_before() {
         // No parts at all: no goal host is built, and the species goals
         // answer for themselves.
         zombie(game, 50, [3.5, 65.0, 3.5]);
-        game.mobs[0].ai.goals.clear();
-        game.mobs[0].ai.goals.add(3, Vanilla);
+        game.entities.mobs[0].ai.goals.clear();
+        game.entities.mobs[0].ai.goals.add(3, Vanilla);
         tick_goals(game, 0);
         assert!(
-            game.mobs[0].ai.goals.is_running("Vanilla"),
+            game.entities.mobs[0].ai.goals.is_running("Vanilla"),
             "a plain goal ticks with no goal host in place"
         );
     });
@@ -539,7 +556,7 @@ fn the_host_answers_without_panicking() {
     with_game(|game| {
         zombie(game, 70, [3.5, 65.0, 3.5]);
         zombie(game, 71, [13.5, 65.0, 13.5]);
-        game.mobs[1].health = 12.5;
+        game.entities.mobs[1].health = 12.5;
         // A loaded chunk the level handle can vouch for (`is_loaded`).
         game.world.chunks.insert(
             (0, 0),
@@ -548,7 +565,7 @@ fn the_host_answers_without_panicking() {
         let other = game.entity(71).unwrap();
         set_other(other);
         // Only the reader goal, so nothing else races it.
-        game.mobs[0].ai.goals.clear();
+        game.entities.mobs[0].ai.goals.clear();
         restage_and_flush_goals(game, 0);
         game.options.dedicated = Some(Vec::new());
         assert!(
@@ -588,8 +605,8 @@ fn mob_of(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, kind: &str
     let kind = game.res.mob_types().get(kind).unwrap().clone();
     let mut m = Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0);
     m.ground.on_ground = true;
-    game.mobs.push(m);
-    let join = game.mobs.last().unwrap().join;
+    game.entities.mobs.push(m);
+    let join = game.entities.mobs.last().unwrap().join;
     game.flush_resident_mob_parts(id, join);
 }
 
@@ -647,7 +664,7 @@ fn a_client_copy_registers_no_mod_goals() {
         // The authoritative construction registers the part's goal…
         zombie(game, 80, [3.5, 65.0, 3.5]);
         assert!(
-            game.mobs[0]
+            game.entities.mobs[0]
                 .ai
                 .goals
                 .entries()
@@ -751,19 +768,22 @@ fn a_goal_jump_goes_through_the_jump_control_input() {
     .unwrap();
     with_game(|game| {
         zombie(game, 82, [3.5, 65.0, 3.5]);
-        game.mobs[0].ai.goals.clear();
+        game.entities.mobs[0].ai.goals.clear();
         restage_and_flush_goals(game, 0);
         tick_goals(game, 0);
         // The goal asked the jump control, not its output: the production
         // `jump_control_tick` assigns the output from this wish.
-        assert!(game.mobs[0].ai.jump, "the goal set the control's input");
-        assert!(!game.mobs[0].ai.jumping, "not its output");
-        game.mobs[0].jump_control_tick();
         assert!(
-            game.mobs[0].ai.jumping,
+            game.entities.mobs[0].ai.jump,
+            "the goal set the control's input"
+        );
+        assert!(!game.entities.mobs[0].ai.jumping, "not its output");
+        game.entities.mobs[0].jump_control_tick();
+        assert!(
+            game.entities.mobs[0].ai.jumping,
             "the control jumps on the mob's next own tick"
         );
-        assert!(!game.mobs[0].ai.jump, "the wish is consumed");
+        assert!(!game.entities.mobs[0].ai.jump, "the wish is consumed");
     });
 }
 
@@ -826,8 +846,8 @@ fn set_target_refuses_what_the_write_handle_refuses() {
         mob_of(game, 92, "minecraft:creeper", [23.5, 65.0, 23.5]);
         mob_of(game, 93, "minecraft:ghast", [33.5, 70.0, 33.5]);
         // Only the writing goal, so no species goal races it.
-        game.mobs[0].ai.goals.clear();
-        game.mobs[0].ai.targets.clear();
+        game.entities.mobs[0].ai.goals.clear();
+        game.entities.mobs[0].ai.targets.clear();
         restage_and_flush_goals(game, 0);
         for id in [91, 92, 93] {
             *TARGET.lock().unwrap() = Some(game.entity(id).unwrap());
@@ -841,10 +861,10 @@ fn set_target_refuses_what_the_write_handle_refuses() {
                 "target {id}"
             );
             if id == 91 {
-                assert_eq!(game.mobs[0].ai.target, Some(Who::Mob(91)));
+                assert_eq!(game.entities.mobs[0].ai.target, Some(Who::Mob(91)));
             } else {
                 assert_ne!(
-                    game.mobs[0].ai.target,
+                    game.entities.mobs[0].ai.target,
                     Some(Who::Mob(id)),
                     "a refused target does not store"
                 );
@@ -863,7 +883,7 @@ fn set_target_refuses_what_the_write_handle_refuses() {
             Some(true),
             "a survival player on a fighting difficulty stores"
         );
-        assert_eq!(game.mobs[0].ai.target, Some(Who::Player));
+        assert_eq!(game.entities.mobs[0].ai.target, Some(Who::Player));
         game.world.health_rules.difficulty = sunrise_world::food::Difficulty::Peaceful;
         tick_goals_as(game, 0, Some(view.clone()), Some(([1, 2, 3, 4], 5000)));
         assert_eq!(
@@ -872,7 +892,7 @@ fn set_target_refuses_what_the_write_handle_refuses() {
             "Peaceful refuses a player target"
         );
         game.world.health_rules.difficulty = sunrise_world::food::Difficulty::Normal;
-        game.mobs[0].extra.player_created = true;
+        game.entities.mobs[0].extra.player_created = true;
         tick_goals_as(game, 0, Some(view), Some(([1, 2, 3, 4], 5000)));
         assert_eq!(
             ANSWERS.lock().unwrap().last().copied(),
@@ -880,7 +900,7 @@ fn set_target_refuses_what_the_write_handle_refuses() {
             "a player-built golem never targets a player"
         );
         assert_eq!(
-            game.mobs[0].ai.target,
+            game.entities.mobs[0].ai.target,
             Some(Who::Player),
             "a refused player target does not replace the stored one"
         );
@@ -943,17 +963,17 @@ fn move_and_look_inputs_pass_the_navigation_boundary() {
     .unwrap();
     with_game(|game| {
         zombie(game, 83, [3.5, 65.0, 3.5]);
-        game.mobs[0].ai.goals.clear();
+        game.entities.mobs[0].ai.goals.clear();
         restage_and_flush_goals(game, 0);
         tick_goals(game, 0);
         let (nan_at, inf_speed, _) = RESULTS.lock().unwrap().last().copied().unwrap();
         assert!(!nan_at, "a NaN coordinate refuses");
         assert!(!inf_speed, "an infinite speed refuses");
-        assert_eq!(game.mobs[0].ai.look.wanted, [10.5, 66.0, 0.0]);
+        assert_eq!(game.entities.mobs[0].ai.look.wanted, [10.5, 66.0, 0.0]);
         // The tick's NaN look kept it.
         tick_goals(game, 0);
         assert_eq!(
-            game.mobs[0].ai.look.wanted,
+            game.entities.mobs[0].ai.look.wanted,
             [10.5, 66.0, 0.0],
             "a NaN look refuses, the control keeps its wish"
         );
@@ -1013,7 +1033,7 @@ fn the_player_the_tick_sees_resolves_by_its_captured_identity() {
     .unwrap();
     with_game(|game| {
         zombie(game, 84, [3.5, 65.0, 3.5]);
-        game.mobs[0].ai.goals.clear();
+        game.entities.mobs[0].ai.goals.clear();
         restage_and_flush_goals(game, 0);
         // A server's tick lends a guest's view, with the guest's real
         // identity captured beside it — no player of the game's own exists.
@@ -1086,7 +1106,7 @@ fn mod_goal_tick_cost() {
             game.flush_unjoined_mob_parts(&mut mob);
             std::mem::take(&mut mob.ai.goals)
         };
-        let mut mobs = game.mobs.lift();
+        let mut mobs = game.entities.mobs.lift();
         let snapshot: Vec<_> = mobs
             .iter()
             .map(|m| creatures::seen(m, game.level.player_uuid, game.items()))
@@ -1330,15 +1350,15 @@ fn leap_trace(mod_goal: bool) -> Vec<[u64; 7]> {
         }
         mob_of(game, 70, "minecraft:wolf", [3.5, 65.0, 3.5]);
         mob_of(game, PREY, "minecraft:pig", [6.0, 65.0, 5.0]);
-        for m in game.mobs.iter_mut() {
+        for m in game.entities.mobs.iter_mut() {
             m.ai.goals.clear();
             m.ai.targets.clear();
         }
-        game.mobs[0].ai.target = Some(Who::Mob(PREY));
+        game.entities.mobs[0].ai.target = Some(Who::Mob(PREY));
         if mod_goal {
             restage_and_flush_goals(game, 0);
         } else {
-            game.mobs[0]
+            game.entities.mobs[0]
                 .ai
                 .goals
                 .add(4, mobs::goals::LeapAtTarget::new(0.4));
@@ -1346,7 +1366,7 @@ fn leap_trace(mod_goal: bool) -> Vec<[u64; 7]> {
         for _ in 0..40 {
             game.world.game_time += 1;
             game.tick_mobs().unwrap();
-            let wolf = game.mobs.iter().find(|m| m.id == 70).unwrap();
+            let wolf = game.entities.mobs.iter().find(|m| m.id == 70).unwrap();
             let (p, v) = (wolf.position, wolf.velocity);
             trace.push([
                 p.x.to_bits(),

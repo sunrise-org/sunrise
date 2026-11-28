@@ -12,7 +12,7 @@ impl ServerGame<'_> {
         if stack.count == 0 {
             self.remove_dropped(i);
         } else {
-            self.common.dropped[i].stack = stack;
+            self.common.entities.dropped[i].stack = stack;
         }
         true
     }

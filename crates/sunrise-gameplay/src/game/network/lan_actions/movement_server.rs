@@ -166,7 +166,7 @@ impl crate::game::ServerGame<'_> {
         let Some(Some(index)) = index else {
             return;
         };
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         let camel = sunrise_sim::mobs::camel::is_camel(m.species()).then_some(m.id);
         let Some((sound, volume)) = crate::game::mounts::start_riding_jump(m, data) else {
             return;

@@ -878,14 +878,14 @@ mod custom_bundle_integration_tests {
                 game.world
                     .chunks
                     .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
-                game.dropped.clear();
+                game.entities.dropped.clear();
                 game.spawn_item(updated, [4.5, 64.0, 4.5], [0.0; 3], 0);
-                let id = game.dropped.last().unwrap().id;
+                let id = game.entities.dropped.last().unwrap().id;
                 assert!(game.hurt_item_entity(id, 10.0, "minecraft:on_fire", None, None, None));
-                assert!(game.dropped.iter().all(|e| e.id != id));
-                assert_eq!(game.dropped.len(), 1);
-                assert_eq!(&*game.dropped[0].stack.item, "minecraft:arrow");
-                assert_eq!(game.dropped[0].stack.count, 20);
+                assert!(game.entities.dropped.iter().all(|e| e.id != id));
+                assert_eq!(game.entities.dropped.len(), 1);
+                assert_eq!(&*game.entities.dropped[0].stack.item, "minecraft:arrow");
+                assert_eq!(game.entities.dropped[0].stack.count, 20);
             });
         });
     }

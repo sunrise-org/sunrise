@@ -50,7 +50,7 @@ fn actual_holder_detach_does_not_reaward_the_held_lead_criterion() {
     ));
     assert!(game.run_command("execute if entity @e[type=frog,nbt={UUID:[I;9,9,9,9],Health:10f,NoAI:1b,variant:\"minecraft:temperate\",Pos:[4.5d,100d,6.5d]}]"));
     let id = game.mob_by_uuid([9, 9, 9, 9]).unwrap();
-    let index = game.mobs.iter().position(|m| m.id == id).unwrap();
+    let index = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
     assert!(game.run_command("item replace entity @s hotbar.0 with lead 4"));
     assert!(!game.adv.progress.has(ADV, CRITERION));
     // Actual modeled frog and player are authoritative; no replayed source tag.
@@ -64,10 +64,13 @@ fn actual_holder_detach_does_not_reaward_the_held_lead_criterion() {
     };
     assert!(game.interact_mob(target()).unwrap());
     assert_eq!(
-        game.mobs[index].extra.leash,
+        game.entities.mobs[index].extra.leash,
         Some(sunrise_sim::mobs::leash::Holder::Player)
     );
-    assert_eq!(game.mobs[index].extra.leash_player, Some([413, 0, 0, 1]));
+    assert_eq!(
+        game.entities.mobs[index].extra.leash_player,
+        Some([413, 0, 0, 1])
+    );
     assert_eq!(game.held().unwrap().count, 3);
     assert!(
         game.adv.progress.has(ADV, CRITERION),
@@ -76,7 +79,7 @@ fn actual_holder_detach_does_not_reaward_the_held_lead_criterion() {
     assert!(game.run_command(&format!("advancement revoke @s only {ADV} {CRITERION}")));
     assert!(!game.adv.progress.has(ADV, CRITERION));
     assert!(game.interact_mob(target()).unwrap());
-    assert!(game.mobs[index].extra.leash.is_none());
+    assert!(game.entities.mobs[index].extra.leash.is_none());
     assert_eq!(game.held().unwrap().item.as_ref(), "minecraft:lead");
     assert_eq!(game.held().unwrap().count, 3);
     assert_eq!(game.level.player_uuid, Some([413, 0, 0, 1]));

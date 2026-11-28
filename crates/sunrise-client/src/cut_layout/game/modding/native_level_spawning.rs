@@ -424,7 +424,7 @@ mod tests {
                         after = Some((
                             <(u64, Option<f64>)>::from(&*game.world.random),
                             delay,
-                            game.mobs.len(),
+                            game.entities.mobs.len(),
                         ));
                     });
                 },
@@ -477,7 +477,12 @@ mod tests {
                     Some("minecraft:cow")
                 );
                 assert_eq!(game.entity_position(cow), Some([8.5, 64.0, 8.25]));
-                let mob = game.mobs.iter().find(|m| m.id == cow.id()).unwrap();
+                let mob = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == cow.id())
+                    .unwrap();
                 assert!(!mob.persistent);
                 assert_eq!(
                     *heard.lock().unwrap(),
@@ -488,7 +493,7 @@ mod tests {
                     ]
                 );
 
-                let mobs = game.mobs.len();
+                let mobs = game.entities.mobs.len();
                 let stale = LevelRef::new(WorldEpoch::new(0), game.dim.key());
                 let at = [8.5, 64.0, 8.5];
                 let refused: [(LevelRef, &str, [f64; 3]); 10] = [
@@ -537,7 +542,7 @@ mod tests {
                     None
                 );
                 assert_eq!(game.server.next_entity, next_id);
-                assert_eq!(game.mobs.len(), mobs);
+                assert_eq!(game.entities.mobs.len(), mobs);
                 assert_eq!(heard.lock().unwrap().len(), 3, "no refusal told a mod");
             });
         });
@@ -572,7 +577,12 @@ mod tests {
             let cow = game
                 .level_spawn_entity(level, "minecraft:cow", [8.5, 64.0, 8.5], &spawn)
                 .unwrap();
-            let mob = game.mobs.iter().find(|m| m.id == cow.id()).unwrap();
+            let mob = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == cow.id())
+                .unwrap();
             assert_eq!(mob.velocity, Vec3::new(0.25, 0.5, -0.125));
             assert_eq!((mob.yaw, mob.head_pitch), (45.0, -10.0));
             // The kind resolves as `/summon`'s.
@@ -598,13 +608,13 @@ mod tests {
                     None
                 );
             }
-            assert!(game.dragon.is_none());
+            assert!(game.entities.dragon.is_none());
             let mut facing = living();
             facing.rotation = Some([30.0, 0.0]);
             let dragon = game
                 .level_spawn_entity(level, "ender_dragon", [8.5, 80.0, 8.5], &facing)
                 .unwrap();
-            let d = game.dragon.as_ref().unwrap();
+            let d = game.entities.dragon.as_ref().unwrap();
             assert_eq!((d.id, d.yaw), (dragon.id(), 30.0));
         });
     }
@@ -633,7 +643,7 @@ mod tests {
                 .unwrap();
             assert_eq!(game.entity_owner(shot), Some(cow));
             let p = game
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|p| p.id == shot.id())
@@ -668,12 +678,12 @@ mod tests {
                 .unwrap();
             assert_eq!(game.entity(stand.id()), Some(stand));
             spawn.owner = Some(stand);
-            let projectiles = game.creatures.projectiles.len();
+            let projectiles = game.entities.projectiles.len();
             assert_eq!(
                 game.level_spawn_entity(level, "minecraft:snowball", [8.5, 65.5, 8.5], &spawn),
                 None
             );
-            assert_eq!(game.creatures.projectiles.len(), projectiles);
+            assert_eq!(game.entities.projectiles.len(), projectiles);
         });
     }
 

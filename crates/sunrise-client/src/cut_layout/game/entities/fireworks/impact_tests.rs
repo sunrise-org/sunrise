@@ -14,7 +14,7 @@ pub(crate) fn launch(game: &mut sunrise_gameplay::game::ServerGame<'_>, lifetime
     r.left_owner = true;
     r.lifetime = lifetime;
     std::sync::Arc::make_mut(&mut r.explosions).push(FireworkExplosion::default());
-    game.rockets.push(r);
+    game.entities.rockets.push(r);
 }
 
 #[test]
@@ -25,7 +25,8 @@ fn rocket_hits_report_geometry_and_cancellation_skips_the_explosion() {
             with_probe(action, true, |game, observed| {
                 if entity {
                     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                    game.mobs
+                    game.entities
+                        .mobs
                         .push(Mob::new(72, kind, Vec3::new(3.0, 64.0, 0.5), 0.0));
                 } else {
                     let stone = game
@@ -56,16 +57,16 @@ fn rocket_hits_report_geometry_and_cancellation_skips_the_explosion() {
                     point(hit.at, [2.0, 64.5, 0.5]);
                 }
                 if matches!(action, Action::Cancel) {
-                    assert_eq!(game.rockets.len(), 1);
+                    assert_eq!(game.entities.rockets.len(), 1);
                     assert!(game.entity(71).is_some());
-                    assert_eq!(game.rockets[0].life, 1);
+                    assert_eq!(game.entities.rockets[0].life, 1);
                     if entity {
-                        assert_eq!(game.mobs[0].health, 10.0);
+                        assert_eq!(game.entities.mobs[0].health, 10.0);
                     }
                 } else {
-                    assert!(game.rockets.is_empty());
+                    assert!(game.entities.rockets.is_empty());
                     if entity {
-                        assert!(game.mobs[0].health < 10.0);
+                        assert!(game.entities.mobs[0].health < 10.0);
                     }
                 }
             });
@@ -90,7 +91,8 @@ fn rockets_skip_misses_deflections_and_a_closed_gate_but_keep_lifetime_expiry() 
                     .get("minecraft:breeze")
                     .unwrap()
                     .clone();
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(72, kind, Vec3::new(3.0, 64.0, 0.5), 0.0));
             } else if case >= 2 {
                 let stone = game
@@ -105,18 +107,18 @@ fn rockets_skip_misses_deflections_and_a_closed_gate_but_keep_lifetime_expiry() 
             if case == 4 {
                 // A plain rocket still reports its block hit, but does not
                 // explode on that hit even when it is allowed.
-                game.rockets[0].explosions = Default::default();
-                game.rockets[0].lifetime = 100;
+                game.entities.rockets[0].explosions = Default::default();
+                game.entities.rockets[0].lifetime = 100;
             }
             game.tick_rockets();
             assert_eq!(observed.hits.lock().unwrap().len(), usize::from(case >= 3));
             match case {
                 1 => {
-                    assert_eq!(game.rockets.len(), 1);
-                    assert_eq!(game.rockets[0].velocity.x, -2.0);
+                    assert_eq!(game.entities.rockets.len(), 1);
+                    assert_eq!(game.entities.rockets[0].velocity.x, -2.0);
                 }
-                2 | 3 => assert!(game.rockets.is_empty()),
-                _ => assert_eq!(game.rockets.len(), 1),
+                2 | 3 => assert!(game.entities.rockets.is_empty()),
+                _ => assert_eq!(game.entities.rockets.len(), 1),
             }
         });
     }
@@ -197,12 +199,12 @@ fn rocket_impact_rechecks_subscriptions_per_impact_moment() {
                 r.left_owner = true;
                 r.lifetime = 100;
                 std::sync::Arc::make_mut(&mut r.explosions).push(FireworkExplosion::default());
-                game.rockets.push(r);
+                game.entities.rockets.push(r);
             }
             ROCKET_IMPACT_PREPARES.with(|count| count.set(0));
             game.tick_rockets();
             prepares = ROCKET_IMPACT_PREPARES.with(std::cell::Cell::get);
-            assert!(game.rockets.is_empty());
+            assert!(game.entities.rockets.is_empty());
         });
     });
     assert_eq!(*seen.lock().unwrap(), [71]);
@@ -225,29 +227,39 @@ fn a_crowd_of_rockets_ticks_in_place_keeping_order_and_identity() {
             r.angled = true;
             r.left_owner = true;
             r.lifetime = 100;
-            game.rockets.push(r);
+            game.entities.rockets.push(r);
         }
-        let joins: Vec<_> = game.rockets.iter().map(|r| (r.id, r.join)).collect();
+        let joins: Vec<_> = game
+            .entities
+            .rockets
+            .iter()
+            .map(|r| (r.id, r.join))
+            .collect();
         for tick in 1..=3 {
             game.tick_rockets();
             // Continuing flights keep every resident's identity and order.
             assert_eq!(
-                game.rockets
+                game.entities
+                    .rockets
                     .iter()
                     .map(|r| (r.id, r.join))
                     .collect::<Vec<_>>(),
                 joins
             );
-            assert!(game.rockets.iter().all(|r| r.life == tick));
+            assert!(game.entities.rockets.iter().all(|r| r.life == tick));
             assert_eq!(game.resident_entities.table.get_mut().end_tick(), Ok(()));
         }
         // Expired rockets permanently leave the list, the others stay put.
-        game.rockets[2].lifetime = 0;
+        game.entities.rockets[2].lifetime = 0;
         game.tick_rockets();
-        assert_eq!(game.rockets.len(), 5);
-        assert!(game.rockets.iter().all(|r| r.id != 102));
+        assert_eq!(game.entities.rockets.len(), 5);
+        assert!(game.entities.rockets.iter().all(|r| r.id != 102));
         assert_eq!(
-            game.rockets.iter().map(|r| r.id).collect::<Vec<_>>(),
+            game.entities
+                .rockets
+                .iter()
+                .map(|r| r.id)
+                .collect::<Vec<_>>(),
             [100, 101, 103, 104, 105]
         );
     });
@@ -258,11 +270,11 @@ fn a_crowd_of_rockets_ticks_in_place_keeping_order_and_identity() {
 fn rocket_section_listener_reads_the_advanced_position() {
     with_probe(Action::ReadSectionPosition, false, |game, observed| {
         launch(game, 100);
-        game.rockets[0].position = Vec3::new(0.5, 79.5, 0.5);
-        game.rockets[0].velocity = Vec3::new(0.0, 1.0, 0.0);
+        game.entities.rockets[0].position = Vec3::new(0.5, 79.5, 0.5);
+        game.entities.rockets[0].velocity = Vec3::new(0.0, 1.0, 0.0);
         game.tick_rockets();
 
-        let pos = game.rockets[0].position;
+        let pos = game.entities.rockets[0].position;
         assert!(pos.y >= 80.0);
         assert_eq!(
             *observed.section_positions.lock().unwrap(),

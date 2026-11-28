@@ -99,12 +99,13 @@ fn game_with_fish<'a>(
     let kind = game.res.mob_types()["minecraft:pufferfish"].clone();
     let mut fish = Mob::new(9001, kind, at, 0.0);
     fish.extra.size = 2;
-    game.mobs.push(fish);
+    game.entities.mobs.push(fish);
     game
 }
 
 fn silverfish(game: &sunrise_gameplay::game::ServerGame<'_>) -> usize {
-    game.mobs
+    game.entities
+        .mobs
         .iter()
         .filter(|m| m.kind.id == "minecraft:silverfish")
         .count()
@@ -133,7 +134,9 @@ fn an_absorbed_hit_still_rolls_the_infested_effect() {
         // Back to what the first sting left, and no cooldown to refuse it.
         let _ = p.set_health(20.0, true);
         p.health.hurt.cooldown = 0;
-        g.mobs.retain(|m| m.kind.id != "minecraft:silverfish");
+        g.entities
+            .mobs
+            .retain(|m| m.kind.id != "minecraft:silverfish");
         g.world.random.set_seed(seed);
         g.touch_pufferfish();
         let p = g.player.as_ref().unwrap();
@@ -167,7 +170,9 @@ fn a_starving_infested_player_rolls_the_infested_effect() {
     let mut rolls = 0;
     for i in 0..128i64 {
         let seed = i.wrapping_mul(0x9E37_79B9_7F4A_7C15u64 as i64);
-        g.mobs.retain(|m| m.kind.id != "minecraft:silverfish");
+        g.entities
+            .mobs
+            .retain(|m| m.kind.id != "minecraft:silverfish");
         g.world.random.set_seed(seed);
         let rules = g.world.health_rules;
         let resources = &g.health_resources;

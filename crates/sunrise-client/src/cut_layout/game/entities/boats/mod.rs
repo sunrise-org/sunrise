@@ -70,7 +70,7 @@ pub(crate) mod tests {
                 let mut boat = Boat::new(71, "oak".into(), Vec3::new(10.0, 200.0, 20.0), 0.0);
                 boat.status = Status::UnderWater;
                 boat.out_of_control = 60.0;
-                game.boats.push(boat);
+                game.entities.boats.push(boat);
                 let mut rider =
                     sunrise_sim::mobs::Mob::new(72, kind.clone(), Vec3::new(5.0, 190.0, 6.0), 0.0);
                 rider.extra.mount = Some(71);
@@ -82,14 +82,14 @@ pub(crate) mod tests {
                 let mut child = sunrise_sim::mobs::Mob::new(73, kind, Vec3::ZERO, 0.0);
                 child.extra.mount = Some(72);
                 child.age = 19;
-                game.mobs.push(child);
+                game.entities.mobs.push(child);
                 if broken {
                     assert!(game.hurt_boat(0, 5.0, true));
-                    assert!(game.boats.is_empty());
+                    assert!(game.entities.boats.is_empty());
                 } else {
                     // The actual ejection entry used by AbstractBoat.tick at 60 submerged ticks.
                     game.eject_boat_riders(0);
-                    assert_eq!(game.boats.len(), 1);
+                    assert_eq!(game.entities.boats.len(), 1);
                 }
                 let rider = game.mob_object(72).unwrap();
                 assert_eq!(rider.extra.mount, None);

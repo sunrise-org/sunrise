@@ -67,7 +67,7 @@ pub(crate) mod select_on_a_server_tests {
             }
             changed.sort();
             assert_eq!(changed, [(0, false), (2, false), (38, true)]);
-            assert!(game.orbs.is_empty());
+            assert!(game.entities.orbs.is_empty());
             assert_eq!(
                 game.stats.get("custom", "minecraft:traded_with_villager"),
                 traded

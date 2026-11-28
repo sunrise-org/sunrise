@@ -34,6 +34,7 @@ impl crate::game::ServerGame<'_> {
                 let bounds = block.bounds();
                 let victims: Vec<_> = self
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .filter(|mob| mob.alive() && !mob.removed && bounds.intersects(mob.bounds()))
@@ -44,20 +45,20 @@ impl crate::game::ServerGame<'_> {
                     ..sunrise_sim::mobs::Damage::of(mob_kind)
                 };
                 for join in victims {
-                    let Some(index) = self.common.mobs.locate(join) else {
+                    let Some(index) = self.common.entities.mobs.locate(join) else {
                         continue;
                     };
-                    if self.common.mobs[index].removed {
+                    if self.common.entities.mobs[index].removed {
                         continue;
                     }
-                    let mob_id = self.common.mobs[index].id;
+                    let mob_id = self.common.entities.mobs[index].id;
                     let plan = self.prepare_knockback_credit(
                         mob_id as i32,
                         None,
                         self.server.combat.0.attack(),
                     );
                     let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
-                    self.common.mobs[index].damage(
+                    self.common.entities.mobs[index].damage(
                         crate::game::server_side::entity_server::damage_level_of!(
                             self,
                             &attack,

@@ -58,7 +58,7 @@ impl crate::game::ClientGame<'_> {
         if self.record_driven_boat_lid_movement(i, delta) {
             return;
         }
-        let boat = &self.common.boats[i];
+        let boat = &self.common.entities.boats[i];
         if let Some(lerp) = self
             .client
             .remote
@@ -117,7 +117,7 @@ impl crate::game::ClientGame<'_> {
     /// the splash sound and particle at the boat.
     pub(in crate::game::client_side) fn boat_bubble_splash(&mut self, i: usize) {
         use sunrise_level::particle_options::{ParticleOptions, ParticleType};
-        let p = self.common.boats[i].position;
+        let p = self.common.entities.boats[i].position;
         let pitch = 0.8 + 0.4 * self.common.world.random.next_float();
         self.play_audio(
             "minecraft:entity.generic.splash",
@@ -146,7 +146,7 @@ impl crate::game::ClientGame<'_> {
             glam::DVec3::new(WIDTH, HEIGHT, WIDTH),
             self.view_scale(),
         );
-        for b in &self.common.boats[run] {
+        for b in &self.common.entities.boats[run] {
             // LevelExtractor: the camera entity is not drawn from its own eyes.
             if self.hides_as_camera(b.id) {
                 continue;
@@ -281,7 +281,7 @@ impl crate::game::ClientGame<'_> {
 
     /// Client-side `AbstractBoat.canAddPassenger` from `Remote::passenger_seats` + local rider.
     pub(in crate::game) fn client_boat_has_room(&self, i: usize) -> bool {
-        let b = &self.common.boats[i];
+        let b = &self.common.entities.boats[i];
         if b.under_water() {
             return false;
         }
@@ -305,7 +305,7 @@ impl crate::game::ClientGame<'_> {
 
     /// Client-side `player_boat_seat` from `Remote::passenger_seats` + local rider.
     pub(in crate::game) fn client_player_boat_seat(&self, i: usize) -> Vec3 {
-        let b = &self.common.boats[i];
+        let b = &self.common.entities.boats[i];
         let (index, count) = if let Some(remote) = self.client.remote.as_ref() {
             let local_id = remote.entity_id as u32;
             let mut seats: Vec<_> = remote.passenger_seats(b.id).collect();
@@ -378,24 +378,30 @@ impl crate::game::ClientGame<'_> {
             if case.attack.is_some() {
                 continue;
             }
-            self.common.boats.clear();
+            self.common.entities.boats.clear();
             let mut boat = Boat::new(1, "oak".into(), Vec3::new(0.0, 100.0, 0.0), 0.0);
             let [x, y, z] = case.velocity;
             boat.velocity = Vec3::new(x, y, z);
             boat.delta_rotation = case.spin;
-            self.common.boats.push(boat);
+            self.common.entities.boats.push(boat);
             let mut steps = Vec::new();
             if let Some(paddles) = case.paddles {
                 self.common.riding = None;
-                self.common.boats.update(0, |b| b.paddles = paddles.initial);
+                self.common
+                    .entities
+                    .boats
+                    .update(0, |b| b.paddles = paddles.initial);
                 for step in paddles.steps {
-                    self.common.boats.update(0, |b| b.paddling = step.flags);
-                    self.common.boats.update(0, |b| {
+                    self.common
+                        .entities
+                        .boats
+                        .update(0, |b| b.paddling = step.flags);
+                    self.common.entities.boats.update(0, |b| {
                         b.paddle_controller = step.occupied && step.first_player
                     });
                     self.common.riding = step.owned.then_some(1);
                     if step.owned {
-                        self.common.boats.update(0, |b| {
+                        self.common.entities.boats.update(0, |b| {
                             b.input = [
                                 step.flags[1] && !step.flags[0],
                                 step.flags[0] && !step.flags[1],
@@ -403,11 +409,11 @@ impl crate::game::ClientGame<'_> {
                                 false,
                             ]
                         });
-                        let boat = self.tick_boat(self.common.boats[0].clone(), true);
+                        let boat = self.tick_boat(self.common.entities.boats[0].clone(), true);
                         self.common.store_boat_back(0, boat);
                     }
                     self.tick_remote_boat_bubbles();
-                    let boat = &self.common.boats[0];
+                    let boat = &self.common.entities.boats[0];
                     let rowing = [0.0, 0.25, 0.5, 1.0].map(|a| {
                         [0, 1].map(|side| format!("{:08x}", boat.rowing_time(side, a).to_bits()))
                     });
@@ -422,12 +428,12 @@ impl crate::game::ClientGame<'_> {
             for owned in case.owned {
                 self.common.riding = owned.then_some(1);
                 if owned {
-                    let boat = self.common.boats.remove(0);
+                    let boat = self.common.entities.boats.remove(0);
                     let boat = self.tick_boat(boat, true);
-                    self.common.boats.push(boat);
+                    self.common.entities.boats.push(boat);
                 }
                 self.tick_remote_boat_bubbles();
-                let boat = &self.common.boats[0];
+                let boat = &self.common.entities.boats[0];
                 steps.push(json!({
                     "owned": owned,
                     "spin": format!("{:08x}", boat.delta_rotation.to_bits()),

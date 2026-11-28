@@ -368,10 +368,10 @@ impl crate::game::ClientGame<'_> {
             // old handles and adopts the epoch already given to Load listeners.
             self.native_lifecycle_open_at(level.handle.epoch());
             self.native_lifecycle_world_ready();
-            self.common.mobs.clear();
+            self.common.entities.mobs.clear();
             self.clear_remote_objects();
             self.clear_remote_projectiles();
-            self.common.dropped.clear();
+            self.common.entities.dropped.clear();
             self.clear_client_level_particles();
             if let Some(r) = self.client.remote.as_mut() {
                 r.heard_level = Some(spawn.dimension.clone());
@@ -525,14 +525,14 @@ impl crate::game::ClientGame<'_> {
         self.remove_local_player_body();
         self.common.spawn = None;
         self.common.level.world_spawn_dimension = None;
-        self.common.mobs.clear();
+        self.common.entities.mobs.clear();
         self.clear_remote_objects();
         self.clear_remote_projectiles();
-        self.common.creatures.projectiles.clear();
-        self.common.dropped.clear();
+        self.common.entities.projectiles.clear();
+        self.common.entities.dropped.clear();
         self.clear_client_level_particles();
-        self.common.orbs.clear();
-        self.common.falling.clear();
+        self.common.entities.orbs.clear();
+        self.common.entities.falling.clear();
         self.set_client_mining(None);
         self.common.container = None;
         self.common.carried = None;
@@ -805,13 +805,13 @@ impl crate::game::ClientGame<'_> {
         self.remove_local_player_body();
         self.common.spawn = None;
         self.common.level.world_spawn_dimension = None;
-        self.common.mobs.clear();
+        self.common.entities.mobs.clear();
         self.clear_remote_objects();
         self.clear_remote_projectiles();
-        self.common.creatures.projectiles.clear();
-        self.common.dropped.clear();
+        self.common.entities.projectiles.clear();
+        self.common.entities.dropped.clear();
         self.clear_client_level_particles();
-        self.common.falling.clear();
+        self.common.entities.falling.clear();
         self.set_client_mining(None);
         self.common.container = None;
         self.common.carried = None;

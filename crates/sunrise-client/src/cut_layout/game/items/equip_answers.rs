@@ -270,16 +270,16 @@ mod tests {
                 .unwrap()
                 .clone();
             let at = sunrise_core::geometry::Vec3::new(6.5, 64.0, 5.5);
-            let index = game.mobs.len();
-            game.mobs.push(Mob::new(21, kind.clone(), at, 0.0));
+            let index = game.entities.mobs.len();
+            game.entities.mobs.push(Mob::new(21, kind.clone(), at, 0.0));
             let prepared = game.equip_stack(&rich_helmet());
             assert!(game.can_equip(&prepared, "feet", 21, "minecraft:zombie", false));
             let before = asked.load(Ordering::Relaxed);
             assert!(!game.can_equip(&prepared, "feet", 9999, "minecraft:zombie", true));
-            game.mobs.remove(index);
+            game.entities.mobs.remove(index);
             assert!(!game.can_equip(&prepared, "feet", 21, "minecraft:zombie", true));
             assert_eq!(asked.load(Ordering::Relaxed), before);
-            game.mobs.push(Mob::new(21, kind, at, 0.0));
+            game.entities.mobs.push(Mob::new(21, kind, at, 0.0));
             assert!(game.can_equip(&prepared, "feet", 21, "minecraft:zombie", false));
             assert_eq!(asked.load(Ordering::Relaxed), before + 1);
             take_equip_conversions();

@@ -12,13 +12,18 @@ use {
 };
 
 pub(crate) fn check_answer(g: &sunrise_gameplay::game::ServerGame<'_>, slot: usize, answers: bool) {
-    let health = g.mobs[0].health;
+    let health = g.entities.mobs[0].health;
     assert_eq!(health < 100.0, answers, "attacker health: {health}");
     assert_eq!(
-        f::item_stack(&g.mobs[1], slot).unwrap().damage,
+        f::item_stack(&g.entities.mobs[1], slot).unwrap().damage,
         if answers { 2 } else { 0 }
     );
-    assert_eq!(f::item_stack(&g.mobs[0], f::MAINHAND).unwrap().damage, 0);
+    assert_eq!(
+        f::item_stack(&g.entities.mobs[0], f::MAINHAND)
+            .unwrap()
+            .damage,
+        0
+    );
     let sounds: Vec<_> = g
         .server
         .pending_sounds
@@ -28,10 +33,10 @@ pub(crate) fn check_answer(g: &sunrise_gameplay::game::ServerGame<'_>, slot: usi
     assert_eq!(sounds.len(), usize::from(answers));
     if answers {
         assert!((95.0..=99.0).contains(&health));
-        let source = g.mobs[0].last_damage.unwrap().0;
+        let source = g.entities.mobs[0].last_damage.unwrap().0;
         assert_eq!(source.kind, DamageKind::Thorns);
         assert_eq!(source.attacker, Some(Who::Mob(42)));
-        assert_eq!(sounds[0].position, g.mobs[0].center());
+        assert_eq!(sounds[0].position, g.entities.mobs[0].center());
     }
 }
 
@@ -45,14 +50,14 @@ fn dragon_takes_player_thorns_through_its_body() {
             g.armor[1] = Some(thorny());
             let mut d = Dragon::new(Vec3::new(0.0, 70.0, 0.0), 0.0, 1);
             d.id = SPECIAL;
-            g.dragon.replace(d);
+            g.entities.dragon.replace(d);
             g.server.pending_sounds.clear();
             if wing {
                 g.dragon_wing_knock_back(Vec3::ZERO, false);
             } else {
                 g.dragon_hurts_player("minecraft:mob_attack", 10.0);
             }
-            let d = g.dragon.as_ref().unwrap();
+            let d = g.entities.dragon.as_ref().unwrap();
             // DamageEntity rolls [1,5); the body's cut is damage/4 + min(damage,1).
             assert_eq!(d.health, 198.019_12);
             assert_eq!(
@@ -76,7 +81,7 @@ fn dragon_takes_player_thorns_through_its_body() {
             );
         }
         // Head contacts run effects through a refused player hit; breath does not.
-        g.dragon.as_mut().unwrap().invulnerable = 0;
+        g.entities.dragon.as_mut().unwrap().invulnerable = 0;
         g.player.as_mut().unwrap().health.advance_clock();
         let health = g.player.as_ref().unwrap().health.health();
         g.dragon_hurts_player("minecraft:mob_attack", 1.0);
@@ -84,9 +89,9 @@ fn dragon_takes_player_thorns_through_its_body() {
         // The refused head hit adds only Thorns wear to the wing's 3;
         // the refused breath hit adds neither ordinary armor wear nor Thorns.
         assert_eq!(g.armor[1].as_ref().unwrap().damage, 5);
-        let before = g.dragon.as_ref().unwrap().health;
+        let before = g.entities.dragon.as_ref().unwrap().health;
         g.dragon_hurts_player("minecraft:indirect_magic", 1.0);
-        assert_eq!(g.dragon.as_ref().unwrap().health, before);
+        assert_eq!(g.entities.dragon.as_ref().unwrap().health, before);
         assert_eq!(g.armor[1].as_ref().unwrap().damage, 5);
 
         // Move past knockBack's two-tick recent-attacker exclusion, but stay
@@ -97,7 +102,7 @@ fn dragon_takes_player_thorns_through_its_body() {
         }
         // A refused wing still retaliates, but neither wears ordinary armor
         // nor retains its nonzero push or a new velocity-sync marker.
-        let d = g.dragon.as_mut().unwrap();
+        let d = g.entities.dragon.as_mut().unwrap();
         d.invulnerable = 0;
         d.last_source = None;
         let before = d.health;
@@ -112,7 +117,7 @@ fn dragon_takes_player_thorns_through_its_body() {
         assert_eq!(p.velocity, velocity);
         assert!(!p.health.sync_velocity);
         assert_eq!(g.armor[1].as_ref().unwrap().damage, 7);
-        let d = g.dragon.as_ref().unwrap();
+        let d = g.entities.dragon.as_ref().unwrap();
         assert!(d.health < before);
         assert_eq!(
             d.last_source,
@@ -132,17 +137,17 @@ fn dragon_takes_player_thorns_through_its_body() {
 }
 
 pub(crate) fn pair(g: &mut sunrise_gameplay::game::ServerGame<'_>, slot: usize) -> Damage {
-    g.mobs.clear();
+    g.entities.mobs.clear();
     g.server.pending_sounds.clear();
     let kind = g.res.mob_types().get("minecraft:husk").unwrap().clone();
     for (id, x) in [(41, 10.5), (42, 0.5)] {
         let mut m = Mob::new(id, kind.clone(), Vec3::new(x, 64.0, 0.5), 0.0);
         m.health = 100.0;
-        g.mobs.push(m);
+        g.entities.mobs.push(m);
     }
-    g.mobs[0].random.set_seed(1);
-    f::set_item_stack(&mut g.mobs[0], f::MAINHAND, thorny()); // Retaliation must not recurse.
-    f::set_item_stack(&mut g.mobs[1], slot, thorny());
+    g.entities.mobs[0].random.set_seed(1);
+    f::set_item_stack(&mut g.entities.mobs[0], f::MAINHAND, thorny()); // Retaliation must not recurse.
+    f::set_item_stack(&mut g.entities.mobs[1], slot, thorny());
     Damage::mob(41, [10.5, 64.0, 0.5])
 }
 

@@ -386,6 +386,7 @@ pub(crate) mod loot_kill_target_tests {
                 "summon sheep 4.5 200 4.5 {{UUID:[I;36,0,0,{n}],Health:8f,NoAI:1b,NoGravity:1b,Age:0,Color:{color}b,Sheared:{}b,Motion:[0d,0d,0d]}}", i32::from(sheared)
             )));
             let mob = game
+                .entities
                 .mobs
                 .iter()
                 .find(|m| game.persist.uuid_of(m.id) == Some([36, 0, 0, n]))
@@ -425,7 +426,12 @@ pub(crate) mod loot_kill_target_tests {
             if actual != u32::from(!sheared) {
                 differences.push((n, sheared, wool, actual));
             }
-            let mob = game.mobs.iter().find(|m| m.id == before.0).unwrap();
+            let mob = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == before.0)
+                .unwrap();
             assert_eq!((mob.id, mob.position, mob.velocity, mob.health), before);
             assert_eq!(game.persist.uuid_of(mob.id), Some([36, 0, 0, n]));
             assert_eq!((mob.extra.color, mob.extra.sheared), (color, sheared));

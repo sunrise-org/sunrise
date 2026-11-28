@@ -111,8 +111,8 @@ fn hanging(id: u32) -> Painting {
 
 /// The vertices one frame of paintings draws for a single entity.
 fn painting_frame(game: &mut crate::game::ClientGame<'_>, id: u32) -> Vec<Vertex> {
-    game.common.paintings.clear();
-    game.common.paintings.push(hanging(id));
+    game.common.entities.paintings.clear();
+    game.common.entities.paintings.push(hanging(id));
     let mut out = Vec::new();
     game.painting_geometry(CAMERA, ALPHA, &mut out);
     out
@@ -375,8 +375,8 @@ fn a_registered_painting_draws_its_renderer_in_place_of_the_quads() {
             // A lived-ticks counter and a non-zero partial so age is ticks + partial, not 0.
             let mut painting = hanging(91);
             painting.ticks = 6;
-            game.paintings.clear();
-            game.paintings.push(painting);
+            game.entities.paintings.clear();
+            game.entities.paintings.push(painting);
             let mut drawn = Vec::new();
             game.painting_geometry(CAMERA, ALPHA, &mut drawn);
             assert_eq!(drawn.len(), 4, "one quad and no painting: {drawn:?}");

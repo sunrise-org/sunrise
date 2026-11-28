@@ -47,8 +47,12 @@ fn client_critical_hit_isolated() {
             let mut reader = logged_in(game);
             let at = Vec3::new(0.5, 65.0, 2.5);
             add_entity(game, 201, "minecraft:zombie", [at.x, at.y, at.z]);
-            game.armor_stands.push(ArmorStand::new(202, at, 0.0));
-            game.boats.push(Boat::new(203, Arc::from("oak"), at, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(202, at, 0.0));
+            game.entities
+                .boats
+                .push(Boat::new(203, Arc::from("oak"), at, 0.0));
             for (id, falling, heard) in [
                 (201, true, Some(("minecraft:zombie", true))),
                 (201, false, Some(("minecraft:zombie", false))),

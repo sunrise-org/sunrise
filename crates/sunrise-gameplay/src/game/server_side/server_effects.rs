@@ -197,7 +197,7 @@ impl ServerGame<'_> {
         pitch: f32,
         except_actor: bool,
     ) {
-        let mob = &self.common.mobs[index];
+        let mob = &self.common.entities.mobs[index];
         let (at, id, silent) = (
             [mob.position.x, mob.position.y, mob.position.z],
             mob.id,

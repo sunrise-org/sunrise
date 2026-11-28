@@ -17,11 +17,13 @@ fn item_replace_asks_the_slot_predicate_of_a_stand_and_the_dragon() {
     with_resident_game(|game| {
         game.build_registries();
         game.ui.registries.permission = 4;
-        game.armor_stands.push(ArmorStand::new(16, Vec3::ZERO, 0.0));
+        game.entities
+            .armor_stands
+            .push(ArmorStand::new(16, Vec3::ZERO, 0.0));
         let mut dragon =
             sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
         dragon.id = 17;
-        game.dragon.replace(dragon);
+        game.entities.dragon.replace(dragon);
         let stand = "@e[type=minecraft:armor_stand,limit=1]";
         let dragon_sel = "@e[type=minecraft:ender_dragon,limit=1]";
         let replace = |game: &mut sunrise_gameplay::game::ServerGame<'_>,
@@ -31,17 +33,17 @@ fn item_replace_asks_the_slot_predicate_of_a_stand_and_the_dragon() {
             game.run_command(&format!("item replace entity {who} {slot} with {item}"));
         };
         let stand_slot = |game: &sunrise_gameplay::game::ServerGame<'_>, slot| {
-            game.armor_stands[0].equipment[slot].clone()
+            game.entities.armor_stands[0].equipment[slot].clone()
         };
         let dragon_slot = |game: &sunrise_gameplay::game::ServerGame<'_>, slot| {
-            game.dragon.as_ref().unwrap().equipment[slot].clone()
+            game.entities.dragon.as_ref().unwrap().equipment[slot].clone()
         };
 
         // A stand refuses body and saddle items and a chestplate in the wrong slot.
         replace(game, stand, "armor.body", "minecraft:diamond_horse_armor");
         replace(game, stand, "saddle", "minecraft:saddle");
         replace(game, stand, "armor.legs", "minecraft:iron_chestplate");
-        assert!(game.armor_stands[0].equipment.is_empty());
+        assert!(game.entities.armor_stands[0].equipment.is_empty());
         replace(game, stand, "armor.chest", "minecraft:iron_chestplate");
         assert_eq!(
             stand_slot(game, CHEST),
@@ -60,7 +62,7 @@ fn item_replace_asks_the_slot_predicate_of_a_stand_and_the_dragon() {
         replace(game, dragon_sel, "armor.body", "minecraft:stone");
         replace(game, dragon_sel, "armor.chest", "minecraft:iron_helmet");
         replace(game, dragon_sel, "saddle", "minecraft:stone");
-        assert!(game.dragon.as_ref().unwrap().equipment.is_empty());
+        assert!(game.entities.dragon.as_ref().unwrap().equipment.is_empty());
         replace(game, dragon_sel, "armor.chest", "minecraft:iron_chestplate");
         replace(
             game,

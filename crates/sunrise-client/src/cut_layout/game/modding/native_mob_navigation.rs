@@ -75,7 +75,7 @@ mod tests {
                     .clone();
                 let mut zombie = Mob::new(99, kind, Vec3::new(3.5, 65.0, 3.5), 0.0);
                 zombie.ground.on_ground = true;
-                game.mobs.push(zombie);
+                game.entities.mobs.push(zombie);
                 let entity = game.entity(99).unwrap();
                 let mob = game.mob(entity).unwrap();
                 assert_eq!(mob.is_done(game), Some(true));
@@ -87,7 +87,7 @@ mod tests {
                 },
             );
                 assert_eq!(mob.is_done(game), Some(false));
-                assert_eq!(game.mobs[0].ai.nav.speed_modifier, 1.25);
+                assert_eq!(game.entities.mobs[0].ai.nav.speed_modifier, 1.25);
                 assert!(!mob.move_to(game, [f64::NAN, 65.0, 3.5], 1.0));
                 assert_eq!(mob.is_done(game), Some(false));
                 assert!(mob.stop(game));
@@ -97,10 +97,10 @@ mod tests {
                                        extreme: f64,
                                        boundary: f64| {
                     let result = mob.move_to(game, [10.5, boundary, 3.5], 1.0);
-                    let path = game.mobs[0].ai.nav.path.clone();
+                    let path = game.entities.mobs[0].ai.nav.path.clone();
                     mob.stop(game);
                     assert_eq!(mob.move_to(game, [10.5, extreme, 3.5], 1.0), result);
-                    assert_eq!(game.mobs[0].ai.nav.path, path);
+                    assert_eq!(game.entities.mobs[0].ai.nav.path, path);
                     mob.stop(game);
                 };
                 let top = f64::from(game.world.top_y() - 1);
@@ -120,12 +120,14 @@ mod tests {
                 assert!(!stale.move_to(game, [5.0, 65.0, 3.0], 1.0));
                 assert!(!stale.stop(game));
                 assert_eq!(stale.is_done(game), None);
-                let taken = game.mobs.lift();
+                let taken = game.entities.mobs.lift();
                 assert_eq!(mob.is_done(game), None);
                 assert!(!mob.stop(game));
-                game.mobs
+                game.entities
+                    .mobs
                     .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
-                game.armor_stands
+                game.entities
+                    .armor_stands
                     .push(sunrise_sim::entities::ArmorStand::new(102, Vec3::ZERO, 0.0));
                 let wrong = MobRef::new(game.entity(102).unwrap());
                 assert!(!wrong.move_to(game, [5.0, 65.0, 3.0], 1.0));
@@ -137,13 +139,15 @@ mod tests {
                     .get("minecraft:parrot")
                     .unwrap()
                     .clone();
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(100, parrot, Vec3::new(3.5, 66.0, 5.5), 0.0));
                 let flying = game.mob(game.entity(100).unwrap()).unwrap();
                 assert!(flying.move_to(game, [9.5, 66.0, 5.5], 1.0));
                 assert_eq!(flying.is_done(game), Some(false));
                 let cod = game.res.mob_types().get("minecraft:cod").unwrap().clone();
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(101, cod, Vec3::new(3.5, 65.0, 7.5), 0.0));
                 let fish = game.mob(game.entity(101).unwrap()).unwrap();
                 assert!(!fish.move_to(game, [9.5, 65.0, 7.5], 1.0));
@@ -164,7 +168,8 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(99, kind, Vec3::new(3.5, 65.0, 3.5), 0.0));
             let entity = game.entity(99).unwrap();
             let mob = game.mob(entity).unwrap();
@@ -205,7 +210,8 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(99, kind, Vec3::new(3.5, 65.0, 3.5), 0.0));
             let entity = game.entity(99).unwrap();
             let mob = game.mob(entity).unwrap();
@@ -213,11 +219,11 @@ mod tests {
             assert_eq!(mob.navigation_speed(game), Some(0.0));
             assert!(mob.set_navigation_speed(game, 1.25));
             assert_eq!(mob.navigation_speed(game), Some(1.25));
-            assert_eq!(game.mobs[0].ai.nav.speed_modifier, 1.25);
+            assert_eq!(game.entities.mobs[0].ai.nav.speed_modifier, 1.25);
             assert!(!mob.set_navigation_speed(game, f64::NAN));
-            assert_eq!(game.mobs[0].ai.nav.speed_modifier, 1.25);
+            assert_eq!(game.entities.mobs[0].ai.nav.speed_modifier, 1.25);
             // Not the movement-speed attribute.
-            let attribute = game.mobs[0].movement_speed();
+            let attribute = game.entities.mobs[0].movement_speed();
             assert_ne!(attribute, 1.25);
             let stale = MobRef::new(EntityRef::new(
                 WorldEpoch::new(entity.epoch().get() + 1),
@@ -225,7 +231,7 @@ mod tests {
             ));
             assert_eq!(stale.navigation_speed(game), None);
             assert!(!stale.set_navigation_speed(game, 1.0));
-            assert_eq!(game.mobs[0].ai.nav.speed_modifier, 1.25);
+            assert_eq!(game.entities.mobs[0].ai.nav.speed_modifier, 1.25);
         });
     }
 }

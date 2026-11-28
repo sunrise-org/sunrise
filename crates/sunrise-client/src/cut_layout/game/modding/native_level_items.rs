@@ -30,7 +30,7 @@ mod tests {
                 Some("minecraft:item")
             );
             assert_eq!(game.entity_position(popped), Some(at));
-            let item = game.dropped.last().unwrap();
+            let item = game.entities.dropped.last().unwrap();
             assert_eq!((item.pickup_delay, item.stack.count), (10, 3));
             assert_eq!(item.velocity.y, 0.2);
             // The offsets are drawn even when nothing drops.
@@ -53,20 +53,20 @@ mod tests {
                 .level_spawn_item_with_motion(level, 1.5, 70.0, 2.5, stone(), [0.0, 0.3, 0.0], 40)
                 .unwrap();
             assert_eq!(game.entity_position(spawned), Some([1.5, 70.0, 2.5]));
-            let item = game.dropped.last().unwrap();
+            let item = game.entities.dropped.last().unwrap();
             assert_eq!((item.pickup_delay, item.velocity.y), (40, 0.3));
             assert!(
                 game.level_spawn_item(level, 1.5, 70.0, 2.5, stone(), 32767)
                     .is_some()
             );
-            assert_eq!(game.dropped.last().unwrap().pickup_delay, 32767);
+            assert_eq!(game.entities.dropped.last().unwrap().pickup_delay, 32767);
             // Signed negative and > i16::MAX delays pass straight through in memory;
             // only NBT save narrows to (short), matching ItemEntity.setPickUpDelay.
             assert!(
                 game.level_spawn_item(level, 1.5, 70.0, 2.5, stone(), -5)
                     .is_some()
             );
-            assert_eq!(game.dropped.last().unwrap().pickup_delay, -5);
+            assert_eq!(game.entities.dropped.last().unwrap().pickup_delay, -5);
             assert!(
                 game.level_spawn_item_with_motion(
                     level,
@@ -79,7 +79,7 @@ mod tests {
                 )
                 .is_some()
             );
-            assert_eq!(game.dropped.last().unwrap().pickup_delay, 40_000);
+            assert_eq!(game.entities.dropped.last().unwrap().pickup_delay, 40_000);
             assert!(
                 game.level_spawn_item(level, f64::NAN, 70.0, 2.5, stone(), 0)
                     .is_none()
@@ -98,13 +98,14 @@ mod tests {
             // the others, which keep their numbers.
             use sunrise_sim::join_seq::Joined;
             let joins = |game: &sunrise_gameplay::game::ServerGame<'_>| -> Vec<(u32, u64)> {
-                game.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .map(|d| (d.id, d.join_seq().get()))
                     .collect()
             };
             let before = joins(game);
-            let out = game.dropped.lift();
+            let out = game.entities.dropped.lift();
             let hooked = game
                 .level_spawn_item(level, 1.5, 70.0, 2.5, stone(), 0)
                 .unwrap();
@@ -118,7 +119,7 @@ mod tests {
 
             // ExperienceOrb.award: 100 is 73, 17, 7 and 3, far apart from other orbs.
             assert!(game.level_award_experience(level, 100.5, 70.0, 0.5, 100));
-            let values: Vec<u32> = game.orbs.iter().map(|o| o.points()).collect();
+            let values: Vec<u32> = game.entities.orbs.iter().map(|o| o.points()).collect();
             assert_eq!(values, [73, 17, 7, 3]);
             assert!(!game.level_award_experience(level, 100.5, 70.0, 0.5, 0));
 
@@ -186,18 +187,19 @@ mod tests {
                 };
                 // A takes X; B, far off, ticks after A. The award is id 160.
                 // The per-orb scan runs before tick increments ticks, so 0 scans now.
-                game.orbs.push(orb(40, 0.5, 3, 0));
-                game.orbs.push(orb(80, 0.5, 3, 1));
-                game.orbs.push(orb(120, 100.5, 3, 0));
+                game.entities.orbs.push(orb(40, 0.5, 3, 0));
+                game.entities.orbs.push(orb(80, 0.5, 3, 1));
+                game.entities.orbs.push(orb(120, 100.5, 3, 0));
                 game.server.next_entity = 159;
                 // Only initial residents take turns; each scan sees hook-awarded residents.
-                let ticking: Vec<_> = game.orbs.iter().map(|orb| orb.join).collect();
+                let ticking: Vec<_> = game.entities.orbs.iter().map(|orb| orb.join).collect();
                 for join in ticking {
-                    if let Some(index) = game.orbs.locate(join) {
+                    if let Some(index) = game.entities.orbs.locate(join) {
                         game.merge_orb(index);
                     }
                 }
-                let left: Vec<(u32, u32)> = game.orbs.iter().map(|o| (o.id, o.count)).collect();
+                let left: Vec<(u32, u32)> =
+                    game.entities.orbs.iter().map(|o| (o.id, o.count)).collect();
                 assert_eq!(left, [(40, 2), (120, 2)]);
             });
         });

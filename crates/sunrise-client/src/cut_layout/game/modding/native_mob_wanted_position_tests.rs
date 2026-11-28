@@ -31,7 +31,7 @@ fn wanted_position_moves_and_navigation_replaces_the_wish() {
             .clone();
         let mut zombie = Mob::new(12, kind, Vec3::new(3.5, 65.0, 3.5), 270.0);
         zombie.ground.on_ground = true;
-        game.mobs.push(zombie);
+        game.entities.mobs.push(zombie);
         let mob = game.mob(game.entity(12).unwrap()).unwrap();
         assert_eq!(
             mob.set_wanted_position(game, [10.5, 65.0, 3.5], 1.0),
@@ -39,7 +39,7 @@ fn wanted_position_moves_and_navigation_replaces_the_wish() {
         );
         assert_eq!(mob.wanted_position(game), Some([10.5, 65.0, 3.5]));
         assert_eq!(mob.speed_modifier(game), Some(1.0));
-        let mut taken = game.mobs.lift();
+        let mut taken = game.entities.mobs.lift();
         let w = game.mob_world_base(&[]);
         let mut test_level = sunrise_sim::health::TestLevel::new(0);
         let mut level = test_level.level();
@@ -55,9 +55,10 @@ fn wanted_position_moves_and_navigation_replaces_the_wish() {
             taken[0].position
         );
         assert!((10.5 - taken[0].position.x).abs() < 6.95);
-        game.mobs
+        game.entities
+            .mobs
             .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
-        let mut taken = game.mobs.lift();
+        let mut taken = game.entities.mobs.lift();
         let w = game.mob_world_base(&[]);
         let mut goal =
             sunrise_sim::mobs::goals::Stroll::new(1.25).position(|_, _| Some([2.5, 65.0, 8.5]));
@@ -73,7 +74,8 @@ fn wanted_position_moves_and_navigation_replaces_the_wish() {
             },
         );
         taken[0].nav_tick(&w);
-        game.mobs
+        game.entities
+            .mobs
             .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         assert_ne!(mob.wanted_position(game), Some([10.5, 65.0, 3.5]));
         assert_eq!(mob.speed_modifier(game), Some(1.25));
@@ -94,7 +96,7 @@ fn wanted_position_names_invalid_inputs_and_refuses_unavailable_mobs() {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
+        game.entities.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
         let mob = game.mob(game.entity(12).unwrap()).unwrap();
         assert_eq!(
             mob.set_wanted_position(game, [10000.0, 80.0, -10000.0], -1.0),
@@ -126,15 +128,16 @@ fn wanted_position_names_invalid_inputs_and_refuses_unavailable_mobs() {
         assert_eq!(mob.set_wanted_position(game, [0.0; 3], 1.0), Ok(false));
         assert_eq!(mob.wanted_position(game), None);
         game.server.held_out.retain(|id| *id != 12);
-        let taken = game.mobs.lift();
+        let taken = game.entities.mobs.lift();
         assert_eq!(mob.set_wanted_position(game, [0.0; 3], 1.0), Ok(false));
         assert_eq!(mob.wanted_position(game), None);
-        game.mobs
+        game.entities
+            .mobs
             .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         let mut dragon =
             sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
         dragon.id = 15;
-        game.dragon.replace(dragon);
+        game.entities.dragon.replace(dragon);
         let dragon = game.mob(game.entity(15).unwrap()).unwrap();
         assert_eq!(dragon.set_wanted_position(game, [0.0; 3], 1.0), Ok(false));
         assert_eq!(dragon.wanted_position(game), None);

@@ -25,7 +25,7 @@ impl ClientGame<'_> {
         }
         // Shared/server riding paths can also set these links without a
         // SetPassengers entry. Preserve their cleanup, scanning once per packet.
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if let Some(id) = m.extra.mount {
                 include(id);
             }
@@ -39,10 +39,17 @@ impl ClientGame<'_> {
             .0
             .values()
             .filter_map(|d| d.vehicle)
-            .chain(self.common.armor_stands.iter().filter_map(|a| a.vehicle))
+            .chain(
+                self.common
+                    .entities
+                    .armor_stands
+                    .iter()
+                    .filter_map(|a| a.vehicle),
+            )
             .chain(self.client.interactions.values().filter_map(|i| i.vehicle))
             .chain(
                 self.common
+                    .entities
                     .boats
                     .iter()
                     .filter(|b| b.paddle_controller)
@@ -67,7 +74,7 @@ impl ClientGame<'_> {
             }
             // Before the crystals go: the dragon's beam index follows them.
             self.remove_remote_dragon(id);
-            self.common.crystals.retain(|c| c.id != id as u32);
+            self.common.entities.crystals.retain(|c| c.id != id as u32);
             self.remove_remote_object(id as u32);
             self.remove_remote_small_projectiles(id as u32);
             self.common.persist.uuids.remove(&(id as u32));
@@ -96,11 +103,11 @@ impl ClientGame<'_> {
                 ids.first().is_none_or(|&removed| id != removed as u32)
             }
         };
-        self.common.mobs.retain(|m| keep(m.id));
-        self.common.orbs.retain(|o| keep(o.id));
-        self.common.dropped.retain(|d| keep(d.id));
-        self.common.falling.retain(|f| keep(f.id));
-        self.common.tnts.retain(|t| keep(t.id));
+        self.common.entities.mobs.retain(|m| keep(m.id));
+        self.common.entities.orbs.retain(|o| keep(o.id));
+        self.common.entities.dropped.retain(|d| keep(d.id));
+        self.common.entities.falling.retain(|f| keep(f.id));
+        self.common.entities.tnts.retain(|t| keep(t.id));
         if let Some(r) = self.client.remote.as_mut() {
             r.passenger_vehicles.retain(|_, seat| keep(seat.vehicle));
         }

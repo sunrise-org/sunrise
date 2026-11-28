@@ -20,7 +20,7 @@ pub mod tests {
         );
         mob.health = 0.0;
         mob.last_damage = Some((damage, 0));
-        game.mobs.push(mob.clone());
+        game.entities.mobs.push(mob.clone());
         mob
     }
 }

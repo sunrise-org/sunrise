@@ -64,10 +64,10 @@ pub(crate) mod stand_equip_event_tests {
             .unwrap();
         assert!(game.run_command("forceload add 0 0"));
         assert!(game.run_command("summon armor_stand 6.5 200 10.5 {UUID:[I;130,0,0,1],NoGravity:1b,attributes:[{id:\"minecraft:movement_speed\",base:0.1d}]}"));
-        let id = game.armor_stands[0].id;
+        let id = game.entities.armor_stands[0].id;
         assert_eq!(game.uuid_for(id), [130, 0, 0, 1]);
         assert!(
-            game.armor_stands[0].speed_instance,
+            game.entities.armor_stands[0].speed_instance,
             "a loaded attribute is not firstTick"
         );
         game.sculk_prepare();
@@ -184,6 +184,7 @@ pub(crate) mod mob_equipment_command_tests {
         let lines = std::mem::replace(&mut game.server.chat_capture, prev).unwrap_or_default();
         assert!(ok, "{kind}/{n}: {lines:?}");
         let mob = game
+            .entities
             .mobs
             .iter()
             .find(|m| game.persist.uuid_of(m.id) == Some([25, 0, 0, n]))
@@ -205,7 +206,7 @@ pub(crate) mod mob_equipment_command_tests {
                 assert!(
                     game.run_command(&format!("item replace entity {uuid} {slot} with {item}"))
                 );
-                let mob = game.mobs.iter().find(|m| m.id == id).unwrap();
+                let mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
                 let actual = if slot == "armor.body" {
                     &mob.extra.equipment[sunrise_items::equipment::BODY]
                 } else {
@@ -227,7 +228,7 @@ pub(crate) mod mob_equipment_command_tests {
                     )),
                     "body must reject a chest item"
                 );
-                let mob = game.mobs.iter().find(|m| m.id == id).unwrap();
+                let mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
                 assert!(
                     mob.extra
                         .slot_stack(sunrise_items::equipment::BODY)
@@ -322,6 +323,7 @@ pub(crate) mod mob_equipment_command_tests {
             assert!(game.run_command("summon sulfur_cube 4.5 200 4.5 {NoAI:1b,Tags:[\"cube\"]}"));
             let body = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 let m = game
+                    .entities
                     .mobs
                     .iter()
                     .find(|m| m.kind.id == "minecraft:sulfur_cube");
@@ -504,6 +506,7 @@ pub(crate) mod mob_equipment_stack_tests {
         let lines = std::mem::replace(&mut game.server.chat_capture, prev).unwrap_or_default();
         assert!(ok, "{kind}/{n}: {lines:?}");
         let mob = game
+            .entities
             .mobs
             .iter()
             .find(|m| game.persist.uuid_of(m.id) == Some([23, 0, 0, n]))
@@ -535,7 +538,7 @@ pub(crate) mod mob_equipment_stack_tests {
             assert!(game.run_command(&format!(
                 "item replace entity {uuid} weapon.offhand with stick[custom_data={{audit:7}}] 3"
             )));
-            let mob = game.mobs.iter().find(|m| m.id == id).unwrap();
+            let mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
             assert_eq!(mob.extra.off_hand_id(), Some("minecraft:stick"));
             let adopted = finalize::item_stack(mob, finalize::OFFHAND).unwrap();
             assert_eq!(
@@ -589,7 +592,7 @@ pub(crate) mod mob_equipment_stack_tests {
             let (uuid, id) = actor(game, "husk", 2);
             assert!(game.run_command("setblock 4 200 4 chest"));
             assert!(game.run_command(&format!("item replace entity {uuid} armor.head with iron_helmet[damage=3,custom_data={{audit:8}}]")));
-            let mob = game.mobs.iter().find(|m| m.id == id).unwrap();
+            let mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
             let stacks = mob.equipment_stacks();
             let adopted = stacks[5].as_ref().unwrap();
             assert_eq!(

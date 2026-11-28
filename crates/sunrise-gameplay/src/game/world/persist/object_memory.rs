@@ -4,7 +4,7 @@ use super::*;
 impl crate::game::ServerGame<'_> {
     pub(super) fn mob_at(&self, object: MobObject) -> &Mob {
         match object {
-            MobObject::Resident(index) => &self.common.mobs[index],
+            MobObject::Resident(index) => &self.common.entities.mobs[index],
             MobObject::OffLevel(id) => self.common.persist.off_level[&id]
                 .as_mob()
                 .expect("mob object slot"),
@@ -13,7 +13,7 @@ impl crate::game::ServerGame<'_> {
 
     pub(super) fn mob_at_mut(&mut self, object: MobObject) -> &mut Mob {
         match object {
-            MobObject::Resident(index) => &mut self.common.mobs[index],
+            MobObject::Resident(index) => &mut self.common.entities.mobs[index],
             MobObject::OffLevel(id) => self
                 .common
                 .persist
@@ -26,8 +26,14 @@ impl crate::game::ServerGame<'_> {
 
     /// Mutate an extant mob object without making it resident.
     pub fn mob_object_mut(&mut self, id: u32) -> Option<&mut Mob> {
-        if let Some(index) = self.common.mobs.iter().position(|mob| mob.id == id) {
-            return Some(&mut self.common.mobs[index]);
+        if let Some(index) = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .position(|mob| mob.id == id)
+        {
+            return Some(&mut self.common.entities.mobs[index]);
         }
         self.common
             .persist
@@ -43,6 +49,7 @@ impl crate::game::ServerGame<'_> {
         id: u32,
     ) -> Option<&sunrise_gameplay_common::game::boats_common::Boat> {
         self.common
+            .entities
             .boats
             .iter()
             .find(|boat| boat.id == id)
@@ -62,6 +69,7 @@ impl crate::game::ServerGame<'_> {
         id: u32,
     ) -> Option<&sunrise_gameplay_common::game::minecarts::Minecart> {
         self.common
+            .entities
             .carts
             .iter()
             .find(|cart| cart.id == id)
@@ -77,7 +85,7 @@ impl crate::game::ServerGame<'_> {
     /// Internal topology only: resident objects followed by retained passengers.
     /// Callers needing level membership must continue to iterate `mobs` instead.
     pub fn mob_objects(&self) -> impl Iterator<Item = &Mob> {
-        self.common.mobs.iter().chain(
+        self.common.entities.mobs.iter().chain(
             self.common
                 .persist
                 .off_level
@@ -105,7 +113,7 @@ impl crate::game::ServerGame<'_> {
             }
             self.remember(e.id, Some(uuid.unwrap_or(fresh)), tag);
             self.bind_saved_entity_attachments(e.id, &mut e.attachment_lifetime);
-            self.common.dropped.push(e);
+            self.common.entities.dropped.push(e);
         }
     }
 
@@ -130,7 +138,7 @@ impl crate::game::ServerGame<'_> {
             }
             // An orb that came through a portal keeps its cooldown.
             self.restore_portal_cooldown(id, &tag);
-            self.common.orbs.push(orb);
+            self.common.entities.orbs.push(orb);
             self.remember_tags(id, &tag);
         }
     }
@@ -262,7 +270,7 @@ impl crate::game::ServerGame<'_> {
             }
             self.remember_uuid(self.server.next_entity, uuid, &tag);
             let uuid = self.uuid_for(self.server.next_entity);
-            self.common.falling.push(FallingBlock {
+            self.common.entities.falling.push(FallingBlock {
                 size_answer: None,
                 attachment_lifetime: Default::default(),
                 // Entity.load's rotation, which nothing turns afterwards.
@@ -316,7 +324,7 @@ impl crate::game::ServerGame<'_> {
             self.resolve_trident_loyalty(&mut t);
             // One that came through a portal keeps its cooldown.
             let id = t.id;
-            self.common.tridents.push(t);
+            self.common.entities.tridents.push(t);
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(id, state);
             }
@@ -337,7 +345,7 @@ impl crate::game::ServerGame<'_> {
             rocket.id = id;
             // One that came through a portal keeps its cooldown.
             self.restore_portal_cooldown(id, &tag);
-            self.common.rockets.push(rocket);
+            self.common.entities.rockets.push(rocket);
             if let Some(state) = transferred {
                 self.adopt_transferred_entity_state(id, state);
             }
@@ -373,6 +381,7 @@ impl crate::game::ServerGame<'_> {
             // to int before short narrowing; integer tags narrow directly.
             let fuse = tnt_fuse(&tag);
             self.common
+                .entities
                 .tnts
                 .push(sunrise_gameplay_common::game::tnt_common::PrimedTnt {
                     size_answer: None,
@@ -464,7 +473,7 @@ impl crate::game::ServerGame<'_> {
                 self.common.persist.off_level.insert(id, OffLevel::Boat(b));
             } else {
                 self.bind_saved_entity_attachments(id, &mut b.attachment_lifetime);
-                self.common.boats.push(b);
+                self.common.entities.boats.push(b);
             }
             self.load_passengers(id, riders);
             return Some(id);
@@ -503,7 +512,7 @@ impl crate::game::ServerGame<'_> {
                 self.common.persist.off_level.insert(id, OffLevel::Cart(c));
             } else {
                 self.bind_saved_entity_attachments(id, &mut c.attachment_lifetime);
-                self.common.carts.push(c);
+                self.common.entities.carts.push(c);
             }
             self.load_passengers(id, riders);
             return Some(id);
@@ -645,8 +654,8 @@ impl crate::game::ServerGame<'_> {
         self.remember(id, Some(uuid), tag);
         if resident {
             self.bind_saved_entity_attachments(id, &mut m.attachment_lifetime);
-            self.common.mobs.push(m);
-            let join = self.common.mobs.last().unwrap().join;
+            self.common.entities.mobs.push(m);
+            let join = self.common.entities.mobs.last().unwrap().join;
             self.flush_resident_mob_parts(id, join);
             if restore_target {
                 self.native_restore_loaded_target(id, anger_uuid);
@@ -700,6 +709,7 @@ impl crate::game::ServerGame<'_> {
     pub(super) fn mob_passenger_objects(&self, id: u32) -> Vec<MobObject> {
         let mut riders: Vec<(i64, u32, MobObject)> = self
             .common
+            .entities
             .mobs
             .iter()
             .enumerate()
@@ -759,6 +769,7 @@ impl crate::game::ServerGame<'_> {
             (VehicleTreeKind::Cart, cart.kind.id().to_owned())
         } else if self
             .common
+            .entities
             .armor_stands
             .iter()
             .any(|stand| stand.id == root)
@@ -899,6 +910,7 @@ impl crate::game::ServerGame<'_> {
                 let id = self.server.next_entity + 1;
                 self.load_armor_stand_transferred(tag, uuid, Some(state));
                 self.common
+                    .entities
                     .armor_stands
                     .iter()
                     .any(|stand| stand.id == id)
@@ -910,6 +922,7 @@ impl crate::game::ServerGame<'_> {
 
     pub(super) fn mob_object_slot(&self, id: u32) -> Option<MobObject> {
         self.common
+            .entities
             .mobs
             .iter()
             .position(|mob| mob.id == id)
@@ -993,14 +1006,14 @@ impl crate::game::ServerGame<'_> {
         // target still in the world gets it now, so `uuid_of` can name it.
         if let Some(sunrise_sim::mobs::Who::Mob(target)) = self.mob_at(object).extra.angry_at
             && target != 0
-            && self.common.mobs.iter().any(|m| m.id == target)
+            && self.common.entities.mobs.iter().any(|m| m.id == target)
         {
             self.uuid_for(target);
         }
         // The mob that last hurt it, still resident, gets its UUID now, as the
         // anger target does, so `put_last_hurt_by_mob` can name it.
         if let Some(sunrise_sim::mobs::Who::Mob(attacker)) = self.mob_at(object).ai.last_hurt_by
-            && self.common.mobs.iter().any(|m| m.id == attacker)
+            && self.common.entities.mobs.iter().any(|m| m.id == attacker)
         {
             self.uuid_for(attacker);
         }

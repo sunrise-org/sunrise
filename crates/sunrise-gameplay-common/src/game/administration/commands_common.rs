@@ -722,6 +722,7 @@ impl crate::game::CommonGame<'_> {
 
     pub(in crate::game) fn bolt_plain_name(&self, id: u32) -> Text {
         if let Some(name) = self
+            .entities
             .bolts
             .iter()
             .find(|b| b.id == id)
@@ -767,37 +768,43 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
                 .command_guest(conn)
                 .map_or([0.0; 2], |g| [g.yaw, g.pitch]),
             Target::Mob(id) => self
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map_or([0.0; 2], Entity::rotation),
             Target::Item(id) => self
+                .entities
                 .dropped
                 .iter()
                 .find(|a| a.id == id)
                 .map_or([0.0; 2], Entity::rotation),
             Target::Orb(id) => self
+                .entities
                 .orbs
                 .iter()
                 .find(|a| a.id == id)
                 .map_or([0.0; 2], Entity::rotation),
             Target::Projectile(id) => self
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|a| a.id == id)
                 .map_or([0.0; 2], Entity::rotation),
             Target::Stand(id) => self
+                .entities
                 .armor_stands
                 .iter()
                 .find(|a| a.id == id)
                 .map_or([0.0; 2], Entity::rotation),
             Target::Frame(id) => self
+                .entities
                 .item_frames
                 .iter()
                 .find(|a| a.id == id)
                 .map_or([0.0; 2], sunrise_sim::entities::ItemFrame::entity_rotation),
             Target::Painting(id) => self
+                .entities
                 .paintings
                 .iter()
                 .find(|a| a.id == id)
@@ -805,63 +812,75 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
                     [f32::from(a.facing) * 90.0, saved_rotation(id)[1]]
                 }),
             Target::Boat(id) => self
+                .entities
                 .boats
                 .iter()
                 .find(|b| b.id == id)
                 .map_or([0.0; 2], Entity::rotation),
             Target::Cart(id) => self
+                .entities
                 .carts
                 .iter()
                 .find(|c| c.id == id)
                 .map_or([0.0; 2], Entity::rotation),
             Target::Fangs(id) => self
+                .entities
                 .fangs
                 .list
                 .iter()
                 .find(|f| f.id == id)
                 .map_or([0.0; 2], |f| [f.yaw, saved_rotation(id)[1]]),
             Target::Crystal(id) => self
+                .entities
                 .crystals
                 .iter()
                 .find(|c| c.id == id)
                 .map_or([0.0; 2], |c| c.rotation),
             Target::Cloud(id) => saved_rotation(id),
             Target::Bolt(id) => self
+                .entities
                 .bolts
                 .iter()
                 .find(|b| b.id == id)
                 .map_or([0.0; 2], |b| b.rotation),
             Target::Dragon(id) => self
+                .entities
                 .dragon
                 .as_ref()
                 .filter(|a| a.id == id)
                 .map_or([0.0; 2], |a| [a.yaw, a.pitch]),
             Target::Tnt(id) => self
+                .entities
                 .tnts
                 .iter()
                 .find(|a| a.id == id)
                 .map_or([0.0; 2], Entity::rotation),
             Target::Cushion(id) => self
+                .entities
                 .cushions
                 .iter()
                 .find(|a| a.id == id)
                 .map_or([0.0; 2], |a| [a.yaw, saved_rotation(id)[1]]),
             Target::Falling(id) => self
+                .entities
                 .falling
                 .iter()
                 .find(|a| a.id == id)
                 .map_or([0.0; 2], Entity::rotation),
             Target::Rocket(id) => self
+                .entities
                 .rockets
                 .iter()
                 .find(|a| a.id == id)
                 .map_or([0.0; 2], Entity::rotation),
             Target::Trident(id) => self
+                .entities
                 .tridents
                 .iter()
                 .find(|a| a.id == id)
                 .map_or([0.0; 2], Entity::rotation),
             Target::Spawner(id) => self
+                .entities
                 .ominous_spawners
                 .iter()
                 .find(|a| a.id == id)
@@ -881,7 +900,7 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
                 .unwrap_or([0.0; 2])
             }
             Target::General(id) => self
-                .resident_entities
+                .entities
                 .general
                 .row(id)
                 .map(|row| row.rotation)
@@ -1028,6 +1047,7 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
         match t {
             Target::Player | Target::Guest(_) => "minecraft:player".into(),
             Target::Mob(id) => self
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id)
@@ -1037,7 +1057,7 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
             Target::Item(_) => "minecraft:item".into(),
             Target::Orb(_) => "minecraft:experience_orb".into(),
             Target::Projectile(id) => self
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|p| p.id == id)
@@ -1047,7 +1067,12 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
                 .general_kind(id)
                 .map_or_else(String::new, str::to_owned),
             Target::Frame(id) => {
-                if self.item_frames.iter().any(|f| f.id == id && f.glow) {
+                if self
+                    .entities
+                    .item_frames
+                    .iter()
+                    .any(|f| f.id == id && f.glow)
+                {
                     "minecraft:glow_item_frame".into()
                 } else {
                     "minecraft:item_frame".into()
@@ -1055,11 +1080,13 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
             }
             Target::Painting(_) => "minecraft:painting".into(),
             Target::Boat(id) => self
+                .entities
                 .boats
                 .iter()
                 .find(|b| b.id == id)
                 .map_or_else(|| "minecraft:oak_boat".into(), |b| b.entity_type()),
             Target::Cart(id) => self
+                .entities
                 .carts
                 .iter()
                 .find(|c| c.id == id)
@@ -1095,6 +1122,7 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
                 .command_guest(conn)
                 .map_or_else(Text::empty, |g| Text::literal(&g.name)),
             Target::Mob(id) => self
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id)
@@ -1105,7 +1133,7 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
                 if let Some(name) = self.custom_name_of(id) {
                     return name;
                 }
-                match self.dropped.iter().find(|i| i.id == id) {
+                match self.entities.dropped.iter().find(|i| i.id == id) {
                     Some(item) => self.stack_item_name_text(&item.stack),
                     None => Text::literal(self.pack.names.display_item("")),
                 }
@@ -1114,6 +1142,7 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
             // with the block's name.
             Target::Falling(id) => {
                 let custom = self
+                    .entities
                     .falling
                     .iter()
                     .find(|f| f.id == id)
@@ -1126,6 +1155,7 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
                     return name;
                 }
                 let block = self
+                    .entities
                     .falling
                     .iter()
                     .find(|f| f.id == id)
@@ -1138,7 +1168,7 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
             // A general row keeps its name on the row, not in a saved compound.
             Target::General(id) => {
                 match self
-                    .resident_entities
+                    .entities
                     .general
                     .row(id)
                     .and_then(|row| row.custom_name.as_ref())
@@ -1164,7 +1194,7 @@ pub trait CommandsCommonGameExt2<'__sg>: crate::game::SideGame<'__sg> {
 
     /// `Entity.getDisplayName` for the mob `id`.
     fn mob_command_name(&self, id: u32) -> Text {
-        let Some(m) = self.mobs.iter().find(|m| m.id == id) else {
+        let Some(m) = self.entities.mobs.iter().find(|m| m.id == id) else {
             return Text::translate("entity.", &[]);
         };
         self.decorate_entity_display_name(id, &m.kind.id, self.mob_team_of(m), m.command_name())

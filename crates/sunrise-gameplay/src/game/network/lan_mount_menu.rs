@@ -44,10 +44,10 @@ impl crate::game::ServerGame<'_> {
     /// `ServerPlayer.openHorseInventory` for mount `mob`: the open menu
     /// closes, the client gets the mount screen and the menu's slots.
     pub fn lan_open_mount(&mut self, conn: u32, mob: u32) {
-        let Some(index) = self.common.mobs.iter().position(|m| m.id == mob) else {
+        let Some(index) = self.common.entities.mobs.iter().position(|m| m.id == mob) else {
             return;
         };
-        let columns = mount_columns(&self.common.mobs[index]);
+        let columns = mount_columns(&self.common.entities.mobs[index]);
         if self.guest_may_open(conn, "minecraft:horse_inventory", None) != Some(true) {
             return;
         }
@@ -77,7 +77,7 @@ impl crate::game::ServerGame<'_> {
         let env = self.menu_env();
         let mut menu = Menu::new(Kind::Mount(columns));
         menu.set_registry_id(Some("sunrise:mount_inventory"));
-        menu.mount = Some(self.common.mobs[index].kind.id.to_string());
+        menu.mount = Some(self.common.entities.mobs[index].kind.id.to_string());
         let (saddle, body, items) = self.mount_contents(index);
         menu.load_slot(0, saddle);
         menu.load_slot(1, body.flatten());
@@ -97,7 +97,7 @@ impl crate::game::ServerGame<'_> {
             return;
         };
         let (mob, columns) = (gm.mob, gm.columns);
-        let Some(index) = self.common.mobs.iter().position(|m| m.id == mob) else {
+        let Some(index) = self.common.entities.mobs.iter().position(|m| m.id == mob) else {
             return;
         };
         let Some(gi) = host.hub.guests.connection_index(conn) else {
@@ -153,7 +153,12 @@ impl crate::game::ServerGame<'_> {
             mob: open.mob,
         };
         if !host.hub.guests[gi].spectator()
-            && let Some(index) = self.common.mobs.iter().position(|m| m.id == window.mob)
+            && let Some(index) = self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .position(|m| m.id == window.mob)
         {
             let columns = open.columns;
             let mut menu = self.mount_engine_menu(index, columns);
@@ -176,6 +181,7 @@ impl crate::game::ServerGame<'_> {
                         return refuse();
                     };
                     let Some(index) = game
+                        .entities
                         .mobs
                         .iter()
                         .position(|m| m.id == window.mob && m.alive())
@@ -226,7 +232,8 @@ impl crate::game::ServerGame<'_> {
 
     /// The engine menu's mount slots back on mount `index`.
     pub fn lan_mount_store(&mut self, index: usize, columns: usize, menu: &Menu) {
-        let body = shows_body(self.common.mobs[index].species()).then(|| menu.slot(1).cloned());
+        let body =
+            shows_body(self.common.entities.mobs[index].species()).then(|| menu.slot(1).cloned());
         let items = (0..columns * 3)
             .map(|k| menu.slot(2 + k).cloned())
             .collect();
@@ -327,7 +334,7 @@ impl crate::game::ServerGame<'_> {
         Option<Option<ItemStack>>,
         Vec<Option<ItemStack>>,
     ) {
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         let species = m.species();
         let body = shows_body(species).then(|| m.equipment_stacks()[6].clone());
         let size = mount_columns(m) * 3;
@@ -345,7 +352,7 @@ impl crate::game::ServerGame<'_> {
         body: Option<Option<ItemStack>>,
         items: Vec<Option<ItemStack>>,
     ) {
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         let at = m.center();
         let saddle_put_on = saddle.is_some() && !m.extra.saddled();
         let put_on = if saddle_put_on {
@@ -374,7 +381,7 @@ impl crate::game::ServerGame<'_> {
             .as_ref()
             .is_some_and(|b| b.is_some() && m.extra.body_id().is_none());
         self.journal_equipment(id);
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         m.set_saddle(saddle);
         if let Some(body) = body {
             m.extra.set_body_stack(body);

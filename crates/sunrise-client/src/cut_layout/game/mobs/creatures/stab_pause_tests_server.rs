@@ -73,11 +73,16 @@ fn a_mob_stab_slows_the_attacker_before_it_moves() {
                 let mut target =
                     floating(game, 72, "minecraft:villager", Vec3::new(0.5, 80.0, 2.1));
                 target.no_ai = true;
-                game.mobs.push(attacker);
-                game.mobs.push(target);
+                game.entities.mobs.push(attacker);
+                game.entities.mobs.push(target);
                 game.tick_mobs().unwrap();
                 let mob = |game: &ServerGame<'_>, id| {
-                    game.mobs.iter().find(|m| m.id == id).unwrap().clone()
+                    game.entities
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .unwrap()
+                        .clone()
                 };
                 let (attacker, target) = (mob(game, 71), mob(game, 72));
                 assert!(target.health < 20.0, "the stab hurt the villager");
@@ -174,9 +179,9 @@ fn discard_on_dismount_case(game: &mut ServerGame<'_>, discard: bool) {
     let mut pig = floating(game, 73, "minecraft:pig", Vec3::new(0.5, 80.0, 2.1));
     target.no_ai = true;
     pig.no_ai = true;
-    game.mobs.push(attacker);
-    game.mobs.push(target);
-    game.mobs.push(pig);
+    game.entities.mobs.push(attacker);
+    game.entities.mobs.push(target);
+    game.entities.mobs.push(pig);
     assert!(game.try_mount_mob(72, 73));
     let seated = game.mob_object_mut(72).unwrap();
     seated.previous = seated.position;
@@ -185,7 +190,7 @@ fn discard_on_dismount_case(game: &mut ServerGame<'_>, discard: bool) {
     assert!(target.health < 20.0, "the stab hurt the villager");
     assert_eq!(target.extra.mount, None, "the stab unseated the villager");
     assert_eq!(
-        game.mobs.iter().any(|m| m.id == 71),
+        game.entities.mobs.iter().any(|m| m.id == 71),
         !discard,
         "a discarded attacker leaves the level"
     );

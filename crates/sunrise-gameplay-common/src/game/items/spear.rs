@@ -30,7 +30,7 @@ impl crate::game::CommonGame<'_> {
     /// The boxes of the mobs a spear can hit: alive, and not the vehicle
     /// ridden (`PiercingWeapon.canHitEntity`), with their index.
     pub fn hittable_mob_boxes(&self) -> Vec<(usize, Aabb)> {
-        (self.mobs.iter().enumerate())
+        (self.entities.mobs.iter().enumerate())
             .filter(|(_, m)| m.alive() && !m.removed && self.riding != Some(m.id))
             .map(|(i, m)| (i, m.bounds()))
             .collect()

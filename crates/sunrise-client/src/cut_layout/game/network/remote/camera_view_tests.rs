@@ -53,8 +53,8 @@ pub(crate) fn with_spectator(
         game.player = Some(PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 0.5)));
         add(game, ZOMBIE, "minecraft:zombie", [10.0, 64.0, 12.0]);
         add(game, BOAT, "minecraft:oak_boat", [-6.5, 64.0, 3.5]);
-        assert_eq!(game.mobs.len(), 1);
-        assert_eq!(game.boats.len(), 1);
+        assert_eq!(game.entities.mobs.len(), 1);
+        assert_eq!(game.entities.boats.len(), 1);
         test(game);
     });
 }
@@ -137,10 +137,11 @@ pub(crate) fn kept(
     id: i32,
 ) -> Option<Vec<(&'static str, i32)>> {
     let id = id as u32;
-    let list = match game.mobs.iter().find(|m| m.id == id) {
+    let list = match game.entities.mobs.iter().find(|m| m.id == id) {
         Some(m) => &m.extra.client_effects.list,
         None => {
             &game
+                .entities
                 .armor_stands
                 .iter()
                 .find(|a| a.id == id)?
@@ -465,7 +466,12 @@ fn effects_count_down_on_the_ticks_their_entity_ticks() {
         game.world.set(3, 64, 3, water.unwrap()).unwrap();
         game.tick_remote_entities(false);
         assert_eq!(left(game), [99, 98, 97, 98, 98]);
-        let pig = game.mobs.iter().find(|m| m.id == PIG as u32).unwrap();
+        let pig = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == PIG as u32)
+            .unwrap();
         assert!(pig.fluids.in_water);
         game.tick_remote_entities(true);
         assert_eq!(left(game), [98, 97, 96, 97, 97]);
@@ -480,7 +486,7 @@ fn a_driven_mounts_effects_count_down_in_its_own_tick() {
     const HORSE: i32 = 37;
     with_spectator(|game| {
         add(game, HORSE, "minecraft:horse", [3.0, 64.0, 3.0]);
-        let horse = game.mobs.iter_mut().find(|m| m.id == HORSE as u32);
+        let horse = game.entities.mobs.iter_mut().find(|m| m.id == HORSE as u32);
         horse.unwrap().extra.set_saddled(true);
         ride(game, HORSE, vec![OWN]);
         assert_eq!(game.driven_mount().map(|m| m.id), Some(HORSE as u32));

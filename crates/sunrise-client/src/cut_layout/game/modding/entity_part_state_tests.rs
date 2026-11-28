@@ -388,7 +388,7 @@ fn entity_part_state_is_per_entity_through_edits_transactions_and_panics() {
         assert_eq!(game.entity_attachments[&b.id()].try_to_nbt().unwrap(), raw);
 
         // A mob out of its list for its own tick can't be reached until it is back.
-        let taken = game.mobs.lift();
+        let taken = game.entities.mobs.lift();
         assert_eq!(a.residency(game), EntityResidency::Busy);
         assert_eq!(
             charge.state(game, a, Clone::clone),
@@ -398,7 +398,8 @@ fn entity_part_state_is_per_entity_through_edits_transactions_and_panics() {
             charge.edit_state(game, a, |_, _tx, n| *n = 1),
             Err(PartStateError::HolderBusy)
         );
-        game.mobs
+        game.entities
+            .mobs
             .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         assert_eq!(a.residency(game), EntityResidency::InPlace);
         assert_eq!(stored(charge, game, a), Some(10));
@@ -480,8 +481,8 @@ fn a_removed_or_unloaded_entity_is_stale_and_a_reloaded_one_reads_its_saved_valu
             .loaded_entities
             .push(((0, 0), vec![saved.into()]));
         game.spawn_loaded_entities();
-        assert_eq!(game.mobs.len(), 1, "the reloaded cow alone");
-        let reloaded = game.mobs[0].id;
+        assert_eq!(game.entities.mobs.len(), 1, "the reloaded cow alone");
+        let reloaded = game.entities.mobs[0].id;
         let reloaded = game.entity(reloaded).unwrap();
         assert_ne!(reloaded, again);
         assert_eq!(
@@ -564,7 +565,7 @@ fn a_spawn_or_removal_inside_an_aborted_action_keeps_the_bindings() {
         game.native_removals_flush();
         game.server.chunk_ticking.tickets.update(None);
         game.tick_creature_entities().unwrap();
-        assert!(game.mobs.iter().all(|m| m.id != cow.id()));
+        assert!(game.entities.mobs.iter().all(|m| m.id != cow.id()));
         assert!(indexed(game, Dim::Overworld).is_empty());
     });
 }
@@ -581,7 +582,7 @@ fn a_lone_mob_or_general_row_moves_under_a_new_id_and_a_ridden_pig_keeps_its_han
         let cow = mob(game, "minecraft:cow", 41);
         assert_eq!(charge.edit_state(game, cow, |_, _tx, n| *n = 7), Ok(()));
         let state = game.take_transferred_entity_state(cow.id());
-        game.mobs.retain(|m| m.id != cow.id());
+        game.entities.mobs.retain(|m| m.id != cow.id());
         game.detach_entity(cow.id());
         assert!(indexed(game, Dim::Overworld).is_empty());
         enter_nether(game);
@@ -609,7 +610,7 @@ fn a_lone_mob_or_general_row_moves_under_a_new_id_and_a_ridden_pig_keeps_its_han
         // A general row: bound at its first store, then moved with its binding.
         let next = game.server.next_entity;
         game.spawn_loaded_entity((0, 0), robot_tag(42), None);
-        let robot = game.resident_entities.general.rows[0].id;
+        let robot = game.entities.general.rows[0].id;
         assert!(robot > next);
         let robot = game.entity(robot).unwrap();
         assert_eq!(charge.state(game, robot, Clone::clone), Ok(0));
@@ -620,7 +621,7 @@ fn a_lone_mob_or_general_row_moves_under_a_new_id_and_a_ridden_pig_keeps_its_han
             "first store"
         );
         let state = game.take_transferred_entity_state(robot.id());
-        game.resident_entities
+        game.entities
             .general
             .rows
             .retain(|row| row.id != robot.id());
@@ -630,7 +631,7 @@ fn a_lone_mob_or_general_row_moves_under_a_new_id_and_a_ridden_pig_keeps_its_han
             .chunks
             .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
         game.spawn_loaded_entity((0, 0), robot_tag(42), Some(state));
-        let arrived = game.resident_entities.general.rows[0].id;
+        let arrived = game.entities.general.rows[0].id;
         let arrived = game.entity(arrived).unwrap();
         assert_ne!(arrived, robot);
         assert_eq!(stored(charge, game, arrived), Some(9));
@@ -737,7 +738,7 @@ fn a_transfer_inside_an_aborted_action_leaves_the_state_with_the_entity() {
         let moved = game.storage_scope(|game, _| {
             assert_eq!(charge.edit_state(game, cow, |_, _tx, n| *n = 9), Ok(()));
             let state = game.take_transferred_entity_state(cow.id());
-            game.mobs.retain(|m| m.id != cow.id());
+            game.entities.mobs.retain(|m| m.id != cow.id());
             game.detach_entity(cow.id());
             assert_eq!(
                 indexed(game, Dim::Overworld),
@@ -775,7 +776,7 @@ fn a_transfer_inside_an_aborted_action_leaves_the_state_with_the_entity() {
         let (b, c) = game.storage_scope(|game, _| {
             assert_eq!(charge.edit_state(game, a, |_, _tx, n| *n = 9), Ok(()));
             let state = game.take_transferred_entity_state(a.id());
-            game.mobs.retain(|m| m.id != a.id());
+            game.entities.mobs.retain(|m| m.id != a.id());
             game.detach_entity(a.id());
             enter_nether(game);
             let b = game
@@ -784,7 +785,7 @@ fn a_transfer_inside_an_aborted_action_leaves_the_state_with_the_entity() {
             let b = game.entity(b).unwrap();
             assert_eq!(stored(charge, game, b), Some(9));
             let state = game.take_transferred_entity_state(b.id());
-            game.mobs.retain(|m| m.id != b.id());
+            game.entities.mobs.retain(|m| m.id != b.id());
             game.detach_entity(b.id());
             game.enter_level(Dim::Overworld).unwrap();
             let c = game
@@ -827,7 +828,7 @@ fn a_transfer_inside_an_aborted_action_leaves_the_state_with_the_entity() {
         let state = game.storage_scope(|game, _| {
             assert_eq!(charge.edit_state(game, late, |_, _tx, n| *n = 9), Ok(()));
             let state = game.take_transferred_entity_state(late.id());
-            game.mobs.retain(|m| m.id != late.id());
+            game.entities.mobs.retain(|m| m.id != late.id());
             game.detach_entity(late.id());
             (state, false)
         });
@@ -857,7 +858,7 @@ fn a_transfer_inside_an_aborted_action_leaves_the_state_with_the_entity() {
         let (state, second) = game.storage_scope(|game, _| {
             assert_eq!(charge.edit_state(game, first, |_, _tx, n| *n = 9), Ok(()));
             let state = game.take_transferred_entity_state(first.id());
-            game.mobs.retain(|m| m.id != first.id());
+            game.entities.mobs.retain(|m| m.id != first.id());
             game.detach_entity(first.id());
             enter_nether(game);
             let second = game
@@ -866,7 +867,7 @@ fn a_transfer_inside_an_aborted_action_leaves_the_state_with_the_entity() {
             let second = game.entity(second).unwrap();
             assert_eq!(stored(charge, game, second), Some(9));
             let state = game.take_transferred_entity_state(second.id());
-            game.mobs.retain(|m| m.id != second.id());
+            game.entities.mobs.retain(|m| m.id != second.id());
             game.detach_entity(second.id());
             game.enter_level(Dim::Overworld).unwrap();
             ((state, second), false)

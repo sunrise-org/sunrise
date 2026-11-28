@@ -64,7 +64,7 @@ fn requirements_draw_the_level_random_before_each_effect() {
             let id = game.spawn_projectile(shot, &stack).unwrap();
             assert_eq!(played(game), expected, "seed {seed}");
             let p = game
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|p| p.id == id)
@@ -148,7 +148,7 @@ fn stack_then_weapon_in_component_order() {
         let id = game.spawn_projectile(arrow(&bow), &ammo).unwrap();
         assert_eq!(names(played(game)), order);
         let p = game
-            .creatures
+            .entities
             .projectiles
             .iter()
             .find(|p| p.id == id)
@@ -159,7 +159,7 @@ fn stack_then_weapon_in_component_order() {
         let id = game.spawn_projectile(arrow(&ammo), &ammo).unwrap();
         assert_eq!(names(played(game)).len(), 2);
         let p = game
-            .creatures
+            .entities
             .projectiles
             .iter()
             .find(|p| p.id == id)

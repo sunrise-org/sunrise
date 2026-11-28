@@ -93,17 +93,17 @@ pub(crate) mod tests {
         let mut resources = None;
         let mut game = server_game(&mut resources).expect("set SUNRISE_TEST_RESOURCES");
         game.add_primed_tnt(BlockPos::new(8, 64, 8), 0.0, 80, None, None);
-        assert!(!game.tnts[0].used_portal);
-        let id = game.tnts[0].id;
+        assert!(!game.entities.tnts[0].used_portal);
+        let id = game.entities.tnts[0].id;
         game.teleport_to_in_level(Target::Tnt(id), [8.5, 64.0, 8.5], None, [false; 3], false);
-        assert!(game.tnts[0].used_portal);
+        assert!(game.entities.tnts[0].used_portal);
         let saved = game.tnt_nbt(0);
-        game.tnts.clear();
+        game.entities.tnts.clear();
         game.load_tnt(saved, None);
-        assert!(!game.tnts[0].used_portal);
+        assert!(!game.entities.tnts[0].used_portal);
         let mut transfer = game.tnt_nbt(0);
         sunrise_gameplay::game::server_side::persist::mark_fresh(&mut transfer);
-        game.tnts.clear();
+        game.entities.tnts.clear();
         game.world.loaded_entities.push((
             (0, 0),
             vec![sunrise_level::world::PendingEntity::after_tnt_portal(
@@ -111,7 +111,7 @@ pub(crate) mod tests {
             )],
         ));
         game.spawn_loaded_entities();
-        assert!(game.tnts[0].used_portal);
+        assert!(game.entities.tnts[0].used_portal);
         assert!(game.tnt_nbt(0).get("sunrise:tnt_used_portal").is_none());
     }
     #[test]
@@ -129,12 +129,15 @@ pub(crate) mod tests {
             if let Tag::Compound(fields) = &mut saved {
                 fields.insert("sunrise:tnt_used_portal".into(), Tag::Byte(marker));
             }
-            game.tnts.clear();
+            game.entities.tnts.clear();
             game.world.queue_entity_nbt((0, 0), vec![saved]);
             game.spawn_loaded_entities();
-            assert_eq!(game.tnts.len(), 1);
-            assert!(!game.tnts[0].used_portal, "ordinary NBT marker {marker}");
-            game.tnts.clear();
+            assert_eq!(game.entities.tnts.len(), 1);
+            assert!(
+                !game.entities.tnts[0].used_portal,
+                "ordinary NBT marker {marker}"
+            );
+            game.entities.tnts.clear();
         }
     }
     #[test]
@@ -183,7 +186,7 @@ pub(crate) mod tests {
             cube.extra.set_body(Some("minecraft:tnt".into()));
             // Fuse 1: explodes on this tick.
             cube.extra.sulfur_fuse = sunrise_sim::mobs::sulfur_cube::Fuse::set(1);
-            game.mobs.push(cube);
+            game.entities.mobs.push(cube);
             game.server.portals.level.entities.insert(
                 9123,
                 PortalState {
@@ -268,9 +271,9 @@ pub(crate) mod tests {
             if let (Some(value), Tag::Compound(fields)) = (value, &mut tag) {
                 fields.insert("fuse".into(), value);
             }
-            let i = game.tnts.len();
+            let i = game.entities.tnts.len();
             game.load_tnt(tag.clone(), Some([90, 0, 0, i as i32 + 1]));
-            let t = &game.tnts[i];
+            let t = &game.entities.tnts[i];
             assert_eq!(t.fuse, expected, "{tag:?}");
             assert_eq!(t.velocity, Vec3::new(0.125, 0.0, 0.0));
             assert!(t.no_gravity);
@@ -325,24 +328,31 @@ pub(crate) mod tests {
         ));
         assert!(game.run_command("summon tnt 5.5 200 5.5 {UUID:[I;89,0,0,1],fuse:40s,Motion:[0d,0d,0d],NoGravity:1b,explosion_power:2f,owner:[I;89,0,0,3],Tags:[keep],Silent:1b}"));
         let pig = game
+            .entities
             .mobs
             .iter()
             .find(|m| game.persist.uuid_of(m.id) == Some([89, 0, 0, 3]))
             .unwrap()
             .id;
         assert_eq!(
-            game.mobs.iter().find(|m| m.id == pig).unwrap().kind.id,
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == pig)
+                .unwrap()
+                .kind
+                .id,
             "minecraft:pig"
         );
-        assert_eq!(game.tnts.len(), 1);
-        let id = game.tnts[0].id;
+        assert_eq!(game.entities.tnts.len(), 1);
+        let id = game.entities.tnts[0].id;
         assert_eq!(game.persist.uuid_of(id), Some([89, 0, 0, 1]));
-        assert_eq!(game.tnts[0].fuse, 40);
-        assert_eq!(game.tnts[0].velocity, Vec3::ZERO);
-        assert!(game.tnts[0].no_gravity);
+        assert_eq!(game.entities.tnts[0].fuse, 40);
+        assert_eq!(game.entities.tnts[0].velocity, Vec3::ZERO);
+        assert!(game.entities.tnts[0].no_gravity);
         // Preserve a live owner referencing an actually registered mob.
-        game.tnts[0].owner = Some(Who::Mob(pig));
-        let before = game.tnts[0].clone();
+        game.entities.tnts[0].owner = Some(Who::Mob(pig));
+        let before = game.entities.tnts[0].clone();
         let next_id = game.server.next_entity;
         let clock = game.world.game_time;
         assert!(before.join.is_joined());
@@ -361,8 +371,8 @@ pub(crate) mod tests {
             game.server.next_entity, next_id,
             "adoption must not spawn another entity"
         );
-        assert_eq!(game.tnts.len(), 1);
-        let live = game.tnts.iter().find(|t| t.id == id).unwrap();
+        assert_eq!(game.entities.tnts.len(), 1);
+        let live = game.entities.tnts.iter().find(|t| t.id == id).unwrap();
         assert_eq!(live.fuse, 60, "the actual modeled counter changes");
         assert_eq!(live.velocity, Vec3::new(0.125, 0.0, -0.25));
         assert_eq!(live.position, before.position);
@@ -424,9 +434,9 @@ pub(crate) mod tests {
                 game.world.set(8, 64, 8, glass).unwrap();
                 game.server.pending_sounds.clear();
                 game.add_primed_tnt(BlockPos::new(8, 64, 8), 0.0, 1, None, None);
-                game.tnts[0].no_gravity = true;
-                game.tnts[0].velocity = Vec3::ZERO;
-                let id = game.tnts[0].id;
+                game.entities.tnts[0].no_gravity = true;
+                game.entities.tnts[0].velocity = Vec3::ZERO;
+                let id = game.entities.tnts[0].id;
                 set_silent(&mut game, id, silent);
                 let before = particle_count(&game);
                 game.tick_one_tnt(0, &[]).unwrap();
@@ -435,7 +445,7 @@ pub(crate) mod tests {
                     particle_count(&game) > before,
                     sound_count(&game, "minecraft:entity.generic.explode") != 0
                 ));
-                assert!(game.tnts.is_empty(), "the fuse still expires");
+                assert!(game.entities.tnts.is_empty(), "the fuse still expires");
                 assert!(
                     game.res.facts().is_air(game.world.block(8, 64, 8)),
                     "silence keeps block destruction"
@@ -491,7 +501,7 @@ pub(crate) mod tests {
                         projectile.id = game.take_entity_id();
                         set_silent(&mut game, projectile.id, silent);
                         let before = particle_count(&game);
-                        let clouds = game.breath_clouds.len();
+                        let clouds = game.entities.breath_clouds.len();
                         game.projectile_hit(
                             &projectile,
                             Hit::Block {
@@ -516,7 +526,7 @@ pub(crate) mod tests {
                             "{kind} {potion} Silent={silent}"
                         );
                         assert_eq!(
-                            game.breath_clouds.len() - clouds,
+                            game.entities.breath_clouds.len() - clouds,
                             usize::from(kind == "lingering_potion" && potion != "awkward"),
                             "silence leaves the lingering cloud intact"
                         );
@@ -546,14 +556,14 @@ pub(crate) mod tests {
                         sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                     )
                     .unwrap();
-                let mob = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+                let mob = game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
                 mob.silent = silent;
                 mob.swell = mob.max_swell;
                 mob.extra.flag = true;
                 let mut events = Vec::new();
                 sunrise_sim::mobs::hostile::creeper_tick(mob, &mut events);
                 assert!(mob.removed);
-                game.mobs.retain(|m| m.id != id);
+                game.entities.mobs.retain(|m| m.id != id);
                 game.server.pending_sounds.clear();
                 let particles = particle_count(&game);
                 game.handle_mob_events(events).unwrap();
@@ -594,15 +604,20 @@ pub(crate) mod tests {
                         );
                     shot.velocity = Vec3::new(0.0, -1.0, 0.0);
                     game.add_projectile(shot);
-                    let id = game.creatures.projectiles.last().unwrap().id;
+                    let id = game.entities.projectiles.last().unwrap().id;
                     set_silent(&mut game, id, silent);
                     game.server.pending_sounds.clear();
                     game.server.lan_events.clear();
                     let particles = particle_count(&game);
-                    let clouds = game.breath_clouds.len();
-                    let xp: u32 = game.orbs.iter().map(|o| o.points() * o.count).sum();
+                    let clouds = game.entities.breath_clouds.len();
+                    let xp: u32 = game
+                        .entities
+                        .orbs
+                        .iter()
+                        .map(|o| o.points() * o.count)
+                        .sum();
                     game.tick_creature_entities().unwrap();
-                    assert!(!game.creatures.projectiles.iter().any(|p| p.id == id));
+                    assert!(!game.entities.projectiles.iter().any(|p| p.id == id));
                     assert!(particle_count(&game) > particles, "{kind} keeps its splash");
                     assert_eq!(
                         sound_count(&game, "minecraft:entity.splash_potion.break"),
@@ -610,10 +625,16 @@ pub(crate) mod tests {
                         "{kind} Silent={silent}"
                     );
                     assert_eq!(
-                        game.breath_clouds.len() - clouds,
+                        game.entities.breath_clouds.len() - clouds,
                         usize::from(kind == "lingering_potion")
                     );
-                    let gained = game.orbs.iter().map(|o| o.points() * o.count).sum::<u32>() - xp;
+                    let gained = game
+                        .entities
+                        .orbs
+                        .iter()
+                        .map(|o| o.points() * o.count)
+                        .sum::<u32>()
+                        - xp;
                     if kind == "experience_bottle" {
                         assert!((3..=11).contains(&gained), "silence keeps the experience");
                     }
@@ -646,7 +667,7 @@ pub(crate) mod tests {
                 1.1,
                 6.0,
             );
-            let id = game.creatures.projectiles.last().unwrap().id;
+            let id = game.entities.projectiles.last().unwrap().id;
             let selector = format!("@e[type=minecraft:{kind},x=8.5,y=100,z=8.5,distance=..12]");
             // Found as shot and again after it flew a tick.
             for _ in 0..2 {
@@ -660,7 +681,7 @@ pub(crate) mod tests {
                 game.tick_creature_entities().unwrap();
             }
             assert!(game.run_command(&format!("kill {selector}")), "{kind}");
-            assert!(!game.creatures.projectiles.iter().any(|p| p.id == id));
+            assert!(!game.entities.projectiles.iter().any(|p| p.id == id));
         }
     }
     #[test]
@@ -680,7 +701,7 @@ pub(crate) mod tests {
                 let mut audible = None;
                 for silent in [false, true] {
                     game.world.random.set_seed(seed);
-                    game.orbs.clear();
+                    game.entities.orbs.clear();
                     let mut projectile = Projectile::new(
                         ProjectileKind::ExperienceBottle,
                         Vec3::new(8.5, 64.0, 8.5),
@@ -697,7 +718,12 @@ pub(crate) mod tests {
                         },
                     )
                     .unwrap();
-                    let xp: u32 = game.orbs.iter().map(|o| o.points() * o.count).sum();
+                    let xp: u32 = game
+                        .entities
+                        .orbs
+                        .iter()
+                        .map(|o| o.points() * o.count)
+                        .sum();
                     let next = game.world.random.next_long();
                     assert!((3..=11).contains(&xp));
                     if let Some((audible_xp, audible_next)) = audible {
@@ -733,18 +759,18 @@ pub(crate) mod tests {
         };
         game.add_primed_tnt(BlockPos::new(8, 64, 8), 0.0, 80, None, None);
         // Hang it in the empty chunk, so it neither falls out nor lands.
-        game.tnts[0].no_gravity = true;
-        game.tnts[0].velocity = Vec3::ZERO;
+        game.entities.tnts[0].no_gravity = true;
+        game.entities.tnts[0].velocity = Vec3::ZERO;
         game.tick_world(true).unwrap();
-        assert_eq!(game.tnts.len(), 1);
+        assert_eq!(game.entities.tnts.len(), 1);
         assert_eq!(
-            game.tnts[0].fuse, 79,
+            game.entities.tnts[0].fuse, 79,
             "its first tick is the next level tick"
         );
         let mut exploded_on = None;
         for tick in 2..=90 {
             game.tick_world(true).unwrap();
-            if game.tnts.is_empty() {
+            if game.entities.tnts.is_empty() {
                 exploded_on = Some(tick);
                 break;
             }
@@ -769,27 +795,31 @@ pub(crate) mod tests {
             .unwrap();
         game.world.set(9, 64, 8, block).unwrap();
         game.add_primed_tnt(BlockPos::new(8, 64, 8), 0.0, 1, None, None);
-        game.tnts[0].no_gravity = true;
-        game.tnts[0].velocity = Vec3::ZERO;
-        let first = game.tnts[0].id;
+        game.entities.tnts[0].no_gravity = true;
+        game.entities.tnts[0].velocity = Vec3::ZERO;
+        let first = game.entities.tnts[0].id;
         for _ in 0..3 {
             game.tick_world(true).unwrap();
-            if game.tnts.iter().all(|t| t.id != first) {
+            if game.entities.tnts.iter().all(|t| t.id != first) {
                 break;
             }
         }
         assert!(
-            game.tnts.iter().all(|t| t.id != first),
+            game.entities.tnts.iter().all(|t| t.id != first),
             "the first TNT went off"
         );
-        assert_eq!(game.tnts.len(), 1, "its blast primed the TNT block");
-        let primed = &game.tnts[0];
+        assert_eq!(
+            game.entities.tnts.len(),
+            1,
+            "its blast primed the TNT block"
+        );
+        let primed = &game.entities.tnts[0];
         assert_eq!(
             primed.position, primed.previous,
             "not ticked in the tick the blast primed it"
         );
         game.tick_world(true).unwrap();
-        let primed = &game.tnts[0];
+        let primed = &game.entities.tnts[0];
         assert_ne!(primed.position, primed.previous, "ticked on the next tick");
     }
 }
@@ -837,9 +867,10 @@ pub(crate) mod entity_collision_tests {
             for _ in 0..40 {
                 game.tick_world(true).unwrap();
             }
-            let boat_top = game.boats[0].bounds().max_position().y;
+            let boat_top = game.entities.boats[0].bounds().max_position().y;
             let tnt_at = |z: f64| {
-                game.tnts
+                game.entities
+                    .tnts
                     .iter()
                     .find(|t| (t.position.z - z).abs() < 0.5)
                     .map(|t| t.position.y)
@@ -848,7 +879,7 @@ pub(crate) mod entity_collision_tests {
             assert_eq!(tnt_at(4.5), boat_top, "the TNT rests on the boat");
             assert_eq!(tnt_at(12.5), 200.0, "the other TNT lands on the stone");
             assert_eq!(
-                game.orbs[0].position.y, boat_top,
+                game.entities.orbs[0].position.y, boat_top,
                 "the orb rests on the boat"
             );
             // FallingBlockEntity.tick: it stops on the shulker, but the air
@@ -865,7 +896,8 @@ pub(crate) mod entity_collision_tests {
                 "nor is it placed over air"
             );
             assert!(
-                game.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .any(|i| &*i.stack.item == "minecraft:sand"),
                 "the sand breaks into an item"

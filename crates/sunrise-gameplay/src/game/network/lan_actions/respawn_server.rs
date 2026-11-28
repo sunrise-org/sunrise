@@ -106,6 +106,7 @@ impl crate::game::ServerGame<'_> {
                     })
                     .or_else(|| {
                         self.common
+                            .entities
                             .mobs
                             .iter()
                             .find(|m| m.id == id)
@@ -511,6 +512,7 @@ impl crate::game::ServerGame<'_> {
             }),
             None => self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id)
@@ -529,7 +531,7 @@ impl crate::game::ServerGame<'_> {
         if self.combat_player(id).is_some() {
             return Some("minecraft:player".into());
         }
-        if let Some(m) = self.common.mobs.iter().find(|m| m.id == id) {
+        if let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) {
             return Some(m.kind.id.clone());
         }
         // A mob that blew up this tick has left the list, but vanilla's player
@@ -545,6 +547,7 @@ impl crate::game::ServerGame<'_> {
             return Some(kind.clone());
         }
         self.common
+            .entities
             .dragon
             .as_ref()
             .filter(|d| d.id == id)

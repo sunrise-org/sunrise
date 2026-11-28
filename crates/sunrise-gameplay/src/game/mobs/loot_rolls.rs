@@ -114,6 +114,7 @@ impl ServerGame<'_> {
         let live_target = match target {
             Target::Mob(id) => self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .any(|mob| mob.id == id)
@@ -257,6 +258,7 @@ impl ServerGame<'_> {
         let mut entity = match target {
             Target::Mob(id) => self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .find(|mob| mob.id == id)

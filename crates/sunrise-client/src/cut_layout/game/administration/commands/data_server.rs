@@ -144,8 +144,8 @@ pub(crate) mod tests {
             None,
         )
         .unwrap();
-        let id = game.mobs.last().unwrap().id;
-        let pig = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+        let id = game.entities.mobs.last().unwrap().id;
+        let pig = game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
         pig.extra.mount = Some(vehicle);
         pig.extra.vehicle_order = 0;
         id
@@ -318,7 +318,7 @@ pub(crate) mod tests {
             );
             assert!(game.server.others.0.iter().all(|o| o.id != DISPLAY));
             assert!(
-                game.mobs.iter().any(|m| m.id == pig),
+                game.entities.mobs.iter().any(|m| m.id == pig),
                 "the rider stays in the level"
             );
         });
@@ -472,11 +472,12 @@ pub(crate) mod falling_live_adoption_tests {
                 "execute as {uuid} if entity @s[type=falling_block]"
             )));
             let index = game
+                .entities
                 .falling
                 .iter()
                 .position(|f| game.persist.uuid_of(f.id) == Some([980, 0, 0, 1]))
                 .unwrap();
-            game.falling.update(index, |falling| {
+            game.entities.falling.update(index, |falling| {
                 falling.start_pos = BlockPos::new(9, 201, 11);
                 falling.stuck = Vec3::new(0.2, 0.3, 0.4);
                 falling.portal.cooldown = 17;
@@ -486,7 +487,7 @@ pub(crate) mod falling_live_adoption_tests {
                     inside: true,
                 });
             });
-            let before = game.falling[index].clone();
+            let before = game.entities.falling[index].clone();
             assert!(before.join.is_joined());
             assert_eq!((before.age, before.drop_item), (5, true));
             let next_id = game.server.next_entity;
@@ -496,10 +497,10 @@ pub(crate) mod falling_live_adoption_tests {
                 game.run_command(&format!("data merge entity {uuid} {{Time:12}}")),
                 "valid Time update must reach model"
             );
-            assert_eq!(game.falling[index].age, 12);
+            assert_eq!(game.entities.falling[index].age, 12);
             assert!(game.run_command(&format!("data merge entity {uuid} {{DropItem:0b}}")));
-            assert!(!game.falling[index].drop_item);
-            let f = &game.falling[index];
+            assert!(!game.entities.falling[index].drop_item);
+            let f = &game.entities.falling[index];
             assert_eq!(
                 (f.id, f.join, f.start_pos, f.stuck),
                 (before.id, before.join, before.start_pos, before.stuck)
@@ -543,7 +544,7 @@ pub(crate) mod falling_live_adoption_tests {
                 Some(&Tag::List(vec![Tag::String("keep".into())]))
             );
             assert_eq!(saved.get("Silent"), Some(&Tag::Byte(1)));
-            assert_eq!(game.falling.len(), 1);
+            assert_eq!(game.entities.falling.len(), 1);
             assert_eq!(game.server.next_entity, next_id);
             assert_eq!(game.world.game_time, clock);
         });

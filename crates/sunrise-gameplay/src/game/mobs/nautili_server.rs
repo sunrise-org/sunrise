@@ -6,7 +6,7 @@ use sunrise_sim::mobs::{equip::equippable_in_slot, nautilus};
 impl ServerGame<'_> {
     /// `AbstractNautilus.mobInteract`. Returns whether the click was used.
     pub fn interact_nautilus(&mut self, index: usize, item: &str) -> bool {
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         if !m.alive() || Some(m.id) == self.common.riding {
             return false;
         }
@@ -26,7 +26,7 @@ impl ServerGame<'_> {
             if !food {
                 return false;
             }
-            let m = &mut self.common.mobs[index];
+            let m = &mut self.common.entities.mobs[index];
             if !m.extra.age_locked {
                 let secs = ((-m.extra.age / 20) as f32 * 0.1) as i32;
                 sunrise_sim::mobs::ai::age_up(m, secs, true);
@@ -46,7 +46,7 @@ impl ServerGame<'_> {
             if !tame && food {
                 // tryToTame: one time in three.
                 self.use_nautilus_food(item);
-                let rolled = self.common.mobs[index]
+                let rolled = self.common.entities.mobs[index]
                     .random
                     .next_int_bound(3)
                     .unwrap_or(1)
@@ -54,7 +54,7 @@ impl ServerGame<'_> {
                 let acting = self.acting_player_uuid();
                 let (tamer, tamer_entity_id) = (self.native_acting_id(), self.own_entity_id());
                 let tamed = rolled && !self.animal_tame_cancelled(index, tamer, tamer_entity_id);
-                let m = &mut self.common.mobs[index];
+                let m = &mut self.common.entities.mobs[index];
                 if tamed {
                     m.extra.tame = true;
                     m.extra.owner = Some(acting);
@@ -63,23 +63,26 @@ impl ServerGame<'_> {
                 }
                 if tamed {
                     self.set_event_ai_target(
-                        self.common.mobs[index].id,
+                        self.common.entities.mobs[index].id,
                         None,
                         self.server.lan_acting,
                     );
                 }
-                let sound = nautilus::eat_sound(&self.common.mobs[index]);
+                let sound = nautilus::eat_sound(&self.common.entities.mobs[index]);
                 // TamableAnimal.spawnTamingParticles (entity event 7 or 6).
-                self.mob_event_particles(self.common.mobs[index].id, if tamed { 7 } else { 6 });
+                self.mob_event_particles(
+                    self.common.entities.mobs[index].id,
+                    if tamed { 7 } else { 6 },
+                );
                 self.nautilus_sound(index, sound);
                 if tamed {
-                    let view = self.mob_entity(&self.common.mobs[index]);
+                    let view = self.mob_entity(&self.common.entities.mobs[index]);
                     self.trigger_entity("minecraft:tame_animal", "entity", &view);
                     self.pet_tamed(index);
                 }
                 return true;
             }
-            let m = &self.common.mobs[index];
+            let m = &self.common.entities.mobs[index];
             if food && m.health < m.attrs.max_health {
                 // feed(player, hand, stack, 2, 1).
                 let sound = nautilus::eat_sound(m);
@@ -92,7 +95,7 @@ impl ServerGame<'_> {
                     .get(item)
                     .and_then(|i| i.food.as_ref())
                     .map(|f| f.0 as i32);
-                let m = &mut self.common.mobs[index];
+                let m = &mut self.common.entities.mobs[index];
                 m.heal(
                     &self.common.loop_context,
                     &|| crate::game::entity_server::hit_reads_of!(self),
@@ -111,18 +114,20 @@ impl ServerGame<'_> {
                         self.items(),
                         stack,
                         "body",
-                        sunrise_sim::mobs::species::vanilla_id(self.common.mobs[index].species()),
+                        sunrise_sim::mobs::species::vanilla_id(
+                            self.common.entities.mobs[index].species(),
+                        ),
                     )
                 });
-            let m = &mut self.common.mobs[index];
+            let m = &mut self.common.entities.mobs[index];
             if item == "minecraft:saddle" && tame && !m.extra.saddled() {
                 let held = self.common.inventory[self.common.selected].clone();
                 m.set_saddle(held.map(|s| ItemStack { count: 1, ..s }));
                 let sound = nautilus::saddle_sound(m);
                 self.nautilus_sound(index, sound);
                 self.consume_held();
-                let id = self.common.mobs[index].id;
-                let pos = self.common.mobs[index].position;
+                let id = self.common.entities.mobs[index].id;
+                let pos = self.common.entities.mobs[index].position;
                 self.mob_equip_event(id, [pos.x, pos.y, pos.z], true);
                 return true;
             }
@@ -132,8 +137,8 @@ impl ServerGame<'_> {
                     .set_body_stack(held.map(|s| ItemStack { count: 1, ..s }));
                 self.nautilus_sound(index, "item.armor.equip_nautilus");
                 self.consume_held();
-                let id = self.common.mobs[index].id;
-                let pos = self.common.mobs[index].position;
+                let id = self.common.entities.mobs[index].id;
+                let pos = self.common.entities.mobs[index].position;
                 self.mob_equip_event(id, [pos.x, pos.y, pos.z], true);
                 return true;
             }
@@ -141,7 +146,7 @@ impl ServerGame<'_> {
         if tame && !food {
             // doPlayerRide: `player.startRiding(this)`, which keeps the
             // rider's view (`ServerPlayer.startRiding`'s `Relative.ROTATION`).
-            let id = self.common.mobs[index].id;
+            let id = self.common.entities.mobs[index].id;
             if !self.native_may_board(id) {
                 return true;
             }
@@ -153,19 +158,19 @@ impl ServerGame<'_> {
         // Animal.mobInteract: a tame adult fed at full health falls in love
         // (a zombie nautilus too: `ZombieNautilus` overrides neither `isFood`
         // nor `mobInteract`, and its brain simply has no make-love goal).
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         if food && m.extra.age == 0 && m.extra.in_love <= 0 {
             m.extra.in_love = 600;
             m.extra.love_player = true;
             let sound = nautilus::eat_sound(m);
             let id = m.id;
             self.server.love_cause.insert(id, self.server.lan_acting);
-            let kind = self.common.mobs[index].kind.id.clone();
+            let kind = self.common.entities.mobs[index].kind.id.clone();
             self.native_entity_enter_love_mode(id, &kind, self.server.lan_acting_uuid);
             self.use_nautilus_food(item);
             self.nautilus_sound(index, sound);
             // Animal.setInLove: entity event 18.
-            self.mob_event_particles(self.common.mobs[index].id, 18);
+            self.mob_event_particles(self.common.entities.mobs[index].id, 18);
             return true;
         }
         false
@@ -183,18 +188,20 @@ impl ServerGame<'_> {
     /// handling runs.
     pub(in crate::game::server_side) fn nautilus_clicked(&mut self, id: Option<i32>) {
         let Some(index) = id.and_then(|id| {
-            sunrise_gameplay_common::game::item_actions::named_entity(&self.common.mobs, id, |m| {
-                m.id
-            })
+            sunrise_gameplay_common::game::item_actions::named_entity(
+                &self.common.entities.mobs,
+                id,
+                |m| m.id,
+            )
         }) else {
             return;
         };
-        if nautilus::is_nautilus(self.common.mobs[index].species()) {
-            self.common.mobs[index].persistent = true;
+        if nautilus::is_nautilus(self.common.entities.mobs[index].species()) {
+            self.common.entities.mobs[index].persistent = true;
         }
     }
     pub(in crate::game::server_side) fn nautilus_sound(&mut self, index: usize, sound: &str) {
-        let at = self.common.mobs[index].center();
+        let at = self.common.entities.mobs[index].center();
         self.server_play_sound(&format!("minecraft:{sound}"), at, 1.0, 1.0);
     }
     /// `AbstractNautilus.usePlayerItem`: bucketed fish leave a water bucket.

@@ -536,7 +536,7 @@ impl crate::game::ClientGame<'_> {
             v
         });
         let entity = self.mob_hit().map(|(i, d, _)| {
-            let m = &self.common.mobs[i];
+            let m = &self.common.entities.mobs[i];
             json!({ "id": m.id, "type": m.kind.id, "health": m.health, "distance": d,
                     "pos": [m.position.x, m.position.y, m.position.z] })
         });
@@ -792,7 +792,7 @@ impl crate::game::ClientGame<'_> {
         };
         // CAN_BE_PICKED's isPickable (`!isRemoved`): a dead-but-tracked mob
         // — a fake player the server keeps at health 0 — is still here.
-        for m in self.common.mobs.iter().filter(|m| !m.removed) {
+        for m in self.common.entities.mobs.iter().filter(|m| !m.removed) {
             let mut v = json!({ "id": m.id, "kind": "mob", "health": m.health, "baby": m.is_baby(), "hurt_time": m.hurt_time });
             // VillagerData as this game knows it: on a client, what the
             // server's synched data says.
@@ -809,14 +809,14 @@ impl crate::game::ClientGame<'_> {
                 v,
             );
         }
-        for item in &self.common.dropped {
+        for item in &self.common.entities.dropped {
             push(
                 [item.position.x, item.position.y, item.position.z],
                 "minecraft:item",
                 json!({ "id": item.id, "kind": "item", "item": self.stack_value(&item.stack) }),
             );
         }
-        for orb in &self.common.orbs {
+        for orb in &self.common.entities.orbs {
             push(
                 [orb.position.x, orb.position.y, orb.position.z],
                 "minecraft:experience_orb",
@@ -832,9 +832,9 @@ impl crate::game::ClientGame<'_> {
             "radius": radius,
             "type": want,
             "tracked": {
-                "mobs": self.mobs.iter().filter(|m| !m.removed).count(),
-                "items": self.dropped.len(),
-                "orbs": self.orbs.len(),
+                "mobs": self.entities.mobs.iter().filter(|m| !m.removed).count(),
+                "items": self.entities.dropped.len(),
+                "orbs": self.entities.orbs.len(),
             },
             "loaded_chunks": self.world.chunks.len(),
         })
@@ -1416,6 +1416,7 @@ impl crate::game::ClientGame<'_> {
                         let id: u32 = a.get(1, "ID")?.parse()?;
                         let m = self
                             .common
+                            .entities
                             .mobs
                             .iter()
                             .find(|m| m.id == id)
@@ -1459,6 +1460,7 @@ impl crate::game::ClientGame<'_> {
                 if let Some(id) = id {
                     let m = self
                         .common
+                        .entities
                         .mobs
                         .iter()
                         .find(|m| m.id == id)
@@ -1478,9 +1480,12 @@ impl crate::game::ClientGame<'_> {
                         5.0,
                     );
                 }
-                let target = self
-                    .mob_hit()
-                    .map(|(i, _, _)| (self.common.mobs[i].id, self.common.mobs[i].health));
+                let target = self.mob_hit().map(|(i, _, _)| {
+                    (
+                        self.common.entities.mobs[i].id,
+                        self.common.entities.mobs[i].health,
+                    )
+                });
                 self.agent_mouse(MouseButton::Left, true)?;
                 self.agent_mouse(MouseButton::Left, false)?;
                 let report_tick = self.common.ticks + 4;
@@ -1508,7 +1513,7 @@ impl crate::game::ClientGame<'_> {
                 let task = Break {
                     pos,
                     before,
-                    items_before: self.common.dropped.iter().map(|i| i.id).collect(),
+                    items_before: self.common.entities.dropped.iter().map(|i| i.id).collect(),
                     inventory: self.inventory_counts(),
                     started_tick: self.common.ticks,
                     collect_until: None,
@@ -2060,7 +2065,9 @@ impl crate::game::ClientGame<'_> {
             *ahead -= 1;
             return false;
         }
-        let picked = self.mob_hit().map(|(i, _, _)| self.common.mobs[i].id);
+        let picked = self
+            .mob_hit()
+            .map(|(i, _, _)| self.common.entities.mobs[i].id);
         let Some(Task {
             kind: TaskKind::Attack { id, aimed, .. },
             ..
@@ -2322,7 +2329,9 @@ impl crate::game::ClientGame<'_> {
                     }
                     let ahead = self.remote_attack_clicks_queued();
                     *aimed = Some(AttackAim::Clicked { ahead });
-                    let target = self.mob_hit().map(|(i, _, _)| &self.common.mobs[i]);
+                    let target = self
+                        .mob_hit()
+                        .map(|(i, _, _)| &self.common.entities.mobs[i]);
                     if target.map(|m| m.id) != *id {
                         return Some(
                             json!({ "error": "that entity is out of reach or hidden; get closer" }),
@@ -2358,7 +2367,7 @@ impl crate::game::ClientGame<'_> {
                 if matches!(*aimed, Some(AttackAim::Clicked { .. } | AttackAim::Dropped)) {
                     return Some(json!({ "error": "the attack click was not taken" }));
                 }
-                let now = id.and_then(|id| self.common.mobs.iter().find(|m| m.id == id));
+                let now = id.and_then(|id| self.common.entities.mobs.iter().find(|m| m.id == id));
                 Some(json!({
                     "ok": true,
                     "target": id,
@@ -2537,7 +2546,7 @@ impl crate::game::ClientGame<'_> {
         }
         // New item entities near the block are its drops.
         let centre = b.pos.map(|v| f64::from(v) + 0.5);
-        for item in &self.common.dropped {
+        for item in &self.common.entities.dropped {
             if !b.items_before.contains(&item.id)
                 && dist(centre, [item.position.x, item.position.y, item.position.z]) < 3.0
             {
@@ -2547,7 +2556,7 @@ impl crate::game::ClientGame<'_> {
         let remaining = b
             .drops
             .keys()
-            .filter(|id| self.common.dropped.iter().any(|i| i.id == **id))
+            .filter(|id| self.common.entities.dropped.iter().any(|i| i.id == **id))
             .count();
         let until = b.collect_until.unwrap_or(0);
         if (self.common.ticks < until && (remaining > 0 || self.common.ticks < b.broke_tick + 3))
@@ -2565,7 +2574,7 @@ impl crate::game::ClientGame<'_> {
             "picked_up": delta(&b.inventory, &self.inventory_counts()),
             "held": self.held().map(|s| self.stack_value(s)),
             "items_left_on_ground": remaining,
-            "on_ground": self.dropped.iter().filter(|i| b.drops.contains_key(&i.id)).map(|i| json!({
+            "on_ground": self.entities.dropped.iter().filter(|i| b.drops.contains_key(&i.id)).map(|i| json!({
                 "id": i.id, "item": &*i.stack.item, "count": i.stack.count,
                 "pos": [i.position.x, i.position.y, i.position.z],
             })).collect::<Vec<_>>(),

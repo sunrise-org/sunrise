@@ -156,7 +156,7 @@ fn with_pair(heard: &Arc<Mutex<Heard>>, check: impl FnOnce(&mut crate::game::Cli
     .into();
     mod_platform::testing::with_mods(mods, || {
         super::native_entity_refs::tests::with_client_game(|game| {
-            game.mobs.clear();
+            game.entities.mobs.clear();
             check(game);
         });
     });
@@ -193,10 +193,14 @@ fn two_entities_are_asked_in_the_draw_queues_order() {
     with_player_pair(&heard, |game| {
         game.client.pack_ids = Some(Default::default());
         game.common
+            .entities
             .mobs
             .push(mob(game, "minecraft:zombie", 91, 0.0));
         admit_own_player(game, false);
-        game.common.mobs.push(mob(game, "minecraft:cow", 92, 2.0));
+        game.common
+            .entities
+            .mobs
+            .push(mob(game, "minecraft:cow", 92, 2.0));
         let (out, ..) = game.entity_geometry(CAMERA, 1.0, None, Vec::new(), &mut Vec::new());
         assert_eq!(
             events(&heard),
@@ -245,6 +249,7 @@ fn a_spectator_following_an_entity_submits_no_local_body() {
         admit_own_player(game, true);
         game.mode = GameMode::Spectator;
         game.common
+            .entities
             .mobs
             .push(mob(game, "minecraft:zombie", 91, 0.0));
         game.handle_packet(Clientbound::SetCamera(SetCamera { camera_id: 91 }))
@@ -408,8 +413,13 @@ pub(in crate::game::client_side) fn run_entity_draw_order_after_client_packets()
                 }),
                 ["beams", crystal] => {
                     let id: u32 = crystal.parse().unwrap();
-                    let index = game.crystals.iter().position(|c| c.id == id).unwrap();
-                    game.dragon.as_mut().unwrap().nearest_crystal = Some(index);
+                    let index = game
+                        .entities
+                        .crystals
+                        .iter()
+                        .position(|c| c.id == id)
+                        .unwrap();
+                    game.entities.dragon.as_mut().unwrap().nearest_crystal = Some(index);
                     check_beams = true;
                     C::SetEntityData(play::SetEntityData {
                         id: id as i32,
@@ -553,6 +563,7 @@ fn a_canceled_living_pre_skips_the_model_and_the_post_hook() {
     let heard: Arc<Mutex<Heard>> = Arc::default();
     with_pair(&heard, |game| {
         game.common
+            .entities
             .mobs
             .push(mob(game, "minecraft:zombie", 91, 0.0));
         let drawn = mob_frame(game);
@@ -582,7 +593,7 @@ fn a_canceled_entity_draws_no_name_tag() {
         let mut named = mob(game, "minecraft:zombie", 91, 0.0);
         named.custom_name = Some("Bob".into());
         named.name_visible = true;
-        game.mobs.push(named);
+        game.entities.mobs.push(named);
         let tag = |game: &mut crate::game::ClientGame<'_>| {
             mob_frame(game);
             let (mut out, mut see_through) = (Vec::new(), Vec::new());
@@ -629,8 +640,8 @@ fn entity_frame(game: &mut crate::game::ClientGame<'_>) -> usize {
 fn zombie_frame(game: &mut crate::game::ClientGame<'_>, burning: bool, shadows: bool) -> usize {
     let mut zombie = mob(game, "minecraft:zombie", 91, 0.0);
     zombie.fire_ticks = if burning { 100 } else { 0 };
-    game.common.mobs.clear();
-    game.common.mobs.push(zombie);
+    game.common.entities.mobs.clear();
+    game.common.entities.mobs.push(zombie);
     game.client.settings.entity_shadows = shadows;
     entity_frame(game)
 }
@@ -703,6 +714,7 @@ fn a_culled_entity_is_asked_neither_hook() {
     with_pair(&heard, |game| {
         // Far past any render distance.
         game.common
+            .entities
             .mobs
             .push(mob(game, "minecraft:zombie", 91, 100_000.0));
         let out = mob_frame(game);
@@ -799,7 +811,7 @@ fn a_spectator_draws_no_layers_but_gets_its_post_hooks() {
         // A spectating mannequin in the level's draw.
         let mut mannequin = mob(game, "minecraft:mannequin", 94, 0.0);
         mannequin.extra.spectator = true;
-        game.mobs.push(mannequin);
+        game.entities.mobs.push(mannequin);
         mob_frame(game);
         assert_eq!(events(&heard), ["living_pre 94", "living_post 94"]);
     });

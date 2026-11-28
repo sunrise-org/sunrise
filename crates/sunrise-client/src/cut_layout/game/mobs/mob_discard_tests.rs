@@ -57,14 +57,16 @@ pub(crate) fn run_discarded_mob_leaves_selectors_and_saves_while_frozen() {
     assert!(game.run_command("tick freeze"));
     assert!(game.clock.frozen());
     let kind = game.res.mob_types().get("minecraft:blaze").unwrap().clone();
-    game.mobs
+    game.entities
+        .mobs
         .push(Mob::new(42, kind.clone(), Vec3::new(0.5, 64.0, 2.5), 0.0));
-    game.mobs
+    game.entities
+        .mobs
         .push(Mob::new(43, kind, Vec3::new(1.5, 64.0, 2.5), 0.0));
     // The survivor is dying, but not removed. Keep existing selection semantics:
     // generic entity lookup/UUID still finds it; @e keeps its death_time filter.
-    game.mobs[1].health = 0.0;
-    game.mobs[1].death_time = 1;
+    game.entities.mobs[1].health = 0.0;
+    game.entities.mobs[1].death_time = 1;
     let removed_uuid = game.uuid_for(42);
     let dying_uuid = game.uuid_for(43);
     let selector = |game: &sunrise_gameplay::game::ServerGame<'_>, text: &str| {
@@ -93,7 +95,7 @@ pub(crate) fn run_discarded_mob_leaves_selectors_and_saves_while_frozen() {
     // completes. Both roots are savable before the explicit discard.
     assert_eq!(saved.values().map(Vec::len).sum::<usize>(), 2);
     let before_save = saved.values().any(|tags| !tags.is_empty());
-    let health = game.mobs[0].health;
+    let health = game.entities.mobs[0].health;
     let world_time = game.world.game_time;
     assert!(!game.entity_discard(mod_api::EntityRef::new(
         mod_api::WorldEpoch::new(u64::MAX),
@@ -108,10 +110,19 @@ pub(crate) fn run_discarded_mob_leaves_selectors_and_saves_while_frozen() {
         42
     )));
     assert_eq!(game.world.game_time, world_time);
-    assert_eq!(game.mobs[0].health, health, "discard is not lethal damage");
-    assert_eq!(game.mobs[0].death_time, 0);
-    assert!(game.dropped.is_empty(), "discard must not roll death loot");
-    assert!(game.orbs.is_empty(), "discard must not award death XP");
+    assert_eq!(
+        game.entities.mobs[0].health, health,
+        "discard is not lethal damage"
+    );
+    assert_eq!(game.entities.mobs[0].death_time, 0);
+    assert!(
+        game.entities.dropped.is_empty(),
+        "discard must not roll death loot"
+    );
+    assert!(
+        game.entities.orbs.is_empty(),
+        "discard must not award death XP"
+    );
     let after_enumeration = !game.select(&all).is_empty();
     assert!(!after_enumeration);
     assert_eq!(game.level_entity(42), None);
@@ -155,7 +166,7 @@ pub(crate) fn run_discarded_mob_leaves_selectors_and_saves_while_frozen() {
         "after_uuid": game.target_with_uuid(removed_uuid).is_some(),
         "after_enumeration": after_enumeration,
         "after_save": saved.values().flatten().any(|(id, _, _)| *id == 42),
-        "removed": game.mobs[0].removed,
+        "removed": game.entities.mobs[0].removed,
     });
     if let Some(path) = std::env::var_os("SUNRISE_DISCARD_REPORT") {
         std::fs::write(path, serde_json::to_vec(&report).unwrap()).unwrap();
@@ -170,7 +181,8 @@ pub(crate) fn run_discarded_mob_leaves_selectors_and_saves_while_frozen() {
     // The old UUID entry can remain in EntityMemory until its normal sweep.
     // It must not shadow a newly joined entity with the same UUID.
     let kind = game.res.mob_types().get("minecraft:blaze").unwrap().clone();
-    game.mobs
+    game.entities
+        .mobs
         .push(Mob::new(44, kind, Vec3::new(0.5, 64.0, 2.5), 0.0));
     game.persist.uuids.insert(44, removed_uuid);
     assert_eq!(
@@ -180,9 +192,10 @@ pub(crate) fn run_discarded_mob_leaves_selectors_and_saves_while_frozen() {
     // Root save suppression alone is insufficient: a live but discarded
     // passenger must not reappear under an otherwise savable vehicle.
     let kind = game.res.mob_types().get("minecraft:blaze").unwrap().clone();
-    game.mobs
+    game.entities
+        .mobs
         .push(Mob::new(45, kind, Vec3::new(0.5, 65.0, 2.5), 0.0));
-    game.mobs[3].extra.mount = Some(44);
+    game.entities.mobs[3].extra.mount = Some(44);
     saved.clear();
     failed.clear();
     game.save_every_entity(&keys, &mut saved, &mut failed, false);
@@ -205,7 +218,7 @@ pub(crate) fn run_discarded_mob_leaves_selectors_and_saves_while_frozen() {
     let kind = game.res.mob_types().get("minecraft:blaze").unwrap().clone();
     let mut killed = Mob::new(46, kind, Vec3::new(0.5, 64.0, 1.5), 0.0);
     killed.health = 0.0;
-    game.mobs.push(killed);
+    game.entities.mobs.push(killed);
     let killed_uuid = game.uuid_for(46);
     assert_eq!(game.select(&all), [commands::Target::Mob(44)]);
     let nearest = selector(&game, "@n[type=minecraft:blaze]");

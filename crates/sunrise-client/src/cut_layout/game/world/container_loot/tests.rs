@@ -255,7 +255,8 @@ fn count(game: &sunrise_gameplay::game::ServerGame<'_>, pos: (i32, i32, i32), it
     })
 }
 fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) -> u32 {
-    game.dropped
+    game.entities
+        .dropped
         .iter()
         .filter(|d| &*d.stack.item == item)
         .map(|d| d.stack.count)
@@ -387,7 +388,7 @@ fn explosion_unpacks_before_contents_drop() {
         explode(g);
         consumed(g, POS);
         assert_eq!(dropped(g, "minecraft:diamond"), 1);
-        g.dropped.clear();
+        g.entities.dropped.clear();
         explode(g);
         assert_eq!(dropped(g, "minecraft:diamond"), 0);
     });
@@ -438,7 +439,7 @@ fn cart(g: &mut sunrise_gameplay::game::ServerGame<'_>) -> u32 {
         seed: Some(Tag::Long(37)),
     });
     assert!(c.items.iter().all(Option::is_none));
-    g.carts.push(c);
+    g.entities.carts.push(c);
     id
 }
 fn chest_minecart_open_uses_opener_once() {
@@ -451,12 +452,12 @@ fn chest_minecart_open_uses_opener_once() {
             p.attributes
                 .edit(&h, |a, o| a.set_base_value(2.0, o))
                 .unwrap();
-            let i = g.carts.iter().position(|c| c.id == id).unwrap();
+            let i = g.entities.carts.iter().position(|c| c.id == id).unwrap();
             g.open_cart_container(i);
             g.open_cart_container(i);
         })
         .unwrap();
-        let c = g.carts.iter().find(|c| c.id == id).unwrap();
+        let c = g.entities.carts.iter().find(|c| c.id == id).unwrap();
         assert!(c.loot.is_none());
         assert_eq!(
             c.items
@@ -473,7 +474,7 @@ fn chest_minecart_break_unpacks_before_drop() {
     with_game(|g| {
         let id = cart(g);
         for _ in 0..2 {
-            if let Some(i) = g.carts.iter().position(|c| c.id == id) {
+            if let Some(i) = g.entities.carts.iter().position(|c| c.id == id) {
                 g.hurt_cart(
                     i,
                     100.0,
@@ -483,7 +484,7 @@ fn chest_minecart_break_unpacks_before_drop() {
                 );
             }
         }
-        assert!(!g.carts.iter().any(|c| c.id == id));
+        assert!(!g.entities.carts.iter().any(|c| c.id == id));
         assert_eq!(dropped(g, "minecraft:diamond"), 1);
     });
 }
@@ -578,11 +579,19 @@ fn detector_rail_comparator_unpacks_cart_once() {
         assert!(g.run_command("fill 7 63 7 10 63 9 minecraft:stone"));
         let id = cart(g);
         assert!(g.run_command("setblock 8 64 8 minecraft:detector_rail[powered=true]"));
-        assert!(g.carts.iter().find(|c| c.id == id).unwrap().loot.is_some());
+        assert!(
+            g.entities
+                .carts
+                .iter()
+                .find(|c| c.id == id)
+                .unwrap()
+                .loot
+                .is_some()
+        );
         assert!(g.run_command("setblock 9 64 8 minecraft:comparator[facing=west]"));
         for _ in 0..2 {
             g.with_level(|b, l, t| b.scheduled_block_tick(l, t, BlockPos::new(9, 64, 8)));
-            let c = g.carts.iter().find(|c| c.id == id).unwrap();
+            let c = g.entities.carts.iter().find(|c| c.id == id).unwrap();
             assert!(c.loot.is_none());
             assert_eq!(
                 c.items
@@ -1132,26 +1141,29 @@ fn vehicle_slot_read_fills_without_opener_while_acting() {
         game.options.dedicated = Some(Vec::new());
         let cart_id = cart(game);
         let cart = game
+            .entities
             .carts
             .iter()
             .position(|cart| cart.id == cart_id)
             .unwrap();
         let resident = ItemStack::new("minecraft:stick", 4);
-        game.carts
+        game.entities
+            .carts
             .update(cart, |cart| cart.items[0] = Some(resident.clone()));
         let (tag, _) = sunrise_core::nbt::parse_snbt(&format!(
             r#"{{Pos:[8.5d,64d,8.5d],LootTable:"{TABLE}",LootTableSeed:37L}}"#
         ))
         .unwrap();
         game.load_boat(tag, None, "minecraft:oak_chest_boat");
-        let boat = game.boats.len() - 1;
-        let boat_id = game.boats[boat].id;
+        let boat = game.entities.boats.len() - 1;
+        let boat_id = game.entities.boats[boat].id;
         assert!(game.persist.raw[&boat_id].get("LootTable").is_some());
         assert_eq!(
             game.persist.raw[&boat_id].get("LootTableSeed"),
             Some(&Tag::Long(37))
         );
-        game.boats
+        game.entities
+            .boats
             .update(boat, |boat| boat.items[0] = Some(resident.clone()));
 
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -1172,12 +1184,12 @@ fn vehicle_slot_read_fills_without_opener_while_acting() {
                         let slot = mod_api::ItemPlace::EntitySlot { entity, slot: 0 };
                         assert_eq!(slot.with_stack(game, |stack| stack.count()), Some(4));
                         let items = if entity == cart_id {
-                            assert!(game.carts[cart].loot.is_none());
-                            &game.carts[cart].items
+                            assert!(game.entities.carts[cart].loot.is_none());
+                            &game.entities.carts[cart].items
                         } else {
                             assert!(game.persist.raw[&boat_id].get("LootTable").is_none());
                             assert!(game.persist.raw[&boat_id].get("LootTableSeed").is_none());
-                            &game.boats[boat].items
+                            &game.entities.boats[boat].items
                         };
                         assert_eq!(items[0].as_ref(), Some(&resident));
                         let filled = items[1..].iter().flatten().collect::<Vec<_>>();
@@ -1235,7 +1247,9 @@ fn saved_carts_keep_a_loot_table_only_when_they_hold_a_container() {
             let (tag, _) = sunrise_core::nbt::parse_snbt(&source).unwrap();
             game.load_cart(tag, Some([61, 0, 0, i as i32 + 1]), kind);
             // The entity chunk's own writer, as a save writes it to disk.
-            let (_, saved) = game.save_cart(game.carts.len() - 1, &keys).unwrap();
+            let (_, saved) = game
+                .save_cart(game.entities.carts.len() - 1, &keys)
+                .unwrap();
             assert_eq!(
                 (
                     saved.get("LootTable").cloned(),

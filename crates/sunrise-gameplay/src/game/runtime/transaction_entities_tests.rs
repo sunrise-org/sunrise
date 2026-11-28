@@ -214,7 +214,7 @@ fn boat_with_rider(game: &mut crate::game::ServerGame<'_>) -> (EntityRef, Entity
 fn a_spawn_then_abort_leaves_no_entity_map_or_hook() {
     const NAME: &str = "game::server_side::transaction_entities_tests::a_spawn_then_abort_leaves_no_entity_map_or_hook";
     with_observer(NAME, |game| {
-        let (mobs, next) = (game.mobs.len(), game.server.next_entity);
+        let (mobs, next) = (game.entities.mobs.len(), game.server.next_entity);
         let pig = game.storage_scope(|game, _| {
             let pig = summon(game, "minecraft:pig", "{}").unwrap();
             assert!(game.entity(pig).is_some(), "in the level inside the action");
@@ -227,7 +227,7 @@ fn a_spawn_then_abort_leaves_no_entity_map_or_hook() {
         });
 
         assert_eq!(game.entity(pig), None);
-        assert_eq!(game.mobs.len(), mobs);
+        assert_eq!(game.entities.mobs.len(), mobs);
         assert!(!game.entity_attachments.contains_key(&pig));
         assert!(!game.persist.uuids.contains_key(&pig));
         game.native_joins_flush(false, 0);
@@ -310,7 +310,7 @@ fn a_join_cancelled_at_commit_leaves_a_stale_handle() {
             "kept out at once"
         );
         heard();
-        let sheep_before = game.mobs.len();
+        let sheep_before = game.entities.mobs.len();
         let sheep = game.storage_scope(|game, _| {
             let sheep =
                 summon(game, "minecraft:sheep", "{}").expect("the handle comes back at once");
@@ -318,7 +318,7 @@ fn a_join_cancelled_at_commit_leaves_a_stale_handle() {
             (sheep, true)
         });
         assert_eq!(game.entity(sheep), None);
-        assert_eq!(game.mobs.len(), sheep_before);
+        assert_eq!(game.entities.mobs.len(), sheep_before);
         game.native_leaves_flush();
         let heard = heard();
         assert_eq!(heard.joined, [sheep]);
@@ -342,11 +342,11 @@ fn a_thrown_spawn_joins_at_the_call_or_the_root_commit() {
             let spawn = EntitySpawn::new(SpawnBody::Thrown { item });
             game.level_spawn_entity(level, kind, [1.5, 70.0, 1.5], &spawn)
         };
-        let projectiles = game.creatures.projectiles.len();
+        let projectiles = game.entities.projectiles.len();
         let next = game.server.next_entity;
         assert_eq!(thrown(game, "minecraft:snowball"), None, "kept out at once");
         assert_eq!(heard().joined, [next + 1]);
-        assert_eq!(game.creatures.projectiles.len(), projectiles);
+        assert_eq!(game.entities.projectiles.len(), projectiles);
         let egg = thrown(game, "minecraft:egg").unwrap();
         assert_eq!(heard().joined, [egg.id()]);
 
@@ -403,11 +403,12 @@ fn a_removal_then_abort_keeps_the_row_map_and_rider() {
             assert_eq!(game.entity(pig.id()), None);
             assert!(!game.entity_discard(boat), "not removed twice");
             assert!(
-                game.boats.iter().any(|b| b.id == boat.id()),
+                game.entities.boats.iter().any(|b| b.id == boat.id()),
                 "the row stays"
             );
             let mount = |game: &crate::game::ServerGame<'_>| {
-                game.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == cow.id())
                     .unwrap()
@@ -448,7 +449,7 @@ fn a_removal_then_commit_runs_each_effect_once() {
         let queued = game.persist.removals.iter();
         assert_eq!(queued.filter(|t| **t == boat_target).count(), 1);
         game.native_leaves_flush();
-        assert!(!game.boats.iter().any(|b| b.id == boat.id()));
+        assert!(!game.entities.boats.iter().any(|b| b.id == boat.id()));
         assert_eq!(heard().left, [boat.id()], "told once");
     });
 }
@@ -460,11 +461,20 @@ fn a_killed_mobs_oozing_spawns_only_at_commit() {
         "game::server_side::transaction_entities_tests::a_killed_mobs_oozing_spawns_only_at_commit";
     with_observer(NAME, |game| {
         let zombie = summon(game, "minecraft:zombie", "{}").unwrap();
-        let at = game.mobs.iter().position(|m| m.id == zombie).unwrap();
-        (game.mobs[at].extra.effects).push(StoredEffect::new("minecraft:oozing", 600, 0));
+        let at = game
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == zombie)
+            .unwrap();
+        (game.entities.mobs[at].extra.effects).push(StoredEffect::new("minecraft:oozing", 600, 0));
         let slimes = |game: &crate::game::ServerGame<'_>| {
             let slime = sunrise_sim::mobs::Species::Slime;
-            game.mobs.iter().filter(|m| m.species() == slime).count()
+            game.entities
+                .mobs
+                .iter()
+                .filter(|m| m.species() == slime)
+                .count()
         };
         let zombie = game.entity(zombie).unwrap();
         game.storage_scope(|game, _| {
@@ -473,7 +483,12 @@ fn a_killed_mobs_oozing_spawns_only_at_commit() {
             ((), true)
         });
         assert_eq!(slimes(game), 2);
-        assert!(game.mobs.iter().any(|m| m.id == zombie.id() && m.removed));
+        assert!(
+            game.entities
+                .mobs
+                .iter()
+                .any(|m| m.id == zombie.id() && m.removed)
+        );
     });
 }
 
@@ -608,11 +623,11 @@ fn late_id_kinds_spawned_then_aborted_are_removed() {
     with_observer(NAME, |game| {
         let counts = |game: &crate::game::ServerGame<'_>| {
             [
-                game.tnts.len(),
-                game.falling.len(),
-                game.rockets.len(),
-                game.tridents.len(),
-                game.creatures.projectiles.len(),
+                game.entities.tnts.len(),
+                game.entities.falling.len(),
+                game.entities.rockets.len(),
+                game.entities.tridents.len(),
+                game.entities.projectiles.len(),
             ]
         };
         let before = counts(game);
@@ -654,7 +669,7 @@ fn a_traveller_arriving_inside_an_aborted_action_stays() {
         );
         game.enter_level(Dim::Overworld).unwrap();
         let diamonds = |game: &crate::game::ServerGame<'_>| {
-            (game.dropped.iter())
+            (game.entities.dropped.iter())
                 .filter(|d| &*d.stack.item == "minecraft:diamond")
                 .count()
         };
@@ -739,9 +754,9 @@ fn exhausted_ids_refuse_every_mod_spawn() {
             game.entity_spawn_at_location(f.mob, stack, 0.0).is_some()
         }),
         ("drop_at", |game, _| {
-            let before = game.dropped.len();
+            let before = game.entities.dropped.len();
             game.drop_at([1, 70, 1], ItemStack::new("minecraft:stone", 1));
-            game.dropped.len() > before
+            game.entities.dropped.len() > before
         }),
         ("level_spawn_mob", |game, f| {
             let reason = mod_api::SpawnReason::Command;
@@ -900,8 +915,13 @@ fn commit_tells_the_joins_before_the_effects_of_the_removals() {
     const NAME: &str = "game::server_side::transaction_entities_tests::commit_tells_the_joins_before_the_effects_of_the_removals";
     with_observer(NAME, |game| {
         let zombie = summon(game, "minecraft:zombie", "{}").unwrap();
-        let at = game.mobs.iter().position(|m| m.id == zombie).unwrap();
-        (game.mobs[at].extra.effects).push(StoredEffect::new("minecraft:oozing", 600, 0));
+        let at = game
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == zombie)
+            .unwrap();
+        (game.entities.mobs[at].extra.effects).push(StoredEffect::new("minecraft:oozing", 600, 0));
         let zombie = game.entity(zombie).unwrap();
         heard();
         let pig = game.storage_scope(|game, _| {
@@ -1152,7 +1172,7 @@ fn a_block_break_at_the_commit_never_announces_a_mob_the_transaction_removed() {
         game.world.set(at[0], at[1], at[2], poppy).unwrap();
         let level = game.level(game.dim.id()).unwrap();
         let water = mod_api::__private::fluid_key("minecraft:water").unwrap();
-        let items = game.dropped.len();
+        let items = game.entities.dropped.len();
         let pig = game
             .storage_transaction(|game, tx| {
                 let pig = summon(game, "minecraft:pig", "{}").unwrap();
@@ -1161,11 +1181,19 @@ fn a_block_break_at_the_commit_never_announces_a_mob_the_transaction_removed() {
                     game.level_place_fluid(level, at, water, None, false, tx),
                     Ok(true)
                 );
-                assert_eq!(game.dropped.len(), items, "the drop waits for the commit");
+                assert_eq!(
+                    game.entities.dropped.len(),
+                    items,
+                    "the drop waits for the commit"
+                );
                 Ok::<_, ()>(pig)
             })
             .unwrap();
-        assert_eq!(game.dropped.len(), items + 1, "the broken poppy dropped");
+        assert_eq!(
+            game.entities.dropped.len(),
+            items + 1,
+            "the broken poppy dropped"
+        );
         let told = heard();
         assert!(
             !told.joined.contains(&pig),

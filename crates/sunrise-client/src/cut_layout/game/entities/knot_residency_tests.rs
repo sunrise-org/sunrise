@@ -10,7 +10,7 @@ fn tie_player_mob(
 ) -> (u32, u32) {
     game.summon_with_nbt("minecraft:pig", fence.map(f64::from), "{}")
         .unwrap();
-    let mob = game.mobs.last().unwrap().id;
+    let mob = game.entities.mobs.last().unwrap().id;
     assert!(game.set_leash(Target::Mob(mob), Holder::Player, None));
     assert!(game.use_knot(fence, false));
     let knot = game.server.knot_state.knot_ids[&fence];
@@ -29,13 +29,13 @@ fn natural_knot_owner_survives_active_parked_reset_and_retires_at_last_holder() 
         let (first, knot) = tie_player_mob(game, fence);
         let (second, same_knot) = tie_player_mob(game, fence);
         assert_eq!(knot, same_knot);
-        assert_eq!(game.resident_entities.knots.len(), 1);
-        let join = game.resident_entities.knots[0].join;
+        assert_eq!(game.entities.knots.len(), 1);
+        let join = game.entities.knots[0].join;
         // Leashable.dropLeash -> LeashFenceKnotEntity.notifyLeasheeRemoved:
         // one departing holder leaves the knot; the last discards it immediately.
         assert!(game.detach_leash(Target::Mob(first), false));
         assert_eq!(game.natural_knot(knot), Some(fence));
-        assert_eq!(game.resident_entities.knots[0].join, join);
+        assert_eq!(game.entities.knots[0].join, join);
 
         game.enter_level(Dim::Nether).unwrap();
         let (nether_mob, nether_knot) = tie_player_mob(game, fence);
@@ -55,11 +55,11 @@ fn natural_knot_owner_survives_active_parked_reset_and_retires_at_last_holder() 
         }
         game.enter_level(Dim::Overworld).unwrap();
         assert_eq!(game.natural_knot(knot), Some(fence));
-        assert_eq!(game.resident_entities.knots[0].join, join);
+        assert_eq!(game.entities.knots[0].join, join);
         assert!(game.detach_leash(Target::Mob(second), false));
         assert_eq!(game.server_resident_entity(knot), EntityLookup::Missing);
         assert!(!game.server.knot_state.knot_ids.contains_key(&fence));
-        assert!(game.resident_entities.knots.is_empty());
+        assert!(game.entities.knots.is_empty());
         assert!(matches!(
             game.server_resident_entity(nether_knot),
             EntityLookup::Found {
@@ -87,7 +87,7 @@ fn natural_knot_tick_cleanup_retires_a_removed_holder_and_fresh_tie_gets_a_new_i
         let (_, knot) = tie_player_mob(game, fence);
         // A removal without a leash notification is reconciled by the existing
         // tracking cleanup, not by a hidden holder scan during lookup.
-        game.mobs[0].removed = true;
+        game.entities.mobs[0].removed = true;
         assert_eq!(game.natural_knot(knot), Some(fence));
         game.forget_untied_knots();
         assert_eq!(game.server_resident_entity(knot), EntityLookup::Missing);
@@ -107,21 +107,21 @@ fn natural_knot_last_boat_notification_excludes_its_old_resident_payload() {
         let (mob, knot) = tie_player_mob(game, fence);
         game.summon_with_nbt("minecraft:oak_boat", [1.0, 70.0, 1.0], "{}")
             .unwrap();
-        let boat = game.boats[0].id;
+        let boat = game.entities.boats[0].id;
         assert!(game.set_leash(Target::Boat(boat), Holder::Knot(fence), None));
         assert!(game.detach_leash(Target::Mob(mob), false));
         assert_eq!(game.natural_knot(knot), Some(fence));
         // A copied boat is removed before its original payload is taken out
         // of the storage list; that old payload is not a remaining holder.
-        let departing = game.boats[0].clone();
+        let departing = game.entities.boats[0].clone();
         game.boat_removed(&departing);
         assert_eq!(game.server_resident_entity(knot), EntityLookup::Missing);
-        game.boats.remove(0);
+        game.entities.boats.remove(0);
 
         let (mob, knot) = tie_player_mob(game, fence);
         game.summon_with_nbt("minecraft:oak_boat", [1.0, 70.0, 1.0], "{}")
             .unwrap();
-        let boat = game.boats[0].id;
+        let boat = game.entities.boats[0].id;
         assert!(game.set_leash(Target::Boat(boat), Holder::Knot(fence), None));
         assert!(game.detach_leash(Target::Mob(mob), false));
         game.release_stored_boat_leash(0, false);

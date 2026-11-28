@@ -78,7 +78,13 @@ fn last(heard: &Heard) -> (CommandSource, CommandInvocation) {
 /// The handle of the only mob in `dim`, looked up with that level in place.
 fn only_mob(game: &mut ServerGame<'_>, dim: Dim) -> EntityRef {
     let back = game.enter_command_level(dim);
-    let id = game.mobs.iter().next().expect("the mob was summoned").id;
+    let id = game
+        .entities
+        .mobs
+        .iter()
+        .next()
+        .expect("the mob was summoned")
+        .id;
     let entity = game.entity(id).expect("a summoned mob has a handle");
     if let Some(back) = back {
         game.enter_command_level(back);
@@ -306,7 +312,7 @@ fn blocks_carts_and_functions_keep_their_entity() {
                 let mut cart = Minecart::new(99, CartKind::CommandBlock, Vec3::new(1.0, 64.0, 1.0));
                 cart.yaw = 30.0;
                 cart.command.command = "where".into();
-                game.carts.push(cart);
+                game.entities.carts.push(cart);
                 assert!(game.perform_cart_command(99));
                 let (source, command) = last(heard);
                 let CommandSource::CommandBlockMinecart { entity, .. } = source else {
@@ -434,7 +440,7 @@ fn execute_on_origin_reaches_a_fake_players_projectile() {
                 game.server.next_entity += 1;
                 snowball.id = game.server.next_entity;
                 snowball.guest = Some(conn);
-                game.creatures.projectiles.push(snowball);
+                game.entities.projectiles.push(snowball);
 
                 let line = "execute as @e[type=minecraft:snowball] on origin run where";
                 assert!(game.native_run_command(line));

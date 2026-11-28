@@ -43,7 +43,7 @@ mod mod_parrot_tests {
                 let mut bird = Mob::new(mob, kind, Vec3::new(0.5, 100.0, 0.5), 0.0);
                 bird.extra.tame = true;
                 bird.extra.owner = Some(owner);
-                game.mobs.push(bird);
+                game.entities.mobs.push(bird);
                 game.parrot_to_shoulder(mob);
                 let extra = game.level.player_extra.as_ref();
                 let left = extra.and_then(|e| e.get("ShoulderEntityLeft"));
@@ -57,6 +57,7 @@ mod mod_parrot_tests {
                 game.remove_entities_on_shoulder();
                 if variant.is_some() {
                     let back = game
+                        .entities
                         .mobs
                         .iter()
                         .find(|m| !m.removed && m.kind.id == id)
@@ -68,7 +69,7 @@ mod mod_parrot_tests {
                     );
                 }
                 game.level.player_extra = None;
-                game.mobs.clear();
+                game.entities.mobs.clear();
             }
         });
     }

@@ -154,7 +154,7 @@ fn an_aborted_placement_over_a_skull_leaves_it_and_drops_nothing() {
             game.world.block_entities.get(&pos).is_some(),
             "the skull has its block entity"
         );
-        let items = game.dropped.len();
+        let items = game.entities.dropped.len();
         dispense_fixture::start_recording();
         let water = key("minecraft:water");
         let _ = game.storage_transaction(|game, tx| {
@@ -169,7 +169,7 @@ fn an_aborted_placement_over_a_skull_leaves_it_and_drops_nothing() {
         });
         assert_eq!(block(game), skull);
         assert_eq!(format!("{:?}", game.world.block_entities.get(&pos)), kept);
-        assert_eq!(game.dropped.len(), items);
+        assert_eq!(game.entities.dropped.len(), items);
         assert_eq!(dispense_fixture::stop_recording(), Vec::<String>::new());
     });
 }
@@ -181,7 +181,7 @@ fn a_committed_pour_breaks_what_it_replaces_then_sends_its_events_in_order() {
         sunrise_gameplay::game::server_side::native_item_places::tests::open_to_lan(game);
         let poppy = state(game, "minecraft:poppy");
         game.world.set(AT[0], AT[1], AT[2], poppy).unwrap();
-        let items = game.dropped.len();
+        let items = game.entities.dropped.len();
         game.world.block_log = Some(Vec::new());
         game.server.pending_native_sounds.clear();
         dispense_fixture::start_recording();
@@ -212,8 +212,8 @@ fn a_committed_pour_breaks_what_it_replaces_then_sends_its_events_in_order() {
         );
         assert_eq!(block(game), state(game, "minecraft:lava"));
         // The poppy's drop, made at the call, spawned at the commit.
-        assert_eq!(game.dropped.len(), items + 1);
-        assert_eq!(&*game.dropped[items].stack.item, "minecraft:poppy");
+        assert_eq!(game.entities.dropped.len(), items + 1);
+        assert_eq!(&*game.entities.dropped[items].stack.item, "minecraft:poppy");
         assert_eq!(
             lines,
             [
@@ -232,7 +232,7 @@ fn the_call_time_answer_stands_when_the_block_changes_before_the_commit() {
         let poppy = state(game, "minecraft:poppy");
         game.world.set(AT[0], AT[1], AT[2], poppy).unwrap();
         let stone = state(game, "minecraft:stone");
-        let items = game.dropped.len();
+        let items = game.entities.dropped.len();
         dispense_fixture::start_recording();
         let water = key("minecraft:water");
         let placed = game
@@ -248,7 +248,7 @@ fn the_call_time_answer_stands_when_the_block_changes_before_the_commit() {
         assert!(placed);
         let lines = dispense_fixture::stop_recording();
         assert_eq!(block(game), stone);
-        assert_eq!(game.dropped.len(), items + 1);
+        assert_eq!(game.entities.dropped.len(), items + 1);
         assert_eq!(
             lines,
             [
@@ -355,7 +355,7 @@ fn a_cancelled_drop_keeps_the_replacement() {
             game.options.dedicated = Some(Vec::new());
             let poppy = state(game, "minecraft:poppy");
             game.world.set(AT[0], AT[1], AT[2], poppy).unwrap();
-            let items = game.dropped.len();
+            let items = game.entities.dropped.len();
             let water = key("minecraft:water");
             game.storage_transaction(|game, tx| {
                 assert_eq!(
@@ -367,7 +367,7 @@ fn a_cancelled_drop_keeps_the_replacement() {
             .unwrap();
             // The listener saw the poppy and cancelled: no drop, but the water is there.
             assert_eq!(*seen.lock().unwrap(), [Some("minecraft:poppy".to_owned())]);
-            assert_eq!(game.dropped.len(), items);
+            assert_eq!(game.entities.dropped.len(), items);
             assert_eq!(block(game), state(game, "minecraft:water"));
         });
     });
@@ -493,7 +493,7 @@ fn journalled_removal_keeps_fluid_and_restores_a_block_entity_on_abort() {
             .block_entities
             .insert(pos, BlockEntity::Chest(slots));
         game.world.block_log = Some(Vec::new());
-        let drops = game.dropped.len();
+        let drops = game.entities.dropped.len();
 
         for commit in [false, true] {
             game.storage_scope(|game, _| {
@@ -501,7 +501,7 @@ fn journalled_removal_keeps_fluid_and_restores_a_block_entity_on_abort() {
                 assert_eq!(block(game), water);
                 assert!(game.world.block_entities.get(&pos).is_none());
                 assert!(game.world.block_log.as_ref().unwrap().is_empty());
-                assert_eq!(game.dropped.len(), drops);
+                assert_eq!(game.entities.dropped.len(), drops);
                 ((), commit)
             });
 
@@ -513,7 +513,7 @@ fn journalled_removal_keeps_fluid_and_restores_a_block_entity_on_abort() {
             if !commit {
                 let restored = game.world.block_entities.get(&pos).unwrap();
                 assert_eq!(restored.slots()[0].as_ref(), Some(&stack));
-                assert_eq!(game.dropped.len(), drops);
+                assert_eq!(game.entities.dropped.len(), drops);
             }
         }
     });

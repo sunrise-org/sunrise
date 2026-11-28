@@ -74,7 +74,11 @@ pub(crate) fn portal_on(game: &mut sunrise_gameplay::game::ServerGame<'_>, floor
 }
 
 pub(crate) fn spawned(game: &sunrise_gameplay::game::ServerGame<'_>) -> Vec<String> {
-    game.mobs.iter().map(|m| m.kind.id.clone()).collect()
+    game.entities
+        .mobs
+        .iter()
+        .map(|m| m.kind.id.clone())
+        .collect()
 }
 
 /// `BlockState.isValidSpawn` is "sturdy top face and `getLightEmission() < 14`"

@@ -158,7 +158,7 @@ impl crate::game::ClientGame<'_> {
                 ))
             }
             Who::Mob(id) => {
-                let m = self.common.mobs.iter().find(|m| m.id == id)?;
+                let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
                 Some(glam::DVec3::new(
                     m.previous.x + (m.position.x - m.previous.x) * alpha,
                     m.previous.y
@@ -187,7 +187,7 @@ impl crate::game::ClientGame<'_> {
         range: std::ops::Range<usize>,
         out: &mut Vec<Vertex>,
     ) {
-        for mob in &self.common.mobs[range] {
+        for mob in &self.common.entities.mobs[range] {
             self.living_geometry::<PRECHECK>(mob, frame, out);
         }
     }
@@ -204,7 +204,7 @@ impl crate::game::ClientGame<'_> {
                 .as_ref()
                 .is_some_and(|culler| culler.camera_is_stationary())
             && self.client.settings.sunrise.entity_culling_precheck != 0
-            && self.common.mobs.len()
+            && self.common.entities.mobs.len()
                 >= self.client.settings.sunrise.entity_culling_precheck as usize
             && !self.client.occlusion.0.shadow_casters.0
             && mod_api::__private::mods().is_empty();
@@ -358,7 +358,7 @@ impl crate::game::ClientGame<'_> {
         use sunrise_sim::mobs::guardian;
         let mut swimming = Vec::new();
         let mut beams = Vec::new();
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if !m.alive() || !matches!(m.species(), Species::Guardian | Species::ElderGuardian) {
                 continue;
             }
@@ -815,7 +815,7 @@ impl crate::game::ClientGame<'_> {
     #[cfg(any(test, feature = "test-support"))]
     pub fn mob_geometry(&self, camera: glam::DVec3, alpha: f64, out: &mut Vec<Vertex>) {
         let frame = self.begin_mob_geometry(camera, alpha);
-        self.mob_run_geometry(&frame, 0..self.common.mobs.len(), out);
+        self.mob_run_geometry(&frame, 0..self.common.entities.mobs.len(), out);
         self.mark_motion(out.len(), 0);
         self.other_creature_geometry(camera, alpha, out);
     }
@@ -829,7 +829,7 @@ impl crate::game::ClientGame<'_> {
         self.spawner_geometry(camera, alpha, out);
         let live = self
             .common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .filter(|a| !self.hides_as_camera(a.id))

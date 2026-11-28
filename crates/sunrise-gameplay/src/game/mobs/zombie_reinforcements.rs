@@ -30,13 +30,19 @@ impl ServerGame<'_> {
     /// and monsters spawning, a copy of it appears out of sight and takes
     /// `target`; both then call less often.
     pub(in crate::game::server_side) fn call_reinforcements(&mut self, caller: u32, target: Who) {
-        let Some(index) = self.common.mobs.iter().position(|m| m.id == caller) else {
+        let Some(index) = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == caller)
+        else {
             return;
         };
         if self.common.world.health_rules.difficulty != Difficulty::Hard {
             return;
         }
-        let zombie = &mut self.common.mobs[index];
+        let zombie = &mut self.common.entities.mobs[index];
         if f64::from(zombie.random.next_float()) >= zombie.attrs.spawn_reinforcements {
             return;
         }
@@ -67,7 +73,7 @@ impl ServerGame<'_> {
         );
         let lent = crate::game::server_side::native_level_spawning::LevelRandomLent::start();
         let spot = self.reinforcement_spot(&kind, from, &mut own, &mut rules);
-        self.common.mobs[index].random = own;
+        self.common.entities.mobs[index].random = own;
         drop(lent);
         self.common.world.random = rules;
         let Some(spot) = spot else {
@@ -90,7 +96,7 @@ impl ServerGame<'_> {
             .and_then(|host| host.mob_players.get(&caller).copied())
             .or(self.server.lan_acting);
         self.set_event_ai_target(id, Some(target), player);
-        if let Some(reinforcement) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+        if let Some(reinforcement) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
             // ZOMBIE_REINFORCEMENT_CALLEE_CHARGE.
             finalize::add_modifier(
                 reinforcement,
@@ -101,7 +107,7 @@ impl ServerGame<'_> {
             );
         }
         // The caller's charge grows by 0.05 each time it calls.
-        let caller = &mut self.common.mobs[index];
+        let caller = &mut self.common.entities.mobs[index];
         let charged = finalize::modifier_amount(
             caller,
             Attr::SpawnReinforcements,

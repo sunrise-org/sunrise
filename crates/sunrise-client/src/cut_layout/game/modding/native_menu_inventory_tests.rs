@@ -356,7 +356,7 @@ mod owner {
                 player: 13,
                 slot: 0,
             };
-            let dropped = game.dropped.len();
+            let dropped = game.entities.dropped.len();
             let moved: Result<(), TransactionError<()>> = (game as &mut dyn ServerHost)
                 .transaction(|host, tx| {
                     let taken = source.extract(host, tx, &diamond, 1).unwrap();
@@ -373,7 +373,7 @@ mod owner {
                 s.as_ref()
                     .is_some_and(|s| s.count == 64 && &*s.item == "minecraft:stone")
             }));
-            assert_eq!(game.dropped.len(), dropped);
+            assert_eq!(game.entities.dropped.len(), dropped);
         });
     }
 
@@ -444,14 +444,14 @@ mod owner {
                         .fill(Some(ItemStack::new("minecraft:stone", 64)));
                 })
                 .unwrap();
-            let dropped = game.dropped.len();
+            let dropped = game.entities.dropped.len();
             let given = (game as &mut dyn ServerHost)
                 .transaction(|host, _| Ok::<_, ()>(player.give_stack(host, diamond)));
             assert_eq!(given, Ok(Ok(None)));
-            assert_eq!(game.dropped.len(), dropped);
+            assert_eq!(game.entities.dropped.len(), dropped);
             game.enter_level(sunrise_gameplay_common::game::Dim::Nether)
                 .unwrap();
-            let [overflow] = game.dropped.as_ref() else {
+            let [overflow] = game.entities.dropped.as_ref() else {
                 panic!("the full guest's level should have one overflow drop");
             };
             assert_eq!(overflow.stack, ItemStack::new("minecraft:diamond", 1));

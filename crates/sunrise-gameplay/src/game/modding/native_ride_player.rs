@@ -65,6 +65,7 @@ impl crate::game::ServerGame<'_> {
         };
         let mob = self
             .common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == id && !m.removed)
@@ -118,6 +119,7 @@ impl crate::game::ServerGame<'_> {
             };
         if !self
             .common
+            .entities
             .mobs
             .iter()
             .any(|m| !m.removed && m.extra.mount.is_some_and(|v| is_player(self, v)))
@@ -126,6 +128,7 @@ impl crate::game::ServerGame<'_> {
         }
         let riders: Vec<(u32, u32)> = self
             .common
+            .entities
             .mobs
             .iter()
             .filter(|m| !m.removed)
@@ -185,7 +188,7 @@ impl crate::game::ServerGame<'_> {
             Vec3::new(low[0], low[1], low[2]),
             Vec3::new(high[0], high[1], high[2]),
         );
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         let offset = riders::vehicle_attachment(m, width);
         m.seated(vehicle, offset, player_box);
         m.previous = m.position;

@@ -86,7 +86,7 @@ impl crate::game::ServerGame<'_> {
         self.server.vehicle_mobs.reach.set(reach);
         // The boats' grid serves the carts ticking right after them; an older one goes.
         let mut grid = self.server.vehicle_mobs.grid.borrow_mut();
-        let stamp = self.common.mobs.stamp();
+        let stamp = self.common.entities.mobs.stamp();
         let built = grid.built.take().filter(|(s, _)| *s == stamp);
         *grid = MobGrid {
             built,
@@ -106,14 +106,14 @@ impl crate::game::ServerGame<'_> {
     /// The mobs' [`BoxReach`] while vehicles tick, none otherwise.
     pub(in crate::game) fn vehicle_mob_reach(&self) -> Option<BoxReach> {
         let (count, reach) = self.server.vehicle_mobs.reach.get()?;
-        if count == self.common.mobs.len() {
+        if count == self.common.entities.mobs.len() {
             return Some(reach);
         }
-        let reach = BoxReach::of(&self.common.mobs);
+        let reach = BoxReach::of(&self.common.entities.mobs);
         self.server
             .vehicle_mobs
             .reach
-            .set(Some((self.common.mobs.len(), reach)));
+            .set(Some((self.common.entities.mobs.len(), reach)));
         Some(reach)
     }
     /// The slots, ascending, of the mobs whose box may meet `area` into `out` (a superset: the
@@ -125,7 +125,7 @@ impl crate::game::ServerGame<'_> {
         if !self.server.vehicle_mobs.vehicle_mobs_indexed() {
             return false;
         }
-        let stamp = self.common.mobs.stamp();
+        let stamp = self.common.entities.mobs.stamp();
         let mut grid = self.server.vehicle_mobs.grid.borrow_mut();
         if grid.built.as_ref().is_none_or(|(s, _)| *s != stamp) {
             if grid.walked < grid.patience {
@@ -134,7 +134,7 @@ impl crate::game::ServerGame<'_> {
             }
             grid.built = Some((
                 stamp,
-                SeenGrid::new(self.common.mobs.iter().map(Mob::bounds)),
+                SeenGrid::new(self.common.entities.mobs.iter().map(Mob::bounds)),
             ));
             grid.walked = 0;
             grid.patience = (grid.patience * 2).max(WALKS_BEFORE_GRID);
@@ -155,7 +155,7 @@ impl crate::game::ServerGame<'_> {
         let mut near = self.server.vehicle_mobs.near.take();
         if self.vehicle_mobs_near(area, &mut near) {
             for &j in &near {
-                let m = &self.common.mobs[j as usize];
+                let m = &self.common.entities.mobs[j as usize];
                 let b = m.bounds();
                 if b.intersects(area) {
                     each(j as usize, m, b);
@@ -163,7 +163,7 @@ impl crate::game::ServerGame<'_> {
             }
         } else {
             let reach = self.vehicle_mob_reach();
-            for (j, m) in self.common.mobs.iter().enumerate() {
+            for (j, m) in self.common.entities.mobs.iter().enumerate() {
                 if reach.is_some_and(|r| !r.may_meet(m, area)) {
                     continue;
                 }
@@ -186,10 +186,10 @@ impl crate::game::ServerGame<'_> {
     ) -> bool {
         if !cells.candidates(reach.around(m.position), near) {
             near.clear();
-            near.extend(0..self.common.carts.len() as u32);
+            near.extend(0..self.common.entities.carts.len() as u32);
         }
         near.iter()
-            .any(|&k| reach.may_meet(m, self.common.carts[k as usize].bounds()))
+            .any(|&k| reach.may_meet(m, self.common.entities.carts[k as usize].bounds()))
     }
     /// The players in boat `id`: the window's player (or the server player
     /// acting as it) and the server's other players.
@@ -213,13 +213,13 @@ impl crate::game::ServerGame<'_> {
     /// `AbstractBoat.canAddPassenger`: a seat is free and the boat is not
     /// under water.
     pub(in crate::game) fn server_boat_has_room(&self, i: usize) -> bool {
-        let b = &self.common.boats[i];
+        let b = &self.common.entities.boats[i];
         self.seated_passenger_count(b.id) < b.max_passengers() && !b.under_water()
     }
     /// Where the player in boat `i` sits: in the middle alone, in front of a
     /// mob, behind a player who got in first (`getPassengers().indexOf`).
     pub(in crate::game) fn server_player_boat_seat(&self, i: usize) -> Vec3 {
-        let b = &self.common.boats[i];
+        let b = &self.common.entities.boats[i];
         let players = self.boat_players(b.id);
         // The seated list, with the rider counted before its own link exists.
         let order = self.passenger_order(b.id);
@@ -234,7 +234,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn position_boat_player(&mut self, i: usize) -> Vec3 {
         self.common.yaw = sunrise_level::camera_math::clamp_boat_rotation(
             self.common.yaw,
-            self.common.boats[i].yaw,
+            self.common.entities.boats[i].yaw,
         )
         .0;
         self.player_boat_seat(i)
@@ -244,11 +244,11 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn mob_root_vehicle(&self, mut j: usize) -> Option<u32> {
         let mut root = None;
         for _ in 0..8 {
-            let Some(v) = self.common.mobs[j].extra.mount else {
+            let Some(v) = self.common.entities.mobs[j].extra.mount else {
                 break;
             };
             root = Some(v);
-            match self.common.mobs.iter().position(|m| m.id == v) {
+            match self.common.entities.mobs.iter().position(|m| m.id == v) {
                 Some(k) => j = k,
                 None => break,
             }
@@ -289,7 +289,7 @@ impl crate::game::ServerGame<'_> {
     /// clients, which tick the boats near them (`remote_pushes`).
     pub fn boat_contacts(&mut self, mut i: usize) {
         let (id, bb, max) = {
-            let b = &self.common.boats[i];
+            let b = &self.common.entities.boats[i];
             (b.id, b.bounds(), b.max_passengers())
         };
         let area = bb.inflate(Vec3::new(
@@ -301,7 +301,7 @@ impl crate::game::ServerGame<'_> {
         // getControllingPassenger is a player: one rides it (players sit first).
         let pick_up = self.boat_players(id) == 0;
         // canAddPassenger, which startRiding asks after the checks below.
-        let room = !self.common.boats[i].under_water();
+        let room = !self.common.entities.boats[i].under_water();
         // The mobs near the two boxes: the teams are only worked out when something
         // touches the boat.
         let mut near = Vec::new();
@@ -324,7 +324,7 @@ impl crate::game::ServerGame<'_> {
         let mobs: Vec<(u32, bool, bool)> = near
             .into_iter()
             .filter_map(|j| {
-                let m = &self.common.mobs[j];
+                let m = &self.common.entities.mobs[j];
                 if !pushable(m) || m.extra.mount.is_some() && self.mob_root_vehicle(j) == Some(id) {
                     return None;
                 }
@@ -356,11 +356,11 @@ impl crate::game::ServerGame<'_> {
         for (mob, touched, pushes) in mobs {
             // By id: a mod's mount hook may have removed mobs since the list
             // was made, which moves the others' indices.
-            let Some(j) = self.common.mobs.iter().position(|m| m.id == mob) else {
+            let Some(j) = self.common.entities.mobs.iter().position(|m| m.id == mob) else {
                 continue;
             };
             if touched {
-                let m = &self.common.mobs[j];
+                let m = &self.common.entities.mobs[j];
                 let boards = pick_up
                     && count < max
                     && m.extra.mount.is_none()
@@ -381,14 +381,16 @@ impl crate::game::ServerGame<'_> {
                         // ends), count its passengers again, and board the
                         // mob only if it is still there, not removed and not
                         // riding.
-                        let Some(now) = self.common.boats.iter().position(|b| b.id == id) else {
+                        let Some(now) = self.common.entities.boats.iter().position(|b| b.id == id)
+                        else {
                             return;
                         };
                         i = now;
                         count = self.seated_passenger_count(id);
-                        if count < self.common.boats[i].max_passengers()
+                        if count < self.common.entities.boats[i].max_passengers()
                             && let Some(m) = self
                                 .common
+                                .entities
                                 .mobs
                                 .iter_mut()
                                 .find(|m| m.id == mob && !m.removed && m.extra.mount.is_none())
@@ -414,7 +416,7 @@ impl crate::game::ServerGame<'_> {
             }
         }
         for (pb, own, touched, pushes) in players {
-            let Some(v) = push_impulse(self.common.boats[i].position, pb.center())
+            let Some(v) = push_impulse(self.common.entities.boats[i].position, pb.center())
                 .filter(|_| boat_pushes(bb, pb, false))
             else {
                 continue;
@@ -422,6 +424,7 @@ impl crate::game::ServerGame<'_> {
             for _ in 0..usize::from(touched) + usize::from(pushes) {
                 if count == 0 {
                     self.common
+                        .entities
                         .boats
                         .update(i, |b| b.velocity = b.velocity.subtract(v));
                 }
@@ -430,44 +433,50 @@ impl crate::game::ServerGame<'_> {
                 }
             }
         }
-        for k in 0..self.common.boats.len() {
-            let ob = self.common.boats[k].bounds();
+        for k in 0..self.common.entities.boats.len() {
+            let ob = self.common.entities.boats[k].bounds();
             if k == i || !ob.intersects(area) || !boat_pushes(bb, ob, true) {
                 continue;
             }
-            let Some(v) =
-                push_impulse(self.common.boats[i].position, self.common.boats[k].position)
-            else {
+            let Some(v) = push_impulse(
+                self.common.entities.boats[i].position,
+                self.common.entities.boats[k].position,
+            ) else {
                 continue;
             };
             if count == 0 {
                 self.common
+                    .entities
                     .boats
                     .update(i, |b| b.velocity = b.velocity.subtract(v));
             }
-            if !self.has_seated_passengers(self.common.boats[k].id) {
+            if !self.has_seated_passengers(self.common.entities.boats[k].id) {
                 self.common
+                    .entities
                     .boats
                     .update(k, |b| b.velocity = b.velocity.add_vector(v));
             }
         }
-        for c in 0..self.common.carts.len() {
-            let cb = self.common.carts[c].bounds();
+        for c in 0..self.common.entities.carts.len() {
+            let cb = self.common.entities.carts[c].bounds();
             if !cb.intersects(area) || !boat_pushes(bb, cb, false) {
                 continue;
             }
-            let Some(v) =
-                push_impulse(self.common.boats[i].position, self.common.carts[c].position)
-            else {
+            let Some(v) = push_impulse(
+                self.common.entities.boats[i].position,
+                self.common.entities.carts[c].position,
+            ) else {
                 continue;
             };
             if count == 0 {
                 self.common
+                    .entities
                     .boats
                     .update(i, |b| b.velocity = b.velocity.subtract(v));
             }
-            if !self.has_seated_passengers(self.common.carts[c].id) {
+            if !self.has_seated_passengers(self.common.entities.carts[c].id) {
                 self.common
+                    .entities
                     .carts
                     .update(c, |c| c.velocity = c.velocity.add_vector(v));
             }
@@ -475,7 +484,10 @@ impl crate::game::ServerGame<'_> {
     }
     /// `AbstractBoat.push(mob)` from boat `i`, which has `count` passengers.
     fn boat_push_mob(&mut self, i: usize, j: usize, count: usize) {
-        let (b, m) = (&self.common.boats[i], &self.common.mobs[j]);
+        let (b, m) = (
+            &self.common.entities.boats[i],
+            &self.common.entities.mobs[j],
+        );
         if !boat_pushes(b.bounds(), m.bounds(), false) {
             return;
         }
@@ -484,10 +496,11 @@ impl crate::game::ServerGame<'_> {
         };
         if count == 0 {
             self.common
+                .entities
                 .boats
                 .update(i, |b| b.velocity = b.velocity.subtract(v));
         }
-        let m = &mut self.common.mobs[j];
+        let m = &mut self.common.entities.mobs[j];
         if moved_by_push(m) {
             m.velocity = m.velocity.add_vector(v);
             m.needs_sync = true;
@@ -528,16 +541,18 @@ impl crate::game::ServerGame<'_> {
         let vehicle = match target {
             Target::Boat(_) => self
                 .common
+                .entities
                 .boats
                 .iter()
                 .position(|b| b.id == id)
-                .map(|i| RemovedVehicle::Boat(self.common.boats.remove(i))),
+                .map(|i| RemovedVehicle::Boat(self.common.entities.boats.remove(i))),
             Target::Cart(_) => self
                 .common
+                .entities
                 .carts
                 .iter()
                 .position(|c| c.id == id)
-                .map(|i| RemovedVehicle::Cart(self.common.carts.remove(i))),
+                .map(|i| RemovedVehicle::Cart(self.common.entities.carts.remove(i))),
             _ => unreachable!(),
         };
         if let Some(vehicle) = vehicle {
@@ -567,22 +582,36 @@ impl crate::game::ServerGame<'_> {
             )
         };
         let slots = match target {
-            Target::Boat(_) => self.common.boats.iter().position(|b| b.id == id).map(|i| {
-                self.common
-                    .boats
-                    .update(i, |b| take(b.position, &mut b.items))
-            }),
-            _ => self.common.carts.iter().position(|c| c.id == id).map(|i| {
-                self.common
-                    .carts
-                    .update(i, |c| take(c.position, &mut c.items))
-            }),
+            Target::Boat(_) => self
+                .common
+                .entities
+                .boats
+                .iter()
+                .position(|b| b.id == id)
+                .map(|i| {
+                    self.common
+                        .entities
+                        .boats
+                        .update(i, |b| take(b.position, &mut b.items))
+                }),
+            _ => self
+                .common
+                .entities
+                .carts
+                .iter()
+                .position(|c| c.id == id)
+                .map(|i| {
+                    self.common
+                        .entities
+                        .carts
+                        .update(i, |c| take(c.position, &mut c.items))
+                }),
         };
         if let Some((at, items)) = slots {
             self.drop_vehicle_contents(at, &items);
         }
         if matches!(target, Target::Boat(_))
-            && let Some(i) = self.common.boats.iter().position(|b| b.id == id)
+            && let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id)
         {
             self.drop_removed_boat_lead(i);
         }
@@ -590,7 +619,7 @@ impl crate::game::ServerGame<'_> {
 
     /// `ejectPassengers` when a submerged boat is no longer rideable.
     pub(in crate::game::server_side) fn eject_boat_mobs(&mut self, i: usize) {
-        let b = &self.common.boats[i];
+        let b = &self.common.entities.boats[i];
         let (id, y) = (b.id, b.position.y);
         for rider in self.mob_passenger_ids(id) {
             if self
@@ -610,7 +639,7 @@ impl crate::game::ServerGame<'_> {
             else {
                 continue;
             };
-            let at = if let Some(boat) = self.common.boats.iter().find(|b| b.id == id) {
+            let at = if let Some(boat) = self.common.entities.boats.iter().find(|b| b.id == id) {
                 self.boat_dismount_target(boat, f64::from(m.width()), m.yaw)
             } else {
                 self.common.removed_vehicle_dismount_point(
@@ -639,14 +668,14 @@ impl crate::game::ServerGame<'_> {
         &self,
         id: u32,
     ) -> impl Iterator<Item = (usize, &Mob)> {
-        let slots = <crate::game::server_side::ServerState as sunrise_gameplay_common::game::side_ops::mobs_rest::SideOps>::side_indexed_mob_rider_slots(&self.server, &self.common.mobs, id);
+        let slots = <crate::game::server_side::ServerState as sunrise_gameplay_common::game::side_ops::mobs_rest::SideOps>::side_indexed_mob_rider_slots(&self.server, &self.common.entities.mobs, id);
         let mut at = 0;
-        let mut scan = self.common.mobs.iter().enumerate();
+        let mut scan = self.common.entities.mobs.iter().enumerate();
         std::iter::from_fn(move || {
             if let Some(slots) = &slots {
                 let &slot = slots.get(at)?;
                 at += 1;
-                Some((slot, &self.common.mobs[slot]))
+                Some((slot, &self.common.entities.mobs[slot]))
             } else {
                 scan.find(|(_, mob)| mob.extra.mount == Some(id))
             }
@@ -741,15 +770,15 @@ mod tests {
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
             let mut cow = Mob::new(77, kind, Vec3::ZERO, 0.0);
             sunrise_sim::mobs::finalize::set_baby(&mut cow, true);
-            game.mobs.push(cow);
+            game.entities.mobs.push(cow);
             let mob = game.mob(game.entity(77).unwrap()).unwrap();
             let area = Aabb::new(Vec3::new(0.3, 0.0, 0.0), Vec3::new(0.4, 1.0, 0.1));
-            assert!(!game.mobs[0].bounds().intersects(area));
+            assert!(!game.entities.mobs[0].bounds().intersects(area));
             let mods = vec![mod_api::ModEntry::new("resize-test", Box::new(Resize))].into();
             mod_platform::testing::with_mods(mods, || {
                 game.vehicles_ticking(true);
                 assert!(mob.set_baby(game, false));
-                let cow = &game.mobs[0];
+                let cow = &game.entities.mobs[0];
                 assert!(cow.bounds().intersects(area));
                 assert!(
                     game.vehicle_mob_reach()

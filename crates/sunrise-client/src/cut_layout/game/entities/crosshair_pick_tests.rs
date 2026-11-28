@@ -206,25 +206,25 @@ fn pin_entity_pose(
         (t.position, t.previous) = (pos_arr, pos_arr);
         (t.yaw, t.previous_yaw, t.pitch, t.previous_pitch) = (yaw, yaw, pitch, pitch);
     }
-    game.mobs.for_each_mut(|m| {
+    game.entities.mobs.for_each_mut(|m| {
         if m.id == uid {
             (m.position, m.previous) = (pos, pos);
             (m.yaw, m.previous_yaw, m.head_yaw, m.previous_head_yaw) = (yaw, yaw, yaw, yaw);
             (m.head_pitch, m.previous_head_pitch) = (pitch, pitch);
         }
     });
-    game.armor_stands.for_each_mut(|a| {
+    game.entities.armor_stands.for_each_mut(|a| {
         if a.id == uid {
             (a.position, a.previous) = (pos, pos);
             (a.yaw, a.previous_yaw, a.pitch) = (yaw, yaw, pitch);
         }
     });
-    game.boats.for_each_mut(|b| {
+    game.entities.boats.for_each_mut(|b| {
         if b.id == uid {
             (b.position, b.previous, b.yaw, b.previous_yaw, b.pitch) = (pos, pos, yaw, yaw, pitch);
         }
     });
-    game.carts.for_each_mut(|c| {
+    game.entities.carts.for_each_mut(|c| {
         if c.id == uid {
             (c.position, c.previous) = (pos, pos);
             (c.yaw, c.previous_yaw, c.pitch, c.previous_pitch) = (yaw, yaw, pitch, pitch);
@@ -239,22 +239,22 @@ fn pin_entity_pose(
             inter.previous_pitch,
         ) = (yaw, yaw, pitch, pitch);
     }
-    game.tnts.for_each_mut(|t| {
+    game.entities.tnts.for_each_mut(|t| {
         if t.id == uid {
             (t.position, t.previous, t.rotation) = (pos, pos, [yaw, pitch]);
         }
     });
-    game.falling.for_each_mut(|f| {
+    game.entities.falling.for_each_mut(|f| {
         if f.id == uid {
             (f.position, f.previous, f.rotation) = (pos, pos, [yaw, pitch]);
         }
     });
-    game.creatures.projectiles.for_each_mut(|p| {
+    game.entities.projectiles.for_each_mut(|p| {
         if p.id == uid {
             (p.position, p.previous, p.yaw, p.pitch) = (pos, pos, yaw, pitch);
         }
     });
-    if let Some(d) = game.dragon.as_mut()
+    if let Some(d) = game.entities.dragon.as_mut()
         && d.id == uid
     {
         (d.position, d.previous, d.yaw, d.previous_yaw) = (pos, pos, yaw, yaw);
@@ -396,7 +396,7 @@ fn replay_witness_case(
     }
 
     if let Some(parts) = tc.get("dragon_parts").and_then(Value::as_array)
-        && let Some(d) = game.dragon.as_mut()
+        && let Some(d) = game.entities.dragon.as_mut()
     {
         for part in parts {
             let index = part["index"].as_u64().unwrap() as usize;
@@ -423,12 +423,12 @@ fn replay_witness_case(
             game.previous_position = prev_v;
         } else {
             let uid = camera_id as u32;
-            game.mobs.for_each_mut(|m| {
+            game.entities.mobs.for_each_mut(|m| {
                 if m.id == uid {
                     m.previous = prev_v;
                 }
             });
-            if let Some(d) = game.dragon.as_mut()
+            if let Some(d) = game.entities.dragon.as_mut()
                 && d.id == uid
             {
                 d.previous = prev_v;
@@ -922,7 +922,7 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 place_player(game, [0.5, 64.0, 0.5], 0.0, 0.0);
                 game.world.set(0, 65, 4, stone).unwrap();
                 let tnt_pos = Vec3::new(0.5, 65.1, 2.5);
-                game.tnts.push(PrimedTnt {
+                game.entities.tnts.push(PrimedTnt {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
                     rotation: [0.0, 0.0],
@@ -954,9 +954,9 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 );
 
                 // B: server falling sand occludes stone behind it and reports no getPickResult.
-                game.tnts.clear();
+                game.entities.tnts.clear();
                 let fb_pos = Vec3::new(0.5, 65.1, 2.5);
-                game.falling.push(FallingBlock {
+                game.entities.falling.push(FallingBlock {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
                     rotation: [0.0, 0.0],
@@ -998,7 +998,7 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 );
 
                 // C: unmounted server player carrying a pig excludes the pig and hits ceiling stone.
-                game.falling.clear();
+                game.entities.falling.clear();
                 game.world.set(0, 65, 4, air).unwrap();
                 game.world.set(0, 68, 0, stone).unwrap();
                 game.riding = None;
@@ -1007,7 +1007,7 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 let mut pig = Mob::new(150, pig_type, Vec3::new(0.5, 66.2, 0.5), 0.0);
                 pig.extra.mount = Some(1);
                 pig.extra.passenger = true;
-                game.mobs.push(pig);
+                game.entities.mobs.push(pig);
                 assert!(
                     game.server_crosshair_entity_hit().is_none(),
                     "pig riding unmounted player must be excluded"
@@ -1015,18 +1015,19 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 assert_eq!(game.pick().map(|h| h.pos), Some([0, 68, 0]));
 
                 // D: server camel rider with eye inside camel box looks through co-passenger husk to external TNT.
-                game.mobs.clear();
+                game.entities.mobs.clear();
                 game.world.set(0, 68, 0, air).unwrap();
                 let camel_type = game.res.mob_types().get("minecraft:camel").unwrap().clone();
                 let husk_type = game.res.mob_types().get("minecraft:husk").unwrap().clone();
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(130, camel_type, Vec3::new(0.5, 64.0, 0.5), 0.0));
                 let mut husk = Mob::new(131, husk_type, Vec3::new(0.5, 64.17, 1.0), 0.0);
                 husk.extra.mount = Some(130);
                 husk.extra.passenger = true;
-                game.mobs.push(husk);
+                game.entities.mobs.push(husk);
                 let behind_tnt = Vec3::new(0.5, 65.3, 2.5);
-                game.tnts.push(PrimedTnt {
+                game.entities.tnts.push(PrimedTnt {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
                     rotation: [0.0, 0.0],
@@ -1057,16 +1058,17 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 );
 
                 // E (server): server horse excludes ArmorStand co-passenger, picking external falling block.
-                game.mobs.clear();
-                game.tnts.clear();
+                game.entities.mobs.clear();
+                game.entities.tnts.clear();
                 let horse_type = game.res.mob_types().get("minecraft:horse").unwrap().clone();
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(110, horse_type, Vec3::new(0.5, 64.0, 0.5), 0.0));
                 let mut stand = ArmorStand::new(112, Vec3::new(0.5, 65.6, 1.4), 0.0);
                 stand.vehicle = Some(110);
-                game.armor_stands.push(stand);
+                game.entities.armor_stands.push(stand);
                 let behind_fb = Vec3::new(0.5, 66.1, 2.9);
-                game.falling.push(FallingBlock {
+                game.entities.falling.push(FallingBlock {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
                     rotation: [0.0, 0.0],
@@ -1100,16 +1102,16 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
 
                 // F (Finding 9): out-of-reach TNT (at 3.2) in front of chest (at 3.5) yields MISS,
                 // and a block at exact block_reach (4.5) fails strict `<`.
-                game.mobs.clear();
-                game.armor_stands.clear();
-                game.falling.clear();
-                game.tnts.clear();
+                game.entities.mobs.clear();
+                game.entities.armor_stands.clear();
+                game.entities.falling.clear();
+                game.entities.tnts.clear();
                 game.riding = None;
                 let chest = registry.default_state("minecraft:chest").unwrap();
                 place_player(game, [0.5, 64.0, 0.5], 0.0, 0.0);
                 game.world.set(0, 65, 4, chest).unwrap();
                 let far_tnt = Vec3::new(0.5, 65.1, 4.19);
-                game.tnts.push(PrimedTnt {
+                game.entities.tnts.push(PrimedTnt {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
                     rotation: [0.0, 0.0],
@@ -1136,7 +1138,7 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                     game.pick().is_none(),
                     "out-of-reach TNT occluding chest must not fall back to chest on unstored pick()"
                 );
-                game.tnts.clear();
+                game.entities.tnts.clear();
                 game.world.set(0, 65, 4, air).unwrap();
                 game.world.set(0, 65, 5, stone).unwrap();
                 assert!(
@@ -1154,9 +1156,9 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                     .clone();
                 let zombie = Mob::new(220, zombie_type, Vec3::new(0.5, 64.5, 2.8), 0.0);
                 let zombie_hp = zombie.health;
-                game.mobs.push(zombie);
+                game.entities.mobs.push(zombie);
                 let shield_tnt = Vec3::new(0.5, 65.1, 1.8);
-                game.tnts.push(PrimedTnt {
+                game.entities.tnts.push(PrimedTnt {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
                     rotation: [0.0, 0.0],
@@ -1180,11 +1182,11 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 });
                 game.attack();
                 assert_eq!(
-                    game.mobs[0].health, zombie_hp,
+                    game.entities.mobs[0].health, zombie_hp,
                     "TNT in front must shield zombie from melee attack"
                 );
-                game.tnts.clear();
-                game.falling.push(FallingBlock {
+                game.entities.tnts.clear();
+                game.entities.falling.push(FallingBlock {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
                     rotation: [0.0, 0.0],
@@ -1210,11 +1212,11 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 });
                 game.attack();
                 assert_eq!(
-                    game.mobs[0].health, zombie_hp,
+                    game.entities.mobs[0].health, zombie_hp,
                     "falling block in front must shield zombie from melee attack"
                 );
-                game.falling.clear();
-                game.mobs.clear();
+                game.entities.falling.clear();
+                game.entities.mobs.clear();
 
                 // H (Finding 12): named interaction reaches a same-root co-passenger without ray root rejection.
                 let camel_type = game.res.mob_types().get("minecraft:camel").unwrap().clone();
@@ -1224,12 +1226,13 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                     .get("minecraft:villager")
                     .unwrap()
                     .clone();
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(230, camel_type, Vec3::new(0.5, 64.0, 0.5), 0.0));
                 let mut copassenger = Mob::new(231, villager_type, Vec3::new(0.5, 64.5, 1.0), 0.0);
                 copassenger.extra.mount = Some(230);
                 copassenger.extra.passenger = true;
-                game.mobs.push(copassenger);
+                game.entities.mobs.push(copassenger);
                 game.riding = Some(230);
                 assert_eq!(
                     game.mob_interaction_target(Some(InteractTarget {
@@ -1241,7 +1244,7 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 );
 
                 // I (Finding 13): vehicle-root walk crosses retained off-level links past resident row count.
-                game.mobs.clear();
+                game.entities.mobs.clear();
                 game.persist.off_level.clear();
                 let pig_type = game.res.mob_types().get("minecraft:pig").unwrap().clone();
                 // Only 1 resident mob (id 305), linked through 5 retained off-level mobs (304 -> ... -> 300).
@@ -1257,7 +1260,7 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 let mut resident_rider = Mob::new(305, pig_type, Vec3::new(0.5, 65.0, 2.0), 0.0);
                 resident_rider.extra.mount = Some(304);
                 resident_rider.extra.passenger = true;
-                game.mobs.push(resident_rider);
+                game.entities.mobs.push(resident_rider);
                 game.riding = Some(300);
                 place_player(game, [0.5, 64.0, 0.5], 0.0, 0.0);
                 assert!(
@@ -1324,7 +1327,7 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 place_player(game, [0.5, 64.0, 0.5], 0.0, 0.0);
                 game.world.set(0, 65, 4, stone).unwrap();
                 let tnt_pos = Vec3::new(0.5, 65.1, 2.5);
-                game.tnts.push(PrimedTnt {
+                game.entities.tnts.push(PrimedTnt {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
                     rotation: [0.0, 0.0],
@@ -1370,9 +1373,9 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 );
 
                 // B (client): falling sand occludes stone behind it and reports no getPickResult.
-                game.tnts.clear();
+                game.entities.tnts.clear();
                 let fb_pos = Vec3::new(0.5, 65.1, 2.5);
-                game.falling.push(FallingBlock {
+                game.entities.falling.push(FallingBlock {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
                     rotation: [0.0, 0.0],
@@ -1423,13 +1426,14 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 );
 
                 // C (client): unmounted player carrying a pig excludes the pig and hits ceiling stone.
-                game.falling.clear();
+                game.entities.falling.clear();
                 game.world.set(0, 65, 4, air).unwrap();
                 game.world.set(0, 68, 0, stone).unwrap();
                 game.riding = None;
                 place_player(game, [0.5, 64.0, 0.5], 0.0, -90.0);
                 let pig_type = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(150, pig_type, Vec3::new(0.5, 66.2, 0.5), 0.0));
                 game.client
                     .remote
@@ -1461,13 +1465,15 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 assert_eq!(game.pick().map(|h| h.pos), Some([0, 68, 0]));
 
                 // D (client): camel rider looks through co-passenger husk to external TNT.
-                game.mobs.clear();
+                game.entities.mobs.clear();
                 game.world.set(0, 68, 0, air).unwrap();
                 let camel_type = game.res.mob_types().get("minecraft:camel").unwrap().clone();
                 let husk_type = game.res.mob_types().get("minecraft:husk").unwrap().clone();
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(130, camel_type, Vec3::new(0.5, 64.0, 0.5), 0.0));
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(131, husk_type, Vec3::new(0.5, 64.17, 1.0), 0.0));
                 game.client
                     .remote
@@ -1482,7 +1488,7 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                         },
                     );
                 let behind_tnt = Vec3::new(0.5, 65.3, 2.5);
-                game.tnts.push(PrimedTnt {
+                game.entities.tnts.push(PrimedTnt {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
                     rotation: [0.0, 0.0],
@@ -1521,13 +1527,14 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 assert!(game.entity_targeted());
 
                 // E (client): connected client horse excludes RemoteInteraction co-passenger.
-                game.mobs.clear();
-                game.tnts.clear();
+                game.entities.mobs.clear();
+                game.entities.tnts.clear();
                 let horse_type = game.res.mob_types().get("minecraft:horse").unwrap().clone();
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(110, horse_type, Vec3::new(0.5, 64.0, 0.5), 0.0));
                 let behind_fb = Vec3::new(0.5, 66.1, 2.9);
-                game.falling.push(FallingBlock {
+                game.entities.falling.push(FallingBlock {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
                     rotation: [0.0, 0.0],
@@ -1590,16 +1597,16 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                 );
 
                 // F (client): out-of-reach TNT occluding chest yields MISS; exact block_reach fails strict `<`.
-                game.mobs.clear();
+                game.entities.mobs.clear();
                 game.client.interactions.clear();
-                game.falling.clear();
-                game.tnts.clear();
+                game.entities.falling.clear();
+                game.entities.tnts.clear();
                 game.riding = None;
                 let chest = registry.default_state("minecraft:chest").unwrap();
                 place_player(game, [0.5, 64.0, 0.5], 0.0, 0.0);
                 game.world.set(0, 65, 4, chest).unwrap();
                 let far_tnt = Vec3::new(0.5, 65.1, 4.19);
-                game.tnts.push(PrimedTnt {
+                game.entities.tnts.push(PrimedTnt {
                     size_answer: None,
                     attachment_lifetime: Default::default(),
                     rotation: [0.0, 0.0],
@@ -1628,7 +1635,7 @@ pub(crate) fn run_singleplayer_and_unstored_pick_share_unified_query_and_root_ex
                     game.pick().is_none(),
                     "out-of-reach TNT occluding chest must not fall back to chest on client pick()"
                 );
-                game.tnts.clear();
+                game.entities.tnts.clear();
                 game.world.set(0, 65, 4, air).unwrap();
                 game.world.set(0, 65, 5, stone).unwrap();
                 game.refresh_client_pick(1.0);

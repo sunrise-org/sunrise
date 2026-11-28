@@ -25,7 +25,7 @@ impl crate::game::ClientGame<'_> {
             // Where the other players' entities are (harnesses check movement).
             // What the other players hold and wear, as this client draws them.
             "player_equipment": self
-                .mobs
+                .entities.mobs
                 .iter()
                 .filter(|m| r.level_players.contains_key(&(m.id as i32)))
                 .map(|m| {
@@ -49,14 +49,14 @@ impl crate::game::ClientGame<'_> {
                 .collect::<Vec<_>>(),
             // The other players this client draws dead (lying down, after EntityEvent DEATH).
             "dead_players": self
-                .mobs
+                .entities.mobs
                 .iter()
                 .filter(|m| r.level_players.contains_key(&(m.id as i32)) && !m.alive())
                 .map(|m| m.id)
                 .collect::<Vec<_>>(),
             // The other players this client draws lying in a bed (SLEEPING_POS).
             "lying_players": self
-                .mobs
+                .entities.mobs
                 .iter()
                 .filter(|m| r.level_players.contains_key(&(m.id as i32)) && m.extra.ints[1] != 0)
                 .map(|m| m.id)
@@ -190,6 +190,7 @@ impl crate::game::ClientGame<'_> {
         // Build once: resolving each player must not scan every level entity.
         let players: HashMap<_, _> = self
             .common
+            .entities
             .mobs
             .iter()
             .enumerate()
@@ -204,7 +205,7 @@ impl crate::game::ClientGame<'_> {
                 skins::drawable_skin(uuid, skins.get(&uuid), true, |sprite| {
                     self.again_skin(sprite)
                 });
-            let mob = &mut self.common.mobs[i];
+            let mob = &mut self.common.entities.mobs[i];
             mob.skin = Some(skin.to_owned());
             mob.slim = is_slim;
             mob.cape = cape.map(str::to_owned);
@@ -233,6 +234,7 @@ impl crate::game::ClientGame<'_> {
         // player's, never required to be signed.
         let mannequins: Vec<(usize, sunrise_client::skins::Textures)> = self
             .common
+            .entities
             .mobs
             .iter()
             .enumerate()
@@ -278,7 +280,7 @@ impl crate::game::ClientGame<'_> {
         for (i, skin, slim) in resolved {
             let skin = skin.filter(|s| !s.starts_with("skins/") || self.again_skin(s));
             // Resolution and atlas uploads do not insert or remove mobs.
-            let mob = &mut self.common.mobs[i];
+            let mob = &mut self.common.entities.mobs[i];
             mob.slim = slim && skin.is_some();
             mob.skin = skin;
         }

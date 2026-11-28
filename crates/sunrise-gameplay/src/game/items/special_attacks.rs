@@ -30,7 +30,7 @@ impl crate::game::ServerGame<'_> {
         let (amount, scale, _, _) = self.melee_damage(
             "minecraft:ender_dragon",
             false,
-            self.common.dragon.as_ref().map(|dragon| dragon.id),
+            self.common.entities.dragon.as_ref().map(|dragon| dragon.id),
         );
         self.swing_arm();
         // The part's box.
@@ -46,7 +46,7 @@ impl crate::game::ServerGame<'_> {
         if let (Some(area), Hurt::Landed { .. }) = (area, hurt) {
             let (knockback, _) = self.extra_knockback(
                 "minecraft:ender_dragon",
-                self.dragon.as_ref().map_or(0, |dragon| dragon.id),
+                self.entities.dragon.as_ref().map_or(0, |dragon| dragon.id),
                 scale,
                 None,
             );
@@ -71,10 +71,10 @@ impl crate::game::ServerGame<'_> {
             .common
             .held()
             .is_some_and(|s| s.enchantment_level("minecraft:fire_aspect") > 0);
-        let area = self.common.carts[i].bounds();
+        let area = self.common.entities.carts[i].bounds();
         // Player.attack's full damage against the cart's entity type.
-        let id = self.common.carts[i].id as i32;
-        let kind = self.common.carts[i].kind.id();
+        let id = self.common.entities.carts[i].id as i32;
+        let kind = self.common.entities.carts[i].kind.id();
         let (damage, scale, _, magic) = self.melee_damage(kind, false, Some(id as u32));
         let sweep = self.sweep_before_hit(kind, false);
         let attacker = self.own_entity_id();

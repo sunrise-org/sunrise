@@ -989,6 +989,7 @@ impl crate::game::ServerGame<'_> {
         };
         for m in self
             .common
+            .entities
             .mobs
             .iter()
             .filter(|m| !m.removed && m.id > after)
@@ -1047,7 +1048,7 @@ impl crate::game::ServerGame<'_> {
             mob_equipment(m, &mut host.hub, &mut e.equipment);
         }
         laps.lap("lan_states_mobs");
-        for d in self.common.dropped.iter().filter(|d| d.id > after) {
+        for d in self.common.entities.dropped.iter().filter(|d| d.id > after) {
             let Some(host) = self.server.lan.as_ref() else {
                 return;
             };
@@ -1101,7 +1102,7 @@ impl crate::game::ServerGame<'_> {
                 .push((5, serializer::BOOLEAN, Value::Bool(false)));
             e.meta.push((8, serializer::ITEM_STACK, Value::Item(stack)));
         }
-        for o in self.common.orbs.iter().filter(|o| o.id > after) {
+        for o in self.common.entities.orbs.iter().filter(|o| o.id > after) {
             let e = out.add(o.id as i32, entity_uuid(o.id), "minecraft:experience_orb");
             e.position = [o.position.x, o.position.y, o.position.z];
             e.idle = idle_at(o.position);
@@ -1127,8 +1128,8 @@ impl crate::game::ServerGame<'_> {
         let Some(host) = self.server.lan.as_ref() else {
             return;
         };
-        for i in 0..self.common.mobs.len() {
-            let m = &self.common.mobs[i];
+        for i in 0..self.common.entities.mobs.len() {
+            let m = &self.common.entities.mobs[i];
             if m.removed {
                 continue;
             }
@@ -1139,7 +1140,7 @@ impl crate::game::ServerGame<'_> {
                 || mob_effects(m),
                 |i| mob_effect(m, &m.extra.effects[i]),
             ) {
-                self.common.mobs[i].extra.modified_effect_particles = update;
+                self.common.entities.mobs[i].extra.modified_effect_particles = update;
             }
         }
         for i in 0..host.hub.guests.len() {
@@ -2181,7 +2182,7 @@ impl crate::game::ServerGame<'_> {
         let Some(host) = self.server.lan.as_ref() else {
             return;
         };
-        for m in &mut self.common.mobs {
+        for m in &mut self.common.entities.mobs {
             if m.rider.is_some()
                 && self.common.riding != Some(m.id)
                 && !host.hub.guests.iter().any(|g| g.vehicle == Some(m.id))
@@ -2294,6 +2295,7 @@ impl crate::game::ServerGame<'_> {
                 // Nobody can receive past movement. A returning viewer pairs
                 // from the cart's current position/rotation, as AddEntity does.
                 self.common
+                    .entities
                     .carts
                     .for_each_mut(|cart| cart.lerp_steps.clear());
             }
@@ -2925,7 +2927,7 @@ impl crate::game::ServerGame<'_> {
         }
         // Hurt and death animations of mobs.
         let mut seen = HashMap::new();
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             let dead = !m.alive();
             let old = host
                 .mob_state
@@ -2971,7 +2973,7 @@ impl crate::game::ServerGame<'_> {
             }
             seen.insert(m.id, (m.hurt_time, dead, swing));
         }
-        if let Some(d) = self.common.dragon.as_ref().filter(|d| d.id != 0) {
+        if let Some(d) = self.common.entities.dragon.as_ref().filter(|d| d.id != 0) {
             let id = d.id;
             let dead = !d.alive();
             let old = host
@@ -4536,11 +4538,11 @@ pub(in crate::game) mod tests {
                 .unwrap()
                 .clone();
             let at = sunrise_core::geometry::Vec3::new(0.5, 70.0, 0.5);
-            game.mobs.push(Mob::new(12, kind, at, 0.0));
+            game.entities.mobs.push(Mob::new(12, kind, at, 0.0));
             let mob = game.entity(12).unwrap();
             let hub = meta_hub("CustomNameMetaTest");
             let meta_of = |game: &crate::game::ServerGame<'_>| {
-                let m = game.mobs.iter().find(|m| m.id == 12).unwrap();
+                let m = game.entities.mobs.iter().find(|m| m.id == 12).unwrap();
                 let (mut meta, mut defaults) = (Vec::new(), Vec::new());
                 mob_meta(m, &hub, None, 0, &mut meta, &mut defaults);
                 (meta, defaults)
@@ -5029,7 +5031,7 @@ pub(in crate::game) mod tests {
                 .map(|(id, amplifier)| sunrise_sim::mobs::StoredEffect::new(id, 600, amplifier)),
             );
             zombie.extra.hidden_effects.push("strength");
-            game.mobs.push(zombie);
+            game.entities.mobs.push(zombie);
 
             let builtin = super::sync::sync_data(
                 &game.options.resources,
@@ -5143,6 +5145,7 @@ pub(in crate::game) mod tests {
                 assert_eq!(sent(game), (zombie_swirls.clone(), guest_swirls.clone()));
                 assert!(asked().is_empty());
                 let zombie = game
+                    .entities
                     .mobs
                     .iter_mut()
                     .find(|m| m.id == ZOMBIE as u32)
@@ -5685,7 +5688,7 @@ pub(in crate::game) mod merchant_packet_tests {
                 offers: session.offers.clone(),
                 ..Default::default()
             }));
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             game.lan_open_merchant(
                 1,
                 MerchantState {
@@ -5813,7 +5816,13 @@ pub(in crate::game) mod merchant_packet_tests {
             // Crossing the real level-two boundary runs updateSpecialPrices while
             // taking the result, so the new level's offers must reach the guest.
             let mut session = Session::new(
-                game.mobs[0].extra.trade.as_ref().unwrap().offers.clone(),
+                game.entities.mobs[0]
+                    .extra
+                    .trade
+                    .as_ref()
+                    .unwrap()
+                    .offers
+                    .clone(),
                 true,
             );
             session.offers[0].uses = 0;
@@ -5901,8 +5910,8 @@ pub(in crate::game) mod merchant_packet_tests {
                 Vec3::new(at[0], at[1], at[2]),
             ));
             bind_local_player(game, 300, 3);
-            game.mobs[0].ambient_timer = 0;
-            game.mobs[0].random = LegacyRandom::new(42);
+            game.entities.mobs[0].ambient_timer = 0;
+            game.entities.mobs[0].random = LegacyRandom::new(42);
             let mut random = LegacyRandom::new(42);
             let pitch = (random.next_float() - random.next_float()) * 0.2 + 1.0;
             if buyer_first {
@@ -5995,7 +6004,7 @@ pub(in crate::game) mod merchant_packet_tests {
                             game.as_guest(2, |game| {
                                 // A player-owned event (such as a cloud) can refresh prices
                                 // even when that player isn't the current actor.
-                                sunrise_sim::mobs::villager::ext_mut(&mut game.mobs[0])
+                                sunrise_sim::mobs::villager::ext_mut(&mut game.entities.mobs[0])
                                     .gossips
                                     .add(
                                         [0, 0, 0, 2],
@@ -6096,8 +6105,11 @@ pub(in crate::game) mod merchant_packet_tests {
                 other_hit(game, 1.0);
                 buyer_hit(game, 3.0);
             }
-            assert_eq!(game.mobs[0].ambient_timer, -80);
-            assert_eq!(game.mobs[0].random.clone().next_long(), random.next_long());
+            assert_eq!(game.entities.mobs[0].ambient_timer, -80);
+            assert_eq!(
+                game.entities.mobs[0].random.clone().next_long(),
+                random.next_long()
+            );
             let mut actual = record();
             assert!(!actual.iter().any(|event| event == "result:empty"));
             game.lan_flush_effects();
@@ -6130,10 +6142,12 @@ pub(in crate::game) mod merchant_packet_tests {
                 4,
                 "payment stayed in the menu"
             );
-            let kind = game.mobs[0].kind.clone();
-            game.mobs
+            let kind = game.entities.mobs[0].kind.clone();
+            game.entities
+                .mobs
                 .push(Mob::new(78, kind.clone(), Vec3::new(1.0, 4.0, 1.0), 0.0));
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(79, kind, Vec3::new(1.5, 4.0, 1.0), 0.0));
             game.admit_new_mobs(0);
             assert!(game.mob_hits_mob(77, 5.0, Damage::mob(78, at)));

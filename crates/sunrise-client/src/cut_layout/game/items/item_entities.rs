@@ -10,7 +10,8 @@ pub(crate) mod destroyed_contents_tests {
 
     /// The motion of each spilled stack, in the order the spill made them.
     fn spilled_motions(game: &sunrise_gameplay::game::ServerGame<'_>) -> Vec<[f64; 3]> {
-        game.dropped
+        game.entities
+            .dropped
             .iter()
             .map(|item| [item.velocity.x, item.velocity.y, item.velocity.z])
             .collect()
@@ -75,9 +76,10 @@ pub(crate) mod destroyed_contents_tests {
         .unwrap()
         .unwrap();
         game.spawn_item(boxed, [8.5, 70.0, 8.5], [0.0; 3], 0);
-        assert_eq!(game.dropped.len(), 1);
+        assert_eq!(game.entities.dropped.len(), 1);
         assert!(game.run_command("damage @e[type=minecraft:item,limit=1] 100 minecraft:generic"));
         let mut spilled: Vec<_> = game
+            .entities
             .dropped
             .iter()
             .map(|item| (item.stack.item.to_string(), item.stack.count))
@@ -91,7 +93,7 @@ pub(crate) mod destroyed_contents_tests {
                 ("minecraft:stone".to_owned(), 2)
             ]
         );
-        for item in &game.dropped {
+        for item in &game.entities.dropped {
             assert_eq!(item.velocity.y, 0.2, "{item:?}");
         }
     }
@@ -128,12 +130,12 @@ pub(crate) mod escape_tests {
         game.world.set(8, 64, 8, stone).unwrap();
         let stack = ItemStack::new("minecraft:stone", 2);
         game.spawn_item(stack, [8.5, 64.4, 8.5], [0.0, 0.0, 0.0], 10);
-        let item = game.dropped.last_mut().unwrap();
+        let item = game.entities.dropped.last_mut().unwrap();
         item.random = sunrise_core::random::LegacyRandom::new(12345);
         let mut level = game.world.random.clone();
         game.server.ticked_entities_through = u32::MAX;
         game.tick_items();
-        let item = game.dropped.last().unwrap();
+        let item = game.entities.dropped.last().unwrap();
         // Up is the nearest open side. Independent Java Random(12345):
         // nextFloat()*0.2F+0.1F, widened before multiplying by widened 0.98F.
         assert_eq!(item.velocity.y, f64::from_bits(0x3fc5_9ef4_570f_5500));
@@ -176,7 +178,7 @@ pub(crate) mod expire_tests {
 
     fn drop_at_age(game: &mut ServerGame<'_>, name: &str, age: i32) -> u32 {
         game.push_item_entity(ItemStack::new(name, 1), AT, Some([0.0; 3]), 0, None);
-        let item = game.dropped.last_mut().unwrap();
+        let item = game.entities.dropped.last_mut().unwrap();
         item.age = age;
         let id = item.id;
         game.native_joins_flush(false, 0);
@@ -260,6 +262,7 @@ pub(crate) mod expire_tests {
                 // First expiry at age 6000: listeners add 60 + 40 -> lifespan 6100, age stays 6000.
                 game.tick_items();
                 let item = game
+                    .entities
                     .dropped
                     .iter()
                     .find(|item| item.id == id)
@@ -280,9 +283,10 @@ pub(crate) mod expire_tests {
                 // The sum 6100 + 30000 fits a Java int but exceeds Short.MAX_VALUE - 1.
                 extra_a.store(30000, Ordering::Relaxed);
                 extra_b.store(0, Ordering::Relaxed);
-                game.dropped.last_mut().unwrap().age = 6099;
+                game.entities.dropped.last_mut().unwrap().age = 6099;
                 game.tick_items();
                 let item = game
+                    .entities
                     .dropped
                     .iter()
                     .find(|item| item.id == id)
@@ -292,9 +296,9 @@ pub(crate) mod expire_tests {
 
                 // Reaching 32766 discards even when listeners still request extra life;
                 // entity_leave_level fires immediately at removal and does not duplicate on flush.
-                game.dropped.last_mut().unwrap().age = 32765;
+                game.entities.dropped.last_mut().unwrap().age = 32765;
                 game.tick_items();
-                assert!(!game.dropped.iter().any(|item| item.id == id));
+                assert!(!game.entities.dropped.iter().any(|item| item.id == id));
                 assert_eq!(
                     log.lock().unwrap().leaves.as_slice(),
                     &[(id, "minecraft:item".to_owned())]
@@ -333,9 +337,9 @@ pub(crate) mod expire_tests {
                 ] {
                     extra.store(extension, Ordering::Relaxed);
                     let id = drop_at_age(game, "minecraft:stone", age);
-                    game.dropped.last_mut().unwrap().lifespan = lifespan;
+                    game.entities.dropped.last_mut().unwrap().lifespan = lifespan;
                     game.tick_items();
-                    assert!(game.dropped.is_empty(), "extension {extension}");
+                    assert!(game.entities.dropped.is_empty(), "extension {extension}");
                     assert_eq!(
                         std::mem::take(&mut log.lock().unwrap().leaves),
                         [(id, "minecraft:item".to_owned())]
@@ -392,7 +396,7 @@ pub(crate) mod expire_tests {
                     *observed.heard.lock().unwrap(),
                     [(first, Some(5999)), (next, None)]
                 );
-                assert!(game.dropped.is_empty());
+                assert!(game.entities.dropped.is_empty());
                 game.native_leaves_flush();
                 assert_eq!(observed.heard.lock().unwrap().len(), 2);
             });
@@ -482,7 +486,7 @@ pub(crate) mod expire_tests {
                     };
 
                     game.tick_items();
-                    assert!(game.dropped.is_empty(), "{commit:?}");
+                    assert!(game.entities.dropped.is_empty(), "{commit:?}");
                     let picked_up: Vec<&str> = game
                         .inventory
                         .iter()
@@ -591,7 +595,7 @@ pub(crate) mod expire_tests {
                     };
 
                     game.tick_items();
-                    assert!(game.dropped.is_empty(), "{commit:?}");
+                    assert!(game.entities.dropped.is_empty(), "{commit:?}");
                     assert_eq!(
                         log.lock().unwrap().events,
                         [
@@ -644,6 +648,7 @@ pub(crate) mod expire_tests {
                 game.tick_items();
                 assert_eq!(*edited.lock().unwrap(), Some(true));
                 let item = game
+                    .entities
                     .dropped
                     .iter()
                     .find(|item| item.id == id)
@@ -718,7 +723,7 @@ pub(crate) mod expire_tests {
                     let x = 2.5 + (idx % 10) as f64 * 1.1;
                     let z = 2.5 + ((idx / 10) % 10) as f64 * 1.1;
                     game.push_item_entity(stack, [x, 64.0, z], Some([0.0; 3]), 0, None);
-                    let item = game.dropped.last_mut().unwrap();
+                    let item = game.entities.dropped.last_mut().unwrap();
                     let id = item.id;
                     if idx % 2 == 0 {
                         item.age = 5999;
@@ -758,7 +763,8 @@ pub(crate) mod expire_tests {
                         "departed item {id} must not resolve during entity_leave_level"
                     );
                 }
-                let survivors: Vec<u32> = game.dropped.iter().map(|item| item.id).collect();
+                let survivors: Vec<u32> =
+                    game.entities.dropped.iter().map(|item| item.id).collect();
                 assert_eq!(survivors, expected_survivors);
                 // Baseline before Row 5 was 404,829 allocations (O(KN) ItemCells rebuilds + stack clones).
                 assert!(
@@ -819,7 +825,7 @@ pub(crate) mod expire_tests {
                     let stack = ItemStack::new("minecraft:diamond_sword", 1);
                     let x = 2.5 + idx as f64 * 2.0;
                     game.push_item_entity(stack, [x, 64.0, 2.5], Some([0.0; 3]), 0, None);
-                    let item = game.dropped.last_mut().unwrap();
+                    let item = game.entities.dropped.last_mut().unwrap();
                     item.age = age;
                     ids.push(item.id);
                     game.server.ticked_entities_through = item.id;
@@ -831,8 +837,8 @@ pub(crate) mod expire_tests {
                 // First expiring drop sees all 3 live drops; second expiring drop sees only 2
                 // (itself + the non-expiring survivor), never the first already-expired drop.
                 assert_eq!(*counts.lock().unwrap(), vec![(ids[0], 3), (ids[1], 2)]);
-                assert_eq!(game.dropped.len(), 1);
-                assert_eq!(game.dropped[0].id, ids[2]);
+                assert_eq!(game.entities.dropped.len(), 1);
+                assert_eq!(game.entities.dropped[0].id, ids[2]);
             });
         });
     }

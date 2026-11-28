@@ -197,7 +197,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn entity_target_accessible(&self, target: Target) -> bool {
         match target {
             Target::Player | Target::Guest(_) => true,
-            Target::DragonPart(_) => self.common.dragon.as_ref().is_some_and(|d| {
+            Target::DragonPart(_) => self.common.entities.dragon.as_ref().is_some_and(|d| {
                 self.entity_position_accessible([d.position.x, d.position.y, d.position.z])
             }),
             _ => self
@@ -331,31 +331,36 @@ impl crate::game::ServerGame<'_> {
             Target::Hook(id) if server => self
                 .fishing_hooks_here()
                 .find_map(|(hook, _)| (hook.id() == id).then(|| hook.bounds())),
-            Target::Dragon(_) => self.common.dragon.as_ref().map(|d| d.body_bounds()),
+            Target::Dragon(_) => self
+                .common
+                .entities
+                .dragon
+                .as_ref()
+                .map(|d| d.body_bounds()),
             Target::Frame(_) => self
                 .common
+                .entities
                 .item_frames
-                .get(self.common.item_frames.locate(join)?)
+                .get(self.common.entities.item_frames.locate(join)?)
                 .map(|f| aabb_extents(f.bounds())),
             Target::Painting(_) => self
                 .common
+                .entities
                 .paintings
-                .get(self.common.paintings.locate(join)?)
+                .get(self.common.entities.paintings.locate(join)?)
                 .map(|p| aabb_extents(p.bounds())),
-            Target::Mob(_) => list_query_body(&self.common.mobs, join),
-            Target::Item(_) => list_query_body(&self.common.dropped, join),
-            Target::Orb(_) => list_query_body(&self.common.orbs, join),
-            Target::Boat(_) => list_query_body(&self.common.boats, join),
-            Target::Cart(_) => list_query_body(&self.common.carts, join),
-            Target::Stand(_) => list_query_body(&self.common.armor_stands, join),
-            Target::Tnt(_) => list_query_body(&self.common.tnts, join),
-            Target::Falling(_) => list_query_body(&self.common.falling, join),
-            Target::Projectile(_) => list_query_body(&self.common.creatures.projectiles, join),
-            Target::Rocket(_) => list_query_body(&self.common.rockets, join),
-            Target::Trident(_) => list_query_body(&self.common.tridents, join),
-            Target::General(_) => {
-                list_query_body(&self.common.resident_entities.general.rows, join)
-            }
+            Target::Mob(_) => list_query_body(&self.common.entities.mobs, join),
+            Target::Item(_) => list_query_body(&self.common.entities.dropped, join),
+            Target::Orb(_) => list_query_body(&self.common.entities.orbs, join),
+            Target::Boat(_) => list_query_body(&self.common.entities.boats, join),
+            Target::Cart(_) => list_query_body(&self.common.entities.carts, join),
+            Target::Stand(_) => list_query_body(&self.common.entities.armor_stands, join),
+            Target::Tnt(_) => list_query_body(&self.common.entities.tnts, join),
+            Target::Falling(_) => list_query_body(&self.common.entities.falling, join),
+            Target::Projectile(_) => list_query_body(&self.common.entities.projectiles, join),
+            Target::Rocket(_) => list_query_body(&self.common.entities.rockets, join),
+            Target::Trident(_) => list_query_body(&self.common.entities.tridents, join),
+            Target::General(_) => list_query_body(&self.common.entities.general.rows, join),
             _ => None,
         }
     }

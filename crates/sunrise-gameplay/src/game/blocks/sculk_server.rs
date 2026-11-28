@@ -296,6 +296,7 @@ impl crate::game::ServerGame<'_> {
     ) -> Context {
         let dampens = self
             .common
+            .entities
             .dropped
             .iter()
             .find(|item| item.id == id)
@@ -417,7 +418,7 @@ impl crate::game::ServerGame<'_> {
         let mobs = self.server.sculk.mob_slots.as_ref().and_then(|s| {
             let mut near = Vec::new();
             for &(i, id) in &s.listeners {
-                let mob = self.common.mobs.get(i)?;
+                let mob = self.common.entities.mobs.get(i)?;
                 if mob.id != id {
                     return None;
                 }
@@ -445,10 +446,10 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             None => {
-                let stamp = self.common.mobs.stamp();
+                let stamp = self.common.entities.mobs.stamp();
                 let slots = self.listener_slots(stamp);
                 for &i in &slots {
-                    if (i as usize) < self.common.mobs.len() {
+                    if (i as usize) < self.common.entities.mobs.len() {
                         self.mob_listen(i as usize, event, pos, &ctx);
                     }
                 }
@@ -496,8 +497,13 @@ impl crate::game::ServerGame<'_> {
         self.tick_player_sculk_events();
         self.tick_mob_sculk_events();
         if !self.server.sculk.falling_items.is_empty() {
-            let present: std::collections::HashSet<u32> =
-                self.common.dropped.iter().map(|item| item.id).collect();
+            let present: std::collections::HashSet<u32> = self
+                .common
+                .entities
+                .dropped
+                .iter()
+                .map(|item| item.id)
+                .collect();
             self.server
                 .sculk
                 .falling_items
@@ -508,6 +514,7 @@ impl crate::game::ServerGame<'_> {
         let ticking = self.entity_ticking_area();
         let items: Vec<[f64; 3]> = self
             .common
+            .entities
             .dropped
             .iter()
             .filter(|i| {
@@ -533,6 +540,7 @@ impl crate::game::ServerGame<'_> {
             bool,
         )> = self
             .common
+            .entities
             .mobs
             .iter()
             .filter(|m| m.alive())
@@ -551,11 +559,12 @@ impl crate::game::ServerGame<'_> {
             })
             .collect();
         let mut by_id = FxHashMap::default();
-        for (i, m) in self.common.mobs.iter().enumerate() {
+        for (i, m) in self.common.entities.mobs.iter().enumerate() {
             by_id.entry(m.id).or_insert(i);
         }
         let listeners = self
             .common
+            .entities
             .mobs
             .iter()
             .enumerate()
@@ -584,7 +593,7 @@ impl crate::game::ServerGame<'_> {
             // A mob first seen already riding raised its event when it spawned.
             let seen = self
                 .mob_slot(id)
-                .is_some_and(|i| self.common.mobs[i].movement_emission.is_some());
+                .is_some_and(|i| self.common.entities.mobs[i].movement_emission.is_some());
             self.mount_events(Who::Mob(id), vehicle, seen);
             let emits = !matches!(species, Species::Shulker);
             if emits && !ticked {
@@ -635,7 +644,7 @@ impl crate::game::ServerGame<'_> {
             }
         }
         self.server.sculk.mob_slots = None;
-        let alive: FxHashSet<u32> = self.common.mobs.iter().map(|m| m.id).collect();
+        let alive: FxHashSet<u32> = self.common.entities.mobs.iter().map(|m| m.id).collect();
         self.server.sculk.damaged.retain(|id, _| alive.contains(id));
         self.server.sculk.mounts.retain(|who, _| match who {
             Who::Player => true,
@@ -776,8 +785,8 @@ impl crate::game::ServerGame<'_> {
             if !self.warden_fits(&mob) {
                 continue;
             }
-            self.common.mobs.push(mob);
-            self.admit_new_mobs(self.common.mobs.len() - 1);
+            self.common.entities.mobs.push(mob);
+            self.admit_new_mobs(self.common.entities.mobs.len() - 1);
             return true;
         }
         false
@@ -808,6 +817,7 @@ impl crate::game::ServerGame<'_> {
                 // Let every warden's minute of calm run out.
                 for m in self
                     .common
+                    .entities
                     .mobs
                     .iter_mut()
                     .filter(|m| m.species() == Species::Warden)
@@ -1168,7 +1178,7 @@ impl crate::game::ServerGame<'_> {
     }
     /// `GameEvent.Context.of(mob, state)`.
     pub(in crate::game) fn mob_context(&mut self, id: u32, state: Option<BlockStateId>) -> Context {
-        let mob = self.mob_slot(id).map(|i| &self.common.mobs[i]);
+        let mob = self.mob_slot(id).map(|i| &self.common.entities.mobs[i]);
         self.context_of_mob(mob, id, state)
     }
     /// The slot of the first mob with this id, from the slots taken for the
@@ -1177,11 +1187,11 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn mob_slot(&mut self, id: u32) -> Option<usize> {
         if let Some(slots) = &self.server.sculk.mob_slots
             && let Some(&i) = slots.by_id.get(&id)
-            && self.common.mobs.get(i).is_some_and(|m| m.id == id)
+            && self.common.entities.mobs.get(i).is_some_and(|m| m.id == id)
         {
             return Some(i);
         }
-        self.common.mob_index.find(&self.common.mobs, id)
+        self.common.mob_index.find(&self.common.entities.mobs, id)
     }
     pub(in crate::game::server_side) fn context_of_mob(
         &self,
@@ -1257,6 +1267,7 @@ impl crate::game::ServerGame<'_> {
             slots.clear();
             slots.extend(
                 self.common
+                    .entities
                     .mobs
                     .iter()
                     .enumerate()
@@ -1301,10 +1312,14 @@ impl crate::game::ServerGame<'_> {
         pos: [f64; 3],
         ctx: &Context,
     ) {
-        if self.common.mobs[index].species() == Species::Warden && self.common.mobs[index].alive() {
+        if self.common.entities.mobs[index].species() == Species::Warden
+            && self.common.entities.mobs[index].alive()
+        {
             self.warden_listen(index, event, pos, ctx);
         }
-        if self.common.mobs[index].species() == Species::Allay && self.common.mobs[index].alive() {
+        if self.common.entities.mobs[index].species() == Species::Allay
+            && self.common.entities.mobs[index].alive()
+        {
             self.allay_listen(index, event, pos, ctx);
             // Allay.JukeboxListener, its own listener beside the vibrations'.
             let playing = match event {
@@ -1312,7 +1327,7 @@ impl crate::game::ServerGame<'_> {
                 "minecraft:jukebox_stop_play" => Some(false),
                 _ => None,
             };
-            let m = &mut self.common.mobs[index];
+            let m = &mut self.common.entities.mobs[index];
             if let Some(playing) = playing
                 && allay::hears_jukebox(m, pos)
             {
@@ -1338,7 +1353,7 @@ impl crate::game::ServerGame<'_> {
         if let Some(t) = self
             .common
             .mob_index
-            .get(&self.common.mobs, id)
+            .get(&self.common.entities.mobs, id)
             .and_then(|m| m.last_damage.map(|(_, t)| t))
         {
             self.server.sculk.damaged.insert(id, t);
@@ -1354,7 +1369,7 @@ impl crate::game::ServerGame<'_> {
                 .as_ref()
                 .map(|p| [p.position.x, p.position.y, p.position.z]),
             Who::Mob(id) => self.mob_slot(id).map(|i| {
-                let p = self.common.mobs[i].position;
+                let p = self.common.entities.mobs[i].position;
                 [p.x, p.y, p.z]
             }),
         };
@@ -1504,11 +1519,11 @@ impl crate::game::ServerGame<'_> {
         ctx: &Context,
     ) {
         let now = self.common.world.game_time;
-        let ctx = warden::heard_by(*ctx, &self.mob_teams(), self.common.mobs[index].id);
+        let ctx = warden::heard_by(*ctx, &self.mob_teams(), self.common.entities.mobs[index].id);
         let (occludes, world) = (&self.server.sculk.tables.occludes, &self.common.world);
         let tags = self.items().game_event_tags.clone();
         let avoided = warden::listen(
-            &mut self.common.mobs[index],
+            &mut self.common.entities.mobs[index],
             now,
             event,
             pos,
@@ -1540,7 +1555,7 @@ impl crate::game::ServerGame<'_> {
         let dimension = self.common.dim.id();
         let tags = self.items().game_event_tags.clone();
         allay::listen(
-            &mut self.common.mobs[index],
+            &mut self.common.entities.mobs[index],
             now,
             event,
             pos,
@@ -1702,7 +1717,7 @@ impl crate::game::ServerGame<'_> {
         Ok(())
     }
     pub(in crate::game) fn rides_player(&self, who: Option<Who>) -> bool {
-        matches!(who, Some(Who::Mob(id)) if self.mobs.iter().any(|m| m.id == id && m.rider.is_some()))
+        matches!(who, Some(Who::Mob(id)) if self.entities.mobs.iter().any(|m| m.id == id && m.rider.is_some()))
     }
     /// `SculkSensorBlock.activate`.
     pub(in crate::game::server_side) fn activate_sensor(
@@ -1747,7 +1762,7 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn sculk_step_on(&mut self) {
         self.sculk_step_on_player();
         let mut standing: Vec<(Who, [f64; 3])> = Vec::new();
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if m.alive() && m.ground.on_ground {
                 standing.push((Who::Mob(m.id), [m.position.x, m.position.y, m.position.z]));
             }
@@ -1777,7 +1792,7 @@ impl crate::game::ServerGame<'_> {
             }
             let state = self.common.world.block(key.0, key.1, key.2);
             let is_warden = matches!(who, Who::Mob(id)
-                if self.mobs.iter().any(|m| m.id == id && m.species() == Species::Warden));
+                if self.entities.mobs.iter().any(|m| m.id == id && m.species() == Species::Warden));
             match self.kind_of_state(state.0) {
                 KIND_SENSOR | KIND_CALIBRATED => {
                     if is_warden
@@ -1863,7 +1878,7 @@ impl crate::game::ServerGame<'_> {
     /// `WardenSpawnTracker.tryWarn` for the one player.
     pub(in crate::game::server_side) fn try_to_warn(&mut self, key: (i32, i32, i32)) -> bool {
         let c = center(key);
-        let warden_nearby = self.common.mobs.iter().any(|m| {
+        let warden_nearby = self.common.entities.mobs.iter().any(|m| {
             m.species() == Species::Warden
                 && m.alive()
                 && (m.position.x - c[0]).abs() < 24.0
@@ -1970,6 +1985,7 @@ impl crate::game::ServerGame<'_> {
         if player_blocks
             || self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .any(|m| !m.removed && m.alive() && m.bounds().intersects(bounds))
@@ -2326,13 +2342,18 @@ impl crate::game::ServerGame<'_> {
     /// Where the vehicle `id` stands: a mob, boat, minecart or cushion.
     pub(in crate::game::server_side) fn vehicle_position(&mut self, id: u32) -> Option<[f64; 3]> {
         let p = if let Some(i) = self.mob_slot(id) {
-            self.common.mobs[i].position
-        } else if let Some(b) = self.common.boats.iter().find(|b| b.id == id) {
+            self.common.entities.mobs[i].position
+        } else if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id) {
             b.position
-        } else if let Some(c) = self.common.carts.iter().find(|c| c.id == id) {
+        } else if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == id) {
             c.position
         } else {
-            self.common.cushions.iter().find(|c| c.id == id)?.position
+            self.common
+                .entities
+                .cushions
+                .iter()
+                .find(|c| c.id == id)?
+                .position
         };
         Some([p.x, p.y, p.z])
     }
@@ -2414,7 +2435,7 @@ impl crate::game::ServerGame<'_> {
             Who::Player => self.common.player.as_ref()?.ground.supporting_block,
             Who::Mob(id) => {
                 let slot = self.mob_slot(id)?;
-                self.common.mobs[slot].ground.supporting_block
+                self.common.entities.mobs[slot].ground.supporting_block
             }
         }
     }
@@ -2423,7 +2444,7 @@ impl crate::game::ServerGame<'_> {
             Who::Player => Some(&mut self.server.sculk.steps),
             Who::Mob(id) => {
                 let slot = self.mob_slot(id)?;
-                Some(&mut self.common.mobs[slot].movement_emission)
+                Some(&mut self.common.entities.mobs[slot].movement_emission)
             }
         }
     }
@@ -2636,7 +2657,7 @@ pub(in crate::game) mod tests {
                 [0.0; 3],
                 0,
             );
-            let id = game.dropped[0].id;
+            let id = game.entities.dropped[0].id;
             let entity = game.entity(id).unwrap();
             assert!(game.entity_game_event(entity, "minecraft:step"));
             assert!(
@@ -2647,7 +2668,7 @@ pub(in crate::game) mod tests {
                     .current
                     .is_none()
             );
-            game.dropped[0].stack = ItemStack::new("minecraft:stone", 1);
+            game.entities.dropped[0].stack = ItemStack::new("minecraft:stone", 1);
             assert!(game.entity_game_event(entity, "minecraft:step"));
             let (info, _) = game
                 .sculk_entity((1, 64, 1))

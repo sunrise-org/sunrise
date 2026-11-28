@@ -117,7 +117,7 @@ impl crate::game::ClientGame<'_> {
                 join: None,
             });
         }
-        for (i, boat) in self.common.boats.iter().enumerate() {
+        for (i, boat) in self.common.entities.boats.iter().enumerate() {
             if self.controls_boat(boat.id)
                 && boat.is_alive()
                 && boat.get_piston_push_reaction() != PushReaction::IgnoreEntity
@@ -302,11 +302,11 @@ impl crate::game::ClientGame<'_> {
             !b.is_removed() && b.id == selected.id && Some(b.join_seq()) == selected.join
         };
         if let MoveWho::Entity(EntityHandle::Boat(i)) = selected.hint
-            && self.common.boats.get(i).is_some_and(matches)
+            && self.common.entities.boats.get(i).is_some_and(matches)
         {
             return Some(i);
         }
-        self.common.boats.iter().position(matches)
+        self.common.entities.boats.iter().position(matches)
     }
 
     fn client_piston_body(
@@ -331,7 +331,7 @@ impl crate::game::ClientGame<'_> {
                 }
             }
             MoveWho::Entity(handle @ EntityHandle::Boat(i)) => {
-                if !self.common.boats[i].is_alive() {
+                if !self.common.entities.boats[i].is_alive() {
                     return None;
                 }
                 self.common.listed_body(handle, pos)
@@ -349,7 +349,7 @@ impl crate::game::ClientGame<'_> {
                 }
             }
             MoveWho::Entity(EntityHandle::Boat(i)) => {
-                self.common.boats.update(i, |b| {
+                self.common.entities.boats.update(i, |b| {
                     b.velocity = piston_push::bounce_velocity(movement, b.velocity);
                 });
             }
@@ -380,7 +380,10 @@ impl crate::game::ClientGame<'_> {
             return;
         }
         let movement = gate.delta();
-        let key = (self.common.boats[i].id, self.common.boats[i].join_seq());
+        let key = (
+            self.common.entities.boats[i].id,
+            self.common.entities.boats[i].join_seq(),
+        );
         let time = self.common.world.game_time;
         let Some(limited) = accumulators
             .entry(key)
@@ -415,6 +418,7 @@ impl crate::game::ClientGame<'_> {
                 || limited.length_squared() - resolved.length_squared() < 1.0e-7;
             if moved && let Some(i) = self.client_resolve_boat(selected) {
                 self.common
+                    .entities
                     .boats
                     .update(i, |b| b.move_entity(&mut gate, resolved));
             }
@@ -431,7 +435,7 @@ impl crate::game::ClientGame<'_> {
         wanted: Vec3,
         moved: Vec3,
     ) {
-        let authoritative = self.controls_boat(self.common.boats[i].id);
+        let authoritative = self.controls_boat(self.common.entities.boats[i].id);
         let motion = BodyMotion {
             world: &self.common.world,
             collision: self.common.collision,
@@ -440,7 +444,7 @@ impl crate::game::ClientGame<'_> {
             context: &self.common.loop_context,
             side: None,
         };
-        self.common.boats.update(i, |boat| {
+        self.common.entities.boats.update(i, |boat| {
             let (at, bounds, id) = (boat.position, boat.bounds(), boat.id);
             let context = BodyMotion::entity_context(id, at);
             motion.record_move(
@@ -461,7 +465,7 @@ impl crate::game::ClientGame<'_> {
             return;
         }
         let side_server = self.game_side_client();
-        let boat = &self.common.boats[i];
+        let boat = &self.common.entities.boats[i];
         let (id, feet, kind) = (boat.id, boat.position, boat.shared_type_name());
         let effect = self
             .common
@@ -484,7 +488,10 @@ impl crate::game::ClientGame<'_> {
             );
         let velocity = self.client_finish_body_restitution((id, &kind), feet, response);
         if let Some(i) = self.client_resolve_boat(selected) {
-            self.common.boats.update(i, |b| b.velocity = velocity);
+            self.common
+                .entities
+                .boats
+                .update(i, |b| b.velocity = velocity);
         }
     }
 
@@ -508,6 +515,7 @@ impl crate::game::ClientGame<'_> {
             }
             if let Some(mount) = self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id)
@@ -531,7 +539,7 @@ impl crate::game::ClientGame<'_> {
         match target {
             MoveWho::Player => self.common.riding.map(|v| self.client_vehicle_root(v)),
             MoveWho::Entity(EntityHandle::Boat(i)) => {
-                Some(self.client_vehicle_root(self.common.boats[i].id))
+                Some(self.client_vehicle_root(self.common.entities.boats[i].id))
             }
             _ => None,
         }
@@ -544,6 +552,7 @@ impl crate::game::ClientGame<'_> {
         let root = self.client_lid_root(lid);
         let boats: Vec<_> = self
             .common
+            .entities
             .boats
             .iter()
             .enumerate()
@@ -609,6 +618,7 @@ impl crate::game::ClientGame<'_> {
         let movement = gate.delta();
         if no_physics {
             self.common
+                .entities
                 .boats
                 .update(i, |b| b.move_entity(&mut gate, movement));
             if let Some(i) = self.client_resolve_boat(selected) {
@@ -620,7 +630,7 @@ impl crate::game::ClientGame<'_> {
             Vec3::new(COLLISION_EPSILON, COLLISION_EPSILON, COLLISION_EPSILON),
         );
         let entities = self.entity_collisions(Mover::Boat {
-            id: self.common.boats[i].id,
+            id: self.common.entities.boats[i].id,
             area,
         });
         let Ok(moved) = pushed_movement(
@@ -645,14 +655,16 @@ impl crate::game::ClientGame<'_> {
             || movement.length_squared() - moved.length_squared() < 1.0e-7;
         if placed {
             let fall = self.common.vehicle_fall_reset(
-                self.common.boats[i].fall_distance,
+                self.common.entities.boats[i].fall_distance,
                 body.position,
                 moved,
             );
             self.common
+                .entities
                 .boats
                 .update(i, |boat| boat.fall_distance = fall);
             self.common
+                .entities
                 .boats
                 .update(i, |boat| boat.move_entity(&mut gate, moved));
         }
@@ -663,7 +675,7 @@ impl crate::game::ClientGame<'_> {
             self.record_boat_lid_movement(i, moved);
         }
         // Record ground first so `boat_fall` sees the landed `on_ground` flag before restitution.
-        let authoritative = self.controls_boat(self.common.boats[i].id);
+        let authoritative = self.controls_boat(self.common.entities.boats[i].id);
         let motion = BodyMotion {
             world: &self.common.world,
             collision: self.common.collision,
@@ -672,7 +684,7 @@ impl crate::game::ClientGame<'_> {
             context: &self.common.loop_context,
             side: None,
         };
-        self.common.boats.update(i, |boat| {
+        self.common.entities.boats.update(i, |boat| {
             let (at, bounds, id) = (boat.position, boat.bounds(), boat.id);
             let context = BodyMotion::entity_context(id, at);
             motion.record_move(
@@ -686,7 +698,7 @@ impl crate::game::ClientGame<'_> {
                 &mut boat.ground,
             );
         });
-        let boat = &self.common.boats[i];
+        let boat = &self.common.entities.boats[i];
         if authoritative
             && self
                 .client
@@ -696,6 +708,7 @@ impl crate::game::ClientGame<'_> {
         {
             let fall = self.common.boat_fall(boat, moved.y);
             self.common
+                .entities
                 .boats
                 .update(i, |boat| boat.fall_distance = fall);
         }
@@ -706,7 +719,7 @@ impl crate::game::ClientGame<'_> {
                 || differs(movement.z, moved.z))
         {
             let side_server = self.game_side_client();
-            let boat = &self.common.boats[i];
+            let boat = &self.common.entities.boats[i];
             let (id, feet, kind) = (boat.id, boat.position, boat.shared_type_name());
             let effect = self
                 .common
@@ -729,7 +742,10 @@ impl crate::game::ClientGame<'_> {
                 );
             let velocity = self.client_finish_body_restitution((id, &kind), feet, response);
             if let Some(i) = self.client_resolve_boat(selected) {
-                self.common.boats.update(i, |b| b.velocity = velocity);
+                self.common
+                    .entities
+                    .boats
+                    .update(i, |b| b.velocity = velocity);
             }
         }
     }

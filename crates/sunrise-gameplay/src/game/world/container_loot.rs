@@ -42,13 +42,14 @@ impl ServerGame<'_> {
         }
         let Some(i) = self
             .common
+            .entities
             .carts
             .iter()
             .position(|c| c.id == cart.id && c.join == cart.join)
         else {
             return false;
         };
-        self.common.carts.update(i, |owner| {
+        self.common.entities.carts.update(i, |owner| {
             owner.loot = cart.loot.take();
             owner.items.clone_from(&cart.items);
             owner.position = cart.position;
@@ -56,13 +57,14 @@ impl ServerGame<'_> {
         self.unpack_loot(LootTarget::Cart(cart.id), None);
         let Some(i) = self
             .common
+            .entities
             .carts
             .iter()
             .position(|c| c.id == cart.id && c.join == cart.join)
         else {
             return false;
         };
-        self.common.carts.update(i, |owner| {
+        self.common.entities.carts.update(i, |owner| {
             cart.loot = owner.loot.take();
             cart.items.clone_from(&owner.items);
         });
@@ -82,10 +84,10 @@ impl ServerGame<'_> {
                 (pending, key)
             }
             LootTarget::Cart(id) => {
-                let Some(i) = self.common.carts.iter().position(|c| c.id == id) else {
+                let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) else {
                     return;
                 };
-                let Some(pending) = self.common.carts.update(i, |c| c.loot.take()) else {
+                let Some(pending) = self.common.entities.carts.update(i, |c| c.loot.take()) else {
                     return;
                 };
                 self.common.store_cart_items((
@@ -93,7 +95,7 @@ impl ServerGame<'_> {
                     super::minecarts::CART_KEY_Y,
                     id as i32,
                 ));
-                let c = &self.common.carts[i];
+                let c = &self.common.entities.carts[i];
                 (
                     pending,
                     (
@@ -104,7 +106,7 @@ impl ServerGame<'_> {
                 )
             }
             LootTarget::Boat(id) => {
-                let Some(i) = self.common.boats.iter().position(|b| b.id == id) else {
+                let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) else {
                     return;
                 };
                 let Some(pending) = self
@@ -125,7 +127,7 @@ impl ServerGame<'_> {
                     super::minecarts::CART_KEY_Y,
                     id as i32,
                 ));
-                let b = &self.common.boats[i];
+                let b = &self.common.entities.boats[i];
                 (
                     pending,
                     (
@@ -186,12 +188,14 @@ impl ServerGame<'_> {
             }
             LootTarget::Cart(id) => self
                 .common
+                .entities
                 .carts
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.items.clone()),
             LootTarget::Boat(id) => self
                 .common
+                .entities
                 .boats
                 .iter()
                 .find(|b| b.id == id)
@@ -204,6 +208,7 @@ impl ServerGame<'_> {
             LootTarget::Cart(id) => {
                 let p = self
                     .common
+                    .entities
                     .carts
                     .iter()
                     .find(|c| c.id == id)
@@ -214,6 +219,7 @@ impl ServerGame<'_> {
             LootTarget::Boat(id) => {
                 let p = self
                     .common
+                    .entities
                     .boats
                     .iter()
                     .find(|b| b.id == id)
@@ -267,13 +273,13 @@ impl ServerGame<'_> {
                 }
             }
             LootTarget::Cart(id) => {
-                if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
-                    self.common.carts.update(i, |c| c.items = slots);
+                if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
+                    self.common.entities.carts.update(i, |c| c.items = slots);
                 }
             }
             LootTarget::Boat(id) => {
-                if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
-                    self.common.boats.update(i, |b| b.items = slots);
+                if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
+                    self.common.entities.boats.update(i, |b| b.items = slots);
                 }
             }
         }
@@ -285,12 +291,14 @@ impl ServerGame<'_> {
             let items = match target {
                 LootTarget::Cart(_) => self
                     .common
+                    .entities
                     .carts
                     .iter()
                     .find(|c| c.id == id)
                     .map(|c| c.items.clone()),
                 _ => self
                     .common
+                    .entities
                     .boats
                     .iter()
                     .find(|b| b.id == id)

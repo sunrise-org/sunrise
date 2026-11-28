@@ -64,7 +64,7 @@ pub trait WorldViewExt<'__sg>: crate::game::SideGame<'__sg> {
             others,
             live_mobs: None,
             dragon: self.dragon_target(),
-            armor_stands: &self.armor_stands,
+            armor_stands: &self.entities.armor_stands,
             leash_boats: params.leash_boats,
             others_grid: None,
             others_index: None,
@@ -124,7 +124,7 @@ pub trait WorldViewExt<'__sg>: crate::game::SideGame<'__sg> {
 
     /// `Level.getEntity`: revenge goals must resolve the dragon too.
     fn dragon_target(&self) -> Option<(u32, sunrise_sim::mobs::TargetInfo)> {
-        let d = self.dragon.as_ref().filter(|d| d.alive())?;
+        let d = self.entities.dragon.as_ref().filter(|d| d.alive())?;
         let p = d.position;
         let bounds = Aabb::new(
             Vec3::new(p.x - 8.0, p.y, p.z - 8.0),

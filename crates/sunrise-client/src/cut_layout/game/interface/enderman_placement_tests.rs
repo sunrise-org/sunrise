@@ -103,25 +103,25 @@ fn leave_block_goal_uses_real_neighbor_shapes_and_keeps_air_placement() {
                 }
             }
         }
-        game.mobs.clear();
+        game.entities.mobs.clear();
         let carried = registry
             .default_state(&format!("minecraft:{name}"))
             .unwrap();
         let mut mob = Mob::new(325, kind.clone(), Vec3::new(3.5, 4.0, 3.5), 0.0);
         mob.random.set_seed(325);
         mob.extra.carried = Some(carried);
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         for _ in 0..48_000 {
-            let mut mob = game.mobs.pop().unwrap();
+            let mut mob = game.entities.mobs.pop().unwrap();
             let events = tick_registered_goals(&mut game, &mut mob);
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             game.handle_mob_events(events).unwrap();
-            if game.mobs[0].extra.carried.is_none() {
+            if game.entities.mobs[0].extra.carried.is_none() {
                 break;
             }
         }
         assert_eq!(
-            game.mobs[0].extra.carried, None,
+            game.entities.mobs[0].extra.carried, None,
             "eligible {name} must empty its hand"
         );
         let mut states = Vec::new();
@@ -160,13 +160,13 @@ fn leave_block_goal_uses_real_neighbor_shapes_and_keeps_air_placement() {
     let mut mob = Mob::new(326, kind, Vec3::new(3.5, 4.0, 3.5), 0.0);
     mob.random.set_seed(325);
     mob.extra.carried = Some(fence);
-    game.mobs.clear();
-    game.mobs.push(mob);
+    game.entities.mobs.clear();
+    game.entities.mobs.push(mob);
     let mut attempt = None;
     for _ in 0..48_000 {
-        let mut mob = game.mobs.pop().unwrap();
+        let mut mob = game.entities.mobs.pop().unwrap();
         let events = tick_registered_goals(&mut game, &mut mob);
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         if let Some(event) = events
             .into_iter()
             .find(|e| matches!(e, MobEvent::EndermanPlaceBlock { .. }))
@@ -183,15 +183,15 @@ fn leave_block_goal_uses_real_neighbor_shapes_and_keeps_air_placement() {
     game.world.set(pos[0], pos[1], pos[2], stone).unwrap();
     let before = game.block_ticks.fluids.count();
     // A stale carried-state identity cannot mutate the world or clear a new hand.
-    game.mobs[0].extra.carried = Some(stone);
+    game.entities.mobs[0].extra.carried = Some(stone);
     game.handle_mob_events(vec![attempt.clone()]).unwrap();
     assert_eq!(game.block_ticks.fluids.count(), before);
-    assert_eq!(game.mobs[0].extra.carried, Some(stone));
-    game.mobs[0].extra.carried = Some(fence);
+    assert_eq!(game.entities.mobs[0].extra.carried, Some(stone));
+    game.entities.mobs[0].extra.carried = Some(fence);
     game.handle_mob_events(vec![attempt.clone()]).unwrap();
     assert!(game.block_ticks.fluids.count() > before);
     assert_eq!(game.world.block(pos[0], pos[1], pos[2]), stone);
-    assert_eq!(game.mobs[0].extra.carried, Some(fence));
+    assert_eq!(game.entities.mobs[0].extra.carried, Some(fence));
 }
 
 /// Normalization must not bypass the existing entity_place cancel contract:
@@ -258,8 +258,8 @@ fn canceled_normalized_placements_keep_the_original_carried_block() {
                 let carried = registry.default_state(name).unwrap();
                 let mut mob = Mob::new(325, kind.clone(), Vec3::new(3.5, 4.0, 3.5), 0.0);
                 mob.extra.carried = Some(carried);
-                game.mobs.clear();
-                game.mobs.push(mob);
+                game.entities.mobs.clear();
+                game.entities.mobs.push(mob);
                 game.handle_mob_events(vec![MobEvent::EndermanPlaceBlock {
                     mob: 325,
                     pos: [3, 4, 3],
@@ -268,7 +268,7 @@ fn canceled_normalized_placements_keep_the_original_carried_block() {
                 }])
                 .unwrap();
                 assert_eq!(game.world.block(3, 4, 3), air);
-                assert_eq!(game.mobs[0].extra.carried, Some(carried));
+                assert_eq!(game.entities.mobs[0].extra.carried, Some(carried));
                 assert_eq!(heard.lock().unwrap().len(), i + 1, "one veto per attempt");
                 let state = normalized.lock().unwrap()[i];
                 if name == "minecraft:poppy" {
@@ -335,7 +335,7 @@ fn a_placement_listener_discarding_the_enderman_refuses_the_attempt() {
                 .clone();
             let mut mob = Mob::new(325, kind, Vec3::new(3.5, 4.0, 3.5), 0.0);
             mob.extra.carried = Some(stone);
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             let attempt = MobEvent::EndermanPlaceBlock {
                 mob: 325,
                 pos: [3, 4, 3],
@@ -344,7 +344,7 @@ fn a_placement_listener_discarding_the_enderman_refuses_the_attempt() {
             };
             game.handle_mob_events(vec![attempt.clone()]).unwrap();
             assert_eq!(heard.load(Ordering::SeqCst), 1);
-            let mob = game.mobs.iter().find(|m| m.id == 325).unwrap();
+            let mob = game.entities.mobs.iter().find(|m| m.id == 325).unwrap();
             // Discard does not set health to zero: alive() alone is not enough.
             assert!(mob.alive());
             assert!(mob.removed);
@@ -406,8 +406,8 @@ fn an_air_normalized_placement_empties_the_hand_without_a_block_change_notice() 
                 let carried = registry.default_state(name).unwrap();
                 let mut mob = Mob::new(325, kind.clone(), Vec3::new(3.5, 4.0, 3.5), 0.0);
                 mob.extra.carried = Some(carried);
-                game.mobs.clear();
-                game.mobs.push(mob);
+                game.entities.mobs.clear();
+                game.entities.mobs.push(mob);
                 game.handle_mob_events(vec![MobEvent::EndermanPlaceBlock {
                     mob: 325,
                     pos: [3, 4, 3],
@@ -415,7 +415,7 @@ fn an_air_normalized_placement_empties_the_hand_without_a_block_change_notice() 
                     occupants: Vec::new(),
                 }])
                 .unwrap();
-                assert_eq!(game.mobs[0].extra.carried, None);
+                assert_eq!(game.entities.mobs[0].extra.carried, None);
                 let state = game.world.block(3, 4, 3);
                 if name == "minecraft:poppy" {
                     assert_eq!(state, air);

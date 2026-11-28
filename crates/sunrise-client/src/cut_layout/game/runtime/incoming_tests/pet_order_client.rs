@@ -62,7 +62,7 @@ pub(crate) fn game<'a>(
     sunrise_sim::mobs::tame::set_tame(&mut wolf, true);
     wolf.extra.owner = Some(game.acting_player_uuid());
     wolf.ground.on_ground = true;
-    game.mobs.push(wolf);
+    game.entities.mobs.push(wolf);
     game
 }
 

@@ -36,11 +36,10 @@ impl MobTarget<'_> {
     fn get_mut<'b>(&'b mut self, game: &'b mut crate::game::ServerGame<'_>) -> Option<&'b mut Mob> {
         match self {
             Self::Resident { id, join } => {
-                let idx = game
-                    .mobs
-                    .locate(*join)
-                    .filter(|&k| game.mobs[k].id == *id && !game.mobs[k].removed)?;
-                Some(&mut game.mobs[idx])
+                let idx = game.entities.mobs.locate(*join).filter(|&k| {
+                    game.entities.mobs[k].id == *id && !game.entities.mobs[k].removed
+                })?;
+                Some(&mut game.entities.mobs[idx])
             }
             Self::Unjoined(mob) => (!mob.removed).then_some(&mut **mob),
         }
@@ -49,12 +48,12 @@ impl MobTarget<'_> {
 
 impl crate::game::ServerGame<'_> {
     /// Drain staged `register_goals` and `register_behaviors` queued when mobs with
-    /// pending parts entered `self.mobs`. O(1) when no new mobs were staged.
+    /// pending parts entered `self.entities.mobs`. O(1) when no new mobs were staged.
     pub(in crate::game) fn flush_pending_mob_parts(&mut self) {
-        if !self.mobs.has_pending_mod_parts() {
+        if !self.entities.mobs.has_pending_mod_parts() {
             return;
         }
-        let pending = self.mobs.take_pending_mod_parts();
+        let pending = self.entities.mobs.take_pending_mod_parts();
         if !self.is_logical_server()
             || (!mod_api::__private::has_scoped_hook(mod_api::HookId::RegisterGoals)
                 && !mod_api::__private::has_scoped_hook(mod_api::HookId::RegisterBehaviors))
@@ -67,11 +66,11 @@ impl crate::game::ServerGame<'_> {
     }
 
     /// Flush staged `register_goals` and `register_behaviors` for the resident mob
-    /// `(id, join)` in `self.mobs`. Listener writes and the selector/brain apply run
+    /// `(id, join)` in `self.entities.mobs`. Listener writes and the selector/brain apply run
     /// in one transaction; apply refuses (never recomputes) if the mob or its target
     /// selectors/brain changed while listeners ran.
     pub fn flush_resident_mob_parts(&mut self, id: u32, join: JoinSeq) {
-        self.mobs.pop_pending_mod_part(id, join);
+        self.entities.mobs.pop_pending_mod_part(id, join);
         self.flush_mob_parts(MobTarget::Resident { id, join });
     }
 
@@ -374,11 +373,11 @@ mod tests {
                     .unwrap()
                     .clone();
                 let mob = Mob::new(202, kind, Vec3::new(3.5, 65.0, 3.5), 0.0);
-                game.mobs.push(mob);
-                let join = game.mobs.last().unwrap().join;
+                game.entities.mobs.push(mob);
+                let join = game.entities.mobs.last().unwrap().join;
                 game.flush_resident_mob_parts(202, join);
 
-                let mob = game.mobs.iter().find(|m| m.id == 202);
+                let mob = game.entities.mobs.iter().find(|m| m.id == 202);
                 assert!(
                     mob.is_none_or(|m| m.removed
                         && !m.ai.goals.entries().any(|(_, n, _)| n == "ShouldNotApply")),
@@ -526,7 +525,7 @@ mod tests {
                 // `age_boundary_reached` -> `villager_brain::refresh` -> second
                 // `register_behaviors` dispatch through production `tick_mobs`.
                 villager.extra.age = -2;
-                game.mobs.push(villager);
+                game.entities.mobs.push(villager);
                 game.world.game_time = 100;
                 game.world.day_time = 3000;
 
@@ -543,7 +542,7 @@ mod tests {
                     game.world.air,
                     "panicking host write rolled back"
                 );
-                let mob = game.mobs.iter().find(|m| m.id == 203).unwrap();
+                let mob = game.entities.mobs.iter().find(|m| m.id == 203).unwrap();
                 let keys = sunrise_sim::mobs::villager_brain::entry_keys(mob).unwrap();
                 assert_eq!(
                     keys.iter().filter(|k| k.2).count(),
@@ -570,7 +569,7 @@ mod tests {
                     game.world.air,
                     "panicking host write still rolled back"
                 );
-                let mob = game.mobs.iter().find(|m| m.id == 203).unwrap();
+                let mob = game.entities.mobs.iter().find(|m| m.id == 203).unwrap();
                 let keys = sunrise_sim::mobs::villager_brain::entry_keys(mob).unwrap();
                 assert_eq!(
                     keys.iter().filter(|k| k.2).count(),

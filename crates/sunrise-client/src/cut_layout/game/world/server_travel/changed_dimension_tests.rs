@@ -390,7 +390,8 @@ fn a_cross_level_teleport_survives_cursor_overflow_removing_an_earlier_guest() {
             assert!(guests[0].carried.is_none());
             assert_eq!(game.dim, Dim::Overworld);
             assert_eq!(
-                game.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .map(|item| item.stack.clone())
                     .collect::<Vec<_>>(),

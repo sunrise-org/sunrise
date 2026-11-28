@@ -6,47 +6,59 @@ use sunrise_gameplay_common::game::native_entity_motion_values::corners;
 
 impl crate::game::ClientGame<'_> {
     fn client_walk_entity(&self, id: u32) -> Option<EntityHandle> {
-        if let Some(i) = self.common.mobs.iter().position(|e| e.id == id) {
+        if let Some(i) = self.common.entities.mobs.iter().position(|e| e.id == id) {
             return Some(EntityHandle::Mob(i));
         }
-        if let Some(i) = self.common.dropped.iter().position(|e| e.id == id) {
+        if let Some(i) = self.common.entities.dropped.iter().position(|e| e.id == id) {
             return Some(EntityHandle::Item(i));
         }
-        if let Some(i) = self.common.boats.iter().position(|e| e.id == id) {
+        if let Some(i) = self.common.entities.boats.iter().position(|e| e.id == id) {
             return Some(EntityHandle::Boat(i));
         }
-        if let Some(i) = self.common.carts.iter().position(|e| e.id == id) {
+        if let Some(i) = self.common.entities.carts.iter().position(|e| e.id == id) {
             return Some(EntityHandle::Cart(i));
         }
-        if let Some(i) = self.common.armor_stands.iter().position(|e| e.id == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .position(|e| e.id == id)
+        {
             return Some(EntityHandle::ArmorStand(i));
         }
-        if let Some(i) = self.common.tnts.iter().position(|e| e.id == id) {
+        if let Some(i) = self.common.entities.tnts.iter().position(|e| e.id == id) {
             return Some(EntityHandle::Tnt(i));
         }
-        if let Some(i) = self.common.falling.iter().position(|e| e.id == id) {
+        if let Some(i) = self.common.entities.falling.iter().position(|e| e.id == id) {
             return Some(EntityHandle::Falling(i));
         }
-        if let Some(i) = self.common.orbs.iter().position(|e| e.id == id) {
+        if let Some(i) = self.common.entities.orbs.iter().position(|e| e.id == id) {
             return Some(EntityHandle::Orb(i));
         }
         if let Some(i) = self
             .common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .position(|e| e.id == id)
         {
             return Some(EntityHandle::Projectile(i));
         }
-        if let Some(i) = self.common.rockets.iter().position(|e| e.id == id) {
+        if let Some(i) = self.common.entities.rockets.iter().position(|e| e.id == id) {
             return Some(EntityHandle::Rocket(i));
         }
-        if let Some(i) = self.common.tridents.iter().position(|e| e.id == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .tridents
+            .iter()
+            .position(|e| e.id == id)
+        {
             return Some(EntityHandle::Trident(i));
         }
         self.common
-            .resident_entities
+            .entities
             .general
             .rows
             .iter()
@@ -93,23 +105,36 @@ impl crate::game::ClientGame<'_> {
                 return Some(corners(i.bounds()));
             }
             Target::DragonPart(id) => {
-                let dragon = self.common.dragon.as_ref()?;
+                let dragon = self.common.entities.dragon.as_ref()?;
                 let part =
                     sunrise_gameplay_common::game::dragon_common::dragon_part_index(dragon.id, id)?;
                 return Some(corners(dragon.part_geometry(part).1));
             }
             Target::Crystal(id) => {
-                let c = self.common.crystals.iter().find(|c| c.id == id)?;
+                let c = self.common.entities.crystals.iter().find(|c| c.id == id)?;
                 return Some(corners(self.client_copy_box(id, c.position, c.bounds())));
             }
-            Target::Cushion(id) => self.common.cushions.iter().find(|c| c.id == id)?.bounds(),
+            Target::Cushion(id) => self
+                .common
+                .entities
+                .cushions
+                .iter()
+                .find(|c| c.id == id)?
+                .bounds(),
             Target::Frame(id) => self
                 .common
+                .entities
                 .item_frames
                 .iter()
                 .find(|f| f.id == id)?
                 .bounds(),
-            Target::Painting(id) => self.common.paintings.iter().find(|p| p.id == id)?.bounds(),
+            Target::Painting(id) => self
+                .common
+                .entities
+                .paintings
+                .iter()
+                .find(|p| p.id == id)?
+                .bounds(),
             _ => return None,
         };
         if lo.iter().chain(&hi).any(|v| !v.is_finite()) {

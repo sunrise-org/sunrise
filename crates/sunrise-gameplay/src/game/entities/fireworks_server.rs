@@ -172,7 +172,7 @@ impl crate::game::ServerGame<'_> {
         let mut rocket = self.new_rocket(at, stack, true, &mut random_source::entity());
         rocket.owner = Some(Who::Player);
         rocket.guest = self.server.lan_acting;
-        self.common.rockets.push(rocket);
+        self.common.entities.rockets.push(rocket);
         if !self.common.creative {
             self.consume_held();
         }
@@ -249,7 +249,7 @@ impl crate::game::ServerGame<'_> {
                     }
                 }
             }
-            for m in self.common.mobs.iter() {
+            for m in self.common.entities.mobs.iter() {
                 if !m.removed && m.bounds().intersects(reach) {
                     candidates.push((
                         sunrise_sim::projectiles::TargetOrder::entity(m.position, m.join.get()),
@@ -257,7 +257,7 @@ impl crate::game::ServerGame<'_> {
                     ));
                 }
             }
-            if let Some(d) = self.common.dragon.as_ref().filter(|d| d.alive())
+            if let Some(d) = self.common.entities.dragon.as_ref().filter(|d| d.alive())
                 && d.body_bounds().intersects(reach)
             {
                 candidates.push((
@@ -265,7 +265,7 @@ impl crate::game::ServerGame<'_> {
                     SplashTarget::Dragon,
                 ));
             }
-            for a in self.common.armor_stands.iter() {
+            for a in self.common.entities.armor_stands.iter() {
                 if a.bounds().intersects(reach) {
                     candidates.push((
                         sunrise_sim::projectiles::TargetOrder::entity(a.position, a.join.get()),
@@ -297,6 +297,7 @@ impl crate::game::ServerGame<'_> {
                         let hit = {
                             let world = self.mob_world_base(&[]);
                             self.common
+                                .entities
                                 .mobs
                                 .iter()
                                 .find(|m| m.id == id && !m.removed)
@@ -329,7 +330,7 @@ impl crate::game::ServerGame<'_> {
                                         .hub
                                         .guest(conn)
                                         .is_some_and(|guest| guest.participates_online())
-                                    && self.common.mobs.iter().any(|m| m.id == hit.0)
+                                    && self.common.entities.mobs.iter().any(|m| m.id == hit.0)
                                 {
                                     host.mob_players.insert(hit.0, conn);
                                 }
@@ -348,6 +349,7 @@ impl crate::game::ServerGame<'_> {
                         let sees = {
                             let world = self.mob_world_base(&[]);
                             self.common
+                                .entities
                                 .armor_stands
                                 .iter()
                                 .find(|a| a.id == id)
@@ -407,7 +409,7 @@ impl crate::game::ServerGame<'_> {
             .server
             .lan_acting
             .filter(|_| owner == Some(Who::Player));
-        self.common.rockets.push(rocket);
+        self.common.entities.rockets.push(rocket);
     }
     /// `FireworkRocketItem.useOn`: launch from the clicked point.
     pub fn launch_firework(&mut self, hit: &Hit, stack: &ItemStack) -> bool {
@@ -424,7 +426,7 @@ impl crate::game::ServerGame<'_> {
         let mut rocket = self.new_rocket(at, stack, false, &mut random_source::entity());
         rocket.owner = Some(Who::Player);
         rocket.guest = self.server.lan_acting;
-        self.common.rockets.push(rocket);
+        self.common.entities.rockets.push(rocket);
         if !self.common.creative {
             self.consume_held();
         }
@@ -508,9 +510,9 @@ impl crate::game::ServerGame<'_> {
             let causing = self.causer_id(attacker);
             let decision = crate::game::entity_server::causer_decision!(self, causing);
             let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
-            if let Some(index) = self.common.mob_index.find(&self.common.mobs, id) {
-                let before = self.common.mobs[index].health;
-                let join = self.common.mobs[index].join;
+            if let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, id) {
+                let before = self.common.entities.mobs[index].health;
+                let join = self.common.entities.mobs[index].join;
                 let (victim, lend) =
                     crate::game::entity_server::victim_and_causer!(self, index, causing, decision);
                 let hurt = victim.damage(
@@ -522,16 +524,16 @@ impl crate::game::ServerGame<'_> {
                     continue;
                 };
                 // LivingEntity.actuallyHurt posts after health loss, before death settlement.
-                if self.common.mobs[index].health < before {
-                    let pos = self.common.mobs[index].position.components();
+                if self.common.entities.mobs[index].health < before {
+                    let pos = self.common.entities.mobs[index].position.components();
                     let ctx = self.who_context(Some(Who::Mob(id)), None);
                     self.post_game_event("minecraft:entity_damage", pos, ctx);
                 }
                 // LivingEntity.hurtServer: a player's rocket makes them the
                 // last player to hurt it (`setLastHurtByPlayer`), so its death
                 // message names them and their item.
-                if let Some(index) = self.common.mob_index.find(&self.common.mobs, id)
-                    && self.common.mobs[index].join == join
+                if let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, id)
+                    && self.common.entities.mobs[index].join == join
                 {
                     if hurt && attacker == Some(Who::Player) {
                         self.remember_mob_player_credit(id);
@@ -752,7 +754,7 @@ impl crate::game::ServerGame<'_> {
             .persist
             .removals
             .contains(&super::commands::Target::Rocket(rocket.id))
-            && self.common.rockets.store_back(index, rocket)
+            && self.common.entities.rockets.store_back(index, rocket)
     }
     /// One tick of `r`, a clone of the resident rocket at `index`. Returns whether the
     /// rocket stays in the list; one that explodes or was removed has left it.
@@ -764,7 +766,7 @@ impl crate::game::ServerGame<'_> {
         let (id, join) = (r.id, r.join);
         let hit = self.with_entity_held_out(id, |game| game.advance_rocket(&mut r));
         let deflected = matches!(hit, ProjectileHit::Entity { who: Who::Mob(id), .. }
-            if self.mobs.iter().any(|m| m.id == id && m.alive() && m.species() == Species::Breeze));
+            if self.entities.mobs.iter().any(|m| m.id == id && m.alive() && m.species() == Species::Breeze));
         let canceled =
             if !deflected && !matches!(hit, ProjectileHit::None) && self.native_hears_impacts() {
                 let Some((rocket, canceled)) = self.rocket_impact(index, r, hit) else {
@@ -785,7 +787,7 @@ impl crate::game::ServerGame<'_> {
         let terminal = explodes_on_hit || r.life + 1 > r.lifetime;
         let _save_lease = terminal.then(sunrise_sim::join_seq::visibility::PassLease::enter);
         if terminal {
-            let Some(mut owner) = self.common.rockets.extract(join) else {
+            let Some(mut owner) = self.common.entities.rockets.extract(join) else {
                 return false;
             };
             sunrise_sim::join_seq::store_back(&mut owner, r);
@@ -855,7 +857,7 @@ impl crate::game::ServerGame<'_> {
             if !explodes_on_hit {
                 self.explode_rocket(&r);
             }
-            self.common.rockets.retire_extracted(id, join);
+            self.common.entities.rockets.retire_extracted(id, join);
             return false;
         }
         let (from, to) = (r.previous, r.position);
@@ -868,19 +870,19 @@ impl crate::game::ServerGame<'_> {
     pub fn tick_rockets(&mut self) {
         let ticking = self.entity_ticking_area();
         let mut i = 0;
-        while i < self.common.rockets.len() {
+        while i < self.common.entities.rockets.len() {
             // ServerLevel.tick: only entities in entity-ticking chunks tick.
-            let at = self.common.rockets[i].position;
+            let at = self.common.entities.rockets[i].position;
             if !ticking(at.x.floor() as i32, at.z.floor() as i32) {
-                self.common.rockets[i].previous = at;
+                self.common.entities.rockets[i].previous = at;
                 i += 1;
                 continue;
             }
             // Like falling blocks and boats, tick an unbound clone while the resident
             // owner keeps its slot: extracting and reinserting every rocket shifts the
             // list tail twice per entity, which is O(n^2) for a crowd of rockets.
-            let id = self.common.rockets[i].id;
-            let rocket = self.common.rockets[i].clone();
+            let id = self.common.entities.rockets[i].id;
+            let rocket = self.common.entities.rockets[i].clone();
             let kept = self.tick_rocket(i, rocket);
             // A hook may have added or removed rockets: resume right after this one
             // where it stands, or at `i` when it is gone.
@@ -888,6 +890,7 @@ impl crate::game::ServerGame<'_> {
                 i
             } else if self
                 .common
+                .entities
                 .rockets
                 .get(i)
                 .is_some_and(|rocket| rocket.id == id)
@@ -895,6 +898,7 @@ impl crate::game::ServerGame<'_> {
                 i + 1
             } else {
                 self.common
+                    .entities
                     .rockets
                     .iter()
                     .position(|rocket| rocket.id == id)

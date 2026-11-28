@@ -359,13 +359,13 @@ pub(crate) mod tests {
                 .unwrap();
             let key = (pos.x, pos.y, pos.z);
             let entity = game.world.block_entities.remove(&key).unwrap();
-            let start = game.dropped.len();
+            let start = game.entities.dropped.len();
             // Control: the same block write without a Part to contribute any spawns.
             game.world.set(pos.x, pos.y, pos.z, stone).unwrap();
             game.world.random.set_seed(7);
             assert!(game.set_block_live([pos.x, pos.y, pos.z], air, 0, false));
             let baseline = game.world.random.next_int();
-            assert_eq!(game.dropped.len(), start);
+            assert_eq!(game.entities.dropped.len(), start);
 
             game.world.set(pos.x, pos.y, pos.z, stone).unwrap();
             game.world.block_entities.insert(key, entity.clone());
@@ -379,7 +379,7 @@ pub(crate) mod tests {
                 "only the two accepted calls construct entities"
             );
             assert_eq!(game.world.random.next_int(), baseline);
-            let [explicit, default] = &game.dropped[start..] else {
+            let [explicit, default] = &game.entities.dropped[start..] else {
                 panic!("expected two items, in submission order");
             };
             assert_eq!(explicit.position, Vec3::new(1.25, 65.75, 2.5));
@@ -408,7 +408,7 @@ pub(crate) mod tests {
             }
 
             // The same removal with the side effects skipped retires the row and publishes no item.
-            let published = game.dropped.len();
+            let published = game.entities.dropped.len();
             game.world.set(pos.x, pos.y, pos.z, stone).unwrap();
             game.world.block_entities.insert(key, entity);
             assert!(game.set_block_live(
@@ -418,7 +418,7 @@ pub(crate) mod tests {
                 false
             ));
             assert!(game.world.block_entities.get(&key).is_none());
-            assert_eq!(game.dropped.len(), published);
+            assert_eq!(game.entities.dropped.len(), published);
         });
     }
     #[test]
@@ -963,13 +963,13 @@ pub(crate) mod tests {
             let host: &mut dyn mod_api::Host = game;
             hoard_key().set(host, holder, 5).unwrap();
             let asked = HOARD_ASKED.load(Ordering::Relaxed);
-            let dropped = game.dropped.len();
+            let dropped = game.entities.dropped.len();
             assert!(game.tick_mod_block_entity(key));
             assert_eq!(game.world.block(pos.x, pos.y, pos.z), granite);
             assert_eq!(HOARD_ASKED.load(Ordering::Relaxed), asked + 1);
             assert!(game.world.block_entities.get(&key).is_none());
             assert!(game.world.block_entities.attachments(key).is_none());
-            let out: Vec<_> = game.dropped[dropped..]
+            let out: Vec<_> = game.entities.dropped[dropped..]
                 .iter()
                 .map(|d| (d.stack.item.to_string(), d.stack.count))
                 .collect();
@@ -1066,13 +1066,13 @@ mod crafter_drop_name_tests {
                         ))
                     );
                 }
-                let start = game.dropped.len();
+                let start = game.entities.dropped.len();
                 assert!(game.run_command(&format!("setblock {x} 200 {z} air destroy")));
                 game.flush_spill();
                 assert!(game.res.facts().is_air(game.world.block(x, 200, z)));
                 assert!(!game.world.block_entities.contains_key(&key));
                 assert!(!game.world.block_names.contains_key(&key));
-                let emitted = &game.dropped[start..];
+                let emitted = &game.entities.dropped[start..];
                 let matching: Vec<_> = emitted
                     .iter()
                     .filter(|d| *d.stack.item == item_id)

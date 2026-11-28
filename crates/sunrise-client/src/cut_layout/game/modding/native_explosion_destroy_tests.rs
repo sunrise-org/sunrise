@@ -150,7 +150,8 @@ fn set(game: &mut sunrise_gameplay::game::ServerGame<'_>, pos: [i32; 3], block: 
 
 /// How many of `item` lie dropped.
 fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) -> u32 {
-    game.dropped
+    game.entities
+        .dropped
         .iter()
         .filter(|e| &*e.stack.item == item)
         .map(|e| e.stack.count)
@@ -170,7 +171,7 @@ fn a_thousand_stone_blocks_turn_to_air_with_drops_decayed_by_the_rule() {
     with_watch(|game, _| {
         for decay in [true, false] {
             assert!(game.run_command("fill 0 70 0 9 79 9 minecraft:stone"));
-            game.dropped.clear();
+            game.entities.dropped.clear();
             assert!(game.ui.rules.set(
                 "block_explosion_drop_decay",
                 sunrise_game_data::gamerules::Value::Bool(decay),
@@ -239,6 +240,7 @@ fn a_detonate_listener_edits_reorders_and_adds_positions() {
         assert!(!game.world.chunks.contains_key(&(6, 6)), "never loaded");
         // Reordered [3, 80, 3] first -> merged cobblestone drop pops from [3, 3], not [2, 1].
         let drops: Vec<_> = game
+            .entities
             .dropped
             .iter()
             .map(|e| (e.stack.item.to_string(), e.stack.count, e.position))
@@ -300,7 +302,7 @@ fn tnt_primes_owned_by_the_causing_entity() {
         assert!(blast.source.is_some());
         destroy(game, &[[5, 80, 5]], blast, Ok(1));
         assert_eq!(name(game, [5, 80, 5]), "minecraft:air");
-        let owners: Vec<Option<Who>> = game.tnts.iter().map(|t| t.owner).collect();
+        let owners: Vec<Option<Who>> = game.entities.tnts.iter().map(|t| t.owner).collect();
         assert_eq!(owners, [Some(Who::Player)]);
     });
 }
@@ -324,6 +326,7 @@ fn drops_of_one_item_merge_at_the_first_blocks_position() {
         // after the shuffle, but its constructor motion uses its own random.
         assert_eq!(game.world.random.next_int(), -1_105_573_998);
         let drops: Vec<_> = game
+            .entities
             .dropped
             .iter()
             .map(|e| (e.stack.item.to_string(), e.stack.count, e.position))
@@ -344,9 +347,9 @@ fn drops_of_one_item_merge_at_the_first_blocks_position() {
             set(game, p, "cobblestone");
         }
         game.world.random.set_seed(7);
-        let before = game.dropped.len();
+        let before = game.entities.dropped.len();
         destroy(game, &positions, blast(ExplosionInteraction::Block), Ok(2));
-        assert_eq!(game.dropped.len(), before, "no new item entity");
+        assert_eq!(game.entities.dropped.len(), before, "no new item entity");
         assert_eq!(
             game.world.random.next_int(),
             -1_105_573_998,

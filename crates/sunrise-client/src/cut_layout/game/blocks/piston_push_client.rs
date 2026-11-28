@@ -41,9 +41,10 @@ mod client_lid_tests {
                 .clone();
             let mut shell = Mob::new(72, kind, Vec3::new(6.5, 200.0, 6.5), 0.0);
             shell.extra.mount = Some(71);
-            game.boats
+            game.entities
+                .boats
                 .push(Boat::new(71, "oak".into(), Vec3::new(2.5, 200.0, 6.5), 0.0));
-            game.mobs.push(shell);
+            game.entities.mobs.push(shell);
             game.riding = Some(71);
 
             let around = Aabb::new(Vec3::new(1.0, 200.0, 1.0), Vec3::new(4.0, 201.0, 8.0));
@@ -53,12 +54,12 @@ mod client_lid_tests {
             };
             game.lid_push_local(Lid::Shulker(72), around, lift);
             assert_eq!(
-                game.boats[0].position.y, 200.0,
+                game.entities.boats[0].position.y, 200.0,
                 "the shulker's vehicle stays"
             );
             assert_eq!(player_y(game), 200.0, "a client's own player stays too");
 
-            game.mobs[0].extra.mount = None;
+            game.entities.mobs[0].extra.mount = None;
             game.lid_push_local(Lid::Shulker(72), around, lift);
             assert_eq!(player_y(game), 200.25, "nothing shared: the lid lifts it");
         });

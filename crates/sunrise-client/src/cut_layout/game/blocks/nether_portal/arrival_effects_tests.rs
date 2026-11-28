@@ -75,22 +75,22 @@ pub(crate) fn run_portal_arrival_effects_merge_items_before_their_first_tick() {
                 [8.5, 70.0, 8.5],
                 0,
             );
-            game.dropped[0].age = incoming_age;
-            let id = game.dropped[0].id;
+            game.entities.dropped[0].age = incoming_age;
+            let id = game.entities.dropped[0].id;
             let at = depart(game, id, restart);
-            assert!(game.dropped.is_empty());
+            assert!(game.entities.dropped.is_empty());
             game.spawn_item_own(
                 ItemStack::new("minecraft:stick", waiting),
                 [at.x, at.y, at.z],
                 0,
             );
-            game.dropped[0].age = waiting_age;
+            game.entities.dropped[0].age = waiting_age;
             game.resolve_arrivals();
             assert!(game.server.portals.arrivals.is_empty());
             let mergeable = incoming_age != -32768 && incoming_age < 6000;
-            assert_eq!(game.dropped.len(), if mergeable { 1 } else { 2 });
+            assert_eq!(game.entities.dropped.len(), if mergeable { 1 } else { 2 });
             if mergeable {
-                let item = &game.dropped[0];
+                let item = &game.entities.dropped[0];
                 assert_eq!(item.stack.count, incoming + waiting);
                 assert_eq!(item.age, incoming_age.min(waiting_age));
                 assert_eq!(item.ticks, 0, "merge must not wait for ItemEntity.tick");
@@ -102,8 +102,8 @@ pub(crate) fn run_portal_arrival_effects_merge_items_before_their_first_tick() {
 /// Expire an actual primed TNT beside a portal and an ordinary block. A valid
 /// frame keeps neighbour updates from removing a protected portal indirectly.
 pub(crate) fn assert_tnt_blast(game: &mut sunrise_gameplay::game::ServerGame<'_>, protected: bool) {
-    assert_eq!(game.tnts.len(), 1);
-    let at = game.tnts[0].position;
+    assert_eq!(game.entities.tnts.len(), 1);
+    let at = game.entities.tnts[0].position;
     let (x, y, z) = (
         at.x.floor() as i32,
         at.y.floor() as i32,
@@ -134,7 +134,7 @@ pub(crate) fn assert_tnt_blast(game: &mut sunrise_gameplay::game::ServerGame<'_>
         }
     }
     game.world.set(x, y, z + 1, dirt).unwrap();
-    let id = game.tnts[0].id;
+    let id = game.entities.tnts[0].id;
     game.server.portals.level.entities.insert(
         id,
         PortalState {
@@ -142,11 +142,11 @@ pub(crate) fn assert_tnt_blast(game: &mut sunrise_gameplay::game::ServerGame<'_>
             process: None,
         },
     );
-    game.tnts[0].velocity = Vec3::ZERO;
-    game.tnts[0].no_gravity = true;
-    game.tnts[0].fuse = 1;
+    game.entities.tnts[0].velocity = Vec3::ZERO;
+    game.entities.tnts[0].no_gravity = true;
+    game.entities.tnts[0].fuse = 1;
     game.tick_one_tnt(0, &[]).unwrap();
-    assert!(game.tnts.is_empty());
+    assert!(game.entities.tnts.is_empty());
     assert_eq!(game.world.block(x, y, z) == portal, protected);
     assert_ne!(
         game.world.block(x, y, z + 1),
@@ -172,26 +172,26 @@ pub(crate) fn run_portal_arrival_effects_tnt_protection_is_live_but_not_saved() 
                 "{fuse:200s,NoGravity:1b}",
             )
             .unwrap();
-            let old = game.tnts[0].id;
-            assert!(!game.tnts[0].used_portal);
+            let old = game.entities.tnts[0].id;
+            assert!(!game.entities.tnts[0].used_portal);
             depart(game, old, restart_waiting);
             game.resolve_arrivals();
             assert!(game.server.portals.arrivals.is_empty());
-            assert_eq!(game.tnts.len(), 1);
-            assert_ne!(game.tnts[0].id, old);
-            assert!(game.tnts[0].used_portal);
+            assert_eq!(game.entities.tnts.len(), 1);
+            assert_ne!(game.entities.tnts[0].id, old);
+            assert!(game.entities.tnts[0].used_portal);
             let saved = game.tnt_nbt(0);
             for key in ["usedPortal", "used_portal", "UsedPortal"] {
                 assert!(saved.get(key).is_none());
             }
-            let id = game.tnts[0].id;
+            let id = game.entities.tnts[0].id;
             game.apply_entity_nbt(
                 sunrise_gameplay_common::game::commands_common::Target::Tnt(id),
                 saved.clone(),
             )
             .unwrap();
             assert!(
-                game.tnts[0].used_portal,
+                game.entities.tnts[0].used_portal,
                 "loading data into the live instance does not reset it"
             );
             assert_tnt_blast(game, true);
@@ -199,7 +199,7 @@ pub(crate) fn run_portal_arrival_effects_tnt_protection_is_live_but_not_saved() 
             let uuid = sunrise_sim::entity_nbt::uuid(&saved);
             game.load_tnt(saved, uuid);
             assert!(
-                !game.tnts[0].used_portal,
+                !game.entities.tnts[0].used_portal,
                 "a disk recreation starts with the constructor default"
             );
             assert_tnt_blast(game, false);
@@ -209,7 +209,7 @@ pub(crate) fn run_portal_arrival_effects_tnt_protection_is_live_but_not_saved() 
                 "{fuse:200s,NoGravity:1b}",
             )
             .unwrap();
-            assert!(!game.tnts[0].used_portal);
+            assert!(!game.entities.tnts[0].used_portal);
             assert_tnt_blast(game, false);
         });
     }
@@ -311,7 +311,7 @@ pub(crate) fn run_portal_arrival_effects_join_removals_cannot_consume_live_stack
                 with_game(|game| {
                     prepare(game);
                     game.spawn_item_own(ItemStack::new("minecraft:stick", 3), [8.5, 70.0, 8.5], 0);
-                    let id = game.dropped[0].id;
+                    let id = game.entities.dropped[0].id;
                     let incoming_uuid = game.uuid_for(id);
                     let at = callback_destination(game, id, portal, false);
                     game.spawn_item_own(
@@ -319,7 +319,7 @@ pub(crate) fn run_portal_arrival_effects_join_removals_cannot_consume_live_stack
                         [at.x, at.y, at.z],
                         0,
                     );
-                    let waiting = game.dropped[0].id;
+                    let waiting = game.entities.dropped[0].id;
                     let waiting_uuid = game.uuid_for(waiting);
                     game.native_joins_flush(false, 0);
                     victim.store(if remove_incoming { 0 } else { waiting }, Ordering::SeqCst);
@@ -327,8 +327,8 @@ pub(crate) fn run_portal_arrival_effects_join_removals_cannot_consume_live_stack
                     complete_callback_arrival(game, id, portal, at);
                     assert_eq!(calls.load(Ordering::SeqCst), 1);
                     game.native_removals_flush();
-                    assert_eq!(game.dropped.len(), 1);
-                    let survivor = &game.dropped[0];
+                    assert_eq!(game.entities.dropped.len(), 1);
+                    let survivor = &game.entities.dropped[0];
                     assert_eq!(survivor.stack.count, if remove_incoming { 5 } else { 3 });
                     assert_eq!(
                         game.persist.uuids.get(&survivor.id),
@@ -425,20 +425,26 @@ pub(crate) fn run_portal_arrival_effects_nested_spawns_do_not_hide_the_real_arri
             with_game(|game| {
                 prepare(game);
                 game.spawn_item_own(ItemStack::new("minecraft:stick", 3), [8.5, 70.0, 8.5], 0);
-                let id = game.dropped[0].id;
+                let id = game.entities.dropped[0].id;
                 let at = callback_destination(game, id, portal, true);
                 game.spawn_item_own(ItemStack::new("minecraft:stick", 5), [at.x, at.y, at.z], 0);
-                let waiting = game.dropped[0].id;
+                let waiting = game.entities.dropped[0].id;
                 game.native_joins_flush(false, 0);
                 *nested_at.lock().unwrap() = [at.x, at.y, at.z];
                 armed.store(true, Ordering::SeqCst);
                 complete_callback_arrival(game, id, portal, at);
                 assert_eq!(calls.load(Ordering::SeqCst), 1);
-                assert_eq!(game.dropped.len(), 2);
-                let survivor = game.dropped.iter().find(|item| item.id == waiting).unwrap();
+                assert_eq!(game.entities.dropped.len(), 2);
+                let survivor = game
+                    .entities
+                    .dropped
+                    .iter()
+                    .find(|item| item.id == waiting)
+                    .unwrap();
                 assert_eq!(survivor.stack.count, 8);
                 assert_eq!(survivor.ticks, 0);
                 let nested = game
+                    .entities
                     .dropped
                     .iter()
                     .find(|item| &*item.stack.item == "minecraft:dirt")

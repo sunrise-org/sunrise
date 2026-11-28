@@ -16,7 +16,7 @@ impl crate::game::ClientGame<'_> {
     ) {
         let orientation = glam::Mat4::from_quat(self.camera_orientation());
         // shouldRender: not while attached to an entity (`isAttachedToEntity`).
-        for r in self.common.rockets[run]
+        for r in self.common.entities.rockets[run]
             .iter()
             .filter(|r| !r.attached && r.attached_to.is_none() && !self.hides_as_camera(r.id))
         {
@@ -68,7 +68,13 @@ impl crate::game::ClientGame<'_> {
     /// FireworkRocketEntity.handleEntityEvent: use the synchronized item data.
     pub(in crate::game::client_side) fn remote_firework_explosion(&mut self, id: i32) {
         let camera = self.common.eye_position();
-        if let Some(r) = self.common.rockets.iter().find(|r| r.id == id as u32) {
+        if let Some(r) = self
+            .common
+            .entities
+            .rockets
+            .iter()
+            .find(|r| r.id == id as u32)
+        {
             let at = [r.position.x, r.position.y, r.position.z];
             let v = [r.velocity.x, r.velocity.y, r.velocity.z];
             self.client.particles.0.fireworks(

@@ -9,7 +9,7 @@ impl crate::game::ServerGame<'_> {
     /// does not bypass; any other puts the dragon in a wall.
     pub fn dragon_check_walls(&mut self) {
         let mut in_wall = false;
-        let Some(d) = self.common.dragon.as_ref() else {
+        let Some(d) = self.common.entities.dragon.as_ref() else {
             return;
         };
         let griefing = self.can_entity_grief(Some(d.id));
@@ -64,7 +64,7 @@ impl crate::game::ServerGame<'_> {
         for (p, _) in removed {
             let _ = self.level_set(p, air);
         }
-        if broke && let Some(d) = self.common.dragon.as_ref() {
+        if broke && let Some(d) = self.common.entities.dragon.as_ref() {
             let p = d.parts[0].0;
             // Level event 2008: an explosion puff where a block broke.
             self.server_particle_at(
@@ -73,7 +73,7 @@ impl crate::game::ServerGame<'_> {
                 [0.0; 3],
             );
         }
-        if let Some(d) = self.common.dragon.as_mut() {
+        if let Some(d) = self.common.entities.dragon.as_mut() {
             d.in_wall = in_wall;
         }
     }

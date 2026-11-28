@@ -98,11 +98,11 @@ pub(crate) fn run_a_stand_breaks_on_low_health_only_through_damage_and_a_dead_on
                 assert_eq!(rows[end].nbt, nbt, "case {case} changed summon NBT");
                 end += 1;
             }
-            game.armor_stands.clear();
-            game.dropped.clear();
+            game.entities.armor_stands.clear();
+            game.entities.dropped.clear();
             game.summon_with_nbt("minecraft:armor_stand", [0.5, 64.0, 0.5], nbt)
                 .unwrap();
-            let id = game.armor_stands[0].id;
+            let id = game.entities.armor_stands[0].id;
             let mut elapsed_ticks = 0u32;
             for row in &rows[i..end] {
                 if let Some(tick) = row.step.strip_prefix("tick:") {
@@ -117,7 +117,7 @@ pub(crate) fn run_a_stand_breaks_on_low_health_only_through_damage_and_a_dead_on
                 } else {
                     panic!("unknown witness step {} in {case}", row.step);
                 }
-                let stand = game.armor_stands.iter().find(|a| a.id == id);
+                let stand = game.entities.armor_stands.iter().find(|a| a.id == id);
                 assert_eq!(
                     stand.is_some(),
                     row.alive,
@@ -161,13 +161,13 @@ pub(crate) fn run_a_stand_breaks_on_low_health_only_through_damage_and_a_dead_on
                     assert_eq!(row.death_time, None, "{case} at {}", row.step);
                 }
                 assert_eq!(
-                    game.dropped.len(),
+                    game.entities.dropped.len(),
                     row.drop_count,
                     "vanilla 26.3 {case} at {}: drop count mismatch",
                     row.step
                 );
                 assert_eq!(
-                    game.dropped.first().map(|item| &*item.stack.item),
+                    game.entities.dropped.first().map(|item| &*item.stack.item),
                     row.drop_item,
                     "vanilla 26.3 {case} at {}: drop item mismatch",
                     row.step

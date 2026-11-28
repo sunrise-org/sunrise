@@ -69,7 +69,13 @@ impl crate::game::ServerGame<'_> {
                 self.native_item_toss(uuid, item, &mut canceled);
                 self.common.native_lifecycle.held_joins.pop();
                 if canceled {
-                    if let Some(at) = self.common.dropped.iter().rposition(|d| d.id == id) {
+                    if let Some(at) = self
+                        .common
+                        .entities
+                        .dropped
+                        .iter()
+                        .rposition(|d| d.id == id)
+                    {
                         self.remove_dropped(at);
                     }
                     self.forget_entity(id);
@@ -90,38 +96,44 @@ impl crate::game::ServerGame<'_> {
         let at = |v: Vec3| [v.x, v.y, v.z];
         let centre = |p: [i32; 3]| p.map(|v| f64::from(v) + 0.5);
         let id = u32::try_from(id).ok()?;
-        if let Some(b) = self.common.boats.iter().find(|b| b.id == id) {
+        if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id) {
             let (lo, hi) = corners(b.bounds());
             return Some((lo, hi, at(b.position)));
         }
-        if let Some(c) = self.common.carts.iter().find(|c| c.id == id) {
+        if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == id) {
             let (lo, hi) = corners(c.bounds());
             return Some((lo, hi, at(c.position)));
         }
-        if let Some(a) = self.common.armor_stands.iter().find(|a| a.id == id) {
+        if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .find(|a| a.id == id)
+        {
             let (lo, hi) = corners(a.bounds());
             return Some((lo, hi, at(a.position)));
         }
-        if let Some(c) = self.common.cushions.iter().find(|c| c.id == id) {
+        if let Some(c) = self.common.entities.cushions.iter().find(|c| c.id == id) {
             let (lo, hi) = corners(Aabb::new(
                 Vec3::new(c.position.x - 0.5, c.position.y, c.position.z - 0.5),
                 Vec3::new(c.position.x + 0.5, c.position.y + 0.25, c.position.z + 0.5),
             ));
             return Some((lo, hi, at(c.position)));
         }
-        if let Some(f) = self.common.item_frames.iter().find(|f| f.id == id) {
+        if let Some(f) = self.common.entities.item_frames.iter().find(|f| f.id == id) {
             let (lo, hi) = f.bounds();
             return Some((lo, hi, centre(f.pos)));
         }
-        if let Some(p) = self.common.paintings.iter().find(|p| p.id == id) {
+        if let Some(p) = self.common.entities.paintings.iter().find(|p| p.id == id) {
             let (lo, hi) = p.bounds();
             return Some((lo, hi, centre(p.pos)));
         }
-        if let Some(t) = self.common.tnts.iter().find(|t| t.id == id) {
+        if let Some(t) = self.common.entities.tnts.iter().find(|t| t.id == id) {
             let (lo, hi) = corners(t.bounds());
             return Some((lo, hi, at(t.position)));
         }
-        if let Some(f) = self.common.falling.iter().find(|f| f.id == id) {
+        if let Some(f) = self.common.entities.falling.iter().find(|f| f.id == id) {
             let (lo, hi) = corners(f.bounds());
             return Some((lo, hi, at(f.position)));
         }
@@ -245,7 +257,7 @@ impl crate::game::ServerGame<'_> {
         // A ghast's fireball or a wind charge: turned along the guest's own
         // view (ServerGamePacketListenerImpl.handleInteract, then
         // Player.attack's AIM_DEFLECT).
-        if let Some(i) = self.creatures.projectiles.iter().position(|p| {
+        if let Some(i) = self.entities.projectiles.iter().position(|p| {
             p.id != 0
                 && p.id as i32 == id
                 && sunrise_gameplay_common::game::deflect_common::attackable(p)
@@ -255,7 +267,7 @@ impl crate::game::ServerGame<'_> {
                     return false;
                 }
                 if matches!(
-                    g.common.creatures.projectiles[i].kind,
+                    g.common.entities.projectiles[i].kind,
                     sunrise_sim::projectiles::ProjectileKind::ShulkerBullet { .. }
                 ) {
                     g.hit_shulker_bullet(i);
@@ -271,11 +283,13 @@ impl crate::game::ServerGame<'_> {
             });
         }
         if let Some(index) = self
+            .entities
             .mobs
             .iter()
             .position(|m| m.id as i32 == id && m.alive())
             .filter(|_| {
                 self.common
+                    .entities
                     .dragon
                     .as_ref()
                     .is_none_or(|d| d.id as i32 != id)
@@ -284,7 +298,7 @@ impl crate::game::ServerGame<'_> {
             let Some(host) = self.server.lan.as_ref() else {
                 return Err(ActionRefused::Stale);
             };
-            if host.hub.guests[gi].vehicle == Some(self.common.mobs[index].id) {
+            if host.hub.guests[gi].vehicle == Some(self.common.entities.mobs[index].id) {
                 return Ok(Struck::Stopped);
             }
             // A mace's smash sets the attacker's velocity and sends it at once, before the
@@ -320,11 +334,13 @@ impl crate::game::ServerGame<'_> {
         let (old_yaw, old_pitch) = (host.hub.guests[gi].yaw, host.hub.guests[gi].pitch);
         let boat = self
             .common
+            .entities
             .boats
             .iter()
             .position(|boat| boat.id as i32 == id);
         let tnt = self
             .common
+            .entities
             .tnts
             .iter()
             .find(|tnt| tnt.id as i32 == id)
@@ -511,7 +527,7 @@ impl crate::game::ServerGame<'_> {
         {
             return Some(g.bounds());
         }
-        if let Some(m) = self.common.mobs.iter().find(|m| m.id as i32 == id) {
+        if let Some(m) = self.common.entities.mobs.iter().find(|m| m.id as i32 == id) {
             return Some(m.bounds());
         }
         if let Some((lo, hi, _)) = self.server_object_target(id) {
@@ -533,7 +549,7 @@ impl crate::game::ServerGame<'_> {
             ));
         }
         self.common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .find(|p| p.id != 0 && p.id as i32 == id)
@@ -877,7 +893,8 @@ impl crate::game::ServerGame<'_> {
                 // side, so the ray meets the boat before them (the server
                 // attacks the entity it is sent).
                 let carries = u32::try_from(id).is_ok_and(|v| {
-                    self.common.boats.iter().any(|b| b.id == v) && !self.boat_mobs(v).is_empty()
+                    self.common.entities.boats.iter().any(|b| b.id == v)
+                        && !self.boat_mobs(v).is_empty()
                 });
                 if carries {
                     let near = |k: usize| eye[k].clamp(lo[k] + 0.01, hi[k] - 0.01);
@@ -896,6 +913,7 @@ impl crate::game::ServerGame<'_> {
         };
         let mob_box = self
             .common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id as i32 == id)
@@ -1017,7 +1035,7 @@ mod tests {
             })
             .expect("UseItem preserves non-finite float bits on the wire");
             let decoded = Serverbound::decode(sb::USE_ITEM, &built.body).unwrap();
-            let before_proj = game.common.creatures.projectiles.len();
+            let before_proj = game.common.entities.projectiles.len();
             game.lan_guest_packet(1, decoded);
 
             let guest = &game.server.lan.as_ref().unwrap().hub.guests[0];
@@ -1029,11 +1047,11 @@ mod tests {
                 "sequence {sequence} still uses the held snowball"
             );
             assert_eq!(
-                game.common.creatures.projectiles.len(),
+                game.common.entities.projectiles.len(),
                 before_proj + 1,
                 "sequence {sequence} spawns a snowball"
             );
-            let proj = game.common.creatures.projectiles.last().unwrap();
+            let proj = game.common.entities.projectiles.last().unwrap();
             assert!(
                 proj.velocity.x.is_finite()
                     && proj.velocity.y.is_finite()

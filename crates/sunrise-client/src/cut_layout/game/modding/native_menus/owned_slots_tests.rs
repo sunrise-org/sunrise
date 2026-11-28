@@ -835,7 +835,7 @@ fn closing_discards_owned_slots_unless_the_listener_returns_their_contents() {
             );
             if return_contents {
                 // GiveCommand.giveItem: a fully fitting give leaves only the one-tick fake item.
-                let [fake] = game.dropped.as_ref() else {
+                let [fake] = game.entities.dropped.as_ref() else {
                     panic!("expected only the fake pickup, not the contents of the closed menu");
                 };
                 assert_eq!(fake.stack, ItemStack::new("minecraft:stick", 1));
@@ -846,7 +846,7 @@ fn closing_discards_owned_slots_unless_the_listener_returns_their_contents() {
                 game.server.ticked_entities_through = game.server.next_entity;
                 game.tick_items();
             }
-            assert!(game.dropped.is_empty());
+            assert!(game.entities.dropped.is_empty());
             let (_, reopened) = open(game, key);
             assert_eq!(reopened.slot(game, 1), Some(None));
         });
@@ -1220,7 +1220,7 @@ fn scoped_owned_clicks_replace_or_continue_each_input_mode() {
                 });
                 hub.resend_menu(1, window, &game.common.world);
                 sent(&rx);
-                let before = game.dropped.len();
+                let before = game.entities.dropped.len();
                 send_scoped_click(game, flow, window, slot, button, input);
                 let packets = sent(&rx);
                 let g = game.server.lan.as_ref().unwrap().hub.guest(1).unwrap();
@@ -1247,7 +1247,7 @@ fn scoped_owned_clicks_replace_or_continue_each_input_mode() {
                             .then(|| stone(2))
                             .flatten()
                     );
-                    assert_eq!(game.dropped.len(), before);
+                    assert_eq!(game.entities.dropped.len(), before);
                     dirt.clone()
                 } else {
                     match input {
@@ -1259,9 +1259,9 @@ fn scoped_owned_clicks_replace_or_continue_each_input_mode() {
                         THROW | PICKUP => {
                             assert_eq!(g.native_menu[0], None);
                             assert_eq!(g.carried, None);
-                            assert_eq!(game.dropped.len(), before + 1);
+                            assert_eq!(game.entities.dropped.len(), before + 1);
                             assert_eq!(
-                                game.dropped[before].stack.count,
+                                game.entities.dropped[before].stack.count,
                                 if input == THROW { 1 } else { 2 }
                             );
                         }
@@ -3550,7 +3550,7 @@ fn processing_owned_menu_returns_inputs_on_close_drops_overflow_and_discards_res
             g.carried = None;
             g.native_menu = vec![stick(3), dirt(2), stone(2)];
         });
-        game.dropped.clear();
+        game.entities.dropped.clear();
         CLOSED_OWNED_LEN.set(None);
         sent(&rx);
         game.lan_guest_packet(
@@ -3577,7 +3577,7 @@ fn processing_owned_menu_returns_inputs_on_close_drops_overflow_and_discards_res
             0,
             "result slot must be discarded, never returned"
         );
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
 
         // 2. Live close with full inventory: drops overflow inputs at player and discards results.
         let menu = game
@@ -3598,7 +3598,7 @@ fn processing_owned_menu_returns_inputs_on_close_drops_overflow_and_discards_res
             g.carried = None;
             g.native_menu = vec![stick(4), dirt(5), stone(4)];
         });
-        game.dropped.clear();
+        game.entities.dropped.clear();
         CLOSED_OWNED_LEN.set(None);
         game.lan_guest_packet(
             1,
@@ -3609,7 +3609,8 @@ fn processing_owned_menu_returns_inputs_on_close_drops_overflow_and_discards_res
         game.run_native_menu_events();
         assert_eq!(CLOSED_OWNED_LEN.get(), Some(0));
         let dropped_count = |game: &sunrise_gameplay::game::ServerGame<'_>, id: &str| -> u32 {
-            game.dropped
+            game.entities
+                .dropped
                 .iter()
                 .filter(|e| &*e.stack.item == id)
                 .map(|e| e.stack.count)
@@ -3635,7 +3636,7 @@ fn processing_owned_menu_returns_inputs_on_close_drops_overflow_and_discards_res
             g.carried = None;
             g.native_menu = vec![stick(2), dirt(1), stone(1)];
         });
-        game.dropped.clear();
+        game.entities.dropped.clear();
         game.guest_disconnected(1);
         game.run_native_menu_events();
         let guest = game.server.lan.as_ref().unwrap().hub.guest(1).unwrap();
@@ -3664,7 +3665,8 @@ fn processing_owned_menu_close_on_death_drops_inputs_unlike_live_close() {
                 .sum()
         };
         let dropped_count = |game: &sunrise_gameplay::game::ServerGame<'_>, id: &str| -> u32 {
-            game.dropped
+            game.entities
+                .dropped
                 .iter()
                 .filter(|e| &*e.stack.item == id)
                 .map(|e| e.stack.count)
@@ -3690,7 +3692,7 @@ fn processing_owned_menu_close_on_death_drops_inputs_unlike_live_close() {
             g.dead = true;
             g.native_menu = vec![stick(3), dirt(2), stone(2)];
         });
-        game.dropped.clear();
+        game.entities.dropped.clear();
         game.tick_level_guests();
         game.run_native_menu_events();
         assert!(
@@ -3732,7 +3734,7 @@ fn processing_owned_menu_close_on_death_drops_inputs_unlike_live_close() {
             g.dead = true;
             g.native_menu = vec![stick(5), dirt(4), stone(4)];
         });
-        game.dropped.clear();
+        game.entities.dropped.clear();
         game.server.lan.as_mut().unwrap().hub.close_container(1);
         game.server.lan.as_mut().unwrap().hub.guests.update(0, |g| {
             g.dead = false;

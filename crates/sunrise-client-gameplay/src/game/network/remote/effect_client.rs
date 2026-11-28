@@ -37,17 +37,26 @@ impl crate::game::ClientGame<'_> {
             return;
         }
         let id = p.id as u32;
-        let (list, darkness) =
-            if let Some(m) = self.common.mob_index.get_mut(&mut self.common.mobs, id) {
-                (
-                    &mut m.extra.client_effects.list,
-                    &mut m.extra.darkness_blend,
-                )
-            } else if let Some(a) = self.common.armor_stands.iter_mut().find(|a| a.id == id) {
-                (&mut a.client_effects.list, &mut a.darkness_blend)
-            } else {
-                return;
-            };
+        let (list, darkness) = if let Some(m) = self
+            .common
+            .mob_index
+            .get_mut(&mut self.common.entities.mobs, id)
+        {
+            (
+                &mut m.extra.client_effects.list,
+                &mut m.extra.darkness_blend,
+            )
+        } else if let Some(a) = self
+            .common
+            .entities
+            .armor_stands
+            .iter_mut()
+            .find(|a| a.id == id)
+        {
+            (&mut a.client_effects.list, &mut a.darkness_blend)
+        } else {
+            return;
+        };
         if let Some(e) = force_add_effect(list, e, blend, &["darkness"])
             && e.id == "darkness"
         {

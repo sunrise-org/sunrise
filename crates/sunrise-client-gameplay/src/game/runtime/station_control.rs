@@ -260,13 +260,13 @@ impl crate::game::ClientGame<'_> {
             )),
             "mount-menu" => {
                 let eye = self.common.eye_position().ok_or("no player")?;
-                let index = (0..self.common.mobs.len())
+                let index = (0..self.common.entities.mobs.len())
                     .filter(|&i| {
-                        sunrise_sim::mobs::equine::is_equine(self.common.mobs[i].species())
+                        sunrise_sim::mobs::equine::is_equine(self.common.entities.mobs[i].species())
                     })
                     .min_by(|&a, &b| {
                         let d = |i: usize| {
-                            let c = self.common.mobs[i].center();
+                            let c = self.common.entities.mobs[i].center();
                             (c[0] - eye[0]).powi(2)
                                 + (c[1] - eye[1]).powi(2)
                                 + (c[2] - eye[2]).powi(2)
@@ -275,10 +275,10 @@ impl crate::game::ClientGame<'_> {
                     })
                     .ok_or("no horse around")?;
                 if flag("tame") {
-                    self.common.mobs[index].extra.tame = true;
+                    self.common.entities.mobs[index].extra.tame = true;
                 }
                 if flag("chest") {
-                    self.common.mobs[index].extra.chested = true;
+                    self.common.entities.mobs[index].extra.chested = true;
                 }
                 self.open_mount_menu(index);
                 ok()

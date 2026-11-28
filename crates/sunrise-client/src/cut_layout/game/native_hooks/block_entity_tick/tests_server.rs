@@ -60,7 +60,7 @@ fn replacement_and_item_stack_journals_close_in_their_own_dimensions() {
         }
         let replace = |game: &mut sunrise_gameplay::game::ServerGame<'_>, subject| {
             let item = game
-                .item_entity(game.entity(game.dropped[0].id).unwrap())
+                .item_entity(game.entity(game.entities.dropped[0].id).unwrap())
                 .unwrap();
             let mut access = access(game, subject);
             let mut tick = BlockEntityScope::new(&mut access);
@@ -92,8 +92,8 @@ fn replacement_and_item_stack_journals_close_in_their_own_dimensions() {
             let level = game.level("minecraft:the_nether").unwrap();
             assert_eq!(game.block_entity(level, AT), Some(nether));
             assert_eq!(game.world.block(POS.0, POS.1, POS.2), original);
-            assert_eq!(game.dropped[0].stack.count, 8);
-            assert_eq!(game.dropped.len(), 1);
+            assert_eq!(game.entities.dropped[0].stack.count, 8);
+            assert_eq!(game.entities.dropped.len(), 1);
             game.storage_scope(|game, _| {
                 replace(game, nether);
                 ((), true)
@@ -104,20 +104,20 @@ fn replacement_and_item_stack_journals_close_in_their_own_dimensions() {
         let level = game.level("minecraft:overworld").unwrap();
         assert_eq!(game.block_entity(level, AT), Some(overworld));
         assert_eq!(game.world.block(POS.0, POS.1, POS.2), original);
-        assert_eq!(game.dropped[0].stack.count, 8);
-        assert_eq!(game.dropped.len(), 1);
+        assert_eq!(game.entities.dropped[0].stack.count, 8);
+        assert_eq!(game.entities.dropped.len(), 1);
         game.enter_level(Dim::Nether).unwrap();
         assert_eq!(game.world.block(POS.0, POS.1, POS.2), replacement);
         assert_eq!(
             game.block_entity(game.level("minecraft:the_nether").unwrap(), AT),
             None
         );
-        assert_eq!(game.dropped[0].stack.count, 7);
+        assert_eq!(game.entities.dropped[0].stack.count, 7);
         assert_eq!(
-            game.dropped[1].stack,
+            game.entities.dropped[1].stack,
             ItemStack::new("minecraft:gold_ingot", 1)
         );
-        assert_eq!(game.dropped.len(), 2);
+        assert_eq!(game.entities.dropped.len(), 2);
         game.enter_level(Dim::Overworld).unwrap();
     });
 }

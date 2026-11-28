@@ -459,18 +459,18 @@ macro_rules! entity_lists {
     ($($then:ident)::+, $($args:tt)*) => {
         $($then)::+! {
             ($($args)*)
-            Mob(sunrise_sim::mobs::Mob) mobs: mobs,
-            Item(sunrise_sim::entities::ItemEntity) dropped: dropped,
-            Boat($crate::game::boats_common::Boat) boats: boats,
-            Cart($crate::game::minecarts::Minecart) carts: carts,
-            ArmorStand(sunrise_sim::entities::ArmorStand) armor_stands: armor_stands,
-            Tnt($crate::game::tnt_common::PrimedTnt) tnts: tnts,
-            Falling($crate::game::FallingBlock) falling: falling,
-            Orb(sunrise_sim::entities::ExperienceOrb) orbs: orbs,
-            Projectile(sunrise_sim::projectiles::Projectile) projectiles: creatures.projectiles,
-            Rocket($crate::game::fireworks::Rocket) rockets: rockets,
-            Trident(sunrise_sim::thrown_trident::ThrownTrident) tridents: tridents,
-            General($crate::game::general::GeneralRow) general: resident_entities.general.rows,
+            Mob(sunrise_sim::mobs::Mob) mobs: entities.mobs,
+            Item(sunrise_sim::entities::ItemEntity) dropped: entities.dropped,
+            Boat($crate::game::boats_common::Boat) boats: entities.boats,
+            Cart($crate::game::minecarts::Minecart) carts: entities.carts,
+            ArmorStand(sunrise_sim::entities::ArmorStand) armor_stands: entities.armor_stands,
+            Tnt($crate::game::tnt_common::PrimedTnt) tnts: entities.tnts,
+            Falling($crate::game::FallingBlock) falling: entities.falling,
+            Orb(sunrise_sim::entities::ExperienceOrb) orbs: entities.orbs,
+            Projectile(sunrise_sim::projectiles::Projectile) projectiles: entities.projectiles,
+            Rocket($crate::game::fireworks::Rocket) rockets: entities.rockets,
+            Trident(sunrise_sim::thrown_trident::ThrownTrident) tridents: entities.tridents,
+            General($crate::game::general::GeneralRow) general: entities.general.rows,
         }
     };
 }

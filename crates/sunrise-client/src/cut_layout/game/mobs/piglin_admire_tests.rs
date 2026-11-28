@@ -29,32 +29,32 @@ fn piglin_admire_preserves_components_on_death_and_finish() {
                 std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
             );
             for sword in [true, false] {
-                g.mobs.clear();
-                g.dropped.clear();
+                g.entities.mobs.clear();
+                g.entities.dropped.clear();
                 assert!(
                     g.run_command("summon minecraft:piglin 0 100 0 {IsImmuneToZombification:1b}")
                 );
-                g.mobs[0].extra.set_main_hand(None);
-                g.mobs[0].extra.age = 0;
+                g.entities.mobs[0].extra.set_main_hand(None);
+                g.entities.mobs[0].extra.age = 0;
                 let expected = stack(sword);
                 if sword {
-                    let id = g.mobs[0].id;
+                    let id = g.entities.mobs[0].id;
                     g.creatures.ticked.insert(id);
                     g.spawn_item(expected.clone(), [0.0, 100.0, 0.0], [0.0; 3], 0);
                     g.piglin_pickups();
                 } else {
                     assert!(g.give_piglin(0, &expected));
                 }
-                let held = item_stack(&g.mobs[0], OFFHAND).unwrap();
+                let held = item_stack(&g.entities.mobs[0], OFFHAND).unwrap();
                 assert!(held.same_item_same_components(&expected));
                 assert_eq!(held.count, 1);
-                let corpse = g.mobs[0].clone();
+                let corpse = g.entities.mobs[0].clone();
                 g.mob_die(&corpse);
-                assert!(g.dropped.iter().any(|d| d.stack.count == 1 && d.stack.same_item_same_components(&expected)));
+                assert!(g.entities.dropped.iter().any(|d| d.stack.count == 1 && d.stack.same_item_same_components(&expected)));
                 if sword {
-                    let id = g.mobs[0].id;
+                    let id = g.entities.mobs[0].id;
                     g.finish_admiring(id);
-                    let kept = item_stack(&g.mobs[0], 0).unwrap();
+                    let kept = item_stack(&g.entities.mobs[0], 0).unwrap();
                     assert!(kept.same_item_same_components(&expected));
                     assert_eq!(kept.count, 1);
                 }
@@ -82,14 +82,14 @@ fn piglin_admire_hit_keeps_baby_gold_and_cancels_adult_barter() {
                 std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
             );
             for baby in [true, false] {
-                g.mobs.clear();
-                g.dropped.clear();
+                g.entities.mobs.clear();
+                g.entities.dropped.clear();
                 assert!(
                     g.run_command("summon minecraft:piglin 0 100 0 {IsImmuneToZombification:1b}")
                 );
-                g.mobs[0].extra.age = if baby { -24000 } else { 0 };
-                g.mobs[0].extra.set_main_hand(None);
-                let id = g.mobs[0].id;
+                g.entities.mobs[0].extra.age = if baby { -24000 } else { 0 };
+                g.entities.mobs[0].extra.set_main_hand(None);
+                let id = g.entities.mobs[0].id;
                 g.creatures.ticked.insert(id);
                 g.spawn_item(
                     ItemStack::new("minecraft:gold_ingot", 1),
@@ -98,19 +98,19 @@ fn piglin_admire_hit_keeps_baby_gold_and_cancels_adult_barter() {
                     0,
                 );
                 g.piglin_pickups();
-                assert!(item_stack(&g.mobs[0], OFFHAND).is_some());
+                assert!(item_stack(&g.entities.mobs[0], OFFHAND).is_some());
                 sunrise_sim::mobs::ai::after_hurt(
-                    &mut g.mobs[0],
+                    &mut g.entities.mobs[0],
                     &sunrise_sim::mobs::Damage::player([1.0, 100.0, 0.0]),
                 );
-                let events = std::mem::take(&mut g.mobs[0].outbox);
+                let events = std::mem::take(&mut g.entities.mobs[0].outbox);
                 g.handle_mob_events(events).unwrap();
-                assert!(item_stack(&g.mobs[0], OFFHAND).is_none());
+                assert!(item_stack(&g.entities.mobs[0], OFFHAND).is_none());
                 assert_eq!(
-                    g.mobs[0].extra.main_hand_id(),
+                    g.entities.mobs[0].extra.main_hand_id(),
                     baby.then_some("minecraft:gold_ingot")
                 );
-                assert!(g.dropped.is_empty());
+                assert!(g.entities.dropped.is_empty());
             }
         })
     });

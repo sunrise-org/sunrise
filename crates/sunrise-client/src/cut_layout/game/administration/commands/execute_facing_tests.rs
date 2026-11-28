@@ -6,7 +6,11 @@ use sunrise_gameplay::game::game_tests::tests::server_game;
 /// A pig summoned at a known place takes the rotation `rotate` gives it.
 fn summoned_pig(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> u32 {
     assert!(game.run_command("summon minecraft:pig 0.5 100 0.5"));
-    game.mobs.last().expect("the pig is in the level").id
+    game.entities
+        .mobs
+        .last()
+        .expect("the pig is in the level")
+        .id
 }
 
 #[test]
@@ -42,7 +46,7 @@ fn facing_wraps_and_uses_mth_atan2() {
             )),
             "{target}"
         );
-        let mob = game.mobs.iter().find(|m| m.id == pig).unwrap();
+        let mob = game.entities.mobs.iter().find(|m| m.id == pig).unwrap();
         assert_eq!(mob.yaw.to_bits(), yaw, "yaw for {target}");
         if let Some(pitch) = pitch {
             assert_eq!(mob.head_pitch.to_bits(), pitch, "pitch for {target}");
@@ -79,7 +83,7 @@ fn over_world_surface_skips_cave_air_and_void_air() {
             "column {x}"
         );
     }
-    let heights: Vec<f64> = game.mobs.iter().map(|m| m.position.y).collect();
+    let heights: Vec<f64> = game.entities.mobs.iter().map(|m| m.position.y).collect();
     assert_eq!(heights, [61.0, 61.0, 61.0]);
 }
 

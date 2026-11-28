@@ -52,7 +52,7 @@ fn use_block(
     pos: [i32; 3],
     stack: Option<ItemStack>,
 ) -> bool {
-    game.dropped.clear();
+    game.entities.dropped.clear();
     let hit = hit(pos);
     game.server.forced_hit = Some(hit);
     *game.held_mut() = stack;
@@ -122,7 +122,7 @@ fn block_drops_off_stops_the_pop_of_bone_meal_and_harvests() {
         let before = game.world.random.clone();
         assert!(use_block(&mut game, off, stack(meal)), "{block} was used");
         assert!(
-            game.dropped.is_empty(),
+            game.entities.dropped.is_empty(),
             "{block} drops nothing with block_drops off"
         );
         if meal {
@@ -148,8 +148,12 @@ fn block_drops_off_stops_the_pop_of_bone_meal_and_harvests() {
     let (block, item, _, meal, _, on) = CASES[0];
     place(&mut game, on, block);
     assert!(use_block(&mut game, on, stack(meal)));
-    assert_eq!(game.dropped.len(), 1, "the rule on pops {item} again");
-    assert_eq!(&*game.dropped[0].stack.item, item);
+    assert_eq!(
+        game.entities.dropped.len(),
+        1,
+        "the rule on pops {item} again"
+    );
+    assert_eq!(&*game.entities.dropped[0].stack.item, item);
 }
 
 #[test]
@@ -166,14 +170,18 @@ fn block_drops_on_keeps_the_pop() {
         place(&mut game, on, block);
         let mut expected = game.world.random.clone();
         assert!(use_block(&mut game, on, stack(meal)), "{block} was used");
-        assert_eq!(game.dropped.len(), drops, "{block} pops its stacks");
-        for dropped in &game.dropped {
+        assert_eq!(
+            game.entities.dropped.len(),
+            drops,
+            "{block} pops its stacks"
+        );
+        for dropped in &game.entities.dropped {
             assert_eq!(&*dropped.stack.item, item);
         }
         if meal {
             // `Block.popResource`'s own offsets from the level random.
             let at = sunrise_gameplay_common::game::spill_common::pop_position(&mut expected, on);
-            let p = game.dropped[0].position;
+            let p = game.entities.dropped[0].position;
             assert_eq!([p.x, p.y, p.z], at, "{block} pops where vanilla pops it");
         }
     }
@@ -219,6 +227,7 @@ fn harvest(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> Vec<String> {
     place(game, at, "minecraft:sweet_berry_bush[age=3]");
     assert!(use_block(game, at, None));
     let mut dropped: Vec<String> = game
+        .entities
         .dropped
         .iter()
         .map(|d| d.stack.item.to_string())
@@ -338,7 +347,7 @@ fn a_harvest_reads_the_vehicle_the_player_rides() {
     let (_published, mut game) = harvest_game(&mut resources, table);
     assert!(harvest(&mut game).is_empty(), "no vehicle, no drop");
     assert!(game.run_command("summon minecraft:pig 12.5 100 2.5 {NoAI:1b}"));
-    game.riding = Some(game.mobs.last().unwrap().id);
+    game.riding = Some(game.entities.mobs.last().unwrap().id);
     assert_eq!(harvest(&mut game), ["minecraft:apple"]);
 }
 

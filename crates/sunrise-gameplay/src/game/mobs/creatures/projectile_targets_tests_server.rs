@@ -13,24 +13,24 @@ pub enum TrackedTarget {
 }
 
 pub fn clear_entities(game: &mut crate::game::ServerGame<'_>) {
-    game.common.mobs.clear();
-    game.common.dropped.clear();
-    game.common.boats.clear();
-    game.common.carts.clear();
-    game.common.armor_stands.clear();
-    game.common.tnts.clear();
-    game.common.falling.clear();
-    game.common.orbs.clear();
-    game.common.creatures.projectiles.clear();
-    game.common.rockets.clear();
-    game.common.tridents.clear();
-    game.common.item_frames.clear();
-    game.common.paintings.clear();
-    game.common.cushions.clear();
+    game.common.entities.mobs.clear();
+    game.common.entities.dropped.clear();
+    game.common.entities.boats.clear();
+    game.common.entities.carts.clear();
+    game.common.entities.armor_stands.clear();
+    game.common.entities.tnts.clear();
+    game.common.entities.falling.clear();
+    game.common.entities.orbs.clear();
+    game.common.entities.projectiles.clear();
+    game.common.entities.rockets.clear();
+    game.common.entities.tridents.clear();
+    game.common.entities.item_frames.clear();
+    game.common.entities.paintings.clear();
+    game.common.entities.cushions.clear();
     game.server.others.0.clear();
     game.server.knot_state.knot_ids.clear();
     game.server.knot_state.broken_knots.clear();
-    game.common.resident_entities.knots.clear();
+    game.common.entities.knots.clear();
     game.reset_entity_residency();
     game.bind_local_player_residency();
 }
@@ -39,65 +39,65 @@ pub fn summon_target(game: &mut crate::game::ServerGame<'_>, target: &str) -> Tr
     match target {
         "armor_stand" => {
             assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 4.5 {}"));
-            TrackedTarget::Stand(game.common.armor_stands.last().unwrap().id)
+            TrackedTarget::Stand(game.common.entities.armor_stands.last().unwrap().id)
         }
         "armor_stand_equipped" => {
             assert!(game.run_command(
                 r#"summon minecraft:armor_stand 3.5 64.0 4.5 {equipment:{head:{id:"minecraft:iron_helmet",count:1}}}"#
             ));
-            TrackedTarget::Stand(game.common.armor_stands.last().unwrap().id)
+            TrackedTarget::Stand(game.common.entities.armor_stands.last().unwrap().id)
         }
         "armor_stand_marker" => {
             assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 4.5 {Marker:1b}"));
-            TrackedTarget::Stand(game.common.armor_stands.last().unwrap().id)
+            TrackedTarget::Stand(game.common.entities.armor_stands.last().unwrap().id)
         }
         "armor_stand_small" | "armor_stand_small_high" => {
             assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 4.5 {Small:1b}"));
-            TrackedTarget::Stand(game.common.armor_stands.last().unwrap().id)
+            TrackedTarget::Stand(game.common.entities.armor_stands.last().unwrap().id)
         }
         "armor_stand_nogravity" => {
             assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 4.5 {NoGravity:1b}"));
-            TrackedTarget::Stand(game.common.armor_stands.last().unwrap().id)
+            TrackedTarget::Stand(game.common.entities.armor_stands.last().unwrap().id)
         }
         "armor_stand_invisible" => {
             assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 4.5 {Invisible:1b}"));
-            TrackedTarget::Stand(game.common.armor_stands.last().unwrap().id)
+            TrackedTarget::Stand(game.common.entities.armor_stands.last().unwrap().id)
         }
         "painting" => {
             assert!(game.run_command(
                 r#"summon minecraft:painting 3.5 64.5 4.5 {block_pos:[I;3,64,4],facing:1b,variant:"minecraft:kebab"}"#
             ));
-            TrackedTarget::Painting(game.common.paintings.last().unwrap().id)
+            TrackedTarget::Painting(game.common.entities.paintings.last().unwrap().id)
         }
         "item_frame" => {
             assert!(game.run_command(
                 r#"summon minecraft:item_frame 3.5 64.5 4.5 {block_pos:[I;3,64,4],Facing:4b,Item:{id:"minecraft:diamond",count:1}}"#
             ));
-            TrackedTarget::Frame(game.common.item_frames.last().unwrap().id)
+            TrackedTarget::Frame(game.common.entities.item_frames.last().unwrap().id)
         }
         "item_frame_empty" => {
             assert!(game.run_command(
                 "summon minecraft:item_frame 3.5 64.5 4.5 {block_pos:[I;3,64,4],Facing:4b}"
             ));
-            TrackedTarget::Frame(game.common.item_frames.last().unwrap().id)
+            TrackedTarget::Frame(game.common.entities.item_frames.last().unwrap().id)
         }
         "item_frame_fixed" => {
             assert!(game.run_command(
                 r#"summon minecraft:item_frame 3.5 64.5 4.5 {block_pos:[I;3,64,4],Facing:4b,Fixed:1b,Item:{id:"minecraft:diamond",count:1}}"#
             ));
-            TrackedTarget::Frame(game.common.item_frames.last().unwrap().id)
+            TrackedTarget::Frame(game.common.entities.item_frames.last().unwrap().id)
         }
         "glow_item_frame" => {
             assert!(game.run_command(
                 r#"summon minecraft:glow_item_frame 3.5 64.5 4.5 {block_pos:[I;3,64,4],Facing:4b,Item:{id:"minecraft:diamond",count:1}}"#
             ));
-            TrackedTarget::Frame(game.common.item_frames.last().unwrap().id)
+            TrackedTarget::Frame(game.common.entities.item_frames.last().unwrap().id)
         }
         "glow_item_frame_empty" => {
             assert!(game.run_command(
                 "summon minecraft:glow_item_frame 3.5 64.5 4.5 {block_pos:[I;3,64,4],Facing:4b}"
             ));
-            TrackedTarget::Frame(game.common.item_frames.last().unwrap().id)
+            TrackedTarget::Frame(game.common.entities.item_frames.last().unwrap().id)
         }
         "leash_knot" => {
             assert!(game.run_command("summon minecraft:leash_knot 3.5 64.375 4.5 {}"));
@@ -107,7 +107,7 @@ pub fn summon_target(game: &mut crate::game::ServerGame<'_>, target: &str) -> Tr
             assert!(game.run_command(
                 "summon minecraft:pig 3.5 64.0 6.5 {NoAI:1b,Silent:1b,leash:[I;3,64,4]}"
             ));
-            let pig_id = game.common.mobs.last().unwrap().id;
+            let pig_id = game.common.entities.mobs.last().unwrap().id;
             game.tick_server(false).unwrap();
             let id = *game
                 .server
@@ -121,13 +121,13 @@ pub fn summon_target(game: &mut crate::game::ServerGame<'_>, target: &str) -> Tr
             assert!(game.run_command(
                 r#"summon minecraft:falling_block 3.5 65.0 4.5 {BlockState:"minecraft:sand",Time:1,Motion:[0.0d,0.0d,0.0d]}"#
             ));
-            TrackedTarget::Falling(game.common.falling.last().unwrap().id)
+            TrackedTarget::Falling(game.common.entities.falling.last().unwrap().id)
         }
         "cushion" => {
             assert!(game.run_command(
                 r#"summon minecraft:cushion 3.5 64.0 4.5 {block_pos:[I;3,64,4],color:"white"}"#
             ));
-            TrackedTarget::Cushion(game.common.cushions.last().unwrap().id)
+            TrackedTarget::Cushion(game.common.entities.cushions.last().unwrap().id)
         }
         other => panic!("unexpected witness target {other}"),
     }
@@ -135,18 +135,15 @@ pub fn summon_target(game: &mut crate::game::ServerGame<'_>, target: &str) -> Tr
 
 pub fn target_alive(game: &crate::game::ServerGame<'_>, target: TrackedTarget) -> bool {
     match target {
-        TrackedTarget::Stand(id) => game.common.armor_stands.iter().any(|a| a.id == id),
-        TrackedTarget::Painting(id) => game.common.paintings.iter().any(|p| p.id == id),
-        TrackedTarget::Frame(id) => game.common.item_frames.iter().any(|f| f.id == id),
-        TrackedTarget::Cushion(id) => game.common.cushions.iter().any(|c| c.id == id),
-        TrackedTarget::Falling(id) => game.common.falling.iter().any(|f| f.id == id),
+        TrackedTarget::Stand(id) => game.common.entities.armor_stands.iter().any(|a| a.id == id),
+        TrackedTarget::Painting(id) => game.common.entities.paintings.iter().any(|p| p.id == id),
+        TrackedTarget::Frame(id) => game.common.entities.item_frames.iter().any(|f| f.id == id),
+        TrackedTarget::Cushion(id) => game.common.entities.cushions.iter().any(|c| c.id == id),
+        TrackedTarget::Falling(id) => game.common.entities.falling.iter().any(|f| f.id == id),
         TrackedTarget::ExplicitKnot(id) => game.server.others.0.iter().any(|o| o.id == id),
-        TrackedTarget::NaturalKnot { id, .. } => game
-            .common
-            .resident_entities
-            .knots
-            .iter()
-            .any(|k| k.id == id),
+        TrackedTarget::NaturalKnot { id, .. } => {
+            game.common.entities.knots.iter().any(|k| k.id == id)
+        }
     }
 }
 
@@ -155,6 +152,7 @@ pub fn target_bounds(game: &crate::game::ServerGame<'_>, target: TrackedTarget) 
         TrackedTarget::Stand(id) => {
             let a = game
                 .common
+                .entities
                 .armor_stands
                 .iter()
                 .find(|a| a.id == id)

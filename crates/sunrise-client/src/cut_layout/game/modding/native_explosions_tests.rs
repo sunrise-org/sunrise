@@ -110,7 +110,7 @@ fn mob(
     mob.no_ai = true;
     mob.ground.on_ground = true;
     mob.health = health;
-    game.mobs.push(mob);
+    game.entities.mobs.push(mob);
 }
 
 #[derive(Default)]
@@ -208,6 +208,7 @@ fn kill(
                 assert_eq!(mob_kills(game), expected_kills);
                 // Monster's base reward for an adult zombie with no equipment.
                 let xp: i32 = game
+                    .entities
                     .orbs
                     .iter()
                     .map(|orb| orb.value * orb.count as i32)
@@ -293,7 +294,7 @@ fn a_player_hit_expires_on_a_living_mob_after_the_last_memory_tick() {
 /// Primed TNT lit by `owner` beside the zombie.
 fn tnt(game: &mut sunrise_gameplay::game::ServerGame<'_>, owner: Option<Who>) -> u32 {
     game.add_primed_tnt(BlockPos::new(4, 80, 4), 0.0, 80, owner, None);
-    game.tnts.last().unwrap().id
+    game.entities.tnts.last().unwrap().id
 }
 
 /// A summoned entity's id.
@@ -356,7 +357,7 @@ fn a_players_thrown_trident_credits_the_player() {
         "a_players_thrown_trident_credits_the_player",
         |game| {
             let id = summoned(game, "minecraft:trident", "{NoGravity:1b}");
-            game.tridents.for_each_mut(|t| t.owner = 11);
+            game.entities.tridents.for_each_mut(|t| t.owner = 11);
             id
         },
         (11, "minecraft:player_explosion", true),
@@ -370,7 +371,9 @@ fn a_players_firework_rocket_credits_the_player() {
         "a_players_firework_rocket_credits_the_player",
         |game| {
             let id = summoned(game, "minecraft:firework_rocket", "{LifeTime:100}");
-            game.rockets.for_each_mut(|r| r.owner = Some(Who::Player));
+            game.entities
+                .rockets
+                .for_each_mut(|r| r.owner = Some(Who::Player));
             id
         },
         (11, "minecraft:player_explosion", true),
@@ -430,7 +433,7 @@ fn a_mob_blast_breaks_blocks_only_when_its_source_may_grief() {
                     assert_eq!((under.as_str(), floor), ("minecraft:stone", 256));
                 }
                 // The source is spared by its own blast.
-                assert_eq!(game.mobs[0].health, 20.0);
+                assert_eq!(game.entities.mobs[0].health, 20.0);
             });
         }
     });
@@ -519,7 +522,7 @@ fn an_invalid_source_explodes_nothing() {
                 explode(game, blast, Err(ExplodeError::Unavailable));
             }
             assert_eq!(stone(game), 256);
-            assert_eq!(game.mobs[0].health, 20.0);
+            assert_eq!(game.entities.mobs[0].health, 20.0);
         });
     });
 }
@@ -635,7 +638,7 @@ fn a_mod_damage_type_names_the_death_message_and_is_what_living_damage_hears() {
         let heard = heard.lock().unwrap();
         assert_eq!(heard.starts, ["test:fuel_tank"]);
         assert_eq!(heard.damage, [(44, "test:fuel_tank".to_owned())]);
-        let zombie = game.mobs.remove(0);
+        let zombie = game.entities.mobs.remove(0);
         assert!(zombie.health < 20.0, "{}", zombie.health);
         let death = game.mob_death_message(&zombie, None).component();
         assert_eq!(death["translate"], "death.attack.fuelTank");
@@ -702,7 +705,7 @@ fn a_calculator_that_damages_no_entities_leaves_health_while_blocks_break() {
             };
             explode(game, blast, Ok(()));
             assert!(stone(game) < 256, "blocks break");
-            let health = game.mobs[0].health;
+            let health = game.entities.mobs[0].health;
             if damages_entities {
                 assert!(health < 20.0, "{health}");
             } else {
@@ -737,7 +740,7 @@ fn a_knockback_multiplier_of_zero_leaves_velocity_unchanged() {
                 ..Blast::at([8.5, 80.5, 8.5], 4.0)
             };
             explode(game, blast, Ok(()));
-            let zombie = &game.mobs[0];
+            let zombie = &game.entities.mobs[0];
             assert!(zombie.health < 20.0, "hurt either way");
             if knockback_multiplier.is_some() {
                 assert_eq!(zombie.velocity, Vec3::new(0.0, 0.0, 0.0));
@@ -836,7 +839,7 @@ fn refused(settings: ExplosionSettings, refusal: ExplodeError) {
         };
         explode(game, blast, Err(refusal));
         assert_eq!(stone(game), 256, "{refusal:?}");
-        assert_eq!(game.mobs[0].health, 20.0, "{refusal:?}");
+        assert_eq!(game.entities.mobs[0].health, 20.0, "{refusal:?}");
         assert!(heard.lock().unwrap().starts.is_empty(), "{refusal:?}");
     });
 }
@@ -892,7 +895,7 @@ fn primed_tnt_that_went_through_a_portal_spares_a_portal_unless_a_calculator_is_
             portal(game);
             let source = source.then(|| {
                 let id = tnt(game, None);
-                game.tnts.last_mut().unwrap().used_portal = true;
+                game.entities.tnts.last_mut().unwrap().used_portal = true;
                 game.entity(id).unwrap()
             });
             let blast = Blast {
@@ -1056,7 +1059,7 @@ fn unhurt() -> Option<ExplosionCalculator> {
 /// The zombie's and the player's velocity, both stilled again.
 fn pushes(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> (Vec3, Vec3) {
     let still = Vec3::new(0.0, 0.0, 0.0);
-    let zombie = std::mem::replace(&mut game.mobs[0].velocity, still);
+    let zombie = std::mem::replace(&mut game.entities.mobs[0].velocity, still);
     let player = &mut game.player.as_mut().unwrap().velocity;
     (zombie, std::mem::replace(player, still))
 }
@@ -1069,7 +1072,11 @@ fn a_wind_charge_source_damages_neither_a_mob_nor_a_player() {
             let source = wind_charge(game, kind.clone());
             explode(game, wind_blast(source, None), Ok(()));
             let player = game.player.as_ref().unwrap().health.health();
-            assert_eq!((game.mobs[0].health, player), (20.0, 20.0), "{kind:?}");
+            assert_eq!(
+                (game.entities.mobs[0].health, player),
+                (20.0, 20.0),
+                "{kind:?}"
+            );
             assert!(heard.lock().unwrap().damage.is_empty(), "{kind:?}");
             // Knockback still applies.
             let (zombie, player) = pushes(game);
@@ -1131,14 +1138,14 @@ fn a_passed_calculator_replaces_a_wind_charges_entity_rules() {
         let (plain_zombie, plain_player) = pushes(game);
         assert!(plain_zombie.x > 0.0, "{plain_zombie:?}");
         assert!(plain_player.x < 0.0, "{plain_player:?}");
-        assert_eq!(game.mobs[0].health, 20.0);
+        assert_eq!(game.entities.mobs[0].health, 20.0);
         assert_eq!(game.player.as_ref().unwrap().health.health(), 20.0);
         let source = wind_charge(game, ProjectileKind::WindCharge);
         let calculator = Some(ExplosionCalculator::default());
         explode(game, wind_blast(source, calculator), Ok(()));
         // The explicit calculator damages both targets and uses the ordinary push multiplier.
         let player_health = game.player.as_ref().unwrap().health.health();
-        assert!(game.mobs[0].health < 20.0);
+        assert!(game.entities.mobs[0].health < 20.0);
         assert!(player_health < 20.0, "{player_health}");
         let (zombie, player) = pushes(game);
         assert_eq!(zombie, plain_zombie, "zombie knockback");

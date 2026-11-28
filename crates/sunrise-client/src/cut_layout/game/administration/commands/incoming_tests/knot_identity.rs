@@ -88,7 +88,7 @@ pub(crate) fn step(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
 
 pub(crate) fn mob(game: &mut sunrise_gameplay::game::ServerGame<'_>, uuid: &str) -> usize {
     match game.target_with_uuid(sunrise_sim::save::uuid_from_text(uuid).unwrap()) {
-        Some(super::Target::Mob(id)) => game.mobs.iter().position(|m| m.id == id).unwrap(),
+        Some(super::Target::Mob(id)) => game.entities.mobs.iter().position(|m| m.id == id).unwrap(),
         other => panic!("{other:?}"),
     }
 }
@@ -129,7 +129,10 @@ fn two_leads_on_one_fence_share_one_knot() {
     step(&mut game);
     for uuid in [PIG, OTHER_PIG] {
         let i = mob(&mut game, uuid);
-        assert_eq!(game.mobs[i].extra.leash, Some(Holder::Knot([8, 201, 0])));
+        assert_eq!(
+            game.entities.mobs[i].extra.leash,
+            Some(Holder::Knot([8, 201, 0]))
+        );
     }
     assert_eq!(knots(&game).len(), 1);
     assert!(game.run_command(&format!("execute if entity {AT_FENCE}")));
@@ -137,7 +140,7 @@ fn two_leads_on_one_fence_share_one_knot() {
     let id = knots(&game)[0];
     let uuid = knot_uuid(&mut game);
     let other = mob(&mut game, OTHER_PIG);
-    let other = game.mobs[other].id;
+    let other = game.entities.mobs[other].id;
     game.break_leash(other, false, false);
     assert_eq!(knots(&game), [id]);
     assert_eq!(knot_uuid(&mut game), uuid);
@@ -153,7 +156,7 @@ fn a_knot_tied_again_after_its_last_lead_is_a_new_entity() {
     let first = knots(&game)[0];
     let first_uuid = knot_uuid(&mut game);
     let pig = mob(&mut game, PIG);
-    let pig = game.mobs[pig].id;
+    let pig = game.entities.mobs[pig].id;
     game.break_leash(pig, false, false);
     assert!(knots(&game).is_empty(), "no lead holds it: gone");
     assert!(!game.run_command(&format!("execute if entity {AT_FENCE}")));
@@ -163,7 +166,10 @@ fn a_knot_tied_again_after_its_last_lead_is_a_new_entity() {
     assert!(game.interact_leash(i, "minecraft:lead"));
     assert!(game.use_knot([8, 201, 0], false));
     let i = mob(&mut game, PIG);
-    assert_eq!(game.mobs[i].extra.leash, Some(Holder::Knot([8, 201, 0])));
+    assert_eq!(
+        game.entities.mobs[i].extra.leash,
+        Some(Holder::Knot([8, 201, 0]))
+    );
     let [second] = knots(&game)[..] else {
         panic!("{:?}", knots(&game));
     };
@@ -247,7 +253,10 @@ fn commands_that_would_move_or_remove_a_natural_knot_fail() {
     }
     assert_eq!(knots(&game), [id], "the knot is still there");
     let i = mob(&mut game, PIG);
-    assert_eq!(game.mobs[i].extra.leash, Some(Holder::Knot([8, 201, 0])));
+    assert_eq!(
+        game.entities.mobs[i].extra.leash,
+        Some(Holder::Knot([8, 201, 0]))
+    );
     let at = sunrise_sim::mobs::leash::knot_state([8, 201, 0]).position;
     assert_eq!(
         game.target_position(super::Target::Knot(id)),

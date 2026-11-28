@@ -114,15 +114,18 @@ fn a_placed_cushion_keeps_its_stacks_custom_name() {
     let mut game = game(&mut resources);
     game.creative = true;
     assert!(game.place_cushion(&top_hit(), &named_stack()));
-    assert_eq!(game.cushions.len(), 1);
-    assert_eq!(game.cushions[0].position, Vec3::new(AT[0], AT[1], AT[2]));
+    assert_eq!(game.entities.cushions.len(), 1);
     assert_eq!(
-        game.cushions[0].custom_name,
+        game.entities.cushions[0].position,
+        Vec3::new(AT[0], AT[1], AT[2])
+    );
+    assert_eq!(
+        game.entities.cushions[0].custom_name,
         Some(Tag::String("Seat".into())),
         "the placed cushion is named after its stack"
     );
     assert_eq!(
-        game.cushions[0]
+        game.entities.cushions[0]
             .item_stack_with_data()
             .custom_name()
             .as_deref(),
@@ -131,9 +134,9 @@ fn a_placed_cushion_keeps_its_stacks_custom_name() {
     );
     // An unnamed stack names nothing.
     let plain = ItemStack::new("minecraft:white_cushion", 1);
-    game.cushions.clear();
+    game.entities.cushions.clear();
     assert!(game.place_cushion(&top_hit(), &plain));
-    assert_eq!(game.cushions[0].custom_name, None);
+    assert_eq!(game.entities.cushions[0].custom_name, None);
 }
 
 /// `Cushion.dropItem` drops nothing when the cause is a player with infinite
@@ -159,8 +162,8 @@ fn a_creative_blast_leaves_no_cushion_item() {
         (true, true, Some(7), 0),
     ] {
         game.creative = creative;
-        game.cushions.clear();
-        game.dropped.clear();
+        game.entities.cushions.clear();
+        game.entities.dropped.clear();
         assert!(game.place_cushion(&top_hit(), &named_stack()));
         // `Explosion.getIndirectSourceEntity` of a player's TNT is the player.
         game.server.combat.0 = Default::default();
@@ -180,16 +183,19 @@ fn a_creative_blast_leaves_no_cushion_item() {
         )
         .unwrap();
         game.server.lan_acting = None;
-        assert!(game.cushions.is_empty(), "the blast breaks the cushion");
+        assert!(
+            game.entities.cushions.is_empty(),
+            "the blast breaks the cushion"
+        );
         assert_eq!(
-            game.dropped.len(),
+            game.entities.dropped.len(),
             dropped,
             "creative={creative} owner_player={owner_player} guest={guest:?}: \
              the blast's cause decides the drop"
         );
         if dropped == 1 {
             assert_eq!(
-                game.dropped[0].stack.custom_name().as_deref(),
+                game.entities.dropped[0].stack.custom_name().as_deref(),
                 Some("Seat"),
                 "a blast that drops the cushion drops it named"
             );
@@ -214,18 +220,24 @@ fn a_cushion_that_loses_its_support_is_discarded_silently() {
         vec![("minecraft:entity_die", AT, Some(Who::Player))],
         "a player's break kills the cushion"
     );
-    assert!(game.dropped.is_empty(), "a creative breaker gets no item");
+    assert!(
+        game.entities.dropped.is_empty(),
+        "a creative breaker gets no item"
+    );
 
     assert!(game.place_cushion(&top_hit(), &named_stack()));
     assert!(game.run_command("setblock 4 199 4 air strict"));
     // The next check (100 ticks) finds the anchor gone.
-    game.cushions[0].check_interval = 100;
+    game.entities.cushions[0].check_interval = 100;
     capture();
     game.tick_cushions();
-    assert!(game.cushions.is_empty(), "the cushion is gone");
+    assert!(game.entities.cushions.is_empty(), "the cushion is gone");
     assert_eq!(events(), [], "a discarded cushion posts no game event");
-    assert_eq!(game.dropped.len(), 1, "it still drops its item");
-    assert_eq!(game.dropped[0].stack.custom_name().as_deref(), Some("Seat"));
+    assert_eq!(game.entities.dropped.len(), 1, "it still drops its item");
+    assert_eq!(
+        game.entities.dropped[0].stack.custom_name().as_deref(),
+        Some("Seat")
+    );
 }
 
 fn doubles(v: [f64; 3]) -> Tag {
@@ -261,31 +273,31 @@ fn a_loaded_cushion_keeps_its_motion_and_pitch_through_tick_and_reload() {
         ("Rotation", floats([90.0, 10.0])),
     ]);
     game.load_cushion(loaded, Some([1, 2, 3, 4]));
-    assert_eq!(game.cushions.len(), 1);
+    assert_eq!(game.entities.cushions.len(), 1);
     // The check at 100 ticks finds the stone under it.
     for _ in 0..102 {
         game.tick_cushions();
     }
-    assert_eq!(game.cushions.len(), 1, "a supported cushion stays");
+    assert_eq!(game.entities.cushions.len(), 1, "a supported cushion stays");
     let saved = saved_cushion(&mut game);
     assert_eq!(saved.get("Motion"), Some(&doubles([0.5, 0.0, -0.25])));
     assert_eq!(saved.get("Rotation"), Some(&floats([90.0, 10.0])));
 
-    game.cushions.clear();
+    game.entities.cushions.clear();
     game.load_cushion(saved, Some([1, 2, 3, 4]));
-    assert_eq!(game.cushions.len(), 1);
+    assert_eq!(game.entities.cushions.len(), 1);
     let again = saved_cushion(&mut game);
     assert_eq!(again.get("Motion"), Some(&doubles([0.5, 0.0, -0.25])));
     assert_eq!(again.get("Rotation"), Some(&floats([90.0, 10.0])));
 
-    game.cushions.clear();
+    game.entities.cushions.clear();
     game.creative = true;
     assert!(game.place_cushion(&top_hit(), &named_stack()));
     let placed = saved_cushion(&mut game);
     assert_eq!(placed.get("Motion"), Some(&doubles([0.0, 0.0, 0.0])));
     assert_eq!(
         placed.get("Rotation"),
-        Some(&floats([game.cushions[0].yaw, 0.0]))
+        Some(&floats([game.entities.cushions[0].yaw, 0.0]))
     );
 }
 

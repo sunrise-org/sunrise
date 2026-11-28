@@ -36,7 +36,7 @@ fn a_dropped_item_lands_on_a_fall_on_part() {
             let item = game
                 .level_spawn_item(level, 1.5, 70.0, 1.5, stack, 10)
                 .unwrap();
-            if let Some(i) = game.dropped.iter_mut().find(|i| i.id == item.id()) {
+            if let Some(i) = game.entities.dropped.iter_mut().find(|i| i.id == item.id()) {
                 i.velocity = sunrise_core::geometry::Vec3::ZERO;
             }
             // The part's write destroys the stone after the batch; it is put back at once,

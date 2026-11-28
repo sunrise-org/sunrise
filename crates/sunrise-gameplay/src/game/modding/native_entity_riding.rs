@@ -38,7 +38,7 @@ pub(in crate::game) fn visit_passenger_tree(
 }
 
 impl crate::game::ServerGame<'_> {
-    /// The dismount search with a vehicle or passenger lent out of `self.mobs`.
+    /// The dismount search with a vehicle or passenger lent out of `self.entities.mobs`.
     pub(in crate::game::server_side) fn scoped_mob_dismount_location(
         &self,
         vehicle: Option<&Mob>,
@@ -47,7 +47,13 @@ impl crate::game::ServerGame<'_> {
         passenger: EntityRef,
     ) -> Option<[f64; 3]> {
         let at = if let Some(rider) = rider {
-            if let Some(boat) = self.common.boats.iter().find(|boat| boat.id == vehicle_id) {
+            if let Some(boat) = self
+                .common
+                .entities
+                .boats
+                .iter()
+                .find(|boat| boat.id == vehicle_id)
+            {
                 Some(self.boat_dismount_target(boat, f64::from(rider.width()), rider.yaw))
             } else if let Some(mount) = vehicle {
                 Some(
@@ -167,13 +173,18 @@ impl crate::game::ServerGame<'_> {
         match vehicle {
             Target::Boat(_) if is_player => Some(LivingRef::new(first)),
             Target::Mob(id) => {
-                let mob = self.common.mobs.iter().find(|m| m.id == id)?;
+                let mob = self.common.entities.mobs.iter().find(|m| m.id == id)?;
                 if is_player {
                     return self
                         .native_player_controls(mob, rider)
                         .then(|| LivingRef::new(first));
                 }
-                let rider = self.common.mobs.iter().find(|m| m.id == first.id())?;
+                let rider = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == first.id())?;
                 let tagged = self.items().entity_type_tags.has_bit(
                     rider.kind.flags.entity_tag_slot,
                     sunrise_items::items::EntityTypeTags::NON_CONTROLLING_RIDER,
@@ -265,14 +276,14 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game) fn entity_leash_holder(&self, entity: EntityRef) -> Option<LeashHolder> {
         match self.native_entity_target(entity)? {
             Target::Mob(id) => {
-                let mob = self.common.mobs.iter().find(|m| m.id == id)?;
+                let mob = self.common.entities.mobs.iter().find(|m| m.id == id)?;
                 if mob.extra.leash_pending.is_some() {
                     return None;
                 }
                 self.native_leash_holder(mob.extra.leash, mob.extra.leash_player)
             }
             Target::Boat(id) => {
-                let boat = self.common.boats.iter().find(|b| b.id == id)?;
+                let boat = self.common.entities.boats.iter().find(|b| b.id == id)?;
                 if boat.leash_pending.is_some() {
                     return None;
                 }
@@ -439,7 +450,8 @@ impl crate::game::ServerGame<'_> {
                     // rider keeps their view, whatever the vehicle's yaw.
                     Target::Boat(_) => {}
                     Target::Mob(id) => {
-                        if let Some(mob) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+                        if let Some(mob) = self.common.entities.mobs.iter_mut().find(|m| m.id == id)
+                        {
                             mob.extra.flag = false;
                             mob.extra.counter = 0;
                         }
@@ -461,7 +473,7 @@ impl crate::game::ServerGame<'_> {
                 self.mounted_player(vehicle_id);
             }
             Target::Mob(id) => {
-                sunrise_sim::mobs::riders::link(&mut self.common.mobs, id, vehicle_id);
+                sunrise_sim::mobs::riders::link(&mut self.common.entities.mobs, id, vehicle_id);
                 self.seat_mob(id);
                 self.break_leash(id, true, false);
             }
@@ -518,7 +530,7 @@ impl crate::game::ServerGame<'_> {
             _ => return Err(R::UnsupportedVehicle),
         };
         if self.entity(vehicle_id).is_none()
-            || matches!(rider, Target::Mob(id) if self.mobs.iter().all(|m| m.id != id || m.removed))
+            || matches!(rider, Target::Mob(id) if self.entities.mobs.iter().all(|m| m.id != id || m.removed))
             || matches!(rider, Target::General(id) if self.general_row(id).is_none())
         {
             return Err(R::NoEntity);
@@ -563,6 +575,7 @@ impl crate::game::ServerGame<'_> {
                 Target::Mob(id)
                     if self
                         .common
+                        .entities
                         .mobs
                         .iter()
                         .find(|m| m.id == id)
@@ -592,12 +605,14 @@ impl crate::game::ServerGame<'_> {
             Target::Boat(id) => {
                 let index = self
                     .common
+                    .entities
                     .boats
                     .iter()
                     .position(|b| b.id == id)
                     .ok_or(R::NoEntity)?;
                 let full = if force {
-                    self.seated_passenger_count(id) >= self.common.boats[index].max_passengers()
+                    self.seated_passenger_count(id)
+                        >= self.common.entities.boats[index].max_passengers()
                 } else {
                     !self.boat_has_room(index)
                 };
@@ -606,7 +621,7 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Cart(id) => {
-                if !self.common.carts.iter().any(|cart| cart.id == id) {
+                if !self.common.entities.carts.iter().any(|cart| cart.id == id) {
                     return Err(R::NoEntity);
                 }
                 if self.has_seated_passengers(id) {
@@ -616,6 +631,7 @@ impl crate::game::ServerGame<'_> {
             Target::Mob(id) => {
                 let mob = self
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .find(|m| m.id == id && m.alive())
@@ -871,9 +887,9 @@ impl crate::game::ServerGame<'_> {
     /// The number of objects that could themselves have a mount, bounding a
     /// walk of valid links. Only mobs, general rows and players can be riders.
     pub(in crate::game) fn riding_link_limit(&self) -> usize {
-        self.common.mobs.len()
+        self.common.entities.mobs.len()
             + self.common.persist.off_level.len()
-            + self.common.resident_entities.general.rows.len()
+            + self.common.entities.general.rows.len()
             + self
                 .server
                 .lan

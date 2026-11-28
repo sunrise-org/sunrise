@@ -67,6 +67,7 @@ impl crate::game::ServerGame<'_> {
             Some(Target::Mob(id)) => {
                 let Some(m) = self
                     .common
+                    .entities
                     .mobs
                     .iter_mut()
                     .find(|m| m.id == id && !m.removed)
@@ -103,6 +104,7 @@ impl crate::game::ServerGame<'_> {
             Some(Target::Mob(id)) => {
                 let Some(m) = self
                     .common
+                    .entities
                     .mobs
                     .iter_mut()
                     .find(|m| m.id == id && !m.removed)
@@ -130,7 +132,13 @@ impl crate::game::ServerGame<'_> {
                 self.native_player_sleep_write(target, |game| game.lie_in_bed(pos))
             }
             Some(Target::Mob(id)) => {
-                let Some(m) = self.common.mobs.iter().find(|m| m.id == id && !m.removed) else {
+                let Some(m) = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)
+                else {
                     return false;
                 };
                 if !matches!(
@@ -145,7 +153,7 @@ impl crate::game::ServerGame<'_> {
                 let Some(at) = self.sleeping_position(pos) else {
                     return false;
                 };
-                let mut mobs = self.common.mobs.lift();
+                let mut mobs = self.common.entities.mobs.lift();
                 #[cfg(any(test, feature = "test-support"))]
                 crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
                 let w = self.mob_world_base(&[]);
@@ -158,6 +166,7 @@ impl crate::game::ServerGame<'_> {
                     slept
                 });
                 self.common
+                    .entities
                     .mobs
                     .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
                 let _ = self.handle_mob_events(events);
@@ -183,13 +192,19 @@ impl crate::game::ServerGame<'_> {
                 })
             }
             Some(Target::Mob(id)) => {
-                let Some(m) = self.common.mobs.iter().find(|m| m.id == id && !m.removed) else {
+                let Some(m) = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)
+                else {
                     return false;
                 };
                 if !villager::sleeping(m) {
                     return false;
                 }
-                let mut mobs = self.common.mobs.lift();
+                let mut mobs = self.common.entities.mobs.lift();
                 #[cfg(any(test, feature = "test-support"))]
                 crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
                 let w = self.mob_world_base(&[]);
@@ -198,6 +213,7 @@ impl crate::game::ServerGame<'_> {
                     villager::stop_sleeping(m, &w, &mut events);
                 }
                 self.common
+                    .entities
                     .mobs
                     .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
                 let _ = self.handle_mob_events(events);

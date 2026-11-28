@@ -50,7 +50,11 @@ fn client_with(
 
 /// The mob `id` of the game's list.
 fn mob<'a>(game: &'a mut ClientGame<'_>, id: u32) -> &'a mut Mob {
-    game.mobs.iter_mut().find(|m| m.id == id).expect("the mob")
+    game.entities
+        .mobs
+        .iter_mut()
+        .find(|m| m.id == id)
+        .expect("the mob")
 }
 
 /// A client's copy of a walking villager: the client's entity pass keeps where its tick began.

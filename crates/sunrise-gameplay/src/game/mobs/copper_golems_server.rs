@@ -71,25 +71,25 @@ impl ServerGame<'_> {
     }
     /// `CopperGolem.mobInteract`; true when handled.
     pub fn interact_copper_golem(&mut self, index: usize, item: &str) -> bool {
-        if self.common.mobs[index].species() != Species::CopperGolem
-            || !self.common.mobs[index].alive()
+        if self.common.entities.mobs[index].species() != Species::CopperGolem
+            || !self.common.entities.mobs[index].alive()
         {
             return false;
         }
         let at = {
-            let m = &self.common.mobs[index];
+            let m = &self.common.entities.mobs[index];
             [m.position.x, m.position.y, m.position.z]
         };
         if item.is_empty() {
             // Empty hand: the golem throws what it carries back.
-            let Some(h) = held(&self.common.mobs[index]).cloned() else {
+            let Some(h) = held(&self.common.entities.mobs[index]).cloned() else {
                 return false;
             };
-            set_held(&mut self.common.mobs[index], None);
+            set_held(&mut self.common.entities.mobs[index], None);
             // BehaviorUtils.throwItem: from 0.3 below the golem's eyes towards
             // the player's feet at 0.3 blocks a tick, default pickup delay.
             let p = self.common.player.as_ref().map(|p| p.position);
-            let eye = self.common.mobs[index].eye_height();
+            let eye = self.common.entities.mobs[index].eye_height();
             let from = [at[0], at[1] + eye - f64::from(0.3f32), at[2]];
             let v = p.map_or([0.0; 3], |p| {
                 let d = [p.x - at[0], p.y - at[1], p.z - at[2]];
@@ -105,7 +105,7 @@ impl ServerGame<'_> {
         }
         let name = item;
         let is_axe = name.ends_with("_axe");
-        let waxed = self.common.mobs[index].extra.vector[0] as i64 == -2;
+        let waxed = self.common.entities.mobs[index].extra.vector[0] as i64 == -2;
         if self.held_shears(sunrise_gameplay_common::game::item_abilities::ability::SHEARS_HARVEST)
             && self.common.golem_shearable(index)
         {
@@ -114,13 +114,13 @@ impl ServerGame<'_> {
             // level.playSound(null, this, COPPER_GOLEM_SHEAR, PLAYERS, 1, 1).
             let shear = LevelSound::new("minecraft:entity.copper_golem.shear", at, 1.0, 1.0)
                 .in_source(SoundSource::Players);
-            self.play_bound_sound(shear, self.common.mobs[index].id, None);
-            let antenna = self.common.mobs[index].saddle_item();
-            self.common.mobs[index].set_saddle(None);
-            let id = self.common.mobs[index].id;
+            self.play_bound_sound(shear, self.common.entities.mobs[index].id, None);
+            let antenna = self.common.entities.mobs[index].saddle_item();
+            self.common.entities.mobs[index].set_saddle(None);
+            let id = self.common.entities.mobs[index].id;
             self.mob_equip_event(id, at, false);
             if let Some(a) = antenna {
-                let p = self.common.mobs[index].position;
+                let p = self.common.entities.mobs[index].position;
                 self.spawn_at_location(p, 1.5, a);
             }
             // mobInteract: gameEvent(SHEAR, player) after the shear, before the
@@ -131,28 +131,28 @@ impl ServerGame<'_> {
             return true;
         }
         let block = {
-            let p = self.common.mobs[index].position;
+            let p = self.common.entities.mobs[index].position;
             [p.x.floor() as i32, p.y.floor() as i32, p.z.floor() as i32]
         };
         if name == "minecraft:honeycomb" && !waxed {
-            self.common.mobs[index].extra.vector[0] = -2.0;
+            self.common.entities.mobs[index].extra.vector[0] = -2.0;
             self.server_level_event_at(3003, block, 0);
             self.server_play_sound("minecraft:item.honeycomb.wax_on", at, 1.0, 1.0);
             self.consume_held();
             return true;
         }
         if is_axe && waxed {
-            self.common.mobs[index].extra.vector[0] = -1.0;
+            self.common.entities.mobs[index].extra.vector[0] = -1.0;
             // level.playSound(null, this, AXE_SCRAPE, getSoundSource(), 1, 1).
             let scrape = LevelSound::new("minecraft:item.axe.scrape", at, 1.0, 1.0)
                 .in_source(SoundSource::Neutral);
-            self.play_bound_sound(scrape, self.common.mobs[index].id, None);
+            self.play_bound_sound(scrape, self.common.entities.mobs[index].id, None);
             self.server_level_event_at(3004, block, 0);
             self.damage_held_tool();
             return true;
         }
-        if is_axe && self.common.mobs[index].extra.variant > 0 {
-            let m = &mut self.common.mobs[index];
+        if is_axe && self.common.entities.mobs[index].extra.variant > 0 {
+            let m = &mut self.common.entities.mobs[index];
             m.extra.vector[0] = -1.0;
             m.extra.variant = sunrise_sim::mobs::copper_golem::weather_previous(m.extra.variant);
             let id = m.id;
@@ -169,7 +169,12 @@ impl ServerGame<'_> {
     /// `OfferFlowerGoal.stop` (`MobEvent::Gift`): the item on the target's
     /// empty antenna, as a guaranteed drop.
     pub fn receive_gift(&mut self, target: u32, item: &'static str) {
-        if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == target)
+        if let Some(m) = self
+            .common
+            .entities
+            .mobs
+            .iter_mut()
+            .find(|m| m.id == target)
             && m.saddle_item().is_none()
         {
             m.set_saddle(Some(ItemStack::new(item, 1)));
@@ -207,6 +212,7 @@ impl ServerGame<'_> {
             );
             let count = self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .filter(|m| {
@@ -267,6 +273,7 @@ impl ServerGame<'_> {
     pub fn golem_become_statue(&mut self, id: u32) {
         let Some(i) = self
             .common
+            .entities
             .mobs
             .iter()
             .position(|m| m.id == id && !m.removed)
@@ -274,11 +281,16 @@ impl ServerGame<'_> {
             return;
         };
         let statue_at = self.with_entity_held_out(id, |game| {
-            let mut m = game.mobs[i].clone();
+            let mut m = game.entities.mobs[i].clone();
             let became_statue = game.golem_turn_to_statue(&mut m);
             let position = m.position.components();
-            if let Some(i) = game.mobs.iter().position(|x| x.id == id && !x.removed) {
-                game.mobs.update(i, |owner| {
+            if let Some(i) = game
+                .entities
+                .mobs
+                .iter()
+                .position(|x| x.id == id && !x.removed)
+            {
+                game.entities.mobs.update(i, |owner| {
                     sunrise_sim::join_seq::store_back(owner, m);
                 });
             }
@@ -370,7 +382,7 @@ impl ServerGame<'_> {
             },
             _ => None,
         };
-        if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+        if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
             m.custom_name = plain;
             m.custom_name_text = Some(sunrise_sim::entity_nbt::name_text(&name));
         }
@@ -437,7 +449,7 @@ impl ServerGame<'_> {
         if let Some(name) = name {
             self.name_golem(id, name);
         }
-        if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+        if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
             m.yaw = yaw;
             m.previous_yaw = yaw;
             m.body_yaw = yaw;

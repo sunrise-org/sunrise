@@ -45,13 +45,13 @@ mod tests {
         let kind = game.res.mob_types().get(name).unwrap().clone();
         let mut m = Mob::new(id, kind, at, 0.0);
         m.ground.on_ground = true;
-        game.mobs.push(m);
+        game.entities.mobs.push(m);
         game.mob(game.entity(id).unwrap()).unwrap()
     }
 
     fn mob<'a>(game: &'a sunrise_gameplay::game::ServerGame<'_>, handle: MobRef) -> &'a Mob {
         let id = handle.entity().id();
-        game.mobs.iter().find(|m| m.id == id).unwrap()
+        game.entities.mobs.iter().find(|m| m.id == id).unwrap()
     }
 
     fn mob_mut<'a>(
@@ -59,7 +59,7 @@ mod tests {
         handle: MobRef,
     ) -> &'a mut Mob {
         let id = handle.entity().id();
-        game.mobs.iter_mut().find(|m| m.id == id).unwrap()
+        game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap()
     }
 
     fn tick(game: &mut sunrise_gameplay::game::ServerGame<'_>, ticks: u32) {
@@ -98,7 +98,7 @@ mod tests {
             lifted.position.y = 68.0;
             lifted.ground.on_ground = false;
             // The pig is the last mob, so it pops for the push as a hit does.
-            let mut m = game.mobs.pop().unwrap();
+            let mut m = game.entities.mobs.pop().unwrap();
             let hit = Damage::of(DamageKind::Generic);
             m.knockback(
                 damage_level_of!(game, &sunrise_sim::health::NO_ATTACK, no_push, None),
@@ -108,7 +108,7 @@ mod tests {
                 &hit,
                 0.0,
             );
-            game.mobs.push(m);
+            game.entities.mobs.push(m);
             tick(game, 20);
             let m = mob(game, pig);
             assert!(
@@ -389,9 +389,9 @@ mod tests {
             );
             assert_eq!(pig.set_ai_paused(game, true), Ok(()));
             let reload = |game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32| {
-                let index = game.mobs.iter().position(|m| m.id == id).unwrap();
+                let index = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
                 let saved = game.mob_tree_nbt(index);
-                game.mobs.remove(index);
+                game.entities.mobs.remove(index);
                 game.forget_entity(id);
                 let id = game.load_mob(saved.clone(), None).unwrap();
                 (saved, game.mob(game.entity(id).unwrap()).unwrap())
@@ -450,7 +450,7 @@ mod tests {
 
             let mut dragon = Dragon::new(Vec3::new(8.0, 80.0, 8.0), 0.0, 0);
             dragon.id = 50;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             refused(
                 game,
                 MobRef::new(EntityRef::new(epoch, 50)),

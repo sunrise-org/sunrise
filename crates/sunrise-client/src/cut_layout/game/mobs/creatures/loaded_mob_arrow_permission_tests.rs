@@ -41,13 +41,19 @@ fn loaded_mob_arrow_predicate_survives_model_and_controls_actual_block_hit() {
             "summon pig 14.5 200 14.5 {UUID:[I;197,0,0,1],NoAI:1b,NoGravity:1b,Health:10f}"
         ));
         let owner = game
+            .entities
             .mobs
             .iter()
             .find(|m| game.persist.uuid_of(m.id) == Some([197, 0, 0, 1]))
             .unwrap()
             .id;
         assert_eq!(
-            game.mobs.iter().find(|m| m.id == owner).unwrap().health,
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == owner)
+                .unwrap()
+                .health,
             10.0
         );
         let clock = game.world.game_time;
@@ -85,7 +91,7 @@ fn loaded_mob_arrow_predicate_survives_model_and_controls_actual_block_hit() {
             });
             assert!(game.run_command(&format!("summon arrow {} 200.5 {} {{UUID:[I;197,0,{n},2],NoGravity:1b,HasBeenShot:1b,Motion:[2d,0d,0d],Owner:[I;197,0,0,1],item:{{id:\"minecraft:arrow\",count:1}}{field}}}", f64::from(x)-1.5, f64::from(z)+0.5)));
             let p = game
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|p| game.persist.uuid_of(p.id) == Some([197, 0, n, 2]))
@@ -128,10 +134,10 @@ fn loaded_mob_arrow_predicate_survives_model_and_controls_actual_block_hit() {
                 // The expected value is the actual admitted input, never an injected model field.
                 assert_eq!(expected, parse("{blocks:\"minecraft:chorus_flower\"}"));
             }
-            let drops_before = game.dropped.len();
+            let drops_before = game.entities.dropped.len();
             game.tick_projectiles().unwrap();
             let after = game
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|a| a.id == p.id)
@@ -150,6 +156,7 @@ fn loaded_mob_arrow_predicate_survives_model_and_controls_actual_block_hit() {
                 missing.push(format!("{n} actual hit block {block} != {want}"));
             }
             let dropped: Vec<_> = game
+                .entities
                 .dropped
                 .iter()
                 .skip(drops_before)
@@ -161,13 +168,13 @@ fn loaded_mob_arrow_predicate_survives_model_and_controls_actual_block_hit() {
             }
         }
         assert!(game.run_command("setblock 13 200 12 dirt"));
-        let before = game.dropped.len();
+        let before = game.entities.dropped.len();
         game.destroy_block_dropping([13, 200, 12]).unwrap();
         assert_eq!(
             &*game.res.facts().get(game.world.block(13, 200, 12)).name,
             "minecraft:air"
         );
-        let direct: Vec<_> = game.dropped.iter().skip(before).collect();
+        let direct: Vec<_> = game.entities.dropped.iter().skip(before).collect();
         assert_eq!(
             direct.len(),
             1,

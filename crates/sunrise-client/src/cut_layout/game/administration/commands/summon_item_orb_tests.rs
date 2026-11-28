@@ -61,7 +61,7 @@ fn a_summoned_orb_keeps_the_position_it_was_asked_for() {
         let ok = game.run_command("summon minecraft:experience_orb 4.5 100.8 4.5");
         let lines = std::mem::replace(&mut game.server.chat_capture, prev).unwrap_or_default();
         assert!(ok, "{lines:?}");
-        let orb = game.orbs.last().expect("an orb");
+        let orb = game.entities.orbs.last().expect("an orb");
         assert_eq!(orb.position, Vec3::new(4.5, 100.8, 4.5));
         assert_eq!(orb.velocity, Vec3::ZERO);
         assert_eq!(orb.points(), 0);

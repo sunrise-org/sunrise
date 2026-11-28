@@ -404,7 +404,7 @@ impl crate::game::ClientGame<'_> {
         let mount = self
             .common
             .riding
-            .and_then(|id| self.common.mobs.iter().find(|m| m.id == id))
+            .and_then(|id| self.common.entities.mobs.iter().find(|m| m.id == id))
             .map(Mob::camera_scale_and_distance);
         // AbstractBoat.positionRider turns a passenger by the boat's
         // deltaRotation after its yRotO was saved, and LocalPlayer.getViewYRot
@@ -413,12 +413,12 @@ impl crate::game::ClientGame<'_> {
         let ride_turn = self
             .common
             .riding
-            .and_then(|id| self.common.boats.iter().find(|b| b.id == id))
+            .and_then(|id| self.common.entities.boats.iter().find(|b| b.id == id))
             .map_or_else(
                 || {
                     self.common
                         .riding
-                        .and_then(|id| self.common.carts.iter().find(|c| c.id == id))
+                        .and_then(|id| self.common.entities.carts.iter().find(|c| c.id == id))
                         .map_or(0.0, |c| c.passenger_yaw_delta)
                 },
                 |b| b.delta_rotation,
@@ -549,10 +549,14 @@ impl crate::game::ClientGame<'_> {
             .sleeping
             .map_or(0, |head| self.common.bed_facing(head));
         let spectator = self.own_player_is_spectator();
-        let boat_yaw = self
-            .common
-            .riding
-            .and_then(|id| self.common.boats.iter().find(|b| b.id == id).map(|b| b.yaw));
+        let boat_yaw = self.common.riding.and_then(|id| {
+            self.common
+                .entities
+                .boats
+                .iter()
+                .find(|b| b.id == id)
+                .map(|b| b.yaw)
+        });
         let blocking = boat_yaw.is_none()
             && self.common.using.is_some_and(|(slot, ticks)| {
                 self.common
@@ -748,7 +752,7 @@ impl crate::game::ClientGame<'_> {
         if let Some(b) = self
             .common
             .riding
-            .and_then(|id| self.common.boats.iter().find(|b| b.id == id))
+            .and_then(|id| self.common.entities.boats.iter().find(|b| b.id == id))
         {
             let (yaw, clamped) =
                 sunrise_level::camera_math::clamp_boat_rotation(self.common.yaw, b.yaw);
@@ -825,6 +829,7 @@ impl crate::game::ClientGame<'_> {
             }
             let stand = self
                 .common
+                .entities
                 .armor_stands
                 .iter()
                 .find(|stand| stand.id == id)?;

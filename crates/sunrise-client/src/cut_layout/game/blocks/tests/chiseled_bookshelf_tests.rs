@@ -171,7 +171,10 @@ fn an_empty_slot_clicked_as_occupied_still_plays_the_pickup() {
         });
         let sounds = std::mem::take(&mut game.server.pending_sounds);
         game.stop_audio_capture();
-        assert!(game.dropped.is_empty(), "an empty stack drops nothing");
+        assert!(
+            game.entities.dropped.is_empty(),
+            "an empty stack drops nothing"
+        );
         assert_eq!(last_slot(game), -1, "nothing came out of the slot");
         assert_eq!(signal(game), 0);
         (posted, sounds)

@@ -486,7 +486,7 @@ impl crate::game::ServerGame<'_> {
                 if let Some(entity) = self.entity(id) {
                     self.entity_stop_riding(entity);
                 }
-                if let Some(row) = self.common.resident_entities.general.row_mut(id) {
+                if let Some(row) = self.common.entities.general.row_mut(id) {
                     row.position = v;
                     row.previous = v;
                     if let Some([yaw, pitch]) = rotation {
@@ -546,7 +546,7 @@ impl crate::game::ServerGame<'_> {
                 // transition is never asPassenger). A rider moved without this
                 // is seated again by the next sync, so nothing moves.
                 self.dismount_mob(id);
-                if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+                if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
                     m.ai.nav.stop();
                     m.velocity = teleport_velocity(m.velocity, relative, m.extra.fall_flying);
                     if !m.extra.fall_flying {
@@ -571,7 +571,7 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Item(id) => {
-                if let Some(i) = self.common.dropped.iter_mut().find(|i| i.id == id) {
+                if let Some(i) = self.common.entities.dropped.iter_mut().find(|i| i.id == id) {
                     i.position = v;
                     i.previous = v;
                     if let Some(r) = rotation {
@@ -580,7 +580,7 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Orb(id) => {
-                if let Some(o) = self.common.orbs.iter_mut().find(|o| o.id == id) {
+                if let Some(o) = self.common.entities.orbs.iter_mut().find(|o| o.id == id) {
                     o.position = v;
                     o.previous = v;
                     if let Some(r) = rotation {
@@ -591,12 +591,12 @@ impl crate::game::ServerGame<'_> {
             Target::Projectile(id) => {
                 if let Some(i) = self
                     .common
-                    .creatures
+                    .entities
                     .projectiles
                     .iter()
                     .position(|a| a.id == id)
                 {
-                    self.common.creatures.projectiles.update(i, |a| {
+                    self.common.entities.projectiles.update(i, |a| {
                         a.position = v;
                         a.previous = v;
                         if let Some(r) = rotation {
@@ -606,7 +606,13 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Stand(id) => {
-                if let Some(a) = self.common.armor_stands.iter_mut().find(|a| a.id == id) {
+                if let Some(a) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter_mut()
+                    .find(|a| a.id == id)
+                {
                     a.position = v;
                     a.previous = v;
                     // Entity.teleport's stopRiding(), as for a mob: a stand a
@@ -619,8 +625,8 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Boat(id) => {
-                if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
-                    self.common.boats.update(i, |b| {
+                if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
+                    self.common.entities.boats.update(i, |b| {
                         b.position = v;
                         b.previous = v;
                         if let Some(r) = rotation {
@@ -630,8 +636,8 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Cart(id) => {
-                if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
-                    self.common.carts.update(i, |c| {
+                if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
+                    self.common.entities.carts.update(i, |c| {
                         c.position = v;
                         c.previous = v;
                         if let Some(r) = rotation {
@@ -641,8 +647,15 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Fangs(id) => {
-                if let Some(i) = self.common.fangs.list.iter().position(|e| e.id == id) {
-                    self.common.fangs.list.update(i, |f| {
+                if let Some(i) = self
+                    .common
+                    .entities
+                    .fangs
+                    .list
+                    .iter()
+                    .position(|e| e.id == id)
+                {
+                    self.common.entities.fangs.list.update(i, |f| {
                         f.pos = [v.x, v.y, v.z];
                         if let Some([yaw, _]) = rotation.filter(|r| r[0].is_finite()) {
                             f.yaw = yaw;
@@ -666,19 +679,25 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Crystal(id) => {
-                if let Some(c) = self.common.crystals.iter_mut().find(|c| c.id == id) {
+                if let Some(c) = self
+                    .common
+                    .entities
+                    .crystals
+                    .iter_mut()
+                    .find(|c| c.id == id)
+                {
                     (c.position, c.fall.0) = (v, true); // performTeleport: setOnGround(true)
                     c.previous = v;
                 }
             }
             Target::Dragon(id) => {
-                if let Some(d) = self.common.dragon.as_mut().filter(|d| d.id == id) {
+                if let Some(d) = self.common.entities.dragon.as_mut().filter(|d| d.id == id) {
                     d.position = v;
                     d.previous = v;
                 }
             }
             Target::Tnt(id) => {
-                if let Some(t) = self.common.tnts.iter_mut().find(|t| t.id == id) {
+                if let Some(t) = self.common.entities.tnts.iter_mut().find(|t| t.id == id) {
                     // `PrimedTnt.teleport` includes same-level command teleports.
                     t.used_portal = true;
                     t.position = v;
@@ -690,7 +709,13 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Cushion(id) => {
                 // BlockAttachedEntity.setPos: the block it rests on follows the position.
-                if let Some(c) = self.common.cushions.iter_mut().find(|c| c.id == id) {
+                if let Some(c) = self
+                    .common
+                    .entities
+                    .cushions
+                    .iter_mut()
+                    .find(|c| c.id == id)
+                {
                     c.position = v;
                     c.pos = [v.x.floor() as i32, v.y.floor() as i32, v.z.floor() as i32];
                     if let Some(r) = rotation {
@@ -699,8 +724,8 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Falling(id) => {
-                if let Some(i) = self.common.falling.iter().position(|f| f.id == id) {
-                    self.common.falling.update(i, |f| {
+                if let Some(i) = self.common.entities.falling.iter().position(|f| f.id == id) {
+                    self.common.entities.falling.update(i, |f| {
                         f.position = v;
                         f.previous = v;
                         if let Some(r) = rotation {
@@ -710,7 +735,7 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Rocket(id) => {
-                if let Some(r) = self.common.rockets.iter_mut().find(|r| r.id == id) {
+                if let Some(r) = self.common.entities.rockets.iter_mut().find(|r| r.id == id) {
                     r.position = v;
                     r.previous = v;
                     if let Some(rot) = rotation {
@@ -719,7 +744,13 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Trident(id) => {
-                if let Some(t) = self.common.tridents.iter_mut().find(|t| t.id == id) {
+                if let Some(t) = self
+                    .common
+                    .entities
+                    .tridents
+                    .iter_mut()
+                    .find(|t| t.id == id)
+                {
                     t.position = v;
                     t.previous = v;
                     if let Some(r) = rotation {
@@ -728,22 +759,34 @@ impl crate::game::ServerGame<'_> {
                 }
             }
             Target::Spawner(id) => {
-                if let Some(i) = self.common.ominous_spawners.iter().position(|e| e.id == id) {
-                    self.common.ominous_spawners.update(i, |s| {
+                if let Some(i) = self
+                    .common
+                    .entities
+                    .ominous_spawners
+                    .iter()
+                    .position(|e| e.id == id)
+                {
+                    self.common.entities.ominous_spawners.update(i, |s| {
                         s.position = [v.x, v.y, v.z];
                     });
                 }
             }
             Target::Cloud(id) => {
-                if let Some(i) = self.common.breath_clouds.iter().position(|e| e.id == id) {
-                    self.common.breath_clouds.update(i, |c| {
+                if let Some(i) = self
+                    .common
+                    .entities
+                    .breath_clouds
+                    .iter()
+                    .position(|e| e.id == id)
+                {
+                    self.common.entities.breath_clouds.update(i, |c| {
                         c.at = pos;
                     });
                 }
             }
             Target::Bolt(id) => {
-                if let Some(i) = self.common.bolts.iter().position(|e| e.id == id) {
-                    self.common.bolts.update(i, |b| {
+                if let Some(i) = self.common.entities.bolts.iter().position(|e| e.id == id) {
+                    self.common.entities.bolts.update(i, |b| {
                         b.at = pos;
                         if let Some([yaw, pitch]) = rotation {
                             if yaw.is_finite() {
@@ -767,7 +810,12 @@ impl crate::game::ServerGame<'_> {
                 *velocity = teleport_velocity(*velocity, relative, false);
             });
             if let Target::Dragon(id) = t
-                && let Some(dragon) = self.common.dragon.as_mut().filter(|dragon| dragon.id == id)
+                && let Some(dragon) = self
+                    .common
+                    .entities
+                    .dragon
+                    .as_mut()
+                    .filter(|dragon| dragon.id == id)
             {
                 dragon.teleport_motion(relative);
             }

@@ -384,14 +384,14 @@ fn playing_menu_throw_uses_only_container_click_and_server_drops_once() {
                     "server must remove exactly one item from the slot"
                 );
                 assert_eq!(
-                    server.dropped.len(),
+                    server.entities.dropped.len(),
                     1,
                     "server must spawn exactly one dropped stack"
                 );
                 assert_eq!(
                     (
-                        &*server.dropped[0].stack.item,
-                        server.dropped[0].stack.count
+                        &*server.entities.dropped[0].stack.item,
+                        server.entities.dropped[0].stack.count
                     ),
                     ("minecraft:stone", 1)
                 );

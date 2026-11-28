@@ -29,7 +29,7 @@ impl crate::game::ServerGame<'_> {
         // dismount hooks run. store_back transfers the resident owner's
         // attachment lifetime to the replacement; removing that owner later
         // also preserves any changes made by the hooks.
-        if let Some(i) = self.common.carts.iter().position(|x| x.id == c.id)
+        if let Some(i) = self.common.entities.carts.iter().position(|x| x.id == c.id)
             && !self.common.store_cart_back(i, c.clone())
         {
             return true;
@@ -39,15 +39,21 @@ impl crate::game::ServerGame<'_> {
         let silent = explodes && self.entity_silent(c.id);
         if self
             .with_destroying_vehicle(target, |game| {
-                if game.carts.iter().any(|x| x.id == c.id && x.join == c.join) {
+                if game
+                    .entities
+                    .carts
+                    .iter()
+                    .any(|x| x.id == c.id && x.join == c.join)
+                {
                     game.release_vehicle_container(c.id);
                 }
                 if let Some(i) = game
+                    .entities
                     .carts
                     .iter()
                     .position(|x| x.id == c.id && x.join == c.join)
                 {
-                    let removed = game.carts.remove(i);
+                    let removed = game.entities.carts.remove(i);
                     game.retain_removed_vehicle(
                         c.id,
                         sunrise_gameplay_common::game::entity_memory::RemovedVehicle::Cart(removed),

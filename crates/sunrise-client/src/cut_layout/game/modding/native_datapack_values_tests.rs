@@ -619,6 +619,7 @@ fn datapack_vanilla_values_agree_with_worldgen_and_invalidate_on_reload() {
                 assert_eq!(unobstructed.test(game, level, [10, 65, 10]), Ok(true));
                 // Non-marker armor stand blocks building; marker armor stand does not.
                 game.common
+                    .entities
                     .armor_stands
                     .push(sunrise_sim::entities::ArmorStand::new(
                         9001,
@@ -629,7 +630,7 @@ fn datapack_vanilla_values_agree_with_worldgen_and_invalidate_on_reload() {
                 let mut marker =
                     sunrise_sim::entities::ArmorStand::new(9002, Vec3::new(12.5, 65.0, 12.5), 0.0);
                 marker.marker = true;
-                game.common.armor_stands.push(marker);
+                game.common.entities.armor_stands.push(marker);
                 assert_eq!(unobstructed.test(game, level, [12, 65, 12]), Ok(true));
                 // LAN guest blocks building even when self.player is None (dedicated server).
                 let saved_player = game.common.player.take();
@@ -662,6 +663,7 @@ fn datapack_vanilla_values_agree_with_worldgen_and_invalidate_on_reload() {
                 let back = game.common.dim;
                 game.enter_level(Dim::Nether).unwrap();
                 game.common
+                    .entities
                     .armor_stands
                     .push(sunrise_sim::entities::ArmorStand::new(
                         9003,

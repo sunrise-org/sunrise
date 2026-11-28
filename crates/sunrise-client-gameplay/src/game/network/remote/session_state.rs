@@ -719,16 +719,17 @@ impl crate::game::ClientGame<'_> {
     /// client `skipAttackInteraction` hurts it and stops the attack there.
     pub fn remote_attacked_object(&self, id: i32) -> Option<(String, bool)> {
         let id = id as u32;
-        if let Some(b) = self.common.boats.iter().find(|b| b.id == id) {
+        if let Some(b) = self.common.entities.boats.iter().find(|b| b.id == id) {
             return Some((b.entity_type(), false));
         }
-        if let Some(c) = self.common.carts.iter().find(|c| c.id == id) {
+        if let Some(c) = self.common.entities.carts.iter().find(|c| c.id == id) {
             return Some((c.kind.id().to_owned(), false));
         }
-        if self.common.armor_stands.iter().any(|a| a.id == id) {
+        if self.common.entities.armor_stands.iter().any(|a| a.id == id) {
             return Some(("minecraft:armor_stand".to_owned(), true));
         }
         self.common
+            .entities
             .crystals
             .iter()
             .any(|c| c.id == id)

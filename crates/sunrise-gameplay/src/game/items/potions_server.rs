@@ -51,7 +51,7 @@ impl crate::game::ServerGame<'_> {
                 at,
                 false,
                 sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
-            ) && let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id)
+            ) && let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id)
             {
                 m.velocity = velocity;
             }
@@ -323,7 +323,7 @@ impl crate::game::ServerGame<'_> {
         else {
             return false;
         };
-        let Some(kind) = self.common.mobs.iter().find_map(|m| {
+        let Some(kind) = self.common.entities.mobs.iter().find_map(|m| {
             (m.id == id && !m.removed && m.species() != sunrise_sim::mobs::Species::Wither)
                 .then(|| m.kind.id.clone())
         }) else {
@@ -345,6 +345,7 @@ impl crate::game::ServerGame<'_> {
         {
             let old = self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)
@@ -374,7 +375,12 @@ impl crate::game::ServerGame<'_> {
         };
         if new && changed {
             if let Some(sound) = sound_on_added(name)
-                && let Some(m) = self.common.mobs.iter().find(|m| m.id == id && !m.removed)
+                && let Some(m) = self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id && !m.removed)
             {
                 let at = [m.position.x, m.position.y, m.position.z];
                 self.server_play_sound(sound, at, 1.0, 1.0);
@@ -637,7 +643,7 @@ impl crate::game::ServerGame<'_> {
             if let Some((who, hit_at)) = entity_hit {
                 // Projectile.hitTargetOrDeflectSelf: Breeze deflects without splashing.
                 if let Who::Mob(id) = who
-                    && let Some(index) = self.common.mobs.iter().position(|m| {
+                    && let Some(index) = self.common.entities.mobs.iter().position(|m| {
                         m.id == id && m.alive() && m.species() == sunrise_sim::mobs::Species::Breeze
                     })
                 {
@@ -666,6 +672,7 @@ impl crate::game::ServerGame<'_> {
                     Who::Player => self.common.player.as_ref().map(|p| p.position),
                     Who::Mob(id) => self
                         .common
+                        .entities
                         .mobs
                         .iter()
                         .find(|m| m.id == id)
@@ -758,7 +765,7 @@ impl crate::game::ServerGame<'_> {
         if let Some(state) = transferred {
             self.adopt_transferred_entity_state(id, state);
         }
-        self.common.breath_clouds.push(cloud);
+        self.common.entities.breath_clouds.push(cloud);
         Some(id)
     }
     pub fn apply_effect_action(&mut self, action: EffectAction) {
@@ -957,6 +964,7 @@ impl crate::game::ServerGame<'_> {
             Who::Mob(id) => {
                 let Some(i) = self
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .position(|m| m.id == id && m.alive())
@@ -964,15 +972,16 @@ impl crate::game::ServerGame<'_> {
                     return;
                 };
                 let inverted = self.items().entity_type_tags.has_bit(
-                    self.common.mobs[i].kind.flags.entity_tag_slot,
+                    self.common.entities.mobs[i].kind.flags.entity_tag_slot,
                     sunrise_items::items::EntityTypeTags::INVERTED_HEALING_AND_HARM,
                 );
                 for (effect, duration, amp) in effects {
                     // A mod's `onEffectAdded` may have changed the mobs.
-                    let Some(index) = self.common.mob_index.find(&self.common.mobs, id) else {
+                    let Some(index) = self.common.mob_index.find(&self.common.entities.mobs, id)
+                    else {
                         return;
                     };
-                    let m = &mut self.common.mobs[index];
+                    let m = &mut self.common.entities.mobs[index];
                     match effect {
                         "instant_damage" | "instant_health" => {
                             // `LivingEntity.addEffect` refuses nothing here; the
@@ -1096,17 +1105,17 @@ impl crate::game::ServerGame<'_> {
                 }
             }),
             Victim::Mob(mob) => {
-                let Some(i) = self.common.mobs.iter().position(|m| m.id == mob) else {
+                let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == mob) else {
                     return;
                 };
                 // Undead invert healing and harming.
                 let inverted = self.items().entity_type_tags.has_bit(
-                    self.common.mobs[i].kind.flags.entity_tag_slot,
+                    self.common.entities.mobs[i].kind.flags.entity_tag_slot,
                     sunrise_items::items::EntityTypeTags::INVERTED_HEALING_AND_HARM,
                 );
                 for (id, duration, amp) in effects {
                     // A mod's effect hooks may have changed the mobs.
-                    let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == mob) else {
+                    let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == mob) else {
                         return;
                     };
                     match *id {
@@ -1133,11 +1142,11 @@ impl crate::game::ServerGame<'_> {
                                     self.prepare_knockback_credit(mob as i32, owner, &attack);
                                 let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
                                 let Some(index) =
-                                    self.common.mob_index.find(&self.common.mobs, mob)
+                                    self.common.mob_index.find(&self.common.entities.mobs, mob)
                                 else {
                                     return;
                                 };
-                                self.common.mobs[index].damage_by(
+                                self.common.entities.mobs[index].damage_by(
                                     crate::game::server_side::entity_server::damage_level_of!(
                                         self,
                                         &attack,
@@ -1232,6 +1241,7 @@ impl crate::game::ServerGame<'_> {
                 let near = bounds.inflate(Vec3::new(2.0, 2.0, 2.0));
                 let nearby = self
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .filter(|m| {
@@ -1250,7 +1260,7 @@ impl crate::game::ServerGame<'_> {
                     [feet.x, feet.y + 0.5, feet.z],
                     false,
                     sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
-                ) && let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id)
+                ) && let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id)
                 {
                     sunrise_sim::mobs::cube::set_size(m, 2);
                 }
@@ -1478,7 +1488,7 @@ impl crate::game::ServerGame<'_> {
         color: u32,
     ) {
         let id = self.take_entity_id();
-        self.common.breath_clouds.push(Breath {
+        self.common.entities.breath_clouds.push(Breath {
             attachment_lifetime: Default::default(),
             join: Default::default(),
             id,
@@ -1584,7 +1594,7 @@ impl crate::game::ServerGame<'_> {
             // stack's `potion_contents` and `potion_duration_scale`.
             let at = mob.unwrap_or(at);
             let id = self.take_entity_id();
-            self.common.breath_clouds.push(Breath {
+            self.common.entities.breath_clouds.push(Breath {
                 attachment_lifetime: Default::default(),
                 join: Default::default(),
                 id,
@@ -1629,7 +1639,7 @@ impl crate::game::ServerGame<'_> {
         let undead = &self.items().entity_type_tags;
         let effect_source = self.potion_owner_entity(owner.who(), owner.guest);
         let mut hits = Vec::new();
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if m.alive()
                 && let Some(d2) = splash_distance_sqr(at, age, m.bounds())
             {
@@ -1661,13 +1671,14 @@ impl crate::game::ServerGame<'_> {
                 };
                 let Some(i) = self
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .position(|m| m.id == mob_id && !m.removed)
                 else {
                     break;
                 };
-                let m = &mut self.common.mobs[i];
+                let m = &mut self.common.entities.mobs[i];
                 if harm && m.species() == sunrise_sim::mobs::Species::Enderman {
                     // `Enderman.hurtServer` for a thrown potion: only water hurts
                     // (`hurtWithCleanWater`), then `repeatedlyTryToTeleport`, which
@@ -1700,7 +1711,7 @@ impl crate::game::ServerGame<'_> {
                         self.server.combat.0.attack().enchantment_direct.clone();
                     let plan = self.prepare_knockback_credit(mob as i32, owner.who(), &attack);
                     let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
-                    self.common.mobs[i].damage_by(
+                    self.common.entities.mobs[i].damage_by(
                         crate::game::server_side::entity_server::damage_level_of!(
                             self,
                             &attack,
@@ -1859,6 +1870,7 @@ impl crate::game::ServerGame<'_> {
         // the others neither become victims nor use up its radius.
         let candidates: Vec<(u32, String, f64, f64)> = self
             .common
+            .entities
             .mobs
             .iter()
             .filter(|m| m.alive() && m.bounds().intersects(area))
@@ -1924,7 +1936,13 @@ impl crate::game::ServerGame<'_> {
     /// The authoritative `AreaEffectCloud.serverTick` for lingering potions' clouds.
     /// The logical client draws particles from tracked cloud data.
     pub fn tick_potion_clouds(&mut self) {
-        if self.common.breath_clouds.iter().all(|c| c.potion.is_none()) {
+        if self
+            .common
+            .entities
+            .breath_clouds
+            .iter()
+            .all(|c| c.potion.is_none())
+        {
             return;
         }
         let players: Vec<FightPlayer> = self
@@ -1932,7 +1950,7 @@ impl crate::game::ServerGame<'_> {
             .into_iter()
             .filter(|p| p.alive)
             .collect();
-        let mut clouds = self.common.breath_clouds.lift();
+        let mut clouds = self.common.entities.breath_clouds.lift();
         #[cfg(any(test, feature = "test-support"))]
         crate::game::server_side::entity_server::taken_pass_tests::after_take(self);
         let ticking = self.entity_ticking_area();
@@ -1951,6 +1969,7 @@ impl crate::game::ServerGame<'_> {
             keep
         });
         self.common
+            .entities
             .breath_clouds
             .restore(clouds, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
         // A cloud that expired on its own takes its `noPhysics` write with it.
@@ -2022,8 +2041,10 @@ impl crate::game::ServerGame<'_> {
                 // GameEvent.FLUID_PICKUP, fires PLAYER_INTERACTED_WITH_ENTITY on the
                 // cloud, and turns one bottle into dragon_breath.
                 if let Some(player) = self.common.player.as_ref()
-                    && let Some(cloud_at) =
-                        collect_dragon_breath(player.bounds(), &mut self.common.breath_clouds)
+                    && let Some(cloud_at) = collect_dragon_breath(
+                        player.bounds(),
+                        &mut self.common.entities.breath_clouds,
+                    )
                 {
                     let player_pos = [player.position.x, player.position.y, player.position.z];
                     self.server_play_sound(

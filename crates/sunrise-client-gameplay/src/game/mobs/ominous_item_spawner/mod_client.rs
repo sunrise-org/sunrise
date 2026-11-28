@@ -13,7 +13,7 @@ impl ClientGame<'_> {
         alpha: f64,
         out: &mut Vec<Vertex>,
     ) {
-        for s in &self.common.ominous_spawners {
+        for s in &self.common.entities.ominous_spawners {
             if self.hides_as_camera(s.id) {
                 continue;
             }
@@ -71,11 +71,13 @@ impl ClientGame<'_> {
     pub fn tick_remote_ominous_item_spawners(&mut self) {
         let at: Vec<[f64; 3]> = self
             .common
+            .entities
             .ominous_spawners
             .iter()
             .map(|s| s.position)
             .collect();
         self.common
+            .entities
             .ominous_spawners
             .for_each_mut(|s| s.tick_count += 1);
         if self.common.world.game_time % 5 == 0 {

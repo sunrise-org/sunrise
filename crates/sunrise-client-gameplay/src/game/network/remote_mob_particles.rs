@@ -18,6 +18,7 @@ impl ClientGame<'_> {
     pub(in crate::game::client_side) fn fox_eat_particles(&mut self, id: u32) {
         let Some(m) = self
             .common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && m.species() == Species::Fox)
@@ -62,6 +63,7 @@ impl ClientGame<'_> {
     pub(in crate::game::client_side) fn witch_magic_particles(&mut self, id: u32) {
         let Some(m) = self
             .common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && m.species() == Species::Witch)
@@ -92,6 +94,7 @@ impl ClientGame<'_> {
     pub(in crate::game::client_side) fn remote_ravager_roar(&mut self, id: i32) {
         let Some(m) = self
             .common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == id as u32 && m.species() == Species::Ravager)

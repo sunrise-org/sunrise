@@ -406,10 +406,20 @@ fn assert_engineer_acquisition(game: &mut sunrise_gameplay::game::ServerGame<'_>
     assert_eq!(mob.extra.profession.id(), "test:engineer");
     assert_eq!(mob.extra.home, Some([1, 64, 0]));
     assert_eq!(mob.extra.profession.index(), None);
-    game.mobs.push(mob);
-    let index = game.mobs.iter().position(|mob| mob.id == 901).unwrap();
+    game.entities.mobs.push(mob);
+    let index = game
+        .entities
+        .mobs
+        .iter()
+        .position(|mob| mob.id == 901)
+        .unwrap();
     game.ensure_offers(index);
-    let offers = &game.mobs[index].extra.trade.as_ref().unwrap().offers;
+    let offers = &game.entities.mobs[index]
+        .extra
+        .trade
+        .as_ref()
+        .unwrap()
+        .offers;
     assert_eq!(offers.len(), 1);
     assert_eq!(&*offers[0].base_cost_a.stack.item, "minecraft:emerald");
     assert_eq!(offers[0].base_cost_a.stack.count, 3);
@@ -470,8 +480,13 @@ fn villager_game_load_resolves_saved_names_for_both_species_without_reroll() {
         |game| {
             for kind in ["minecraft:villager", "minecraft:zombie_villager"] {
                 let id = game.load_mob(saved_engineer(kind), None).unwrap();
-                let index = game.mobs.iter().position(|mob| mob.id == id).unwrap();
-                let mob = &game.mobs[index];
+                let index = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .position(|mob| mob.id == id)
+                    .unwrap();
+                let mob = &game.entities.mobs[index];
                 assert!(matches!(
                     mob.extra.profession,
                     sunrise_sim::mobs::villager::ProfessionState::Registered { .. }
@@ -488,11 +503,11 @@ fn villager_game_load_resolves_saved_names_for_both_species_without_reroll() {
                     game.ensure_offers(index);
                 }
                 assert_eq!(
-                    game.mobs[index].extra.trade.as_deref(),
+                    game.entities.mobs[index].extra.trade.as_deref(),
                     Some(original.as_ref())
                 );
                 let saved = sunrise_sim::entity_nbt::mob_to_nbt(
-                    &game.mobs[index],
+                    &game.entities.mobs[index],
                     [11, 12, 13, 14],
                     None,
                     Some(game.pack.assets.registry),
@@ -518,13 +533,23 @@ fn villager_game_missing_mod_keeps_both_species_unresolved_and_offers_untouched(
     fixture(vec![].into(), |game| {
         for kind in ["minecraft:villager", "minecraft:zombie_villager"] {
             let id = game.load_mob(saved_engineer(kind), None).unwrap();
-            let index = game.mobs.iter().position(|mob| mob.id == id).unwrap();
+            let index = game
+                .entities
+                .mobs
+                .iter()
+                .position(|mob| mob.id == id)
+                .unwrap();
             assert!(matches!(
-                game.mobs[index].extra.profession,
+                game.entities.mobs[index].extra.profession,
                 sunrise_sim::mobs::villager::ProfessionState::Unresolved(_)
             ));
-            assert_eq!(game.mobs[index].extra.profession.index(), None);
-            let original = game.mobs[index].extra.trade.as_ref().unwrap().clone();
+            assert_eq!(game.entities.mobs[index].extra.profession.index(), None);
+            let original = game.entities.mobs[index]
+                .extra
+                .trade
+                .as_ref()
+                .unwrap()
+                .clone();
             if kind == "minecraft:villager" {
                 game.ensure_offers(index);
                 let mut mob = sunrise_sim::entity_nbt::mob_from_nbt(
@@ -546,9 +571,12 @@ fn villager_game_missing_mod_keeps_both_species_unresolved_and_offers_untouched(
                 assert_eq!(mob.extra.profession.index(), None);
                 assert_eq!(mob.extra.trade.as_deref(), Some(original.as_ref()));
             }
-            assert_eq!(game.mobs[index].extra.profession.id(), "test:engineer");
             assert_eq!(
-                game.mobs[index].extra.trade.as_deref(),
+                game.entities.mobs[index].extra.profession.id(),
+                "test:engineer"
+            );
+            assert_eq!(
+                game.entities.mobs[index].extra.trade.as_deref(),
                 Some(original.as_ref())
             );
         }

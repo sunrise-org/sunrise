@@ -6,13 +6,16 @@ use sunrise_sim::mobs::{Mob, Who, ai::do_hurt_target, goals::Cx};
 
 pub fn spawn(game: &mut crate::game::ServerGame<'_>, id: u32, kind: &str, position: Vec3) -> u32 {
     let kind = game.common.res.mob_types().get(kind).unwrap().clone();
-    game.common.mobs.push(Mob::new(id, kind, position, 0.0));
+    game.common
+        .entities
+        .mobs
+        .push(Mob::new(id, kind, position, 0.0));
     id
 }
 
 /// One `Bee.doHurtTarget` from the bee, then the game's event handling.
 pub fn sting(game: &mut crate::game::ServerGame<'_>, bee_id: u32, who: Who) {
-    let mut mobs = game.common.mobs.lift();
+    let mut mobs = game.common.entities.mobs.lift();
     let i = mobs.iter().position(|m| m.id == bee_id).unwrap();
     let mut test_level = sunrise_sim::health::TestLevel::new(0);
     let mut events = Vec::new();
@@ -26,6 +29,7 @@ pub fn sting(game: &mut crate::game::ServerGame<'_>, bee_id: u32, who: Who) {
         do_hurt_target(&mut mobs[i], who, &mut cx);
     }
     game.common
+        .entities
         .mobs
         .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
     game.handle_mob_events(events).unwrap();

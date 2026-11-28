@@ -27,7 +27,7 @@ impl crate::game::ServerGame<'_> {
         index: usize,
         damage_type: &str,
     ) -> Vec<ItemStack> {
-        let Some(entry) = self.common.dropped.get_mut(index) else {
+        let Some(entry) = self.common.entities.dropped.get_mut(index) else {
             return Vec::new();
         };
         let items = self.common.res.clone();
@@ -38,7 +38,13 @@ impl crate::game::ServerGame<'_> {
         let vanilla_spilled = entry.peek_destroyed_contents(items.items());
         let stack = entry.stack.clone();
         let Some(handle) = self.entity(id).and_then(|entity| self.item_entity(entity)) else {
-            if let Some(entry) = self.common.dropped.get_mut(index).filter(|e| e.id == id) {
+            if let Some(entry) = self
+                .common
+                .entities
+                .dropped
+                .get_mut(index)
+                .filter(|e| e.id == id)
+            {
                 return entry.spill_destroyed_contents(items.items());
             }
             return vanilla_spilled;
@@ -68,7 +74,7 @@ impl crate::game::ServerGame<'_> {
                 vanilla_spilled
             }
         };
-        if let Some(entry) = self.common.dropped.iter_mut().find(|e| e.id == id) {
+        if let Some(entry) = self.common.entities.dropped.iter_mut().find(|e| e.id == id) {
             let _ = entry.spill_destroyed_contents(items.items());
         }
         result

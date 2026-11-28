@@ -36,7 +36,7 @@ pub(crate) mod tests {
             stack.data_mut().custom_name =
                 Some(sunrise_core::nbt::Tag::String("Named pick".into()));
             game.spawn_item(stack.clone(), [0.0; 3], [0.0; 3], 0);
-            let entity = game.entity(game.dropped[0].id).unwrap();
+            let entity = game.entity(game.entities.dropped[0].id).unwrap();
             let item = game.item_entity(entity).unwrap();
             assert_eq!(item.entity(), entity);
             assert_eq!(
@@ -61,7 +61,7 @@ pub(crate) mod tests {
             assert_eq!(item.pickup_delay(game), Some(10));
             assert!(item.set_never_pickup(game));
             assert_eq!(
-                game.dropped[0].pickup_delay,
+                game.entities.dropped[0].pickup_delay,
                 ItemEntity::INFINITE_PICKUP_DELAY
             );
             assert_eq!(
@@ -70,7 +70,7 @@ pub(crate) mod tests {
             );
             assert!(item.set_no_pickup_delay(game));
             assert_eq!(item.pickup_delay(game), Some(0));
-            game.dropped[0].age = ItemEntity::INFINITE_LIFETIME;
+            game.entities.dropped[0].age = ItemEntity::INFINITE_LIFETIME;
             assert_eq!(item.age(game), Some(ItemEntity::INFINITE_LIFETIME));
             let target = 0x12345678_9abcdef0_10203040_50607080_u128;
             assert!(item.set_target(game, Some(target)));
@@ -82,14 +82,15 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(99, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(99, kind, Vec3::ZERO, 0.0));
             let thrower = game.entity(99).unwrap();
-            game.dropped[0].thrower = Some(uuid_ints(game.entity_uuid(thrower).unwrap()));
+            game.entities.dropped[0].thrower = Some(uuid_ints(game.entity_uuid(thrower).unwrap()));
             assert_eq!(item.owner(game), Some(thrower));
             assert_eq!(item.target(game), Some(target));
             assert!(item.set_target(game, None));
             assert_eq!(item.target(game), None);
-            game.armor_stands
+            game.entities
+                .armor_stands
                 .push(ArmorStand::new(100, Vec3::ZERO, 0.0));
             assert!(game.item_entity(game.entity(100).unwrap()).is_none());
             let stale = ItemEntityRef::new(EntityRef::new(
@@ -107,9 +108,9 @@ pub(crate) mod tests {
             // An empty stack stays resident until the next item tick.
             let air = test_snapshot(&ItemStack::new("minecraft:air", 1));
             assert_eq!(item.set_stack(game, Some(air)), Ok(true));
-            assert_eq!(game.dropped.len(), 1);
-            assert_eq!(game.dropped[0].stack.count, 0);
-            assert_eq!(&*game.dropped[0].stack.item, "minecraft:air");
+            assert_eq!(game.entities.dropped.len(), 1);
+            assert_eq!(game.entities.dropped[0].stack.count, 0);
+            assert_eq!(&*game.entities.dropped[0].stack.item, "minecraft:air");
             assert!(item.with_stack(game, |_| ()).is_none());
             // Aborting the transaction restores the prior stack.
             assert_eq!(item.set_stack(game, Some(changed.clone())), Ok(true));
@@ -121,18 +122,18 @@ pub(crate) mod tests {
                 Err::<(), ()>(())
             });
             assert_eq!(item.with_stack(game, |stack| stack.damage()), Some(21));
-            let taken = game.dropped.lift();
+            let taken = game.entities.dropped.lift();
             assert!(item.with_stack(game, |_| ()).is_none());
             assert!(!item.set_no_pickup_delay(game));
             game.put_back_dropped(taken);
             // Committing an empty stack leaves the item resident until its next tick discards it.
             assert_eq!(item.set_stack(game, None), Ok(true));
-            assert_eq!(game.dropped.len(), 1);
+            assert_eq!(game.entities.dropped.len(), 1);
             game.server.ticked_entities_through = u32::MAX;
             let mut round = game.native_tick_round();
             game.tick_dropped_items(&mut round);
             assert!(
-                game.dropped.is_empty(),
+                game.entities.dropped.is_empty(),
                 "normal ItemEntity.tick discards an item entity holding an empty stack"
             );
         });

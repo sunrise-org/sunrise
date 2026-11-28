@@ -81,8 +81,8 @@ fn game_with_open_donkey<'a>(
     mob.extra.tame = true;
     mob.extra.chested = true;
     assert_eq!(mob.species(), Species::Donkey);
-    game.mobs.push(mob);
-    game.mobs[0].position.x = 8.5 + gap + f64::from(game.mobs[0].width()) / 2.0;
+    game.entities.mobs.push(mob);
+    game.entities.mobs[0].position.x = 8.5 + gap + f64::from(game.entities.mobs[0].width()) / 2.0;
     game.open_mount_menu(0);
     assert_eq!(
         game.client.mount_menu.opened_mob(),
@@ -106,7 +106,7 @@ fn a_mount_moved_five_blocks_away_keeps_its_menu_open() {
         Some(DONKEY),
         "the menu closed 5 blocks from the donkey's box"
     );
-    game.mobs[0].position.x += 1.5;
+    game.entities.mobs[0].position.x += 1.5;
     game.tick_mount_menu();
     assert_eq!(
         game.client.mount_menu.opened_mob(),
@@ -155,7 +155,7 @@ fn guest_beside_a_donkey<'a>(
     let mut mob = Mob::new(DONKEY, kind, Vec3::new(8.5, 64.0, 8.5), 0.0);
     mob.extra.tame = true;
     mob.extra.chested = true;
-    game.mobs.push(mob);
+    game.entities.mobs.push(mob);
     let (tx, _rx) = mpsc::channel();
     let mut guest = Guest::new(
         Joined {
@@ -183,7 +183,7 @@ fn guest_beside_a_donkey<'a>(
 
 /// The east face of the donkey's box at `(8.5, 64, 8.5)`.
 fn box_face(game: &sunrise_gameplay::game::ServerGame<'_>) -> f64 {
-    8.5 + f64::from(game.mobs[0].width()) / 2.0
+    8.5 + f64::from(game.entities.mobs[0].width()) / 2.0
 }
 
 /// A server checks its guest's mount menu against the guest's own entity

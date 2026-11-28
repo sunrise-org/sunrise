@@ -19,7 +19,7 @@ impl ServerGame<'_> {
         else {
             return false;
         };
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         if !m.alive() {
             return false;
         }

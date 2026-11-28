@@ -1278,6 +1278,7 @@ pub(crate) fn spawn_mob(
     }))
     .unwrap();
     let mob = game
+        .entities
         .mobs
         .iter_mut()
         .find(|m| m.id == id as u32)

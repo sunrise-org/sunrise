@@ -1455,10 +1455,10 @@ fn section_compiled_and_visible_gates_displays_and_mobs_26_3() {
             .unwrap()
             .show(&[(23, 0, Value::Id(stone.0 as i32))], None);
         game.tick_text_displays(game.clock.runs_normally());
-        let mob_start = game.mobs.len();
+        let mob_start = game.entities.mobs.len();
         game.spawn_entity(7003, "minecraft:zombie", [0.5, 65.5, 3.5], [0.0; 3]);
-        assert_eq!(game.mobs.len(), mob_start + 1);
-        let mob_range = mob_start..game.mobs.len();
+        assert_eq!(game.entities.mobs.len(), mob_start + 1);
+        let mob_range = mob_start..game.entities.mobs.len();
 
         let (mut normal, mut see_through, mut blocks, mut mob_verts) =
             (Vec::new(), Vec::new(), Vec::new(), Vec::new());

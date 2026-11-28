@@ -106,6 +106,7 @@ impl crate::game::ServerGame<'_> {
         match self.timer_read_target(entity)? {
             Target::Mob(id) => Some(
                 self.common
+                    .entities
                     .mobs
                     .iter()
                     .find(|m| m.id == id)?
@@ -123,13 +124,15 @@ impl crate::game::ServerGame<'_> {
     pub fn entity_set_invulnerable_time(&mut self, entity: EntityRef, ticks: i32) -> bool {
         let ticks = ticks.max(0);
         match self.native_entity_target(entity) {
-            Some(Target::Mob(id)) => match self.common.mobs.iter_mut().find(|m| m.id == id) {
-                Some(m) => {
-                    m.invulnerable_time = ticks;
-                    true
+            Some(Target::Mob(id)) => {
+                match self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
+                    Some(m) => {
+                        m.invulnerable_time = ticks;
+                        true
+                    }
+                    None => false,
                 }
-                None => false,
-            },
+            }
             Some(t @ (Target::Player | Target::Guest(_))) => {
                 self.native_player_body_mut(t).is_some_and(|p| {
                     p.health.invulnerable_time = ticks;
@@ -311,7 +314,7 @@ impl crate::game::ServerGame<'_> {
         let Target::Mob(id) = self.native_entity_target(entity)? else {
             return None;
         };
-        let m = self.common.mobs.iter().find(|m| m.id == id)?;
+        let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
         Some(self.mob_query_invulnerable(m, damage_type))
     }
 
@@ -400,6 +403,7 @@ impl crate::game::ServerGame<'_> {
         match self.native_entity_target(entity)? {
             Target::Mob(id) => Some(
                 self.common
+                    .entities
                     .mobs
                     .iter()
                     .find(|m| m.id == id)?
@@ -425,7 +429,14 @@ impl crate::game::ServerGame<'_> {
     /// one. Mobs and players.
     pub fn entity_damage_cooldown_time(&self, entity: EntityRef) -> Option<i32> {
         match self.timer_read_target(entity)? {
-            Target::Mob(id) => Some(self.common.mobs.iter().find(|m| m.id == id)?.invulnerable),
+            Target::Mob(id) => Some(
+                self.common
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)?
+                    .invulnerable,
+            ),
             t => Some(self.native_player_body(t)?.health.hurt.cooldown),
         }
     }
@@ -436,7 +447,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         match t {
-            Target::Mob(id) => match self.common.mobs.iter_mut().find(|m| m.id == id) {
+            Target::Mob(id) => match self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
                 Some(m) => {
                     m.invulnerable = ticks;
                     true

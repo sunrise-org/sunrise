@@ -129,7 +129,8 @@ fn owner_launch_applies_the_supplied_stacks_effects() {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(21, kind, Vec3::new(0.0, 64.0, 0.0), 0.0));
         let source = game.entity(21).unwrap();
         let owner = game.living(source).unwrap();
@@ -139,7 +140,7 @@ fn owner_launch_applies_the_supplied_stacks_effects() {
             .spawn_projectile_from_rotation(owner, &snowball, &stack, 0.0, 1.5, 1.0)
             .unwrap();
         let p = game
-            .creatures
+            .entities
             .projectiles
             .iter()
             .find(|p| p.id == shot.entity().id())
@@ -149,13 +150,13 @@ fn owner_launch_applies_the_supplied_stacks_effects() {
         assert_eq!(p.item.as_ref().unwrap().count, 1);
         assert_eq!(stack.count, 16);
         let boom = enchanted("minecraft:snowball", 1, &[("spawn_test:boom", 1)]);
-        let count = game.creatures.projectiles.len();
+        let count = game.entities.projectiles.len();
         let mut before = game.world.random.clone();
         assert!(
             game.spawn_projectile_from_rotation(owner, &snowball, &boom, 0.0, 1.5, 1.0)
                 .is_none()
         );
-        assert_eq!(game.creatures.projectiles.len(), count);
+        assert_eq!(game.entities.projectiles.len(), count);
         assert_eq!(game.world.random.next_long(), before.next_long());
         for enchantment in ["spawn_test:flags", "spawn_test:bad_clamp"] {
             let invalid = enchanted("minecraft:snowball", 1, &[(enchantment, 1)]);
@@ -164,7 +165,7 @@ fn owner_launch_applies_the_supplied_stacks_effects() {
                 game.spawn_projectile_from_rotation(owner, &snowball, &invalid, 0.0, 1.5, 1.0)
                     .is_none()
             );
-            assert_eq!(game.creatures.projectiles.len(), count);
+            assert_eq!(game.entities.projectiles.len(), count);
             assert_eq!(game.world.random.next_long(), before.next_long());
         }
     });

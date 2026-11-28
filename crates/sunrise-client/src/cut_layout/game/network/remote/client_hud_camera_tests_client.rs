@@ -67,7 +67,7 @@ fn a_watched_rider_gets_hearts_for_the_dragon_and_local_player_but_not_a_boat() 
                 data(game, WATCHED, vec![(1, serializer::INT, Value::Int(150))]);
                 spawn(game, DRAGON, "minecraft:ender_dragon");
                 // Seed the live dragon, not its generic mob metadata.
-                game.dragon.as_mut().unwrap().health = 37.25;
+                game.entities.dragon.as_mut().unwrap().health = 37.25;
                 spawn(game, BOAT, "minecraft:oak_boat");
                 game.handle_packet(C::SetCamera(play::SetCamera { camera_id: WATCHED }))
                     .unwrap();
@@ -90,7 +90,10 @@ fn a_watched_rider_gets_hearts_for_the_dragon_and_local_player_but_not_a_boat() 
                         passengers: vec![WATCHED],
                     }))
                     .unwrap();
-                    assert_eq!(game.mobs[watched].extra.mount, Some(vehicle as u32));
+                    assert_eq!(
+                        game.entities.mobs[watched].extra.mount,
+                        Some(vehicle as u32)
+                    );
                     assert_eq!(game.camera_vehicle(camera).is_some(), expected.is_some());
                     assert_eq!(
                         game.camera_vehicle_health(camera)

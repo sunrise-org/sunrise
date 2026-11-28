@@ -33,7 +33,7 @@ fn guest_player_bow_death_keeps_the_connected_shooter_without_a_local_player() {
                         guest.load_timeout = 0;
                     });
                 mob(game, 41, "minecraft:zombie", Vec3::new(6.0, 80.0, 4.5));
-                game.mobs[0].health = 1.0;
+                game.entities.mobs[0].health = 1.0;
                 let weapon = bow();
                 let expected = weapon.try_into_api().unwrap();
                 let arrow = game
@@ -99,9 +99,9 @@ fn zombie_ai_melee_armor_hurt_retains_the_real_source() {
                 game.apply_equipment();
                 game.refresh_armor_protection();
                 mob(game, 45, "minecraft:zombie", Vec3::new(5.0, 80.0, 4.5));
-                game.mobs[0].no_ai = false;
-                game.mobs[0].ai.speed = 0.2;
-                game.mobs[0].ai.target = Some(Who::Player);
+                game.entities.mobs[0].no_ai = false;
+                game.entities.mobs[0].ai.speed = 0.2;
+                game.entities.mobs[0].ai.target = Some(Who::Player);
                 for _ in 0..40 {
                     // MeleeAttackGoal.canUse admits a new attempt once game time reaches 20.
                     game.world.game_time += 1;

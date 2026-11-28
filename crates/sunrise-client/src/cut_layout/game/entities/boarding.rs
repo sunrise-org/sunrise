@@ -29,7 +29,7 @@ pub(crate) mod tests {
             let mut resident = Mob::new(73, pig, Vec3::ZERO, 0.0);
             resident.extra.mount = Some(71);
             resident.extra.vehicle_order = 1;
-            game.mobs.push(resident);
+            game.entities.mobs.push(resident);
             assert_eq!(
                 game.seated_passengers(71),
                 vec![(0, 72, false), (1, 73, false), (2, 74, false)]
@@ -55,7 +55,8 @@ pub(crate) mod tests {
             ));
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let (vehicle, rider) = (90, 91);
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(vehicle, pig.clone(), Vec3::ZERO, 0.0));
             let order = game.boarding_order(vehicle, 12, true);
             let dimension = game.dim.id().to_owned();
@@ -72,7 +73,7 @@ pub(crate) mod tests {
                 .unwrap();
             let mut pig = Mob::new(rider, pig, Vec3::ZERO, 0.0);
             pig.extra.mount = Some(vehicle);
-            game.mobs.push(pig);
+            game.entities.mobs.push(pig);
             game.seat_mob(rider);
             game.start_riding(vehicle);
             let own = game.player.as_ref().unwrap().entity_id as u32;
@@ -105,7 +106,8 @@ pub(crate) mod tests {
                 .clone();
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
             let (vehicle, rider) = (90, 91);
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(vehicle, ghast, Vec3::new(8.5, 64.0, 8.5), 0.0));
             let order = game.boarding_order(vehicle, 12, true);
             let dimension = game.dim.id().to_owned();
@@ -122,7 +124,7 @@ pub(crate) mod tests {
                 .unwrap();
             let mut pig = Mob::new(rider, pig, Vec3::ZERO, 0.0);
             pig.extra.mount = Some(vehicle);
-            game.mobs.push(pig);
+            game.entities.mobs.push(pig);
             game.seat_mob(rider);
             game.start_riding(vehicle);
             game.position_rider();

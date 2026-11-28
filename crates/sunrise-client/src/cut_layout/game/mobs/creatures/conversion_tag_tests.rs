@@ -71,7 +71,13 @@ fn converted_mobs_keep_command_tags_at_the_new_id_and_on_save() {
         ]);
         let old_id = game.load_mob(raw, None).unwrap();
         assert_eq!(game.tags_of(Target::Mob(old_id)), ["subject", from]);
-        let source = game.mobs.iter().find(|m| m.id == old_id).unwrap().clone();
+        let source = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == old_id)
+            .unwrap()
+            .clone();
         let new_id = game
             .convert_to(
                 &source,
@@ -87,7 +93,12 @@ fn converted_mobs_keep_command_tags_at_the_new_id_and_on_save() {
             ["subject", from],
             "converted ID must keep tags"
         );
-        let index = game.mobs.iter().position(|m| m.id == new_id).unwrap();
+        let index = game
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == new_id)
+            .unwrap();
         let saved = game.mob_tree_nbt(index);
         assert_eq!(saved.get("Tags"), Some(&tags));
         assert_eq!(
@@ -96,7 +107,7 @@ fn converted_mobs_keep_command_tags_at_the_new_id_and_on_save() {
         );
         assert_ne!(sunrise_sim::entity_nbt::uuid(&saved), Some(uuid));
         assert!(saved.get("sunrise:old_entity_only").is_none());
-        game.mobs.remove(index);
+        game.entities.mobs.remove(index);
         let reloaded = game.load_mob(saved, None).unwrap();
         assert_eq!(game.tags_of(Target::Mob(reloaded)), ["subject", from]);
     }

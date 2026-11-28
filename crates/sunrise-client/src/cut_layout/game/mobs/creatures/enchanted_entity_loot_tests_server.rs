@@ -41,7 +41,7 @@ fn a_draw_made_during_loot_kill_stays_in_the_level_random() {
             game.ui.registries.permission = 4;
             game.server.next_entity = 1000;
             zombie(game, Damage::mob(0, [0.0; 3]));
-            game.mobs.last_mut().unwrap().health = 20.0;
+            game.entities.mobs.last_mut().unwrap().health = 20.0;
             game.world.random.set_seed(7);
             let source = game.player_source();
             game.server.command_source = Some(
@@ -136,7 +136,7 @@ fn a_kills_loot_uses_the_level_a_mod_answers() {
             seen.lock().unwrap().clear();
             let skeleton = zombie(game, Damage::mob(0, [0.0; 3]));
             // Keep the admitted row's residency and attachment lifetime.
-            game.mobs.last_mut().unwrap().health = 20.0;
+            game.entities.mobs.last_mut().unwrap().health = 20.0;
             let victim = zombie(game, Damage::mob(skeleton.id, [0.0; 3]));
             game.mob_die(&victim);
             assert_eq!(
@@ -167,7 +167,7 @@ fn loot_kill_asks_with_a_non_living_source_and_with_none() {
             game.ui.registries.permission = 4;
             game.server.next_entity = 1000;
             zombie(game, Damage::mob(0, [0.0; 3]));
-            game.mobs.last_mut().unwrap().health = 20.0;
+            game.entities.mobs.last_mut().unwrap().health = 20.0;
             let kill = "loot spawn 0 64 0 kill @e[type=minecraft:zombie,limit=1]";
 
             let source = game.player_source();
@@ -193,7 +193,7 @@ fn loot_kill_asks_with_a_non_living_source_and_with_none() {
                 .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
             let stick = sunrise_items::items::ItemStack::new("minecraft:stick", 1);
             game.spawn_item(stick, [0.5, 64.0, 0.5], [0.0; 3], 0);
-            let item = game.dropped.iter().last().unwrap().id;
+            let item = game.entities.dropped.iter().last().unwrap().id;
             let item = sunrise_gameplay_common::game::commands_common::Target::Item(item);
             game.server.command_source = Some(
                 sunrise_gameplay::game::server_side::commands::execute::Source {
@@ -232,7 +232,7 @@ fn loot_kill_asks_with_the_commands_source_as_the_attacker() {
             game.server.lan.as_mut().unwrap().hub.guests.push(guest(5));
             game.server.next_entity = 1000;
             let victim = zombie(game, Damage::mob(0, [0.0; 3]));
-            game.mobs.last_mut().unwrap().health = 20.0;
+            game.entities.mobs.last_mut().unwrap().health = 20.0;
             let looted = |level| {
                 heard(
                     "minecraft:zombie",
@@ -252,7 +252,8 @@ fn loot_kill_asks_with_the_commands_source_as_the_attacker() {
             .unwrap();
             assert_eq!(*seen.lock().unwrap(), [looted(2), looted(2)]);
             assert!(
-                game.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .any(|m| m.id == victim.id && m.health > 0.0)
             );
@@ -329,6 +330,6 @@ pub(crate) fn zombie(game: &mut sunrise_gameplay::game::ServerGame<'_>, damage: 
     );
     mob.health = 0.0;
     mob.last_damage = Some((damage, 0));
-    game.mobs.push(mob.clone());
+    game.entities.mobs.push(mob.clone());
     mob
 }

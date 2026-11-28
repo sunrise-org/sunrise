@@ -18,7 +18,8 @@ pub(crate) mod tests {
     fn rejected_boat_passengers_fill_actual_capacity_without_becoming_resident() {
         super::super::native_entity_refs::tests::with_game(|game| {
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     71,
                     "oak".into(),
@@ -59,7 +60,8 @@ pub(crate) mod tests {
                 .enumerate()
             {
                 let at = Vec3::new(x, 64.0, z);
-                game.carts
+                game.entities
+                    .carts
                     .push(Minecart::new(100 + i as u32, CartKind::Chest, at));
             }
             // 0.5 west of the second cart (boxes 0.9 and 0.98 wide), in the middle of them
@@ -68,13 +70,26 @@ pub(crate) mod tests {
             let crowd = (0..crowd).map(|i| (40.5 + 3.0 * f64::from(i), 40.5));
             for (i, (x, z)) in spots.chain(crowd).enumerate() {
                 let at = Vec3::new(x, 64.0, z);
-                game.mobs.push(Mob::new(1 + i as u32, pig.clone(), at, 0.0));
+                game.entities
+                    .mobs
+                    .push(Mob::new(1 + i as u32, pig.clone(), at, 0.0));
             }
             game.tick_carts();
-            let velocity = |id| game.mobs.iter().find(|m| m.id == id).unwrap().velocity;
+            let velocity = |id| {
+                game.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .unwrap()
+                    .velocity
+            };
             assert!(velocity(1).x < 0.0, "pushed back west: {:?}", velocity(1));
-            let idle = game.mobs.iter().filter(|m| m.velocity == Vec3::ZERO);
-            assert_eq!(idle.count(), game.mobs.len() - 1);
+            let idle = game
+                .entities
+                .mobs
+                .iter()
+                .filter(|m| m.velocity == Vec3::ZERO);
+            assert_eq!(idle.count(), game.entities.mobs.len() - 1);
             velocity(1)
         });
         assert_eq!(pushed[0], pushed[1]);
@@ -96,7 +111,7 @@ pub(crate) mod tests {
         };
         for id in 1..=400 {
             let at = Vec3::new(next(48.0), 64.0 + next(3.0), next(48.0));
-            game.mobs.push(Mob::new(id, pig.clone(), at, 0.0));
+            game.entities.mobs.push(Mob::new(id, pig.clone(), at, 0.0));
         }
         let mut met = 0;
         for round in 0..300 {
@@ -108,10 +123,11 @@ pub(crate) mod tests {
             let size = Vec3::new(0.5 + next(2.5), 0.5 + next(1.5), 0.5 + next(2.5));
             let area = Aabb::new(corner, corner.add_vector(size));
             if round % 40 == 20 {
-                let j = round % game.mobs.len();
-                game.mobs[j].position = area.center();
+                let j = round % game.entities.mobs.len();
+                game.entities.mobs[j].position = area.center();
             }
             let walked: Vec<Aabb> = game
+                .entities
                 .mobs
                 .iter()
                 .map(Mob::bounds)
@@ -128,7 +144,8 @@ pub(crate) mod tests {
             );
             if round % 100 == 99 {
                 // The last comparisons ran against the grid: it stands, for the list as it is.
-                let fresh = |(stamp, _): &(ListStamp, SeenGrid)| *stamp == game.mobs.stamp();
+                let fresh =
+                    |(stamp, _): &(ListStamp, SeenGrid)| *stamp == game.entities.mobs.stamp();
                 assert!(
                     game.server
                         .vehicle_mobs
@@ -153,19 +170,21 @@ pub(crate) mod tests {
         let mut game = super::super::game_tests::tests::server_game(&mut resources);
         let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
         for id in 1..=4 {
-            game.mobs.push(Mob::new(id, pig.clone(), Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(id, pig.clone(), Vec3::ZERO, 0.0));
         }
         let riders = |game: &sunrise_gameplay::game::ServerGame<'_>| {
             [100, 101, 102].map(|id| (game.has_seated_passengers(id), game.boat_mobs(id)))
         };
-        game.mobs[0].extra.mount = Some(100);
+        game.entities.mobs[0].extra.mount = Some(100);
         game.vehicles_ticking(true);
         let none = (false, vec![]);
         assert_eq!(riders(&game), [(true, vec![0]), none.clone(), none.clone()]);
-        game.mobs[0].removed = true;
-        game.mobs[1].extra.mount = Some(101);
-        game.mobs[3].extra.mount = Some(102);
-        game.mobs[3].health = 0.0;
+        game.entities.mobs[0].removed = true;
+        game.entities.mobs[1].extra.mount = Some(101);
+        game.entities.mobs[3].extra.mount = Some(102);
+        game.entities.mobs[3].health = 0.0;
         let after = [none, (true, vec![1]), (true, vec![])];
         assert_eq!(riders(&game), after);
         game.vehicles_ticking(false);
@@ -195,8 +214,8 @@ mod off_level_tests {
             resident.extra.vehicle_order = 1;
             let offset = riders::vehicle_attachment(&resident, 1.375);
             let expected = boat.seat(1, 2, true, offset, false);
-            game.boats.push(boat);
-            game.mobs.push(resident);
+            game.entities.boats.push(boat);
+            game.entities.mobs.push(resident);
             game.persist.off_level.insert(
                 72,
                 sunrise_gameplay_common::game::entity_memory::OffLevel::Mob(ghost),
@@ -268,7 +287,8 @@ mod boat_callback_review_tests {
                     (0, 0),
                 );
                 game.options.dedicated = Some(Vec::new());
-                game.boats
+                game.entities
+                    .boats
                     .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                         71,
                         "oak".into(),
@@ -280,7 +300,7 @@ mod boat_callback_review_tests {
                     let mut mob = Mob::new(id, kind.clone(), Vec3::ZERO, 0.0);
                     mob.extra.mount = (id != 74).then_some(71);
                     mob.extra.vehicle_order = i64::from(id);
-                    game.mobs.push(mob);
+                    game.entities.mobs.push(mob);
                 }
                 assert!(game.kill_vehicle_object(
                     sunrise_gameplay_common::game::commands_common::Target::Boat(71)
@@ -317,7 +337,8 @@ mod boat_callback_review_tests {
                     (0, 0),
                 );
                 game.options.dedicated = Some(Vec::new());
-                game.boats
+                game.entities
+                    .boats
                     .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                         71,
                         "oak".into(),
@@ -328,13 +349,13 @@ mod boat_callback_review_tests {
                 let original = Vec3::new(2.0, 60.0, 3.0);
                 let mut rider = Mob::new(72, kind.clone(), original, 0.0);
                 rider.extra.mount = Some(71);
-                game.mobs.push(rider);
+                game.entities.mobs.push(rider);
                 let mut child = Mob::new(73, kind, original, 0.0);
                 child.extra.mount = Some(72);
-                game.mobs.push(child);
-                let mut boat = game.boats[0].clone();
+                game.entities.mobs.push(child);
+                let mut boat = game.entities.boats[0].clone();
                 boat.position = Vec3::new(40.0, 70.0, 40.0);
-                game.boats.store_back(0, boat);
+                game.entities.boats.store_back(0, boat);
                 assert!(game.kill_vehicle_object(
                     sunrise_gameplay_common::game::commands_common::Target::Boat(71)
                 ));

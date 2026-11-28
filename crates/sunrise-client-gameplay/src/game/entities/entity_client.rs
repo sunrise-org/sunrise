@@ -224,9 +224,14 @@ impl ClientGame<'_> {
             sunrise_gameplay_common::game::entity::entity_lists_of!(self),
             DrawExtras {
                 local_player,
-                dragon: self.common.dragon.as_ref().map(|dragon| dragon.join),
+                dragon: self
+                    .common
+                    .entities
+                    .dragon
+                    .as_ref()
+                    .map(|dragon| dragon.join),
                 crystals: if draw_crystals {
-                    &self.common.crystals
+                    &self.common.entities.crystals
                 } else {
                     &[]
                 },
@@ -318,12 +323,13 @@ impl ClientGame<'_> {
             Mover::Cart(c) => {
                 for o in
                     self.common
+                        .entities
                         .carts
                         .iter()
                         .filter(|o| o.id != c.id)
                         .map(|c| cart(|id, p, bounds| self.client_copy_box(id, p, bounds), c))
                         .chain(
-                            self.common.boats.iter().map(|b| {
+                            self.common.entities.boats.iter().map(|b| {
                                 boat(|id, p, bounds| self.client_copy_box(id, p, bounds), b)
                             }),
                         )
@@ -333,7 +339,7 @@ impl ClientGame<'_> {
                     }
                 }
                 let reach = cart_reach(c);
-                for (j, m) in self.common.mobs.iter().enumerate() {
+                for (j, m) in self.common.entities.mobs.iter().enumerate() {
                     if m.bounds().intersects(reach) {
                         let cand = m.solid_candidate();
                         if solids.accepts(&cand, || None) {
@@ -352,7 +358,7 @@ impl ClientGame<'_> {
                 }
             }
             Mover::Boat { id, area } => {
-                for (j, m) in self.common.mobs.iter().enumerate() {
+                for (j, m) in self.common.entities.mobs.iter().enumerate() {
                     if !m.removed && m.bounds().intersects(area) {
                         let cand = m.solid_candidate();
                         if solids.accepts(&cand, || {
@@ -364,6 +370,7 @@ impl ClientGame<'_> {
                 }
                 for (c, target) in self
                     .common
+                    .entities
                     .boats
                     .iter()
                     .map(|b| {
@@ -372,7 +379,7 @@ impl ClientGame<'_> {
                             Target::Boat(b.id),
                         )
                     })
-                    .chain(self.common.carts.iter().map(|c| {
+                    .chain(self.common.entities.carts.iter().map(|c| {
                         (
                             cart(|id, p, bounds| self.client_copy_box(id, p, bounds), c),
                             Target::Cart(c.id),

@@ -1212,7 +1212,7 @@ fn hotbar_attack_indicator_progress_edits_only_stock_hotbar_paint() {
                 game.client.remote.as_mut().unwrap().level_load.finish();
                 enter_test_world(game);
                 let cow = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-                game.mobs.push(Mob::new(31, cow, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(31, cow, Vec3::ZERO, 0.0));
                 game.remote_set_camera(31);
                 assert_eq!(
                     game.camera_player(),

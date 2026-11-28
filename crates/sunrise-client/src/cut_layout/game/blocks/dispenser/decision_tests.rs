@@ -56,7 +56,7 @@ fn crown_is_prepared_once_for_three_and_eight_dispenser_candidates() {
                 for id in &ids {
                     let mut mob = sunrise_sim::mobs::Mob::new(*id, kind.clone(), at, 0.0);
                     mob.extra.pick_up_loot = true;
-                    game.mobs.push(mob);
+                    game.entities.mobs.push(mob);
                 }
                 let mut helmet = ItemStack::new("minecraft:iron_helmet", 3);
                 helmet.set_crafting_enchantments(vec![("minecraft:protection".into(), 4)]);
@@ -70,7 +70,12 @@ fn crown_is_prepared_once_for_three_and_eight_dispenser_candidates() {
                     sunrise_gameplay_common::game::equip_answers::take_equip_conversions(),
                     1
                 );
-                for mob in game.mobs.iter().filter(|mob| ids.contains(&mob.id)) {
+                for mob in game
+                    .entities
+                    .mobs
+                    .iter()
+                    .filter(|mob| ids.contains(&mob.id))
+                {
                     assert_eq!(mob_slot_item(mob, Slot::Head).is_some(), mob.id == 23);
                 }
             });

@@ -54,7 +54,8 @@ pub(crate) mod tests {
         .unwrap();
         let camera = glam::DVec3::new(0.5, 64.0, 0.5);
         let start = Vec3::new(0.5, 64.0, 4.5);
-        game.rockets
+        game.entities
+            .rockets
             .push(sunrise_gameplay_common::game::fireworks::Rocket::remote(
                 77,
                 start,
@@ -65,7 +66,7 @@ pub(crate) mod tests {
         // a camera-only run (id 0) closes it so nothing drawn after takes its motion.
         game.client.entity_motion.borrow_mut().clear();
         let mut out = Vec::new();
-        game.rocket_geometry(camera, 1.0, &mut out, 0..game.rockets.len());
+        game.rocket_geometry(camera, 1.0, &mut out, 0..game.entities.rockets.len());
         let marks = game.client.entity_motion.borrow().clone();
         let at = marks
             .iter()
@@ -103,8 +104,8 @@ pub(crate) mod tests {
                 Vec3::ZERO,
             );
             loud.explosions = vec![explosion].into();
-            game.rockets.push(quiet);
-            game.rockets.push(loud);
+            game.entities.rockets.push(quiet);
+            game.entities.rockets.push(loud);
             for id in [101, 102] {
                 game.apply_packet(C::EntityEvent(EntityEvent {
                     id,

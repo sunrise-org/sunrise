@@ -47,15 +47,15 @@ fn exercise_restore<'g, G: SideGame<'g>>(
     game.block_ticks
         .add_empty_chunk(sunrise_core::position::ChunkPos::new(0, 0))
         .unwrap();
-    game.creatures.projectiles.push(arrow(71, at));
-    game.creatures
+    game.entities.projectiles.push(arrow(71, at));
+    game.entities
         .projectiles
         .update(0, |p| p.velocity = Vec3::new(0.3, 0.0, 0.0));
     let index = Arc::new(Mutex::new(AttachmentIndex::default()));
     let mut values = Attachments::default();
     VALUE.set(&mut values, Holder::Entity(71), 10).unwrap();
     let holder = mod_api::EntityRef::new(game.native_lifecycle.epoch().unwrap(), 71);
-    let original = game.creatures.projectiles.update(0, |p| {
+    let original = game.entities.projectiles.update(0, |p| {
         p.attachment_lifetime().bind(&mut values, &index, holder);
         p.attachment_lifetime().registration().unwrap()
     });
@@ -64,7 +64,7 @@ fn exercise_restore<'g, G: SideGame<'g>>(
     assert_eq!(before.len(), 1);
     step(game, at);
     let current = game
-        .creatures
+        .entities
         .projectiles
         .update(0, |p| p.attachment_lifetime().registration().unwrap());
     assert!(original.same_registration(&current), "restore path {path}");
@@ -73,7 +73,7 @@ fn exercise_restore<'g, G: SideGame<'g>>(
         1,
         "restore path {path}"
     );
-    game.creatures.projectiles.clear();
+    game.entities.projectiles.clear();
     assert!(index.lock().unwrap().snapshot(&key).is_empty());
     assert_eq!(before[0].entry.read(&VALUE), Ok(&10));
 }
@@ -84,7 +84,7 @@ fn projectile_restore_entries_keep_the_bound_arrow() {
     crate::game::native_entity_refs::tests::with_client_game(|game| {
         exercise_restore(game, 0, |game, at| {
             game.tick_remote_projectiles(|_, at| at);
-            assert!(game.creatures.projectiles[0].position.x > at[0]);
+            assert!(game.entities.projectiles[0].position.x > at[0]);
         });
     });
     for path in 1..3 {
@@ -97,9 +97,9 @@ fn projectile_restore_entries_keep_the_bound_arrow() {
                 state.in_ground = true;
                 state.pickup = sunrise_sim::entities::arrows::Pickup::Allowed;
                 for id in [73, 74] {
-                    game.creatures.projectiles.push(arrow(id, at));
+                    game.entities.projectiles.push(arrow(id, at));
                 }
-                game.creatures.projectiles.push(picked);
+                game.entities.projectiles.push(picked);
                 if path == 1 {
                     sunrise_gameplay::game::entity_server::taken_pass_tests::assert_projectile_spawn_survives(
                         game,
@@ -120,7 +120,7 @@ fn projectile_restore_entries_keep_the_bound_arrow() {
                     );
                 }
                 assert_eq!(
-                    game.creatures
+                    game.entities
                         .projectiles
                         .iter()
                         .map(|p| p.id)

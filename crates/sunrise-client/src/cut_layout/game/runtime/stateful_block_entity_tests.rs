@@ -204,7 +204,7 @@ fn stateful_creation_fixture(strict: bool) {
             assert_eq!(game.block_entity(level, MIXED), Some(strict_row));
             assert_eq!(game.world.block(x, y, z), chest);
             assert!(game.world.bulk_log.contains(&(x >> 4, z >> 4)));
-            assert!(game.dropped.is_empty());
+            assert!(game.entities.dropped.is_empty());
             return;
         }
 

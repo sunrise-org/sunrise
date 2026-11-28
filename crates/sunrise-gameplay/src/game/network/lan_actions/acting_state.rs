@@ -228,7 +228,7 @@ impl ServerGame<'_> {
             self.is_logical_server(),
             "server_request_mount_menu called on Client role"
         );
-        let Some(m) = self.common.mobs.get(index) else {
+        let Some(m) = self.common.entities.mobs.get(index) else {
             return;
         };
         if !has_mount_menu(m.species()) {
@@ -253,10 +253,10 @@ impl ServerGame<'_> {
         let Some(id) = self.common.riding else {
             return false;
         };
-        let Some(index) = self.common.mobs.iter().position(|m| m.id == id) else {
+        let Some(index) = self.common.entities.mobs.iter().position(|m| m.id == id) else {
             return false;
         };
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         if !has_mount_menu(m.species()) || !m.extra.tame || !m.alive() {
             return false;
         }

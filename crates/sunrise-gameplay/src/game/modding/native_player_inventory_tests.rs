@@ -323,7 +323,7 @@ fn give_write_aborts() {
             player.with_inventory(game, |view| view.iter().next().is_none()),
             Some(true)
         );
-        let drops = game.dropped.len();
+        let drops = game.entities.dropped.len();
         let _: Result<(), ()> = game.storage_transaction(|host, _| {
             player.give_stack(host, new.clone()).unwrap();
             assert_eq!(
@@ -336,20 +336,20 @@ fn give_write_aborts() {
             player.with_inventory(game, |view| view.iter().next().is_none()),
             Some(true)
         );
-        assert_eq!(game.dropped.len(), drops);
+        assert_eq!(game.entities.dropped.len(), drops);
         for slot in 0..36 {
             player
                 .set_inventory_slot(game, slot, Some(old.clone()))
                 .unwrap();
         }
         let before = player.with_inventory(game, snapshot).unwrap();
-        let drops = game.dropped.len();
+        let drops = game.entities.dropped.len();
         let _: Result<(), ()> = game.storage_transaction(|host, _| {
             player.give_stack(host, new).unwrap();
             Err(())
         });
         assert_eq!(player.with_inventory(game, snapshot), Some(before));
-        assert_eq!(game.dropped.len(), drops);
+        assert_eq!(game.entities.dropped.len(), drops);
     });
 }
 

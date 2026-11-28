@@ -378,7 +378,7 @@ pub(crate) mod tests {
             );
             assert!(events.lock().unwrap().is_empty());
             if case == "mount" {
-                game.common.mobs.push(sunrise_sim::mobs::Mob::new(
+                game.common.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                     31,
                     game.common
                         .res
@@ -816,16 +816,16 @@ pub(crate) mod tests {
                     g.inventory[0] = Some(ItemStack::new("minecraft:stone", 62));
                     g.carried = Some(ItemStack::new("minecraft:stone", 4));
                 });
-                let dropped = game.dropped.len();
+                let dropped = game.entities.dropped.len();
                 game.as_guest(2, |game| {
                     game.as_guest(1, |game| open(game, 1, "new", MenuReplace::CloseFirst))
                         .unwrap();
                 })
                 .unwrap();
                 assert_eq!(*heard.lock().unwrap(), ["drop", "close", "open"]);
-                assert_eq!(game.dropped.len(), dropped + 1);
+                assert_eq!(game.entities.dropped.len(), dropped + 1);
                 assert_eq!(
-                    game.dropped[dropped].stack,
+                    game.entities.dropped[dropped].stack,
                     ItemStack::new("minecraft:stone", 2)
                 );
                 let guests = &game.server.lan.as_ref().unwrap().hub.guests;
@@ -1209,6 +1209,7 @@ pub(crate) mod tests {
                 let new_chest = game.world.block_entities.get(&CELL).unwrap();
                 assert!(new_chest.slots().iter().all(Option::is_none));
                 let dropped: u32 = game
+                    .entities
                     .dropped
                     .iter()
                     .filter(|entity| &*entity.stack.item == CONTENT)

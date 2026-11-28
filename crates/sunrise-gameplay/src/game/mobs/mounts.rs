@@ -84,7 +84,9 @@ impl ServerGame<'_> {
         let Some(i) = self.common.mount_index() else {
             return false;
         };
-        if self.common.mobs[i].species() != species || !equine::boost(&mut self.common.mobs[i]) {
+        if self.common.entities.mobs[i].species() != species
+            || !equine::boost(&mut self.common.entities.mobs[i])
+        {
             return false;
         }
         let slot = self.common.held_slot();
@@ -117,7 +119,7 @@ impl ServerGame<'_> {
     /// `AbstractHorse.mobInteract`. Returns whether the click was used.
     pub fn interact_mount(&mut self, index: usize, item: &str) -> bool {
         let held = self.common.held().cloned();
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         let species = m.species();
         // Pigs and striders check occupancy only for boarding, not for saddling.
         if matches!(species, Species::Pig | Species::Strider) {
@@ -146,6 +148,7 @@ impl ServerGame<'_> {
         if !matches!(species, Species::Camel | Species::CamelHusk)
             && self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .any(|p| p.extra.mount == Some(id) && !p.removed && p.alive())
@@ -165,7 +168,7 @@ impl ServerGame<'_> {
             .any(|s| &*s.item == "minecraft:golden_dandelion");
         let mut events = Vec::new();
         match equine::held_item(
-            &mut self.common.mobs[index],
+            &mut self.common.entities.mobs[index],
             item,
             sneaking,
             dandelion,
@@ -178,7 +181,7 @@ impl ServerGame<'_> {
             }
             None => {}
         }
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         // AbstractHorse.mobInteract: shift + use opens a tamed adult's inventory.
         if !m.is_baby() && m.extra.tame && sneaking {
             self.server_request_mount_menu(index);
@@ -195,7 +198,7 @@ impl ServerGame<'_> {
                 sunrise_sim::mobs::species::vanilla_id(species),
             )
         });
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         if m.is_baby() {
             return false;
         }
@@ -230,7 +233,7 @@ impl ServerGame<'_> {
         };
         if let Some(sound) = sound {
             let chest = item == "minecraft:chest";
-            let m = &mut self.common.mobs[index];
+            let m = &mut self.common.entities.mobs[index];
             let silent = m.silent;
             // `LivingEntity.onEquipItem`: a saddle's or armour's equip sound plays
             // at the mount's feet at pitch `1.0F`, seeded with the mount's own
@@ -256,8 +259,8 @@ impl ServerGame<'_> {
             }
             self.consume_held();
             if !chest {
-                let id = self.common.mobs[index].id;
-                let pos = self.common.mobs[index].position;
+                let id = self.common.entities.mobs[index].id;
+                let pos = self.common.entities.mobs[index].position;
                 self.mob_equip_event(id, [pos.x, pos.y, pos.z], true);
             }
             self.common
@@ -268,11 +271,11 @@ impl ServerGame<'_> {
         }
         // doPlayerRide: `AbstractHorse.doPlayerRide` turns the rider to the
         // horse's yaw before it seats them.
-        let id = self.common.mobs[index].id;
+        let id = self.common.entities.mobs[index].id;
         if !self.native_may_board(id) {
             return true;
         }
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         m.extra.flag = false;
         m.extra.counter = 0;
         self.common.yaw = m.yaw;
@@ -289,7 +292,7 @@ impl ServerGame<'_> {
     ) -> bool {
         let held = self.common.inventory[self.common.selected].clone();
         let sneaking = self.server_acting_sneak();
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         if m.is_baby() || !m.alive() || Some(m.id) == self.common.riding {
             return false;
         }
@@ -300,11 +303,11 @@ impl ServerGame<'_> {
             } else {
                 "minecraft:entity.pig.saddle"
             };
-            self.common.mobs[index].set_saddle(held.map(|s| ItemStack { count: 1, ..s }));
+            self.common.entities.mobs[index].set_saddle(held.map(|s| ItemStack { count: 1, ..s }));
             self.server_play_sound(sound, at, 1.0, 1.0);
             self.consume_held();
-            let id = self.common.mobs[index].id;
-            let pos = self.common.mobs[index].position;
+            let id = self.common.entities.mobs[index].id;
+            let pos = self.common.entities.mobs[index].position;
             self.mob_equip_event(id, [pos.x, pos.y, pos.z], true);
             self.common
                 .world
@@ -334,7 +337,7 @@ impl ServerGame<'_> {
     /// before its mobInteract can ride it, with the saddle's shearing sound.
     /// An occupied mount is not sheared: its mobInteract runs instead.
     pub(in crate::game) fn shear_saddle(&mut self, index: usize) -> Option<bool> {
-        let m = &self.common.mobs[index];
+        let m = &self.common.entities.mobs[index];
         // EntityTypeTags.CAN_EQUIP_SADDLE.
         let saddleable = matches!(
             m.species(),
@@ -363,6 +366,7 @@ impl ServerGame<'_> {
             || equine::is_vehicle(m)
             || self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .any(|r| r.alive() && !r.removed && r.extra.mount == Some(id))
@@ -395,12 +399,12 @@ impl ServerGame<'_> {
         let at = m.position;
         let offset = sunrise_sim::mobs::riders::passenger_attachment(m)[1];
         self.damage_held_tool();
-        self.common.mobs[index].set_saddle(None);
+        self.common.entities.mobs[index].set_saddle(None);
         let context = self.who_context(Some(Who::Player), None);
         self.post_game_event("minecraft:shear", [at.x, at.y, at.z], context);
         self.mob_equip_event(id, [at.x, at.y, at.z], false);
         self.spawn_at_location(at, offset, saddle.clone());
-        let target = self.mob_entity(&self.common.mobs[index]);
+        let target = self.mob_entity(&self.common.entities.mobs[index]);
         self.trigger_item_entity("minecraft:player_sheared_equipment", &saddle, &target);
         // attemptToShearEquipment: playSound(equippable.shearingSound()).
         if !silent {
@@ -415,11 +419,12 @@ impl ServerGame<'_> {
     }
     /// `AbstractHorse.handleEating`.
     pub(in crate::game::server_side) fn feed_mount(&mut self, index: usize, item: &str) -> bool {
-        let Some((heal, age_up, temper, love)) = eating(self.common.mobs[index].species(), item)
+        let Some((heal, age_up, temper, love)) =
+            eating(self.common.entities.mobs[index].species(), item)
         else {
             return false;
         };
-        let m = &mut self.common.mobs[index];
+        let m = &mut self.common.entities.mobs[index];
         let mut used = false;
         let mut loved = false;
         if love && m.extra.tame && m.extra.age == 0 && m.extra.in_love <= 0 {
@@ -491,7 +496,7 @@ impl ServerGame<'_> {
         // Animal.setInLove: entity event 18.
         if loved {
             self.server.love_cause.insert(id, self.server.lan_acting);
-            let kind = self.common.mobs[index].kind.id.clone();
+            let kind = self.common.entities.mobs[index].kind.id.clone();
             self.native_entity_enter_love_mode(id, &kind, self.server.lan_acting_uuid);
             self.mob_event_particles(id, 18);
         }
@@ -529,15 +534,17 @@ impl ServerGame<'_> {
         // of the `dismounts_underwater` tag (a server's player too: the put-back at the end of `guest_turn` tells their
         // client). When `entity_mount` keeps it on, the mount still reads this tick's input.
         let i = if keys.shift
-            || !self.common.mobs[i].alive()
-            || (dismounts_underwater(&self.items().entity_type_tags, &self.common.mobs[i])
-                && self.rider_eyes_in_water())
+            || !self.common.entities.mobs[i].alive()
+            || (dismounts_underwater(
+                &self.items().entity_type_tags,
+                &self.common.entities.mobs[i],
+            ) && self.rider_eyes_in_water())
         {
             self.dismount_mount();
             let Some(i) = self
                 .common
                 .mount_index()
-                .filter(|&i| self.common.mobs[i].alive())
+                .filter(|&i| self.common.entities.mobs[i].alive())
             else {
                 return true;
             };
@@ -549,12 +556,12 @@ impl ServerGame<'_> {
         let forward = f32::from(u8::from(keys.forward)) - f32::from(u8::from(keys.backward));
         // LocalPlayer.aiStep: the riding jump charges while space is held.
         let steer = steering_item(
-            self.common.mobs[i].species(),
+            self.common.entities.mobs[i].species(),
             self.common.held().map(|s| s.item.as_ref()),
             self.common.offhand.as_ref().map(|s| s.item.as_ref()),
         );
         let jump = self.common.charge_mount_jump(i, keys);
-        let m = &mut self.common.mobs[i];
+        let m = &mut self.common.entities.mobs[i];
         if jump > 0.0 {
             // AbstractHorse.onPlayerJump: slide on the keys and rear (horses,
             // donkeys and mules).
@@ -570,7 +577,7 @@ impl ServerGame<'_> {
             }
         }
         let sprint = keys.sprint || self.server_acting_sprint();
-        let m = &mut self.common.mobs[i];
+        let m = &mut self.common.entities.mobs[i];
         let pending = m.rider.map_or(0.0, |r| r.jump);
         m.rider = Some(equine::Rider {
             strafe,
@@ -595,12 +602,13 @@ impl ServerGame<'_> {
         let tags = &self.items().entity_type_tags;
         let swimmers: Vec<u32> = self
             .common
+            .entities
             .mobs
             .iter()
             .filter(|m| !blocked.contains(&m.id) && m.alive() && m.fluids.eye_in_water)
             .filter_map(|m| {
                 let mount = m.extra.mount?;
-                let under = self.common.mobs.iter().find(|v| v.id == mount)?;
+                let under = self.common.entities.mobs.iter().find(|v| v.id == mount)?;
                 dismounts_underwater(tags, under).then_some(m.id)
             })
             .collect();
@@ -629,7 +637,7 @@ impl ServerGame<'_> {
             return;
         }
         self.common.riding = None;
-        let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return;
         };
         m.rider = None;
@@ -694,13 +702,25 @@ impl ServerGame<'_> {
         yaw: f32,
         p: &PlayerMotion,
     ) -> Option<Vec3> {
-        if let Some(i) = self.common.boats.iter().position(|b| b.id == vehicle) {
+        if let Some(i) = self
+            .common
+            .entities
+            .boats
+            .iter()
+            .position(|b| b.id == vehicle)
+        {
             return Some(self.boat_player_dismount_target(i, yaw));
         }
-        if let Some(i) = self.common.carts.iter().position(|c| c.id == vehicle) {
+        if let Some(i) = self
+            .common
+            .entities
+            .carts
+            .iter()
+            .position(|c| c.id == vehicle)
+        {
             return Some(self.cart_player_dismount_target(i));
         }
-        let mount = self.common.mobs.iter().find(|m| m.id == vehicle)?;
+        let mount = self.common.entities.mobs.iter().find(|m| m.id == vehicle)?;
         if mount.species() == Species::HappyGhast {
             return Some(on_top(mount));
         }
@@ -712,11 +732,11 @@ impl ServerGame<'_> {
         // RunAroundLikeCrazyGoal.tick: tameWithName by the player on its
         // back, unless AnimalTameEvent is cancelled, which fails the roll
         // instead. Inside a guest's turn the acting ids are the guest's.
-        let index = self.common.mobs.iter().position(|m| m.id == mob);
+        let index = self.common.entities.mobs.iter().position(|m| m.id == mob);
         if let Some(index) = index {
             let (tamer, tamer_entity_id) = (self.native_acting_id(), self.own_entity_id());
             if self.animal_tame_cancelled(index, tamer, tamer_entity_id) {
-                let m = &mut self.common.mobs[index];
+                let m = &mut self.common.entities.mobs[index];
                 let mut events = Vec::new();
                 sunrise_sim::mobs::equine::refuse_rider(m, &mut events);
                 if let Err(e) = self.handle_mob_events(events) {
@@ -726,7 +746,7 @@ impl ServerGame<'_> {
             }
         }
         let owner = self.acting_player_uuid();
-        if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == mob) {
+        if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == mob) {
             // `asks_animal_tame` left the flag for this handler to set.
             m.extra.tame = true;
             m.extra.owner = Some(owner);
@@ -736,6 +756,7 @@ impl ServerGame<'_> {
         }
         if let Some(view) = self
             .common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == mob)
@@ -745,6 +766,7 @@ impl ServerGame<'_> {
         }
         if let Some(kind) = self
             .common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == mob)
@@ -794,12 +816,15 @@ impl ServerGame<'_> {
             // `Entity.ejectPassengers` before the mob moved off `from`: each
             // rider's `dismountVehicle` reads the vehicle where it stood.
             MobEvent::EjectPassengers { mob, from } => {
-                let Some(i) = self.common.mobs.iter().position(|m| m.id == mob) else {
+                let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == mob) else {
                     return;
                 };
-                let moved = (self.common.mobs[i].position, self.common.mobs[i].previous);
-                self.common.mobs[i].position = from;
-                self.common.mobs[i].previous = from;
+                let moved = (
+                    self.common.entities.mobs[i].position,
+                    self.common.entities.mobs[i].previous,
+                );
+                self.common.entities.mobs[i].position = from;
+                self.common.entities.mobs[i].previous = from;
                 if self.common.riding == Some(mob) {
                     self.stop_riding();
                 }
@@ -816,6 +841,7 @@ impl ServerGame<'_> {
                 }
                 let riders: Vec<u32> = self
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .filter(|m| m.extra.mount == Some(mob))
@@ -824,7 +850,7 @@ impl ServerGame<'_> {
                 for rider in riders {
                     self.dismount_mob(rider);
                 }
-                if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == mob) {
+                if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == mob) {
                     (m.position, m.previous) = moved;
                     m.extra.rider = None;
                 }
@@ -869,15 +895,15 @@ impl ServerGame<'_> {
                 }
                 continue;
             }
-            let Some(i) = self.common.mob_index.find(&self.common.mobs, id) else {
+            let Some(i) = self.common.mob_index.find(&self.common.entities.mobs, id) else {
                 continue;
             };
-            let join = self.common.mobs[i].join;
+            let join = self.common.entities.mobs[i].join;
             let fall = sunrise_sim::mobs::living::PassengerFall { distance, modifier };
             let mut resume = None;
             let mut events = Vec::new();
-            while let Some(i) = self.common.mob_index.find(&self.common.mobs, id) {
-                let rider = &mut self.common.mobs[i];
+            while let Some(i) = self.common.mob_index.find(&self.common.entities.mobs, id) {
+                let rider = &mut self.common.entities.mobs[i];
                 if rider.join != join
                     || rider.removed
                     || (resume.is_none() && rider.extra.mount != Some(mob))
@@ -1614,8 +1640,8 @@ pub mod tests {
         m.extra.tame = true;
         m.health = m.attrs.max_health;
         m.random = sunrise_core::random::LegacyRandom::new(seed);
-        game.mobs.clear();
-        game.mobs.push(m);
+        game.entities.mobs.clear();
+        game.entities.mobs.push(m);
     }
 
     /// Equips `item` on mob 0 and collects the sounds and the `minecraft:equip`

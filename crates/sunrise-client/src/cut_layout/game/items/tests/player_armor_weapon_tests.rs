@@ -38,7 +38,7 @@ fn taken(hand: Option<ItemStack>) -> f32 {
         let kind = g.res.mob_types().get("minecraft:zombie").unwrap().clone();
         let mut zombie = Mob::new(41, kind, Vec3::new(2.5, 64.0, 0.5), 0.0);
         zombie.extra.set_main_hand_stack(hand);
-        g.mobs.push(zombie);
+        g.entities.mobs.push(zombie);
         g.mob_hits_player(5.0, [2.5, 64.0, 0.5], "minecraft:mob_attack");
         taken = before - g.player.as_ref().unwrap().health.health();
     });

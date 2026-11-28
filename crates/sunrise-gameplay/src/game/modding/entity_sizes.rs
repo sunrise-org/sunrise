@@ -31,11 +31,11 @@ impl ServerGame<'_> {
         if !mod_api::__private::listened(mod_api::HookId::EntitySize) {
             return;
         }
-        for i in 0..self.common.mobs.len() {
-            let m = &self.common.mobs[i];
+        for i in 0..self.common.entities.mobs.len() {
+            let m = &self.common.entities.mobs[i];
             let (id, pose, vanilla, previous) = (m.id, m.pose(), m.vanilla_dims(), m.size_answer);
             if let Some(answer) = self.ask_entity_size(id, pose, vanilla, previous)
-                && let Some(m) = self.common.mobs.get_mut(i)
+                && let Some(m) = self.common.entities.mobs.get_mut(i)
                 && m.id == id
             {
                 m.size_answer = Some(answer);
@@ -73,8 +73,8 @@ impl ServerGame<'_> {
                     .update(i, |e| e.size_answer = Some(answer));
             }
         }
-        for i in 0..self.common.crystals.len() {
-            let c = &self.common.crystals[i];
+        for i in 0..self.common.entities.crystals.len() {
+            let c = &self.common.entities.crystals[i];
             // A crystal no server tracks yet has no entity id to name.
             let (id, previous) = (c.id, c.size_answer);
             if id == 0 {
@@ -83,6 +83,7 @@ impl ServerGame<'_> {
             let vanilla = sunrise_gameplay_common::game::dragon_common::Crystal::DIMENSIONS;
             if let Some(answer) = self.ask_entity_size(id, Pose::Standing, vanilla, previous) {
                 self.common
+                    .entities
                     .crystals
                     .update(i, |c| c.size_answer = Some(answer));
             }
@@ -174,11 +175,11 @@ pub(in crate::game) mod tests {
                         sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                     )
                     .unwrap();
-                let i = game.mobs.iter().position(|m| m.id == id).unwrap();
-                let vanilla = game.mobs[i].vanilla_dims();
+                let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
+                let vanilla = game.entities.mobs[i].vanilla_dims();
                 game.native_mob_sizes();
                 let grown = [vanilla[0] * 2.0, vanilla[1] * 2.0, vanilla[2]];
-                let m = &game.mobs[i];
+                let m = &game.entities.mobs[i];
                 assert_eq!((m.width(), m.height()), (grown[0], grown[1]));
                 assert_eq!(m.eye_height(), f64::from(vanilla[2]));
                 assert!((m.bounds().size().y - f64::from(grown[1])).abs() < 1e-9);
@@ -189,12 +190,12 @@ pub(in crate::game) mod tests {
                     &[(m_pose(game, i), vanilla, vanilla)]
                 );
                 // Grown down to a baby: asked again, from the size it had.
-                sunrise_sim::mobs::finalize::set_baby(&mut game.mobs[i], true);
+                sunrise_sim::mobs::finalize::set_baby(&mut game.entities.mobs[i], true);
                 game.native_mob_sizes();
                 let calls = calls.lock().unwrap();
                 assert_eq!(calls.len(), 2);
                 assert_eq!(calls[1].1, grown);
-                assert_eq!(calls[1].2, game.mobs[i].vanilla_dims());
+                assert_eq!(calls[1].2, game.entities.mobs[i].vanilla_dims());
             })
         });
     }
@@ -226,9 +227,9 @@ pub(in crate::game) mod tests {
                         sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                     )
                     .unwrap();
-                let i = game.mobs.iter().position(|m| m.id == id).unwrap();
-                let vanilla = game.mobs[i].vanilla_dims();
-                let default_dims = game.mobs[i].dims();
+                let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
+                let vanilla = game.entities.mobs[i].vanilla_dims();
+                let default_dims = game.entities.mobs[i].dims();
                 for invalid in [
                     f32::NAN,
                     f32::INFINITY,
@@ -241,33 +242,33 @@ pub(in crate::game) mod tests {
                         let mut answer = vanilla;
                         answer[axis] = invalid;
                         *size.lock().unwrap() = answer;
-                        game.mobs[i].size_answer = None;
+                        game.entities.mobs[i].size_answer = None;
                         game.native_mob_sizes();
-                        let mob = &game.mobs[i];
+                        let mob = &game.entities.mobs[i];
                         assert_eq!(mob.size_answer.unwrap().effective(), vanilla, "{answer:?}");
                         assert_eq!(mob.dims(), default_dims, "{answer:?}");
                     }
                 }
                 // The reported crash input must never become a pathfinding extent.
                 *size.lock().unwrap() = [1e30; 3];
-                game.mobs[i].size_answer = None;
+                game.entities.mobs[i].size_answer = None;
                 game.native_mob_sizes();
-                assert_eq!(game.mobs[i].dims(), default_dims);
+                assert_eq!(game.entities.mobs[i].dims(), default_dims);
                 // Both endpoints are valid: zero-size entities are vanilla too.
                 for accepted in [0.0, 32.0] {
                     *size.lock().unwrap() = [accepted; 3];
-                    game.mobs[i].size_answer = None;
+                    game.entities.mobs[i].size_answer = None;
                     game.native_mob_sizes();
                     assert_eq!(
-                        game.mobs[i].dims(),
+                        game.entities.mobs[i].dims(),
                         (accepted.into(), accepted.into(), accepted.into())
                     );
                 }
                 *size.lock().unwrap() = [0.0; 3];
-                game.mobs[i].size_answer = None;
+                game.entities.mobs[i].size_answer = None;
                 for _ in 0..4 {
                     game.native_mob_sizes();
-                    let mob = &game.mobs[i];
+                    let mob = &game.entities.mobs[i];
                     let path_mob = mob.path_mob();
                     assert_eq!((path_mob.width, path_mob.height), (0.0, 0.0));
                     let world = game.mob_world_base(&[]);
@@ -323,13 +324,13 @@ pub(in crate::game) mod tests {
                             sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                         )
                         .unwrap();
-                    let i = game.mobs.iter().position(|m| m.id == id).unwrap();
-                    let vanilla = game.mobs[i].vanilla_dims();
+                    let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
+                    let vanilla = game.entities.mobs[i].vanilla_dims();
                     for answer in [[0.0; 3], [1e-30; 3], [1e-45; 3], vanilla] {
                         *size.lock().unwrap() = answer;
-                        game.mobs[i].size_answer = None;
+                        game.entities.mobs[i].size_answer = None;
                         game.native_mob_sizes();
-                        let mut mob = game.mobs[i].path_mob();
+                        let mut mob = game.entities.mobs[i].path_mob();
                         mob.on_ground = true;
                         let world = game.mob_world_base(&[]);
                         let finder = Finder::new(&world, &mob, Evaluator::Walk);
@@ -344,11 +345,11 @@ pub(in crate::game) mod tests {
                             sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                         )
                         .unwrap();
-                    let i = game.mobs.iter().position(|m| m.id == id).unwrap();
-                    game.mobs[i].extra.model_scale = 0.0625;
-                    *size.lock().unwrap() = game.mobs[i].vanilla_dims();
+                    let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
+                    game.entities.mobs[i].extra.model_scale = 0.0625;
+                    *size.lock().unwrap() = game.entities.mobs[i].vanilla_dims();
                     game.native_mob_sizes();
-                    let mut mob = game.mobs[i].path_mob();
+                    let mut mob = game.entities.mobs[i].path_mob();
                     mob.on_ground = true;
                     assert!((mob.width - 0.025).abs() < 1e-8);
                     assert!((mob.height - 0.01875).abs() < 1e-8);
@@ -487,7 +488,7 @@ pub(in crate::game) mod tests {
         game: &crate::game::ServerGame<'_>,
         i: usize,
     ) -> Pose {
-        game.mobs[i].pose()
+        game.entities.mobs[i].pose()
     }
 
     /// Each client-copy test boots the normal resource loader, which replaces process-wide
@@ -731,7 +732,12 @@ pub(in crate::game) mod tests {
                 // The same pose again: no new size, no new call.
                 entity_data(game, id, vec![pose(2)]);
                 assert_eq!(calls(seen), expected, "asleep, same pose again");
-                let m = game.mobs.iter().find(|m| m.id == id as u32).unwrap();
+                let m = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id as u32)
+                    .unwrap();
                 assert_eq!((m.width(), m.height()), (0.4, 0.4));
                 // Waking: the pose stands it up, before or after the bed is cleared.
                 if bed_first {
@@ -781,7 +787,7 @@ pub(in crate::game) mod tests {
             game.tick_remote_entities(true);
             assert_eq!(seen.lock().unwrap().sizes.len(), 2, "the answer holds");
             let [width, height, _] = doubled(scaled);
-            let m = game.mobs.iter().find(|m| m.id == 31).unwrap();
+            let m = game.entities.mobs.iter().find(|m| m.id == 31).unwrap();
             let p = m.position;
             let half = f64::from(width) / 2.0;
             let min = [p.x - half, p.y, p.z - half];
@@ -822,7 +828,7 @@ pub(in crate::game) mod tests {
                 assert_eq!(seen.sizes.len(), before + 1, "one call per lid move");
                 let (_, pose, _, vanilla) = *seen.sizes.last().unwrap();
                 assert_eq!(pose, Pose::Standing);
-                let m = game.mobs.iter().find(|m| m.id == 51).unwrap();
+                let m = game.entities.mobs.iter().find(|m| m.id == 51).unwrap();
                 assert_eq!(m.vanilla_dims(), vanilla);
                 assert_eq!(m.height(), vanilla[1] * 2.0, "the lid's answer is applied");
                 heights.push(vanilla[1]);
@@ -882,9 +888,11 @@ pub(in crate::game) mod tests {
         }
         with_server(true, |game, seen| {
             let (cart_at, other_at) = (Vec3::new(8.5, 70.0, 8.5), Vec3::new(10.0, 70.0, 8.5));
-            game.carts
+            game.entities
+                .carts
                 .push(Minecart::new(9001, CartKind::Rideable, cart_at));
-            game.carts
+            game.entities
+                .carts
                 .push(Minecart::new(9002, CartKind::Rideable, other_at));
             game.spawn_item(
                 sunrise_items::items::ItemStack::new("minecraft:stone", 1),
@@ -892,13 +900,15 @@ pub(in crate::game) mod tests {
                 [0.0; 3],
                 0,
             );
-            let item = game.dropped.last().unwrap().id;
+            let item = game.entities.dropped.last().unwrap().id;
             let stand_at = Vec3::new(2.5, 70.0, 6.5);
-            game.armor_stands.push(ArmorStand::new(9004, stand_at, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(9004, stand_at, 0.0));
             let shot_at = Vec3::new(2.5, 70.0, 2.5);
             let mut shot = Projectile::new(ProjectileKind::Snowball, shot_at, None);
             shot.id = 9003;
-            game.creatures.projectiles.push(shot);
+            game.entities.projectiles.push(shot);
             for (id, kind) in [
                 (9005, "minecraft:leash_knot"),
                 (9006, "minecraft:block_display"),
@@ -943,28 +953,28 @@ pub(in crate::game) mod tests {
                 ]
             );
             let cart_box = made_box(cart_at, doubled(cart));
-            assert_eq!(corners(game.carts[0].bounds()), cart_box);
-            let item_at = game.dropped.last().unwrap().position;
+            assert_eq!(corners(game.entities.carts[0].bounds()), cart_box);
+            let item_at = game.entities.dropped.last().unwrap().position;
             assert_eq!(
-                corners(game.dropped.last().unwrap().bounds()),
+                corners(game.entities.dropped.last().unwrap().bounds()),
                 made_box(item_at, doubled(item_size))
             );
             assert_eq!(
-                corners(game.creatures.projectiles[0].bounds()),
+                corners(game.entities.projectiles[0].bounds()),
                 made_box(shot_at, doubled(item_size))
             );
             assert_eq!(
-                corners(game.armor_stands[0].bounds()),
+                corners(game.entities.armor_stands[0].bounds()),
                 made_box(stand_at, doubled(stand))
             );
             // The other cart moves against the first one's answered box.
-            let other = game.carts[1].clone();
+            let other = game.entities.carts[1].clone();
             let solids = game.entity_collisions(Mover::Cart(&other));
             assert!(solids.iter().any(|b| corners(*b) == cart_box), "{solids:?}");
             // The same sizes again: nothing to ask. ArmorStand.setSmall refreshes its size.
             game.native_entity_sizes();
             assert_eq!(seen.lock().unwrap().sizes.len(), 6);
-            game.armor_stands.update(0, |a| a.small = true);
+            game.entities.armor_stands.update(0, |a| a.small = true);
             game.native_entity_sizes();
             assert_eq!(
                 seen.lock().unwrap().sizes.last(),
@@ -995,8 +1005,15 @@ pub(in crate::game) mod tests {
                     sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                 )
                 .unwrap();
-            let health = game.mobs.iter().find(|m| m.id == pig).unwrap().health;
+            let health = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == pig)
+                .unwrap()
+                .health;
             game.common
+                .entities
                 .falling
                 .push(sunrise_gameplay_common::game::FallingBlock {
                     size_answer: None,
@@ -1028,10 +1045,16 @@ pub(in crate::game) mod tests {
                     saved: None,
                 });
             game.native_entity_sizes();
-            let mut anvil = game.falling[0].clone();
-            game.falling.remove(0);
+            let mut anvil = game.entities.falling[0].clone();
+            game.entities.falling.remove(0);
             game.falling_block_impact(&mut anvil);
-            let hurt = game.mobs.iter().find(|m| m.id == pig).unwrap().health;
+            let hurt = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == pig)
+                .unwrap()
+                .health;
             assert!(hurt < health, "{hurt} < {health}");
         });
     }
@@ -1057,15 +1080,18 @@ pub(in crate::game) mod tests {
                     sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                 )
                 .unwrap();
-            let i = game.mobs.iter().position(|m| m.id == id).unwrap();
-            sunrise_sim::mobs::finalize::set_baby(&mut game.mobs[i], true);
-            let calf = game.mobs[i].vanilla_dims();
+            let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
+            sunrise_sim::mobs::finalize::set_baby(&mut game.entities.mobs[i], true);
+            let calf = game.entities.mobs[i].vanilla_dims();
             // One tick from growing up (`AgeableMob.aiStep`: ++age).
-            game.mobs[i].extra.age = -1;
+            game.entities.mobs[i].extra.age = -1;
             game.native_mob_sizes();
             game.tick_creature_entities().unwrap();
-            let i = game.mobs.iter().position(|m| m.id == id).unwrap();
-            assert!(!game.mobs[i].is_baby(), "the calf grew up in its tick");
+            let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
+            assert!(
+                !game.entities.mobs[i].is_baby(),
+                "the calf grew up in its tick"
+            );
             // EntityType.COW: 0.9 by 1.4, eyes 1.3.
             let cow = [0.9, 1.4, 1.3];
             let calls: Vec<_> = seen
@@ -1083,7 +1109,7 @@ pub(in crate::game) mod tests {
                     (id, Pose::Standing, doubled(calf), cow),
                 ]
             );
-            assert_eq!(game.mobs[i].height(), 1.4_f32 * 2.0);
+            assert_eq!(game.entities.mobs[i].height(), 1.4_f32 * 2.0);
         });
     }
 
@@ -1098,12 +1124,14 @@ pub(in crate::game) mod tests {
         }
         with_server(false, |game, _| {
             let at = Vec3::new(8.5, 70.0, 8.5);
-            game.carts.push(Minecart::new(9001, CartKind::Rideable, at));
+            game.entities
+                .carts
+                .push(Minecart::new(9001, CartKind::Rideable, at));
             game.native_mob_sizes();
             game.native_entity_sizes();
-            assert_eq!(game.carts[0].size_answer, None);
+            assert_eq!(game.entities.carts[0].size_answer, None);
             assert_eq!(
-                corners(game.carts[0].bounds()),
+                corners(game.entities.carts[0].bounds()),
                 made_box(at, [0.98, 0.7, 0.0])
             );
         });

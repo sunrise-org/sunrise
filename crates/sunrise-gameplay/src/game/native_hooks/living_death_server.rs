@@ -55,7 +55,14 @@ impl crate::game::ServerGame<'_> {
         let kind = super::mob_kind(mob);
         let mut cancel = false;
         self.native_living_death(mob.id, &kind, &source, weapon.as_ref(), &mut cancel);
-        if cancel && let Some(body) = self.common.mobs.iter_mut().find(|m| m.id == mob.id) {
+        if cancel
+            && let Some(body) = self
+                .common
+                .entities
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == mob.id)
+        {
             body.death_canceled = body.health <= 0.0;
             if !body.death_canceled {
                 body.death_time = 0;

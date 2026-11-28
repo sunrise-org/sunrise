@@ -58,10 +58,10 @@ fn scene(
         rider.extra.mount = Some(VEHICLE);
         rider
     });
-    game.mobs.clear();
-    game.mobs.push(vehicle);
+    game.entities.mobs.clear();
+    game.entities.mobs.push(vehicle);
     if let Some(rider) = mob_rider {
-        game.mobs.push(rider);
+        game.entities.mobs.push(rider);
     }
 
     let (sender, _packets) = mpsc::channel();

@@ -31,7 +31,7 @@ fn mob_thorns_melee_projectiles_and_non_attacks() {
             }])
             .unwrap();
             check_answer(g, slot, true);
-            assert_eq!(g.mobs[0].health, 96.139_27); // Java Random(1), then the husk's 2 armor.
+            assert_eq!(g.entities.mobs[0].health, 96.139_27); // Java Random(1), then the husk's 2 armor.
         }
         for case in 0..5 {
             let source = pair(g, f::CHEST);
@@ -61,8 +61,8 @@ fn mob_thorns_melee_projectiles_and_non_attacks() {
                     source,
                 },
                 _ => {
-                    g.mobs[1].invulnerable = 20;
-                    g.mobs[1].last_hurt = 10.0;
+                    g.entities.mobs[1].invulnerable = 20;
+                    g.entities.mobs[1].last_hurt = 10.0;
                     MobEvent::AttackMob {
                         target: 42,
                         amount: 1.0,
@@ -104,7 +104,7 @@ fn mob_thorns_melee_projectiles_and_non_attacks() {
             (ProjectileKind::Egg, false),
         ] {
             pair(g, f::CHEST);
-            let mut p = Projectile::new(kind, g.mobs[1].position, Some(Who::Mob(41)));
+            let mut p = Projectile::new(kind, g.entities.mobs[1].position, Some(Who::Mob(41)));
             p.velocity = Vec3::new(-1.0, 0.0, 0.0);
             g.projectile_hit(
                 &p,
@@ -190,12 +190,12 @@ fn a_still_guardian_spikes_the_player_who_hit_it() {
             guest.load_timeout = 0;
             g.server.lan.as_mut().unwrap().hub.guests.push(guest);
         }
-        g.mobs.clear();
+        g.entities.mobs.clear();
         let kind = g.res.mob_types().get("minecraft:guardian").unwrap().clone();
         let mut guardian = Mob::new(41, kind, Vec3::new(10.5, 64.0, 0.5), 0.0);
         // Even a refused hit retaliates, before LivingEntity's guards.
         guardian.invulnerable_flag = true;
-        g.mobs.push(guardian);
+        g.entities.mobs.push(guardian);
         let before: Vec<_> = [11, 22]
             .into_iter()
             .map(|conn| {
@@ -222,10 +222,10 @@ fn a_still_guardian_spikes_the_player_who_hit_it() {
         .unwrap();
         // The guardian changes targets, and the next player's turn drains the
         // real outbox. A deferred or redirected thorns hit must not reach 22.
-        g.mobs[0].ai.target = Some(Who::Mob(202));
+        g.entities.mobs[0].ai.target = Some(Who::Mob(202));
         g.as_guest(22, |g| {
             g.player.as_mut().unwrap().health.advance_clock();
-            let queued = std::mem::take(&mut g.mobs[0].outbox);
+            let queued = std::mem::take(&mut g.entities.mobs[0].outbox);
             g.handle_mob_events(queued).unwrap();
             g.player.as_mut().unwrap().health.advance_clock();
         })

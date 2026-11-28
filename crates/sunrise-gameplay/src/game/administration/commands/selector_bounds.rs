@@ -24,12 +24,7 @@ impl crate::game::ServerGame<'_> {
     /// retains its existing point fallback for those kinds.
     pub(in crate::game) fn selector_target_bounds(&self, target: Target) -> Option<Aabb> {
         match target {
-            Target::General(id) => self
-                .common
-                .resident_entities
-                .general
-                .row(id)
-                .map(Entity::bounds),
+            Target::General(id) => self.common.entities.general.row(id).map(Entity::bounds),
             Target::Player => self.common.player.as_ref().map(|p| p.bounds()),
             Target::Guest(conn) => self.command_guest(conn).map(|p| p.bounds()),
             Target::Hook(id) => self.fishing_hook_by_id(id).map(|(h, _)| h.bounds()),
@@ -38,99 +33,119 @@ impl crate::game::ServerGame<'_> {
                 .map(|(d, i)| d.part_geometry(i).1),
             Target::Mob(id) => self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .find(|e| e.id == id)
                 .map(Entity::bounds),
             Target::Item(id) => self
                 .common
+                .entities
                 .dropped
                 .iter()
                 .find(|e| e.id == id)
                 .map(Entity::bounds),
             Target::Orb(id) => self
                 .common
+                .entities
                 .orbs
                 .iter()
                 .find(|e| e.id == id)
                 .map(Entity::bounds),
             Target::Projectile(id) => self
                 .common
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|e| e.id == id)
                 .map(Entity::bounds),
             Target::Stand(id) => self
                 .common
+                .entities
                 .armor_stands
                 .iter()
                 .find(|e| e.id == id)
                 .map(Entity::bounds),
             Target::Boat(id) => self
                 .common
+                .entities
                 .boats
                 .iter()
                 .find(|e| e.id == id)
                 .map(Entity::bounds),
             Target::Cart(id) => self
                 .common
+                .entities
                 .carts
                 .iter()
                 .find(|e| e.id == id)
                 .map(Entity::bounds),
             Target::Tnt(id) => self
                 .common
+                .entities
                 .tnts
                 .iter()
                 .find(|e| e.id == id)
                 .map(Entity::bounds),
             Target::Falling(id) => self
                 .common
+                .entities
                 .falling
                 .iter()
                 .find(|e| e.id == id)
                 .map(Entity::bounds),
             Target::Rocket(id) => self
                 .common
+                .entities
                 .rockets
                 .iter()
                 .find(|e| e.id == id)
                 .map(Entity::bounds),
             Target::Trident(id) => self
                 .common
+                .entities
                 .tridents
                 .iter()
                 .find(|e| e.id == id)
                 .map(Entity::bounds),
             Target::Frame(id) => self
                 .common
+                .entities
                 .item_frames
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| extents(e.bounds())),
             Target::Painting(id) => self
                 .common
+                .entities
                 .paintings
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| extents(e.bounds())),
             Target::Cushion(id) => self
                 .common
+                .entities
                 .cushions
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| extents(e.bounds())),
             Target::Crystal(id) => self
                 .common
+                .entities
                 .crystals
                 .iter()
                 .find(|e| e.id == id)
                 .map(|e| e.bounds()),
-            Target::Bolt(id) => self.common.bolts.iter().find(|b| b.id == id).map(|b| {
-                let p = Vec3::new(b.at[0], b.at[1], b.at[2]);
-                Aabb::new(p, p)
-            }),
+            Target::Bolt(id) => self
+                .common
+                .entities
+                .bolts
+                .iter()
+                .find(|b| b.id == id)
+                .map(|b| {
+                    let p = Vec3::new(b.at[0], b.at[1], b.at[2]);
+                    Aabb::new(p, p)
+                }),
             Target::Other(_)
             | Target::Fangs(_)
             | Target::Dragon(_)

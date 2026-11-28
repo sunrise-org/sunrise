@@ -60,7 +60,7 @@ fn game<'a>(resources: &'a mut Option<Arc<Resources>>) -> sunrise_gameplay::game
 fn a_shield_halves_the_push_of_a_ram() {
     let mut resources = None;
     let mut game = game(&mut resources);
-    let goat = game.mobs[0].id;
+    let goat = game.entities.mobs[0].id;
     let from = [0.5, 64.0, 1.5];
     let ram = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
         game.handle_mob_events(vec![MobEvent::Knockback {

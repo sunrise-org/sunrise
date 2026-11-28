@@ -20,9 +20,14 @@ fn a_stop_waiting_for_a_sound_is_heard_after_its_removal() {
             [0.0; 3],
             32767,
         );
-        let fresh = game.dropped.last().unwrap().id;
-        let index = game.dropped.iter().position(|d| d.id == near).unwrap();
-        let _ = game.dropped.remove(index);
+        let fresh = game.entities.dropped.last().unwrap().id;
+        let index = game
+            .entities
+            .dropped
+            .iter()
+            .position(|d| d.id == near)
+            .unwrap();
+        let _ = game.entities.dropped.remove(index);
         let sound = |entity: u32| sunrise_game_data::sound_source::ServerSound {
             event: "minecraft:entity.item.pickup".into(),
             source: 7,

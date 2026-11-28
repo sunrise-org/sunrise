@@ -55,7 +55,7 @@ pub(crate) mod tests {
             let entity = game.entity(32).unwrap();
             assert_eq!(game.entity_bounding_box(entity), Some([min, max]));
             // Only the cart and the armor stand show an outline: keep the cart's.
-            game.armor_stands.clear();
+            game.entities.armor_stands.clear();
             assert_eq!(white_outline(game), (min, max));
             // Aimed over a vanilla cart (y 70.7) but into the answered box: the crosshair
             // picks the cart.

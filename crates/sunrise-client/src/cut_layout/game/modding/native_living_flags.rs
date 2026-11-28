@@ -25,7 +25,8 @@ pub(crate) mod tests {
     fn cow(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32) -> LivingRef {
         fixture_resident_column(&mut game.world, (0, 0));
         let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(id, kind, Vec3::new(5.5, 64.0, 5.5), 0.0));
         game.living(game.entity(id).unwrap()).unwrap()
     }
@@ -38,10 +39,12 @@ pub(crate) mod tests {
             let game = &mut *game;
             assert_eq!(game.living_is_gliding(mob), Some(false));
             assert!(game.living_start_gliding(mob));
-            assert!(game.mobs[0].extra.fall_flying);
+            assert!(game.entities.mobs[0].extra.fall_flying);
             assert_eq!(game.living_is_gliding(mob), Some(true));
             // An armor stand has no glide state, so the write changes nothing.
-            game.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(13, Vec3::ZERO, 0.0));
             let living = game.living(game.entity(13).unwrap()).unwrap();
             assert!(!game.living_start_gliding(living));
             // The player in place and a guest start their own body's flag.
@@ -70,35 +73,35 @@ pub(crate) mod tests {
             let mob_ref = game.mob(game.entity(12).unwrap()).unwrap();
             assert_eq!(game.mob_no_ai(mob_ref), Some(false));
             assert!(game.mob_set_no_ai(mob_ref, true));
-            assert!(game.mobs[0].no_ai);
+            assert!(game.entities.mobs[0].no_ai);
             assert_eq!(game.mob_no_ai(mob_ref), Some(true));
             assert_eq!(game.mob_persistence_required(mob_ref), Some(false));
             assert_eq!(game.mob_requires_custom_persistence(mob_ref), Some(false));
             assert!(game.mob_set_persistence_required(mob_ref));
-            assert!(game.mobs[0].persistent);
+            assert!(game.entities.mobs[0].persistent);
             assert_eq!(game.mob_persistence_required(mob_ref), Some(true));
             // The baby age: a full day of growing up, and grown on the spot.
             assert_eq!(game.living_baby(mob), Some(false));
             assert!(game.mob_set_baby(mob_ref, true));
-            assert_eq!(game.mobs[0].extra.age, -24000);
+            assert_eq!(game.entities.mobs[0].extra.age, -24000);
             assert_eq!(game.living_baby(mob), Some(true));
             let _ = &mob_ref;
             // The glide flag clears the way the game's own glide end does.
-            game.mobs[0].extra.fall_flying = true;
-            game.mobs[0].extra.fall_fly_ticks = 9;
+            game.entities.mobs[0].extra.fall_flying = true;
+            game.entities.mobs[0].extra.fall_fly_ticks = 9;
             assert_eq!(game.living_is_gliding(mob), Some(true));
             assert_eq!(game.living_gliding_ticks(mob), Some(9));
             assert!(game.living_stop_gliding(mob));
-            assert!(!game.mobs[0].extra.fall_flying);
+            assert!(!game.entities.mobs[0].extra.fall_flying);
             // A villager's bed helpers answer for an awake cow.
-            assert!(!villager::sleeping(&game.mobs[0]));
+            assert!(!villager::sleeping(&game.entities.mobs[0]));
             assert_eq!(game.living_is_sleeping(mob), Some(false));
             assert_eq!(game.living_sleeping_pos(mob), None);
             assert!(!game.living_start_sleeping(mob, [5, 64, 5]));
             assert!(!game.living_stop_sleeping(mob));
             // NoAI, PersistenceRequired and Age are the save's own tags.
             let tag = sunrise_sim::entity_nbt::mob_to_nbt(
-                &game.mobs[0],
+                &game.entities.mobs[0],
                 [1, 2, 3, 4],
                 None,
                 Some(game.pack.assets.registry),
@@ -122,13 +125,14 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(13, kind, Vec3::new(5.5, 64.0, 5.5), 0.0));
             let zombie_ref = game.mob(game.entity(13).unwrap()).unwrap();
             assert!(game.mob_set_persistence_required(zombie_ref));
             assert!(game.mob_set_no_ai(zombie_ref, true));
             let tag = sunrise_sim::entity_nbt::mob_to_nbt(
-                &game.mobs[1],
+                &game.entities.mobs[1],
                 [5, 6, 7, 8],
                 None,
                 Some(game.pack.assets.registry),
@@ -145,7 +149,7 @@ pub(crate) mod tests {
             assert!(restored.persistent && restored.no_ai);
             // A grown-up cow reads back as one, too.
             assert!(game.mob_set_baby(mob_ref, false));
-            assert_eq!(game.mobs[0].extra.age, 0);
+            assert_eq!(game.entities.mobs[0].extra.age, 0);
             assert_eq!(game.living_baby(mob), Some(false));
             // A stale handle reads None and writes false.
             let stale = LivingRef::new(EntityRef::new(
@@ -186,7 +190,7 @@ pub(crate) mod tests {
             || {
                 with_game(|game| {
                     fixture_resident_column(&mut game.world, (0, 0));
-                    let before = game.mobs.len();
+                    let before = game.entities.mobs.len();
                     game.spawn_mob_spawned(
                         "zombie",
                         [5.0, 64.0, 5.0],
@@ -195,7 +199,7 @@ pub(crate) mod tests {
                         ),
                     )
                     .unwrap();
-                    let m = &game.mobs[before];
+                    let m = &game.entities.mobs[before];
                     assert!(m.persistent, "the join hook's write survives");
                     assert!(m.no_ai && m.is_baby());
                 });
@@ -204,7 +208,7 @@ pub(crate) mod tests {
         // Without a mod the summoned mob stays plain vanilla: not
         // persistent, as SummonCommand never calls setPersistenceRequired.
         with_game(|game| {
-            let before = game.mobs.len();
+            let before = game.entities.mobs.len();
             game.spawn_mob_spawned(
                 "zombie",
                 [5.0, 64.0, 5.0],
@@ -213,7 +217,10 @@ pub(crate) mod tests {
                 ),
             )
             .unwrap();
-            assert!(!game.mobs[before].persistent, "a summon stays vanilla");
+            assert!(
+                !game.entities.mobs[before].persistent,
+                "a summon stays vanilla"
+            );
         });
     }
 
@@ -740,9 +747,9 @@ pub(crate) mod tests {
             assert_eq!(game.living_gliding_ticks(living), Some(0));
             // A mob uses the same adapter with its own, not the player's flag.
             let mob = cow(game, 20);
-            game.mobs[0].position = Vec3::new(3.0, 64.0, 5.0);
+            game.entities.mobs[0].position = Vec3::new(3.0, 64.0, 5.0);
             assert_eq!(game.living_is_climbing(mob), Some(true));
-            game.mobs[0].extra.fall_flying = true;
+            game.entities.mobs[0].extra.fall_flying = true;
             assert_eq!(game.living_is_climbing(mob), Some(false));
             let ladder = game
                 .pack
@@ -838,7 +845,8 @@ pub(crate) mod tests {
                     .get("minecraft:villager")
                     .unwrap()
                     .clone();
-                game.mobs
+                game.entities
+                    .mobs
                     .push(Mob::new(20, kind, Vec3::new(3.0, 64.0, 5.0), 0.0));
                 let living = game.living(game.entity(20).unwrap()).unwrap();
                 let stone = game
@@ -852,7 +860,7 @@ pub(crate) mod tests {
                 balance.drain_balanced();
                 for pos in [[5, 64, 5], [4, 64, 4], [1600, 64, 1600], [6, 64, 6]] {
                     let before = sunrise_sim::entity_nbt::mob_to_nbt(
-                        &game.mobs[0],
+                        &game.entities.mobs[0],
                         [1, 2, 3, 4],
                         None,
                         Some(game.pack.assets.registry),
@@ -862,7 +870,7 @@ pub(crate) mod tests {
                     assert!(!game.living_start_sleeping(living, pos), "{pos:?}");
                     assert_eq!(
                         sunrise_sim::entity_nbt::mob_to_nbt(
-                            &game.mobs[0],
+                            &game.entities.mobs[0],
                             [1, 2, 3, 4],
                             None,
                             Some(game.pack.assets.registry),
@@ -871,7 +879,7 @@ pub(crate) mod tests {
                         ),
                         before
                     );
-                    assert_eq!(game.mobs[0].position, Vec3::new(3.0, 64.0, 5.0));
+                    assert_eq!(game.entities.mobs[0].position, Vec3::new(3.0, 64.0, 5.0));
                     assert_eq!(game.living_sleeping_pos(living), None);
                     assert_eq!(balance.drain_balanced(), 0, "rejected bed opened a pass");
                 }
@@ -884,7 +892,7 @@ pub(crate) mod tests {
                 },
             );
                 assert_eq!(game.living_sleeping_pos(living), Some([5, 64, 5]));
-                assert_eq!(game.mobs[0].position, Vec3::new(5.5, 64.6875, 5.5));
+                assert_eq!(game.entities.mobs[0].position, Vec3::new(5.5, 64.6875, 5.5));
                 assert_eq!(
                     game.pack
                         .assets
@@ -939,7 +947,7 @@ pub(crate) mod tests {
                 state("minecraft:stone"),
             );
             let at = |game: &sunrise_gameplay::game::ServerGame<'_>, id: u32| {
-                let mob = game.mobs.iter().find(|m| m.id == id).unwrap();
+                let mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
                 mob.on_climbable(&game.mob_world_base(&[]))
             };
             let even = cow(game, 20);
@@ -1182,7 +1190,7 @@ pub(crate) mod tests {
                     game.world.set(5, 64, 5, trapdoor).unwrap();
                     // The flag a mod reads, the cow's own climbing and the player's motion agree.
                     assert_eq!(game.living_is_climbing(living), Some(climbs));
-                    let mob = game.mobs.iter().find(|m| m.id == 40).unwrap();
+                    let mob = game.entities.mobs.iter().find(|m| m.id == 40).unwrap();
                     assert_eq!(mob.on_climbable(&game.mob_world_base(&[])), climbs);
                     let remembered = climbs.then_some(BlockPos::new(5, 64, 5));
                     assert_eq!(player_climbs(game, 41), (climbs, remembered));

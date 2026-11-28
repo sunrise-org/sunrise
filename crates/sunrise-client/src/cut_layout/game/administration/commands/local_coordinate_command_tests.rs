@@ -147,7 +147,7 @@ fn h149_actual_registered_local_commands_preserve_exact_saved_positions() {
                 .find(|(_, u)| **u == uuid)
                 .unwrap()
                 .0;
-            assert!(game.mobs.iter().any(|m| m.id == id));
+            assert!(game.entities.mobs.iter().any(|m| m.id == id));
             assert!(game.run_command(&format!("execute if entity @e[type=pig,nbt={{UUID:[I;149,1,0,{number}],Health:10f,NoAI:1b,NoGravity:1b,Pos:[4.5d,200d,4.5d],Motion:[0d,0d,0d],Rotation:[11f,7f]}}]")));
             assert!(game.world.loaded(4, 4));
             let before = game.command_target_nbt(Target::Mob(id)).unwrap();
@@ -166,7 +166,7 @@ fn h149_actual_registered_local_commands_preserve_exact_saved_positions() {
             );
             assert_eq!(game.score.board.score("#r", "h149").unwrap().value, 1);
             assert_eq!(game.score.board.score("#s", "h149").unwrap().value, 1);
-            let model = game.mobs.iter().find(|m| m.id == id).unwrap();
+            let model = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
             let model_bits =
                 [model.position.x, model.position.y, model.position.z].map(f64::to_bits);
             let saved = game.command_target_nbt(Target::Mob(id)).unwrap();

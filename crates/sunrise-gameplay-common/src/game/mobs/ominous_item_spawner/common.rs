@@ -37,7 +37,7 @@ impl crate::game::CommonGame<'_> {
     /// `handleAddEntity` for a spawner a server sent: its item comes with the
     /// entity data (`ItemStack.EMPTY` until then, which draws nothing).
     pub fn add_remote_ominous_item_spawner(&mut self, id: u32, position: [f64; 3]) {
-        self.ominous_spawners.push(OminousItemSpawner {
+        self.entities.ominous_spawners.push(OminousItemSpawner {
             attachment_lifetime: Default::default(),
             join: Default::default(),
             id,

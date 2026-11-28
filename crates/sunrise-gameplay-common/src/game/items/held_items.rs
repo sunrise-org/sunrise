@@ -171,11 +171,11 @@ impl crate::game::CommonGame<'_> {
 
     /// `Entity.getKnownSpeed` of the mob at `index`, per second: its root vehicle's.
     pub fn mob_speed(&self, index: usize) -> Vec3 {
-        let mut mob = &self.mobs[index];
+        let mut mob = &self.entities.mobs[index];
         while let Some(vehicle) = mob
             .extra
             .mount
-            .and_then(|v| self.mobs.iter().find(|m| m.id == v))
+            .and_then(|v| self.entities.mobs.iter().find(|m| m.id == v))
         {
             mob = vehicle;
         }
@@ -1268,18 +1268,21 @@ pub trait HeldItemsGameExt1<'__sg>: crate::game::SideGame<'__sg> {
                         .as_ref()
                         .map(|p| (p.position, f64::from(p.dimensions.height)))
                 } else {
-                    self.mobs
+                    self.entities
+                        .mobs
                         .iter()
                         .find(|m| m.id == id && m.alive())
                         .map(|m| (m.position, f64::from(m.height())))
                         .or_else(|| {
-                            self.carts
+                            self.entities
+                                .carts
                                 .iter()
                                 .find(|c| c.id == id)
                                 .map(|c| (c.position, super::minecarts::HEIGHT))
                         })
                         .or_else(|| {
-                            self.dropped
+                            self.entities
+                                .dropped
                                 .iter()
                                 .find(|i| i.id == id)
                                 .map(|i| (i.position, sunrise_sim::entities::ItemEntity::WIDTH))

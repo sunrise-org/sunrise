@@ -138,13 +138,13 @@ pub(crate) fn run_extra_case(
     let (expected_hooked_id, tracked_item): (Option<u32>, Option<u32>) = match case.case.as_str() {
         "owner_vehicle_passenger" => {
             assert!(game.run_command("summon minecraft:oak_boat 2.5 64.0 4.5 {}"));
-            let boat_id = game.boats.last().unwrap().id;
+            let boat_id = game.entities.boats.last().unwrap().id;
             assert!(game.run_command("summon minecraft:pig 2.5 64.0 4.5 {NoAI:1b,Silent:1b}"));
-            let pig_id = game.mobs.last().unwrap().id;
+            let pig_id = game.entities.mobs.last().unwrap().id;
             assert!(game.start_riding_target(Target::Player, Target::Boat(boat_id), true));
             assert!(game.start_riding_target(Target::Mob(pig_id), Target::Boat(boat_id), true));
             assert!(game.run_command("summon minecraft:armor_stand 5.5 64.0 4.5 {}"));
-            let stand_id = game.armor_stands.last().unwrap().id;
+            let stand_id = game.entities.armor_stands.last().unwrap().id;
             game.tick_server(false).unwrap();
             spawn_test_hook(
                 game,
@@ -181,7 +181,7 @@ pub(crate) fn run_extra_case(
                     "summon minecraft:armor_stand 6.9 64.0 5.050000005 {NoGravity:1b}"
                 )
             );
-            let stand_id = game.armor_stands.last().unwrap().id;
+            let stand_id = game.entities.armor_stands.last().unwrap().id;
             spawn_test_hook(
                 game,
                 Vec3::new(1.5, 65.5, 4.5),
@@ -196,7 +196,7 @@ pub(crate) fn run_extra_case(
             assert!(game.run_command(
                 r#"summon minecraft:item 3.5 64.0 4.5 {Item:{id:"minecraft:diamond",count:1},Motion:[0.0d,0.0d,0.0d],PickupDelay:32767}"#
             ));
-            let item_id = game.dropped.last().unwrap().id;
+            let item_id = game.entities.dropped.last().unwrap().id;
             assert_eq!(item_id & 3, mod4, "same_tick_retrieve_item tick phase");
             spawn_test_hook(
                 game,

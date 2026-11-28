@@ -49,14 +49,14 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn remote_arrow_puff(&mut self, id: u32) {
         let Some(i) = self
             .common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .position(|p| p.id == id)
         else {
             return;
         };
-        let Some((at, color)) = self.common.creatures.projectiles.update(i, |p| {
+        let Some((at, color)) = self.common.entities.projectiles.update(i, |p| {
             let a = p.arrow.as_mut()?;
             Some((p.position, std::mem::replace(&mut a.effect_color, -1)))
         }) else {
@@ -98,7 +98,10 @@ impl crate::game::ClientGame<'_> {
         if replace {
             self.spawn_remote_projectile(kind, p, rotation);
         } else {
-            self.common.crystals.retain(|c| c.id != p.id as u32);
+            self.common
+                .entities
+                .crystals
+                .retain(|c| c.id != p.id as u32);
             self.remove_remote_small_projectiles(p.id as u32);
             self.spawn_remote_projectile_inner(kind, p, rotation);
         }
@@ -137,12 +140,14 @@ impl crate::game::ClientGame<'_> {
             }
             return;
         }
-        if self.common.rockets.iter().any(|r| r.id == id) {
+        if self.common.entities.rockets.iter().any(|r| r.id == id) {
             for (index, _, value) in values {
                 match (index, value) {
                     // Entity.DATA_SILENT: suppresses client burst blast and twinkle sounds.
                     (4, Value::Bool(silent)) => {
-                        if let Some(r) = self.common.rockets.iter_mut().find(|r| r.id == id) {
+                        if let Some(r) =
+                            self.common.entities.rockets.iter_mut().find(|r| r.id == id)
+                        {
                             r.silent = *silent;
                         }
                     }
@@ -150,7 +155,8 @@ impl crate::game::ClientGame<'_> {
                     // explosions for `createFireworks`.
                     (8, Value::Item(stack)) => {
                         if let Some(stack) = self.to_stack(stack)
-                            && let Some(r) = self.common.rockets.iter_mut().find(|r| r.id == id)
+                            && let Some(r) =
+                                self.common.entities.rockets.iter_mut().find(|r| r.id == id)
                         {
                             let (_, explosions) = fireworks_of(&stack);
                             r.explosions = explosions.into();
@@ -160,13 +166,17 @@ impl crate::game::ClientGame<'_> {
                     // DATA_ATTACHED_TO_TARGET (OptionalInt: the id plus 1).
                     (9, Value::Id(v)) => {
                         let v = (*v != 0).then(|| v.wrapping_sub(1) as u32);
-                        if let Some(r) = self.common.rockets.iter_mut().find(|r| r.id == id) {
+                        if let Some(r) =
+                            self.common.entities.rockets.iter_mut().find(|r| r.id == id)
+                        {
                             r.attached_to = v;
                         }
                     }
                     // DATA_SHOT_AT_ANGLE.
                     (10, Value::Bool(a)) => {
-                        if let Some(r) = self.common.rockets.iter_mut().find(|r| r.id == id) {
+                        if let Some(r) =
+                            self.common.entities.rockets.iter_mut().find(|r| r.id == id)
+                        {
                             r.angled = *a;
                         }
                     }
@@ -198,29 +208,42 @@ impl crate::game::ClientGame<'_> {
             })
             && let Some(stack) = self.to_stack(stack)
         {
-            remote_projectile_item(&mut self.common.creatures.projectiles, id, stack);
+            remote_projectile_item(&mut self.common.entities.projectiles, id, stack);
         }
         for (index, _, value) in values {
-            if let Some(t) = self.common.tnts.iter_mut().find(|t| t.id == id) {
+            if let Some(t) = self.common.entities.tnts.iter_mut().find(|t| t.id == id) {
                 // PrimedTnt.DATA_FUSE_ID.
                 if let (8, Value::Int(fuse)) = (index, value) {
                     t.fuse = *fuse;
                 }
-            } else if let Some(i) = self.common.falling.iter().position(|f| f.id == id) {
+            } else if let Some(i) = self.common.entities.falling.iter().position(|f| f.id == id) {
                 // FallingBlockEntity.DATA_START_POS (the model's seed).
                 if let (8, Value::Pos(p)) = (index, value) {
                     self.common
+                        .entities
                         .falling
                         .update(i, |f| f.start_pos = BlockPos::new(p[0], p[1], p[2]));
                 }
-            } else if let Some(c) = self.common.crystals.iter_mut().find(|c| c.id == id) {
+            } else if let Some(c) = self
+                .common
+                .entities
+                .crystals
+                .iter_mut()
+                .find(|c| c.id == id)
+            {
                 // EndCrystal.DATA_BEAM_TARGET and DATA_SHOW_BOTTOM.
                 match (index, value) {
                     (8, Value::OptPos(beam)) => c.beam = *beam,
                     (9, Value::Bool(show)) => c.show_bottom = *show,
                     _ => {}
                 }
-            } else if let Some(t) = self.common.tridents.iter_mut().find(|t| t.id == id) {
+            } else if let Some(t) = self
+                .common
+                .entities
+                .tridents
+                .iter_mut()
+                .find(|t| t.id == id)
+            {
                 // AbstractArrow.ID_FLAGS (no physics) and IN_GROUND, and
                 // ThrownTrident.ID_LOYALTY.
                 match (index, value) {
@@ -233,12 +256,12 @@ impl crate::game::ClientGame<'_> {
                 }
             } else if let Some(i) = self
                 .common
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .position(|p| p.id == id)
             {
-                self.common.creatures.projectiles.update(i, |p| {
+                self.common.entities.projectiles.update(i, |p| {
                     match (&mut p.kind, index, value) {
                         // Entity.DATA_SHARED_FLAGS_ID's FLAG_ONFIRE: Entity.isOnFire on
                         // a client, which draws the flames. A client doesn't count the
@@ -305,16 +328,22 @@ impl crate::game::ClientGame<'_> {
         };
         if let Some(i) = self
             .common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .position(|p| p.id == id)
         {
-            self.common.creatures.projectiles.update(i, |p| {
+            self.common.entities.projectiles.update(i, |p| {
                 p.yaw = yaw;
                 p.pitch = pitch;
             });
-        } else if let Some(t) = self.common.tridents.iter_mut().find(|t| t.id == id) {
+        } else if let Some(t) = self
+            .common
+            .entities
+            .tridents
+            .iter_mut()
+            .find(|t| t.id == id)
+        {
             t.yaw = yaw;
             t.pitch = pitch;
         }
@@ -327,7 +356,7 @@ impl crate::game::ClientGame<'_> {
             let eye = self.common.eye_position()?;
             return Some(Vec3::new(eye[0], eye[1], eye[2]));
         }
-        let m = self.common.mobs.iter().find(|m| m.id == id)?;
+        let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
         Some(Vec3::new(
             m.position.x,
             m.position.y + m.eye_height(),
@@ -351,13 +380,14 @@ impl crate::game::ClientGame<'_> {
             || self.common.player.is_none()
             || !self
                 .common
+                .entities
                 .rockets
                 .iter()
                 .any(|r| r.attached_to == Some(me))
         {
             return;
         }
-        let mut rockets = self.common.rockets.lift();
+        let mut rockets = self.common.entities.rockets.lift();
         #[cfg(test)]
         nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::OwnRocket);
         for r in rockets.iter_mut().filter(|r| r.attached_to == Some(me)) {
@@ -366,6 +396,7 @@ impl crate::game::ClientGame<'_> {
             self.rocket_spark(r);
         }
         self.common
+            .entities
             .rockets
             .restore(rockets, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
     }
@@ -389,7 +420,7 @@ impl crate::game::ClientGame<'_> {
         let side_server = self.game_side_client();
         let side = client_game_side!(self, side_server);
         let sections = self.client.client_pick.sections.get_mut();
-        self.common.tnts.retain_mut(|t| {
+        self.common.entities.tnts.retain_mut(|t| {
             // A fluid lookup that fails leaves it where its move put it.
             let _ = t.tick_among(
                 world,
@@ -414,7 +445,13 @@ impl crate::game::ClientGame<'_> {
         // PrimedTnt.tick: while the fuse is still lit, a client adds one SMOKE
         // particle at (x, y + 0.5, z). The server's Level.addParticle never
         // reaches this window.
-        let smoking: Vec<Vec3> = self.common.tnts.iter().map(|t| t.position).collect();
+        let smoking: Vec<Vec3> = self
+            .common
+            .entities
+            .tnts
+            .iter()
+            .map(|t| t.position)
+            .collect();
         let smoke = ParticleOptions::simple(ParticleType::Smoke);
         for p in smoking {
             self.client
@@ -423,7 +460,7 @@ impl crate::game::ClientGame<'_> {
                 .add(&smoke, [p.x, p.y + 0.5, p.z], [0.0; 3]);
         }
         // Clients simulate motion and drag; only the server places/removes the landing block.
-        let mut falling = self.common.falling.lift();
+        let mut falling = self.common.entities.falling.lift();
         #[cfg(test)]
         nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Falling);
         falling.for_each_mut(|f| {
@@ -431,6 +468,7 @@ impl crate::game::ClientGame<'_> {
             self.pick_section_move(f.id, f.position.components());
         });
         self.common
+            .entities
             .falling
             .restore(falling, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
         // Projectiles tick on the client too and fly on between the tracker's
@@ -440,14 +478,14 @@ impl crate::game::ClientGame<'_> {
         // runs with zero hand-backs.
         let mut round = self.native_tick_round();
         let told = round.told_listening();
-        let mut projectiles = self.common.creatures.projectiles.lift();
+        let mut projectiles = self.common.entities.projectiles.lift();
         #[cfg(test)]
         nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Projectile);
         let bubbles: Vec<_> = projectiles
             .iter()
             .filter_map(Projectile::water_bubbles)
             .collect();
-        let mut tridents = self.common.tridents.lift();
+        let mut tridents = self.common.entities.tridents.lift();
         #[cfg(test)]
         nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::Trident);
         let mut arrow_events = Vec::new();
@@ -490,11 +528,11 @@ impl crate::game::ClientGame<'_> {
                 self.count_client_tick(id);
             }
         }
-        self.common.creatures.projectiles.restore(
+        self.common.entities.projectiles.restore(
             projectiles,
             sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
         );
-        self.common.tridents.restore(
+        self.common.entities.tridents.restore(
             tridents,
             sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst,
         );
@@ -504,7 +542,7 @@ impl crate::game::ClientGame<'_> {
         self.arrow_effect_particles();
         let trails: Vec<Vec3> = self
             .common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .filter(|p| has_smoke_trail(&p.kind))
@@ -518,7 +556,7 @@ impl crate::game::ClientGame<'_> {
         // follows it, and every rocket leaves its spark trail on a client. One
         // boosting this client's own player ticks after it (`tick_own_rockets`).
         let me = self.remote_player_id();
-        let mut rockets = self.common.rockets.lift();
+        let mut rockets = self.common.entities.rockets.lift();
         #[cfg(test)]
         nested_spawn_tests::after_lift(self, nested_spawn_tests::Point::RemoteRocket);
         for r in &mut rockets {
@@ -532,7 +570,7 @@ impl crate::game::ClientGame<'_> {
                     self.pick_section_move(r.id, r.position.components());
                     continue;
                 }
-                if let Some(m) = self.common.mobs.iter().find(|m| m.id == target) {
+                if let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == target) {
                     // Another player's motion is not known here: its step.
                     r.velocity = Vec3::new(
                         m.position.x - r.previous.x,
@@ -546,9 +584,10 @@ impl crate::game::ClientGame<'_> {
             self.rocket_spark(r);
         }
         self.common
+            .entities
             .rockets
             .restore(rockets, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
-        for c in &mut self.common.crystals {
+        for c in &mut self.common.entities.crystals {
             // ClientLevel.tickNonPassenger's setOldPosAndRot, then the interpolation step.
             c.previous = c.position;
             c.time += 1;
@@ -561,17 +600,17 @@ impl crate::game::ClientGame<'_> {
     }
 
     pub(in crate::game) fn remove_remote_projectile(&mut self, id: u32) {
-        self.common.tnts.retain(|t| t.id != id);
-        self.common.falling.retain(|f| f.id != id);
-        self.common.crystals.retain(|c| c.id != id);
+        self.common.entities.tnts.retain(|t| t.id != id);
+        self.common.entities.falling.retain(|f| f.id != id);
+        self.common.entities.crystals.retain(|c| c.id != id);
         self.remove_remote_small_projectiles(id);
     }
 
     pub(in crate::game::client_side) fn remove_remote_small_projectiles(&mut self, id: u32) {
-        self.common.fangs.list.retain(|f| f.id != id);
-        self.common.creatures.projectiles.retain(|p| p.id != id);
-        self.common.tridents.retain(|t| t.id != id);
-        self.common.rockets.retain(|r| r.id != id);
+        self.common.entities.fangs.list.retain(|f| f.id != id);
+        self.common.entities.projectiles.retain(|p| p.id != id);
+        self.common.entities.tridents.retain(|t| t.id != id);
+        self.common.entities.rockets.retain(|r| r.id != id);
         crate::game::client_side::potions::remove_remote_thrown(&mut self.common.potions, id);
         self.client.remote_clouds.retain(|c| c.id != id);
         self.common.end.remove_remote_eye(id);
@@ -580,15 +619,15 @@ impl crate::game::ClientGame<'_> {
 
     /// Every one a server sent (a new connection, level or dimension).
     pub fn clear_remote_projectiles(&mut self) {
-        self.common.fangs.list.clear();
-        self.common.tnts.clear();
-        self.common.falling.clear();
-        self.common.creatures.projectiles.clear();
-        self.common.tridents.clear();
-        self.common.rockets.clear();
-        self.common.crystals.clear();
+        self.common.entities.fangs.list.clear();
+        self.common.entities.tnts.clear();
+        self.common.entities.falling.clear();
+        self.common.entities.projectiles.clear();
+        self.common.entities.tridents.clear();
+        self.common.entities.rockets.clear();
+        self.common.entities.crystals.clear();
         // The dragon a server sent goes with its crystals.
-        self.common.dragon.discard();
+        self.common.entities.dragon.discard();
         self.common.potions.clear_thrown();
         self.client.remote_clouds.clear();
         self.common.end.clear_remote_eyes();
@@ -753,24 +792,25 @@ impl crate::game::ClientGame<'_> {
         #[cfg(any(test, feature = "test-support"))]
         HANDBACKS.with(|count| count.set(count.get() + 1));
         self.common
-            .creatures
+            .entities
             .projectiles
             .restore(projectiles, RestoreOrder::SurvivorsFirst);
         self.common
+            .entities
             .tridents
             .restore(tridents, RestoreOrder::SurvivorsFirst);
         let stamps = (
-            self.common.creatures.projectiles.stamp(),
-            self.common.tridents.stamp(),
+            self.common.entities.projectiles.stamp(),
+            self.common.entities.tridents.stamp(),
         );
         tell(self);
         let changed = (
-            self.common.creatures.projectiles.stamp() != stamps.0,
-            self.common.tridents.stamp() != stamps.1,
+            self.common.entities.projectiles.stamp() != stamps.0,
+            self.common.entities.tridents.stamp() != stamps.1,
         );
         (
-            self.common.creatures.projectiles.lift(),
-            self.common.tridents.lift(),
+            self.common.entities.projectiles.lift(),
+            self.common.entities.tridents.lift(),
             changed,
         )
     }
@@ -784,7 +824,7 @@ impl crate::game::ClientGame<'_> {
     /// position while flying.
     pub(in crate::game::client_side) fn arrow_effect_particles(&mut self) {
         let mut puffs: Vec<(Vec3, i32, u32)> = Vec::new();
-        for p in &self.common.creatures.projectiles {
+        for p in &self.common.entities.projectiles {
             let Some(a) = p.arrow.as_ref().filter(|_| p.is_arrow()) else {
                 continue;
             };
@@ -844,7 +884,7 @@ impl crate::game::ClientGame<'_> {
         let trail = ParticleOptions::simple(ParticleType::DragonBreath);
         let at: Vec<Vec3> = self
             .common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .filter(|p| p.kind == ProjectileKind::DragonFireball)
@@ -862,7 +902,7 @@ impl crate::game::ClientGame<'_> {
     pub(in crate::game::client_side) fn shulker_bullet_trails(&mut self) {
         let bullets: Vec<Vec3> = self
             .common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .filter(|p| matches!(p.kind, ProjectileKind::ShulkerBullet { .. }))
@@ -904,34 +944,32 @@ impl crate::game::ClientGame<'_> {
         let (yaw, pitch) = rotation;
         match kind {
             "minecraft:evoker_fangs" => self.common.insert_fangs(id, position, yaw, 0, 0),
-            "minecraft:tnt" => {
-                self.common
-                    .tnts
-                    .push(sunrise_gameplay_common::game::tnt_common::PrimedTnt {
-                        size_answer: None,
-                        attachment_lifetime: Default::default(),
-                        rotation: [0.0, 0.0],
-                        join: Default::default(),
-                        no_gravity: false,
-                        id,
-                        position: at,
-                        previous: at,
-                        velocity,
-                        fuse: 80,
-                        ticks: 0,
-                        ground: Default::default(),
-                        fall_distance: 0.0,
-                        stuck: Vec3::ZERO,
-                        in_water: false,
-                        owner: None,
-                        guest: None,
-                        power: 4.0,
-                        used_portal: false,
-                        block_state: None,
-                    })
-            }
+            "minecraft:tnt" => self.common.entities.tnts.push(
+                sunrise_gameplay_common::game::tnt_common::PrimedTnt {
+                    size_answer: None,
+                    attachment_lifetime: Default::default(),
+                    rotation: [0.0, 0.0],
+                    join: Default::default(),
+                    no_gravity: false,
+                    id,
+                    position: at,
+                    previous: at,
+                    velocity,
+                    fuse: 80,
+                    ticks: 0,
+                    ground: Default::default(),
+                    fall_distance: 0.0,
+                    stuck: Vec3::ZERO,
+                    in_water: false,
+                    owner: None,
+                    guest: None,
+                    power: 4.0,
+                    used_portal: false,
+                    block_state: None,
+                },
+            ),
             // FallingBlockEntity.recreateFromPacket: the block state is the data.
-            "minecraft:falling_block" => self.common.falling.push(FallingBlock {
+            "minecraft:falling_block" => self.common.entities.falling.push(FallingBlock {
                 size_answer: None,
                 attachment_lifetime: Default::default(),
                 rotation: [0.0, 0.0],
@@ -960,10 +998,11 @@ impl crate::game::ClientGame<'_> {
                 t.velocity = velocity;
                 // Projectile.getAddEntityPacket: the owner's id is the data.
                 t.owner = data as u32;
-                self.common.tridents.push(t);
+                self.common.entities.tridents.push(t);
             }
             "minecraft:firework_rocket" => {
                 self.common
+                    .entities
                     .rockets
                     .push(super::fireworks::Rocket::remote(id, at, velocity));
             }
@@ -1012,7 +1051,7 @@ impl crate::game::ClientGame<'_> {
                     drawn,
                     self.common.clock.still(),
                 );
-                self.common.crystals.push(
+                self.common.entities.crystals.push(
                     sunrise_gameplay_common::game::dragon_common::Crystal::new(id, at, true, time),
                 );
             }
@@ -1044,7 +1083,7 @@ impl crate::game::ClientGame<'_> {
                     a.spawn_velocity = Some(p.velocity);
                     a.spawn_rot = Some((p.pitch, p.yaw));
                 }
-                self.common.creatures.projectiles.push(p);
+                self.common.entities.projectiles.push(p);
             }
         }
         true
@@ -1381,12 +1420,12 @@ pub(in crate::game) mod nested_spawn_tests {
                 .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
             game.world.set(4, 63, 4, slime).unwrap();
             falling(game, 48);
-            game.falling.update(0, |f| {
+            game.entities.falling.update(0, |f| {
                 f.position = Vec3::new(4.5, 64.25, 4.5);
                 f.velocity = Vec3::new(0.0, -0.96, 0.0);
             });
             game.tick_remote_projectiles(|_, p| p);
-            let f = &game.falling[0];
+            let f = &game.entities.falling[0];
             assert_eq!(f.position.y.to_bits(), 64.0_f64.to_bits());
             assert_eq!(f.velocity.y.to_bits(), 0.7878808308504466_f64.to_bits());
             assert!(f.ground.on_ground);
@@ -1404,7 +1443,7 @@ pub(in crate::game) mod nested_spawn_tests {
     fn own_rocket(game: &mut crate::game::ClientGame<'_>, id: u32) {
         rocket(game, id);
         let me = game.client.remote.as_ref().unwrap().entity_id as u32;
-        game.rockets.for_each_mut(|r| {
+        game.entities.rockets.for_each_mut(|r| {
             if r.id == id {
                 r.attached_to = Some(me);
             }
@@ -1424,10 +1463,10 @@ pub(in crate::game) mod nested_spawn_tests {
             }};
         }
         match point {
-            Point::Falling => rows!(game.falling),
-            Point::Projectile => rows!(game.creatures.projectiles),
-            Point::Trident => rows!(game.tridents),
-            Point::RemoteRocket | Point::OwnRocket => rows!(game.rockets),
+            Point::Falling => rows!(game.entities.falling),
+            Point::Projectile => rows!(game.entities.projectiles),
+            Point::Trident => rows!(game.entities.tridents),
+            Point::RemoteRocket | Point::OwnRocket => rows!(game.entities.rockets),
         }
     }
     struct Case {
@@ -1450,13 +1489,20 @@ pub(in crate::game) mod nested_spawn_tests {
                 Case {
                     point: Point::Falling,
                     spawn: falling,
-                    position: |g| g.falling.iter().find(|e| e.id == ID).unwrap().position,
+                    position: |g| {
+                        g.entities
+                            .falling
+                            .iter()
+                            .find(|e| e.id == ID)
+                            .unwrap()
+                            .position
+                    },
                 },
                 Case {
                     point: Point::Projectile,
                     spawn: projectile,
                     position: |g| {
-                        g.creatures
+                        g.entities
                             .projectiles
                             .iter()
                             .find(|e| e.id == ID)
@@ -1467,12 +1513,26 @@ pub(in crate::game) mod nested_spawn_tests {
                 Case {
                     point: Point::Trident,
                     spawn: trident,
-                    position: |g| g.tridents.iter().find(|e| e.id == ID).unwrap().position,
+                    position: |g| {
+                        g.entities
+                            .tridents
+                            .iter()
+                            .find(|e| e.id == ID)
+                            .unwrap()
+                            .position
+                    },
                 },
                 Case {
                     point: Point::RemoteRocket,
                     spawn: rocket,
-                    position: |g| g.rockets.iter().find(|e| e.id == ID).unwrap().position,
+                    position: |g| {
+                        g.entities
+                            .rockets
+                            .iter()
+                            .find(|e| e.id == ID)
+                            .unwrap()
+                            .position
+                    },
                 },
             ] {
                 game.clear_remote_projectiles();
@@ -1529,7 +1589,12 @@ pub(in crate::game) mod nested_spawn_tests {
             let mut expected = identities(game, Point::OwnRocket, true);
             with_spawn(Point::OwnRocket, own_rocket, || game.tick_own_rockets());
             assert_eq!(
-                game.rockets.iter().find(|r| r.id == ID).unwrap().position,
+                game.entities
+                    .rockets
+                    .iter()
+                    .find(|r| r.id == ID)
+                    .unwrap()
+                    .position,
                 AT
             );
             let actual = identities(game, Point::OwnRocket, false);
@@ -1537,7 +1602,12 @@ pub(in crate::game) mod nested_spawn_tests {
             assert_eq!(actual, expected);
             game.tick_own_rockets();
             assert_ne!(
-                game.rockets.iter().find(|r| r.id == ID).unwrap().position,
+                game.entities
+                    .rockets
+                    .iter()
+                    .find(|r| r.id == ID)
+                    .unwrap()
+                    .position,
                 AT
             );
         });
@@ -1562,6 +1632,7 @@ mod firework_attach_high_bit_tests {
 
     fn attached(game: &crate::game::ClientGame<'_>) -> Option<u32> {
         game.common
+            .entities
             .rockets
             .iter()
             .find(|rocket| rocket.id == ROCKET)
@@ -1582,13 +1653,13 @@ mod firework_attach_high_bit_tests {
             let (client, _server) = sunrise_protocol::connection::Pipe::pair();
             game.connect_local(client, "HighBitRocket").unwrap();
             game.client.remote.as_mut().unwrap().entity_id = ME as i32;
-            game.common
-                .rockets
-                .push(sunrise_gameplay_common::game::fireworks::Rocket::remote(
+            game.common.entities.rockets.push(
+                sunrise_gameplay_common::game::fireworks::Rocket::remote(
                     ROCKET,
                     Vec3::ZERO,
                     Vec3::ZERO,
-                ));
+                ),
+            );
 
             set_attachment(game, 0);
             assert_eq!(attached(game), None, "0 clears the attachment");

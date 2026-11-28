@@ -65,7 +65,7 @@ impl crate::game::ServerGame<'_> {
             return self.native_entity_known_speed(rider);
         }
         if let Target::Dragon(_) = t {
-            let d = self.common.dragon.as_ref()?;
+            let d = self.common.entities.dragon.as_ref()?;
             return Some(d.position.subtract(d.previous));
         }
         Some(match self.common.native_walk_entity(entity.id()) {
@@ -82,6 +82,7 @@ impl crate::game::ServerGame<'_> {
             Target::Boat(_) => true,
             Target::Mob(id) => self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .any(|m| m.id == id && sunrise_sim::mobs::equine::controlled(m)),
@@ -131,7 +132,7 @@ impl crate::game::ServerGame<'_> {
         };
         with_entity_mut!(self, h, e => *e.velocity_mut() = velocity);
         if let EntityHandle::Mob(i) = h {
-            self.common.mobs[i].needs_sync = true;
+            self.common.entities.mobs[i].needs_sync = true;
         }
         true
     }
@@ -181,14 +182,14 @@ impl crate::game::ServerGame<'_> {
         let Target::General(id) = self.native_entity_target(entity)? else {
             return None;
         };
-        Some(self.resident_entities.general.row(id)?.horizontal_collision)
+        Some(self.entities.general.row(id)?.horizontal_collision)
     }
     /// `Entity.verticalCollision` of a general row's last move.
     pub(in crate::game) fn entity_vertical_collision(&self, entity: EntityRef) -> Option<bool> {
         let Target::General(id) = self.native_entity_target(entity)? else {
             return None;
         };
-        Some(self.resident_entities.general.row(id)?.vertical_collision)
+        Some(self.entities.general.row(id)?.vertical_collision)
     }
     /// `Entity.setOnGround` on its live server body, with no movement or fall processing.
     pub(in crate::game) fn entity_set_on_ground(
@@ -208,16 +209,10 @@ impl crate::game::ServerGame<'_> {
             }
             Target::Hook(id) => self.set_fishing_hook_ground(id, on_ground),
             // A general row keeps the flag itself, with no support block to refresh.
-            Target::General(id) => {
-                Ok(self
-                    .resident_entities
-                    .general
-                    .row_mut(id)
-                    .is_some_and(|row| {
-                        row.on_ground = on_ground;
-                        true
-                    }))
-            }
+            Target::General(id) => Ok(self.entities.general.row_mut(id).is_some_and(|row| {
+                row.on_ground = on_ground;
+                true
+            })),
             _ => {
                 let Some(handle) = self.common.native_walk_entity(entity.id()) else {
                     return Ok(false);
@@ -349,17 +344,30 @@ impl crate::game::ServerGame<'_> {
                 return Some(corners(dragon.part_geometry(part).1));
             }
             Target::Crystal(id) => {
-                let c = self.common.crystals.iter().find(|c| c.id == id)?;
+                let c = self.common.entities.crystals.iter().find(|c| c.id == id)?;
                 return Some(corners(c.bounds()));
             }
-            Target::Cushion(id) => self.common.cushions.iter().find(|c| c.id == id)?.bounds(),
+            Target::Cushion(id) => self
+                .common
+                .entities
+                .cushions
+                .iter()
+                .find(|c| c.id == id)?
+                .bounds(),
             Target::Frame(id) => self
                 .common
+                .entities
                 .item_frames
                 .iter()
                 .find(|f| f.id == id)?
                 .bounds(),
-            Target::Painting(id) => self.common.paintings.iter().find(|p| p.id == id)?.bounds(),
+            Target::Painting(id) => self
+                .common
+                .entities
+                .paintings
+                .iter()
+                .find(|p| p.id == id)?
+                .bounds(),
             _ => return None,
         };
         if lo.iter().chain(&hi).any(|v| !v.is_finite()) {
@@ -424,7 +432,7 @@ impl crate::game::ServerGame<'_> {
         // LivingEntity.getViewYRot(1.0F) is head yaw, not body yaw.
         match target {
             Target::Mob(id) => {
-                yaw = self.mobs.iter().find(|m| m.id == id)?.head_yaw;
+                yaw = self.entities.mobs.iter().find(|m| m.id == id)?.head_yaw;
             }
             Target::Player | Target::Guest(_) => {
                 if let Some(guest) = self.native_target_guest(target) {
@@ -590,12 +598,13 @@ pub(in crate::game) mod tests {
                 .unwrap()
                 .clone();
             // A zombie 0.6 wide straddling x = 1: its box is over blocks 0 and 1.
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(40, kind, Vec3::new(0.9, 65.0, 0.5), 0.0));
             let entity = game.entity(40).unwrap();
             // Only block 1 is under the box: it supports, not the block of the feet's own column.
             game.world.set(1, 64, 0, stone).unwrap();
-            let _ = game.common.mobs[0].update_retained_ground(
+            let _ = game.common.entities.mobs[0].update_retained_ground(
                 &game.common.world,
                 game.common.collision,
                 &world_items!(game).entity_type_tags,
@@ -606,7 +615,7 @@ pub(in crate::game) mod tests {
             // Adding a nearer block doesn't change the support until the next check.
             game.world.set(0, 64, 0, stone).unwrap();
             assert_eq!(game.entity_on_block(entity), Some([1, 64, 0]));
-            let _ = game.common.mobs[0].update_retained_ground(
+            let _ = game.common.entities.mobs[0].update_retained_ground(
                 &game.common.world,
                 game.common.collision,
                 &world_items!(game).entity_type_tags,
@@ -614,8 +623,8 @@ pub(in crate::game) mod tests {
                 None,
             );
             assert_eq!(game.entity_on_block(entity), Some([0, 64, 0]));
-            game.mobs[0].position = Vec3::new(1.1, 65.0, 0.5);
-            let _ = game.common.mobs[0].update_retained_ground(
+            game.entities.mobs[0].position = Vec3::new(1.1, 65.0, 0.5);
+            let _ = game.common.entities.mobs[0].update_retained_ground(
                 &game.common.world,
                 game.common.collision,
                 &world_items!(game).entity_type_tags,
@@ -624,8 +633,8 @@ pub(in crate::game) mod tests {
             );
             assert_eq!(game.entity_on_block(entity), Some([1, 64, 0]));
             // Off the ground there is no support: the cell under the feet.
-            game.mobs[0].position = Vec3::new(0.9, 65.0, 0.5);
-            let _ = game.common.mobs[0].update_retained_ground(
+            game.entities.mobs[0].position = Vec3::new(0.9, 65.0, 0.5);
+            let _ = game.common.entities.mobs[0].update_retained_ground(
                 &game.common.world,
                 game.common.collision,
                 &world_items!(game).entity_type_tags,
@@ -640,7 +649,7 @@ pub(in crate::game) mod tests {
                 .default_state("minecraft:air")
                 .unwrap();
             game.world.set(0, 64, 0, air).unwrap();
-            let _ = game.common.mobs[0].update_retained_ground(
+            let _ = game.common.entities.mobs[0].update_retained_ground(
                 &game.common.world,
                 game.common.collision,
                 &world_items!(game).entity_type_tags,
@@ -650,7 +659,7 @@ pub(in crate::game) mod tests {
             assert_eq!(game.entity_on_block(entity), Some([1, 64, 0]));
 
             // Facing south (yaw 0) level, the eyes see a block two cells ahead.
-            game.mobs[0].position = Vec3::new(0.5, 65.0, 0.5);
+            game.entities.mobs[0].position = Vec3::new(0.5, 65.0, 0.5);
             let eyes = game.entity_eye_position(entity).unwrap();
             let wall = [0, eyes[1].floor() as i32, 2];
             game.world.set(wall[0], wall[1], wall[2], stone).unwrap();
@@ -661,20 +670,20 @@ pub(in crate::game) mod tests {
             assert_near(hit.location, [0.5, eyes[1], 2.0]);
             // Too short a ray misses, as does one over an empty column.
             assert!(game.entity_pick(entity, 1.0, false).unwrap().miss);
-            game.mobs[0].position = Vec3::new(5.5, 65.0, 0.5);
+            game.entities.mobs[0].position = Vec3::new(5.5, 65.0, 0.5);
             assert!(game.entity_pick(entity, 3.0, false).unwrap().miss);
             // A ray into a column that is not loaded has no answer, neither a miss nor a hit.
-            game.mobs[0].position = Vec3::new(5.5, 65.0, 14.5);
+            game.entities.mobs[0].position = Vec3::new(5.5, 65.0, 14.5);
             assert!(game.entity_pick(entity, 3.0, false).is_none());
-            game.mobs[0].position = Vec3::new(5.5, 65.0, 0.5);
+            game.entities.mobs[0].position = Vec3::new(5.5, 65.0, 0.5);
             // Looking straight down from the stand hits the top of its support.
-            game.mobs[0].position = Vec3::new(1.5, 65.0, 0.5);
-            game.mobs[0].head_pitch = 90.0;
+            game.entities.mobs[0].position = Vec3::new(1.5, 65.0, 0.5);
+            game.entities.mobs[0].head_pitch = 90.0;
             let down = game.entity_pick(entity, 3.0, false).unwrap();
             assert_eq!((down.block, down.face), ([1, 64, 0], BlockFace::Up));
             assert_near(down.location, [1.5, 65.0, 0.5]);
             // Looking down 45 degrees tilts the up vector forward.
-            game.mobs[0].head_pitch = 45.0;
+            game.entities.mobs[0].head_pitch = 45.0;
             assert_near(
                 game.entity_up_vector(entity).unwrap(),
                 [
@@ -723,7 +732,7 @@ pub(in crate::game) mod tests {
             let mut mob = Mob::new(41, kind.clone(), Vec3::new(4.5, 65.0, 4.5), 90.0);
             mob.head_yaw = 0.0;
             mob.head_pitch = 0.0;
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             let entity = game.entity(41).unwrap();
             let eye_y = game.entity_eye_position(entity).unwrap()[1];
             let y = eye_y.floor() as i32;
@@ -862,13 +871,14 @@ pub(in crate::game) mod tests {
             stand.velocity = velocity;
             stand.enchantment_fall_distance = 1.5;
             stand.ground.horizontal_collision = true;
-            game.armor_stands.push(stand);
+            game.entities.armor_stands.push(stand);
             let entity = game.entity(40).unwrap();
             assert_eq!(entity.set_on_ground(game, true), Ok(true));
             assert_eq!(entity.on_ground(game), Some(true));
             assert_eq!(entity.on_block(game), Some(under_feet));
             assert_eq!(entity.set_on_ground(game, false), Ok(true));
-            game.armor_stands[0].equipment[2] = Some(ItemStack::new("minecraft:leather_boots", 1));
+            game.entities.armor_stands[0].equipment[2] =
+                Some(ItemStack::new("minecraft:leather_boots", 1));
             assert_eq!(entity.set_on_ground(game, true), Ok(true));
             assert_eq!(entity.on_block(game), Some(supported));
             game.world.set(1, 64, 0, air).unwrap();
@@ -882,7 +892,7 @@ pub(in crate::game) mod tests {
             assert_eq!(entity.on_block(game), Some(supported));
             assert_eq!(entity.set_on_ground(game, false), Ok(true));
             assert_eq!(entity.on_block(game), Some(under_feet));
-            let stand = &game.armor_stands[0];
+            let stand = &game.entities.armor_stands[0];
             assert_eq!(stand.ground.supporting_block, None::<BlockPos>);
             assert!(!stand.ground.on_ground_no_blocks);
             assert!(stand.ground.horizontal_collision);
@@ -896,7 +906,7 @@ pub(in crate::game) mod tests {
             assert_eq!(entity.on_ground(game), Some(false));
 
             // A scan with invalid bounds fails, but vanilla sets the flag before the query.
-            game.armor_stands[0].position.y = f64::INFINITY;
+            game.entities.armor_stands[0].position.y = f64::INFINITY;
             assert_eq!(
                 entity.set_on_ground(game, true),
                 Err(mod_api::LevelWriteError::Unavailable)
@@ -917,7 +927,7 @@ pub(in crate::game) mod tests {
             );
             shot.id = 41;
             shot.arrow.as_mut().unwrap().fall_distance = 3.0;
-            game.creatures.projectiles.push(shot);
+            game.entities.projectiles.push(shot);
             let projectile = game.entity(41).unwrap();
             assert_eq!(projectile.on_ground(game), Some(false));
             assert_eq!(projectile.set_on_ground(game, true), Ok(true));
@@ -935,7 +945,7 @@ pub(in crate::game) mod tests {
                 0.0,
             );
             drop.fall_distance = 3.0;
-            game.dropped.push(drop);
+            game.entities.dropped.push(drop);
             let item = game.entity(42).unwrap();
             assert_eq!(item.set_on_ground(game, true), Ok(true));
             assert_eq!(item.on_block(game), Some(supported));

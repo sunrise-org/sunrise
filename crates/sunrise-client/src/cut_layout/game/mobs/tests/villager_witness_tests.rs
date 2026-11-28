@@ -14,7 +14,7 @@ use {
 #[ignore = "daily"]
 fn murder_uses_only_the_victims_sensor_memory() {
     crate::game::server_side::kill_die_vibration_tests::game(|game| {
-        game.mobs.clear();
+        game.entities.mobs.clear();
         let player = [0, 0, 0, 101];
         game.level.player_uuid = Some(player);
         let kind = game
@@ -24,7 +24,8 @@ fn murder_uses_only_the_victims_sensor_memory() {
             .unwrap()
             .clone();
         let mut victim = Mob::new(91, kind.clone(), Vec3::new(1.0, 100.0, 1.0), 0.0);
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(92, kind, Vec3::new(2.0, 100.0, 1.0), 0.0));
         game.villager_murdered(&victim, true, None);
         assert_eq!(
@@ -33,6 +34,7 @@ fn murder_uses_only_the_victims_sensor_memory() {
             "a nearby villager absent from the last scan is not a witness"
         );
         let snapshot: Vec<_> = game
+            .entities
             .mobs
             .iter()
             .map(|m| m.seen(None, game.items()))
@@ -65,7 +67,7 @@ fn every_accepted_hurt_counts_for_its_own_attacker() {
         return;
     }
     with_game(|game| {
-        game.mobs.clear();
+        game.entities.mobs.clear();
         let kind = game
             .res
             .mob_types()
@@ -88,7 +90,7 @@ fn every_accepted_hurt_counts_for_its_own_attacker() {
             .known_attacker_uuid(dragon)
             .expect("the dragon has its UUID before tracking or saving");
         for id in [91, 92] {
-            game.mobs.push(Mob::new(id, kind.clone(), at, 0.0));
+            game.entities.mobs.push(Mob::new(id, kind.clone(), at, 0.0));
         }
         game.persist.uuids.insert(92, [0, 0, 0, 4]);
         game.admit_new_mobs(0);
@@ -105,7 +107,7 @@ fn every_accepted_hurt_counts_for_its_own_attacker() {
         assert!(game.mob_hits_mob(91, 7.0, mob));
         game.discard_resident_dragon();
         assert!(player_hit(game, 5, 1000.0));
-        assert!(!game.mobs[0].alive());
+        assert!(!game.entities.mobs[0].alive());
         let got = [
             mob_uuid,
             [0, 0, 0, 2],
@@ -149,7 +151,7 @@ fn two_hits_of_a_mob_without_uuid_share_one() {
         server
             .streaming
             .insert_remote(&mut common.world, sunrise_level::chunk::Chunk::empty(0, 0));
-        game.mobs.clear();
+        game.entities.mobs.clear();
         let fish = game
             .res
             .mob_types()
@@ -166,12 +168,12 @@ fn two_hits_of_a_mob_without_uuid_share_one() {
         fish.extra.size = 2;
         fish.no_ai = true;
         fish.no_gravity = true;
-        game.mobs.push(fish);
+        game.entities.mobs.push(fish);
         for (id, x) in [(91, 1.25), (92, 1.75)] {
             let mut target = Mob::new(id, villager.clone(), Vec3::new(x, 80.0, 1.5), 0.0);
             target.no_ai = true;
             target.no_gravity = true;
-            game.mobs.push(target);
+            game.entities.mobs.push(target);
         }
         game.admit_new_mobs(0);
         let uuid = game.persist.uuids[&90];
@@ -194,7 +196,7 @@ fn hurt_gossip_belongs_to_the_hits_own_player() {
         return;
     }
     with_game(|game| {
-        game.mobs.clear();
+        game.entities.mobs.clear();
         let kind = game
             .res
             .mob_types()
@@ -202,7 +204,7 @@ fn hurt_gossip_belongs_to_the_hits_own_player() {
             .unwrap()
             .clone();
         let at = Vec3::new(1.0, 100.0, 1.0);
-        game.mobs.push(Mob::new(91, kind, at, 0.0));
+        game.entities.mobs.push(Mob::new(91, kind, at, 0.0));
         game.admit_new_mobs(0);
         game.player = Some(sunrise_sim::motion::PlayerMotion::new(game.motion, at));
         bind_local_player(game, 301, 9);

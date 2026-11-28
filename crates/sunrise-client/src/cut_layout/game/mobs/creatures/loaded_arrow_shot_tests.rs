@@ -86,7 +86,8 @@ pub(crate) fn stop_events() {
         .with(|v| *v.borrow_mut() = None);
 }
 pub(crate) fn owner(game: &sunrise_gameplay::game::ServerGame<'_>) -> u32 {
-    game.mobs
+    game.entities
+        .mobs
         .iter()
         .find(|m| game.persist.uuid_of(m.id) == Some([114, 0, 0, 99]))
         .unwrap()
@@ -101,12 +102,12 @@ fn a_landing_orb_posts_hit_ground_after_a_fall() {
     use sunrise_sim::entities::OrbMove;
     with_game(|game| {
         assert!(game.run_command("summon experience_orb 6.5 200 10.5 {Value:1,fall_distance:2d}"));
-        let i = game.orbs.len() - 1;
+        let i = game.entities.orbs.len() - 1;
         let from = Vec3::new(6.5, 200.5, 10.5);
         let down = Vec3::new(0.0, -0.5, 0.0);
         start_events();
         // In the air: the drop adds to the fall.
-        game.orbs[i].ground.on_ground = false;
+        game.entities.orbs[i].ground.on_ground = false;
         game.orb_moved(
             i,
             OrbMove {
@@ -115,9 +116,9 @@ fn a_landing_orb_posts_hit_ground_after_a_fall() {
                 in_water: false,
             },
         );
-        assert_eq!(game.orbs[i].fall_distance, 2.5);
+        assert_eq!(game.entities.orbs[i].fall_distance, 2.5);
         // On the ground: HIT_GROUND, then the fall is gone.
-        game.orbs[i].ground.on_ground = true;
+        game.entities.orbs[i].ground.on_ground = true;
         game.orb_moved(
             i,
             OrbMove {
@@ -126,7 +127,7 @@ fn a_landing_orb_posts_hit_ground_after_a_fall() {
                 in_water: false,
             },
         );
-        assert_eq!(game.orbs[i].fall_distance, 0.0);
+        assert_eq!(game.entities.orbs[i].fall_distance, 0.0);
         // In water with no fall: no drop, so no landing event.
         game.orb_moved(
             i,
@@ -145,7 +146,7 @@ fn a_landing_orb_posts_hit_ground_after_a_fall() {
             });
         stop_events();
         assert_eq!(events.len(), 1);
-        assert_eq!(game.orbs[i].fall_distance, 0.0);
+        assert_eq!(game.entities.orbs[i].fall_distance, 0.0);
     });
 }
 
@@ -161,14 +162,14 @@ fn loaded_arrow_first_tick_dispatches_once_with_its_real_owner() {
                 .unwrap_or_default();
             assert!(game.run_command(&format!("summon arrow 6.5 201.5 10.5 {{UUID:[I;114,0,0,{n}],NoGravity:1b,Motion:[0d,0d,0d],Owner:[I;114,0,0,99]{extra}}}")));
             let id = game
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|p| game.persist.uuid_of(p.id) == Some([114, 0, 0, n]))
                 .unwrap()
                 .id;
             let p = game
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|p| p.id == id)
@@ -180,7 +181,7 @@ fn loaded_arrow_first_tick_dispatches_once_with_its_real_owner() {
             start_events();
             game.tick_projectiles().unwrap();
             let p = game
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|p| p.id == id)
@@ -249,8 +250,8 @@ pub(crate) fn natural(kind: &str) {
             }
             _ => unreachable!(),
         }
-        assert_eq!(game.creatures.projectiles.len(), 1, "real launch {kind}");
-        let p = &game.creatures.projectiles[0];
+        assert_eq!(game.entities.projectiles.len(), 1, "real launch {kind}");
+        let p = &game.entities.projectiles[0];
         let id = p.id;
         assert!(id > 0);
         assert!(
@@ -260,7 +261,7 @@ pub(crate) fn natural(kind: &str) {
         let launch = take_shots();
         game.tick_projectiles().unwrap();
         let p = game
-            .creatures
+            .entities
             .projectiles
             .iter()
             .find(|p| p.id == id)
@@ -318,7 +319,7 @@ fn rocket_and_mob_trident_post_only_on_their_first_tick() {
         start_events();
         let bow = game.held().unwrap().clone();
         assert!(game.use_crossbow(&bow));
-        assert_eq!(game.rockets.len(), 1);
+        assert_eq!(game.entities.rockets.len(), 1);
         assert!(take_shots().is_empty(), "no rocket shot before its tick");
         game.tick_rockets();
         assert_eq!(take_shots().len(), 1, "rocket first tick");
@@ -337,13 +338,13 @@ fn rocket_and_mob_trident_post_only_on_their_first_tick() {
             p.velocity = Vec3::new(0.0, 0.0, 1.0);
             start_events();
             game.launch_mob_projectile(p);
-            let id = game.creatures.projectiles.last().unwrap().id;
+            let id = game.entities.projectiles.last().unwrap().id;
             assert!(
                 take_shots().is_empty(),
                 "no trident shot before its tick: {route}"
             );
             if route == "finish_hit" {
-                let p = game.creatures.projectiles.pop().unwrap();
+                let p = game.entities.projectiles.pop().unwrap();
                 game.finish_arrow_hit(p, sunrise_sim::entities::arrows::EntityHit::Deflected);
             } else {
                 game.tick_projectiles().unwrap();
@@ -351,7 +352,7 @@ fn rocket_and_mob_trident_post_only_on_their_first_tick() {
             assert_eq!(take_shots().len(), 1, "trident first tick: {route}");
             if route == "breeze" {
                 let p = game
-                    .creatures
+                    .entities
                     .projectiles
                     .iter()
                     .find(|p| p.id == id)
@@ -372,7 +373,7 @@ fn rocket_and_mob_trident_post_only_on_their_first_tick() {
 fn finish_hit_dispatches_once_and_the_next_tick_does_not_repeat_it() {
     with_game(|game| {
         assert!(game.run_command("summon arrow 6.5 201.5 10.5 {UUID:[I;114,0,0,20],NoGravity:1b,Motion:[0d,0d,0d],Owner:[I;114,0,0,99]}"));
-        let mut arrow = game.creatures.projectiles.pop().unwrap();
+        let mut arrow = game.entities.projectiles.pop().unwrap();
         let owner = owner(game);
         assert_eq!(arrow.owner_uuid, Some([114, 0, 0, 99]));
         // Resolve through the actual registered owner, as tick_projectiles does.
@@ -384,7 +385,7 @@ fn finish_hit_dispatches_once_and_the_next_tick_does_not_repeat_it() {
         game.finish_arrow_hit(arrow, sunrise_sim::entities::arrows::EntityHit::Deflected);
         let first = take_shots();
         assert!(
-            game.creatures
+            game.entities
                 .projectiles
                 .iter()
                 .find(|p| p.id == id)

@@ -720,6 +720,7 @@ mod tests {
                         if death {
                             game.guest_respawn(12);
                             let mut drops: Vec<_> = game
+                                .entities
                                 .dropped
                                 .iter()
                                 .map(|item| (item.stack.item.to_string(), item.stack.count))

@@ -920,8 +920,8 @@ impl crate::game::ServerGame<'_> {
     /// the vehicle is no longer in the level.
     pub fn vehicle_contact_hurt(&mut self, target: Target, damage_type: &str, amount: f32) -> bool {
         let present = |game: &crate::game::ServerGame<'_>| match target {
-            Target::Boat(id) => game.common.boats.iter().any(|b| b.id == id),
-            Target::Cart(id) => game.common.carts.iter().any(|c| c.id == id),
+            Target::Boat(id) => game.common.entities.boats.iter().any(|b| b.id == id),
+            Target::Cart(id) => game.common.entities.carts.iter().any(|c| c.id == id),
             _ => false,
         };
         let id = match target {
@@ -937,12 +937,14 @@ impl crate::game::ServerGame<'_> {
         let entity_kind = match target {
             Target::Boat(_) => self
                 .common
+                .entities
                 .boats
                 .iter()
                 .find(|b| b.id == id)
                 .map(|b| b.entity_type()),
             Target::Cart(_) => self
                 .common
+                .entities
                 .carts
                 .iter()
                 .find(|c| c.id == id)
@@ -970,12 +972,12 @@ impl crate::game::ServerGame<'_> {
         }
         match target {
             Target::Boat(_) => {
-                if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
+                if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
                     self.hurt_boat_result(i, amount, false);
                 }
             }
             Target::Cart(_) => {
-                if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
+                if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
                     self.hurt_cart_result(
                         i,
                         amount,
@@ -1602,7 +1604,7 @@ macro_rules! hit_reads_of {
 pub(in crate::game) use hit_reads_of;
 /// A hit's one decision about its causing entity `$causing` (an entity id, 0 for none), taken
 /// before the site borrows the game's fields for the hit: whether a `HitHost` hook listens,
-/// the causer's place in `$game.mobs` when it is a mob, and otherwise, when it is not the player
+/// the causer's place in `$game.entities.mobs` when it is a mob, and otherwise, when it is not the player
 /// in place either, the parked guest it may be (see [`Game::native_parked_causer`]). Expands to
 /// `(i32, bool, Option<usize>, Option<u32>)`: the causing id with the three; without a
 /// listener it looks nothing up.
@@ -1614,6 +1616,7 @@ macro_rules! causer_decision {
             .then(|| {
                 $game
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .position(|m| m.id as i32 == causing)
@@ -1632,7 +1635,7 @@ macro_rules! causer_decision {
 }
 #[allow(unused_imports)]
 pub(in crate::game) use causer_decision;
-/// The causing entity `$causing` a hit on the mob at `$index` of `$game.mobs` lends its
+/// The causing entity `$causing` a hit on the mob at `$index` of `$game.entities.mobs` lends its
 /// listeners, beside that victim, as `$decision` ([`causer_decision`]) decided: another mob of
 /// the list (split with `get_disjoint_mut`), the player in place, or a parked guest's record
 /// (read-only, as its `LivingRef` reads answer from it). A mob that caused its own hit is not
@@ -1645,14 +1648,15 @@ macro_rules! victim_and_causer {
             Some(other) if other != index => {
                 let [victim, causer] = $game
                     .common
+                    .entities
                     .mobs
                     .get_disjoint_mut([index, other])
                     .expect("the victim and its causer are two mobs");
                 (victim, sunrise_sim::health::HitLend::mob(causer))
             }
-            Some(_) => (&mut $game.common.mobs[index], None),
+            Some(_) => (&mut $game.common.entities.mobs[index], None),
             None => (
-                &mut $game.common.mobs[index],
+                &mut $game.common.entities.mobs[index],
                 if listened {
                     sunrise_sim::health::HitLend::attacking_player(
                         $game.common.player.as_mut(),
@@ -1676,7 +1680,7 @@ macro_rules! victim_and_causer {
 #[allow(unused_imports)]
 pub(in crate::game) use victim_and_causer;
 /// The causing entity a hit on the player in place lends its listeners, as `$decision`
-/// ([`causer_decision`]) decided: a mob of `$game.mobs`, or a parked guest's record. The player
+/// ([`causer_decision`]) decided: a mob of `$game.entities.mobs`, or a parked guest's record. The player
 /// causing its own hit is not lent again: the listener reads it as the victim.
 macro_rules! player_victim_causer {
     ($game:ident, $decision:expr) => {{
@@ -1686,6 +1690,7 @@ macro_rules! player_victim_causer {
             // row must still be the causer.
             Some(index) => $game
                 .common
+                .entities
                 .mobs
                 .get_mut(index)
                 .filter(|m| m.id as i32 == causing)
@@ -1958,19 +1963,21 @@ impl crate::game::ServerGame<'_> {
     /// The ids of the entities that are not on the walk of `entity_lists!`.
     pub fn entity_ids_off_walk(&self) -> impl Iterator<Item = u32> + '_ {
         self.common
+            .entities
             .cushions
             .iter()
             .map(|e| e.id)
-            .chain(self.common.item_frames.iter().map(|e| e.id))
-            .chain(self.common.paintings.iter().map(|e| e.id))
+            .chain(self.common.entities.item_frames.iter().map(|e| e.id))
+            .chain(self.common.entities.paintings.iter().map(|e| e.id))
             .chain(self.server.others.0.iter().map(|e| e.id))
-            .chain(self.common.breath_clouds.iter().map(|e| e.id))
-            .chain(self.common.bolts.iter().map(|e| e.id))
-            .chain(self.common.fangs.list.iter().map(|e| e.id))
-            .chain(self.common.crystals.iter().map(|e| e.id))
-            .chain(self.common.dragon.iter().map(|e| e.id))
+            .chain(self.common.entities.breath_clouds.iter().map(|e| e.id))
+            .chain(self.common.entities.bolts.iter().map(|e| e.id))
+            .chain(self.common.entities.fangs.list.iter().map(|e| e.id))
+            .chain(self.common.entities.crystals.iter().map(|e| e.id))
+            .chain(self.common.entities.dragon.iter().map(|e| e.id))
             .chain(
                 self.common
+                    .entities
                     .dragon
                     .iter()
                     .filter(|dragon| dragon.id != 0)
@@ -1982,8 +1989,8 @@ impl crate::game::ServerGame<'_> {
                         })
                     }),
             )
-            .chain(self.common.ominous_spawners.iter().map(|e| e.id))
-            .chain(self.common.resident_entities.knots.iter().map(|e| e.id))
+            .chain(self.common.entities.ominous_spawners.iter().map(|e| e.id))
+            .chain(self.common.entities.knots.iter().map(|e| e.id))
             // Cast hooks live with their players, not in the saveable lists.
             // Keep both their identities and attachment holders until they leave.
             .chain(self.fishing_hooks_here().map(|(hook, _)| hook.id()))
@@ -2796,14 +2803,14 @@ mod vehicle_contact_hurt_tests {
         with_hull_heat(1.0, |game| {
             let mut b = boat(1);
             b.ground.on_ground = true;
-            game.boats.push(b);
+            game.entities.boats.push(b);
             game.tick_boats();
-            assert_eq!(game.boats.len(), 1);
+            assert_eq!(game.entities.boats.len(), 1);
             assert!(
-                game.boats[0].damage > 0.0,
+                game.entities.boats[0].damage > 0.0,
                 "the contact wears the stored hull"
             );
-            assert_eq!(game.boats[0].hurt_time, 10);
+            assert_eq!(game.entities.boats[0].hurt_time, 10);
         });
     }
 
@@ -2814,14 +2821,14 @@ mod vehicle_contact_hurt_tests {
         with_hull_heat(1.0, |game| {
             let mut c = cart(2);
             c.ground.on_ground = true;
-            game.carts.push(c);
+            game.entities.carts.push(c);
             game.tick_carts();
-            assert_eq!(game.carts.len(), 1);
+            assert_eq!(game.entities.carts.len(), 1);
             assert!(
-                game.carts[0].damage > 0.0,
+                game.entities.carts[0].damage > 0.0,
                 "the contact wears the stored cart"
             );
-            assert_eq!(game.carts[0].hurt_time, 10);
+            assert_eq!(game.entities.carts[0].hurt_time, 10);
         });
     }
 
@@ -2833,9 +2840,9 @@ mod vehicle_contact_hurt_tests {
         with_hull_heat(5.0, |game| {
             let mut b = boat(1);
             b.ground.on_ground = true;
-            game.boats.push(b);
+            game.entities.boats.push(b);
             game.tick_boats();
-            assert!(game.boats.is_empty());
+            assert!(game.entities.boats.is_empty());
         });
     }
 
@@ -2848,9 +2855,9 @@ mod vehicle_contact_hurt_tests {
         with_hull_heat(2.5, |game| {
             let mut b = boat(1);
             b.ground.on_ground = true;
-            game.boats.push(b);
+            game.entities.boats.push(b);
             game.tick_boats();
-            assert!(game.boats.is_empty());
+            assert!(game.entities.boats.is_empty());
         });
     }
 
@@ -2860,9 +2867,9 @@ mod vehicle_contact_hurt_tests {
         with_hull_heat(5.0, |game| {
             let mut c = cart(2);
             c.ground.on_ground = true;
-            game.carts.push(c);
+            game.entities.carts.push(c);
             game.tick_carts();
-            assert!(game.carts.is_empty());
+            assert!(game.entities.carts.is_empty());
         });
     }
 
@@ -2872,8 +2879,8 @@ mod vehicle_contact_hurt_tests {
     #[ignore = "daily"]
     fn an_invulnerable_vehicle_refuses_a_contact_hurt() {
         with_game(|game| {
-            game.boats.push(boat(1));
-            game.carts.push(cart(2));
+            game.entities.boats.push(boat(1));
+            game.entities.carts.push(cart(2));
             for id in [1, 2] {
                 let mut compound = Compound::new();
                 compound.insert("Invulnerable".into(), Tag::Byte(1));
@@ -2881,10 +2888,10 @@ mod vehicle_contact_hurt_tests {
             }
             assert!(!game.vehicle_contact_hurt(Target::Boat(1), "minecraft:cactus", 2.0));
             assert!(!game.vehicle_contact_hurt(Target::Cart(2), "minecraft:cactus", 2.0));
-            assert_eq!(game.boats[0].damage, 0.0);
-            assert_eq!(game.carts[0].damage, 0.0);
-            assert_eq!(game.boats[0].hurt_time, 0);
-            assert_eq!(game.carts[0].hurt_time, 0);
+            assert_eq!(game.entities.boats[0].damage, 0.0);
+            assert_eq!(game.entities.carts[0].damage, 0.0);
+            assert_eq!(game.entities.boats[0].hurt_time, 0);
+            assert_eq!(game.entities.carts[0].hurt_time, 0);
         });
     }
 }

@@ -435,7 +435,7 @@ fn a_transaction_refuses_only_a_completing_wither_placement() {
         ];
         let at = [5, 72, 4];
         let alone = [1, 72, 1];
-        let before = game.mobs.len();
+        let before = game.entities.mobs.len();
         (game as &mut dyn ServerHost)
             .transaction(|host, _| -> Result<(), ()> {
                 assert_eq!(
@@ -497,9 +497,9 @@ fn a_transaction_refuses_only_a_completing_wither_placement() {
         for ([x, y, z], state) in cells {
             assert_eq!(game.world.block(x, y, z), state);
         }
-        assert_eq!(game.mobs.len(), before);
+        assert_eq!(game.entities.mobs.len(), before);
         assert_eq!(level.set_placed_by(game, at, None), Ok(true));
-        assert_eq!(game.mobs.len(), before + 1);
+        assert_eq!(game.entities.mobs.len(), before + 1);
         for ([x, y, z], _) in cells {
             assert_eq!(game.world.block(x, y, z), air);
         }

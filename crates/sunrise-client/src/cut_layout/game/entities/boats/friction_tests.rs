@@ -60,11 +60,14 @@ fn a_status_refresh_asks_friction_as_the_chest_boat_it_is() {
         for (chest, expected) in [(true, Status::OnLand), (false, Status::InAir)] {
             let mut boat = Boat::new(12, "oak".into(), Vec3::new(6.0, 65.0, 5.5), 0.0);
             boat.chest = chest;
-            game.boats.clear();
-            game.boats.push(boat);
+            game.entities.boats.clear();
+            game.entities.boats.push(boat);
             calls.store(0, Ordering::SeqCst);
             game.refresh_boat_status(0);
-            assert_eq!(game.boats[0].status, expected, "chest boat: {chest}");
+            assert_eq!(
+                game.entities.boats[0].status, expected,
+                "chest boat: {chest}"
+            );
             assert!(calls.load(Ordering::SeqCst) > 0);
         }
     });

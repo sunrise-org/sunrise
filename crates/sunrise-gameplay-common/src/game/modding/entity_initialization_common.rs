@@ -47,7 +47,7 @@ impl EntityInitialization {
 impl crate::game::CommonGame<'_> {
     pub fn forget_entity_initialization(&mut self, holder: Holder) {
         if let Holder::Entity(id) = holder
-            && let Some(mob) = self.mobs.iter_mut().find(|mob| mob.id == id)
+            && let Some(mob) = self.entities.mobs.iter_mut().find(|mob| mob.id == id)
         {
             mob.accepted_hit = None;
         }

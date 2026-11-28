@@ -67,11 +67,19 @@ fn heart_with_a_creaking(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> (
     }
     for _ in 0..300 {
         game.tick_creaking_heart((0, 202, 0)).unwrap();
-        if let Some(m) = game.mobs.iter().find(|m| m.species() == Species::Creaking) {
+        if let Some(m) = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.species() == Species::Creaking)
+        {
             return (m.id, [m.position.x, m.position.y, m.position.z]);
         }
     }
-    panic!("the heart spawned no creaking: {:?}", game.mobs.len());
+    panic!(
+        "the heart spawned no creaking: {:?}",
+        game.entities.mobs.len()
+    );
 }
 
 #[test]
@@ -103,7 +111,12 @@ fn a_heart_spawn_posts_entity_place_and_the_poof() {
         // The packet carries only the entity id and event; clients resolve
         // the poof's position from that entity, not a packet coordinate.
         .map(|&(mob, event)| {
-            let entity = game.mobs.iter().find(|m| m.id == mob as u32).unwrap();
+            let entity = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == mob as u32)
+                .unwrap();
             (
                 mob,
                 event,
@@ -170,15 +183,16 @@ fn shearing_a_copper_golem_posts_shear_at_the_golem() {
          {NoAI:1b,PersistenceRequired:1b,next_weather_age:-2L}"
     ));
     let index = game
+        .entities
         .mobs
         .iter()
         .position(|m| m.species() == Species::CopperGolem)
         .expect("the golem");
     // OfferFlowerGoal.stop: the poppy on the antenna.
-    game.receive_gift(game.mobs[index].id, "minecraft:poppy");
+    game.receive_gift(game.entities.mobs[index].id, "minecraft:poppy");
     assert!(game.golem_shearable(index), "the antenna holds the poppy");
     let at = {
-        let p = game.mobs[index].position;
+        let p = game.entities.mobs[index].position;
         [p.x, p.y, p.z]
     };
     game.common.inventory[game.common.selected] =
@@ -196,7 +210,7 @@ fn shearing_a_copper_golem_posts_shear_at_the_golem() {
         "the golem's SHEAR from the player: {events:?}"
     );
     assert!(
-        game.mobs[index].saddle_item().is_none(),
+        game.entities.mobs[index].saddle_item().is_none(),
         "the antenna is empty"
     );
 }

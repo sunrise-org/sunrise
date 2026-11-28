@@ -141,7 +141,8 @@ fn is_sitting_reads_each_mobs_own_test() {
         ];
         for (i, kind) in kinds.iter().enumerate() {
             let kind = game.res.mob_types().get(*kind).unwrap().clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(40 + i as u32, kind, Vec3::ZERO, 0.0));
         }
         game.server.next_entity = game.server.next_entity.max(44);
@@ -156,7 +157,7 @@ fn is_sitting_reads_each_mobs_own_test() {
         }
         assert_eq!(read(game, 44), None, "a cow has no sitting test");
         fn mob<'a>(game: &'a mut ServerGame<'_>, id: u32) -> &'a mut Mob {
-            game.mobs.iter_mut().find(|m| m.id == id).unwrap()
+            game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap()
         }
         mob(game, 40).extra.sitting_pose = true;
         mob(game, 41).extra.ints[0] = fox::SITTING;
@@ -229,15 +230,21 @@ fn armor_stand_pose_and_flags_read_the_stand() {
             std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
         );
         // A server spawns the stand here; a client has it from the server's AddEntity.
-        if !game.common().armor_stands.iter().any(|s| s.id == 21) {
-            game.common_mut().armor_stands.push(ArmorStand::new(
-                21,
-                Vec3::new(0.5, 64.0, 0.5),
-                0.0,
-            ));
+        if !game
+            .common()
+            .entities
+            .armor_stands
+            .iter()
+            .any(|s| s.id == 21)
+        {
+            game.common_mut()
+                .entities
+                .armor_stands
+                .push(ArmorStand::new(21, Vec3::new(0.5, 64.0, 0.5), 0.0));
         }
         let stand = game
             .common_mut()
+            .entities
             .armor_stands
             .iter_mut()
             .find(|s| s.id == 21)
@@ -286,7 +293,8 @@ fn armor_stand_pose_and_flags_read_the_stand() {
         check(game);
         // Another kind has neither.
         let cow = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(sunrise_sim::mobs::Mob::new(22, cow, Vec3::ZERO, 0.0));
         game.server.next_entity = game.server.next_entity.max(22);
         let cow = game.entity(22).unwrap();
@@ -777,7 +785,7 @@ fn client_tracked_entities_read_their_synced_pose() {
             game.handle_packet(pkt).unwrap();
             // As SetEntityData's DATA_POSE leaves them: a player's in `synced_pose`, a mob's in
             // `pose` (crouching is 5, swimming 3).
-            for mob in game.mobs.iter_mut() {
+            for mob in game.entities.mobs.iter_mut() {
                 match mob.id {
                     301 => mob.extra.synced_pose = 5,
                     302 => mob.extra.pose = 3,
@@ -821,7 +829,8 @@ fn a_server_reads_a_mobs_jump_cooldown() {
             .expect("a pig");
         let id = entity.id();
         for delay in [7, 0] {
-            game.mobs
+            game.entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == id)
                 .unwrap()

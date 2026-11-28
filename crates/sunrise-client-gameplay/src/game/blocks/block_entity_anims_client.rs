@@ -90,7 +90,7 @@ impl ClientGame<'_> {
         {
             out.push(PLAYER);
         }
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if !m.removed && m.bounds().intersects(area) {
                 out.push(u64::from(m.id));
             }
@@ -108,7 +108,7 @@ impl ClientGame<'_> {
             alive: p.alive,
             raider: false,
         });
-        let mobs = &self.common.mobs;
+        let mobs = &self.common.entities.mobs;
         let entity = |h: u64| {
             if h == PLAYER {
                 return player;
@@ -168,7 +168,12 @@ impl ClientGame<'_> {
                     .find(|&(_, v)| v == uuid)
                     .map(|(&id, _)| id)
             })?;
-        let m = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let m = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         Some(ConduitTarget {
             position: [m.position.x, m.position.y, m.position.z],
             eye_y: m.eye_y(),

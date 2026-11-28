@@ -185,13 +185,7 @@ impl crate::game::ServerGame<'_> {
     }
 
     fn active_perf_view(&self) -> super::super::levels::EntityCountView<'_> {
-        super::super::levels::entity_count_view!(
-            self,
-            &self.creatures.projectiles,
-            &self.resident_entities.general.rows,
-            &self.resident_entities.knots,
-            &self.server.others.0
-        )
+        super::super::levels::entity_count_view!(self.common.entities, &self.server.others.0)
     }
 
     /// All typed entities in the active dimension, without allocating.

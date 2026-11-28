@@ -241,16 +241,16 @@ fn saved_entity_loaders_publish_and_retire_the_authoritative_owner() {
                 // Exercise the clone-replay boundary used by vehicle/projectile ticks.
                 match kind {
                     "oak_boat" => {
-                        let copy = game.boats[0].clone();
-                        assert!(game.boats.store_back(0, copy));
+                        let copy = game.entities.boats[0].clone();
+                        assert!(game.entities.boats.store_back(0, copy));
                     }
                     "minecart" => {
-                        let copy = game.carts[0].clone();
-                        assert!(game.carts.store_back(0, copy));
+                        let copy = game.entities.carts[0].clone();
+                        assert!(game.entities.carts.store_back(0, copy));
                     }
                     "arrow" | "small_fireball" | "snowball" => {
-                        let copy = game.creatures.projectiles[0].clone();
-                        assert!(game.creatures.projectiles.store_back(0, copy));
+                        let copy = game.entities.projectiles[0].clone();
+                        assert!(game.entities.projectiles.store_back(0, copy));
                     }
                     _ => (),
                 }
@@ -341,18 +341,22 @@ fn saved_binding_family_first_stores_publish_to_queries() {
                 );
             }};
         }
-            family!("item", r#"{Item:{id:"minecraft:stone",count:1}}"#, dropped);
-            family!("experience_orb", "{Value:1s}", orbs);
-            family!("arrow", "{}", creatures.projectiles);
-            family!("armor_stand", "{}", armor_stands);
-            family!("item_frame", "{Facing:3b}", item_frames);
-            family!("oak_boat", "{}", boats);
-            family!("minecart", "{}", carts);
+            family!(
+                "item",
+                r#"{Item:{id:"minecraft:stone",count:1}}"#,
+                entities.dropped
+            );
+            family!("experience_orb", "{Value:1s}", entities.orbs);
+            family!("arrow", "{}", entities.projectiles);
+            family!("armor_stand", "{}", entities.armor_stands);
+            family!("item_frame", "{Facing:3b}", entities.item_frames);
+            family!("oak_boat", "{}", entities.boats);
+            family!("minecart", "{}", entities.carts);
             // The gate stays narrow: a family without saved binding stores without publishing.
             game.summon_with_nbt("minecraft:tnt", [0.5, 70.0, 0.5], "{}")
                 .unwrap();
             game.lan_assign_ids();
-            let id = game.tnts[0].id;
+            let id = game.entities.tnts[0].id;
             value_key.set(game, Holder::Entity(id), 9).unwrap();
             assert!(
                 game.query(value_key)

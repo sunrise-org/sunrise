@@ -18,7 +18,8 @@ pub(crate) mod nested_spawn_tests {
         taken_pass_tests::in_both_dimensions(|game, balance| {
             let mut heart = CreakingHeart::default();
             let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(70, kind, Vec3::new(0.5, 80.0, 0.5), 0.0));
             game.world.chunks.insert(
                 (0, 0),

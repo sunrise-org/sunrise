@@ -24,7 +24,7 @@ impl crate::game::ServerGame<'_> {
         let Target::Mob(id) = self.native_entity_target(merchant.entity())? else {
             return None;
         };
-        self.common.mobs.iter().position(|m| {
+        self.common.entities.mobs.iter().position(|m| {
             m.id == id
                 && !m.removed
                 && matches!(m.species(), Species::Villager | Species::WanderingTrader)
@@ -33,7 +33,7 @@ impl crate::game::ServerGame<'_> {
 
     fn native_villager_index(&self, merchant: MerchantRef) -> Option<usize> {
         let index = self.native_merchant_index(merchant)?;
-        (self.common.mobs[index].species() == Species::Villager).then_some(index)
+        (self.common.entities.mobs[index].species() == Species::Villager).then_some(index)
     }
 
     /// Reads the offers, experience and level (1 for a trader) of the mob at
@@ -44,10 +44,10 @@ impl crate::game::ServerGame<'_> {
         index: usize,
         read: impl FnOnce(&[MerchantOffer], i32, i32) -> T,
     ) -> T {
-        self.merchant_read_lent(&self.common.mobs[index], read)
+        self.merchant_read_lent(&self.common.entities.mobs[index], read)
     }
 
-    /// The same read while an AI tick lends this mob out of `self.mobs`.
+    /// The same read while an AI tick lends this mob out of `self.entities.mobs`.
     pub(in crate::game) fn merchant_read_lent<T>(
         &self,
         mob: &sunrise_sim::mobs::Mob,
@@ -89,7 +89,7 @@ impl crate::game::ServerGame<'_> {
         index: usize,
         edit: impl FnOnce(&mut Vec<MerchantOffer>, &mut i32, &mut i32) -> bool,
     ) -> bool {
-        let mob = &self.common.mobs[index];
+        let mob = &self.common.entities.mobs[index];
         if mob.species() == Species::Villager
             && self
                 .stations()
@@ -112,11 +112,11 @@ impl crate::game::ServerGame<'_> {
             });
             return sent && done;
         }
-        if self.common.mobs[index].extra.flag2 {
+        if self.common.entities.mobs[index].extra.flag2 {
             return false;
         }
         self.journal_merchant_mob(id);
-        let mob = &mut self.common.mobs[index];
+        let mob = &mut self.common.entities.mobs[index];
         let trader = mob.extra.trade.get_or_insert_with(|| {
             Box::new(Trader {
                 unset: true,
@@ -182,8 +182,10 @@ impl crate::game::ServerGame<'_> {
         let Some(mob) = self.native_merchant_index(merchant) else {
             return false;
         };
-        if self.lan_trade_conn(self.common.mobs[mob].id).is_none()
-            && !self.common.mobs[mob].extra.flag2
+        if self
+            .lan_trade_conn(self.common.entities.mobs[mob].id)
+            .is_none()
+            && !self.common.entities.mobs[mob].extra.flag2
         {
             self.ensure_offers(mob);
         }
@@ -219,14 +221,14 @@ impl crate::game::ServerGame<'_> {
         merchant: MerchantRef,
     ) -> Option<PlayerRef> {
         let index = self.native_merchant_index(merchant)?;
-        let conn = self.lan_trade_conn(self.common.mobs[index].id)?;
+        let conn = self.lan_trade_conn(self.common.entities.mobs[index].id)?;
         self.player(self.lan_trade_player(conn)?)
     }
 
     /// `VillagerData.profession`, a registry id (`minecraft:farmer`; none is
     /// `minecraft:none`). None for a wandering trader.
     pub(in crate::game) fn merchant_profession(&self, merchant: MerchantRef) -> Option<String> {
-        let mob = &self.common.mobs[self.native_villager_index(merchant)?];
+        let mob = &self.common.entities.mobs[self.native_villager_index(merchant)?];
         Some(mob.extra.profession.id())
     }
 
@@ -248,20 +250,20 @@ impl crate::game::ServerGame<'_> {
         else {
             return false;
         };
-        let id = self.common.mobs[index].id;
+        let id = self.common.entities.mobs[index].id;
         if self
             .stations()
             .professions
-            .state_index(&self.common.mobs[index].extra.profession)
+            .state_index(&self.common.entities.mobs[index].extra.profession)
             .is_none()
-            || self.common.mobs[index].extra.flag2
+            || self.common.entities.mobs[index].extra.flag2
             || self.lan_trade_conn(id).is_some()
         {
             return false;
         }
         self.journal_merchant_mob(id);
         let table = self.stations().professions.clone();
-        villager::set_profession(&mut self.common.mobs[index], &table, profession);
+        villager::set_profession(&mut self.common.entities.mobs[index], &table, profession);
         true
     }
 
@@ -292,7 +294,7 @@ impl crate::game::ServerGame<'_> {
 
     /// `VillagerData.type`, a registry id (`minecraft:plains`).
     pub(in crate::game) fn merchant_villager_type(&self, merchant: MerchantRef) -> Option<String> {
-        let mob = &self.common.mobs[self.native_villager_index(merchant)?];
+        let mob = &self.common.entities.mobs[self.native_villager_index(merchant)?];
         let name = VILLAGER_TYPES[mob.extra.variant as usize % VILLAGER_TYPES.len()];
         Some(format!("minecraft:{name}"))
     }
@@ -311,17 +313,17 @@ impl crate::game::ServerGame<'_> {
         let Some(kind) = registry_index(kind, &VILLAGER_TYPES) else {
             return false;
         };
-        let id = self.common.mobs[index].id;
+        let id = self.common.entities.mobs[index].id;
         if let Some(conn) = self.lan_trade_conn(id) {
             let variant = format!("minecraft:{}", VILLAGER_TYPES[kind as usize]);
             if !self.lan_trade_edit(conn, |session| session.variant = variant) {
                 return false;
             }
-        } else if self.common.mobs[index].extra.flag2 {
+        } else if self.common.entities.mobs[index].extra.flag2 {
             return false;
         }
         self.journal_merchant_mob(id);
-        self.common.mobs[index].extra.variant = kind;
+        self.common.entities.mobs[index].extra.variant = kind;
         true
     }
 
@@ -358,7 +360,7 @@ pub mod tests {
             );
         }
         let kind = game.res.mob_types().get(kind).unwrap().clone();
-        game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+        game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
         let entity = game.entity(id).unwrap();
         game.merchant(entity).unwrap()
     }

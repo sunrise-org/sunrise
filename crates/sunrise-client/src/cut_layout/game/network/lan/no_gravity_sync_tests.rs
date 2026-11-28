@@ -42,14 +42,17 @@ fn an_items_and_a_mobs_no_gravity_reaches_the_tracker() {
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
         let mut mob = Mob::new(101, kind, Vec3::new(1.5, 70.0, 1.5), 0.0);
         mob.no_gravity = true;
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         let stack = ItemStack::new("minecraft:diamond", 1);
         let mut drop = ItemEntity::new(102, stack, Vec3::new(2.5, 70.0, 1.5), Vec3::ZERO, 0.0);
         drop.no_gravity = true;
-        game.dropped.push(drop);
+        game.entities.dropped.push(drop);
         game.server.next_entity = 102;
         let (pig, item) = (101, 102);
-        assert!(game.mobs.last().unwrap().no_gravity && game.dropped.last().unwrap().no_gravity);
+        assert!(
+            game.entities.mobs.last().unwrap().no_gravity
+                && game.entities.dropped.last().unwrap().no_gravity
+        );
         for id in [pig, item] {
             assert_eq!(
                 no_gravity_entry(game, id),
@@ -59,8 +62,8 @@ fn an_items_and_a_mobs_no_gravity_reaches_the_tracker() {
         }
 
         // `setNoGravity(false)`: nothing past the default, which the tracker sends.
-        game.mobs.last_mut().unwrap().no_gravity = false;
-        game.dropped.last_mut().unwrap().no_gravity = false;
+        game.entities.mobs.last_mut().unwrap().no_gravity = false;
+        game.entities.dropped.last_mut().unwrap().no_gravity = false;
         for id in [pig, item] {
             assert_eq!(no_gravity_entry(game, id), (None, true), "{id}");
         }

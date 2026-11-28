@@ -210,7 +210,8 @@ fn mining_reports_after_the_drop_hook(
     assert!(game.held().is_none());
     assert_ne!(game.world.block(pos[0], pos[1], pos[2]), stone);
     assert!(
-        game.dropped
+        game.entities
+            .dropped
             .iter()
             .any(|item| &*item.stack.item == "minecraft:cobblestone")
     );
@@ -227,7 +228,8 @@ fn continuations_preserve_listener_hand_writes(
 ) {
     // A broken steering stick must not install its fishing rod over the new stack.
     let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-    game.mobs
+    game.entities
+        .mobs
         .push(sunrise_sim::mobs::Mob::new(21, pig, Vec3::ZERO, 0.0));
     game.riding = Some(21);
     let mut stick = named_stack("minecraft:carrot_on_a_stick", 1);
@@ -398,8 +400,8 @@ fn run_isolated() {
 
             // Native entity interaction: the last wheat is eaten by an adult cow.
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-            game.mobs.clear();
-            game.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.entities.mobs.clear();
+            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 42,
                 kind,
                 Vec3::new(0.5, 64.0, 2.5),

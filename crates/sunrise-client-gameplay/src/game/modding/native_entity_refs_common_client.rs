@@ -77,7 +77,7 @@ impl crate::game::ClientGame<'_> {
                 .ok_or(EntityReadError::Unavailable);
         }
         // The server tracks the dragon alone; its parts are the client's own copies of it.
-        if self.common.dragon.as_ref().is_some_and(|d| {
+        if self.common.entities.dragon.as_ref().is_some_and(|d| {
             sunrise_gameplay_common::game::dragon_common::dragon_part_index(d.id, entity.id())
                 .is_some()
         }) {
@@ -94,7 +94,12 @@ impl crate::game::ClientGame<'_> {
         }
         match self.client_level_entity(id) {
             Some(Target::Mob(mob))
-                if !self.common.mobs.iter().any(|m| m.id == mob && !m.removed) =>
+                if !self
+                    .common
+                    .entities
+                    .mobs
+                    .iter()
+                    .any(|m| m.id == mob && !m.removed) =>
             {
                 Err(EntityReadError::Unavailable)
             }
@@ -106,70 +111,88 @@ impl crate::game::ClientGame<'_> {
     /// Resolve a tracked client entity's typed target across every body store a client holds.
     pub(in crate::game::client_side) fn client_level_entity(&self, id: i32) -> Option<Target> {
         let uid = u32::try_from(id).ok()?;
-        if self.common.dragon.as_ref().is_some_and(|d| d.id == uid) {
+        if self
+            .common
+            .entities
+            .dragon
+            .as_ref()
+            .is_some_and(|d| d.id == uid)
+        {
             return Some(Target::Dragon(uid));
         }
-        if self.common.mobs.iter().any(|m| m.id == uid) {
+        if self.common.entities.mobs.iter().any(|m| m.id == uid) {
             return Some(Target::Mob(uid));
         }
-        if self.common.dropped.iter().any(|e| e.id == uid) {
+        if self.common.entities.dropped.iter().any(|e| e.id == uid) {
             return Some(Target::Item(uid));
         }
-        if self.common.orbs.iter().any(|e| e.id == uid) {
+        if self.common.entities.orbs.iter().any(|e| e.id == uid) {
             return Some(Target::Orb(uid));
         }
-        if self.common.boats.iter().any(|e| e.id == uid) {
+        if self.common.entities.boats.iter().any(|e| e.id == uid) {
             return Some(Target::Boat(uid));
         }
-        if self.common.carts.iter().any(|e| e.id == uid) {
+        if self.common.entities.carts.iter().any(|e| e.id == uid) {
             return Some(Target::Cart(uid));
-        }
-        if self.common.armor_stands.iter().any(|e| e.id == uid) {
-            return Some(Target::Stand(uid));
-        }
-        if self.common.tnts.iter().any(|e| e.id == uid) {
-            return Some(Target::Tnt(uid));
-        }
-        if self.common.falling.iter().any(|e| e.id == uid) {
-            return Some(Target::Falling(uid));
         }
         if self
             .common
-            .creatures
-            .projectiles
+            .entities
+            .armor_stands
             .iter()
             .any(|e| e.id == uid)
         {
+            return Some(Target::Stand(uid));
+        }
+        if self.common.entities.tnts.iter().any(|e| e.id == uid) {
+            return Some(Target::Tnt(uid));
+        }
+        if self.common.entities.falling.iter().any(|e| e.id == uid) {
+            return Some(Target::Falling(uid));
+        }
+        if self.common.entities.projectiles.iter().any(|e| e.id == uid) {
             return Some(Target::Projectile(uid));
         }
-        if self.common.rockets.iter().any(|e| e.id == uid) {
+        if self.common.entities.rockets.iter().any(|e| e.id == uid) {
             return Some(Target::Rocket(uid));
         }
-        if self.common.tridents.iter().any(|e| e.id == uid) {
+        if self.common.entities.tridents.iter().any(|e| e.id == uid) {
             return Some(Target::Trident(uid));
         }
-        if self.common.crystals.iter().any(|e| e.id == uid) {
+        if self.common.entities.crystals.iter().any(|e| e.id == uid) {
             return Some(Target::Crystal(uid));
         }
-        if self.common.cushions.iter().any(|e| e.id == uid) {
+        if self.common.entities.cushions.iter().any(|e| e.id == uid) {
             return Some(Target::Cushion(uid));
         }
-        if self.common.item_frames.iter().any(|e| e.id == uid) {
+        if self.common.entities.item_frames.iter().any(|e| e.id == uid) {
             return Some(Target::Frame(uid));
         }
-        if self.common.paintings.iter().any(|e| e.id == uid) {
+        if self.common.entities.paintings.iter().any(|e| e.id == uid) {
             return Some(Target::Painting(uid));
         }
-        if self.common.fangs.list.iter().any(|e| e.id == uid) {
+        if self.common.entities.fangs.list.iter().any(|e| e.id == uid) {
             return Some(Target::Fangs(uid));
         }
-        if self.common.bolts.iter().any(|b| b.id == uid) {
+        if self.common.entities.bolts.iter().any(|b| b.id == uid) {
             return Some(Target::Bolt(uid));
         }
-        if self.common.breath_clouds.iter().any(|e| e.id == uid) {
+        if self
+            .common
+            .entities
+            .breath_clouds
+            .iter()
+            .any(|e| e.id == uid)
+        {
             return Some(Target::Cloud(uid));
         }
-        if self.common.ominous_spawners.iter().any(|s| s.id == uid) {
+        if self
+            .common
+            .entities
+            .ominous_spawners
+            .iter()
+            .any(|s| s.id == uid)
+        {
             return Some(Target::Spawner(uid));
         }
         if self.client.interactions.contains_key(&id) {

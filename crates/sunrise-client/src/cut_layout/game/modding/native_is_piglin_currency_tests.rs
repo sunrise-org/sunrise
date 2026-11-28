@@ -114,13 +114,14 @@ fn add_piglin(
     main: Option<&str>,
     baby: bool,
 ) -> u32 {
-    let before: Vec<u32> = game.mobs.iter().map(|m| m.id).collect();
+    let before: Vec<u32> = game.entities.mobs.iter().map(|m| m.id).collect();
     let baby = if baby { ",IsBaby:1b" } else { "" };
     let command = format!(
         "summon minecraft:piglin {x} 100 {z} {{PersistenceRequired:1b,IsImmuneToZombification:1b{baby}}}"
     );
     assert!(game.run_command(&command), "{command}");
     let m = game
+        .entities
         .mobs
         .iter_mut()
         .find(|m| m.species() == Species::Piglin && !before.contains(&m.id))
@@ -131,11 +132,11 @@ fn add_piglin(
 }
 
 fn mob<'a>(game: &'a sunrise_gameplay::game::ServerGame<'_>, id: u32) -> &'a Mob {
-    game.mobs.iter().find(|m| m.id == id).unwrap()
+    game.entities.mobs.iter().find(|m| m.id == id).unwrap()
 }
 
 fn index(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> usize {
-    game.mobs.iter().position(|m| m.id == id).unwrap()
+    game.entities.mobs.iter().position(|m| m.id == id).unwrap()
 }
 
 /// Right click on the piglin `id` holding `held`; whether the click was taken.
@@ -152,8 +153,8 @@ fn click(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, held: ItemS
 /// game applies what they raised with the next tick's events.
 fn hit(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32) {
     let i = index(game, id);
-    piglin::stop_admiring(&mut game.mobs[i]);
-    piglin::stop_admiring(&mut game.mobs[i]);
+    piglin::stop_admiring(&mut game.entities.mobs[i]);
+    piglin::stop_admiring(&mut game.entities.mobs[i]);
     step(game, 1);
 }
 
@@ -179,7 +180,7 @@ fn off_hand(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Option<It
 
 /// Thrown barter items (no other items are on the ground in these tests).
 fn thrown(game: &sunrise_gameplay::game::ServerGame<'_>) -> usize {
-    game.dropped.len()
+    game.entities.dropped.len()
 }
 
 #[test]
@@ -233,7 +234,7 @@ fn a_part_makes_a_coin_currency_and_refuses_the_gold_ingot_isolated() {
             assert_eq!(mob(game, p).extra.main_hand_id(), None);
             assert_eq!(stored(mob(game, p), EMERALD), 0);
             assert!(thrown(game) > 0, "the barter is thrown at the 120th tick");
-            game.dropped.clear();
+            game.entities.dropped.clear();
 
             // A hit: an adult admiring a coin loses it, nothing thrown or stored. Were the coin
             // asked about without its data, it would be kept instead.
@@ -290,8 +291,8 @@ fn a_part_makes_a_coin_currency_and_refuses_the_gold_ingot_isolated() {
             let adult = Mob::new(101, kind.clone(), sunrise_core::geometry::Vec3::ZERO, 0.0);
             let mut baby = Mob::new(102, kind, sunrise_core::geometry::Vec3::ZERO, 0.0);
             baby.extra.age = -24000;
-            client.mobs.push(adult);
-            client.mobs.push(baby);
+            client.entities.mobs.push(adult);
+            client.entities.mobs.push(baby);
             client.common.inventory[client.common.selected] = Some(coins(1));
             assert!(client.remote_mob_would_take(0, Hand::Main));
             assert!(!client.remote_mob_would_take(1, Hand::Main));
@@ -350,7 +351,7 @@ fn without_parts_only_the_gold_ingot_is_currency_isolated() {
         hit(game, p);
         assert_eq!(off_hand(game, p), None);
         let i = index(game, p);
-        let main = sunrise_sim::mobs::finalize::item_stack(&game.mobs[i], 0).unwrap();
+        let main = sunrise_sim::mobs::finalize::item_stack(&game.entities.mobs[i], 0).unwrap();
         assert_eq!(&*main.item, GOLDEN_SWORD);
         assert_eq!(main.custom_data(), Some(&coin_data()));
         assert_eq!(thrown(game), 0);
@@ -372,6 +373,7 @@ fn without_parts_only_the_gold_ingot_is_currency_isolated() {
             .unwrap()
             .clone();
         client
+            .entities
             .mobs
             .push(Mob::new(101, kind, sunrise_core::geometry::Vec3::ZERO, 0.0));
         client.common.inventory[client.common.selected] = Some(coins(1));

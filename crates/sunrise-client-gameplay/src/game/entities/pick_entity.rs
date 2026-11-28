@@ -16,16 +16,11 @@ pub(in crate::game) use sunrise_gameplay_common::game::pick_entity_common::{
 impl ClientGame<'_> {
     pub(in crate::game::client_side) fn client_has_pick_result(&self, id: i32) -> bool {
         let uid = id as u32;
-        if self
-            .common
-            .creatures
-            .projectiles
-            .iter()
-            .any(|p| p.id == uid)
-            || self.common.tridents.iter().any(|t| t.id == uid)
-            || self.common.rockets.iter().any(|r| r.id == uid)
-            || self.common.tnts.iter().any(|t| t.id == uid)
-            || self.common.falling.iter().any(|f| f.id == uid)
+        if self.common.entities.projectiles.iter().any(|p| p.id == uid)
+            || self.common.entities.tridents.iter().any(|t| t.id == uid)
+            || self.common.entities.rockets.iter().any(|r| r.id == uid)
+            || self.common.entities.tnts.iter().any(|t| t.id == uid)
+            || self.common.entities.falling.iter().any(|f| f.id == uid)
             || self.resident_dragon_part(uid).is_some()
             || self
                 .client
@@ -34,7 +29,7 @@ impl ClientGame<'_> {
                 .is_some_and(|r| r.general.rows.contains_key(&id))
             || self
                 .common
-                .resident_entities
+                .entities
                 .general
                 .rows
                 .iter()

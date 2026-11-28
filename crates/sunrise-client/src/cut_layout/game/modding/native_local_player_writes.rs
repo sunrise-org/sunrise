@@ -161,11 +161,12 @@ mod tests {
                 game.spawn_entity(43, "minecraft:pig", [0.5, 64.0, 0.5], [55.0, 0.0, 55.0]);
                 let index = game
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .position(|mob| mob.id == 43)
                     .unwrap();
-                let mount = &mut game.common.mobs[index];
+                let mount = &mut game.common.entities.mobs[index];
                 mount.previous_body_yaw = 35.0;
                 mount.body_yaw = 55.0;
                 set_passengers(game, 43, vec![42]);
@@ -180,11 +181,12 @@ mod tests {
                 let before = game.player.as_ref().unwrap().position.z;
                 let index = game
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .position(|mob| mob.id == 43)
                     .unwrap();
-                game.common.mobs[index].position.z += 3.0;
+                game.common.entities.mobs[index].position.z += 3.0;
                 game.tick_remote_player(false, false).unwrap();
                 assert_eq!(game.player.as_ref().unwrap().position.z, before + 3.0);
                 // No horizontal movement in the rider's own tick. A turn toward the
@@ -224,6 +226,7 @@ mod tests {
                 game.player_model_geometry(camera, 0.5, &mut Vec::new());
                 assert_eq!(*turns.lock().unwrap(), [37.5, 45.0, 65.0, 45.0]);
                 let stand = game
+                    .entities
                     .armor_stands
                     .iter()
                     .find(|stand| stand.id == 45)
@@ -231,7 +234,8 @@ mod tests {
                 assert_eq!((stand.yaw, stand.previous_yaw), (0.0, 0.0));
 
                 let at = game.player.as_ref().unwrap().position;
-                game.boats
+                game.entities
+                    .boats
                     .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                         44,
                         "oak".into(),

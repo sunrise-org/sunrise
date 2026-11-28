@@ -26,6 +26,7 @@ impl crate::game::ServerGame<'_> {
         );
         out.extend(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .filter(|m| rule.takes(m.solid_kind()))
@@ -33,6 +34,7 @@ impl crate::game::ServerGame<'_> {
         );
         out.extend(
             self.common
+                .entities
                 .boats
                 .iter()
                 .map(|b| boat(|id, p, bounds| self.client_copy_box(id, p, bounds), b)),
@@ -70,12 +72,13 @@ impl crate::game::ServerGame<'_> {
             Mover::Cart(c) => {
                 for o in
                     self.common
+                        .entities
                         .carts
                         .iter()
                         .filter(|o| o.id != c.id)
                         .map(|c| cart(|id, p, bounds| self.client_copy_box(id, p, bounds), c))
                         .chain(
-                            self.common.boats.iter().map(|b| {
+                            self.common.entities.boats.iter().map(|b| {
                                 boat(|id, p, bounds| self.client_copy_box(id, p, bounds), b)
                             }),
                         )
@@ -126,6 +129,7 @@ impl crate::game::ServerGame<'_> {
                 });
                 for (c, target) in self
                     .common
+                    .entities
                     .boats
                     .iter()
                     .map(|b| {
@@ -134,7 +138,7 @@ impl crate::game::ServerGame<'_> {
                             Target::Boat(b.id),
                         )
                     })
-                    .chain(self.common.carts.iter().map(|c| {
+                    .chain(self.common.entities.carts.iter().map(|c| {
                         (
                             cart(|id, p, bounds| self.client_copy_box(id, p, bounds), c),
                             Target::Cart(c.id),

@@ -375,7 +375,12 @@ pub(crate) fn entity_data_validation_inline_painting_and_pre_login_bundle_case(c
                         .as_bool()
                         .unwrap()
                 );
-                let painting = game.paintings.iter().find(|p| p.id == 2001).unwrap();
+                let painting = game
+                    .entities
+                    .paintings
+                    .iter()
+                    .find(|p| p.id == 2001)
+                    .unwrap();
                 assert_eq!(painting.asset.as_deref(), Some("alban"));
                 assert_eq!((painting.width, painting.height), (2, 1));
                 let (lo, hi) = painting.bounds();
@@ -532,7 +537,12 @@ pub(crate) fn entity_data_validation_inline_painting_and_pre_login_bundle_case(c
                 )
                 .unwrap();
                 wait_pong_in_game(game, &mut peer, 2);
-                let before = game.paintings.iter().find(|p| p.id == 2002).unwrap();
+                let before = game
+                    .entities
+                    .paintings
+                    .iter()
+                    .find(|p| p.id == 2002)
+                    .unwrap();
                 assert_eq!((before.width, before.height), (1, 1));
                 // Send the recorded wire bytes for holder id 1 (0-based index 0: overridden minecraft:kebab).
                 let mut frame = sunrise_core::vanilla_bytes::Writer::new();
@@ -544,7 +554,12 @@ pub(crate) fn entity_data_validation_inline_painting_and_pre_login_bundle_case(c
                 peer.send(&frame.data).unwrap();
                 wait_pong_in_game(game, &mut peer, 3);
 
-                let painting = game.paintings.iter().find(|p| p.id == 2002).unwrap();
+                let painting = game
+                    .entities
+                    .paintings
+                    .iter()
+                    .find(|p| p.id == 2002)
+                    .unwrap();
                 assert_eq!(&*painting.variant, synced_name);
                 assert_eq!(
                     painting.asset.as_deref(),
@@ -577,7 +592,12 @@ pub(crate) fn entity_data_validation_inline_painting_and_pre_login_bundle_case(c
                 )
                 .unwrap();
                 wait_pong_in_game(game, &mut peer, 4);
-                let spawned = game.paintings.iter().find(|p| p.id == 2003).unwrap();
+                let spawned = game
+                    .entities
+                    .paintings
+                    .iter()
+                    .find(|p| p.id == 2003)
+                    .unwrap();
                 assert_eq!(&*spawned.variant, synced_name);
                 assert_eq!(
                     spawned.asset.as_deref(),

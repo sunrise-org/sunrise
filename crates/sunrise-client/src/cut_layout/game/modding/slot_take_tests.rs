@@ -1019,14 +1019,14 @@ fn a_throw_repeat_sees_the_previous_notice_and_oversized_swap_delivers_after_it(
             game.server.lan.as_ref().unwrap().hub.guests[0].inventory[8],
             stone(5)
         );
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
 
         set(game, &[(0, stone(2))], &[], None);
         SCRIPT.set(TakeScript::RefillThenPanic);
         click(game, 0, 1, 4);
         assert_eq!(heard(), [took(0, 2, 0), took(0, 2, 0)]);
         assert_eq!(in_pot(game, 0), 2);
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
     });
 }
 
@@ -1055,7 +1055,7 @@ fn an_oversized_swap_delivers_the_displaced_stack_even_when_the_holder_is_remove
         assert!(guest.menu.is_none());
         assert_eq!(guest.inventory[0], item(dirt, 63));
         assert_eq!(guest.inventory[8], stone(64));
-        let spawned = game.dropped.iter().map(|e| &e.stack);
+        let spawned = game.entities.dropped.iter().map(|e| &e.stack);
         let queued = game.server.spill.0.spawns.iter().map(|e| &e.stack);
         assert_eq!(
             spawned
@@ -1083,7 +1083,7 @@ fn replacing_the_detached_holder_spills_only_the_contents_after_the_take() {
         // A live close returns the stack just taken from the cursor to the inventory.
         assert_eq!(guest.carried, None);
         assert_eq!(guest.inventory[0], stone(5));
-        let spawned = game.dropped.iter().map(|e| &e.stack);
+        let spawned = game.entities.dropped.iter().map(|e| &e.stack);
         let queued = game.server.spill.0.spawns.iter().map(|e| &e.stack);
         assert_eq!(
             spawned
@@ -1387,7 +1387,11 @@ fn a_partial_mod_craft_keeps_crafting_bookkeeping_but_not_item_crafted() {
             assert_eq!(in_pot(game, 0), u32::from(!success));
             assert_eq!(held(game, 0), (if success { 64 } else { 62 }, 0));
             assert_eq!(
-                game.dropped.iter().map(|e| e.stack.count).sum::<u32>(),
+                game.entities
+                    .dropped
+                    .iter()
+                    .map(|e| e.stack.count)
+                    .sum::<u32>(),
                 if success { 2 } else { 0 }
             );
             let host = game.server.lan.as_ref().unwrap();

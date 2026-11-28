@@ -554,6 +554,7 @@ fn scene_entities_are_drawn_and_refused_as_draw_context_entity_refuses_them() {
         );
         // Kept-frame refresh picks up live client state changes on the `Existing` slot.
         game.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == pig_id)
@@ -571,6 +572,7 @@ fn scene_entities_are_drawn_and_refused_as_draw_context_entity_refuses_them() {
         );
         // Removing the live entity refuses the scene without drawing.
         game.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == pig_id)

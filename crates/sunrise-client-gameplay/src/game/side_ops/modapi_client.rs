@@ -29,7 +29,7 @@ impl ClientGame<'_> {
             return Residence::Missing;
         };
         if (id == remote.entity_id && self.common.player.is_some())
-            || self.common.dragon.as_ref().is_some_and(|dragon| {
+            || self.common.entities.dragon.as_ref().is_some_and(|dragon| {
                 sunrise_gameplay_common::game::dragon_common::dragon_part_index(
                     dragon.id,
                     holder.id(),

@@ -40,11 +40,17 @@ fn a_mob_moved_in_one_arrows_post_is_hit_by_the_next_arrow() {
             ] {
                 assert!(game.run_command(command), "{command}");
             }
-            first.store(game.creatures.projectiles[0].id, Ordering::Relaxed);
-            let health = game.mobs.iter().find(|m| m.id == 72).unwrap().health;
+            first.store(game.entities.projectiles[0].id, Ordering::Relaxed);
+            let health = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == 72)
+                .unwrap()
+                .health;
             game.server.ticked_entities_through = u32::MAX;
             game.tick_projectiles().unwrap();
-            let pig = game.mobs.iter().find(|m| m.id == 72).unwrap();
+            let pig = game.entities.mobs.iter().find(|m| m.id == 72).unwrap();
             assert_eq!(pig.position.z, 5.5, "the first arrow's Post moved the pig");
             assert!(
                 pig.health < health,
@@ -75,7 +81,7 @@ fn a_mob_outside_the_entity_tick_list_checks_no_despawn() {
             game.world
                 .chunks
                 .insert((1, 0), Arc::new(Chunk::empty(1, 0)));
-            game.mobs[1].position = Vec3::new(24.5, 80.0, 0.5);
+            game.entities.mobs[1].position = Vec3::new(24.5, 80.0, 0.5);
             // Only chunk (0, 0) is forced: (1, 0) is loaded at the next level out.
             game.server
                 .chunk_ticking
@@ -90,7 +96,7 @@ fn a_mob_outside_the_entity_tick_list_checks_no_despawn() {
             let heard: Vec<u32> = records.lock().unwrap().0.iter().map(|r| r.0).collect();
             assert_eq!(heard, [71], "only the listed mob checks despawning");
             assert!(
-                game.mobs.iter().any(|mob| mob.id == 72),
+                game.entities.mobs.iter().any(|mob| mob.id == 72),
                 "the unlisted mob stays, though its listener would allow the despawn"
             );
         });
@@ -130,13 +136,14 @@ fn item_lifetime_edit_in_the_item_tick_still_lands() {
                 0,
                 None,
             );
-            let id = game.dropped.last().unwrap().id;
+            let id = game.entities.dropped.last().unwrap().id;
             named.store(id, Ordering::Relaxed);
             game.server.ticked_entities_through = id;
-            game.dropped.last_mut().unwrap().age = 6000;
+            game.entities.dropped.last_mut().unwrap().age = 6000;
             let mut round = game.native_tick_round();
             game.tick_dropped_items(&mut round);
             let item = game
+                .entities
                 .dropped
                 .iter()
                 .find(|item| item.id == id)
@@ -178,7 +185,7 @@ fn named_projectiles_hear_each_their_own_pre_and_post() {
                     "summon minecraft:arrow 1.5 80.5 {z} {{NoGravity:1b,Motion:[0.5d,0.0d,0.0d]}}"
                 )));
             }
-            ids = game.creatures.projectiles.iter().map(|p| p.id).collect();
+            ids = game.entities.projectiles.iter().map(|p| p.id).collect();
             game.server.ticked_entities_through = u32::MAX;
             game.tick_projectiles().unwrap();
         });
@@ -230,7 +237,7 @@ pub(crate) fn with_two_pigs(test: impl FnOnce(&mut sunrise_gameplay::game::Serve
             mob.no_ai = true;
             mob.no_gravity = true;
             mob.ground.on_ground = true;
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
         }
         test(game);
     });

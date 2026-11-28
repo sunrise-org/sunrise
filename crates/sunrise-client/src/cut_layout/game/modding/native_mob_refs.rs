@@ -28,7 +28,7 @@ pub(crate) mod tests {
         name: &str,
     ) -> MobRef {
         let kind = game.res.mob_types().get(name).unwrap().clone();
-        game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+        game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
         game.mob(game.entity(id).unwrap()).unwrap()
     }
 
@@ -46,7 +46,7 @@ pub(crate) mod tests {
                 (15, "minecraft:zombie"),
             ] {
                 let kind = game.res.mob_types().get(name).unwrap().clone();
-                game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
             }
             let handle = |game: &sunrise_gameplay::game::ServerGame<'_>, id| {
                 game.mob(game.entity(id).unwrap()).unwrap()
@@ -54,18 +54,24 @@ pub(crate) mod tests {
             let (fox, enderman, piglin) = (handle(game, 12), handle(game, 13), handle(game, 14));
             let other = game.living(game.entity(15).unwrap()).unwrap();
             let state = |game: &sunrise_gameplay::game::ServerGame<'_>, id| {
-                game.mobs.iter().find(|m| m.id == id).unwrap().clone()
+                game.entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == id)
+                    .unwrap()
+                    .clone()
             };
 
             // Fox.setTarget: a target leaves defending as it is; clearing ends it.
-            game.mobs
+            game.entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == 12)
                 .unwrap()
                 .extra
                 .ints[0] |= mobs::fox::DEFENDING;
             mobs::fox::add_trusted_entity(
-                game.mobs.iter_mut().find(|m| m.id == 12).unwrap(),
+                game.entities.mobs.iter_mut().find(|m| m.id == 12).unwrap(),
                 [1, 2, 3, 4],
             );
             assert!(fox.set_target(game, Some(other)));
@@ -77,13 +83,20 @@ pub(crate) mod tests {
             assert!(mobs::fox::trusts(&state(game, 12), [1, 2, 3, 4]));
 
             // Enderman target changes also update the synced flags and attack speed.
-            let enderman_state = game.mobs.iter_mut().find(|m| m.id == 13).unwrap();
+            let enderman_state = game.entities.mobs.iter_mut().find(|m| m.id == 13).unwrap();
             enderman_state.age = 1234;
             enderman_state.extra.flag2 = true;
             game.start_audio_capture();
             assert!(enderman.set_target(game, Some(other)));
-            client_events =
-                std::mem::take(&mut game.mobs.iter_mut().find(|m| m.id == 13).unwrap().outbox);
+            client_events = std::mem::take(
+                &mut game
+                    .entities
+                    .mobs
+                    .iter_mut()
+                    .find(|m| m.id == 13)
+                    .unwrap()
+                    .outbox,
+            );
             game.handle_mob_events(client_events.clone()).unwrap();
             assert!(
                 game.server.pending_sounds.is_empty(),
@@ -106,7 +119,12 @@ pub(crate) mod tests {
             let mut expected = LegacyRandom::new(2026);
             let sound_delay = expected.next_int_bound(21).unwrap();
             let alert_delay = 80 + expected.next_int_bound(41).unwrap();
-            game.mobs.iter_mut().find(|m| m.id == 14).unwrap().random = LegacyRandom::new(2026);
+            game.entities
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == 14)
+                .unwrap()
+                .random = LegacyRandom::new(2026);
             assert!(piglin.set_target(game, Some(other)));
             assert_eq!(piglin.target(game), Some(other));
             let first = state(game, 14);
@@ -165,10 +183,10 @@ pub(crate) mod tests {
                 *redirect.lock().unwrap() = Some(LivingRef::new(fake.entity()));
                 let mob = add_mob(game, 12, "minecraft:zombie");
                 let existing = add_mob(game, 13, "minecraft:sheep");
-                game.mobs[0].ai.target = Some(Who::Mob(13));
+                game.entities.mobs[0].ai.target = Some(Who::Mob(13));
                 assert!(!mob.set_target(game, None));
                 assert_eq!(
-                    game.mobs[0].ai.target,
+                    game.entities.mobs[0].ai.target,
                     Some(Who::Mob(existing.entity().id()))
                 );
             })
@@ -183,23 +201,23 @@ pub(crate) mod tests {
             let horse = add_mob(game, 13, "minecraft:horse");
             assert_eq!(wolf.is_in_sitting_pose(game), Some(false));
             assert!(wolf.set_in_sitting_pose(game, true));
-            assert!(game.mobs[0].extra.sitting_pose);
-            assert!(game.mobs[0].needs_sync);
+            assert!(game.entities.mobs[0].extra.sitting_pose);
+            assert!(game.entities.mobs[0].needs_sync);
             assert_eq!(wolf.is_in_sitting_pose(game), Some(true));
             assert!(wolf.set_in_sitting_pose(game, false));
-            assert!(!game.mobs[0].extra.sitting_pose);
+            assert!(!game.entities.mobs[0].extra.sitting_pose);
             assert_eq!(wolf.is_in_sitting_pose(game), Some(false));
             // A horse is tamed another way and has no TamableAnimal pose.
             assert_eq!(horse.is_in_sitting_pose(game), None);
             assert!(!horse.set_in_sitting_pose(game, true));
-            assert!(!game.mobs[1].extra.sitting_pose);
+            assert!(!game.entities.mobs[1].extra.sitting_pose);
             // A cat is tamable too.
             let cat = add_mob(game, 14, "minecraft:cat");
             assert_eq!(cat.is_in_sitting_pose(game), Some(false));
             assert!(cat.set_in_sitting_pose(game, true));
-            assert!(game.mobs[2].extra.sitting_pose);
+            assert!(game.entities.mobs[2].extra.sitting_pose);
             // A removed handle is stale: it reads nothing and writes nothing.
-            game.mobs[0].removed = true;
+            game.entities.mobs[0].removed = true;
             assert_eq!(wolf.is_in_sitting_pose(game), None);
             assert!(!wolf.set_in_sitting_pose(game, true));
         })
@@ -273,7 +291,8 @@ pub(crate) mod tests {
             game.server.lan.as_mut().unwrap().hub.guests.push(guest);
             let cow = add_mob(game, 12, "minecraft:cow");
             let other = add_mob(game, 13, "minecraft:cow");
-            game.boats
+            game.entities
+                .boats
                 .push(Boat::new(14, "oak".into(), Vec3::ZERO, 0.0));
             let boat = game.entity(14).unwrap();
             assert_eq!(
@@ -301,16 +320,16 @@ pub(crate) mod tests {
                 (Holder::Boat(14), LeashHolder::Entity(boat)),
                 (Holder::Knot([1, 2, 3]), LeashHolder::Knot([1, 2, 3])),
             ] {
-                game.mobs[0].extra.leash = Some(Holder::Player);
-                game.mobs[0].extra.leash_player = Some(uuid_ints(20));
+                game.entities.mobs[0].extra.leash = Some(Holder::Player);
+                game.entities.mobs[0].extra.leash_player = Some(uuid_ints(20));
                 game.as_guest(20, |game| {
                     assert!(game.tie_player_leads(glam::DVec3::ZERO, holder, None));
                     assert_eq!(cow.entity().leash_holder(game), Some(expected));
                 })
                 .unwrap();
             }
-            game.mobs[0].extra.leash = None;
-            game.mobs[0].extra.leash_pending = Some(Pending::Uuid([0, 0, 0, 99]));
+            game.entities.mobs[0].extra.leash = None;
+            game.entities.mobs[0].extra.leash_pending = Some(Pending::Uuid([0, 0, 0, 99]));
             assert_eq!(cow.entity().leash_holder(game), None);
             let stale = EntityRef::new(WorldEpoch::new(999), 12);
             assert_eq!(stale.leash_holder(game), None);
@@ -329,6 +348,7 @@ pub(crate) mod tests {
             let check =
                 |game: &sunrise_gameplay::game::ServerGame<'_>, handle: MobRef, expected| {
                     let mob = game
+                        .entities
                         .mobs
                         .iter()
                         .find(|m| m.id == handle.entity().id())
@@ -339,9 +359,9 @@ pub(crate) mod tests {
                 };
             check(game, cow, true);
             check(game, wither, false);
-            game.mobs[0].extra.mount = Some(99);
+            game.entities.mobs[0].extra.mount = Some(99);
             check(game, cow, false);
-            game.mobs[0].extra.mount = None;
+            game.entities.mobs[0].extra.mount = None;
             game.riding = Some(12);
             check(game, cow, false);
             game.riding = None;
@@ -372,8 +392,8 @@ pub(crate) mod tests {
                     (true, None, false),
                     (true, Some(mobs::leash::Holder::Knot([5, 64, 5])), true),
                 ] {
-                    game.mobs[0].persistent = persistent;
-                    game.mobs[0].extra.leash = leash;
+                    game.entities.mobs[0].persistent = persistent;
+                    game.entities.mobs[0].extra.leash = leash;
                     assert_eq!(mob.requires_custom_persistence(game), Some(expected));
                     assert_eq!(mob.persistence_required(game), Some(persistent));
                     assert_eq!(mob.no_ai(game), Some(no_ai));
@@ -381,7 +401,7 @@ pub(crate) mod tests {
             }
             let enderman = add_mob(game, 13, "minecraft:enderman");
             assert_eq!(enderman.requires_custom_persistence(game), Some(false));
-            game.mobs[1].extra.carried = Some(
+            game.entities.mobs[1].extra.carried = Some(
                 game.pack
                     .assets
                     .registry
@@ -390,7 +410,7 @@ pub(crate) mod tests {
             );
             assert_eq!(enderman.requires_custom_persistence(game), Some(true));
             assert_eq!(enderman.persistence_required(game), Some(false));
-            game.mobs[1].extra.carried = None;
+            game.entities.mobs[1].extra.carried = None;
             assert!(enderman.set_persistence_required(game));
             assert_eq!(enderman.requires_custom_persistence(game), Some(false));
             assert_eq!(enderman.persistence_required(game), Some(true));
@@ -422,7 +442,7 @@ pub(crate) mod tests {
                     }
                     for baby in [true, false, true, false] {
                         assert!(mob.set_baby(game, baby), "{name}");
-                        let state = game.mobs.last().unwrap();
+                        let state = game.entities.mobs.last().unwrap();
                         assert_eq!(state.extra.age, if baby { baby_age } else { 0 }, "{name}");
                         assert_eq!(mob.living().baby(game), Some(baby), "{name}");
                         if let Some((baby_damage, adult_damage)) = damage {
@@ -449,10 +469,10 @@ pub(crate) mod tests {
             let ghast = add_mob(game, 12, "minecraft:happy_ghast");
             assert!(ghast.set_no_ai(game, true));
             assert!(ghast.set_persistence_required(game));
-            assert!(game.mobs[0].ai.goals.has("HappyGhastFloatGoal"));
+            assert!(game.entities.mobs[0].ai.goals.has("HappyGhastFloatGoal"));
             for baby in [true, false, true, false] {
                 assert!(ghast.set_baby(game, baby));
-                let state = &game.mobs[0];
+                let state = &game.entities.mobs[0];
                 assert_eq!(ghast.living().baby(game), Some(baby));
                 assert_eq!(state.ai.goals.has("HappyGhastFloatGoal"), !baby);
                 assert_eq!(state.ai.goals.has("RandomFloatAroundGoal"), !baby);
@@ -479,7 +499,7 @@ pub(crate) mod tests {
                 assert!(mob.set_persistence_required(game));
                 for baby in [true, false] {
                     assert!(!mob.set_baby(game, baby), "{name}");
-                    assert_eq!(game.mobs.last().unwrap().extra.age, 0, "{name}");
+                    assert_eq!(game.entities.mobs.last().unwrap().extra.age, 0, "{name}");
                     assert_eq!(mob.living().baby(game), Some(false), "{name}");
                     assert_eq!(mob.no_ai(game), Some(true), "{name}");
                     assert_eq!(mob.persistence_required(game), Some(true), "{name}");
@@ -496,21 +516,21 @@ pub(crate) mod tests {
             assert_eq!(mob.requires_custom_persistence(game), None);
             assert!(!mob.set_baby(game, true));
             game.server.held_out.pop();
-            game.mobs.last_mut().unwrap().removed = true;
+            game.entities.mobs.last_mut().unwrap().removed = true;
             assert_eq!(mob.requires_custom_persistence(game), None);
             assert!(!mob.set_baby(game, true));
-            assert_eq!(game.mobs.last().unwrap().extra.age, 0);
-            game.mobs.last_mut().unwrap().removed = false;
-            let taken = game.mobs.lift();
+            assert_eq!(game.entities.mobs.last().unwrap().extra.age, 0);
+            game.entities.mobs.last_mut().unwrap().removed = false;
+            let taken = game.entities.mobs.lift();
             assert_eq!(mob.requires_custom_persistence(game), None);
             assert!(!mob.set_baby(game, true));
-            game.mobs = taken;
+            game.entities.mobs = taken;
             assert!(mob.set_baby(game, true));
 
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = 15;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let dragon = game.mob(game.entity(15).unwrap()).unwrap();
             assert_eq!(dragon.requires_custom_persistence(game), None);
             assert!(!dragon.set_baby(game, true));
@@ -576,7 +596,9 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
             let mob = game.mob(game.entity(12).unwrap()).unwrap();
             let player = game.living(game.entity(20).unwrap()).unwrap();
             assert!(mob.set_target(game, Some(player)));
@@ -595,11 +617,12 @@ pub(crate) mod tests {
                 .clone();
             let mut piglin_state = Mob::new(13, kind, Vec3::ZERO, 0.0);
             piglin_state.ai.last_hurt_by_player = 42;
-            game.mobs.push(piglin_state);
+            game.entities.mobs.push(piglin_state);
             let piglin = game.mob(game.entity(13).unwrap()).unwrap();
             assert!(piglin.set_target(game, Some(player)));
             assert_eq!(
-                game.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 13)
                     .unwrap()
@@ -610,7 +633,8 @@ pub(crate) mod tests {
             assert!(!game.server.last_hurt_by_player.contains_key(&13));
             assert!(piglin.set_target(game, None));
             assert_eq!(
-                game.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 13)
                     .unwrap()
@@ -624,7 +648,8 @@ pub(crate) mod tests {
             assert!(!piglin.set_target(game, Some(fake_living)));
             assert_eq!(piglin.target(game), None);
             assert_eq!(
-                game.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|m| m.id == 13)
                     .unwrap()
@@ -640,7 +665,7 @@ pub(crate) mod tests {
                 .get("minecraft:zombified_piglin")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(14, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(14, kind, Vec3::ZERO, 0.0));
             game.persist.uuids.insert(14, [0, 0, 0, 14]);
             let host_name = game.acting_player_name().to_owned();
             game.score.board.add_team("red");
@@ -675,7 +700,7 @@ pub(crate) mod tests {
             }
             assert!(!mob.set_target(game, Some(player)));
             assert_eq!(mob.target(game), None);
-            assert_eq!(game.mobs[0].ai.target, Some(Who::Player));
+            assert_eq!(game.entities.mobs[0].ai.target, Some(Who::Player));
             {
                 let value = 0;
                 game.server
@@ -697,10 +722,10 @@ pub(crate) mod tests {
                     .update(0, |guest| guest.dimension = value);
             }
             assert!(!mob.set_target(game, Some(player)));
-            assert_eq!(game.mobs[0].ai.target, Some(Who::Player));
+            assert_eq!(game.entities.mobs[0].ai.target, Some(Who::Player));
             game.server.lan.as_mut().unwrap().mob_players.clear();
             assert_eq!(mob.target(game), None);
-            assert_eq!(game.mobs[0].ai.target, Some(Who::Player));
+            assert_eq!(game.entities.mobs[0].ai.target, Some(Who::Player));
         });
     }
 
@@ -721,7 +746,7 @@ pub(crate) mod tests {
                 (21, "minecraft:iron_golem"),
             ] {
                 let kind = game.res.mob_types().get(name).unwrap().clone();
-                game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
             }
             let handle = |game: &sunrise_gameplay::game::ServerGame<'_>, id| {
                 game.mob(game.entity(id).unwrap()).unwrap()
@@ -734,7 +759,7 @@ pub(crate) mod tests {
                 assert!(mob.set_brain_target(game, Some(golem)), "mob {id}");
                 assert_eq!(mob.target(game), Some(golem), "mob {id}");
                 assert_eq!(
-                    mobs::ai::brain_target(game.mobs.iter().find(|m| m.id == id).unwrap()),
+                    mobs::ai::brain_target(game.entities.mobs.iter().find(|m| m.id == id).unwrap()),
                     Some(Some(Who::Mob(21))),
                     "mob {id}"
                 );
@@ -745,7 +770,7 @@ pub(crate) mod tests {
             // (the sonic-boom cooldown among them) do not run.
             let warden = handle(game, 12);
             assert!(warden.set_brain_target(game, Some(golem)));
-            let st = game.mobs.iter().find(|m| m.id == 12).unwrap();
+            let st = game.entities.mobs.iter().find(|m| m.id == 12).unwrap();
             assert!(
                 !st.extra
                     .warden
@@ -790,15 +815,20 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, zombie.clone(), Vec3::ZERO, 0.0));
-            game.mobs.push(Mob::new(13, zombie, Vec3::ZERO, 0.0));
-            game.armor_stands.push(ArmorStand::new(14, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(13, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(14, Vec3::ZERO, 0.0));
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             // Reserve the dragon's eight consecutive part IDs away from the mobs.
             dragon.id = 40;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             assert!(
                 game.mob(game.entity(40).unwrap()).is_some(),
                 "the dragon is a Mob"
@@ -815,11 +845,11 @@ pub(crate) mod tests {
                 (21, "minecraft:ghast"),
             ] {
                 let kind = game.res.mob_types().get(name).unwrap().clone();
-                game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
             }
             let brain = game.mob(game.entity(16).unwrap()).unwrap();
             mobs::monster_brain::set_attack_target(
-                game.mobs.iter_mut().find(|m| m.id == 16).unwrap(),
+                game.entities.mobs.iter_mut().find(|m| m.id == 16).unwrap(),
                 Some(Who::Mob(13)),
             );
             assert_eq!(brain.target(game), Some(other));
@@ -858,11 +888,11 @@ pub(crate) mod tests {
             assert!(game.mob(stale.entity()).is_none());
             assert!(!game.mob_set_target(stale, None));
             assert_eq!(game.mob_is_aggressive(stale), None);
-            let taken = game.mobs.lift();
+            let taken = game.entities.mobs.lift();
             assert_eq!(game.mob_target(mob), None);
             assert!(!game.mob_set_target(mob, None));
             assert_eq!(taken[0].ai.target, Some(Who::Mob(13)));
-            game.mobs = taken;
+            game.entities.mobs = taken;
             assert!(game.mob_set_target(mob, None));
             assert_eq!(game.mob_target(mob), None);
         });
@@ -878,7 +908,8 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, zombie, Vec3::new(3.5, 65.0, 3.5), 0.0));
             let creaking = game
                 .res
@@ -886,32 +917,33 @@ pub(crate) mod tests {
                 .get("minecraft:creaking")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(16, creaking, Vec3::new(9.5, 65.0, 9.5), 0.0));
             let mob = game.mob(game.entity(12).unwrap()).unwrap();
             assert!(game.mob_look_at(mob, [10.5, 66.0, -2.5]));
             let (wanted, cooldown, speed) = {
-                let control = &game.mobs[0].ai.look;
+                let control = &game.entities.mobs[0].ai.look;
                 (control.wanted, control.cooldown, control.y_max_rot_speed)
             };
             assert_eq!(wanted, [10.5, 66.0, -2.5]);
             assert_eq!(cooldown, 2);
-            assert_eq!(speed, game.mobs[0].kind.head_rot_speed);
+            assert_eq!(speed, game.entities.mobs[0].kind.head_rot_speed);
             assert!(!game.mob_look_at(mob, [f64::NAN, 66.0, 0.0]));
-            assert_eq!(game.mobs[0].ai.look.wanted, [10.5, 66.0, -2.5]);
+            assert_eq!(game.entities.mobs[0].ai.look.wanted, [10.5, 66.0, -2.5]);
             // A brain species writes through the same look control, so its
             // handle takes the wish too.
             let brain = game.mob(game.entity(16).unwrap()).unwrap();
             assert!(game.mob_look_at(brain, [0.0, 66.0, 0.0]));
-            assert_eq!(game.mobs[1].ai.look.wanted, [0.0, 66.0, 0.0]);
+            assert_eq!(game.entities.mobs[1].ai.look.wanted, [0.0, 66.0, 0.0]);
             assert!(game.mob_jump(brain));
-            assert!(game.mobs[1].ai.jump);
+            assert!(game.entities.mobs[1].ai.jump);
             assert!(game.mob_jump(mob));
-            assert!(game.mobs[0].ai.jump);
+            assert!(game.entities.mobs[0].ai.jump);
             // JumpControl.tick consumes the wish as the next tick's jump.
-            game.mobs[0].jump_control_tick();
-            assert!(game.mobs[0].ai.jumping);
-            assert!(!game.mobs[0].ai.jump);
+            game.entities.mobs[0].jump_control_tick();
+            assert!(game.entities.mobs[0].ai.jumping);
+            assert!(!game.entities.mobs[0].ai.jump);
         });
     }
 
@@ -926,7 +958,8 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, zombie, Vec3::new(3.5, 65.0, 3.5), 0.0));
             let mob = game.mob(game.entity(12).unwrap()).unwrap();
             assert_eq!(game.mob_restrict_center(mob), Some([0, 0, 0]));
@@ -951,7 +984,7 @@ pub(crate) mod tests {
             );
             // The home area is saved with the mob.
             let saved = sunrise_sim::entity_nbt::mob_to_nbt(
-                &game.mobs[0],
+                &game.entities.mobs[0],
                 [0; 4],
                 None,
                 None,
@@ -971,7 +1004,7 @@ pub(crate) mod tests {
             assert_eq!(game.mob_restrict_radius(mob), Some(-1));
             assert_eq!(game.mob_is_within_restriction(mob, [20, 64, 0]), Some(true));
             let saved = sunrise_sim::entity_nbt::mob_to_nbt(
-                &game.mobs[0],
+                &game.entities.mobs[0],
                 [0; 4],
                 None,
                 None,
@@ -997,7 +1030,8 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(12, zombie, Vec3::new(3.5, 65.0, 3.5), 0.0));
             let mob = game.mob(game.entity(12).unwrap()).unwrap();
             // `Vec3i.distSqr` in doubles: the far corner of the int range is
@@ -1040,23 +1074,27 @@ pub(crate) mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(12, zombie, Vec3::ZERO, 0.0));
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = 15;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let entity = game.entity(12).unwrap();
             let mob = game.mob(entity).unwrap();
             assert_eq!(game.mob_left_handed(mob), Some(false));
             assert!(game.mob_set_left_handed(mob, true));
-            assert!(game.mobs[0].extra.left_handed && game.mobs[0].main_arm_left());
+            assert!(
+                game.entities.mobs[0].extra.left_handed && game.entities.mobs[0].main_arm_left()
+            );
             assert_eq!(game.mob_left_handed(mob), Some(true));
             assert!(game.mob_set_can_pick_up_loot(mob, true));
-            assert!(game.mobs[0].extra.pick_up_loot);
+            assert!(game.entities.mobs[0].extra.pick_up_loot);
             assert_eq!(game.mob_can_pick_up_loot(mob), Some(true));
             // Saved as LeftHanded / CanPickUpLoot.
             let saved = sunrise_sim::entity_nbt::mob_to_nbt(
-                &game.mobs[0],
+                &game.entities.mobs[0],
                 [0; 4],
                 None,
                 None,
@@ -1096,8 +1134,8 @@ pub(crate) mod tests {
             assert_eq!(game.mob_restrict_radius(stale), None);
             assert_eq!(game.mob_has_restriction(stale), None);
             assert_eq!(game.mob_is_within_restriction(stale, [0, 0, 0]), None);
-            assert!(!game.mobs[0].extra.left_handed);
-            assert!(!game.mobs[0].extra.pick_up_loot);
+            assert!(!game.entities.mobs[0].extra.left_handed);
+            assert!(!game.entities.mobs[0].extra.pick_up_loot);
         });
     }
 }

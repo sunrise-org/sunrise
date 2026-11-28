@@ -46,15 +46,19 @@ pub(crate) mod item_toss_tests {
                     sunrise_core::geometry::Vec3::ZERO,
                 ));
                 let eye = [0.5, 65.0, 0.5];
-                let before = game.dropped.len();
+                let before = game.entities.dropped.len();
                 let stone = ItemStack::new("minecraft:stone", 1);
                 assert!(game.throw_from_eyes(stone, eye, false, true).is_none());
                 assert_eq!(*heard.lock().unwrap(), 1);
-                assert_eq!(game.dropped.len(), before, "a canceled toss leaves no item");
+                assert_eq!(
+                    game.entities.dropped.len(),
+                    before,
+                    "a canceled toss leaves no item"
+                );
                 let dirt = ItemStack::new("minecraft:dirt", 1);
                 let id = game.throw_from_eyes(dirt, eye, false, true).unwrap();
                 assert_eq!(*heard.lock().unwrap(), 2);
-                let thrown = game.dropped.iter().find(|d| d.id == id).unwrap();
+                let thrown = game.entities.dropped.iter().find(|d| d.id == id).unwrap();
                 assert_eq!(thrown.pickup_delay, 0, "the listener's change stays");
                 let dirt = ItemStack::new("minecraft:dirt", 1);
                 assert!(game.throw_from_eyes(dirt, eye, true, false).is_some());
@@ -162,13 +166,13 @@ pub(crate) mod item_toss_tests {
                 assert!(!joins.contains(&tossed), "the canceled toss never joins");
                 assert!(joins.contains(&spawned), "the listener's item joins");
                 assert!(!probe.leaves.lock().unwrap().contains(&tossed));
-                assert!(game.dropped.iter().all(|d| d.id != tossed));
+                assert!(game.entities.dropped.iter().all(|d| d.id != tossed));
                 if veto_join {
                     assert_eq!(*probe.order.lock().unwrap(), ["join"]);
-                    assert!(game.dropped.iter().all(|d| d.id != spawned));
+                    assert!(game.entities.dropped.iter().all(|d| d.id != spawned));
                 } else {
                     assert_eq!(*probe.order.lock().unwrap(), ["join", "spawn"]);
-                    assert!(game.dropped.iter().any(|d| d.id == spawned));
+                    assert!(game.entities.dropped.iter().any(|d| d.id == spawned));
                 }
             });
         });

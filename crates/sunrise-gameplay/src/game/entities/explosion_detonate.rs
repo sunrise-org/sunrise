@@ -68,19 +68,19 @@ impl ServerGame<'_> {
                 entities.push(EntityRef::new(epoch, id));
             }
         };
-        for frame in self.common.item_frames.iter() {
+        for frame in self.common.entities.item_frames.iter() {
             let (lo, hi) = frame.bounds();
             listed(frame.id, lo, hi, entities);
         }
-        for painting in self.common.paintings.iter() {
+        for painting in self.common.entities.paintings.iter() {
             let (lo, hi) = painting.bounds();
             listed(painting.id, lo, hi, entities);
         }
-        for cushion in self.common.cushions.iter() {
+        for cushion in self.common.entities.cushions.iter() {
             let (lo, hi) = cushion.bounds();
             listed(cushion.id, lo, hi, entities);
         }
-        for crystal in self.common.crystals.iter() {
+        for crystal in self.common.entities.crystals.iter() {
             let bounds = crystal.bounds();
             let lo = [
                 bounds.min(sunrise_core::geometry::Axis::X),
@@ -101,48 +101,60 @@ impl ServerGame<'_> {
     /// the dragon and its parts, hooks, players) answer None: their own
     /// passes and the player walk read the list for them.
     pub(in crate::game::server_side) fn blast_handle(&self, id: u32) -> Option<EntityHandle> {
-        if let Some(i) = self.common.mobs.iter().position(|m| m.id == id) {
+        if let Some(i) = self.common.entities.mobs.iter().position(|m| m.id == id) {
             return Some(EntityHandle::Mob(i));
         }
-        if let Some(i) = self.common.dropped.iter().position(|m| m.id == id) {
+        if let Some(i) = self.common.entities.dropped.iter().position(|m| m.id == id) {
             return Some(EntityHandle::Item(i));
         }
-        if let Some(i) = self.common.boats.iter().position(|m| m.id == id) {
+        if let Some(i) = self.common.entities.boats.iter().position(|m| m.id == id) {
             return Some(EntityHandle::Boat(i));
         }
-        if let Some(i) = self.common.carts.iter().position(|m| m.id == id) {
+        if let Some(i) = self.common.entities.carts.iter().position(|m| m.id == id) {
             return Some(EntityHandle::Cart(i));
         }
-        if let Some(i) = self.common.armor_stands.iter().position(|m| m.id == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .armor_stands
+            .iter()
+            .position(|m| m.id == id)
+        {
             return Some(EntityHandle::ArmorStand(i));
         }
-        if let Some(i) = self.common.tnts.iter().position(|m| m.id == id) {
+        if let Some(i) = self.common.entities.tnts.iter().position(|m| m.id == id) {
             return Some(EntityHandle::Tnt(i));
         }
-        if let Some(i) = self.common.falling.iter().position(|m| m.id == id) {
+        if let Some(i) = self.common.entities.falling.iter().position(|m| m.id == id) {
             return Some(EntityHandle::Falling(i));
         }
-        if let Some(i) = self.common.orbs.iter().position(|m| m.id == id) {
+        if let Some(i) = self.common.entities.orbs.iter().position(|m| m.id == id) {
             return Some(EntityHandle::Orb(i));
         }
         if let Some(i) = self
             .common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .position(|m| m.id == id)
         {
             return Some(EntityHandle::Projectile(i));
         }
-        if let Some(i) = self.common.rockets.iter().position(|m| m.id == id) {
+        if let Some(i) = self.common.entities.rockets.iter().position(|m| m.id == id) {
             return Some(EntityHandle::Rocket(i));
         }
-        if let Some(i) = self.common.tridents.iter().position(|m| m.id == id) {
+        if let Some(i) = self
+            .common
+            .entities
+            .tridents
+            .iter()
+            .position(|m| m.id == id)
+        {
             return Some(EntityHandle::Trident(i));
         }
         if let Some(i) = self
             .common
-            .resident_entities
+            .entities
             .general
             .rows
             .iter()

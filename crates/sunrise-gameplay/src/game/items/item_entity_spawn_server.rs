@@ -24,20 +24,23 @@ impl ServerGame<'_> {
             .insert(self.server.next_entity, random.uuid);
         let (bob, yaw) = (random.bob, random.yaw);
         let velocity = velocity.unwrap_or(random.velocity);
-        self.common.dropped.push(random.state.apply(ItemEntity {
-            attachment_lifetime: Default::default(),
-            fall_distance: 0.0,
-            rotation: [yaw, 0.0],
-            pickup_delay,
-            random: random.own.into(),
-            ..ItemEntity::new(
-                self.server.next_entity,
-                stack,
-                p,
-                Vec3::new(velocity[0], velocity[1], velocity[2]),
-                bob,
-            )
-        }));
+        self.common
+            .entities
+            .dropped
+            .push(random.state.apply(ItemEntity {
+                attachment_lifetime: Default::default(),
+                fall_distance: 0.0,
+                rotation: [yaw, 0.0],
+                pickup_delay,
+                random: random.own.into(),
+                ..ItemEntity::new(
+                    self.server.next_entity,
+                    stack,
+                    p,
+                    Vec3::new(velocity[0], velocity[1], velocity[2]),
+                    bob,
+                )
+            }));
         self.wake_hoppers_near_dropped_item(self.server.next_entity);
         velocity
     }

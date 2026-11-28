@@ -257,10 +257,16 @@ impl crate::game::ClientGame<'_> {
             // Objects whose interact passes (paintings, empty or fixed item frames,
             // boats sneaked at or out of control, carts that pass) leave each hand's
             // turn to its item: a crossbow aimed at it shoots.
-            let is_painting = self.common.paintings.iter().any(|p| p.id as i32 == hit.id);
+            let is_painting = self
+                .common
+                .entities
+                .paintings
+                .iter()
+                .any(|p| p.id as i32 == hit.id);
             let held = self.with_hand(hand, |g| g.held().cloned());
             let frame_passes = self
                 .common
+                .entities
                 .item_frames
                 .iter()
                 .find(|f| f.id as i32 == hit.id)
@@ -269,6 +275,7 @@ impl crate::game::ClientGame<'_> {
                 });
             let boat_passes = self
                 .common
+                .entities
                 .boats
                 .iter()
                 .enumerate()
@@ -283,12 +290,18 @@ impl crate::game::ClientGame<'_> {
                 });
             let (cart_passes, is_rideable_cart) = self
                 .common
+                .entities
                 .carts
                 .iter()
                 .find(|c| c.id as i32 == hit.id)
                 .map(|c| {
                     let ridden = self.common.riding == Some(c.id)
-                        || self.common.mobs.iter().any(|m| m.extra.mount == Some(c.id));
+                        || self
+                            .common
+                            .entities
+                            .mobs
+                            .iter()
+                            .any(|m| m.extra.mount == Some(c.id));
                     (
                         c.kind.interact_passes(
                             sneaking,
@@ -301,7 +314,12 @@ impl crate::game::ClientGame<'_> {
                 .unwrap_or((false, false));
             // Cushion.interact on a client: PASS when sneaked at or when
             // something already sits on it, CONSUME (no swing) otherwise.
-            let is_cushion = self.common.cushions.iter().any(|c| c.id as i32 == hit.id);
+            let is_cushion = self
+                .common
+                .entities
+                .cushions
+                .iter()
+                .any(|c| c.id as i32 == hit.id);
             let cushion_passes = is_cushion
                 && (sneaking
                     || self.common.riding.is_some_and(|r| r as i32 == hit.id)
@@ -311,16 +329,31 @@ impl crate::game::ClientGame<'_> {
                         .as_ref()
                         .is_some_and(|r| r.has_passengers(hit.id as u32)));
             // EndCrystal, EnderDragonPart, PrimedTnt, and FallingBlock keep Entity.interact's PASS.
-            let crystal_passes = self.common.crystals.iter().any(|c| c.id as i32 == hit.id)
-                || self.common.dragon.as_ref().is_some_and(|d| {
+            let crystal_passes = self
+                .common
+                .entities
+                .crystals
+                .iter()
+                .any(|c| c.id as i32 == hit.id)
+                || self.common.entities.dragon.as_ref().is_some_and(|d| {
                     sunrise_gameplay_common::game::dragon_common::dragon_part_index(
                         d.id,
                         hit.id as u32,
                     )
                     .is_some()
                 });
-            let tnt_or_falling_passes = self.common.tnts.iter().any(|t| t.id as i32 == hit.id)
-                || self.common.falling.iter().any(|f| f.id as i32 == hit.id);
+            let tnt_or_falling_passes = self
+                .common
+                .entities
+                .tnts
+                .iter()
+                .any(|t| t.id as i32 == hit.id)
+                || self
+                    .common
+                    .entities
+                    .falling
+                    .iter()
+                    .any(|f| f.id as i32 == hit.id);
             let passes = self
                 .client
                 .remote
@@ -347,16 +380,17 @@ impl crate::game::ClientGame<'_> {
             // Minecart.interact resets the passenger's easing baseline on
             // a successful boarding click, not on SetPassengers (commands
             // can mount a player without this interaction).
-            if let Some(i) = self.common.carts.iter().position(|c| {
+            if let Some(i) = self.common.entities.carts.iter().position(|c| {
                 c.id as i32 == hit.id
                     && c.kind == sunrise_gameplay_common::game::minecarts::CartKind::Rideable
             }) {
                 self.common
+                    .entities
                     .carts
                     .update(i, |c| c.player_rotation_offset = c.rotation_offset);
             }
             // MinecartCommandBlock.interact on the client: the editor opens.
-            if self.common.carts.iter().any(|c| {
+            if self.common.entities.carts.iter().any(|c| {
                 c.id as i32 == hit.id
                     && c.kind == sunrise_gameplay_common::game::minecarts::CartKind::CommandBlock
             }) {
@@ -374,7 +408,7 @@ impl crate::game::ClientGame<'_> {
         if let Some((i, distance, location)) = self.mob_hit()
             && self.before_block(distance)
         {
-            let id = self.common.mobs[i].id as i32;
+            let id = self.common.entities.mobs[i].id as i32;
             self.send(interact_packet(id, location));
             if let Some(done) = self.entity_interaction(hand, id) {
                 return done;
@@ -937,7 +971,7 @@ impl crate::game::ClientGame<'_> {
             .copied()
             .or_else(|| {
                 self.common
-                    .resident_entities
+                    .entities
                     .knots
                     .iter()
                     .find(|k| k.id == entity.id())

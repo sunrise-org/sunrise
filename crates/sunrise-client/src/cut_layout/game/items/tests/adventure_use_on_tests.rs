@@ -237,13 +237,13 @@ fn an_adventure_use_on_needs_may_build_or_a_matching_can_place_on() {
     // SpawnEggItem.useOn: a pig egg spawns a pig on the clicked face.
     let stone = [12, 4, 3];
     place(&mut game, stone, "minecraft:stone", &[]);
-    let mobs = game.mobs.len();
+    let mobs = game.entities.mobs.len();
     click(
         &mut game,
         stone,
         ItemStack::new("minecraft:pig_spawn_egg", 1),
     );
-    assert_eq!(game.mobs.len(), mobs, "the egg spawned a mob");
+    assert_eq!(game.entities.mobs.len(), mobs, "the egg spawned a mob");
     assert_eq!(
         held(&game),
         Some(("minecraft:pig_spawn_egg".into(), 1)),
@@ -254,7 +254,7 @@ fn an_adventure_use_on_needs_may_build_or_a_matching_can_place_on() {
         stone,
         placeable("minecraft:pig_spawn_egg", 1, "minecraft:stone"),
     );
-    assert_eq!(game.mobs.len(), mobs + 1, "a matching egg spawns");
+    assert_eq!(game.entities.mobs.len(), mobs + 1, "a matching egg spawns");
     assert_eq!(held(&game), None, "a matching egg is used up");
 }
 
@@ -320,13 +320,13 @@ fn a_builder_use_on_is_unaffected() {
 
     let stone = [12, 4, 3];
     place(&mut game, stone, "minecraft:stone", &[]);
-    let mobs = game.mobs.len();
+    let mobs = game.entities.mobs.len();
     click(
         &mut game,
         stone,
         ItemStack::new("minecraft:pig_spawn_egg", 1),
     );
-    assert_eq!(game.mobs.len(), mobs + 1, "the egg spawns");
+    assert_eq!(game.entities.mobs.len(), mobs + 1, "the egg spawns");
     assert_eq!(held(&game), None, "the egg is used up");
 }
 

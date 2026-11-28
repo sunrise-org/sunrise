@@ -19,7 +19,7 @@ pub(crate) fn use_on_wolf(
         location: [0.0, 0.5, 0.0],
     });
     game.interact_mob(target).unwrap();
-    let wolf = game.mobs.iter().find(|m| m.id == WOLF).unwrap();
+    let wolf = game.entities.mobs.iter().find(|m| m.id == WOLF).unwrap();
     let left = game.inventory[0].as_ref().map_or(0, |s| s.count);
     (wolf.extra.sitting, wolf.extra.color, left)
 }
@@ -29,7 +29,7 @@ pub(crate) fn use_on_wolf(
 fn the_collars_own_dye_leaves_a_wolf_as_it_was() {
     let mut resources = None;
     let mut game = game(&mut resources);
-    let red = game.mobs[0].extra.color;
+    let red = game.entities.mobs[0].extra.color;
     assert_eq!(
         sunrise_level::dyes::DYE_NAMES[usize::from(red)],
         "red",

@@ -11,12 +11,14 @@ impl crate::game::ServerGame<'_> {
     ) -> bool {
         let bounds = self
             .common
+            .entities
             .carts
             .iter()
             .find(|c| c.id as i32 == id)
             .map(|c| c.bounds())
             .or_else(|| {
                 self.common
+                    .entities
                     .boats
                     .iter()
                     .find(|b| b.id as i32 == id)

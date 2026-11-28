@@ -222,10 +222,12 @@ mod tests {
                 BlockEntity::Mod(Box::new(ModBlockEntity::new("test:battery".into(), fields))),
             );
             for id in [13, 14] {
-                game.armor_stands.push(ArmorStand::new(id, Vec3::ZERO, 0.0));
+                game.entities
+                    .armor_stands
+                    .push(ArmorStand::new(id, Vec3::ZERO, 0.0));
             }
             let pig = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-            game.mobs.push(Mob::new(15, pig, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(15, pig, Vec3::ZERO, 0.0));
             let (stand, other, pig) = (
                 game.entity(13).unwrap(),
                 game.entity(14).unwrap(),

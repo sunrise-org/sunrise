@@ -13,14 +13,14 @@ fn a_boat_pushes_the_player_in_the_level_tick_order() {
         let mut player = PlayerMotion::new(game.motion, Vec3::new(0.5, 64.0, 3.7));
         player.client_side = true;
         game.player = Some(player);
-        game.mobs.clear();
+        game.entities.mobs.clear();
         let boat = sunrise_gameplay_common::game::boats_common::Boat::new(
             9,
             "oak".into(),
             Vec3::new(0.5, 64.0, 3.5),
             0.0,
         );
-        game.boats.push(boat);
+        game.entities.boats.push(boat);
         let after = game.remote_pushes(false);
         assert_eq!(game.remote_pushes(true), Vec3::ZERO);
         assert!(after.z > 0.0, "{after:?}");

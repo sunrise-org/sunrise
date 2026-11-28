@@ -43,15 +43,15 @@ impl ClientGame<'_> {
         };
         offer(
             self.mob_hit()
-                .map(|(i, d, _)| (d, self.common.mobs[i].kind.id.to_string())),
+                .map(|(i, d, _)| (d, self.common.entities.mobs[i].kind.id.to_string())),
         );
         offer(
             self.boat_hit()
-                .map(|(i, d)| (d, self.common.boats[i].entity_type())),
+                .map(|(i, d)| (d, self.common.entities.boats[i].entity_type())),
         );
         offer(
             self.cart_hit()
-                .map(|(i, d)| (d, self.common.carts[i].kind.id().to_owned())),
+                .map(|(i, d)| (d, self.common.entities.carts[i].kind.id().to_owned())),
         );
         offer(
             self.armor_stand_hit()
@@ -59,7 +59,7 @@ impl ClientGame<'_> {
         );
         offer(
             self.frame_hit()
-                .map(|(i, d)| (d, self.common.item_frames[i].kind().to_owned())),
+                .map(|(i, d)| (d, self.common.entities.item_frames[i].kind().to_owned())),
         );
         offer(
             self.painting_hit()

@@ -61,14 +61,25 @@ pub(crate) mod tests {
             game.run_ordered_ticks(sunrise_sim::join_seq::JoinSeq::MAX, false)
                 .unwrap();
             assert_eq!(
-                game.tnts.iter().map(|t| t.fuse).collect::<Vec<_>>(),
+                game.entities
+                    .tnts
+                    .iter()
+                    .map(|t| t.fuse)
+                    .collect::<Vec<_>>(),
                 [79, 79]
             );
             assert_eq!(
-                game.falling.iter().map(|f| f.age).collect::<Vec<_>>(),
+                game.entities
+                    .falling
+                    .iter()
+                    .map(|f| f.age)
+                    .collect::<Vec<_>>(),
                 [2, 2]
             );
-            assert_eq!(game.orbs.iter().map(|o| o.age).collect::<Vec<_>>(), [1, 1]);
+            assert_eq!(
+                game.entities.orbs.iter().map(|o| o.age).collect::<Vec<_>>(),
+                [1, 1]
+            );
         });
     }
     /// Two text displays, which the server keeps without simulating them, through a level's

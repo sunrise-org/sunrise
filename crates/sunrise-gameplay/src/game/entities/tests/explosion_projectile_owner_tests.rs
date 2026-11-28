@@ -24,8 +24,8 @@ fn ghast_fireball(
 ) -> usize {
     let mut fireball = Projectile::fireball(kind, at, Some(Who::Mob(ghast)), [0.0, 0.0, 1.0]);
     fireball.owner_uuid = Some(game.uuid_for(ghast));
-    game.creatures.projectiles.push(fireball);
-    game.creatures.projectiles.len() - 1
+    game.entities.projectiles.push(fireball);
+    game.entities.projectiles.len() - 1
 }
 
 #[test]
@@ -50,14 +50,14 @@ fn a_blast_gives_its_causing_entity_to_the_redirectable_projectiles_in_reach() {
         ghast,
         Vec3::new(7.5, 64.5, 8.5),
     );
-    let ghast_uuid = game.creatures.projectiles[large].owner_uuid;
+    let ghast_uuid = game.entities.projectiles[large].owner_uuid;
     // A player-lit TNT names the player as the blast's indirect source.
     game.server.combat.0.blast_owner = Some((1, Text::literal("Host")));
     game.server.combat.0.blast_owner_player = true;
     game.server.combat.0.blast_guest = None;
     game.server_explode([8.5, 64.0, 8.5], 2.0, BlockInteraction::Keep, false)
         .unwrap();
-    let taken = &game.creatures.projectiles[large];
+    let taken = &game.entities.projectiles[large];
     assert_eq!(
         taken.owner,
         Some(Who::Player),
@@ -69,7 +69,7 @@ fn a_blast_gives_its_causing_entity_to_the_redirectable_projectiles_in_reach() {
         "the host's UUID, not the ghast's"
     );
     assert_eq!(taken.guest, None, "the host is the player in place");
-    let kept = &game.creatures.projectiles[small];
+    let kept = &game.entities.projectiles[small];
     assert_eq!(
         kept.owner,
         Some(Who::Mob(ghast)),
@@ -82,7 +82,7 @@ fn a_blast_gives_its_causing_entity_to_the_redirectable_projectiles_in_reach() {
     game.server.combat.0.blast_owner_player = false;
     game.server_explode([8.5, 64.0, 8.5], 2.0, BlockInteraction::Keep, false)
         .unwrap();
-    let cleared = &game.creatures.projectiles[large];
+    let cleared = &game.entities.projectiles[large];
     assert_eq!(cleared.owner, None, "no causing entity, no owner");
     assert_eq!(cleared.owner_uuid, None, "and no UUID left over");
     assert_eq!(cleared.guest, None);
@@ -113,7 +113,7 @@ fn an_acting_guests_blast_gives_the_projectile_the_guest() {
     game.server.combat.0.blast_guest = Some(9);
     game.server_explode([8.5, 64.0, 8.5], 2.0, BlockInteraction::Keep, false)
         .unwrap();
-    let taken = &game.creatures.projectiles[fireball];
+    let taken = &game.entities.projectiles[fireball];
     assert_eq!(taken.owner, Some(Who::Player));
     assert_eq!(taken.guest, Some(9), "credited to the acting guest");
     assert_eq!(

@@ -31,7 +31,7 @@ pub(in crate::game) mod tests {
                     cow.leash_holder(game),
                     Some(mod_api::LeashHolder::Entity(holder))
                 );
-                assert!(game.dropped.is_empty());
+                assert!(game.entities.dropped.is_empty());
                 assert_eq!(*unleashed.lock().unwrap(), 0);
 
                 assert_eq!(cow.start_riding(game, vehicle, true), Ok(()));
@@ -79,7 +79,7 @@ pub(in crate::game) mod tests {
                     cow.leash_holder(game),
                     Some(mod_api::LeashHolder::Entity(holder))
                 );
-                assert!(game.dropped.is_empty());
+                assert!(game.entities.dropped.is_empty());
                 assert_eq!(*unleashed.lock().unwrap(), 0);
 
                 game.mob_object_mut(160).unwrap().extra.boarding_cooldown = 0;

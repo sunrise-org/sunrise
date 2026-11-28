@@ -433,7 +433,7 @@ fn the_contextual_bar_facts_read_the_jumpable_mount_and_the_tracked_waypoints() 
                     (32, "minecraft:camel"),
                 ] {
                     add(game, id, kind);
-                    let mount = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+                    let mount = game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
                     mount.extra.set_saddled(true);
                 }
                 ride(game, 30, vec![PLAYER as i32]);
@@ -457,7 +457,8 @@ fn the_contextual_bar_facts_read_the_jumpable_mount_and_the_tracked_waypoints() 
                 let camel = game.entity(32);
                 assert!(camel.is_some());
                 assert_eq!(facts(game), (camel, false));
-                game.mobs
+                game.entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == 32)
                     .unwrap()
@@ -534,7 +535,8 @@ fn a_dying_mount_stays_the_jumpable_vehicle() {
             with_client_game(|game| {
                 let _connection = join(game);
                 add(game, 30, "minecraft:horse");
-                game.mobs
+                game.entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == 30)
                     .unwrap()
@@ -547,7 +549,12 @@ fn a_dying_mount_stays_the_jumpable_vehicle() {
                 .unwrap();
                 let horse = game.entity(30);
                 assert!(horse.is_some());
-                game.mobs.iter_mut().find(|m| m.id == 30).unwrap().health = 0.0;
+                game.entities
+                    .mobs
+                    .iter_mut()
+                    .find(|m| m.id == 30)
+                    .unwrap()
+                    .health = 0.0;
                 assert_eq!((&*game as &dyn ClientHost).jumpable_vehicle(), horse);
                 assert_eq!(game.contextual_bar(), ContextualBar::JumpableVehicle);
             });
@@ -571,8 +578,8 @@ fn the_jump_riding_scale_follows_the_charge_on_a_jumpable_mount() {
                 };
                 assert_eq!(scale(game), 0.0);
                 add(game, 30, "minecraft:horse");
-                let horse = game.mobs.iter().position(|m| m.id == 30).unwrap();
-                game.mobs[horse].extra.set_saddled(true);
+                let horse = game.entities.mobs.iter().position(|m| m.id == 30).unwrap();
+                game.entities.mobs[horse].extra.set_saddled(true);
                 game.handle_packet(C::SetPassengers(play::SetPassengers {
                     vehicle: 30,
                     passengers: vec![PLAYER as i32],

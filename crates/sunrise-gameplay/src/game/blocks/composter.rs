@@ -244,12 +244,13 @@ impl crate::game::ServerGame<'_> {
         let mut amounts: Vec<(std::sync::Arc<str>, i32)> = Vec::new();
         // Pin one world generation for the whole work batch, including callbacks.
         let maps = std::sync::Arc::clone(self.mob_map_snapshot());
-        let slots = villager::ext(&self.common.mobs[mob]).map_or(0, |e| e.inventory.len());
+        let slots = villager::ext(&self.common.entities.mobs[mob]).map_or(0, |e| e.inventory.len());
         'slots: for slot in (0..slots).rev() {
             if remaining <= 0 {
                 break;
             }
-            let stack = villager::ext_mut(&mut self.common.mobs[mob]).inventory[slot].clone();
+            let stack =
+                villager::ext_mut(&mut self.common.entities.mobs[mob]).inventory[slot].clone();
             if !maps.villager_compostable(&stack.item) {
                 continue;
             }
@@ -286,7 +287,7 @@ impl crate::game::ServerGame<'_> {
         let Some(layers) = self.compostable(stack) else {
             return;
         };
-        let interacting = Some(Target::Mob(self.common.mobs[mob].id));
+        let interacting = Some(Target::Mob(self.common.entities.mobs[mob].id));
         let layers = self.composter_layers(pos, &layers, interacting);
         let at = BlockPos::new(pos[0], pos[1], pos[2]);
         self.with_level(|b, level, ticks| b.composter_layer(level, ticks, at, layers));
@@ -295,7 +296,7 @@ impl crate::game::ServerGame<'_> {
             .modified
             .insert((pos[0] >> 4, pos[2] >> 4));
         let _ = self.server_process_level_events();
-        let inventory = &mut villager::ext_mut(&mut self.common.mobs[mob]).inventory;
+        let inventory = &mut villager::ext_mut(&mut self.common.entities.mobs[mob]).inventory;
         inventory[slot].count -= 1;
         if inventory[slot].count == 0 {
             inventory.remove(slot);

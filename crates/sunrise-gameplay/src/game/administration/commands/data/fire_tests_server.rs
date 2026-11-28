@@ -3,10 +3,20 @@ use super::Target;
 pub fn target_exists(game: &crate::game::ServerGame<'_>, target: Target) -> bool {
     match target {
         Target::Other(id) => game.server.others.0.iter().any(|o| o.id == id),
-        Target::Fangs(id) => game.common.fangs.list.iter().any(|f| f.id == id),
-        Target::Spawner(id) => game.common.ominous_spawners.iter().any(|s| s.id == id),
-        Target::Cloud(id) => game.common.breath_clouds.iter().any(|c| c.id == id),
-        Target::Projectile(id) => game.common.creatures.projectiles.iter().any(|p| p.id == id),
+        Target::Fangs(id) => game.common.entities.fangs.list.iter().any(|f| f.id == id),
+        Target::Spawner(id) => game
+            .common
+            .entities
+            .ominous_spawners
+            .iter()
+            .any(|s| s.id == id),
+        Target::Cloud(id) => game
+            .common
+            .entities
+            .breath_clouds
+            .iter()
+            .any(|c| c.id == id),
+        Target::Projectile(id) => game.common.entities.projectiles.iter().any(|p| p.id == id),
         _ => false,
     }
 }

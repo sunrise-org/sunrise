@@ -71,7 +71,7 @@ fn finish_hit_uses_registered_guest_context_and_restores_the_host() {
         }).unwrap();
         assert_eq!(game.acting_player_uuid(), host_uuid);
         assert_eq!(game.server.lan_acting, None);
-        let arrow = game.creatures.projectiles.pop().unwrap();
+        let arrow = game.entities.projectiles.pop().unwrap();
         assert_eq!(arrow.guest, Some(2));
         assert_eq!(arrow.owner, Some(Who::Player));
         assert_eq!(arrow.owner_uuid, Some([0, 0, 0, 114]));
@@ -85,7 +85,7 @@ fn finish_hit_uses_registered_guest_context_and_restores_the_host() {
         assert_eq!(game.server.lan_acting, None);
         assert_eq!(game.server.lan.as_ref().unwrap().hub.guests[0].uuid, 114);
         assert!(
-            game.creatures
+            game.entities
                 .projectiles
                 .iter()
                 .find(|p| p.id == id)

@@ -405,7 +405,8 @@ fn a_hit_listener_reads_its_victim_and_causer_live_and_their_attachments_read_on
 
             // A lent attacker that is removed is no causing entity.
             let set_removed = |game: &mut sunrise_gameplay::game::ServerGame<'_>, removed: bool| {
-                game.mobs
+                game.entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == zombie)
                     .unwrap()

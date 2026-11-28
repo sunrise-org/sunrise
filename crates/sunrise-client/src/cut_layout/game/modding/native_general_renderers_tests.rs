@@ -609,7 +609,7 @@ fn load_saved_row(
         .load_listed(fixture::KIND, Some(uuid), None, saved)
         .unwrap();
     let id = server
-        .resident_entities
+        .entities
         .general
         .rows
         .iter()

@@ -95,7 +95,7 @@ pub(crate) mod wolf_live_anger_tests {
         game.world.game_time = 12_345;
         // Bee's independently modeled end is the first control, before the Wolf regression.
         for (kind, health, number) in [("bee", 10.0_f32, 1), ("wolf", 8.0, 2)] {
-            game.mobs.clear();
+            game.entities.mobs.clear();
             let tag = Tag::Compound(
                 [
                     (
@@ -122,11 +122,11 @@ pub(crate) mod wolf_live_anger_tests {
                 .collect(),
             );
             let id = game.load_mob(tag, None).unwrap();
-            let i = game.mobs.iter().position(|m| m.id == id).unwrap();
-            game.mobs[i].invulnerable = 17;
-            game.mobs[i].last_hurt = 2.0;
-            game.mobs[i].age = 6;
-            game.mobs[i].in_powder_snow = true;
+            let i = game.entities.mobs.iter().position(|m| m.id == id).unwrap();
+            game.entities.mobs[i].invulnerable = 17;
+            game.entities.mobs[i].last_hurt = 2.0;
+            game.entities.mobs[i].age = 6;
+            game.entities.mobs[i].in_powder_snow = true;
             for end in [12_395, 12_395, 12_420, -1] {
                 let mut tag = game.mob_tree_nbt(i);
                 let Tag::Compound(fields) = &mut tag else {
@@ -142,17 +142,17 @@ pub(crate) mod wolf_live_anger_tests {
                 );
                 assert_eq!(game.world.game_time, 12_345);
                 assert_eq!(game.persist.uuids.get(&id), Some(&[316, 1, 0, number]));
-                assert_eq!(game.mobs[i].health, health);
-                assert!(game.mobs[i].no_ai);
+                assert_eq!(game.entities.mobs[i].health, health);
+                assert!(game.entities.mobs[i].no_ai);
                 assert_eq!(
                     (
-                        game.mobs[i].invulnerable,
-                        game.mobs[i].last_hurt,
-                        game.mobs[i].age
+                        game.entities.mobs[i].invulnerable,
+                        game.entities.mobs[i].last_hurt,
+                        game.entities.mobs[i].age
                     ),
                     (17, 2.0, 6)
                 );
-                assert!(game.mobs[i].in_powder_snow, "{kind} end={end}");
+                assert!(game.entities.mobs[i].in_powder_snow, "{kind} end={end}");
             }
         }
     }
@@ -177,8 +177,13 @@ pub(crate) mod boat_passenger_tree_tests {
             assert!(game.world.loaded(8, 8));
             assert!(game.run_command("setblock 8 199 8 stone"));
             assert!(game.run_command("summon oak_boat 8.5 200 8.5 {UUID:[I;7,151,1,1],NoGravity:1b,Silent:1b,CustomName:\"Hull\"}"));
-            let bi = game.boats.iter().position(|b| b.position.x == 8.5).unwrap();
-            let bid = game.boats[bi].id;
+            let bi = game
+                .entities
+                .boats
+                .iter()
+                .position(|b| b.position.x == 8.5)
+                .unwrap();
+            let bid = game.entities.boats[bi].id;
             let child = game
                 .spawn_mob(
                     "minecraft:cow",
@@ -187,20 +192,25 @@ pub(crate) mod boat_passenger_tree_tests {
                     sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                 )
                 .unwrap();
-            let ci = game.mobs.iter().position(|m| m.id == child).unwrap();
-            game.mobs[ci].no_ai = true;
-            game.mobs[ci].no_gravity = true;
+            let ci = game
+                .entities
+                .mobs
+                .iter()
+                .position(|m| m.id == child)
+                .unwrap();
+            game.entities.mobs[ci].no_ai = true;
+            game.entities.mobs[ci].no_gravity = true;
             assert!(
                 !game.persist.raw.contains_key(&child),
                 "fresh actual runtime child has no raw NBT"
             );
             assert_eq!(
-                game.mobs[ci].extra.anger_end, 0,
+                game.entities.mobs[ci].extra.anger_end, 0,
                 "unprimed constructor state"
             );
             game.ride_mount(Target::Mob(child), Target::Boat(bid))
                 .unwrap();
-            assert_eq!(game.mobs[ci].extra.mount, Some(bid));
+            assert_eq!(game.entities.mobs[ci].extra.mount, Some(bid));
             let clock = game.world.game_time;
             let chunks = game.world.chunks.len();
             let raw = game.persist.raw.get(&bid).cloned();
@@ -208,15 +218,15 @@ pub(crate) mod boat_passenger_tree_tests {
             let before = (
                 game.persist.uuids.len(),
                 game.persist.uuid_of(child),
-                game.mobs[ci].extra.anger_end,
-                game.mobs[ci].extra.angry_at,
+                game.entities.mobs[ci].extra.anger_end,
+                game.entities.mobs[ci].extra.angry_at,
             );
             let first = game.command_target_nbt(Target::Boat(bid)).unwrap();
             let after = (
                 game.persist.uuids.len(),
                 game.persist.uuid_of(child),
-                game.mobs[ci].extra.anger_end,
-                game.mobs[ci].extra.angry_at,
+                game.entities.mobs[ci].extra.anger_end,
+                game.entities.mobs[ci].extra.angry_at,
             );
             println!("parent-first bookkeeping before={before:?} after={after:?}");
             let mut failures = Vec::new();
@@ -234,21 +244,26 @@ pub(crate) mod boat_passenger_tree_tests {
                     sunrise_gameplay_common::game::creatures::SpawnSite::Plain,
                 )
                 .unwrap();
-            let di = game.mobs.iter().position(|m| m.id == control).unwrap();
-            game.mobs[di].no_ai = true;
-            game.mobs[di].no_gravity = true;
+            let di = game
+                .entities
+                .mobs
+                .iter()
+                .position(|m| m.id == control)
+                .unwrap();
+            game.entities.mobs[di].no_ai = true;
+            game.entities.mobs[di].no_gravity = true;
             assert!(!game.persist.raw.contains_key(&control));
-            assert_eq!(game.mobs[di].extra.anger_end, 0);
+            assert_eq!(game.entities.mobs[di].extra.anger_end, 0);
             let direct_before = (
                 game.persist.uuids.len(),
                 game.persist.uuid_of(control),
-                game.mobs[di].extra.anger_end,
+                game.entities.mobs[di].extra.anger_end,
             );
             let direct_control = game.command_target_nbt(Target::Mob(control)).unwrap();
             let direct_after = (
                 game.persist.uuids.len(),
                 game.persist.uuid_of(control),
-                game.mobs[di].extra.anger_end,
+                game.entities.mobs[di].extra.anger_end,
             );
             println!(
                 "existing child-getter bookkeeping before={direct_before:?} after={direct_after:?}"
@@ -278,8 +293,8 @@ pub(crate) mod boat_passenger_tree_tests {
                     failures.push("repeated parent must keep exactly one actual child".into());
                 }
                 assert_eq!(game.persist.uuids.len(), stable);
-                assert_eq!(game.mobs[ci].extra.anger_end, -1);
-                assert_eq!(game.mobs[ci].extra.mount, Some(bid));
+                assert_eq!(game.entities.mobs[ci].extra.anger_end, -1);
+                assert_eq!(game.entities.mobs[ci].extra.mount, Some(bid));
             }
             assert!(game.run_command("scoreboard objectives add h151 dummy"));
             assert!(game.run_command("scoreboard players set #r h151 91"));
@@ -289,7 +304,7 @@ pub(crate) mod boat_passenger_tree_tests {
             if (accepted, score("#r"), score("#s")) != (true, 4, 1) {
                 failures.push("registered data command must reach live tree".into());
             }
-            game.boats.update(bi, |boat| {
+            game.entities.boats.update(bi, |boat| {
                 boat.leash = Some(sunrise_sim::mobs::leash::Holder::Mob(control))
             });
             let leashed = game.command_target_nbt(Target::Boat(bid)).unwrap();
@@ -582,7 +597,7 @@ pub(crate) mod arrow_owner_tests {
                 fields.insert("Owner".into(), Tag::IntArray(owner.to_vec()));
             }
             game.load_arrow(tag, Some(uuid), None);
-            let p = game.creatures.projectiles.last().unwrap();
+            let p = game.entities.projectiles.last().unwrap();
             // Prove actual loader adoption before reading any saved NBT.
             assert_eq!(p.owner_uuid, owner);
             let id = p.id;
@@ -612,7 +627,7 @@ pub(crate) mod arrow_owner_tests {
                     assert_eq!(saved.get("CustomName"), raw.get("CustomName"));
                     assert_eq!(saved.get("Tags"), raw.get("Tags"));
                 }
-                assert_eq!(game.creatures.projectiles.last().unwrap().owner_uuid, owner);
+                assert_eq!(game.entities.projectiles.last().unwrap().owner_uuid, owner);
                 assert_eq!(game.persist.raw.get(&id), raw.as_ref());
                 assert_eq!(game.world.game_time, time);
             }
@@ -685,7 +700,7 @@ pub(crate) mod arrow_owner_tests {
             ("ExplosionPower", Tag::Byte(3)),
         ]);
         game.load_fireball(tag, Some(uuid), None);
-        let p = game.creatures.projectiles.last().unwrap();
+        let p = game.entities.projectiles.last().unwrap();
         // Prove the loader retained the non-player reference.
         assert_eq!(p.owner_uuid, Some(owner));
         let id = p.id;
@@ -1000,7 +1015,7 @@ pub(crate) mod vehicle_container_tests {
                 let (tag, _) = parse_snbt(&source).unwrap();
                 let target = if kind.contains("boat") {
                     game.load_boat(tag, Some(uuid), kind);
-                    let b = game.boats.last().unwrap();
+                    let b = game.entities.boats.last().unwrap();
                     assert_eq!(
                         b.items
                             .first()
@@ -1012,7 +1027,7 @@ pub(crate) mod vehicle_container_tests {
                     Target::Boat(b.id)
                 } else {
                     game.load_cart(tag, Some(uuid), kind);
-                    let c = game.carts.last().unwrap();
+                    let c = game.entities.carts.last().unwrap();
                     assert_eq!(
                         c.items
                             .first()
@@ -1061,15 +1076,17 @@ pub(crate) mod vehicle_container_tests {
                     match target {
                         Target::Boat(_) => {
                             game.common
+                                .entities
                                 .boats
-                                .update(game.common.boats.len() - 1, |boat| {
+                                .update(game.common.entities.boats.len() - 1, |boat| {
                                     boat.items[0].as_mut().unwrap().count = 4
                                 });
                         }
                         Target::Cart(_) => {
                             game.common
+                                .entities
                                 .carts
-                                .update(game.common.carts.len() - 1, |cart| {
+                                .update(game.common.entities.carts.len() - 1, |cart| {
                                     cart.items[0].as_mut().unwrap().count = 4
                                 });
                         }
@@ -1106,12 +1123,12 @@ pub(crate) mod vehicle_container_tests {
                 let (tag, _) = parse_snbt(source).unwrap();
                 let count = if kind.contains("boat") {
                     game.load_boat(tag, Some([52, 1, 0, 1]), kind);
-                    game.boats.last().unwrap().items[0]
+                    game.entities.boats.last().unwrap().items[0]
                         .as_ref()
                         .map_or(0, |s| s.count)
                 } else {
                     game.load_cart(tag, Some([52, 1, 0, 2]), kind);
-                    game.carts.last().unwrap().items[0]
+                    game.entities.carts.last().unwrap().items[0]
                         .as_ref()
                         .map_or(0, |s| s.count)
                 };

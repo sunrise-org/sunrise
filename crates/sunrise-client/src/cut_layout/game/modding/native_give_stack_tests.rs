@@ -206,12 +206,12 @@ fn a_given_stack_fills_the_inventory_then_drops_for_its_player() {
                 });
             })
             .unwrap();
-        let before = game.dropped.len();
+        let before = game.entities.dropped.len();
         assert_eq!(b.give_stack(game, named.clone()), Ok(None));
         let g = game.server.lan.as_ref().unwrap().hub.guest(13).unwrap();
         assert_eq!(g.inventory[5].as_ref().map(|s| s.count), Some(64));
-        assert_eq!(game.dropped.len(), before + 1);
-        let dropped = game.dropped.last().unwrap();
+        assert_eq!(game.entities.dropped.len(), before + 1);
+        let dropped = game.entities.dropped.last().unwrap();
         assert_eq!(dropped.stack.count, 6);
         assert_eq!(dropped.stack.extra, engine.extra);
         assert_eq!(dropped.pickup_delay, 0, "no pickup delay");
@@ -230,8 +230,8 @@ fn a_given_stack_fills_the_inventory_then_drops_for_its_player() {
         assert_eq!(b.give_stack(game, named), Ok(None));
         let g = game.server.lan.as_ref().unwrap().hub.guest(13).unwrap();
         assert_eq!(g.inventory[7].as_ref(), Some(&engine));
-        assert_eq!(game.dropped.len(), before + 2);
-        let fake = game.dropped.last().unwrap();
+        assert_eq!(game.entities.dropped.len(), before + 2);
+        let fake = game.entities.dropped.last().unwrap();
         assert_eq!(
             fake.stack,
             sunrise_items::items::ItemStack { count: 1, ..engine }
@@ -261,13 +261,13 @@ fn a_dead_player_is_given_nothing() {
             .hub
             .guests
             .update_connection(13, |g| g.dead = true);
-        let before = game.dropped.len();
+        let before = game.entities.dropped.len();
         assert_eq!(b.give_stack(game, rock), Err(PlayerDataRefusal::Dead));
         assert_eq!(
             b.with_inventory(game, |view| view.iter().next().is_none()),
             Some(true)
         );
-        assert_eq!(game.dropped.len(), before);
+        assert_eq!(game.entities.dropped.len(), before);
     });
 }
 

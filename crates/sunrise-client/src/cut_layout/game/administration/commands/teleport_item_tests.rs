@@ -14,14 +14,14 @@ fn relative_item_teleports_keep_only_relative_horizontal_motion() {
             [0.0, 64.0, 0.0],
             10,
         );
-        game.dropped[0].velocity = Vec3::new(1.0, -2.0, 3.0);
+        game.entities.dropped[0].velocity = Vec3::new(1.0, -2.0, 3.0);
         assert!(game.run_command("tp @e[type=minecraft:item] ~ 70 12"));
-        assert_eq!(game.dropped[0].velocity, Vec3::new(1.0, 0.0, 0.0));
-        game.dropped[0].velocity = Vec3::new(1.0, -2.0, 3.0);
+        assert_eq!(game.entities.dropped[0].velocity, Vec3::new(1.0, 0.0, 0.0));
+        game.entities.dropped[0].velocity = Vec3::new(1.0, -2.0, 3.0);
         assert!(game.run_command("tp @e[type=minecraft:item] 12 ~ ~"));
-        assert_eq!(game.dropped[0].velocity, Vec3::new(0.0, 0.0, 3.0));
+        assert_eq!(game.entities.dropped[0].velocity, Vec3::new(0.0, 0.0, 3.0));
         assert!(game.run_command("tp @e[type=minecraft:item] 10 70 10"));
-        assert_eq!(game.dropped[0].velocity, Vec3::ZERO);
+        assert_eq!(game.entities.dropped[0].velocity, Vec3::ZERO);
     });
 }
 
@@ -39,15 +39,15 @@ fn an_item_teleported_into_another_level_arrives_there_still() {
             [0.0, 64.0, 0.0],
             10,
         );
-        game.dropped[0].velocity = Vec3::new(1.0, -2.0, 3.0);
+        game.entities.dropped[0].velocity = Vec3::new(1.0, -2.0, 3.0);
         assert!(game.run_command(
             "execute in minecraft:the_nether run tp @e[type=minecraft:item] 1.5 70 1.5"
         ));
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         game.enter_level(sunrise_gameplay_common::game::Dim::Nether)
             .unwrap();
-        assert_eq!(game.dropped.len(), 1);
-        let item = &game.dropped[0];
+        assert_eq!(game.entities.dropped.len(), 1);
+        let item = &game.entities.dropped[0];
         assert_eq!(
             (&*item.stack.item, item.stack.count),
             ("minecraft:stick", 3)
@@ -72,9 +72,9 @@ pub(crate) fn run_portal_arrival_effects_command_items_merge_immediately() {
             [0.5, 70.0, 0.5],
             10,
         );
-        game.dropped[0].age = 7;
-        game.dropped[0].pickup_delay = 30;
-        let incoming_uuid = game.uuid_for(game.dropped[0].id);
+        game.entities.dropped[0].age = 7;
+        game.entities.dropped[0].pickup_delay = 30;
+        let incoming_uuid = game.uuid_for(game.entities.dropped[0].id);
         game.enter_level(sunrise_gameplay_common::game::Dim::Nether)
             .unwrap();
         prepare_entity_ticking_neighborhood(game, ChunkPos::new(0, 0));
@@ -83,17 +83,17 @@ pub(crate) fn run_portal_arrival_effects_command_items_merge_immediately() {
             [1.5, 70.0, 1.5],
             10,
         );
-        game.dropped[0].age = 41;
+        game.entities.dropped[0].age = 41;
         game.enter_level(sunrise_gameplay_common::game::Dim::Overworld)
             .unwrap();
         assert!(game.run_command(
             "execute in minecraft:the_nether run tp @e[type=minecraft:item] 1.5 70 1.5"
         ));
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
         game.enter_level(sunrise_gameplay_common::game::Dim::Nether)
             .unwrap();
-        assert_eq!(game.dropped.len(), 1);
-        let item = &game.dropped[0];
+        assert_eq!(game.entities.dropped.len(), 1);
+        let item = &game.entities.dropped[0];
         assert_eq!((item.stack.count, item.age, item.pickup_delay), (8, 7, 30));
         assert_eq!(item.velocity, Vec3::ZERO);
         assert_eq!(item.ticks, 0);

@@ -635,6 +635,7 @@ impl crate::game::ServerGame<'_> {
         // is alive); `kill`/`tickDeath` call it too, so a dead dragon updates.
         let ticks = self
             .common
+            .entities
             .dragon
             .as_ref()
             .is_some_and(|d| !d.alive() || !d.no_ai);
@@ -643,6 +644,7 @@ impl crate::game::ServerGame<'_> {
         }
         let custom = self
             .common
+            .entities
             .dragon
             .as_ref()
             .filter(|d| d.id != 0)
@@ -704,6 +706,7 @@ impl crate::game::ServerGame<'_> {
             let range = f64::from(10.min(viewer.view_chunks.max(0)) * 16);
             for m in self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .filter(|m| m.species() == Species::Wither && m.alive() && !m.removed)

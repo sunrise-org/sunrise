@@ -29,18 +29,18 @@ impl crate::game::ServerGame<'_> {
         }
         let canceled =
             self.native_separate_projectile_impact(id, "minecraft:firework_rocket", owner, hit);
-        let at = self.common.rockets.locate(join)?;
+        let at = self.common.entities.rockets.locate(join)?;
         if self
             .common
             .persist
             .removals
             .contains(&super::super::commands::Target::Rocket(id))
         {
-            drop(self.common.rockets.extract(join)?);
-            self.common.rockets.retire_extracted(id, join);
+            drop(self.common.entities.rockets.extract(join)?);
+            self.common.entities.rockets.retire_extracted(id, join);
             return None;
         }
-        let r = self.common.rockets[at].clone();
+        let r = self.common.entities.rockets[at].clone();
         let changed = r.position != position
             || r.velocity != velocity
             || target != self.native_impact_target(hit);

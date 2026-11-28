@@ -31,12 +31,12 @@ impl BoundProjectiles {
         let index = Arc::new(Mutex::new(AttachmentIndex::default()));
         let mut values = [Attachments::default(), Attachments::default()];
         let registrations = std::array::from_fn(|i| {
-            let id = game.creatures.projectiles[i].id;
+            let id = game.entities.projectiles[i].id;
             let holder = mod_api::EntityRef::new(game.native_lifecycle.epoch().unwrap(), id);
             VALUE
                 .set(&mut values[i], Holder::Entity(id), 10 + i as i32)
                 .unwrap();
-            game.creatures.projectiles.update(i, |p| {
+            game.entities.projectiles.update(i, |p| {
                 p.attachment_lifetime().bind(&mut values[i], &index, holder);
                 p.attachment_lifetime().registration().unwrap()
             })
@@ -154,9 +154,9 @@ pub(crate) fn with_batch(
                 let mut p = Projectile::new(kind, Vec3::new(x, 64.5, 0.5), None);
                 p.id = ids[i];
                 p.velocity = Vec3::new(3.0, 0.0, 0.0);
-                game.creatures.projectiles.push(p);
+                game.entities.projectiles.push(p);
             }
-            let joins = std::array::from_fn(|i| game.creatures.projectiles[i].join);
+            let joins = std::array::from_fn(|i| game.entities.projectiles[i].join);
             let bound = BoundProjectiles::bind_two(game);
             let index = &bound.index;
             let key = ("test".into(), "projectile_lifetime".into());
@@ -175,13 +175,13 @@ pub(crate) fn with_batch(
             assert_eq!(index.lock().unwrap().snapshot(&key).len(), 2);
             for (id, original) in ids[..2].iter().zip(&bound.registrations) {
                 let i = game
-                    .creatures
+                    .entities
                     .projectiles
                     .iter()
                     .position(|p| p.id == *id)
                     .unwrap();
                 let current = game
-                    .creatures
+                    .entities
                     .projectiles
                     .update(i, |p| p.attachment_lifetime().registration().unwrap());
                 assert!(original.same_registration(&current));
@@ -190,14 +190,14 @@ pub(crate) fn with_batch(
             assert_eq!(observed.impacts, [ids[0], ids[1]]);
             assert!(observed.spawned && observed.buffered);
             let spawned = game
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|p| p.position.x == 8.5)
                 .unwrap()
                 .id;
             let buffered = game
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|p| p.position.x == 9.5)
@@ -209,7 +209,7 @@ pub(crate) fn with_batch(
                 index.lock().unwrap().snapshot(&key).len(),
                 if remove { 1 } else { 2 }
             );
-            game.creatures.projectiles.clear();
+            game.entities.projectiles.clear();
             assert!(index.lock().unwrap().snapshot(&key).is_empty());
             assert!(
                 before
@@ -233,7 +233,7 @@ fn no_impact_expiration_retires_only_the_expired_owner() {
             p.id = id;
             p.age = age;
             p.velocity = Vec3::new(0.25, 0.0, 0.0);
-            game.creatures.projectiles.push(p);
+            game.entities.projectiles.push(p);
         }
         let bound = BoundProjectiles::bind_two(game);
         let key = ("test".into(), "projectile_lifetime".into());
@@ -241,23 +241,23 @@ fn no_impact_expiration_retires_only_the_expired_owner() {
         assert_eq!(before.len(), 2);
         game.tick_projectiles().unwrap();
         assert_eq!(
-            game.creatures
+            game.entities
                 .projectiles
                 .iter()
                 .map(|p| p.id)
                 .collect::<Vec<_>>(),
             [72]
         );
-        assert_eq!(game.creatures.projectiles[0].age, 1);
+        assert_eq!(game.entities.projectiles[0].age, 1);
         let current = game
-            .creatures
+            .entities
             .projectiles
             .update(0, |p| p.attachment_lifetime().registration().unwrap());
         assert!(bound.registrations[1].same_registration(&current));
         let after = bound.index.lock().unwrap().snapshot(&key);
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].entry.read(&VALUE), Ok(&11));
-        game.creatures.projectiles.clear();
+        game.entities.projectiles.clear();
         assert!(bound.index.lock().unwrap().snapshot(&key).is_empty());
         assert!(
             before
@@ -278,7 +278,7 @@ fn canceled_impacts_keep_projectile_batch_joins_and_survivor_order() {
         return;
     }
     with_batch(false, |game, ids, joins, spawned, buffered| {
-        let list = &mut game.creatures.projectiles;
+        let list = &mut game.entities.projectiles;
         // The replayed snowball is appended; the arrow keeps its original slot.
         assert_eq!(
             list.iter().map(|p| p.id).collect::<Vec<_>>(),
@@ -315,7 +315,7 @@ fn a_projectile_removed_in_its_impact_hook_stays_removed_after_replay() {
     with_batch(true, |game, ids, joins, spawned, buffered| {
         assert!(game.entity(ids[1]).is_none());
         let discarded = game
-            .creatures
+            .entities
             .projectiles
             .iter()
             .find(|p| p.id == ids[1])
@@ -325,7 +325,7 @@ fn a_projectile_removed_in_its_impact_hook_stays_removed_after_replay() {
             "discard must not replay the flight"
         );
         game.native_removals_flush();
-        let list = &game.creatures.projectiles;
+        let list = &game.entities.projectiles;
         assert_eq!(
             list.iter().map(|p| p.id).collect::<Vec<_>>(),
             [buffered, ids[2], spawned, ids[0]]
@@ -333,7 +333,7 @@ fn a_projectile_removed_in_its_impact_hook_stays_removed_after_replay() {
         assert_eq!(list[1].join, joins[2]);
         assert_eq!(list[3].join, joins[0]);
         game.tick_projectiles().unwrap();
-        assert!(!game.creatures.projectiles.iter().any(|p| p.id == ids[1]));
+        assert!(!game.entities.projectiles.iter().any(|p| p.id == ids[1]));
     });
 }
 
@@ -351,8 +351,8 @@ pub(crate) fn terminal_egg(action: Action, abort: bool) {
         let mut egg = Projectile::new(ProjectileKind::Egg, Vec3::new(0.5, 64.5, 0.5), None);
         egg.id = 71;
         egg.velocity = Vec3::new(3.0, 0.0, 0.0);
-        game.creatures.projectiles.push(egg);
-        let join = game.creatures.projectiles[0].join;
+        game.entities.projectiles.push(egg);
+        let join = game.entities.projectiles[0].join;
         let handle = game.entity(71).unwrap();
         game.native_joins_skip();
         game.start_audio_capture();
@@ -373,20 +373,20 @@ pub(crate) fn terminal_egg(action: Action, abort: bool) {
         assert!(game.server.pending_sounds.is_empty());
         game.stop_audio_capture();
         assert_eq!(game.world.random.state(), random);
-        assert!(game.mobs.is_empty());
+        assert!(game.entities.mobs.is_empty());
         if abort {
             assert!(observed.leaves.lock().unwrap().is_empty());
             assert_eq!(game.entity(71), Some(handle));
-            let egg = &game.creatures.projectiles[0];
+            let egg = &game.entities.projectiles[0];
             assert_eq!(egg.join, join);
             assert_eq!(egg.age, 1);
             assert!(egg.position.x > 2.0, "cancel alone flies through the block");
         } else {
             assert!(game.entity_position(handle).is_none());
-            assert!(game.creatures.projectiles.is_empty());
+            assert!(game.entities.projectiles.is_empty());
             game.tick_projectiles().unwrap();
             game.native_leaves_flush();
-            assert!(game.creatures.projectiles.is_empty());
+            assert!(game.entities.projectiles.is_empty());
             assert_eq!(*observed.leaves.lock().unwrap(), [71]);
         }
     });
@@ -438,7 +438,7 @@ fn two_discarded_eggs_leave_once_without_dying() {
             let mut egg = Projectile::new(ProjectileKind::Egg, Vec3::new(0.5, 64.5, 0.5), None);
             egg.id = id;
             egg.velocity = Vec3::new(3.0, 0.0, 0.0);
-            game.creatures.projectiles.push(egg);
+            game.entities.projectiles.push(egg);
             game.entity(id).unwrap()
         });
         game.native_joins_skip();
@@ -448,9 +448,9 @@ fn two_discarded_eggs_leave_once_without_dying() {
                 .into_iter()
                 .all(|egg| game.entity_position(egg).is_none())
         );
-        assert_eq!(game.creatures.projectiles.len(), 2);
+        assert_eq!(game.entities.projectiles.len(), 2);
         game.native_leaves_flush();
-        assert!(game.creatures.projectiles.is_empty());
+        assert!(game.entities.projectiles.is_empty());
         assert_eq!(*observed.leaves.lock().unwrap(), [71, 72]);
         assert_eq!(observed.deaths.load(Ordering::Relaxed), 0);
         assert_eq!(observed.lands.load(Ordering::Relaxed), 0);
@@ -480,7 +480,7 @@ pub(crate) fn shoot_arrow_at_wall(
     );
     arrow.id = 71;
     arrow.velocity = Vec3::new(3.0, 0.0, 0.0);
-    game.creatures.projectiles.push(arrow);
+    game.entities.projectiles.push(arrow);
     game.native_joins_skip();
     game.tick_projectiles().unwrap();
 }
@@ -534,7 +534,7 @@ fn an_arrow_files_both_section_crossings_at_a_section_edge_wall() {
             [(71, [0, 4, 0], [1, 4, 0]), (71, [1, 4, 0], [0, 4, 0])],
         );
         assert_eq!(
-            game.creatures.projectiles[0].position.x,
+            game.entities.projectiles[0].position.x,
             16.0 - f64::from(0.05_f32)
         );
     });
@@ -578,7 +578,8 @@ fn wind_charges_retrace_only_after_gameplay_breaks_a_vehicle() {
             .into_iter()
             .take(if case == "miss" { 1 } else { 2 })
         {
-            game.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     id,
                     Arc::from("oak"),
@@ -595,11 +596,11 @@ fn wind_charges_retrace_only_after_gameplay_breaks_a_vehicle() {
             p.id = 80 + i;
             p.velocity = Vec3::new(0.0, -0.5, 0.0);
             p.acceleration = 0.0;
-            game.creatures.projectiles.push(p);
+            game.entities.projectiles.push(p);
         }
         game.native_joins_skip();
         let joins = game
-            .creatures
+            .entities
             .projectiles
             .iter()
             .map(|p| p.join)
@@ -618,26 +619,27 @@ fn wind_charges_retrace_only_after_gameplay_breaks_a_vehicle() {
             assert!(hits[5].at[1] < hits[0].at[1], "the second boat is lower");
         }
         assert_eq!(observed.bursts.load(Ordering::Relaxed), bursts);
-        assert_eq!(game.boats.len(), boats);
+        assert_eq!(game.entities.boats.len(), boats);
         if boats == 1 {
-            assert_eq!(game.boats[0].id, 72);
-            assert_eq!(game.boats[0].damage, 0.0);
+            assert_eq!(game.entities.boats[0].id, 72);
+            assert_eq!(game.entities.boats[0].damage, 0.0);
         }
         assert_eq!(
-            game.dropped
+            game.entities
+                .dropped
                 .iter()
                 .filter(|drop| &*drop.stack.item == "minecraft:oak_boat")
                 .map(|drop| drop.stack.count)
                 .sum::<u32>(),
             drops
         );
-        assert_eq!(game.creatures.projectiles.len(), survivors);
+        assert_eq!(game.entities.projectiles.len(), survivors);
         let at = if case == "discard-target" {
             hits[0].at
         } else {
             [8.5, 64.8 - 0.5, 0.5]
         };
-        for charge in game.creatures.projectiles.iter() {
+        for charge in game.entities.projectiles.iter() {
             assert_eq!(charge.join, joins[(charge.id - 80) as usize]);
             assert_eq!(charge.age, 1);
             assert_eq!(charge.position.components(), at);
@@ -735,7 +737,7 @@ fn a_subscriber_enabled_by_a_section_callback_hears_the_flights_after_it() {
                 );
                 arrow.id = id;
                 arrow.velocity = Vec3::new(3.0, 0.0, 0.0);
-                game.creatures.projectiles.push(arrow);
+                game.entities.projectiles.push(arrow);
             }
             game.native_joins_skip();
             game.tick_projectiles().unwrap();
@@ -887,7 +889,12 @@ pub(crate) fn assert_boat_matches_witness(
     tick: usize,
     tag: &str,
 ) {
-    let actual = game.boats.iter().find(|b| b.id == 71).map(|b| b.damage);
+    let actual = game
+        .entities
+        .boats
+        .iter()
+        .find(|b| b.id == 71)
+        .map(|b| b.damage);
     let expected = wind_continuation_boat_witness_26_3(witness, tick, tag);
     assert_eq!(
         actual.map(f32::to_bits),
@@ -895,7 +902,7 @@ pub(crate) fn assert_boat_matches_witness(
         "tick {tick} {tag}: boat state got {actual:?} expected {expected:?}"
     );
     assert_eq!(
-        game.boats.len(),
+        game.entities.boats.len(),
         usize::from(expected.is_some()),
         "tick {tick} {tag}: boat count mismatch"
     );

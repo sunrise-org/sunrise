@@ -86,7 +86,7 @@ fn receiver_kill_stages_orb_removal_until_commit_and_kills_a_resident_knot_once(
         let at = [4.25, 70.0, 4.75];
         game.summon_with_nbt("minecraft:experience_orb", at, "{Value:1s}")
             .unwrap();
-        let orb = game.entity(game.orbs[0].id).unwrap();
+        let orb = game.entity(game.entities.orbs[0].id).unwrap();
 
         for commit in [false, true] {
             capture();
@@ -141,7 +141,8 @@ fn entity_die_commands() {
             .get("minecraft:warden")
             .unwrap()
             .clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(700, kind, Vec3::new(7.5, 200.0, 4.5), 0.0));
         for (kind, nbt, heard) in [
             ("item", "{Item:{id:\"minecraft:stone\",count:1}}", true),
@@ -165,7 +166,7 @@ fn entity_die_commands() {
             game.run_command("setblock 1 200 4 sculk_sensor strict");
             game.sculk_prepare();
             game.sculk_sync_index();
-            warden::register(&mut game.mobs[0]);
+            warden::register(&mut game.entities.mobs[0]);
             // The killed entity is the event's source, except an end crystal, whose kill posts
             // without one.
             let source = (kind != "end_crystal")
@@ -190,21 +191,26 @@ fn entity_die_commands() {
                 assert_eq!(info.pos, at);
                 assert_eq!(info.source, source, "{kind} source");
             }
-            let vibration = &game.mobs[0].extra.warden.as_ref().unwrap().vibration;
+            let vibration = &game.entities.mobs[0]
+                .extra
+                .warden
+                .as_ref()
+                .unwrap()
+                .vibration;
             assert_eq!(
                 vibration.selector.current.is_some(),
                 heard && kind != "armor_stand",
                 "warden accepts {kind} source"
             );
             assert!(
-                game.dropped.is_empty(),
+                game.entities.dropped.is_empty(),
                 "/kill must not drop the cushion or crystal"
             );
         }
         game.run_command("summon end_crystal 4.25 200 4.75");
         capture();
         game.run_command("damage @e[type=end_crystal,limit=1] 1 minecraft:explosion");
-        assert!(game.crystals.is_empty());
+        assert!(game.entities.crystals.is_empty());
         assert!(
             deaths().is_empty(),
             "EndCrystal.hurtServer removes without Entity.kill"
@@ -225,13 +231,14 @@ fn entity_die_explosions() {
             .get("minecraft:creeper")
             .unwrap()
             .clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(700, kind, Vec3::new(10.0, 200.0, 10.0), 0.0));
         for source in [None, Some(700)] {
             let expected_source = source.map(Who::Mob);
             // The loaded entity exists even on main, where it has no command target.
             game.summon_with_nbt("minecraft:cushion", at, "{}").unwrap();
-            assert_eq!(game.cushions.len(), 1);
+            assert_eq!(game.entities.cushions.len(), 1);
             let stand_at = [5.25, 200.0, 4.75];
             let stand = game
                 .summon_with_nbt("minecraft:armor_stand", stand_at, "{}")
@@ -273,15 +280,16 @@ fn entity_die_explosions() {
             for target in [stand, painting, frame, boat] {
                 assert_eq!(game.target_position(target), None, "{target:?} removed");
             }
-            assert!(game.cushions.is_empty());
+            assert!(game.entities.cushions.is_empty());
             assert!(
-                game.dropped.is_empty() && game.orbs.is_empty(),
+                game.entities.dropped.is_empty() && game.entities.orbs.is_empty(),
                 "blast discards items and orbs: items={:?} orbs={}",
-                game.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .map(|i| (&i.stack.item, i.health))
                     .collect::<Vec<_>>(),
-                game.orbs.len()
+                game.entities.orbs.len()
             );
             let events = deaths();
             assert_eq!(events.len(), 5);
@@ -325,7 +333,7 @@ fn painting_falling_off_the_wall_posts_no_entity_die() {
             )
             .unwrap()
             .expect("the painting joins");
-        assert_eq!(game.paintings.len(), 1);
+        assert_eq!(game.entities.paintings.len(), 1);
         game.sculk_prepare();
         game.sculk_sync_index();
         capture();
@@ -333,16 +341,17 @@ fn painting_falling_off_the_wall_posts_no_entity_die() {
         for _ in 0..101 {
             game.tick_paintings();
         }
-        assert_eq!(game.paintings.len(), 1, "the wall still holds it");
+        assert_eq!(game.entities.paintings.len(), 1, "the wall still holds it");
         game.run_command("setblock 4 200 3 air strict");
         for _ in 0..101 {
             game.tick_paintings();
         }
         assert_eq!(game.target_position(painting), None, "discarded");
-        assert!(game.paintings.is_empty());
+        assert!(game.entities.paintings.is_empty());
         // BlockAttachedEntity.tick: discard(), then dropItem().
         assert_eq!(
-            game.dropped
+            game.entities
+                .dropped
                 .iter()
                 .map(|i| &*i.stack.item)
                 .collect::<Vec<_>>(),
@@ -367,7 +376,7 @@ fn painting_falling_off_the_wall_posts_no_entity_die() {
             .expect("the second painting joins");
         capture();
         game.run_command("kill @e[type=minecraft:painting]");
-        assert!(game.paintings.is_empty());
+        assert!(game.entities.paintings.is_empty());
         assert_eq!(deaths(), vec![("minecraft:entity_die", killed_at, None)]);
         let Some(BlockEntity::Sculk(sensor)) = game.world.block_entities.get(&(1, 200, 4)) else {
             panic!("sensor must exist");
@@ -407,8 +416,8 @@ fn unknown_painting_variant_keeps_the_default_one() {
         )
         .unwrap()
         .expect("a painting with a bare variant id still joins");
-        assert_eq!(game.paintings.len(), 3);
-        let (default, unknown) = (&game.paintings[0], &game.paintings[1]);
+        assert_eq!(game.entities.paintings.len(), 3);
+        let (default, unknown) = (&game.entities.paintings[0], &game.entities.paintings[1]);
         // RegistryDataLoader registers the registry's entries sorted by id, so
         // VariantUtils.getAny is `minecraft:alban`.
         assert_eq!(&*default.variant, "minecraft:alban");
@@ -417,7 +426,7 @@ fn unknown_painting_variant_keeps_the_default_one() {
             (unknown.width, unknown.height),
             (default.width, default.height)
         );
-        assert_eq!(&*game.paintings[2].variant, "minecraft:kebab");
+        assert_eq!(&*game.entities.paintings[2].variant, "minecraft:kebab");
         let variant = sunrise_gameplay_common::world_paintings!(game)
             .get(&default.variant)
             .expect("the default variant is a real one");
@@ -475,9 +484,15 @@ fn a_data_packs_placeable_painting_variant_is_placed() {
         let painting = sunrise_items::items::ItemStack::new("minecraft:painting", 1);
         assert!(game.painting_fits(&hit, &painting));
         assert!(game.place_painting(&hit, &painting));
-        assert_eq!(game.paintings.len(), 1);
-        assert_eq!(&*game.paintings[0].variant, "test:big_square");
-        assert_eq!((game.paintings[0].width, game.paintings[0].height), (2, 2));
+        assert_eq!(game.entities.paintings.len(), 1);
+        assert_eq!(&*game.entities.paintings[0].variant, "test:big_square");
+        assert_eq!(
+            (
+                game.entities.paintings[0].width,
+                game.entities.paintings[0].height
+            ),
+            (2, 2)
+        );
         let _ = std::fs::remove_dir_all(&dir);
     });
 }

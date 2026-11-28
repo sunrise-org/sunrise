@@ -27,7 +27,7 @@ impl ClientGame<'_> {
     /// `LivingEntity.refreshDirtyAttributes`: clamp health to max health on living tick.
     #[cfg(any(test, feature = "test-support"))]
     pub fn refresh_remote_attributes(&mut self) {
-        for m in &mut self.common.mobs {
+        for m in &mut self.common.entities.mobs {
             if m.extra.max_health_dirty {
                 m.extra.max_health_dirty = false;
                 m.health = m.health.min(m.attrs.max_health);
@@ -118,10 +118,11 @@ impl ClientGame<'_> {
         let Some(m) = self
             .common
             .mob_index
-            .get_mut(&mut self.common.mobs, id as u32)
+            .get_mut(&mut self.common.entities.mobs, id as u32)
         else {
             if let Some(a) = self
                 .common
+                .entities
                 .armor_stands
                 .iter_mut()
                 .find(|a| a.id == id as u32)

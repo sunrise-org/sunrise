@@ -44,7 +44,7 @@ mod tests {
                 .unwrap()
                 .clone();
             let villager = Mob::new(500, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
-            game.mobs.push(villager.clone());
+            game.entities.mobs.push(villager.clone());
             MARK.set(game, Holder::Entity(500), 7).unwrap();
             LOOSE.set(game, Holder::Entity(500), 3).unwrap();
             let params = Params {

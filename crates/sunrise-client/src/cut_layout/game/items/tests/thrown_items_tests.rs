@@ -59,7 +59,11 @@ fn a_thrown_item_takes_the_throwers_random_not_the_levels() {
     game.common.inventory[game.common.selected] = Some(ItemStack::new("minecraft:stone", 4));
     let level = game.world.random.state();
     game.drop_held_item(false);
-    let thrown = game.dropped.last().expect("the drop key threw the stack");
+    let thrown = game
+        .entities
+        .dropped
+        .last()
+        .expect("the drop key threw the stack");
     let velocity = thrown.velocity;
     assert!(
         (velocity.z - 0.3).abs() <= 0.02,
@@ -74,7 +78,7 @@ fn a_thrown_item_takes_the_throwers_random_not_the_levels() {
     );
     // The next throw scatters differently: the thrower's stream is live.
     game.drop_held_item(false);
-    assert_ne!(game.dropped.last().unwrap().velocity, velocity);
+    assert_ne!(game.entities.dropped.last().unwrap().velocity, velocity);
     assert_eq!(game.world.random.state(), level);
 }
 
@@ -97,7 +101,7 @@ fn a_death_scatter_takes_the_throwers_random_not_the_levels() {
             recently_hit: false,
         },
     );
-    let thrown = game.dropped.first().expect("the stack was thrown");
+    let thrown = game.entities.dropped.first().expect("the stack was thrown");
     assert_eq!(thrown.velocity.y, f64::from(0.2f32), "a scatter rises 0.2");
     assert!(thrown.velocity.x.abs() <= 0.5 && thrown.velocity.z.abs() <= 0.5);
     assert_eq!(
@@ -139,7 +143,7 @@ fn a_pickup_pitch_is_not_drawn_from_the_levels_random() {
     );
     let level = game.world.random.state();
     game.tick_items();
-    assert!(game.dropped.is_empty(), "the item was picked up");
+    assert!(game.entities.dropped.is_empty(), "the item was picked up");
     assert_eq!(
         game.world.random.state(),
         level,
@@ -193,14 +197,16 @@ pub(crate) use crate::game::client_side::item_entities_client::thrown_items_test
 fn a_client_pickup_sound_takes_the_listeners_random() {
     with_remote_game(|game| {
         let at = Vec3::new(2.5, 64.0, 2.5);
-        game.dropped.push(ItemEntity::new(
+        game.entities.dropped.push(ItemEntity::new(
             9,
             ItemStack::new("minecraft:stone", 1),
             at,
             Vec3::ZERO,
             0.0,
         ));
-        game.orbs.push(ExperienceOrb::new(10, at, Vec3::ZERO, 1));
+        game.entities
+            .orbs
+            .push(ExperienceOrb::new(10, at, Vec3::ZERO, 1));
         let take = |item: i32| {
             C::TakeItemEntity(play::TakeItemEntity {
                 item,
@@ -238,7 +244,7 @@ fn a_client_pickup_sound_takes_the_listeners_random() {
 fn a_client_take_shrinks_an_item_and_removes_it_only_when_empty() {
     with_remote_game(|game| {
         let at = Vec3::new(2.5, 64.0, 2.5);
-        game.dropped.push(ItemEntity::new(
+        game.entities.dropped.push(ItemEntity::new(
             9,
             ItemStack::new("minecraft:emerald", 8),
             at,
@@ -254,17 +260,17 @@ fn a_client_take_shrinks_an_item_and_removes_it_only_when_empty() {
         };
         game.handle_packet(take(0)).unwrap();
         assert_eq!(
-            game.dropped[0].stack.count, 8,
+            game.entities.dropped[0].stack.count, 8,
             "an animation of nothing taken"
         );
         game.handle_packet(take(3)).unwrap();
         assert_eq!(
-            game.dropped[0].stack.count, 5,
+            game.entities.dropped[0].stack.count, 5,
             "a partial pickup leaves the rest"
         );
         game.handle_packet(take(5)).unwrap();
         assert!(
-            game.dropped.iter().all(|d| d.id != 9),
+            game.entities.dropped.iter().all(|d| d.id != 9),
             "an emptied stack goes"
         );
     });
@@ -293,7 +299,7 @@ fn a_burning_items_sound_is_not_drawn_from_the_levels_random() {
     );
     // `Entity.lavaHurt` sounds on the tenth tick of a contact that leaves the
     // item alive (`should_playLavaHurtSound`), so the item is about to be 10.
-    game.dropped[0].ticks = 9;
+    game.entities.dropped[0].ticks = 9;
     let level = game.world.random.state();
     game.tick_items();
     let (volume, pitch) = server_sound(&mut game, "minecraft:entity.generic.burn");

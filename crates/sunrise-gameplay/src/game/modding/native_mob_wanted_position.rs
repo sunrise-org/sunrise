@@ -20,6 +20,7 @@ impl crate::game::ServerGame<'_> {
         };
         let Some(mob) = self
             .common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id && !m.removed)
@@ -36,6 +37,7 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)?
@@ -51,6 +53,7 @@ impl crate::game::ServerGame<'_> {
         };
         Some(
             self.common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id && !m.removed)?

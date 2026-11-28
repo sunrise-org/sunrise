@@ -89,7 +89,7 @@ mod tests {
                         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
                         for (id, x) in [(111, 1.0), (112, 2.0), (113, 1.5), (114, 0.5), (115, 3.0)]
                         {
-                            game.mobs.push(sunrise_sim::mobs::Mob::new(
+                            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                                 id,
                                 kind.clone(),
                                 Vec3::new(x, 0.0, 0.0),

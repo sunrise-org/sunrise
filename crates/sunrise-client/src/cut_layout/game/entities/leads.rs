@@ -76,12 +76,13 @@ pub(crate) mod attach_tests {
             (2, "minecraft:cow", Species::Cow),
         ] {
             let kind = game.res.mob_types().get(kind).expect(kind).clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(id, kind, Vec3::new(0.5, 64.0, 0.5), 0.0));
-            assert_eq!(game.mobs.last().unwrap().species(), species);
+            assert_eq!(game.entities.mobs.last().unwrap().species(), species);
         }
         let at = |index: usize, blocks: f64| {
-            let c = centre(&game.mobs[index]);
+            let c = centre(&game.entities.mobs[index]);
             glam::DVec3::new(c.x + blocks, c.y, c.z)
         };
         assert!(
@@ -124,21 +125,22 @@ pub(crate) mod attach_tests {
             .clone();
         let mut cow = Mob::new(1, kind, Vec3::new(1.5, 64.0, 0.5), 0.0);
         cow.extra.leash_pending = Some(Pending::Uuid([9, 9, 9, 9]));
-        game.mobs.push(cow);
+        game.entities.mobs.push(cow);
         game.common.inventory[game.common.selected] =
             Some(sunrise_items::items::ItemStack::new("minecraft:lead", 1));
 
         assert!(game.interact_leash(0, "minecraft:lead"));
-        assert_eq!(game.mobs[0].extra.leash, Some(Holder::Player));
+        assert_eq!(game.entities.mobs[0].extra.leash, Some(Holder::Player));
         assert!(
             game.common.inventory[game.common.selected].is_none(),
             "the lead is spent"
         );
-        game.mobs[0].age = 101;
+        game.entities.mobs[0].age = 101;
         game.tick_leads();
-        assert_eq!(game.mobs[0].extra.leash, Some(Holder::Player));
+        assert_eq!(game.entities.mobs[0].extra.leash, Some(Holder::Player));
         assert!(
             !game
+                .entities
                 .dropped
                 .iter()
                 .any(|d| &*d.stack.item == "minecraft:lead"),

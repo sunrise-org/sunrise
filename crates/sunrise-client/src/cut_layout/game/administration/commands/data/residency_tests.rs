@@ -16,10 +16,10 @@ fn identity<'a>(
         }};
     }
     match target {
-        Target::Mob(id) => fields!(game.mobs, id),
-        Target::Item(id) => fields!(game.dropped, id),
-        Target::Stand(id) => fields!(game.armor_stands, id),
-        Target::Frame(id) => fields!(game.item_frames, id),
+        Target::Mob(id) => fields!(game.entities.mobs, id),
+        Target::Item(id) => fields!(game.entities.dropped, id),
+        Target::Stand(id) => fields!(game.entities.armor_stands, id),
+        Target::Frame(id) => fields!(game.entities.item_frames, id),
         _ => unreachable!("fixture only admits the four decoder-replacement kinds"),
     }
 }
@@ -52,13 +52,19 @@ fn reload_preserves_runtime_identity(kind: &str) {
             .expect("fixture entity loads");
         match target {
             Target::Mob(id) => {
-                let mob = game.mobs.iter_mut().find(|mob| mob.id == id).unwrap();
+                let mob = game
+                    .entities
+                    .mobs
+                    .iter_mut()
+                    .find(|mob| mob.id == id)
+                    .unwrap();
                 mob.age = 17;
                 mob.invulnerable = 9;
                 mob.last_hurt = 2.0;
             }
             Target::Item(id) => {
-                game.dropped
+                game.entities
+                    .dropped
                     .iter_mut()
                     .find(|item| item.id == id)
                     .unwrap()
@@ -97,11 +103,12 @@ fn reload_preserves_runtime_identity(kind: &str) {
         );
         match target {
             Target::Mob(id) => {
-                let mob = game.mobs.iter().find(|mob| mob.id == id).unwrap();
+                let mob = game.entities.mobs.iter().find(|mob| mob.id == id).unwrap();
                 assert_eq!((mob.age, mob.invulnerable, mob.last_hurt), (17, 9, 2.0));
             }
             Target::Item(id) => assert_eq!(
-                game.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .find(|item| item.id == id)
                     .unwrap()
@@ -155,13 +162,19 @@ fn data_edits_keep_hit_cooldown_separate_from_saved_immunity() {
         game.set_allow_commands(true);
         assert!(game.run_command("summon cow 8.5 65 8.5"));
         let id = game
+            .entities
             .mobs
             .iter()
             .find(|m| m.species() == sunrise_sim::mobs::Species::Cow)
             .unwrap()
             .id;
         let health = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-            game.mobs.iter().find(|m| m.id == id).unwrap().health
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == id)
+                .unwrap()
+                .health
         };
         assert!(game.run_command("damage @e[type=cow,limit=1] 4 minecraft:generic"));
         assert_eq!(health(game), 6.0);
@@ -179,7 +192,7 @@ fn data_edits_keep_hit_cooldown_separate_from_saved_immunity() {
             "a stronger hit only deals the difference"
         );
         assert!(game.run_command("data merge entity @e[type=cow,limit=1] {invulnerable_time:7}"));
-        let mob = game.mobs.iter().find(|m| m.id == id).unwrap();
+        let mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
         assert_eq!(mob.invulnerable, 20);
         assert_eq!(mob.invulnerable_time, 7);
     });

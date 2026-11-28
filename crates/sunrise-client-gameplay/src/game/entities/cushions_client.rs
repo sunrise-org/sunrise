@@ -15,7 +15,7 @@ impl crate::game::ClientGame<'_> {
             return;
         };
         let sprites = &self.client.gui.atlas.sprites;
-        for c in &self.common.cushions {
+        for c in &self.common.entities.cushions {
             if self.hides_as_camera(c.id) {
                 continue;
             }

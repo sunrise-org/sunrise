@@ -151,8 +151,8 @@ fn run(mode: Option<u8>) -> (Vec<(String, u32)>, usize, i32, u32, i64, bool) {
                 })
                 .unwrap_or_default()
                 .into();
-            let before_items = game.dropped.len();
-            let before_orbs = game.orbs.len();
+            let before_items = game.entities.dropped.len();
+            let before_orbs = game.entities.orbs.len();
             let stat = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 game.stats
                     .values
@@ -166,12 +166,13 @@ fn run(mode: Option<u8>) -> (Vec<(String, u32)>, usize, i32, u32, i64, bool) {
                 game.retrieve_hook_extracted(&ItemStack::new("minecraft:fishing_rod", 1), &mut hook)
             });
             result = Some((
-                game.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .skip(before_items)
                     .map(|item| (item.stack.item.to_string(), item.stack.count))
                     .collect(),
-                game.orbs.len() - before_orbs,
+                game.entities.orbs.len() - before_orbs,
                 stat(game) - before_stat,
                 damage,
                 hook.random.next_long(),

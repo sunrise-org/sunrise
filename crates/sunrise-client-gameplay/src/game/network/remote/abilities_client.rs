@@ -81,11 +81,12 @@ impl crate::game::ClientGame<'_> {
             }
         }
         if let Some(r) = self.client.remote.as_ref() {
-            for i in 0..self.common.mobs.len() {
-                let id = self.common.mobs[i].id as i32;
+            for i in 0..self.common.entities.mobs.len() {
+                let id = self.common.entities.mobs[i].id as i32;
                 if r.level_players.contains_key(&id) {
                     let spectator = r.remote_player_info_game_mode(id) == Some(SPECTATOR);
                     self.common
+                        .entities
                         .mobs
                         .update(i, |m| m.extra.spectator = spectator);
                 }

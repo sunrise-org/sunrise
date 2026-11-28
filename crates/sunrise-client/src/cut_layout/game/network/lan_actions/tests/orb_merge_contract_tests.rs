@@ -171,16 +171,19 @@ fn a_resident_merge_of_three_times_two_and_five_saves_and_pays_eleven() {
     mod_platform::testing::with_mods(mods(Normalize), || {
         with_resident_game(|game| {
             open(game);
-            game.orbs.push(orb(1, 0.5, 3, 2));
-            game.orbs.push(orb(41, 0.7, 5, 1));
+            game.entities.orbs.push(orb(1, 0.5, 3, 2));
+            game.entities.orbs.push(orb(41, 0.7, 5, 1));
             game.merge_orb(0);
-            assert_eq!(game.orbs.len(), 1);
-            assert_eq!((game.orbs[0].value, game.orbs[0].count), (11, 1));
-            let saved = orb_to_nbt(&game.orbs[0], [0; 4]);
+            assert_eq!(game.entities.orbs.len(), 1);
+            assert_eq!(
+                (game.entities.orbs[0].value, game.entities.orbs[0].count),
+                (11, 1)
+            );
+            let saved = orb_to_nbt(&game.entities.orbs[0], [0; 4]);
             let back = orbs_from_nbt(&saved);
             assert_eq!((back[0].value, back[0].count), (11, 1));
             game.guest_orbs(0);
-            assert!(game.orbs.is_empty());
+            assert!(game.entities.orbs.is_empty());
             paid = game.server.lan.as_ref().unwrap().hub.guests[0].xp_total;
         });
     });
@@ -194,14 +197,17 @@ fn a_spawning_merge_of_three_times_two_and_five_saves_and_pays_eleven() {
     mod_platform::testing::with_mods(mods(Normalize), || {
         with_resident_game(|game| {
             open(game);
-            game.orbs.push(orb(41, 0.5, 3, 2));
+            game.entities.orbs.push(orb(41, 0.5, 3, 2));
             game.award_orb([0.5, 70.0, 0.5], 5, 1);
-            assert_eq!(game.orbs.len(), 1);
-            assert_eq!((game.orbs[0].value, game.orbs[0].count), (11, 1));
-            let back = orbs_from_nbt(&orb_to_nbt(&game.orbs[0], [0; 4]));
+            assert_eq!(game.entities.orbs.len(), 1);
+            assert_eq!(
+                (game.entities.orbs[0].value, game.entities.orbs[0].count),
+                (11, 1)
+            );
+            let back = orbs_from_nbt(&orb_to_nbt(&game.entities.orbs[0], [0; 4]));
             assert_eq!((back[0].value, back[0].count), (11, 1));
             game.guest_orbs(0);
-            assert!(game.orbs.is_empty());
+            assert!(game.entities.orbs.is_empty());
             paid = game.server.lan.as_ref().unwrap().hub.guests[0].xp_total;
         });
     });
@@ -214,10 +220,11 @@ fn a_canceled_merge_keeps_both_orbs_as_they_were() {
     mod_platform::testing::with_mods(mods(Cancel), || {
         with_resident_game(|game| {
             game.options.dedicated = Some(Vec::new());
-            game.orbs.push(orb(1, 0.5, 3, 2));
-            game.orbs.push(orb(41, 0.7, 5, 1));
+            game.entities.orbs.push(orb(1, 0.5, 3, 2));
+            game.entities.orbs.push(orb(41, 0.7, 5, 1));
             game.merge_orb(0);
             let left: Vec<_> = game
+                .entities
                 .orbs
                 .iter()
                 .map(|o| (o.id, o.value, o.count, o.age))
@@ -233,9 +240,10 @@ fn a_canceled_spawning_merge_puts_the_destination_back_and_spawns_its_own_orb() 
     mod_platform::testing::with_mods(mods(Cancel), || {
         with_resident_game(|game| {
             game.options.dedicated = Some(Vec::new());
-            game.orbs.push(orb(41, 0.5, 3, 2));
+            game.entities.orbs.push(orb(41, 0.5, 3, 2));
             game.award_orb([0.5, 70.0, 0.5], 5, 1);
             let left: Vec<_> = game
+                .entities
                 .orbs
                 .iter()
                 .map(|o| (o.value, o.count, o.age))
@@ -254,7 +262,7 @@ fn a_spawning_merge_tells_the_hook_the_signed_destination_value() {
     mod_platform::testing::with_mods(mods(Record), || {
         with_game(|game| {
             game.options.dedicated = Some(Vec::new());
-            game.orbs.push(orb(41, 0.5, -32768, 1));
+            game.entities.orbs.push(orb(41, 0.5, -32768, 1));
             game.award_orb([0.5, 70.0, 0.5], 5, 1);
         });
     });
@@ -267,10 +275,15 @@ fn a_changed_source_refuses_the_merge_and_puts_the_written_orb_back() {
     mod_platform::testing::with_mods(mods(Stale), || {
         with_resident_game(|game| {
             game.options.dedicated = Some(Vec::new());
-            game.orbs.push(orb(1, 0.5, 3, 2));
-            game.orbs.push(orb(41, 0.7, 5, 1));
+            game.entities.orbs.push(orb(1, 0.5, 3, 2));
+            game.entities.orbs.push(orb(41, 0.7, 5, 1));
             game.merge_orb(0);
-            let left: Vec<_> = game.orbs.iter().map(|o| (o.value, o.count)).collect();
+            let left: Vec<_> = game
+                .entities
+                .orbs
+                .iter()
+                .map(|o| (o.value, o.count))
+                .collect();
             assert_eq!(left, [(3, 2), (6, 1)]);
         });
     });
@@ -280,10 +293,10 @@ fn a_changed_source_refuses_the_merge_and_puts_the_written_orb_back() {
 #[ignore = "daily"]
 fn a_count_past_what_a_save_holds_refuses_the_merge() {
     with_game(|game| {
-        game.orbs.push(orb(1, 0.5, 3, i32::MAX as u32));
-        game.orbs.push(orb(41, 0.7, 3, 1));
+        game.entities.orbs.push(orb(1, 0.5, 3, i32::MAX as u32));
+        game.entities.orbs.push(orb(41, 0.7, 3, 1));
         game.merge_orb(0);
-        assert_eq!(game.orbs.len(), 2);
-        assert_eq!(game.orbs[0].count, i32::MAX as u32);
+        assert_eq!(game.entities.orbs.len(), 2);
+        assert_eq!(game.entities.orbs[0].count, i32::MAX as u32);
     });
 }

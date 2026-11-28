@@ -18,7 +18,7 @@ impl crate::game::ServerGame<'_> {
     ) -> Result<(&Raids, &[Mob]), LevelReadError> {
         self.native_level_world_result(level)?;
         let (raids, mobs) = if level.dimension() == self.common.dim.key() {
-            (self.raids_in_place(), self.common.mobs.as_ref())
+            (self.raids_in_place(), self.common.entities.mobs.as_ref())
         } else {
             let parked = self
                 .server
@@ -28,7 +28,7 @@ impl crate::game::ServerGame<'_> {
                 .ok_or(LevelReadError::Stale)?;
             (
                 parked.raiding.raids(level.dimension_id()),
-                parked.mobs.as_ref(),
+                parked.entities.mobs.as_ref(),
             )
         };
         Ok((raids.ok_or(LevelReadError::Unavailable)?, mobs))
@@ -101,7 +101,12 @@ impl crate::game::ServerGame<'_> {
         let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
             return None;
         };
-        let raider = self.common.mobs.iter().find(|m| m.id == id && !m.removed)?;
+        let raider = self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == id && !m.removed)?;
         let id = sunrise_sim::mobs::raider::state(raider)?.raid_id?;
         let level = self.entity_level(mob.entity())?;
         self.level_raid(level, id)

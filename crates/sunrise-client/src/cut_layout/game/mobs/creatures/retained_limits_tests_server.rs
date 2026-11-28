@@ -94,7 +94,7 @@ fn same_mob_guest_attack_survives_movement_panic() {
                 mob.ground.on_ground = true;
                 mob.ai.speed = 0.2;
                 mob.ai.target = Some(Who::Player);
-                game.common.mobs.push(mob);
+                game.common.entities.mobs.push(mob);
                 // Who::Player names the selected player, so bind it to the nearby guest.
                 host.mob_players.insert(ZOMBIE, TARGET_GUEST);
 
@@ -129,7 +129,7 @@ fn same_mob_guest_attack_survives_movement_panic() {
                 // Keep the zombie's grounded speed path active. Move the guest beyond
                 // melee range without unloading the chunk and clear the hurt cooldown,
                 // so unchanged health cannot be explained by invulnerability.
-                game.mobs[0].ground.on_ground = true;
+                game.entities.mobs[0].ground.on_ground = true;
                 game.server
                     .lan
                     .as_mut()

@@ -49,8 +49,8 @@ impl crate::game::ServerGame<'_> {
         pricked: &mut Vec<u32>,
     ) {
         let id = match target {
-            MoveWho::Entity(EntityHandle::Boat(i)) => self.common.boats[i].id,
-            MoveWho::Entity(EntityHandle::Cart(i)) => self.common.carts[i].id,
+            MoveWho::Entity(EntityHandle::Boat(i)) => self.common.entities.boats[i].id,
+            MoveWho::Entity(EntityHandle::Cart(i)) => self.common.entities.carts[i].id,
             _ => return,
         };
         let eps = f64::from(1.0e-5_f32);
@@ -74,9 +74,9 @@ impl crate::game::ServerGame<'_> {
     /// found, in the order of their pushes.
     pub(in crate::game) fn hurt_cactus_pricked_vehicles(&mut self, pricked: Vec<u32>) {
         for id in pricked {
-            if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
+            if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
                 self.hurt_boat(i, 1.0, false);
-            } else if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
+            } else if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
                 self.hurt_cart(i, 1.0, false, false, CartHit::default());
             }
         }
@@ -113,7 +113,7 @@ impl crate::game::ServerGame<'_> {
 
     /// `moveEntityByPiston`'s `applyEffectsFromBlocks(previousPos, position)` for projectile `i`.
     pub(in crate::game) fn projectile_piston_block_effects(&mut self, i: usize, from: Vec3) {
-        let p = &self.common.creatures.projectiles[i];
+        let p = &self.common.entities.projectiles[i];
         let end = p.aabb();
         let offset = from.subtract(p.position);
         let start = end.move_by(offset);
@@ -147,11 +147,11 @@ impl crate::game::ServerGame<'_> {
         }
         if let Some(stuck) = stuck {
             self.common
-                .creatures
+                .entities
                 .projectiles
                 .update(i, |p| p.stuck_speed = stuck);
         }
-        let stuck_arrow = self.common.creatures.projectiles[i]
+        let stuck_arrow = self.common.entities.projectiles[i]
             .arrow
             .as_ref()
             .is_some_and(|a| a.in_ground);
@@ -162,7 +162,7 @@ impl crate::game::ServerGame<'_> {
                 self.common.res.facts(),
                 self.common.collision,
             );
-            let tops = self.common.creatures.projectiles.update(i, |p| {
+            let tops = self.common.entities.projectiles.update(i, |p| {
                 p.bubble_surfaces.clear();
                 p.bubble_columns_since(from, |at| {
                     sunrise_sim::motion::bubble_column_at(
@@ -279,22 +279,23 @@ impl crate::game::ServerGame<'_> {
             .intersects(area)
         };
         let mut i = 0;
-        while i < self.common.paintings.len() {
-            if !(meets(self.common.paintings[i].bounds()) && self.break_painting_by(i, false, None))
+        while i < self.common.entities.paintings.len() {
+            if !(meets(self.common.entities.paintings[i].bounds())
+                && self.break_painting_by(i, false, None))
             {
                 i += 1;
             }
         }
         let mut i = 0;
-        while i < self.common.item_frames.len() {
-            let f = &self.common.item_frames[i];
+        while i < self.common.entities.item_frames.len() {
+            let f = &self.common.entities.item_frames[i];
             if f.fixed || !meets(f.bounds()) || !self.break_frame_by(i, None) {
                 i += 1;
             }
         }
         let mut i = 0;
-        while i < self.common.cushions.len() {
-            let c = &self.common.cushions[i];
+        while i < self.common.entities.cushions.len() {
+            let c = &self.common.entities.cushions[i];
             if root == Some(c.id) || !meets(c.bounds()) || !self.break_cushion_by(i, None) {
                 i += 1;
             }
@@ -365,7 +366,7 @@ impl crate::game::ServerGame<'_> {
                         Vec3::new(COLLISION_EPSILON, COLLISION_EPSILON, COLLISION_EPSILON),
                     );
                 self.entity_collisions(Mover::Boat {
-                    id: self.common.boats[i].id,
+                    id: self.common.entities.boats[i].id,
                     area,
                 })
             }
@@ -394,11 +395,12 @@ impl crate::game::ServerGame<'_> {
             || movement.length_squared() - moved.length_squared() < 1.0e-7;
         if placed {
             if lid_move && let MoveWho::Entity(EntityHandle::Boat(i)) = target {
-                let boat = &self.common.boats[i];
+                let boat = &self.common.entities.boats[i];
                 let fall = self
                     .common
                     .vehicle_fall_reset(boat.fall_distance, body.position, moved);
                 self.common
+                    .entities
                     .boats
                     .update(i, |boat| boat.fall_distance = fall);
             }
@@ -416,10 +418,11 @@ impl crate::game::ServerGame<'_> {
         }
         self.set_pushed_on_ground(target, movement, moved, None);
         if lid_move && let MoveWho::Entity(EntityHandle::Boat(i)) = target {
-            let boat = &self.common.boats[i];
+            let boat = &self.common.entities.boats[i];
             if self.boat_can_simulate_movement(boat.id) {
                 let fall = self.common.boat_fall(boat, moved.y);
                 self.common
+                    .entities
                     .boats
                     .update(i, |boat| boat.fall_distance = fall);
             }
@@ -468,7 +471,7 @@ impl crate::game::ServerGame<'_> {
             self.hurt_cactus_pricked_vehicles(pricked);
         } else {
             let stand = match handle {
-                EntityHandle::ArmorStand(i) => Some(self.common.armor_stands[i].velocity),
+                EntityHandle::ArmorStand(i) => Some(self.common.entities.armor_stands[i].velocity),
                 _ => None,
             };
             self.move_pushed_body(cause, target, body, movement, false, &mut None);
@@ -476,7 +479,7 @@ impl crate::game::ServerGame<'_> {
                 && let Some(MoveWho::Entity(EntityHandle::ArmorStand(i))) =
                     self.resolve_push_target(selected)
             {
-                self.common.armor_stands[i].velocity = velocity;
+                self.common.entities.armor_stands[i].velocity = velocity;
             }
         }
         if let Some(MoveWho::Entity(handle)) = self.resolve_push_target(selected) {
@@ -733,7 +736,7 @@ impl crate::game::ServerGame<'_> {
         let body = match target {
             // PistonMovingBlockEntity collects a resident stand regardless of health.
             MoveWho::Entity(handle @ EntityHandle::ArmorStand(i)) if pos.is_some() => {
-                (!self.common.armor_stands[i].is_removed())
+                (!self.common.entities.armor_stands[i].is_removed())
                     .then(|| self.common.listed_body(handle, pos))
             }
             _ => self.push_body(target, pos, steps),
@@ -829,11 +832,11 @@ impl crate::game::ServerGame<'_> {
             with_piston_noclip(piston_direction, || {
                 self.common.release_after_block_move(target);
                 if let MoveWho::Entity(EntityHandle::Tnt(i)) = target {
-                    let from = self.common.tnts[i].position;
+                    let from = self.common.entities.tnts[i].position;
                     self.tnt_piston_block_effects(i, from);
                 }
                 if let MoveWho::Entity(EntityHandle::Projectile(i)) = target {
-                    let at = self.common.creatures.projectiles[i].position;
+                    let at = self.common.entities.projectiles[i].position;
                     self.projectile_piston_block_effects(i, at);
                 }
                 self.piston_block_triggers(before, before);
@@ -845,7 +848,7 @@ impl crate::game::ServerGame<'_> {
         }
         let projectile_from = match target {
             MoveWho::Entity(EntityHandle::Projectile(i)) => {
-                self.common.creatures.projectiles.update(i, |p| {
+                self.common.entities.projectiles.update(i, |p| {
                     if p.stuck_speed.length_squared() > 1.0e-7 {
                         p.stuck_speed = Vec3::ZERO;
                         p.velocity = Vec3::ZERO;
@@ -857,7 +860,7 @@ impl crate::game::ServerGame<'_> {
         };
         let tnt = match target {
             MoveWho::Entity(EntityHandle::Tnt(i)) => {
-                let t = &mut self.common.tnts[i];
+                let t = &mut self.common.entities.tnts[i];
                 t.take_stuck();
                 Some((
                     i,
@@ -943,7 +946,9 @@ impl crate::game::ServerGame<'_> {
                 let host = self.server.lan.as_mut()?;
                 limit(&mut host.hub.guests.motion_mut(conn)?.piston)
             }
-            MoveWho::Entity(EntityHandle::Mob(i)) => limit(&mut self.common.mobs[i].piston),
+            MoveWho::Entity(EntityHandle::Mob(i)) => {
+                limit(&mut self.common.entities.mobs[i].piston)
+            }
             MoveWho::Entity(handle) => {
                 let key = with_entity!(self, handle, entity => (entity.id(), entity.join_seq()));
                 limit(accumulators.entry(key).or_default())
@@ -1029,7 +1034,7 @@ impl crate::game::ServerGame<'_> {
         };
         let server = self.common.is_logical_server();
         if let EntityHandle::Mob(i) = handle {
-            let mob = &self.common.mobs[i];
+            let mob = &self.common.entities.mobs[i];
             // The controlling player's side owns a ridden mob's restitution.
             // Even an observing copy updates support after a vertical move.
             let authoritative = if server {
@@ -1060,7 +1065,7 @@ impl crate::game::ServerGame<'_> {
             };
             if authoritative || wanted.y.abs() > 0.0 {
                 let mut paused_hurt = None;
-                let mut mobs = self.common.mobs.lift();
+                let mut mobs = self.common.entities.mobs.lift();
                 let mut lent = sunrise_sim::health::LentLevel::take(&mut self.common.world);
                 let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                     let world = self.mob_world_base(&[]);
@@ -1082,13 +1087,17 @@ impl crate::game::ServerGame<'_> {
                 }));
                 lent.give_back(&mut self.common.world);
                 self.common
+                    .entities
                     .mobs
                     .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
                 if let Err(payload) = result {
                     std::panic::resume_unwind(payload);
                 }
                 if let Some(hit) = paused_hurt
-                    && let Some(index) = self.common.mob_index.find(&self.common.mobs, hit.victim)
+                    && let Some(index) = self
+                        .common
+                        .mob_index
+                        .find(&self.common.entities.mobs, hit.victim)
                 {
                     self.server.paused_mob_hurt.0 = Some(hit);
                     self.finish_mob_damage_at(index);
@@ -1104,7 +1113,9 @@ impl crate::game::ServerGame<'_> {
             return Some(target);
         }
         let can_simulate = match handle {
-            EntityHandle::Boat(i) => self.boat_can_simulate_movement(self.common.boats[i].id),
+            EntityHandle::Boat(i) => {
+                self.boat_can_simulate_movement(self.common.entities.boats[i].id)
+            }
             EntityHandle::Item(_)
             | EntityHandle::Tnt(_)
             | EntityHandle::Orb(_)
@@ -1125,7 +1136,7 @@ impl crate::game::ServerGame<'_> {
         if server {
             match handle {
                 EntityHandle::Tnt(i) => {
-                    let t = &mut self.common.tnts[i];
+                    let t = &mut self.common.entities.tnts[i];
                     if t.check_fall_damage(moved.y) {
                         let bounds = t.bounds();
                         self.nonliving_fall_on(id, feet, effect);
@@ -1135,10 +1146,13 @@ impl crate::game::ServerGame<'_> {
                 EntityHandle::Falling(i) => self.finish_falling_piston_move(i, moved),
                 EntityHandle::Cart(i) => {
                     let (distance, landing) =
-                        self.cart_move_fall(&self.common.carts[i], from, moved);
-                    self.common.carts.update(i, |c| c.fall_distance = distance);
+                        self.cart_move_fall(&self.common.entities.carts[i], from, moved);
+                    self.common
+                        .entities
+                        .carts
+                        .update(i, |c| c.fall_distance = distance);
                     if !self.finish_cart_landing(landing, effect, |game, power| {
-                        let mut cart = game.carts[i].clone();
+                        let mut cart = game.entities.carts[i].clone();
                         game.explode_cart(&mut cart, power)
                     }) {
                         return None;
@@ -1162,13 +1176,13 @@ impl crate::game::ServerGame<'_> {
             _ => 0.98_f32,
         };
         let boat_name = match handle {
-            EntityHandle::Boat(i) => Some(self.common.boats[i].shared_type_name()),
+            EntityHandle::Boat(i) => Some(self.common.entities.boats[i].shared_type_name()),
             _ => None,
         };
         let kind = match handle {
             EntityHandle::Boat(_) => boat_name.as_deref()?,
-            EntityHandle::Cart(i) => self.common.carts[i].kind.id(),
-            EntityHandle::Projectile(i) => self.common.creatures.projectiles[i].entity_type(),
+            EntityHandle::Cart(i) => self.common.entities.carts[i].kind.id(),
+            EntityHandle::Projectile(i) => self.common.entities.projectiles[i].entity_type(),
             EntityHandle::Item(_) => "minecraft:item",
             EntityHandle::Orb(_) => "minecraft:experience_orb",
             EntityHandle::Falling(_) => "minecraft:falling_block",
@@ -1200,7 +1214,7 @@ impl crate::game::ServerGame<'_> {
         let MoveWho::Entity(EntityHandle::General(i)) = target else {
             return;
         };
-        let row = &self.resident_entities.general.rows[i];
+        let row = &self.entities.general.rows[i];
         if row.no_physics || row.fall_distance == 0.0 || moved.length_squared() < 1.0 {
             return;
         }
@@ -1213,7 +1227,7 @@ impl crate::game::ServerGame<'_> {
             moved,
         );
         if hit {
-            self.resident_entities.general.rows[i].fall_distance = 0.0;
+            self.entities.general.rows[i].fall_distance = 0.0;
         }
     }
 
@@ -1224,7 +1238,7 @@ impl crate::game::ServerGame<'_> {
         i: usize,
         (wanted, moved): (Vec3, Vec3),
     ) -> Option<MoveWho> {
-        let row = &self.common.resident_entities.general.rows[i];
+        let row = &self.common.entities.general.rows[i];
         if row.no_physics {
             return Some(target);
         }
@@ -1271,7 +1285,7 @@ impl crate::game::ServerGame<'_> {
                 .body_motion(&side)
                 .apply_block_speed(feet, &mut velocity);
         }
-        self.common.resident_entities.general.rows[i].velocity = velocity;
+        self.common.entities.general.rows[i].velocity = velocity;
         Some(MoveWho::Entity(handle))
     }
 
@@ -1551,22 +1565,24 @@ impl crate::game::ServerGame<'_> {
             return;
         };
         if let EntityHandle::Mob(i) = handle {
-            self.common.mobs[i].ground.horizontal_collision =
+            self.common.entities.mobs[i].ground.horizontal_collision =
                 different(wanted.x, moved.x) || different(wanted.z, moved.z);
             return;
         }
         // A general row's `Entity.move` end, for every cause: the flags, the fall check and
         // the blocked axes; a `noPhysics` row never gets here.
         if let EntityHandle::General(i) = handle {
-            self.resident_entities.general.rows[i].finish_move(wanted, moved);
+            self.entities.general.rows[i].finish_move(wanted, moved);
             return;
         }
         let authoritative = match handle {
-            EntityHandle::Boat(i) => self.boat_can_simulate_movement(self.common.boats[i].id),
+            EntityHandle::Boat(i) => {
+                self.boat_can_simulate_movement(self.common.entities.boats[i].id)
+            }
             _ => self.common.is_logical_server(),
         };
         if let EntityHandle::ArmorStand(i) = handle {
-            let stand = &mut self.common.armor_stands[i];
+            let stand = &mut self.common.entities.armor_stands[i];
             stand.ground.horizontal_collision =
                 different(wanted.x, moved.x) || different(wanted.z, moved.z);
             if authoritative || wanted.y.abs() > 0.0 {

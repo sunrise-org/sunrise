@@ -41,7 +41,8 @@ mod tests {
             fixture_resident_column(&mut game.world, (-1, 0));
             game.options.dedicated = Some(Vec::new());
             let boat_id = game.take_entity_id();
-            game.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     boat_id,
                     "oak".into(),
@@ -53,13 +54,13 @@ mod tests {
             let mut p = Projectile::new(ProjectileKind::Snowball, Vec3::new(-1.1, 0.2, 0.0), None);
             p.id = id;
             p.velocity = Vec3::new(1.0, 0.0, 0.0);
-            game.creatures.projectiles.push(p);
+            game.entities.projectiles.push(p);
             let entity = game.entity(id).unwrap();
             let projectile = game.projectile(entity).unwrap();
             assert!(game.projectile_set_owner(projectile, Some(boat)));
             assert_eq!(game.projectile_owner(projectile), Some(boat));
             let scene = Air(game.pickable_object_targets());
-            let mut p = game.creatures.projectiles[0].clone();
+            let mut p = game.entities.projectiles[0].clone();
             assert!(!p.left_owner);
             assert_eq!(p.owner, None, "a vehicle must not credit a living attacker");
             assert_eq!(p.owner_uuid, Some(game.uuid_for(boat_id)));
@@ -75,10 +76,10 @@ mod tests {
             // Reload mid-flight, before leftOwner: the UUID restores exclusion too.
             let keys = std::collections::HashSet::from([(-1, 0)]);
             let (_, tag) = game.save_projectile(0, &keys).unwrap();
-            game.creatures.projectiles.clear();
+            game.entities.projectiles.clear();
             game.load_listed("minecraft:snowball", Some([1, 2, 3, 4]), None, tag)
                 .unwrap();
-            let mut loaded = game.creatures.projectiles[0].clone();
+            let mut loaded = game.entities.projectiles[0].clone();
             assert!(!loaded.left_owner);
             assert_eq!(loaded.owner, None);
             assert_eq!(loaded.tick(&scene).1, Hit::None);
@@ -95,7 +96,8 @@ mod tests {
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.world.health_rules.difficulty = sunrise_world::food::Difficulty::Easy;
             let boat_id = game.take_entity_id();
-            game.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     boat_id,
                     "oak".into(),
@@ -108,10 +110,10 @@ mod tests {
                 Vec3::new(3.0, 0.0, 0.0),
                 None,
             ));
-            let id = game.creatures.projectiles[0].id;
+            let id = game.entities.projectiles[0].id;
             let projectile = game.projectile(game.entity(id).unwrap()).unwrap();
             assert!(game.projectile_set_owner(projectile, Some(boat)));
-            let p = game.creatures.projectiles[0].clone();
+            let p = game.entities.projectiles[0].clone();
             game.projectile_hit(
                 &p,
                 Hit::Entity {
@@ -148,10 +150,10 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(99, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(99, kind, Vec3::ZERO, 0.0));
             let mob = game.entity(99).unwrap();
             game.add_projectile(arrow(Who::Mob(99)));
-            let id = game.creatures.projectiles[0].id;
+            let id = game.entities.projectiles[0].id;
             let entity = game.entity(id).unwrap();
             assert!(game.projectile(mob).is_none());
             let handle = game.projectile(entity).unwrap();
@@ -160,13 +162,14 @@ mod tests {
             assert_eq!(handle.owner(game), Some(mob));
             assert!(handle.set_owner(game, None));
             assert_eq!(handle.owner(game), None);
-            assert_eq!(game.creatures.projectiles[0].owner, None);
+            assert_eq!(game.entities.projectiles[0].owner, None);
             assert!(handle.set_owner(game, Some(mob)));
             assert_eq!(handle.owner(game), Some(mob));
-            assert_eq!(game.creatures.projectiles[0].owner, Some(Who::Mob(99)));
+            assert_eq!(game.entities.projectiles[0].owner, Some(Who::Mob(99)));
             // A non-living owner has collision identity but no living hit credit.
             let boat_id = game.take_entity_id();
-            game.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     boat_id,
                     "oak".into(),
@@ -176,10 +179,10 @@ mod tests {
             let boat = game.entity(boat_id).unwrap();
             assert!(handle.set_owner(game, Some(boat)));
             assert_eq!(handle.owner(game), Some(boat));
-            assert_eq!(game.creatures.projectiles[0].owner, None);
-            assert_eq!(game.creatures.projectiles[0].owner_vehicle, Some(boat_id));
+            assert_eq!(game.entities.projectiles[0].owner, None);
+            assert_eq!(game.entities.projectiles[0].owner_vehicle, Some(boat_id));
             let saved = game.uuid_for(boat_id);
-            assert_eq!(game.creatures.projectiles[0].owner_uuid, Some(saved));
+            assert_eq!(game.entities.projectiles[0].owner_uuid, Some(saved));
             assert!(handle.set_owner(game, Some(mob)));
 
             assert_eq!(handle.pierce_level(game), Ok(0));
@@ -199,7 +202,7 @@ mod tests {
             assert_eq!(handle.pickup(game), Some(ArrowPickup::Disallowed));
             assert!(handle.set_pickup(game, ArrowPickup::CreativeOnly));
             assert_eq!(
-                game.creatures.projectiles[0].arrow.as_ref().unwrap().pickup,
+                game.entities.projectiles[0].arrow.as_ref().unwrap().pickup,
                 Pickup::CreativeOnly
             );
             assert_eq!(handle.base_damage(game), Some(2.0));
@@ -209,14 +212,14 @@ mod tests {
             assert!(handle.base_damage(game).unwrap().is_nan());
             assert_eq!(handle.critical(game), Some(false));
             assert!(handle.set_critical(game, true));
-            assert!(game.creatures.projectiles[0].critical());
+            assert!(game.entities.projectiles[0].critical());
 
             // REVERSE: one float from the projectile's `Entity.random`, then
             // the scaled velocity.
-            let draw = game.creatures.projectiles[0].random.0.clone().next_float();
-            let yaw = game.creatures.projectiles[0].yaw;
+            let draw = game.entities.projectiles[0].random.0.clone().next_float();
+            let yaw = game.entities.projectiles[0].yaw;
             assert!(handle.deflect(game, Deflection::Reverse, None, None, false, [0.2; 3]));
-            let p = &game.creatures.projectiles[0];
+            let p = &game.entities.projectiles[0];
             assert_eq!(
                 p.velocity,
                 Vec3::new(1.0 * (-0.2 * 0.5), 2.0 * (-0.2 * 0.5), 3.0 * (-0.2 * 0.5))
@@ -235,7 +238,7 @@ mod tests {
                 true,
                 [2.0; 3]
             ));
-            let p = &game.creatures.projectiles[0];
+            let p = &game.entities.projectiles[0];
             assert_eq!(
                 p.velocity,
                 Vec3::new(look[0] * 2.0, look[1] * 2.0, look[2] * 2.0)
@@ -251,7 +254,7 @@ mod tests {
                 false,
                 [1.0; 3]
             ));
-            assert_eq!(game.creatures.projectiles[0].velocity, Vec3::ZERO);
+            assert_eq!(game.entities.projectiles[0].velocity, Vec3::ZERO);
 
             // A hurting projectile's acceleration: 0.1 by an attack, else halved.
             let mut ball = Projectile::fireball(
@@ -262,7 +265,7 @@ mod tests {
             );
             ball.acceleration = 0.1;
             game.add_projectile(ball);
-            let ball_id = game.creatures.projectiles[1].id;
+            let ball_id = game.entities.projectiles[1].id;
             let ball = game.projectile(game.entity(ball_id).unwrap()).unwrap();
             assert_eq!(ball.pierce_level(game), Err(PierceLevelError::NotArrow));
             assert_eq!(
@@ -273,9 +276,9 @@ mod tests {
             assert_eq!(ball.base_damage(game), None);
             assert!(!ball.set_critical(game, true));
             assert!(ball.deflect(game, Deflection::Reverse, None, None, false, [1.0; 3]));
-            assert_eq!(game.creatures.projectiles[1].acceleration, 0.05);
+            assert_eq!(game.entities.projectiles[1].acceleration, 0.05);
             assert!(ball.deflect(game, Deflection::Reverse, None, None, true, [1.0; 3]));
-            assert_eq!(game.creatures.projectiles[1].acceleration, 0.1);
+            assert_eq!(game.entities.projectiles[1].acceleration, 0.1);
 
             let stale = ProjectileRef::new(EntityRef::new(
                 WorldEpoch::new(entity.epoch().get() + 1),
@@ -289,9 +292,9 @@ mod tests {
             assert_eq!(stale.owner(game), None);
             assert!(!stale.set_pickup(game, ArrowPickup::Allowed));
             assert!(!stale.deflect(game, Deflection::Reverse, None, None, false, [1.0; 3]));
-            let taken = game.creatures.projectiles.lift();
+            let taken = game.entities.projectiles.lift();
             assert!(handle.base_damage(game).is_none());
-            game.creatures.projectiles = taken;
+            game.entities.projectiles = taken;
         });
     }
 
@@ -313,19 +316,19 @@ mod tests {
             let mut trident = ThrownTrident::remote(id, Vec3::new(0.0, 64.0, 0.0), 10.0, 0.0);
             trident.velocity = Vec3::new(1.0, 2.0, 3.0);
             let mut expect = trident.random.clone();
-            game.tridents.push(trident);
+            game.entities.tridents.push(trident);
             let id = game.take_entity_id();
             let mut rocket =
                 Rocket::remote(id, Vec3::new(0.0, 70.0, 0.0), Vec3::new(0.0, 1.0, 0.0));
             let mut rocket_random = rocket.random.clone();
             rocket.velocity = Vec3::new(2.0, 4.0, 6.0);
-            game.rockets.push(rocket);
+            game.entities.rockets.push(rocket);
 
             let trident = game
-                .projectile(game.entity(game.tridents[0].id).unwrap())
+                .projectile(game.entity(game.entities.tridents[0].id).unwrap())
                 .unwrap();
             let rocket = game
-                .projectile(game.entity(game.rockets[0].id).unwrap())
+                .projectile(game.entity(game.entities.rockets[0].id).unwrap())
                 .unwrap();
             // A trident or rocket has no arrow state: those reads are None.
             assert_eq!(trident.pickup(game), None);
@@ -335,14 +338,16 @@ mod tests {
             // A trident a player threw keeps a player owner.
             assert!(!trident.set_owner(game, None));
             assert!(trident.set_owner(game, Some(player)));
-            assert_eq!(game.tridents[0].guest, None);
+            assert_eq!(game.entities.tridents[0].guest, None);
             let zombie = game
                 .res
                 .mob_types()
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(99, zombie, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(99, zombie, Vec3::ZERO, 0.0));
             let mob = game.entity(99).unwrap();
             assert!(!trident.set_owner(game, Some(mob)));
 
@@ -358,30 +363,33 @@ mod tests {
                 [0.02, 0.2, 0.02]
             ));
             assert_eq!(
-                game.tridents[0].velocity,
+                game.entities.tridents[0].velocity,
                 Vec3::new(1.0 * (-0.02 * 0.5), 2.0 * (-0.2 * 0.5), 3.0 * (-0.02 * 0.5))
             );
-            assert_eq!(game.tridents[0].yaw, 10.0 + (170.0 + draw * 20.0));
+            assert_eq!(game.entities.tridents[0].yaw, 10.0 + (170.0 + draw * 20.0));
             assert_eq!(
-                game.tridents[0].random.clone().next_float(),
+                game.entities.tridents[0].random.clone().next_float(),
                 expect.next_float()
             );
             assert_eq!(game.world.random.clone().next_float(), level);
             // No owner for a trident a player threw: refused, nothing changed.
-            let velocity = game.tridents[0].velocity;
+            let velocity = game.entities.tridents[0].velocity;
             assert!(!trident.deflect(game, Deflection::Reverse, None, None, false, [1.0; 3]));
-            assert_eq!(game.tridents[0].velocity, velocity);
+            assert_eq!(game.entities.tridents[0].velocity, velocity);
 
             // A rocket: owner, then REVERSE, then an owner of none.
             assert_eq!(rocket.owner(game), None);
             assert!(rocket.set_owner(game, Some(mob)));
             assert_eq!(rocket.owner(game), Some(mob));
-            assert_eq!(game.rockets[0].owner, Some(Who::Mob(99)));
+            assert_eq!(game.entities.rockets[0].owner, Some(Who::Mob(99)));
             let _ = rocket_random.next_float();
             assert!(rocket.deflect(game, Deflection::Reverse, None, None, false, [0.5; 3]));
-            assert_eq!(game.rockets[0].velocity, Vec3::new(-0.5, -1.0, -1.5));
             assert_eq!(
-                game.rockets[0].random.clone().next_float(),
+                game.entities.rockets[0].velocity,
+                Vec3::new(-0.5, -1.0, -1.5)
+            );
+            assert_eq!(
+                game.entities.rockets[0].random.clone().next_float(),
                 rocket_random.next_float()
             );
             assert_eq!(rocket.owner(game), None);
@@ -389,7 +397,8 @@ mod tests {
             // A rocket keeps an owner that is neither player nor mob, across a
             // save too, but a player's trident still refuses one.
             let boat_id = game.take_entity_id();
-            game.boats
+            game.entities
+                .boats
                 .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                     boat_id,
                     "oak".into(),
@@ -400,9 +409,9 @@ mod tests {
             assert!(!trident.set_owner(game, Some(boat)));
             assert!(rocket.set_owner(game, Some(boat)));
             assert_eq!(rocket.owner(game), Some(boat));
-            assert_eq!(game.rockets[0].owner, None);
+            assert_eq!(game.entities.rockets[0].owner, None);
             let saved = game.uuid_for(boat_id);
-            let tag = game.rockets[0].to_nbt([9; 4], None, None, game.res.items());
+            let tag = game.entities.rockets[0].to_nbt([9; 4], None, None, game.res.items());
             let back = Rocket::from_nbt(
                 sunrise_sim::entity_nbt::firework_rocket_from_nbt(&tag, None).unwrap(),
             );
@@ -423,7 +432,7 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(99, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(99, kind, Vec3::ZERO, 0.0));
             let mob = game.entity(99).unwrap();
 
             // A wind charge refuses for its first five ticks, with no change and no draw.
@@ -432,32 +441,32 @@ mod tests {
             charge.velocity = Vec3::new(0.0, 1.0, 0.0);
             game.add_projectile(charge);
             let charge = game
-                .projectile(game.entity(game.creatures.projectiles[0].id).unwrap())
+                .projectile(game.entity(game.entities.projectiles[0].id).unwrap())
                 .unwrap();
-            let random = game.creatures.projectiles[0].random.0.clone().next_float();
+            let random = game.entities.projectiles[0].random.0.clone().next_float();
             for left in 1..=5 {
-                game.creatures
+                game.entities
                     .projectiles
                     .update(0, |p| p.no_deflect_ticks = left);
                 assert!(!charge.deflect(game, Deflection::Reverse, None, None, true, [1.0; 3]));
-                let p = &game.creatures.projectiles[0];
+                let p = &game.entities.projectiles[0];
                 assert_eq!(p.velocity, Vec3::new(0.0, 1.0, 0.0));
                 assert_eq!(p.owner, Some(Who::Mob(99)));
                 assert_eq!(p.random.0.clone().next_float(), random);
             }
-            game.creatures
+            game.entities
                 .projectiles
                 .update(0, |p| p.no_deflect_ticks = 0);
 
             // REVERSE of a non-arrow takes one float from its own random, not the level's.
             let level = game.world.random.clone().next_float();
-            let mut expect = game.creatures.projectiles[0].random.0.clone();
+            let mut expect = game.entities.projectiles[0].random.0.clone();
             let _ = expect.next_float();
             assert!(charge.deflect(game, Deflection::Reverse, None, None, true, [1.0; 3]));
-            assert_eq!(game.creatures.projectiles[0].owner, None);
+            assert_eq!(game.entities.projectiles[0].owner, None);
             assert_eq!(game.world.random.clone().next_float(), level);
             assert_eq!(
-                game.creatures.projectiles[0].random.0.clone().next_float(),
+                game.entities.projectiles[0].random.0.clone().next_float(),
                 expect.next_float()
             );
 
@@ -467,7 +476,7 @@ mod tests {
             shot.velocity = Vec3::new(0.0, 0.0, 1.0);
             game.add_projectile(shot);
             let arrow_ref = game
-                .projectile(game.entity(game.creatures.projectiles[1].id).unwrap())
+                .projectile(game.entity(game.entities.projectiles[1].id).unwrap())
                 .unwrap();
             assert_eq!(arrow_ref.pickup(game), Some(ArrowPickup::Disallowed));
             assert!(arrow_ref.deflect(
@@ -483,9 +492,9 @@ mod tests {
             assert_eq!(arrow_ref.pickup(game), Some(ArrowPickup::Allowed));
 
             // MOMENTUM_DEFLECT normalizes the known speed (the last move), not the velocity.
-            game.mobs[0].previous = Vec3::new(0.0, 0.0, -3.0);
-            game.mobs[0].position = Vec3::ZERO;
-            game.mobs[0].velocity = Vec3::new(5.0, 0.0, 0.0);
+            game.entities.mobs[0].previous = Vec3::new(0.0, 0.0, -3.0);
+            game.entities.mobs[0].position = Vec3::ZERO;
+            game.entities.mobs[0].velocity = Vec3::new(5.0, 0.0, 0.0);
             assert!(arrow_ref.deflect(
                 game,
                 Deflection::MomentumDeflect,
@@ -495,7 +504,7 @@ mod tests {
                 [2.0; 3]
             ));
             assert_eq!(
-                game.creatures.projectiles[1].velocity,
+                game.entities.projectiles[1].velocity,
                 Vec3::new(0.0, 0.0, 2.0)
             );
         });
@@ -518,7 +527,7 @@ mod tests {
             boat.previous = Vec3::new(0.0, 0.0, -2.0);
             boat.position = Vec3::ZERO;
             boat.velocity = Vec3::new(5.0, 0.0, 0.0);
-            game.boats.push(boat);
+            game.entities.boats.push(boat);
             let boat = game.entity(id).unwrap();
             assert_eq!(
                 game.native_entity_known_speed(boat),
@@ -528,7 +537,7 @@ mod tests {
             shot.velocity = Vec3::new(1.0, 0.0, 0.0);
             game.add_projectile(shot);
             let arrow_ref = game
-                .projectile(game.entity(game.creatures.projectiles[0].id).unwrap())
+                .projectile(game.entity(game.entities.projectiles[0].id).unwrap())
                 .unwrap();
             assert!(arrow_ref.deflect(
                 game,
@@ -539,7 +548,7 @@ mod tests {
                 [3.0; 3]
             ));
             assert_eq!(
-                game.creatures.projectiles[0].velocity,
+                game.entities.projectiles[0].velocity,
                 Vec3::new(0.0, 0.0, 3.0)
             );
 
@@ -549,22 +558,22 @@ mod tests {
                 Projectile::new(ProjectileKind::WindCharge, Vec3::ZERO, Some(Who::Mob(99)));
             charge.velocity = Vec3::new(0.0, 1.0, 0.0);
             game.add_projectile(charge);
-            let i = game.creatures.projectiles.len() - 1;
+            let i = game.entities.projectiles.len() - 1;
             game.server.attack_ticks = 50;
             assert!(!game.deflect(i));
             assert_eq!(game.server.attack_ticks, 0);
             assert_eq!(
-                game.creatures.projectiles[i].velocity,
+                game.entities.projectiles[i].velocity,
                 Vec3::new(0.0, 1.0, 0.0)
             );
-            assert_eq!(game.creatures.projectiles[i].owner, Some(Who::Mob(99)));
-            game.creatures
+            assert_eq!(game.entities.projectiles[i].owner, Some(Who::Mob(99)));
+            game.entities
                 .projectiles
                 .update(i, |p| p.no_deflect_ticks = 0);
             game.server.attack_ticks = 50;
             assert!(game.deflect(i));
             assert_eq!(game.server.attack_ticks, 0);
-            assert_eq!(game.creatures.projectiles[i].owner, Some(Who::Player));
+            assert_eq!(game.entities.projectiles[i].owner, Some(Who::Player));
         });
     }
 }

@@ -130,10 +130,10 @@ impl crate::game::ClientGame<'_> {
     /// The other players' models and names: the players a server sends.
     pub(in crate::game::client_side) fn other_players(&self) -> Vec<(&Mob, String)> {
         let mut out = Vec::new();
-        let indices = first_mob_indices(&self.common.mobs);
+        let indices = first_mob_indices(&self.common.entities.mobs);
         for (id, name) in self.remote_player_names() {
             if let Some(&index) = indices.get(&id) {
-                out.push((&self.common.mobs[index], name));
+                out.push((&self.common.entities.mobs[index], name));
             }
         }
         out
@@ -185,14 +185,16 @@ impl crate::game::ClientGame<'_> {
         hooks: bool,
         frustum: Option<&sunrise_client::gfx::JoinedFrusta>,
     ) -> Vec<NameTag> {
-        let target = self.mob_hit().map(|(i, _, _)| self.common.mobs[i].id);
+        let target = self
+            .mob_hit()
+            .map(|(i, _, _)| self.common.entities.mobs[i].id);
         // Asked once a frame: a mod loaded without this hook costs the tags nothing.
         let name_format = hooks && mod_api::__private::listened(mod_api::HookId::PlayerNameFormat);
         let viewer = self.client_player_team();
         let mut tags = Vec::new();
         let players = self.other_players();
         let player_ids = named_by_player_list(&players);
-        let named = self.common.mobs.iter().filter_map(|m| {
+        let named = self.common.entities.mobs.iter().filter_map(|m| {
             // Already named by the player list: a second tag would sit on the
             // first (`named_by_player_list`). A mob a mod's pre hook canceled has none.
             if player_ids.contains(&m.id) || self.render_canceled(m.id) {
@@ -224,7 +226,7 @@ impl crate::game::ClientGame<'_> {
         // for each tag made this quadratic in the number of loaded entities.
         let local_entity_id = self.client.remote.as_ref().map(|r| r.entity_id as u32);
         let ridden = collect_vehicle_ids(
-            &self.common.mobs,
+            &self.common.entities.mobs,
             self.remote_vehicle_ids(),
             self.common.riding,
             local_entity_id,
@@ -398,7 +400,7 @@ impl crate::game::ClientGame<'_> {
         drop(player_ids);
         // Armor stands name themselves: an invisible one with a visible name
         // is a hologram (its model is skipped, its name tag is not).
-        for a in &self.common.armor_stands {
+        for a in &self.common.entities.armor_stands {
             if self.hides_as_camera(a.id) {
                 continue;
             }
@@ -508,12 +510,12 @@ impl crate::game::ClientGame<'_> {
             })
             .map(|(index, _)| index);
         let frames = if hooks {
-            0..self.common.item_frames.len()
+            0..self.common.entities.item_frames.len()
         } else {
             targeted_frame.map_or(0..0, |index| index..index + 1)
         };
         for index in frames {
-            let frame = &self.common.item_frames[index];
+            let frame = &self.common.entities.item_frames[index];
             let name = frame.item.as_ref().and_then(|item| item.custom_name());
             if !hooks && name.is_none() {
                 continue;

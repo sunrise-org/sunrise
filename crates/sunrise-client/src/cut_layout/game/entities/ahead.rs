@@ -46,7 +46,7 @@ mod tests {
                     0 => {
                         game.world.set(x, 65, z, stone).unwrap();
                         game.spawn_item(stack(1), [fx, 65.3, fz], [0.0; 3], 10);
-                        escaping.push(game.dropped.last().unwrap().id);
+                        escaping.push(game.entities.dropped.last().unwrap().id);
                     }
                     1 => {
                         game.world.set(x, 65, z, water).unwrap();
@@ -70,14 +70,14 @@ mod tests {
             0.0,
         );
         let boat_top = boat.bounds().max_position().y;
-        game.boats.push(boat);
+        game.entities.boats.push(boat);
         game.spawn_item(
             ItemStack::new("minecraft:iron_ingot", 1),
             [8.5, 80.2, 8.5],
             [0.0; 3],
             10,
         );
-        let caught = game.dropped.last().unwrap().id;
+        let caught = game.entities.dropped.last().unwrap().id;
         escaping.push(caught);
         game.spawn_item(
             ItemStack::new("minecraft:gold_ingot", 1),
@@ -85,7 +85,7 @@ mod tests {
             [0.0, -1.0, 0.0],
             10,
         );
-        let landing = game.dropped.last().unwrap().id;
+        let landing = game.entities.dropped.last().unwrap().id;
         // The border cuts the box even though the centre is still inside it.
         game.spawn_item(
             ItemStack::new("minecraft:diamond", 1),
@@ -93,12 +93,12 @@ mod tests {
             [0.0; 3],
             10,
         );
-        let border = game.dropped.last().unwrap().id;
+        let border = game.entities.dropped.last().unwrap().id;
         escaping.push(border);
         let boxes =
             game.entity_collisions(sunrise_gameplay_common::game::collision_source::Mover::Passive);
         for id in [caught, border] {
-            let item = game.dropped.iter().find(|i| i.id == id).unwrap();
+            let item = game.entities.dropped.iter().find(|i| i.id == id).unwrap();
             assert!(item.inside_block(
                 &game.world,
                 game.collision,
@@ -107,11 +107,11 @@ mod tests {
             ));
             assert!(!item.inside_block(&game.world, game.collision, &[], None));
         }
-        for item in game.dropped.iter_mut() {
+        for item in game.entities.dropped.iter_mut() {
             item.ticks = 39;
         }
         game.server.ticked_entities_through = u32::MAX;
-        let (items, random) = (game.dropped.clone(), game.world.random.clone());
+        let (items, random) = (game.entities.dropped.clone(), game.world.random.clone());
         // Each merge-written field independently invalidates a prepared move.
         // Rejecting it must not overwrite the merge or advance the item's RNG.
         AHEAD.with(|a| a.set(Some(true)));
@@ -144,7 +144,7 @@ mod tests {
         // First use the real environment switch, then serial/ahead/serial
         // overrides. This also checks switch-off behavior above the threshold.
         for ahead in [None, Some(false), Some(true), Some(false)] {
-            game.dropped = items.clone();
+            game.entities.dropped = items.clone();
             game.world.random = random.clone();
             AHEAD.with(|a| a.set(ahead));
             TAKEN.with(|t| t.set((0, 0)));
@@ -152,7 +152,7 @@ mod tests {
             // Independently advance just the escaping items' starting randoms.
             // The helper copy must consume exactly one float and return that
             // state at the turn; ordinary moves must consume none of it.
-            for item in game.dropped.iter() {
+            for item in game.entities.dropped.iter() {
                 let before = items.iter().find(|i| i.id == item.id).unwrap();
                 let mut expected = before.random.clone();
                 if escaping.contains(&item.id) {
@@ -165,11 +165,21 @@ mod tests {
                     item.id
                 );
             }
-            let landed = game.dropped.iter().find(|i| i.id == landing).unwrap();
+            let landed = game
+                .entities
+                .dropped
+                .iter()
+                .find(|i| i.id == landing)
+                .unwrap();
             assert_eq!(landed.position.y, boat_top);
             assert!(landed.ground.on_ground);
             assert_eq!(format!("{:?}", game.world.random), format!("{random:?}"));
-            let left: Vec<String> = game.dropped.iter().map(|i| format!("{i:?}")).collect();
+            let left: Vec<String> = game
+                .entities
+                .dropped
+                .iter()
+                .map(|i| format!("{i:?}"))
+                .collect();
             runs.push((
                 left,
                 format!("{:?}", game.world.random),

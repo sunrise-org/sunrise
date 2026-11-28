@@ -256,7 +256,7 @@ impl crate::game::ClientGame<'_> {
             items: self.items(),
             registry: self.common.pack.assets.registry,
             brewing: None,
-            mobs: &self.common.mobs,
+            mobs: &self.common.entities.mobs,
         }
     }
 

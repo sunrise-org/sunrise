@@ -759,11 +759,12 @@ impl crate::game::ServerGame<'_> {
             Slot::Equipment(i) => self.common.equipment.get(*i).cloned(),
             Slot::Ender(i) => self.server.ender_items.get(*i).cloned().flatten(),
             Slot::Mob(id, key) => {
-                let m = self.common.mobs.iter().find(|m| m.id == *id)?;
+                let m = self.common.entities.mobs.iter().find(|m| m.id == *id)?;
                 m.equipment_stacks()[mob_slot(key)?].clone()
             }
             Slot::Stand(id, i) => self
                 .common
+                .entities
                 .armor_stands
                 .iter()
                 .find(|a| a.id == *id)?
@@ -772,6 +773,7 @@ impl crate::game::ServerGame<'_> {
                 .cloned(),
             Slot::Item(id) => self
                 .common
+                .entities
                 .dropped
                 .iter()
                 .find(|e| e.id == *id)
@@ -779,6 +781,7 @@ impl crate::game::ServerGame<'_> {
                 .filter(|s| &*s.item != "minecraft:air" && s.count > 0),
             Slot::Dragon(id, i) => self
                 .common
+                .entities
                 .dragon
                 .as_ref()
                 .filter(|d| d.id == *id)?
@@ -787,6 +790,7 @@ impl crate::game::ServerGame<'_> {
                 .cloned(),
             Slot::Frame(id) => self
                 .common
+                .entities
                 .item_frames
                 .iter()
                 .find(|f| f.id == *id)?
@@ -893,13 +897,13 @@ impl crate::game::ServerGame<'_> {
                 None => false,
             },
             Slot::Mob(id, key) => {
-                let Some(index) = self.common.mobs.iter().position(|m| m.id == *id) else {
+                let Some(index) = self.common.entities.mobs.iter().position(|m| m.id == *id) else {
                     return false;
                 };
                 let Some(slot) = mob_slot(key) else {
                     return false;
                 };
-                let m = &self.common.mobs[index];
+                let m = &self.common.entities.mobs[index];
                 let old = m.equipment_stacks()[slot].clone();
                 let first_tick = m.first_tick;
                 let at = [m.position.x, m.position.y, m.position.z];
@@ -917,7 +921,7 @@ impl crate::game::ServerGame<'_> {
                                 .get(&s.item)
                                 .is_some_and(|i| i.equip_slot.is_some()))
                 });
-                let changed = self.common.mobs[index].set_equipment_stack(slot, stack);
+                let changed = self.common.entities.mobs[index].set_equipment_stack(slot, stack);
                 if changed && !first_tick && !same && self.common.is_logical_server() {
                     self.mob_equip_event(*id, at, equippable);
                 }
@@ -935,7 +939,13 @@ impl crate::game::ServerGame<'_> {
                                 .get(&s.item)
                                 .is_some_and(|i| i.equip_slot.is_some()))
                 });
-                let Some(a) = self.common.armor_stands.iter_mut().find(|a| a.id == *id) else {
+                let Some(a) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter_mut()
+                    .find(|a| a.id == *id)
+                else {
                     return false;
                 };
                 let same = match (a.equipment.get(*i), stack.as_ref()) {
@@ -967,11 +977,18 @@ impl crate::game::ServerGame<'_> {
             }
             Slot::Dragon(id, i) => self
                 .common
+                .entities
                 .dragon
                 .as_mut()
                 .filter(|d| d.id == *id)
                 .is_some_and(|d| d.equipment.set(*i, stack)),
-            Slot::Item(id) => match self.common.dropped.iter_mut().find(|e| e.id == *id) {
+            Slot::Item(id) => match self
+                .common
+                .entities
+                .dropped
+                .iter_mut()
+                .find(|e| e.id == *id)
+            {
                 Some(entity) => {
                     // `ItemEntity.setItem`: the stack is the entity's.
                     match stack.filter(|s| &*s.item != "minecraft:air" && s.count > 0) {
@@ -982,7 +999,13 @@ impl crate::game::ServerGame<'_> {
                 }
                 None => false,
             },
-            Slot::Frame(id) => match self.common.item_frames.iter().position(|f| f.id == *id) {
+            Slot::Frame(id) => match self
+                .common
+                .entities
+                .item_frames
+                .iter()
+                .position(|f| f.id == *id)
+            {
                 Some(i) => {
                     self.set_frame_item(i, stack);
                     true

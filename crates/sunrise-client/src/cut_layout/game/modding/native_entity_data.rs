@@ -29,7 +29,8 @@ mod tests {
         kind: &str,
     ) -> EntityRef {
         let kind = game.res.mob_types().get(kind).unwrap().clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(id, kind, Vec3::new(0.5, 70.0, 0.5), 0.0));
         game.entity(id).unwrap()
     }
@@ -116,7 +117,9 @@ mod tests {
             assert!(mob.set_custom_name(game, None).unwrap());
             assert_eq!(mob.custom_name(game).unwrap(), None);
 
-            game.armor_stands.push(ArmorStand::new(16, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(16, Vec3::ZERO, 0.0));
             let stand = game.entity(16).unwrap();
             assert_eq!(stand.custom_name(game).unwrap(), None);
             assert!(stand.set_custom_name(game, Some(name.clone())).unwrap());
@@ -124,13 +127,16 @@ mod tests {
 
             let stone = sunrise_items::items::ItemStack::new("minecraft:stone", 1);
             game.spawn_item(stone, [0.5, 70.0, 0.5], [0.0; 3], 0);
-            let item = game.entity(game.dropped.last().unwrap().id).unwrap();
+            let item = game
+                .entity(game.entities.dropped.last().unwrap().id)
+                .unwrap();
             assert_eq!(item.custom_name(game).unwrap(), None);
             assert!(item.set_custom_name(game, Some(name.clone())).unwrap());
             assert_eq!(item.custom_name(game).unwrap(), Some(name));
 
             // A mob a spawn named with a plain name: no styled text, the name all the same.
-            game.mobs
+            game.entities
+                .mobs
                 .iter_mut()
                 .find(|m| m.id == 15)
                 .unwrap()
@@ -141,7 +147,7 @@ mod tests {
             );
 
             // A cushion keeps its name on itself, not in the saved data.
-            game.cushions.push(sunrise_sim::entities::Cushion {
+            game.entities.cushions.push(sunrise_sim::entities::Cushion {
                 attachment_lifetime: Default::default(),
                 join: Default::default(),
                 id: 17,
@@ -160,7 +166,7 @@ mod tests {
 
             // An experience orb, a kind whose name only its saved `CustomName` holds.
             game.spawn_orbs([0.5, 70.0, 0.5], 3);
-            let orb_id = game.orbs.last().unwrap().id;
+            let orb_id = game.entities.orbs.last().unwrap().id;
             let orb = game.entity(orb_id).unwrap();
             assert_eq!(orb.custom_name(game).unwrap(), None);
             game.put_saved(orb_id, "CustomName", Some(Tag::String("Shiny".into())));
@@ -208,13 +214,15 @@ mod tests {
             // The saved data loads back with the styled name and the flag.
             let t = game.native_entity_target(mob).unwrap();
             game.apply_entity_nbt(t, Tag::Compound(saved)).unwrap();
-            let m = game.mobs.iter().find(|m| m.id == 12).unwrap();
+            let m = game.entities.mobs.iter().find(|m| m.id == 12).unwrap();
             assert_eq!(m.custom_name_text.as_ref(), Some(&name));
             assert_eq!(mob.name(game).as_deref(), Some("Grumbles"));
             assert_eq!(mob.custom_name_visible(game), Some(true));
 
             // An armor stand keeps its name in its own field.
-            game.armor_stands.push(ArmorStand::new(13, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(13, Vec3::ZERO, 0.0));
             let stand = game.entity(13).unwrap();
             assert!(
                 stand
@@ -235,7 +243,7 @@ mod tests {
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = 14;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let dragon = game.entity(14).unwrap();
             assert!(
                 !dragon
@@ -272,13 +280,15 @@ mod tests {
                 let mob = push_mob(game, id, kind);
                 assert_eq!(mob.classification(game), Some(category), "{kind}");
             }
-            game.armor_stands.push(ArmorStand::new(27, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(27, Vec3::ZERO, 0.0));
             let stand = game.entity(27).unwrap();
             assert_eq!(stand.classification(game), Some(MobCategory::Misc));
             let mut dragon =
                 sunrise_gameplay_common::game::dragon_common::Dragon::new(Vec3::ZERO, 0.0, 0);
             dragon.id = 28;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let dragon = game.entity(28).unwrap();
             assert_eq!(dragon.classification(game), Some(MobCategory::Monster));
         });

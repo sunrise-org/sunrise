@@ -63,6 +63,7 @@ impl crate::game::ServerGame<'_> {
             return None;
         }
         self.common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == parent)

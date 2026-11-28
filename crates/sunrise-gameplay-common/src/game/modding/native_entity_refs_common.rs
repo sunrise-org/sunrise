@@ -548,7 +548,14 @@ pub trait NativeEntityRefsCommonGameExt4<'__sg>: crate::game::SideGame<'__sg> {
         let keys = self.res.living_type_keys();
         match target {
             Target::Player | Target::Guest(_) => keys.player,
-            Target::Mob(id) => self.mobs.iter().find(|mob| mob.id == id)?.kind.type_key,
+            Target::Mob(id) => {
+                self.entities
+                    .mobs
+                    .iter()
+                    .find(|mob| mob.id == id)?
+                    .kind
+                    .type_key
+            }
             Target::Stand(_) => keys.armor_stand,
             Target::Dragon(_) | Target::DragonPart(_) => keys.ender_dragon,
             target => {
@@ -563,13 +570,15 @@ pub trait NativeEntityRefsCommonGameExt4<'__sg>: crate::game::SideGame<'__sg> {
     {
         Some(match target {
             Target::Player | Target::Guest(_) => super::native_living_body::PLAYER,
-            Target::Mob(id) => super::native_living_body::body_kind_name(
-                sunrise_sim::health::LivingBody::Mob(self.mobs.iter().find(|mob| mob.id == id)?),
-            ),
+            Target::Mob(id) => {
+                super::native_living_body::body_kind_name(sunrise_sim::health::LivingBody::Mob(
+                    self.entities.mobs.iter().find(|mob| mob.id == id)?,
+                ))
+            }
             Target::Item(_) => "minecraft:item",
             Target::Orb(_) => "minecraft:experience_orb",
             Target::Projectile(id) => self
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|p| p.id == id)?
@@ -578,6 +587,7 @@ pub trait NativeEntityRefsCommonGameExt4<'__sg>: crate::game::SideGame<'__sg> {
             Target::General(id) => self.general_kind(id)?,
             Target::Frame(id) => {
                 if self
+                    .entities
                     .item_frames
                     .iter()
                     .any(|frame| frame.id == id && frame.glow)
@@ -588,8 +598,19 @@ pub trait NativeEntityRefsCommonGameExt4<'__sg>: crate::game::SideGame<'__sg> {
                 }
             }
             Target::Painting(_) => "minecraft:painting",
-            Target::Boat(id) => self.boats.iter().find(|b| b.id == id)?.entity_type_name(),
-            Target::Cart(id) => self.carts.iter().find(|cart| cart.id == id)?.kind.id(),
+            Target::Boat(id) => self
+                .entities
+                .boats
+                .iter()
+                .find(|b| b.id == id)?
+                .entity_type_name(),
+            Target::Cart(id) => self
+                .entities
+                .carts
+                .iter()
+                .find(|cart| cart.id == id)?
+                .kind
+                .id(),
             Target::Other(id) => crate::game::side_ops::player::SideOps::side_other_entity_kind(
                 self.side_state(),
                 id,
@@ -776,7 +797,7 @@ pub trait NativeEntityRefsCommonGameExt5<'__sg>: crate::game::SideGame<'__sg> {
     fn entity_target_accessible(&self, target: Target) -> bool {
         match target {
             Target::Player | Target::Guest(_) => true,
-            Target::DragonPart(_) => self.dragon.as_ref().is_some_and(|d| {
+            Target::DragonPart(_) => self.entities.dragon.as_ref().is_some_and(|d| {
                 self.entity_position_accessible([d.position.x, d.position.y, d.position.z])
             }),
             _ => self
@@ -939,7 +960,7 @@ pub trait NativeEntityRefsCommonGameExt6<'__sg>: crate::game::SideGame<'__sg> {
         let Target::Mob(id) = self.native_entity_target(mob.entity())? else {
             return None;
         };
-        let mob = self.mobs.iter().find(|m| m.id == id)?;
+        let mob = self.entities.mobs.iter().find(|m| m.id == id)?;
         Some(self.mob_portal_eligible(mob))
     }
 }
@@ -973,6 +994,7 @@ pub trait NativeEntityRefsCommonGameExt7<'__sg>: crate::game::SideGame<'__sg> {
             }
             if let Target::Stand(id) = t
                 && let Some(name) = self
+                    .entities
                     .armor_stands
                     .iter()
                     .find(|a| a.id == id)
@@ -994,42 +1016,47 @@ pub trait NativeEntityRefsCommonGameExt7<'__sg>: crate::game::SideGame<'__sg> {
         match self.native_entity_read_target(entity)? {
             Target::Player | Target::Guest(_) => None,
             Target::Mob(id) => {
-                let mob = self.mobs.iter().find(|m| m.id == id)?;
+                let mob = self.entities.mobs.iter().find(|m| m.id == id)?;
                 mob.custom_name_text.clone().or_else(|| {
                     mob.custom_name
                         .as_deref()
                         .map(sunrise_game_data::text::Text::literal)
                 })
             }
-            Target::General(id) => self.resident_entities.general.row(id)?.custom_name.clone(),
+            Target::General(id) => self.entities.general.row(id)?.custom_name.clone(),
             Target::Stand(id) => self
+                .entities
                 .armor_stands
                 .iter()
                 .find(|a| a.id == id)?
                 .custom_name
                 .clone(),
             Target::Frame(id) => decode(
-                self.item_frames
+                self.entities
+                    .item_frames
                     .iter()
                     .find(|f| f.id == id)?
                     .custom_name
                     .as_ref()?,
             ),
             Target::Bolt(id) => decode(
-                self.bolts
+                self.entities
+                    .bolts
                     .iter()
                     .find(|b| b.id == id)?
                     .custom_name
                     .as_ref()?,
             ),
             Target::Cushion(id) => decode(
-                self.cushions
+                self.entities
+                    .cushions
                     .iter()
                     .find(|c| c.id == id)?
                     .custom_name
                     .as_ref()?,
             ),
             Target::Falling(id) => self
+                .entities
                 .falling
                 .iter()
                 .find(|f| f.id == id)

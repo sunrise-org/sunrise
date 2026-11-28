@@ -245,7 +245,8 @@ mod tests {
             game.ui.difficulty = 2;
             let difficulty = game.local_difficulty([8.0, 65.0, 8.0]);
             let piglins = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-                game.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .filter(|m| m.species() == Species::ZombifiedPiglin)
                     .count()

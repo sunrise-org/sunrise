@@ -22,7 +22,7 @@ impl ClientGame<'_> {
                 glam::DVec3::splat(2.0 * HALF),
                 self.view_scale(),
             );
-        let live = self.common.tridents[run]
+        let live = self.common.entities.tridents[run]
             .iter()
             .filter(|t| {
                 !self.hides_as_camera(t.id)

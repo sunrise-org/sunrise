@@ -209,9 +209,14 @@ pub(crate) fn run_a_named_mob_the_server_camera_is_attached_to_shows_no_name_tag
                 data: 0,
             }))
             .unwrap();
-            let at = game.mobs.iter().position(|m| m.id == id as u32).unwrap();
-            game.mobs[at].custom_name = Some(name.into());
-            game.mobs[at].name_visible = true;
+            let at = game
+                .entities
+                .mobs
+                .iter()
+                .position(|m| m.id == id as u32)
+                .unwrap();
+            game.entities.mobs[at].custom_name = Some(name.into());
+            game.entities.mobs[at].name_visible = true;
         }
         let eye = glam::DVec3::new(11.0, 65.0, 10.0);
         let mut expected = Vec::new();

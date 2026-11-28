@@ -25,7 +25,7 @@ fn a_falling_part_hears_each_airborne_tick_and_not_the_landing() {
         game.world.set(0, 60, 0, stone).unwrap();
         let sand = registry.default_state("minecraft:sand").unwrap();
         let at = Vec3::new(0.5, 70.0, 0.5);
-        game.falling.push(FallingBlock {
+        game.entities.falling.push(FallingBlock {
             size_answer: None,
             ground: Default::default(),
             fire_ticks: 0,
@@ -50,7 +50,7 @@ fn a_falling_part_hears_each_airborne_tick_and_not_the_landing() {
             saved: None,
         });
         let mut ticks = 0;
-        while !game.falling.is_empty() {
+        while !game.entities.falling.is_empty() {
             assert!(ticks < 200, "the sand never landed");
             game.tick_one_falling(0, &[]).unwrap();
             game.deliver_falling_ticks();
@@ -95,7 +95,7 @@ fn sand_at(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32) {
         .default_state("minecraft:sand")
         .unwrap();
     let at = Vec3::new(0.5, 70.0, 0.5);
-    game.falling.push(FallingBlock {
+    game.entities.falling.push(FallingBlock {
         size_answer: None,
         ground: Default::default(),
         fire_ticks: 0,
@@ -151,7 +151,7 @@ fn a_falling_listener_reads_its_block_and_its_velocity_write_lands() {
         };
         assert_eq!((*id, *x, *z), (71, 0.5, 0.5));
         assert!(*y < 70.0, "the sand has fallen: {y}");
-        assert_eq!(game.falling[0].velocity, Vec3::new(0.0, 0.5, 0.0));
+        assert_eq!(game.entities.falling[0].velocity, Vec3::new(0.0, 0.5, 0.0));
     });
 }
 
@@ -162,7 +162,7 @@ fn a_falling_block_gone_before_delivery_is_skipped() {
     with_recorder(|game, heard| {
         sand_at(game, 71);
         game.tick_one_falling(0, &[]).unwrap();
-        game.falling.retain(|block| block.id != 71);
+        game.entities.falling.retain(|block| block.id != 71);
         game.deliver_falling_ticks();
         assert!(heard.lock().unwrap().is_empty());
         game.deliver_falling_ticks();

@@ -1629,7 +1629,7 @@ fn humanoid_arm_pose_mod_reads_mob_state_and_changes_the_model() {
                 .set_slot_stack(MAINHAND, Some(ItemStack::new("minecraft:stick", 2)));
             m.extra
                 .set_slot_stack(OFFHAND, Some(ItemStack::new("minecraft:brush", 3)));
-            game.mobs.push(m);
+            game.entities.mobs.push(m);
         }
         let mut player = Mob::new(
             8,
@@ -1640,8 +1640,8 @@ fn humanoid_arm_pose_mod_reads_mob_state_and_changes_the_model() {
         player
             .extra
             .set_slot_stack(MAINHAND, Some(ItemStack::new("minecraft:stick", 1)));
-        game.mobs.push(player);
-        let m = &mut game.mobs[0];
+        game.entities.mobs.push(player);
+        let m = &mut game.entities.mobs[0];
         let mut brush = ItemStack::new("minecraft:brush", 3);
         brush.damage = 9;
         m.extra.set_slot_stack(OFFHAND, Some(brush));
@@ -1650,13 +1650,14 @@ fn humanoid_arm_pose_mod_reads_mob_state_and_changes_the_model() {
         m.extra.using_off_hand = true;
         let baseline: Vec<_> = {
             let models = game.client_res().client_mob_models();
-            game.mobs.iter().map(|m| arms(m, models)).collect()
+            game.entities.mobs.iter().map(|m| arms(m, models)).collect()
         };
         game.extract_remote_arm_poses();
         {
             let models = game.client_res().client_mob_models();
             assert_eq!(
-                game.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .map(|m| arms(m, models))
                     .collect::<Vec<_>>(),
@@ -1669,19 +1670,19 @@ fn humanoid_arm_pose_mod_reads_mob_state_and_changes_the_model() {
             || {
                 game.extract_remote_arm_poses();
                 assert_eq!(
-                    game.mobs[0].extra.held_arm_pose,
+                    game.entities.mobs[0].extra.held_arm_pose,
                     [Some(sunrise_core::arm_pose::ArmPose::ThrowTrident), None]
                 );
                 {
                     let models = game.client_res().client_mob_models();
-                    let posed = arms(&game.mobs[0], models);
+                    let posed = arms(&game.entities.mobs[0], models);
                     assert!((posed[1][3] + std::f32::consts::PI).abs() < 1e-6);
                     assert_ne!(posed, baseline[0]);
-                    for (m, expected) in game.mobs[1..].iter().zip(&baseline[1..]) {
+                    for (m, expected) in game.entities.mobs[1..].iter().zip(&baseline[1..]) {
                         assert_eq!(arms(m, models), *expected);
                     }
                 }
-                let empty = Mob::new(60, game.mobs[0].kind.clone(), Vec3::ZERO, 0.0);
+                let empty = Mob::new(60, game.entities.mobs[0].kind.clone(), Vec3::ZERO, 0.0);
                 assert_eq!(game.held_arm_poses(60, &empty), [None; 2]);
                 // The local player's extraction also exposes its actual off-hand stack.
                 game.extract_player_arm_pose();
@@ -1696,7 +1697,8 @@ fn humanoid_arm_pose_mod_reads_mob_state_and_changes_the_model() {
         game.extract_remote_arm_poses();
         let models = game.client_res().client_mob_models();
         assert_eq!(
-            game.mobs
+            game.entities
+                .mobs
                 .iter()
                 .map(|m| arms(m, models))
                 .collect::<Vec<_>>(),

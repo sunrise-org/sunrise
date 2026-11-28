@@ -16,28 +16,28 @@ fn remote_mob_takes_only_adult_piglin_currency_with_free_offhand() {
                 sunrise_core::geometry::Vec3::new(4.5, 100.0, 4.5),
             ));
             let kind = g.res.mob_types().get("minecraft:piglin").unwrap().clone();
-            g.mobs.push(Mob::new(
+            g.entities.mobs.push(Mob::new(
                 7,
                 kind,
                 sunrise_core::geometry::Vec3::new(0.0, 100.0, 0.0),
                 0.0,
             ));
-            g.mobs[0]
+            g.entities.mobs[0]
                 .extra
                 .set_slot_stack(sunrise_items::equipment::OFFHAND, None);
-            g.mobs[0].extra.age = 0;
+            g.entities.mobs[0].extra.age = 0;
             g.common.inventory[g.common.selected] = Some(ItemStack::new("minecraft:gold_ingot", 1));
             assert!(g.remote_mob_takes(0, Hand::Main));
-            g.mobs[0].extra.age = -24000;
+            g.entities.mobs[0].extra.age = -24000;
             assert!(!g.remote_mob_takes(0, Hand::Main));
-            g.mobs[0].extra.age = 0;
+            g.entities.mobs[0].extra.age = 0;
             g.common.inventory[g.common.selected] =
                 Some(ItemStack::new("minecraft:golden_apple", 1));
             assert!(!g.remote_mob_takes(0, Hand::Main));
             g.remote_use_item(Hand::Main);
             assert!(g.using.is_some());
             g.common.inventory[g.common.selected] = Some(ItemStack::new("minecraft:gold_ingot", 1));
-            g.mobs[0].extra.set_slot_stack(
+            g.entities.mobs[0].extra.set_slot_stack(
                 sunrise_items::equipment::OFFHAND,
                 Some(ItemStack::new("minecraft:gold_ingot", 1)),
             );

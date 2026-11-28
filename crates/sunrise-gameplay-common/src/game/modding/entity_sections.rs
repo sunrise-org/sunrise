@@ -575,16 +575,17 @@ pub trait EntitySectionsGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             }
             let Some(index) = hint
                 .filter(|&index| {
-                    self.mobs
+                    self.entities
+                        .mobs
                         .get(index)
                         .is_some_and(|mob| mob.join == write.join)
                 })
-                .or_else(|| self.mobs.locate(write.join))
+                .or_else(|| self.entities.mobs.locate(write.join))
             else {
                 self.entity_section_forget(write.id);
                 continue;
             };
-            if self.mobs[index].removed {
+            if self.entities.mobs[index].removed {
                 self.entity_section_forget(write.id);
                 continue;
             }
@@ -599,28 +600,35 @@ pub trait EntitySectionsGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             if !crossed || sections.busy {
                 continue;
             }
-            let final_position = self.mobs[index].position;
+            let final_position = self.entities.mobs[index].position;
             let staged = final_position != write.to;
             if staged {
-                self.mobs.update(index, |mob| mob.position = write.to);
+                self.entities
+                    .mobs
+                    .update(index, |mob| mob.position = write.to);
             }
-            let staged_stamp = self.mobs.stamp();
+            let staged_stamp = self.entities.mobs.stamp();
             self.tell_entity_sections();
-            written |= self.mobs.stamp() != staged_stamp;
+            written |= self.entities.mobs.stamp() != staged_stamp;
             if staged {
                 let restore = if self
+                    .entities
                     .mobs
                     .get(index)
                     .is_some_and(|mob| mob.join == write.join)
                 {
                     Some(index)
                 } else {
-                    self.mobs.locate(write.join)
+                    self.entities.mobs.locate(write.join)
                 };
                 if let Some(index) = restore {
                     hint = Some(index);
-                    if !self.mobs[index].removed && self.mobs[index].position == write.to {
-                        self.mobs.update(index, |mob| mob.position = final_position);
+                    if !self.entities.mobs[index].removed
+                        && self.entities.mobs[index].position == write.to
+                    {
+                        self.entities
+                            .mobs
+                            .update(index, |mob| mob.position = final_position);
                     }
                 }
             }

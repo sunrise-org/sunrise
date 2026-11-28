@@ -120,7 +120,8 @@ fn scenario(interruption: Interruption) {
         let (before_12, before_13) = (read(12), read(13));
         // Guest 12 rides a boat alone; a save would move it into the player file.
         let boat = 700;
-        game.boats
+        game.entities
+            .boats
             .push(sunrise_gameplay_common::game::boats_common::Boat::new(
                 boat,
                 "oak".into(),
@@ -203,7 +204,7 @@ fn scenario(interruption: Interruption) {
             "the interrupted player keeps the last saved files"
         );
         assert!(
-            game.boats.iter().any(|b| b.id == boat),
+            game.entities.boats.iter().any(|b| b.id == boat),
             "the interrupted player's boat stays in the world, not in a file nobody writes"
         );
         if matches!(

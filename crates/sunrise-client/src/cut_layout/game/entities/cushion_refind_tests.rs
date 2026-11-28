@@ -16,7 +16,7 @@ fn a_cushion_the_listener_removed_does_not_seat_the_player() {
             );
         },
         |game, gate| {
-            game.cushions.push(Cushion {
+            game.entities.cushions.push(Cushion {
                 attachment_lifetime: Default::default(),
                 join: Default::default(),
                 id: 953,
@@ -34,7 +34,7 @@ fn a_cushion_the_listener_removed_does_not_seat_the_player() {
             };
             assert!(game.interact_cushion(Some(click)), "the click is spent");
             assert!(gate.fired());
-            assert!(game.cushions.is_empty());
+            assert!(game.entities.cushions.is_empty());
             assert_eq!(game.riding, None);
         },
     );

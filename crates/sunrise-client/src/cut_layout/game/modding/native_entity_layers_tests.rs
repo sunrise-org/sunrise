@@ -774,8 +774,8 @@ fn draw_single_mob(
     game: &mut sunrise_client_gameplay::game::ClientGame<'_>,
     mob: Mob,
 ) -> Vec<Vertex> {
-    game.mobs.clear();
-    game.mobs.push(mob);
+    game.entities.mobs.clear();
+    game.entities.mobs.push(mob);
     game.prepare_entity_culling();
     let mut out = Vec::new();
     game.mob_geometry(CAMERA, 1.0, &mut out);

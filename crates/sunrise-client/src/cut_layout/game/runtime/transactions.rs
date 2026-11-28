@@ -899,7 +899,7 @@ pub(crate) mod tests {
             game.offhand.clone(),
             game.carried.clone(),
         );
-        let dropped = game.dropped.len();
+        let dropped = game.entities.dropped.len();
         let me = game.native_acting_id();
         let hand = mod_api::ItemPlace::PlayerHand {
             player: me,
@@ -920,7 +920,7 @@ pub(crate) mod tests {
             before
         );
         assert_eq!(
-            game.dropped.len(),
+            game.entities.dropped.len(),
             dropped,
             "a thrown bucket waits for the root commit"
         );
@@ -929,8 +929,8 @@ pub(crate) mod tests {
         let host: &mut dyn ServerHost = &mut game;
         let _ = host.transaction(|host, tx| hand.exchange(host, tx, &water, 1));
         assert_eq!(game.inventory[0], Some(bucket("minecraft:bucket", 2)));
-        assert_eq!(game.dropped.len(), dropped + 1);
-        let thrown = &game.dropped[game.dropped.len() - 1].stack;
+        assert_eq!(game.entities.dropped.len(), dropped + 1);
+        let thrown = &game.entities.dropped[game.entities.dropped.len() - 1].stack;
         assert_eq!(&*thrown.item, "minecraft:water_bucket");
 
         // A chest minecart's, a chest boat's and a chested donkey's slots: an abort puts back
@@ -961,7 +961,8 @@ pub(crate) mod tests {
             .unwrap()
             .id();
         let len = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-            game.mobs
+            game.entities
+                .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .unwrap()
@@ -971,7 +972,7 @@ pub(crate) mod tests {
         };
         // Its list is short (none kept yet): reading it as slots grows it, and the abort puts
         // that back too.
-        let mob = game.mobs.iter_mut().find(|m| m.id == id).unwrap();
+        let mob = game.entities.mobs.iter_mut().find(|m| m.id == id).unwrap();
         mob.extra.items.clear();
         let host: &mut dyn ServerHost = &mut game;
         let _ = host.transaction(|host, tx| {
@@ -1045,9 +1046,9 @@ pub(crate) mod tests {
         // exchanged in a committed one is dropped beside it at the commit; emptied in a
         // committed one, it's gone.
         game.spawn_item(sticks(4), [0.5, 70.0, 6.5], [0.0; 3], 10);
-        let id = game.dropped.last().unwrap().id;
+        let id = game.entities.dropped.last().unwrap().id;
         let entity = mod_api::ItemPlace::ItemEntity { id };
-        let count = |game: &sunrise_gameplay::game::ServerGame<'_>| game.dropped.len();
+        let count = |game: &sunrise_gameplay::game::ServerGame<'_>| game.entities.dropped.len();
         let items = count(&game);
         let host: &mut dyn ServerHost = &mut game;
         let _ = host.transaction(|host, tx| {
@@ -1069,7 +1070,7 @@ pub(crate) mod tests {
         assert_eq!(count(&game), items + 1);
         let host: &mut dyn ServerHost = &mut game;
         let _ = host.transaction(|host, tx| entity.extract(host, tx, &stick, 3));
-        assert!(game.dropped.iter().all(|e| e.id != id));
+        assert!(game.entities.dropped.iter().all(|e| e.id != id));
         assert_eq!(count(&game), items);
 
         // A hopper moving into a mod's part: a truthful part (a pipe into the chest east of
@@ -1259,9 +1260,11 @@ pub(crate) mod mod_capability_tests {
                     .chunks
                     .insert((0, 0), Arc::new(Chunk::empty(0, 0)));
                 game.common
+                    .entities
                     .armor_stands
                     .push(ArmorStand::new(13, Vec3::ZERO, 0.0));
                 game.common
+                    .entities
                     .armor_stands
                     .push(ArmorStand::new(14, Vec3::ZERO, 0.0));
                 let guest = 0x5eed_u128;

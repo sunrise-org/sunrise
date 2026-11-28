@@ -147,7 +147,7 @@ fn game<'a>(
 fn pig(game: &mut sunrise_gameplay::game::ServerGame<'_>, uuid: &str) -> usize {
     match game.target_with_uuid(sunrise_sim::save::uuid_from_text(uuid).unwrap()) {
         Some(sunrise_gameplay_common::game::commands_common::Target::Mob(id)) => {
-            game.mobs.iter().position(|m| m.id == id).unwrap()
+            game.entities.mobs.iter().position(|m| m.id == id).unwrap()
         }
         other => panic!("{other:?}"),
     }
@@ -163,7 +163,7 @@ fn step(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
 /// `(Motion, yaw)` as saved: the velocity and the yaw.
 fn vectors(game: &mut sunrise_gameplay::game::ServerGame<'_>, uuid: &str) -> ([f64; 3], f32) {
     let i = pig(game, uuid);
-    let m = &game.mobs[i];
+    let m = &game.entities.mobs[i];
     ([m.velocity.x, m.velocity.y, m.velocity.z], m.yaw)
 }
 
@@ -176,7 +176,7 @@ fn a_fence_leash_pulls_a_pig_as_vanilla_does() {
     // Before any tick: the saved leash is only pending; the pig is at rest
     // on stone, with gravity.
     for (i, fence) in [(elastic, [8, 201, 0]), (slack, [40, 201, 0])] {
-        let m = &game.mobs[i];
+        let m = &game.entities.mobs[i];
         assert_eq!(m.extra.leash_pending, Some(Pending::Knot(fence)), "pending");
         assert_eq!(m.extra.leash, None, "not live yet");
         assert!(m.no_ai && !m.no_gravity);
@@ -191,8 +191,8 @@ fn a_fence_leash_pulls_a_pig_as_vanilla_does() {
     // The tick-1 boundary: the real restoration bound the live knot.
     for (uuid, fence) in [(ELASTIC, [8, 201, 0]), (SLACK, [40, 201, 0])] {
         let i = pig(&mut game, uuid);
-        let leash = game.mobs[i].extra.leash;
-        let pending = game.mobs[i].extra.leash_pending;
+        let leash = game.entities.mobs[i].extra.leash;
+        let pending = game.entities.mobs[i].extra.leash_pending;
         let knot = game.server.knot_state.knot_ids.get(&fence).copied();
         let state = knot_state(fence);
         eprintln!(

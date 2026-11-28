@@ -19,11 +19,11 @@ pub fn add_mob(game: &mut crate::game::ServerGame<'_>, id: u32, kind: &str, x: f
     mob.no_ai = true;
     mob.no_gravity = true;
     mob.ground.on_ground = true;
-    game.common.mobs.push(mob);
+    game.common.entities.mobs.push(mob);
 }
 
 pub fn shoot(game: &mut crate::game::ServerGame<'_>, owner: Who, kind: ProjectileKind) {
-    let at = game.common.mobs[0].position;
+    let at = game.common.entities.mobs[0].position;
     let mut shot = Projectile::new(kind, at, Some(owner));
     shot.velocity = Vec3::new(0.0, 0.0, 2.0);
     shot.id = 77;

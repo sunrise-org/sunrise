@@ -100,9 +100,12 @@ pub(crate) mod tests {
                     }),
                 );
             }
-            assert_eq!(game.mobs[0].extra.profession.id(), "example:engineer");
-            assert_eq!(game.mobs[0].extra.villager_level, 4);
-            assert_eq!(game.mobs[0].extra.trade.as_ref().unwrap().xp, 17);
+            assert_eq!(
+                game.entities.mobs[0].extra.profession.id(),
+                "example:engineer"
+            );
+            assert_eq!(game.entities.mobs[0].extra.villager_level, 4);
+            assert_eq!(game.entities.mobs[0].extra.trade.as_ref().unwrap().xp, 17);
             assert!(rx.try_iter().any(|out| match out {
                 sunrise_sim::lan::Out::Packet(body) => matches!(
                     play::Clientbound::decode(body[0] as i32, &body[1..]),
@@ -112,7 +115,7 @@ pub(crate) mod tests {
             }));
             assert_eq!(game.server.missing_professions.len(), 1);
             let tag = sunrise_sim::entity_nbt::mob_to_nbt(
-                &game.mobs[0],
+                &game.entities.mobs[0],
                 [0; 4],
                 None,
                 Some(game.pack.assets.registry),
@@ -127,7 +130,7 @@ pub(crate) mod tests {
             assert_eq!(game.server.missing_professions.len(), 1);
             let second = spawn(game, 41, "minecraft:villager");
             let mut tag = sunrise_sim::entity_nbt::mob_to_nbt(
-                &game.mobs[1],
+                &game.entities.mobs[1],
                 [0; 4],
                 None,
                 Some(game.pack.assets.registry),
@@ -158,7 +161,7 @@ pub(crate) mod tests {
             .unwrap();
             assert_eq!(game.server.missing_professions.len(), 1);
             assert_eq!(
-                game.mobs[0].extra.trade.as_ref().unwrap().offers,
+                game.entities.mobs[0].extra.trade.as_ref().unwrap().offers,
                 vec![offer]
             );
             let inventory = &game.server.lan.as_ref().unwrap().hub.guests[0].inventory;
@@ -222,10 +225,10 @@ pub(crate) mod tests {
             ]);
             game.apply_entity_nbt(target, sunrise_sim::data_cmd::merged(&old, &patch))
                 .unwrap();
-            let trade = game.mobs[0].extra.trade.as_ref().unwrap();
+            let trade = game.entities.mobs[0].extra.trade.as_ref().unwrap();
             assert_eq!(trade.offers, vec![replacement]);
             assert_eq!(trade.xp, 9);
-            assert_eq!(game.mobs[0].extra.villager_level, 4);
+            assert_eq!(game.entities.mobs[0].extra.villager_level, 4);
         });
     }
     #[test]
@@ -283,7 +286,10 @@ pub(crate) mod tests {
             assert_eq!(sent_offers(), 3);
             // The mob's offers are the screen's (the brain restocks them).
             let live = vec![changed.clone(), second.clone()];
-            assert_eq!(game.mobs[0].extra.trade.as_ref().unwrap().offers, live);
+            assert_eq!(
+                game.entities.mobs[0].extra.trade.as_ref().unwrap().offers,
+                live
+            );
             assert_eq!(villager.offers(game), Some(live.try_into_api().unwrap()));
             assert_eq!(villager.xp(game), Some(40));
             assert_eq!(villager.level(game), Some(3));
@@ -317,9 +323,9 @@ pub(crate) mod tests {
                 .take()
                 .unwrap();
             game.merchant_closed(&mut gm.merchant);
-            let trade = game.mobs[0].extra.trade.as_ref().unwrap();
+            let trade = game.entities.mobs[0].extra.trade.as_ref().unwrap();
             assert_eq!((trade.offers.clone(), trade.xp), (vec![changed], 40));
-            assert_eq!(game.mobs[0].extra.villager_level, 3);
+            assert_eq!(game.entities.mobs[0].extra.villager_level, 3);
             assert_eq!(villager.trading_player(game), None);
         });
     }
@@ -385,7 +391,7 @@ pub(crate) mod tests {
                 game.lan_trade_session(12).unwrap().variant,
                 "minecraft:swamp"
             );
-            assert_eq!(game.mobs[0].extra.variant, 5);
+            assert_eq!(game.entities.mobs[0].extra.variant, 5);
             assert_eq!(
                 villager.villager_type(game).as_deref(),
                 Some("minecraft:swamp")

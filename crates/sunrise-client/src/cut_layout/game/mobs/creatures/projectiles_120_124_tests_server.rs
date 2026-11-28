@@ -12,16 +12,16 @@ use sunrise_core::random::{LegacyRandom, RandomSource};
 
 pub(crate) fn alive_124(game: &sunrise_gameplay::game::ServerGame<'_>, t: Target124) -> bool {
     match t {
-        Target124::Boat(id) => game.boats.iter().any(|b| b.id == id),
-        Target124::Cart(id) => game.carts.iter().any(|c| c.id == id),
-        Target124::Frame(id) => game.item_frames.iter().any(|f| f.id == id),
-        Target124::Painting(id) => game.paintings.iter().any(|p| p.id == id),
-        Target124::Falling(id) => game.falling.iter().any(|f| f.id == id),
+        Target124::Boat(id) => game.entities.boats.iter().any(|b| b.id == id),
+        Target124::Cart(id) => game.entities.carts.iter().any(|c| c.id == id),
+        Target124::Frame(id) => game.entities.item_frames.iter().any(|f| f.id == id),
+        Target124::Painting(id) => game.entities.paintings.iter().any(|p| p.id == id),
+        Target124::Falling(id) => game.entities.falling.iter().any(|f| f.id == id),
         Target124::Knot(id) => game.server.others.0.iter().any(|o| o.id == id),
-        Target124::Cushion(id) => game.cushions.iter().any(|c| c.id == id),
-        Target124::Crystal(id) => game.crystals.iter().any(|c| c.id == id),
-        Target124::Tnt(id) => game.tnts.iter().any(|t| t.id == id),
-        Target124::Stand(id) => game.armor_stands.iter().any(|a| a.id == id),
+        Target124::Cushion(id) => game.entities.cushions.iter().any(|c| c.id == id),
+        Target124::Crystal(id) => game.entities.crystals.iter().any(|c| c.id == id),
+        Target124::Tnt(id) => game.entities.tnts.iter().any(|t| t.id == id),
+        Target124::Stand(id) => game.entities.armor_stands.iter().any(|a| a.id == id),
     }
 }
 
@@ -52,14 +52,14 @@ pub(crate) fn run_witness_firework_rocket_targets_124() {
                 assert!(game.run_command("summon minecraft:oak_boat 3.5 64.0 4.5 {}"));
                 targets.insert(
                     "boat".into(),
-                    Target124::Boat(game.boats.last().unwrap().id),
+                    Target124::Boat(game.entities.boats.last().unwrap().id),
                 );
             }
             "minecart" => {
                 assert!(game.run_command("summon minecraft:minecart 3.5 64.0 4.5 {}"));
                 targets.insert(
                     "minecart".into(),
-                    Target124::Cart(game.carts.last().unwrap().id),
+                    Target124::Cart(game.entities.carts.last().unwrap().id),
                 );
             }
             "item_frame" => {
@@ -68,7 +68,7 @@ pub(crate) fn run_witness_firework_rocket_targets_124() {
                 ));
                 targets.insert(
                     "frame".into(),
-                    Target124::Frame(game.item_frames.last().unwrap().id),
+                    Target124::Frame(game.entities.item_frames.last().unwrap().id),
                 );
             }
             "painting" => {
@@ -77,7 +77,7 @@ pub(crate) fn run_witness_firework_rocket_targets_124() {
                 ));
                 targets.insert(
                     "painting".into(),
-                    Target124::Painting(game.paintings.last().unwrap().id),
+                    Target124::Painting(game.entities.paintings.last().unwrap().id),
                 );
             }
             "falling_block" => {
@@ -86,7 +86,7 @@ pub(crate) fn run_witness_firework_rocket_targets_124() {
                 ));
                 targets.insert(
                     "falling".into(),
-                    Target124::Falling(game.falling.last().unwrap().id),
+                    Target124::Falling(game.entities.falling.last().unwrap().id),
                 );
             }
             "leash_knot" => {
@@ -102,61 +102,64 @@ pub(crate) fn run_witness_firework_rocket_targets_124() {
                 ));
                 targets.insert(
                     "cushion".into(),
-                    Target124::Cushion(game.cushions.last().unwrap().id),
+                    Target124::Cushion(game.entities.cushions.last().unwrap().id),
                 );
             }
             "end_crystal" => {
                 assert!(game.run_command("summon minecraft:end_crystal 4.25 64.0 4.5 {}"));
                 targets.insert(
                     "crystal".into(),
-                    Target124::Crystal(game.crystals.last().unwrap().id),
+                    Target124::Crystal(game.entities.crystals.last().unwrap().id),
                 );
             }
             "tnt" => {
                 assert!(game.run_command("summon minecraft:tnt 3.5 64.0 4.5 {fuse:80}"));
-                targets.insert("tnt".into(), Target124::Tnt(game.tnts.last().unwrap().id));
+                targets.insert(
+                    "tnt".into(),
+                    Target124::Tnt(game.entities.tnts.last().unwrap().id),
+                );
             }
             "armor_stand" => {
                 assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 4.5 {}"));
                 targets.insert(
                     "stand".into(),
-                    Target124::Stand(game.armor_stands.last().unwrap().id),
+                    Target124::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
             }
             "armor_stand_marker" => {
                 assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 4.5 {Marker:1b}"));
                 targets.insert(
                     "stand".into(),
-                    Target124::Stand(game.armor_stands.last().unwrap().id),
+                    Target124::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
             }
             "armor_stand_blast_nearby" => {
                 assert!(game.run_command("summon minecraft:armor_stand 5.5 64.0 4.5 {}"));
                 targets.insert(
                     "normal".into(),
-                    Target124::Stand(game.armor_stands.last().unwrap().id),
+                    Target124::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
                 assert!(
                     game.run_command("summon minecraft:armor_stand 3.5 64.0 6.5 {Invisible:1b}")
                 );
                 targets.insert(
                     "invisible".into(),
-                    Target124::Stand(game.armor_stands.last().unwrap().id),
+                    Target124::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
                 assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 2.5 {Marker:1b}"));
                 targets.insert(
                     "marker".into(),
-                    Target124::Stand(game.armor_stands.last().unwrap().id),
+                    Target124::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
                 assert!(game.run_command("summon minecraft:armor_stand 7.5 64.0 4.5 {}"));
                 targets.insert(
                     "occluded".into(),
-                    Target124::Stand(game.armor_stands.last().unwrap().id),
+                    Target124::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
                 assert!(game.run_command("summon minecraft:armor_stand 9.5 64.0 4.5 {}"));
                 targets.insert(
                     "far".into(),
-                    Target124::Stand(game.armor_stands.last().unwrap().id),
+                    Target124::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
             }
             other => panic!("unexpected case {other}"),
@@ -182,15 +185,15 @@ pub(crate) fn run_witness_firework_rocket_targets_124() {
             )
         };
         assert!(game.run_command(&rocket_cmd), "{rocket_cmd}");
-        let idx = game.rockets.len() - 1;
-        let rocket_id = game.rockets[idx].id;
-        game.rockets.update(idx, |r| {
+        let idx = game.entities.rockets.len() - 1;
+        let rocket_id = game.entities.rockets[idx].id;
+        game.entities.rockets.update(idx, |r| {
             r.random = LegacyRandom::new(witness.proj_seed);
         });
 
         for exp in &case.ticks {
             let (events, sounds) = step_recording(&mut game);
-            let live = game.rockets.iter().find(|r| r.id == rocket_id);
+            let live = game.entities.rockets.iter().find(|r| r.id == rocket_id);
             if live.is_some() != exp.rocket_alive {
                 failures.push(format!(
                     "{label} t={}: rocket_alive expected {} got {}",
@@ -226,6 +229,7 @@ pub(crate) fn run_witness_firework_rocket_targets_124() {
                 break;
             }
             let mut got_drops: Vec<String> = game
+                .entities
                 .dropped
                 .iter()
                 .map(|d| d.stack.item.to_string())

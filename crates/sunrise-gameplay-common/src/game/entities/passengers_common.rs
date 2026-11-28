@@ -24,26 +24,30 @@ impl crate::game::CommonGame<'_> {
 
     /// A vehicle whose `seat_*_mobs` pass places its mob riders itself.
     pub fn seats_own_riders(&self, vehicle: u32) -> bool {
-        self.boats.iter().any(|b| b.id == vehicle)
-            || self.carts.iter().any(|c| c.id == vehicle)
-            || self.cushions.iter().any(|c| c.id == vehicle)
-            || self.tnts.iter().any(|t| t.id == vehicle && t.id != 0)
+        self.entities.boats.iter().any(|b| b.id == vehicle)
+            || self.entities.carts.iter().any(|c| c.id == vehicle)
+            || self.entities.cushions.iter().any(|c| c.id == vehicle)
+            || self
+                .entities
+                .tnts
+                .iter()
+                .any(|t| t.id == vehicle && t.id != 0)
     }
 
     /// `Entity.positionRider` for mobs riding primed TNT.
     pub fn seat_tnt_mobs(&mut self, riders: &Riders) {
-        for i in 0..self.tnts.len() {
+        for i in 0..self.entities.tnts.len() {
             let (id, pos, prev) = (
-                self.tnts[i].id,
-                self.tnts[i].position,
-                self.tnts[i].previous,
+                self.entities.tnts[i].id,
+                self.entities.tnts[i].position,
+                self.entities.tnts[i].previous,
             );
             let Some(js) = riders.get(&id).filter(|_| id != 0) else {
                 continue;
             };
-            let tnt_box = self.tnts[i].bounds();
+            let tnt_box = self.entities.tnts[i].bounds();
             for &j in js {
-                let m = &mut self.mobs[j];
+                let m = &mut self.entities.mobs[j];
                 // Primed TNT's box is 0.98 wide.
                 let offset = riders::vehicle_attachment(m, 0.98);
                 m.seated(id, offset, tnt_box);
@@ -60,12 +64,12 @@ impl crate::game::CommonGame<'_> {
 
     /// `Entity.positionRider` for mobs sitting on a cushion.
     pub fn seat_cushion_mobs(&mut self, riding: &Riders) {
-        for c in &self.cushions {
+        for c in &self.entities.cushions {
             let Some(js) = riding.get(&c.id) else {
                 continue;
             };
             for &j in js {
-                let m = &mut self.mobs[j];
+                let m = &mut self.entities.mobs[j];
                 // Cushion's box is 1 wide.
                 let offset = riders::vehicle_attachment(m, 1.0);
                 let at = Vec3::new(c.position.x, c.position.y + 0.25 - offset, c.position.z);
@@ -87,21 +91,21 @@ pub trait PassengersCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
         riding: &Riders,
         order_of: impl Fn(&Self, u32) -> Vec<u32>,
     ) {
-        for i in 0..self.boats.len() {
-            let id = self.boats[i].id;
+        for i in 0..self.entities.boats.len() {
+            let id = self.entities.boats[i].id;
             let mobs: Vec<usize> = riding
                 .get(&id)
                 .into_iter()
                 .flatten()
                 .copied()
-                .filter(|&j| !self.mobs[j].removed && self.mobs[j].alive())
+                .filter(|&j| !self.entities.mobs[j].removed && self.entities.mobs[j].alive())
                 .collect();
             if mobs.is_empty() {
                 continue;
             }
             let order = order_of(self, id);
             let count = order.len().max(mobs.len());
-            let b = &self.boats[i];
+            let b = &self.entities.boats[i];
             let full = count == b.max_passengers();
             let delta = b.delta_rotation;
             let boat_box = b.bounds();
@@ -113,7 +117,7 @@ pub trait PassengersCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
                 .iter()
                 .enumerate()
                 .map(|(n, &j)| {
-                    let m = &self.mobs[j];
+                    let m = &self.entities.mobs[j];
                     let animal = is_animal(m.species());
                     // AbstractBoat's box is 1.375 wide.
                     let offset = riders::vehicle_attachment(m, 1.375);
@@ -137,7 +141,7 @@ pub trait PassengersCommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
                 })
                 .collect();
             for (j, offset, at, previous, facing) in seats {
-                let m = &mut self.mobs[j];
+                let m = &mut self.entities.mobs[j];
                 m.seated(id, offset, boat_box);
                 m.fluids.boat = Some((id, ridden));
                 sunrise_sim::mobs::living::teleports::set_pos(m, at);

@@ -62,7 +62,7 @@ fn assert_quiet(game: &sunrise_gameplay::game::ServerGame<'_>, heard: &Mutex<Vec
         "tentative state was published"
     );
     assert!(
-        game.dropped.is_empty(),
+        game.entities.dropped.is_empty(),
         "a container extraction spawned bone meal"
     );
 }
@@ -303,7 +303,7 @@ fn sided_composter_transactions_preserve_literal_chance_and_defer_all_effects() 
                 assert_eq!(game.composter_level(POS), Some(0));
                 assert_eq!(heard.lock().unwrap().as_slice(), ["minecraft:block_change"]);
                 assert!(game.server.pending_sounds.is_empty());
-                assert!(game.dropped.is_empty());
+                assert!(game.entities.dropped.is_empty());
 
                 // A real bulk consumer offers all remaining items up to 64, not a pre-trimmed
                 // single item. Because `move_resources` visits each source index once per call

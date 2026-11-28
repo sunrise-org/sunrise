@@ -10,9 +10,11 @@ fn a_bred_turtle_posts_no_heart_burst_but_a_bred_frog_does() {
     game.start_audio_capture();
     for (kind_id, hearts) in [("minecraft:turtle", 0), ("minecraft:frog", 1)] {
         let kind = game.res.mob_types().get(kind_id).unwrap().clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(1, kind.clone(), Vec3::new(8.5, 64.0, 8.5), 0.0));
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(2, kind, Vec3::new(9.5, 64.0, 8.5), 0.0));
         game.server.lan_queues.entity_events.clear();
         game.breed(
@@ -36,7 +38,7 @@ fn a_bred_turtle_posts_no_heart_burst_but_a_bred_frog_does() {
             "{kind_id} heartbeat events: {:?}",
             game.server.lan_queues.entity_events
         );
-        game.mobs.clear();
-        game.orbs.clear();
+        game.entities.mobs.clear();
+        game.entities.orbs.clear();
     }
 }

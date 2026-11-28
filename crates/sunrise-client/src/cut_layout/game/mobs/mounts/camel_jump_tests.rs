@@ -201,6 +201,7 @@ fn a_saddled_camels_riding_jump_posts_entity_action() {
     jump(&mut game, 100);
     // The jump is accepted: Camel.handleStartJump's setDashing(true).
     let camel = game
+        .entities
         .mobs
         .iter()
         .find(|m| m.species() == sunrise_sim::mobs::Species::Camel)

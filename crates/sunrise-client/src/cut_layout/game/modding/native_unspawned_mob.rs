@@ -90,7 +90,7 @@ pub(crate) mod tests {
             || {
                 with_game(|game| {
                     let spawned = spawn_pig(game).unwrap();
-                    let m = game.mobs.iter().find(|m| m.id == spawned).unwrap();
+                    let m = game.entities.mobs.iter().find(|m| m.id == spawned).unwrap();
                     let head = &m.equipment_stacks()[EquipmentSlot::Head as usize];
                     assert_eq!(
                         head.as_ref().map(|s| &*s.item),
@@ -125,7 +125,7 @@ pub(crate) mod tests {
             || {
                 with_game(|game| {
                     let spawned = spawn_pig(game).unwrap();
-                    let m = game.mobs.iter().find(|m| m.id == spawned).unwrap();
+                    let m = game.entities.mobs.iter().find(|m| m.id == spawned).unwrap();
                     assert_eq!(finalize::base_value(m, Attr::MaxHealth), 1024.0);
                 });
                 assert_eq!(seen.lock().unwrap().take(), Some(Ok(1024.0)));
@@ -146,7 +146,7 @@ pub(crate) mod tests {
             || {
                 with_game(|game| {
                     let spawned = spawn_pig(game).expect("a skipped finalization still spawns");
-                    let m = game.mobs.iter().find(|m| m.id == spawned).unwrap();
+                    let m = game.entities.mobs.iter().find(|m| m.id == spawned).unwrap();
                     assert_eq!(finalize::base_value(m, Attr::MaxHealth), 20.0);
                     assert!(
                         !finalize::has_modifier(
@@ -167,9 +167,13 @@ pub(crate) mod tests {
             },
             || {
                 with_game(|game| {
-                    let before = game.mobs.len();
+                    let before = game.entities.mobs.len();
                     assert_eq!(spawn_pig(game), None);
-                    assert_eq!(game.mobs.len(), before, "a stopped spawn adds no mob");
+                    assert_eq!(
+                        game.entities.mobs.len(),
+                        before,
+                        "a stopped spawn adds no mob"
+                    );
                 });
             },
         );
@@ -182,7 +186,7 @@ pub(crate) mod tests {
     fn the_group_a_listener_leaves_is_what_finalization_reads() {
         with_game(|game| {
             let alone = spawn_pig(game).unwrap();
-            let m = game.mobs.iter().find(|m| m.id == alone).unwrap();
+            let m = game.entities.mobs.iter().find(|m| m.id == alone).unwrap();
             assert!(!m.is_baby(), "a pack's first member is never a baby");
         });
         let given = Arc::new(Mutex::new(Vec::new()));
@@ -198,7 +202,7 @@ pub(crate) mod tests {
             || {
                 with_game(|game| {
                     let spawned = spawn_pig(game).unwrap();
-                    let m = game.mobs.iter().find(|m| m.id == spawned).unwrap();
+                    let m = game.entities.mobs.iter().find(|m| m.id == spawned).unwrap();
                     assert!(m.is_baby());
                 });
             },

@@ -90,7 +90,7 @@ fn boats_over_glass<'g, G: sunrise_gameplay_common::game::SideGame<'g>>(
             0.0,
         );
         boat.velocity.y = -1.0;
-        game.boats.push(boat);
+        game.entities.boats.push(boat);
     }
 }
 
@@ -111,9 +111,13 @@ fn a_bounce_listener_can_remove_a_later_lid_target() {
                 sunrise_gameplay_common::game::native_hooks::install_block_contact_hooks();
                 with_game(|game| {
                     boats_over_glass(game, &[(71, 4), (72, 7), (73, 10)]);
-                    game.boats.update(0, |boat| boat.fall_distance = 5.0);
-                    game.boats.update(1, |boat| boat.position.x = 8.875);
-                    game.carts.push(Minecart::new(
+                    game.entities
+                        .boats
+                        .update(0, |boat| boat.fall_distance = 5.0);
+                    game.entities
+                        .boats
+                        .update(1, |boat| boat.position.x = 8.875);
+                    game.entities.carts.push(Minecart::new(
                         74,
                         CartKind::Rideable,
                         Vec3::new(9.125, 64.25, 3.95),
@@ -127,10 +131,10 @@ fn a_bounce_listener_can_remove_a_later_lid_target() {
                     assert!(game.entity(72).is_none());
                     assert!(game.entity(74).is_none());
                     assert_eq!(
-                        game.boats[2].position.x, 10.0,
+                        game.entities.boats[2].position.x, 10.0,
                         "neither discarded hull blocks the next boat"
                     );
-                    for boat in game.boats.iter() {
+                    for boat in game.entities.boats.iter() {
                         if boat.id == 72 {
                             assert_eq!(boat.position.y, 64.25);
                             assert_eq!(boat.velocity.y, -1.0);
@@ -167,8 +171,12 @@ fn a_downward_shulker_box_lid_bounces_only_the_locally_driven_boat() {
                     game.client.remote.as_mut().unwrap().first_passenger = true;
                     game.riding = Some(71);
                     boats_over_glass(game, &[(71, 4), (72, 7)]);
-                    game.boats.update(0, |boat| boat.fall_distance = 5.0);
-                    game.boats.update(1, |boat| boat.fall_distance = 5.0);
+                    game.entities
+                        .boats
+                        .update(0, |boat| boat.fall_distance = 5.0);
+                    game.entities
+                        .boats
+                        .update(1, |boat| boat.fall_distance = 5.0);
                     let facing = Direction::ALL
                         .iter()
                         .position(|d| *d == Direction::Down)
@@ -180,13 +188,13 @@ fn a_downward_shulker_box_lid_bounces_only_the_locally_driven_boat() {
                             [3.0, 64.5, 3.0, 9.0, 65.0, 6.0],
                         )]);
                     });
-                    assert_eq!(game.boats[0].position.y, 64.0);
-                    assert_eq!(game.boats[0].fall_distance, 0.0);
-                    assert!(game.boats[0].velocity.y > 0.0);
-                    assert_eq!(game.boats[1].position.y, 64.0);
-                    assert!(game.boats[1].ground.on_ground);
-                    assert_eq!(game.boats[1].fall_distance, 5.0);
-                    assert_eq!(game.boats[1].velocity.y, -1.0);
+                    assert_eq!(game.entities.boats[0].position.y, 64.0);
+                    assert_eq!(game.entities.boats[0].fall_distance, 0.0);
+                    assert!(game.entities.boats[0].velocity.y > 0.0);
+                    assert_eq!(game.entities.boats[1].position.y, 64.0);
+                    assert!(game.entities.boats[1].ground.on_ground);
+                    assert_eq!(game.entities.boats[1].fall_distance, 5.0);
+                    assert_eq!(game.entities.boats[1].velocity.y, -1.0);
                     assert_eq!(*part.restitution.lock().unwrap(), [(true, 71)]);
                     assert!(!game.persist.sync_body_position.contains(&71));
                 });
@@ -206,7 +214,9 @@ fn a_shulker_box_lid_stops_a_driven_boat_at_another_boat() {
                 game.client.remote.as_mut().unwrap().first_passenger = true;
                 game.riding = Some(71);
                 boats_over_glass(game, &[(71, 4), (72, 6)]);
-                game.boats.update(1, |boat| boat.position.x = 6.125);
+                game.entities
+                    .boats
+                    .update(1, |boat| boat.position.x = 6.125);
                 let facing = Direction::ALL
                     .iter()
                     .position(|d| *d == Direction::East)
@@ -215,13 +225,13 @@ fn a_shulker_box_lid_stops_a_driven_boat_at_another_boat() {
                 game.push_shulker_local(push());
                 // The 1.375-wide hulls are 1.625 blocks apart. The first boat
                 // moves 0.25 blocks before contact, not the lid's requested 0.51.
-                assert_eq!(game.boats[0].position.x, 4.75);
-                assert_eq!(game.boats[1].position.x, 6.125);
+                assert_eq!(game.entities.boats[0].position.x, 4.75);
+                assert_eq!(game.entities.boats[1].position.x, 6.125);
 
                 // The riding graph can nest vehicles. The same hull on a
                 // shared root is not a collider, even when it isn't a rider of 71.
-                game.boats.update(0, |boat| boat.position.x = 4.5);
-                game.carts.push(Minecart::new(
+                game.entities.boats.update(0, |boat| boat.position.x = 4.5);
+                game.entities.carts.push(Minecart::new(
                     75,
                     CartKind::Rideable,
                     Vec3::new(5.0, 67.0, 4.5),
@@ -242,8 +252,8 @@ fn a_shulker_box_lid_stops_a_driven_boat_at_another_boat() {
                     },
                 );
                 game.push_shulker_local(push());
-                assert_eq!(game.boats[0].position.x, 4.5 + 0.51);
-                assert_eq!(game.boats[1].position.x, 6.125);
+                assert_eq!(game.entities.boats[0].position.x, 4.5 + 0.51);
+                assert_eq!(game.entities.boats[1].position.x, 6.125);
             })
         },
     );
@@ -258,7 +268,7 @@ fn an_observing_boat_keeps_the_lid_push_through_its_last_lerp_step() {
             with_client_game(|game| {
                 game.init_remote_for_replay().unwrap();
                 boats_over_glass(game, &[(71, 4)]);
-                game.boats.update(0, |boat| boat.position.y = 64.0);
+                game.entities.boats.update(0, |boat| boat.position.y = 64.0);
                 game.handle_packet(Clientbound::EntityPositionSync(play::EntityPositionSync {
                     id: 71,
                     path: play::PositionPath::Linear([4.5, 64.375, 4.5]),
@@ -269,7 +279,7 @@ fn an_observing_boat_keeps_the_lid_push_through_its_last_lerp_step() {
                 .unwrap();
                 game.tick_remote_entities(true);
                 game.tick_remote_entities(true);
-                assert_eq!(game.boats[0].position.y, 64.25);
+                assert_eq!(game.entities.boats[0].position.y, 64.25);
 
                 let kind = game
                     .res
@@ -279,9 +289,9 @@ fn an_observing_boat_keeps_the_lid_push_through_its_last_lerp_step() {
                     .clone();
                 let mut shell = Mob::new(72, kind, Vec3::new(4.5, 63.25, 4.5), 0.0);
                 shell.extra.counter = 100; // Open the lid on the boat's final interpolation tick.
-                game.mobs.push(shell);
+                game.entities.mobs.push(shell);
                 game.tick_remote_entities(true);
-                let boat = &game.boats[0];
+                let boat = &game.entities.boats[0];
                 let rise = boat.previous.y - 64.25;
                 assert!(
                     rise > 0.0,

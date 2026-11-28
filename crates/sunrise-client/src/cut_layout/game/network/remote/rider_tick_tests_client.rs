@@ -18,7 +18,8 @@ fn a_boat_clamps_the_riders_yaw_without_changing_the_previous_yaw() {
         let (client, server) = sunrise_protocol::connection::Pipe::pair();
         game.connect_local(client, "boat-clamp").unwrap();
         game.client.remote.as_mut().unwrap().first_passenger = false;
-        game.boats
+        game.entities
+            .boats
             .push(Boat::new(71, "oak".into(), Vec3::new(2.5, 64.0, 2.5), 0.0));
         game.riding = Some(71);
         game.yaw = 200.0;
@@ -65,7 +66,8 @@ fn a_riders_move_takes_the_look_of_the_tick_and_leaves_it_off_the_ground() {
             for y in 5..=7 {
                 game.world.set(8, y, 9, stone).unwrap();
             }
-            game.boats
+            game.entities
+                .boats
                 .push(Boat::new(71, "oak".into(), Vec3::new(2.5, 5.0, 2.5), 0.0));
             game.riding = Some(71);
 
@@ -122,7 +124,8 @@ fn mounted_local_spectator_forces_flight_and_sends_abilities() {
                 remote.level_load.finish();
             }
             game.client.screen = Screen::Playing;
-            game.boats
+            game.entities
+                .boats
                 .push(Boat::new(71, "oak".into(), Vec3::new(2.5, 64.0, 2.5), 0.0));
             game.riding = Some(71);
 

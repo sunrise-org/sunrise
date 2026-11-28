@@ -40,7 +40,7 @@ impl ServerGame<'_> {
         let (from, to) = super::pick_ray::pick_ray_segment(eye, dir, reach);
         let mut pick = super::pick_ray::PickAccumulator::new(reach * reach);
         let mut best = None;
-        for (i, p) in self.common.creatures.projectiles.iter().enumerate() {
+        for (i, p) in self.common.entities.projectiles.iter().enumerate() {
             if !self.projectile_is_pickable(p) {
                 continue;
             }
@@ -73,7 +73,7 @@ impl ServerGame<'_> {
             return false;
         }
         if matches!(
-            self.creatures.projectiles[i].kind,
+            self.entities.projectiles[i].kind,
             ProjectileKind::ShulkerBullet { .. }
         ) {
             self.hit_shulker_bullet(i);
@@ -90,7 +90,7 @@ impl ServerGame<'_> {
         let ((_, _, _, magic), admitted) = self.melee_damage_with_admission(
             "minecraft:shulker_bullet",
             false,
-            Some(self.common.creatures.projectiles[i].id),
+            Some(self.common.entities.projectiles[i].id),
         );
         let sweep = self.sweep_before_hit("minecraft:shulker_bullet", false);
         let p = self.destroy_shulker_bullet(i);
@@ -107,7 +107,7 @@ impl ServerGame<'_> {
     /// (`discard` and `gameEvent(ENTITY_DAMAGE)` from the bullet).
     pub fn destroy_shulker_bullet(&mut self, i: usize) -> Projectile {
         let (id, at, owner, owner_uuid, silent) = {
-            let p = &self.common.creatures.projectiles[i];
+            let p = &self.common.entities.projectiles[i];
             (
                 p.id,
                 [p.position.x, p.position.y, p.position.z],
@@ -132,7 +132,7 @@ impl ServerGame<'_> {
     pub(in crate::game::server_side) fn within_interaction_range(&self, i: usize) -> bool {
         let (Some(eye), Some(p)) = (
             self.common.eye_position(),
-            self.common.creatures.projectiles.get(i),
+            self.common.entities.projectiles.get(i),
         ) else {
             return false;
         };
@@ -164,7 +164,7 @@ impl ServerGame<'_> {
                 (self.common.pitch, self.common.yaw)
             }
             (Who::Mob(id), _) => {
-                let m = self.common.mobs.iter().find(|m| m.id == id)?;
+                let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
                 (m.head_pitch, m.yaw)
             }
         };
@@ -177,7 +177,7 @@ impl ServerGame<'_> {
         let (pitch, yaw) = (self.common.pitch, self.common.yaw);
         let (guest, owner_uuid) = (self.server.lan_acting, Some(self.acting_player_uuid()));
         self.common
-            .creatures
+            .entities
             .projectiles
             .update(i, |p| attack_deflect(p, pitch, yaw, owner_uuid, guest))
     }

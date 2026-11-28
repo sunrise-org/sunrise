@@ -79,14 +79,16 @@ fn a_client_follows_an_items_and_a_mobs_no_gravity() {
         game.handle_packet(data(31, vec![no_gravity(true)]))
             .unwrap();
         let item = |game: &sunrise_client_gameplay::game::ClientGame<'_>| {
-            game.dropped
+            game.entities
+                .dropped
                 .iter()
                 .find(|d| d.id == 30)
                 .expect("the item was made")
                 .no_gravity
         };
         let pig = |game: &sunrise_client_gameplay::game::ClientGame<'_>| {
-            game.mobs
+            game.entities
+                .mobs
                 .iter()
                 .find(|m| m.id == 31)
                 .expect("the pig")

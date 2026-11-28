@@ -232,11 +232,7 @@ impl crate::game::ServerGame<'_> {
     }
 
     pub(in crate::game::server_side) fn spawned_projectile(&self, id: u32) -> Option<&Projectile> {
-        self.common
-            .creatures
-            .projectiles
-            .iter()
-            .find(|p| p.id == id)
+        self.common.entities.projectiles.iter().find(|p| p.id == id)
     }
 
     /// `EnchantmentEntityEffect.apply` on the new projectile `id`, at its
@@ -258,7 +254,7 @@ impl crate::game::ServerGame<'_> {
         }
         let Some(index) = self
             .common
-            .creatures
+            .entities
             .projectiles
             .iter()
             .position(|p| p.id == id)
@@ -267,7 +263,7 @@ impl crate::game::ServerGame<'_> {
         };
         let sound = self
             .common
-            .creatures
+            .entities
             .projectiles
             .update(index, |p| match kind {
                 SpawnedEffect::Ignite => {

@@ -229,7 +229,7 @@ fn the_sneak_key_counts_while_riding() {
                 Vec3::new(8.0, 64.0, 8.0),
                 0.0,
             );
-            game.boats.push(boat);
+            game.entities.boats.push(boat);
             game.riding = Some(5);
             game.client.remote.as_mut().unwrap().first_passenger = false;
             game.insert_device_key(KeyCode::ShiftLeft);

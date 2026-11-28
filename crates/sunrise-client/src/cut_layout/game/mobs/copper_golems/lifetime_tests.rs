@@ -27,13 +27,14 @@ fn statue_conversion_keeps_the_owner_until_physical_discard() {
             .get("minecraft:copper_golem")
             .unwrap()
             .clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(71, kind, Vec3::new(0.5, 70.0, 0.5), 0.0));
         let index = Arc::new(Mutex::new(AttachmentIndex::default()));
         let holder = mod_api::EntityRef::new(game.native_lifecycle.epoch().unwrap(), 71);
         let mut values = Attachments::default();
         VALUE.set(&mut values, Holder::Entity(71), 10).unwrap();
-        let original = game.mobs.update(0, |mob| {
+        let original = game.entities.mobs.update(0, |mob| {
             mob.attachment_lifetime().bind(&mut values, &index, holder);
             mob.attachment_lifetime().registration().unwrap()
         });
@@ -41,8 +42,9 @@ fn statue_conversion_keeps_the_owner_until_physical_discard() {
         let before = index.lock().unwrap().snapshot(&key);
         assert_eq!(before.len(), 1);
         game.golem_become_statue(71);
-        assert!(game.mobs[0].removed);
+        assert!(game.entities.mobs[0].removed);
         let current = game
+            .entities
             .mobs
             .update(0, |mob| mob.attachment_lifetime().registration().unwrap());
         assert!(original.same_registration(&current));
@@ -51,7 +53,7 @@ fn statue_conversion_keeps_the_owner_until_physical_discard() {
         let after = index.lock().unwrap().snapshot(&key);
         assert_eq!(after.len(), 1);
         assert_eq!(after[0].entry.read(&VALUE), Ok(&20));
-        game.mobs.retain(|mob| !mob.removed);
+        game.entities.mobs.retain(|mob| !mob.removed);
         assert!(index.lock().unwrap().snapshot(&key).is_empty());
         assert_eq!(before[0].entry.read(&VALUE), Ok(&10));
         assert_eq!(after[0].entry.read(&VALUE), Ok(&20));

@@ -28,7 +28,7 @@ impl crate::game::ClientGame<'_> {
                 .and_then(|id| {
                     self.common
                         .mob_index
-                        .get(&self.common.mobs, id)
+                        .get(&self.common.entities.mobs, id)
                         .map(|m| m.kind.id.to_string())
                 });
             self.common
@@ -43,7 +43,7 @@ impl crate::game::ClientGame<'_> {
         } else if let Some(m) = self
             .common
             .mob_index
-            .get_mut(&mut self.common.mobs, p.id as u32)
+            .get_mut(&mut self.common.entities.mobs, p.id as u32)
         {
             m.limb_speed = 1.5;
             m.hurt_time = 10;
@@ -126,7 +126,7 @@ impl crate::game::ClientGame<'_> {
                 let m = self
                     .common
                     .mob_index
-                    .get_mut(&mut self.common.mobs, p.id as u32);
+                    .get_mut(&mut self.common.entities.mobs, p.id as u32);
                 if let Some(m) = m
                     && m.species() == sunrise_sim::mobs::Species::Rabbit
                 {
@@ -148,7 +148,7 @@ impl crate::game::ClientGame<'_> {
                     // this.random: the rabbit's own, x then z.
                     game.common
                         .mob_index
-                        .get_mut(&mut game.common.mobs, id)
+                        .get_mut(&mut game.common.entities.mobs, id)
                         .map(|m| (m.random.next_double(), m.random.next_double()))
                 });
             }
@@ -157,7 +157,7 @@ impl crate::game::ClientGame<'_> {
             && let Some(m) = self
                 .common
                 .mob_index
-                .get_mut(&mut self.common.mobs, p.id as u32)
+                .get_mut(&mut self.common.entities.mobs, p.id as u32)
         {
             sunrise_sim::mobs::aquatic::squid_cycle_event(m);
         }
@@ -167,7 +167,7 @@ impl crate::game::ClientGame<'_> {
             && let Some(m) = self
                 .common
                 .mob_index
-                .get_mut(&mut self.common.mobs, p.id as u32)
+                .get_mut(&mut self.common.entities.mobs, p.id as u32)
         {
             m.extra.swap_hands();
         }
@@ -181,7 +181,7 @@ impl crate::game::ClientGame<'_> {
             && let Some(m) = self
                 .common
                 .mob_index
-                .get_mut(&mut self.common.mobs, p.id as u32)
+                .get_mut(&mut self.common.entities.mobs, p.id as u32)
         {
             m.health = 0.0;
         }
@@ -204,7 +204,7 @@ impl crate::game::ClientGame<'_> {
         if let Some(m) = self
             .common
             .mob_index
-            .get_mut(&mut self.common.mobs, p.id as u32)
+            .get_mut(&mut self.common.entities.mobs, p.id as u32)
         {
             sunrise_sim::mobs::sync::entity_event(m, p.event as u8);
         }
@@ -215,7 +215,10 @@ impl crate::game::ClientGame<'_> {
         }
         // LivingEntity.handleEntityEvent 60: the poof as the dead body goes.
         if p.event == 60
-            && let Some(m) = self.common.mob_index.get(&self.common.mobs, p.id as u32)
+            && let Some(m) = self
+                .common
+                .mob_index
+                .get(&self.common.entities.mobs, p.id as u32)
         {
             let (at, w, h) = (m.position, f64::from(m.width()), f64::from(m.height()));
             self.death_poof([at.x, at.y, at.z], w, h);
@@ -224,7 +227,14 @@ impl crate::game::ClientGame<'_> {
             self.remote_totem(p.id);
         }
         // Mob.handleEntityEvent 20: the spawn poof.
-        if p.event == 20 && self.common.mobs.iter().any(|m| m.id == p.id as u32) {
+        if p.event == 20
+            && self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .any(|m| m.id == p.id as u32)
+        {
             self.poof_particles(p.id as u32);
         }
         // The particle bursts of Villager 12 to 14 and 42, TamableAnimal
@@ -237,7 +247,7 @@ impl crate::game::ClientGame<'_> {
         if p.event == 3 {
             let crumbs = self
                 .common
-                .creatures
+                .entities
                 .projectiles
                 .iter()
                 .find(|pr| pr.id == p.id as u32)
@@ -273,6 +283,7 @@ impl crate::game::ClientGame<'_> {
                     .map(|q| [q.position.x, q.position.y, q.position.z])
             } else {
                 self.common
+                    .entities
                     .mobs
                     .iter()
                     .find(|m| m.id == p.id as u32)
@@ -309,11 +320,12 @@ impl crate::game::ClientGame<'_> {
         } else if let Some(m) = self
             .common
             .mob_index
-            .get_mut(&mut self.common.mobs, p.id as u32)
+            .get_mut(&mut self.common.entities.mobs, p.id as u32)
         {
             m.extra.client_effects.list.retain(|e| e.id != id);
         } else if let Some(a) = self
             .common
+            .entities
             .armor_stands
             .iter_mut()
             .find(|a| a.id == p.id as u32)
@@ -367,7 +379,7 @@ impl crate::game::ClientGame<'_> {
         if let Some(m) = self
             .common
             .mob_index
-            .get_mut(&mut self.common.mobs, id as u32)
+            .get_mut(&mut self.common.entities.mobs, id as u32)
         {
             match (index, value) {
                 (0, Value::Byte(flags)) => {
@@ -393,7 +405,13 @@ impl crate::game::ClientGame<'_> {
         // Entity.DATA_NO_GRAVITY of an item, which may come before its stack
         // (`DATA_ITEM`, 8) and so before the item is made.
         if let (5, Value::Bool(no_gravity)) = (index, value) {
-            if let Some(item) = self.common.dropped.iter_mut().find(|d| d.id == id as u32) {
+            if let Some(item) = self
+                .common
+                .entities
+                .dropped
+                .iter_mut()
+                .find(|d| d.id == id as u32)
+            {
                 item.no_gravity = *no_gravity;
             } else if let Some(pending) = self
                 .client
@@ -408,7 +426,7 @@ impl crate::game::ClientGame<'_> {
         if let Some(m) = self
             .common
             .mob_index
-            .get_mut(&mut self.common.mobs, id as u32)
+            .get_mut(&mut self.common.entities.mobs, id as u32)
             && m.species() == sunrise_sim::mobs::Species::Creeper
         {
             match (index, value) {
@@ -422,7 +440,7 @@ impl crate::game::ClientGame<'_> {
         if let Some(m) = self
             .common
             .mob_index
-            .get_mut(&mut self.common.mobs, id as u32)
+            .get_mut(&mut self.common.entities.mobs, id as u32)
         {
             match (index, value) {
                 // Entity.DATA_TICKS_FROZEN: isFullyFrozen shakes it.
@@ -439,6 +457,7 @@ impl crate::game::ClientGame<'_> {
         // too, remote_mob_data's apply reads index 8 above.
         let mannequin = self
             .common
+            .entities
             .mobs
             .iter()
             .any(|m| m.id == id as u32 && &*m.kind.id == "minecraft:mannequin");
@@ -457,7 +476,7 @@ impl crate::game::ClientGame<'_> {
                 if let Some(m) = self
                     .common
                     .mob_index
-                    .get_mut(&mut self.common.mobs, id as u32)
+                    .get_mut(&mut self.common.entities.mobs, id as u32)
                 {
                     m.extra.ints[1] = code;
                     if bed.is_some() {
@@ -478,7 +497,7 @@ impl crate::game::ClientGame<'_> {
                 && let Some(m) = self
                     .common
                     .mob_index
-                    .get_mut(&mut self.common.mobs, id as u32)
+                    .get_mut(&mut self.common.entities.mobs, id as u32)
             {
                 m.extra.main_hand_left = *arm == 0;
             }
@@ -488,7 +507,7 @@ impl crate::game::ClientGame<'_> {
                 && let Some(m) = self
                     .common
                     .mob_index
-                    .get_mut(&mut self.common.mobs, id as u32)
+                    .get_mut(&mut self.common.entities.mobs, id as u32)
             {
                 m.extra.hidden_model_parts = !(*bits as u8) & 0x7F;
             }
@@ -638,7 +657,7 @@ impl crate::game::ClientGame<'_> {
             && let Some(m) = self
                 .common
                 .mob_index
-                .get_mut(&mut self.common.mobs, id as u32)
+                .get_mut(&mut self.common.entities.mobs, id as u32)
             && let (0, Value::Byte(flags)) = (index, value)
         {
             m.extra.crouching = flags & 2 != 0;
@@ -652,7 +671,12 @@ impl crate::game::ClientGame<'_> {
         // ExperienceOrb.DATA_VALUE (the icon's size).
         if *index == 8
             && let Value::Int(v) = value
-            && let Some(o) = self.common.orbs.iter_mut().find(|o| o.id == id as u32)
+            && let Some(o) = self
+                .common
+                .entities
+                .orbs
+                .iter_mut()
+                .find(|o| o.id == id as u32)
         {
             o.value = *v;
         }
@@ -737,7 +761,7 @@ impl crate::game::ClientGame<'_> {
         if let Some(m) = self
             .common
             .mob_index
-            .get_mut(&mut self.common.mobs, p.id as u32)
+            .get_mut(&mut self.common.entities.mobs, p.id as u32)
         {
             if let Some(charged) = charged
                 && &*m.kind.id == "minecraft:player"
@@ -793,6 +817,7 @@ impl crate::game::ClientGame<'_> {
             return Some(row.kind().to_owned());
         }
         self.common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == id as u32)

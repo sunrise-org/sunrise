@@ -73,7 +73,7 @@ pub(in crate::game) fn run_local_player_and_camera_entity_draw_like_the_real_cli
                 _ => CameraType::ThirdPersonFront,
             };
             game.sleeping = (f[2] == "1").then_some([0, 64, 0]);
-            let mob = game.mobs.iter_mut().find(|m| m.id == 31).unwrap();
+            let mob = game.entities.mobs.iter_mut().find(|m| m.id == 31).unwrap();
             mob.extra.ints[1] = i32::from(f[3] == "1");
             actual.push(format!(
                 "{} {} {} {} {} {}",

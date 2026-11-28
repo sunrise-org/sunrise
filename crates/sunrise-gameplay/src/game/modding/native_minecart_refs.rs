@@ -11,11 +11,14 @@ impl crate::game::ServerGame<'_> {
         let Target::Cart(id) = self.native_entity_target(cart.entity())? else {
             return None;
         };
-        self.common.carts.iter().position(|c| c.id == id)
+        self.common.entities.carts.iter().position(|c| c.id == id)
     }
 
     fn native_minecart(&self, cart: MinecartRef) -> Option<&Minecart> {
-        self.common.carts.get(self.native_minecart_index(cart)?)
+        self.common
+            .entities
+            .carts
+            .get(self.native_minecart_index(cart)?)
     }
 
     /// Edits a cart, of one kind if `kind` is given. False for another kind
@@ -29,10 +32,10 @@ impl crate::game::ServerGame<'_> {
         let Some(index) = self.native_minecart_index(cart) else {
             return false;
         };
-        if kind.is_some_and(|kind| self.common.carts[index].kind != kind) {
+        if kind.is_some_and(|kind| self.common.entities.carts[index].kind != kind) {
             return false;
         }
-        self.common.carts.update(index, edit);
+        self.common.entities.carts.update(index, edit);
         true
     }
 
@@ -201,7 +204,7 @@ impl crate::game::ServerGame<'_> {
         let Some(index) = self.native_minecart_index(cart) else {
             return false;
         };
-        if self.common.carts[index].kind != CartKind::Tnt
+        if self.common.entities.carts[index].kind != CartKind::Tnt
             || !self
                 .common
                 .ui
@@ -210,7 +213,7 @@ impl crate::game::ServerGame<'_> {
         {
             return false;
         }
-        let mut primed = self.common.carts[index].clone();
+        let mut primed = self.common.entities.carts[index].clone();
         self.prime_cart(&mut primed);
         self.native_minecart_edit(cart, Some(CartKind::Tnt), |c| c.fuse = primed.fuse)
     }

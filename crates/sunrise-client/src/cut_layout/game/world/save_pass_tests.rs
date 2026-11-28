@@ -84,17 +84,17 @@ fn save_requested_during_pickup_keeps_lifted_items_on_disk() {
                     game.$($field).+.restore(pass, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
                 }};
             }
-            refuses!(mobs);
-            refuses!(dropped);
-            refuses!(boats);
-            refuses!(carts);
-            refuses!(armor_stands);
-            refuses!(tnts);
-            refuses!(falling);
-            refuses!(orbs);
-            refuses!(creatures.projectiles);
-            refuses!(rockets);
-            refuses!(tridents);
+            refuses!(entities.mobs);
+            refuses!(entities.dropped);
+            refuses!(entities.boats);
+            refuses!(entities.carts);
+            refuses!(entities.armor_stands);
+            refuses!(entities.tnts);
+            refuses!(entities.falling);
+            refuses!(entities.orbs);
+            refuses!(entities.projectiles);
+            refuses!(entities.rockets);
+            refuses!(entities.tridents);
             game.with_entity_held_out(999, |game| assert!(game.save_game().is_err()));
             game.player = Some(PlayerMotion::new(game.motion, Vec3::new(2.0, 64.0, 2.0)));
             game.level.player_uuid = Some([0, 0, 0, 99]);
@@ -124,11 +124,11 @@ fn save_requested_during_pickup_keeps_lifted_items_on_disk() {
             });
             assert_eq!(calls.load(Ordering::SeqCst), 1, "listener must really run");
             assert_eq!(
-                game.dropped.len(),
+                game.entities.dropped.len(),
                 2,
                 "refused pickup and untouched row survive"
             );
-            assert_eq!(game.dropped[0].stack.count, 7);
+            assert_eq!(game.entities.dropped[0].stack.count, 7);
             game.server.save.0.flush().unwrap();
             assert!(
                 game.server.save.0.load_entities(0, 0).unwrap().is_empty(),

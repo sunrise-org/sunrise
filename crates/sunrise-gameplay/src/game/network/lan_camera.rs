@@ -28,7 +28,12 @@ impl crate::game::ServerGame<'_> {
         }
         let t = self.level_entity(id)?;
         if let Target::Mob(m) = t
-            && !self.common.mobs.iter().any(|x| x.id == m && x.alive())
+            && !self
+                .common
+                .entities
+                .mobs
+                .iter()
+                .any(|x| x.id == m && x.alive())
         {
             return None;
         }
@@ -42,14 +47,14 @@ impl crate::game::ServerGame<'_> {
     pub(in crate::game::server_side) fn camera_extra(&self, id: i32) -> Option<CameraExtra> {
         let id = u32::try_from(id).ok().filter(|&id| id != 0)?;
         let at = |v: Vec3| [v.x, v.y, v.z];
-        if let Some(t) = self.common.tnts.iter().find(|t| t.id == id) {
+        if let Some(t) = self.common.entities.tnts.iter().find(|t| t.id == id) {
             return Some(CameraExtra {
                 position: at(t.position),
                 rotation: [0.0; 2],
                 bounds: t.bounds(),
             });
         }
-        if let Some(f) = self.common.falling.iter().find(|f| f.id == id) {
+        if let Some(f) = self.common.entities.falling.iter().find(|f| f.id == id) {
             // EntityType.FALLING_BLOCK: 0.98 x 0.98.
             let h = 0.49;
             return Some(CameraExtra {
@@ -95,6 +100,7 @@ impl crate::game::ServerGame<'_> {
             Some(Target::Mob(_)) => self.camera_state(id).is_some(),
             Some(Target::Stand(s)) => self
                 .common
+                .entities
                 .armor_stands
                 .iter()
                 .any(|a| a.id == s && !a.marker),

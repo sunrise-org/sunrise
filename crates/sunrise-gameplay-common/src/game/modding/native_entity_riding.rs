@@ -91,7 +91,9 @@ pub mod tests {
                 {
                     let id = 200 + index as u32 * 3;
                     if vehicle_kind == "minecraft:armor_stand" {
-                        game.armor_stands.push(ArmorStand::new(id, Vec3::ZERO, 0.0));
+                        game.entities
+                            .armor_stands
+                            .push(ArmorStand::new(id, Vec3::ZERO, 0.0));
                     } else {
                         game.side
                             .others
@@ -222,11 +224,11 @@ pub mod tests {
                 game.options.dedicated = Some(Vec::new());
                 for id in [40, 41, 42] {
                     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                    game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                    game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
                 }
                 assert!(game.start_riding_target(Target::Mob(40), Target::Mob(41), true));
                 assert!(!game.start_riding_target(Target::Mob(40), Target::Mob(42), true));
-                assert_eq!(game.mobs[0].extra.mount, Some(41));
+                assert_eq!(game.entities.mobs[0].extra.mount, Some(41));
                 assert_eq!(*events.lock().unwrap(), [true, true, false]);
             });
         });
@@ -253,21 +255,22 @@ pub mod tests {
                     (43, "minecraft:cow"),
                 ] {
                     let kind = game.res.mob_types().get(name).unwrap().clone();
-                    game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                    game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
                 }
-                game.boats
+                game.entities
+                    .boats
                     .push(Boat::new(44, "oak".into(), Vec3::ZERO, 0.0));
                 let pig =
                     "ride @e[type=minecraft:zombie,limit=1] mount @e[type=minecraft:pig,limit=1]";
                 let boat = "ride @e[type=minecraft:zombie,limit=1] mount @e[type=minecraft:oak_boat,limit=1]";
                 assert!(game.run_command(pig));
-                game.mobs[0].extra.mount = None;
-                game.mobs[1].extra.rider = None;
+                game.entities.mobs[0].extra.mount = None;
+                game.entities.mobs[1].extra.rider = None;
                 assert!(game.run_command(boat));
-                game.mobs[0].extra.mount = None;
-                game.mobs[2].extra.mount = Some(41);
-                game.mobs[1].extra.rider = Some(42);
-                game.mobs[3].extra.mount = Some(44);
+                game.entities.mobs[0].extra.mount = None;
+                game.entities.mobs[2].extra.mount = Some(41);
+                game.entities.mobs[1].extra.rider = Some(42);
+                game.entities.mobs[3].extra.mount = Some(44);
                 super::super::native_player_death::tests::add_guest(game);
                 game.side
                     .lan
@@ -297,8 +300,8 @@ pub mod tests {
                 // /ride forces mob boarding: capacity alone must not suppress its hook.
                 assert!(game.run_command(pig));
                 assert_eq!(*events.lock().unwrap(), [true]);
-                assert_eq!(game.mobs[0].extra.mount, Some(41));
-                assert_eq!(game.mobs[2].extra.mount, Some(41));
+                assert_eq!(game.entities.mobs[0].extra.mount, Some(41));
+                assert_eq!(game.entities.mobs[2].extra.mount, Some(41));
             });
         });
     }
@@ -313,11 +316,11 @@ pub mod tests {
                 (72, "minecraft:happy_ghast"),
             ] {
                 let kind = game.res.mob_types().get(name).unwrap().clone();
-                game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
             }
             for id in 73..=76 {
                 let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
             }
             // Capacity counts real player bodies, not an unbound `riding` pointer.
             let player = super::super::native_player_death::tests::add_guest(game);
@@ -356,7 +359,7 @@ pub mod tests {
                 let first = 100 + vehicle * 10;
                 for id in first..=first + capacity {
                     let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                    game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                    game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
                 }
                 for rider in first..first + capacity {
                     assert!(
@@ -391,7 +394,8 @@ pub mod tests {
         super::super::native_entity_refs::tests::with_game(|game| {
             game.player = Some(PlayerMotion::new(game.motion, Vec3::ZERO));
             game.yaw = 10.0;
-            game.boats
+            game.entities
+                .boats
                 .push(Boat::new(60, "oak".into(), Vec3::ZERO, 45.0));
             assert!(game.interact_boat(Some(InteractTarget {
                 id: 60,
@@ -400,7 +404,8 @@ pub mod tests {
             assert_eq!(game.riding, Some(60));
             assert_eq!(game.yaw, 10.0, "mounting keeps the rider's view");
             game.riding = None;
-            game.carts
+            game.entities
+                .carts
                 .push(Minecart::new(61, CartKind::Rideable, Vec3::ZERO));
             assert!(game.interact_cart(Some(InteractTarget {
                 id: 61,
@@ -418,8 +423,9 @@ pub mod tests {
         use super::super::boats_common::Boat;
         super::super::native_entity_refs::tests::with_game(|game| {
             let kind = game.res.mob_types().get("minecraft:horse").unwrap().clone();
-            game.mobs.push(Mob::new(70, kind, Vec3::ZERO, 0.0));
-            game.boats
+            game.entities.mobs.push(Mob::new(70, kind, Vec3::ZERO, 0.0));
+            game.entities
+                .boats
                 .push(Boat::new(71, "oak".into(), Vec3::ZERO, 0.0));
             let host = &*game as &dyn ServerHost;
             let shows = |id| game.entity(id).unwrap().shows_vehicle_health(host);
@@ -434,7 +440,7 @@ pub mod tests {
         super::super::native_entity_refs::tests::with_game(|game| {
             for id in [50, 51] {
                 let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
             }
             let rider = game.entity(50).unwrap();
             let vehicle = game.entity(51).unwrap();
@@ -447,7 +453,7 @@ pub mod tests {
             assert!(game.entity_start_riding(rider, vehicle, true).is_err());
             game.side.held_out.pop();
             assert!(game.entity_start_riding(rider, vehicle, true).is_ok());
-            assert_eq!(game.mobs[0].extra.mount, Some(51));
+            assert_eq!(game.entities.mobs[0].extra.mount, Some(51));
         });
     }
 
@@ -461,7 +467,7 @@ pub mod tests {
         for<'__g> crate::game::Game<'__g, S>: ::mod_api::Host,
     {
         let kind = game.res.mob_types().get(name).unwrap().clone();
-        game.mobs.push(Mob::new(id, kind, at, 0.0));
+        game.entities.mobs.push(Mob::new(id, kind, at, 0.0));
         game.entity(id).unwrap()
     }
     pub(in crate::game::server_side) fn stale(entity: EntityRef) -> EntityRef {
@@ -541,8 +547,8 @@ pub mod tests {
                 Some(first)
             );
             game.mob_object_mut(81).unwrap().health = 1.0;
-            let index = game.mobs.iter().position(|m| m.id == 81).unwrap();
-            let ghost = game.mobs.remove(index);
+            let index = game.entities.mobs.iter().position(|m| m.id == 81).unwrap();
+            let ghost = game.entities.mobs.remove(index);
             game.persist
                 .off_level
                 .insert(81, crate::game::entity_memory::OffLevel::Mob(ghost));
@@ -581,8 +587,8 @@ pub mod tests {
                 None,
                 "retained objects cannot revive stale handles"
             );
-            let index = game.mobs.iter().position(|m| m.id == 82).unwrap();
-            let ghost = game.mobs.remove(index);
+            let index = game.entities.mobs.iter().position(|m| m.id == 82).unwrap();
+            let ghost = game.entities.mobs.remove(index);
             game.persist
                 .off_level
                 .insert(82, crate::game::entity_memory::OffLevel::Mob(ghost));
@@ -599,8 +605,8 @@ pub mod tests {
                 collect_entity_visit(|visit| camel.visit_indirect_passengers(game, visit)),
                 Ok(vec![top])
             );
-            let index = game.mobs.iter().position(|m| m.id == 80).unwrap();
-            let ghost = game.mobs.remove(index);
+            let index = game.entities.mobs.iter().position(|m| m.id == 80).unwrap();
+            let ghost = game.entities.mobs.remove(index);
             game.persist
                 .off_level
                 .insert(80, crate::game::entity_memory::OffLevel::Mob(ghost));
@@ -618,11 +624,12 @@ pub mod tests {
             assert_eq!(stale(top).is_vehicle(game), None);
             let other_root = add_mob(game, 85, "minecraft:cow", Vec3::ZERO);
             let index = game
+                .entities
                 .mobs
                 .iter()
                 .position(|m| m.id == other_root.id())
                 .unwrap();
-            let ghost = game.mobs.remove(index);
+            let ghost = game.entities.mobs.remove(index);
             game.persist
                 .off_level
                 .insert(85, crate::game::entity_memory::OffLevel::Mob(ghost));
@@ -691,7 +698,7 @@ pub mod tests {
                 Ok(vec![last, next, driver])
             );
             // `Entity.saveWithoutId` writes `getPassengers`, so a reload keeps the order.
-            let index = game.mobs.iter().position(|m| m.id == 86).unwrap();
+            let index = game.entities.mobs.iter().position(|m| m.id == 86).unwrap();
             let saved = game.mob_tree_nbt(index);
             let Some(Tag::List(riders)) = saved.get("Passengers") else {
                 panic!("no Passengers in {saved:?}");
@@ -711,7 +718,7 @@ pub mod tests {
                 Some(LivingRef::new(last))
             );
             assert!(game.entity_stop_riding(last));
-            assert_eq!(game.mobs[index].extra.rider, Some(87));
+            assert_eq!(game.entities.mobs[index].extra.rider, Some(87));
             assert_eq!(
                 vehicle.controlling_passenger(game),
                 Some(LivingRef::new(next))
@@ -797,9 +804,9 @@ pub mod tests {
                 ravager.controlling_passenger(game),
                 Some(LivingRef::new(zombie))
             );
-            game.mobs[0].no_ai = true;
+            game.entities.mobs[0].no_ai = true;
             assert_eq!(ravager.controlling_passenger(game), None);
-            game.mobs[0].no_ai = false;
+            game.entities.mobs[0].no_ai = false;
 
             // `#non_controlling_rider` keeps a mob from steering.
             let cow = add_mob(game, 92, "minecraft:cow", Vec3::ZERO);
@@ -814,7 +821,8 @@ pub mod tests {
             // A player steers a boat at once, a pig only saddled and with the stick in hand.
             let player = super::super::native_player_death::tests::add_guest(game).entity();
             let conn = 1;
-            game.boats
+            game.entities
+                .boats
                 .push(Boat::new(95, "oak".into(), Vec3::ZERO, 0.0));
             let boat = game.entity(95).unwrap();
             // A mob in a boat steers nothing, and a player boarding after it goes first.
@@ -846,8 +854,8 @@ pub mod tests {
                 Ok(vec![player])
             );
             assert_eq!(pig.controlling_passenger(game), None);
-            let index = game.mobs.iter().position(|m| m.id == 96).unwrap();
-            game.mobs[index].extra.set_saddled(true);
+            let index = game.entities.mobs.iter().position(|m| m.id == 96).unwrap();
+            game.entities.mobs[index].extra.set_saddled(true);
             assert_eq!(pig.controlling_passenger(game), None);
             game.side
                 .lan
@@ -867,15 +875,18 @@ pub mod tests {
                 let entity = add_mob(game, id, name, Vec3::ZERO);
                 ride(game, id);
                 assert_eq!(entity.controlling_passenger(game), None, "{name}");
-                (entity, game.mobs.iter().position(|m| m.id == id).unwrap())
+                (
+                    entity,
+                    game.entities.mobs.iter().position(|m| m.id == id).unwrap(),
+                )
             };
             for (id, name) in [(97, "minecraft:horse"), (98, "minecraft:nautilus")] {
                 let (entity, index) = mount(game, id, name);
-                game.mobs[index].extra.set_saddled(true);
+                game.entities.mobs[index].extra.set_saddled(true);
                 assert_eq!(entity.controlling_passenger(game), steered, "{name}");
             }
             let (strider, index) = mount(game, 99, "minecraft:strider");
-            game.mobs[index].extra.set_saddled(true);
+            game.entities.mobs[index].extra.set_saddled(true);
             assert_eq!(strider.controlling_passenger(game), None);
             game.side
                 .lan
@@ -888,15 +899,15 @@ pub mod tests {
                 .unwrap();
             assert_eq!(strider.controlling_passenger(game), steered);
             let (ghast, index) = mount(game, 89, "minecraft:happy_ghast");
-            game.mobs[index]
+            game.entities.mobs[index]
                 .extra
                 .set_body(Some("minecraft:white_harness".into()));
             assert_eq!(ghast.controlling_passenger(game), steered);
-            game.mobs[index].extra.counter = 10;
+            game.entities.mobs[index].extra.counter = 10;
             assert_eq!(ghast.controlling_passenger(game), None);
             // Both endpoints can be non-Mobs: even with no Mob objects, the
             // root walk must visit the player's boat before its terminal step.
-            game.mobs.clear();
+            game.entities.mobs.clear();
             ride(game, 95);
             assert_eq!(player.root_vehicle(game), Some(boat));
         });
@@ -914,9 +925,9 @@ pub mod tests {
             let at = Vec3::new(0.5, 64.0, 0.5);
             let cow = add_mob(game, 160, "minecraft:cow", at);
             let holder = add_mob(game, 161, "minecraft:sheep", at);
-            game.mobs[0].health = 0.0;
+            game.entities.mobs[0].health = 0.0;
             let tick_cleanup = |game: &mut crate::game::ServerGame<'_>| {
-                game.mobs[0].extra.leash = Some(Holder::Mob(161));
+                game.entities.mobs[0].extra.leash = Some(Holder::Mob(161));
                 // What `leash::tick` sends for a mob that is not alive.
                 let event = MobEvent::LeashBreak {
                     mob: 160,
@@ -924,13 +935,13 @@ pub mod tests {
                     sound: false,
                 };
                 game.handle_mob_events(vec![event]).unwrap();
-                assert_eq!(game.mobs[0].extra.leash, None);
+                assert_eq!(game.entities.mobs[0].extra.leash, None);
             };
 
             // `tickLeash`: `removeLeash` with the rule off, `dropLeash` with it on.
             game.ui.rules.set("entity_drops", Value::Bool(false));
             tick_cleanup(game);
-            assert!(game.dropped.is_empty());
+            assert!(game.entities.dropped.is_empty());
             game.ui.rules.set("entity_drops", Value::Bool(true));
             tick_cleanup(game);
             take_one_lead(game, at);
@@ -953,7 +964,7 @@ pub mod tests {
             assert!(cow.leash_to(game, player));
             let dropped = game.as_guest(1, |game| game.drop_all_leash_connections());
             assert_eq!(dropped, Some(true));
-            assert_eq!(game.mobs[0].extra.leash, None);
+            assert_eq!(game.entities.mobs[0].extra.leash, None);
             take_one_lead(game, at);
         });
     }
@@ -978,12 +989,12 @@ pub mod tests {
     where
         for<'__g> crate::game::Game<'__g, S>: ::mod_api::Host,
     {
-        assert_eq!(game.dropped.len(), 1);
-        let item = game.dropped.iter().next().unwrap();
+        assert_eq!(game.entities.dropped.len(), 1);
+        let item = game.entities.dropped.iter().next().unwrap();
         assert_eq!(&*item.stack.item, "minecraft:lead");
         assert_eq!(item.stack.count, 1);
         assert_eq!(item.position, at);
-        game.dropped.clear();
+        game.entities.dropped.clear();
     }
     pub(in crate::game::server_side) fn assert_near(at: [f64; 3], expected: [f64; 3]) {
         let near = at.iter().zip(expected).all(|(a, b)| (a - b).abs() < 1e-4);
@@ -1013,16 +1024,20 @@ pub mod tests {
                 assert_near(get_off(game, rider, vehicle), [0.5, 64.0 + height, 0.5]);
             }
             // At a right-handed rider's right, `(1.3964844 + 0.6 + 1e-5) / 2` from a horse's centre.
-            let index = game.mobs.iter().position(|m| m.id == 100).unwrap();
-            game.mobs[index].extra.left_handed = false;
+            let index = game.entities.mobs.iter().position(|m| m.id == 100).unwrap();
+            game.entities.mobs[index].extra.left_handed = false;
             let horse = add_mob(game, 105, "minecraft:horse", at);
             assert_near(get_off(game, rider, horse), [-0.49825, 64.0, 0.5]);
             // Ahead of it past a boat's side, `(1.375 * sqrt 2 + 0.6 + 1e-5) / 2` from its centre.
-            game.boats.push(Boat::new(106, "oak".into(), at, 0.0));
+            game.entities
+                .boats
+                .push(Boat::new(106, "oak".into(), at, 0.0));
             let boat = game.entity(106).unwrap();
             assert_near(get_off(game, rider, boat), [0.5, 64.0, 1.77229]);
             // A cart facing south lets it off to the north.
-            game.carts.push(Minecart::new(107, CartKind::Rideable, at));
+            game.entities
+                .carts
+                .push(Minecart::new(107, CartKind::Rideable, at));
             let cart = game.entity(107).unwrap();
             assert_near(get_off(game, rider, cart), [0.5, 64.0, -0.5]);
         });
@@ -1064,11 +1079,15 @@ pub mod tests {
             assert_near(get_off(game, player, strider), [0.5, 64.0, 1.5]);
             let ghast = add_mob(game, 122, "minecraft:happy_ghast", at);
             assert_near(get_off(game, player, ghast), [0.5, 68.0, 0.5]);
-            game.boats.push(Boat::new(123, "oak".into(), at, 0.0));
+            game.entities
+                .boats
+                .push(Boat::new(123, "oak".into(), at, 0.0));
             let boat = game.entity(123).unwrap();
             assert_near(get_off(game, player, boat), [0.5, 64.0, 1.77229]);
             // As for a mob, a cart facing south lets it off to the north.
-            game.carts.push(Minecart::new(124, CartKind::Rideable, at));
+            game.entities
+                .carts
+                .push(Minecart::new(124, CartKind::Rideable, at));
             let cart = game.entity(124).unwrap();
             assert_near(get_off(game, player, cart), [0.5, 64.0, -0.5]);
         });
@@ -1093,10 +1112,10 @@ pub mod tests {
             // Boarding turns the player to the vehicle, so it faces the same way.
             let mut boat = Boat::new(150, "oak".into(), at, 45.0);
             boat.previous_yaw = 45.0;
-            game.boats.push(boat);
+            game.entities.boats.push(boat);
             let boat = game.entity(150).unwrap();
             let strider = add_mob(game, 151, "minecraft:strider", at);
-            game.mobs[0].yaw = 45.0;
+            game.entities.mobs[0].yaw = 45.0;
 
             // `getCollisionHorizontalEscapeVector` at 45 degrees: the longer axis reaches the
             // distance, so both do, `(1.375 * sqrt 2 + 0.6 + 1e-5) / 2` out from a boat's centre.
@@ -1186,7 +1205,9 @@ pub mod tests {
                 let cow = add_mob(game, 110, "minecraft:cow", at);
                 let holder = add_mob(game, 111, "minecraft:sheep", at);
                 let vehicle = add_mob(game, 112, "minecraft:pig", at);
-                game.boats.push(Boat::new(113, "oak".into(), at, 0.0));
+                game.entities
+                    .boats
+                    .push(Boat::new(113, "oak".into(), at, 0.0));
                 let boat = game.entity(113).unwrap();
 
                 // A mob's lead goes to a mob, and the leashed mob gets off its vehicle.
@@ -1214,7 +1235,7 @@ pub mod tests {
 
                 // `removeLeash` leaves no item, `dropLeash` drops one; both tell `entity_unleash`.
                 assert!(cow.detach_leash(game, false));
-                assert!(game.dropped.is_empty());
+                assert!(game.entities.dropped.is_empty());
                 assert_eq!(cow.leash_holder(game), Some(LeashHolder::Unleashed));
                 assert_eq!(*unleashed.lock().unwrap(), 1);
                 assert!(!cow.detach_leash(game, false));
@@ -1230,7 +1251,7 @@ pub mod tests {
                 assert_eq!(boat.leash_holder(game), Some(LeashHolder::Entity(holder)));
                 assert!(boat.detach_leash(game, false));
                 assert_eq!(boat.leash_holder(game), Some(LeashHolder::Unleashed));
-                assert!(game.dropped.is_empty());
+                assert!(game.entities.dropped.is_empty());
                 assert!(boat.leash_to(game, holder));
                 assert!(boat.detach_leash(game, true));
                 assert_eq!(boat.leash_holder(game), Some(LeashHolder::Unleashed));
@@ -1257,20 +1278,25 @@ pub mod tests {
 
                 // A holder unresolved from a save reads as unknown, and `dropLeash` leaves it;
                 // `setLeashedTo` replaces it.
-                let index = game.mobs.iter().position(|m| m.id == 110).unwrap();
-                game.mobs[index].extra.leash_pending = Some(Pending::Uuid([0, 0, 0, 99]));
+                let index = game.entities.mobs.iter().position(|m| m.id == 110).unwrap();
+                game.entities.mobs[index].extra.leash_pending = Some(Pending::Uuid([0, 0, 0, 99]));
                 assert_eq!(cow.leash_holder(game), None);
                 assert!(!cow.detach_leash(game, true));
-                assert!(game.mobs[index].extra.leash_pending.is_some());
+                assert!(game.entities.mobs[index].extra.leash_pending.is_some());
                 assert!(cow.leash_to(game, holder));
                 assert_eq!(cow.leash_holder(game), Some(LeashHolder::Entity(holder)));
-                let index = game.boats.iter().position(|b| b.id == 113).unwrap();
-                game.boats.update(index, |boat| {
+                let index = game
+                    .entities
+                    .boats
+                    .iter()
+                    .position(|b| b.id == 113)
+                    .unwrap();
+                game.entities.boats.update(index, |boat| {
                     boat.leash_pending = Some(Pending::Uuid([0, 0, 0, 99]));
                 });
                 assert_eq!(boat.leash_holder(game), None);
                 assert!(!boat.detach_leash(game, true));
-                assert!(game.boats[index].leash_pending.is_some());
+                assert!(game.entities.boats[index].leash_pending.is_some());
                 assert!(boat.leash_to(game, holder));
                 assert_eq!(boat.leash_holder(game), Some(LeashHolder::Entity(holder)));
             });
@@ -1283,24 +1309,24 @@ pub mod tests {
         super::super::native_entity_refs::tests::with_game(|game| {
             for id in [30, 31, 32] {
                 let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-                game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+                game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
             }
-            game.mobs[0].extra.boarding_cooldown = 10;
+            game.entities.mobs[0].extra.boarding_cooldown = 10;
             assert!(!game.start_riding_target(Target::Mob(30), Target::Mob(31), false));
             assert!(game.start_riding_target(Target::Mob(30), Target::Mob(31), true));
             assert!(!game.start_riding_target(Target::Mob(30), Target::Mob(31), true));
             assert!(!game.start_riding_target(Target::Mob(31), Target::Mob(30), true));
             assert!(!game.start_riding_target(Target::Mob(32), Target::Mob(31), false));
             assert!(game.start_riding_target(Target::Mob(32), Target::Mob(31), true));
-            assert_eq!(game.mobs[0].extra.mount, Some(31));
-            assert_eq!(game.mobs[1].extra.rider, Some(30));
-            assert_eq!(game.mobs[2].extra.mount, Some(31));
+            assert_eq!(game.entities.mobs[0].extra.mount, Some(31));
+            assert_eq!(game.entities.mobs[1].extra.rider, Some(30));
+            assert_eq!(game.entities.mobs[2].extra.mount, Some(31));
             game.dismount_mob(30);
-            assert_eq!(game.mobs[0].extra.mount, None);
-            assert_eq!(game.mobs[0].extra.boarding_cooldown, 60);
+            assert_eq!(game.entities.mobs[0].extra.mount, None);
+            assert_eq!(game.entities.mobs[0].extra.boarding_cooldown, 60);
             assert!(!game.start_riding_target(Target::Mob(30), Target::Mob(32), false));
             assert!(game.start_riding_target(Target::Mob(30), Target::Mob(32), true));
-            assert_eq!(game.mobs[0].extra.mount, Some(32));
+            assert_eq!(game.entities.mobs[0].extra.mount, Some(32));
         });
     }
 }

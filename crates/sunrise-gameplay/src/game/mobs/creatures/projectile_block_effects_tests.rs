@@ -18,7 +18,7 @@ fn tick_inside(game: &mut ServerGame<'_>, block: &str, mut shot: Projectile) -> 
     game.world.set(0, 64, 0, state).unwrap();
     shot.id = 71;
     shot.velocity = Vec3::ZERO;
-    game.creatures.projectiles.push(shot);
+    game.entities.projectiles.push(shot);
     game.start_audio_capture();
     game.tick_projectiles().unwrap();
     let sounds = std::mem::take(&mut game.server.pending_sounds);
@@ -135,13 +135,13 @@ fn fire_lava_and_water_reach_a_projectile_in_its_tick() {
                 );
                 bullet.id = 71;
                 bullet.velocity = Vec3::new(0.8, 0.0, 0.0);
-                game.creatures.projectiles.push(bullet);
+                game.entities.projectiles.push(bullet);
 
                 let mut snowball =
                     Projectile::new(ProjectileKind::Snowball, Vec3::new(0.5, 64.5, 3.5), None);
                 snowball.id = 72;
                 snowball.velocity = Vec3::ZERO;
-                game.creatures.projectiles.push(snowball);
+                game.entities.projectiles.push(snowball);
 
                 game.tick_projectiles().unwrap();
 
@@ -162,7 +162,7 @@ fn fire_lava_and_water_reach_a_projectile_in_its_tick() {
                     "impact listener writes must not commit for a lava-destroyed bullet"
                 );
                 assert!(
-                    game.creatures.projectiles.iter().all(|p| p.id != 71),
+                    game.entities.projectiles.iter().all(|p| p.id != 71),
                     "shulker bullet must be destroyed"
                 );
                 assert!(
@@ -179,7 +179,7 @@ fn fire_lava_and_water_reach_a_projectile_in_its_tick() {
         Ok("fire") => {
             let shot = Projectile::new(ProjectileKind::Snowball, at(), None);
             tick_inside(game, "minecraft:fire", shot);
-            assert_eq!(game.creatures.projectiles[0].fire_ticks, 159);
+            assert_eq!(game.entities.projectiles[0].fire_ticks, 159);
         }
         // Entity.lavaHurt on a shulker bullet: its hurtServer destroys it,
         // with its hurt sound, and the burn plays as hurtServer said true.
@@ -196,7 +196,7 @@ fn fire_lava_and_water_reach_a_projectile_in_its_tick() {
                 None,
             );
             let sounds = tick_inside(game, "minecraft:lava", shot);
-            assert!(game.creatures.projectiles.is_empty(), "the bullet is gone");
+            assert!(game.entities.projectiles.is_empty(), "the bullet is gone");
             assert!(
                 sounds
                     .iter()
@@ -210,7 +210,7 @@ fn fire_lava_and_water_reach_a_projectile_in_its_tick() {
             let mut shot = Projectile::new(ProjectileKind::Snowball, at(), None);
             shot.fire_ticks = 100;
             let sounds = tick_inside(game, "minecraft:water", shot);
-            assert_eq!(game.creatures.projectiles[0].fire_ticks, 0);
+            assert_eq!(game.entities.projectiles[0].fire_ticks, 0);
             assert!(
                 sounds
                     .iter()

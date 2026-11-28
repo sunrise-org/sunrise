@@ -37,7 +37,7 @@ pub(crate) fn matrix(mods: mod_api::Mods) {
                         game.world.set(0, 65, 0, air).unwrap();
                         game.set_test_forced_hit((path == 1).then(hit));
                         game.side_release_tick_targets();
-                        game.mobs.clear();
+                        game.entities.mobs.clear();
                         game.clear_device_keys();
                         game.yaw = 0.0;
                         game.pitch = 0.0;
@@ -91,7 +91,12 @@ pub(crate) fn matrix(mods: mod_api::Mods) {
                             1
                         );
                         assert_eq!(game.world.block(0, 64, 0), target_state);
-                        assert!(game.mobs.iter().all(|mob| !mob.removed && mob.alive()));
+                        assert!(
+                            game.entities
+                                .mobs
+                                .iter()
+                                .all(|mob| !mob.removed && mob.alive())
+                        );
                         assert_eq!(
                             game.swings_started - swings,
                             if server_only {

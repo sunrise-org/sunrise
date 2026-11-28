@@ -73,13 +73,14 @@ pub(crate) mod peaceful_tests {
                     );
                 }
             }
-            assert!(game.mobs.is_empty());
+            assert!(game.entities.mobs.is_empty());
             assert_eq!(
                 game.cmd_summon(&context("peaceful_test:zombie", Some("{UUID:[I;1,2,3,4]}"))),
                 Ok(1)
             );
             assert!(
-                game.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .any(|mob| mob.kind.id == "peaceful_test:zombie")
             );
@@ -89,13 +90,13 @@ pub(crate) mod peaceful_tests {
                 let nbt = format!(
                     "{{Passengers:[{{id:\"{TRADER}\"{uuid},Passengers:[{{id:\"minecraft:pig\"}}]}}]}}"
                 );
-                let before = game.mobs.len();
+                let before = game.entities.mobs.len();
                 assert_eq!(
                     game.cmd_summon(&context("minecraft:cow", Some(&nbt))),
                     Ok(1)
                 );
-                assert_eq!(game.mobs.len(), before + 1);
-                let cow = &game.mobs[before];
+                assert_eq!(game.entities.mobs.len(), before + 1);
+                let cow = &game.entities.mobs[before];
                 assert_eq!(cow.kind.id, "minecraft:cow");
                 assert!(cow.extra.rider.is_none());
             }
@@ -168,7 +169,8 @@ pub(crate) mod selector_bounds_tests {
         .unwrap();
         game.build_registries();
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(30, kind, Vec3::new(10.5, 220.0, 10.5), 0.0));
         let target = Target::Mob(30);
         let mut selector = Selector {
@@ -199,7 +201,8 @@ pub(crate) mod selector_bounds_tests {
                 .len(),
             1
         );
-        game.armor_stands
+        game.entities
+            .armor_stands
             .push(ArmorStand::new(31, Vec3::new(30.5, 220.0, 10.5), 0.0));
         selector.delta = [Some(0.0); 3];
         for (x, count) in [(29.5, 1), (29.25, 0), (30.75, 0), (29.250000000000004, 1)] {
@@ -725,16 +728,27 @@ pub(crate) mod global_selector_order_tests {
                 assert_eq!(game.target_position(target), Some(*pos));
                 assert!(game.world.loaded(pos[0] as i32, pos[2] as i32));
                 let join = match target {
-                    Target::Mob(id) => game.mobs.iter().find(|m| m.id == id).unwrap().join_seq(),
+                    Target::Mob(id) => game
+                        .entities
+                        .mobs
+                        .iter()
+                        .find(|m| m.id == id)
+                        .unwrap()
+                        .join_seq(),
                     Target::Stand(id) => game
+                        .entities
                         .armor_stands
                         .iter()
                         .find(|m| m.id == id)
                         .unwrap()
                         .join_seq(),
-                    Target::Item(id) => {
-                        game.dropped.iter().find(|m| m.id == id).unwrap().join_seq()
-                    }
+                    Target::Item(id) => game
+                        .entities
+                        .dropped
+                        .iter()
+                        .find(|m| m.id == id)
+                        .unwrap()
+                        .join_seq(),
                     _ => panic!("actual admitted family"),
                 };
                 assert!(

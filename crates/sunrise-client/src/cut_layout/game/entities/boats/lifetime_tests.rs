@@ -39,9 +39,9 @@ fn a_tick_clone_follows_its_join_but_cannot_replace_a_later_resident() {
 fn a_bound_boat_keeps_its_registration_through_ticks_until_discard() {
     bound_boat_server_case(|game, step| {
         game.tick_boats();
-        assert_eq!(game.boats[0].age, step);
-        assert_eq!(game.boats[0].hurt_time, 6 - step);
-        assert!(game.boats[0].position.y < 70.0);
+        assert_eq!(game.entities.boats[0].age, step);
+        assert_eq!(game.entities.boats[0].hurt_time, 6 - step);
+        assert!(game.entities.boats[0].position.y < 70.0);
     });
 }
 
@@ -55,9 +55,9 @@ fn a_bound_boat_commits_the_driven_client_tick() {
             forward: true,
             ..Default::default()
         },));
-        assert_eq!(game.boats[0].hurt_time, 6 - step);
-        assert!(game.boats[0].input[2]);
-        assert!(game.boats[0].position.y < 70.0);
+        assert_eq!(game.entities.boats[0].hurt_time, 6 - step);
+        assert!(game.entities.boats[0].input[2]);
+        assert!(game.entities.boats[0].position.y < 70.0);
     });
 }
 
@@ -67,18 +67,19 @@ fn a_bound_ridden_boat_commits_the_server_leash_tick() {
     bound_boat_server_case(|game, step| {
         game.riding = Some(71);
         game.tick_boats();
-        assert_eq!(game.boats[0].age, step);
-        assert_eq!(game.boats[0].hurt_time, 6);
-        assert_eq!(game.boats[0].position.y, 70.0);
+        assert_eq!(game.entities.boats[0].age, step);
+        assert_eq!(game.entities.boats[0].hurt_time, 6);
+        assert_eq!(game.entities.boats[0].position.y, 70.0);
     });
 }
 
 fn bound_boat_server_case(tick: impl Fn(&mut sunrise_gameplay::game::ServerGame<'_>, i32)) {
     sunrise_gameplay::game::native_entity_refs::tests::with_resident_game(|game| {
         game.server.chunk_ticking.tickets.update(None);
-        game.boats
+        game.entities
+            .boats
             .push(Boat::new(71, "oak".into(), Vec3::new(0.5, 70.0, 0.5), 0.0));
-        game.boats.update(0, |boat| boat.hurt_time = 6);
+        game.entities.boats.update(0, |boat| boat.hurt_time = 6);
         let holder = {
             let host: &dyn mod_api::ServerHost = game;
             host.entity(71).unwrap()
@@ -86,7 +87,7 @@ fn bound_boat_server_case(tick: impl Fn(&mut sunrise_gameplay::game::ServerGame<
         let index = Arc::new(Mutex::new(AttachmentIndex::default()));
         let mut values = Attachments::default();
         VALUE.set(&mut values, Holder::Entity(71), 10).unwrap();
-        let original = game.boats.update(0, |boat| {
+        let original = game.entities.boats.update(0, |boat| {
             boat.attachment_lifetime().bind(&mut values, &index, holder);
             boat.attachment_lifetime().registration().unwrap()
         });
@@ -96,6 +97,7 @@ fn bound_boat_server_case(tick: impl Fn(&mut sunrise_gameplay::game::ServerGame<
         for step in 1..=3 {
             tick(game, step);
             let current = game
+                .entities
                 .boats
                 .update(0, |boat| boat.attachment_lifetime().registration().unwrap());
             assert!(original.same_registration(&current));
@@ -113,11 +115,11 @@ fn bound_boat_server_case(tick: impl Fn(&mut sunrise_gameplay::game::ServerGame<
         game.persist
             .removals
             .push(sunrise_gameplay_common::game::commands_common::Target::Boat(71));
-        let clone = game.boats[0].clone();
+        let clone = game.entities.boats[0].clone();
         assert!(!game.store_boat_back(0, clone));
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
         game.native_removals_flush();
-        assert!(game.boats.is_empty());
+        assert!(game.entities.boats.is_empty());
         assert!(index.lock().unwrap().snapshot(&key).is_empty());
         VALUE.set(&mut values, Holder::Entity(71), 30).unwrap();
         assert!(index.lock().unwrap().snapshot(&key).is_empty());
@@ -133,14 +135,15 @@ fn bound_boat_client_case(tick: impl Fn(&mut sunrise_client_gameplay::game::Clie
         game.connect_local(client, "BoatLifetimeTest").unwrap();
         game.client.remote.as_mut().unwrap().joined = true;
         game.client.remote.as_mut().unwrap().first_passenger = true;
-        game.boats
+        game.entities
+            .boats
             .push(Boat::new(71, "oak".into(), Vec3::new(0.5, 70.0, 0.5), 0.0));
-        game.boats.update(0, |boat| boat.hurt_time = 6);
+        game.entities.boats.update(0, |boat| boat.hurt_time = 6);
         let holder = mod_api::EntityRef::new(game.native_lifecycle.epoch().unwrap(), 71);
         let index = Arc::new(Mutex::new(AttachmentIndex::default()));
         let mut values = Attachments::default();
         VALUE.set(&mut values, Holder::Entity(71), 10).unwrap();
-        let original = game.boats.update(0, |boat| {
+        let original = game.entities.boats.update(0, |boat| {
             boat.attachment_lifetime().bind(&mut values, &index, holder);
             boat.attachment_lifetime().registration().unwrap()
         });
@@ -150,6 +153,7 @@ fn bound_boat_client_case(tick: impl Fn(&mut sunrise_client_gameplay::game::Clie
         for step in 1..=3 {
             tick(game, step);
             let current = game
+                .entities
                 .boats
                 .update(0, |boat| boat.attachment_lifetime().registration().unwrap());
             assert!(original.same_registration(&current));
@@ -164,11 +168,11 @@ fn bound_boat_client_case(tick: impl Fn(&mut sunrise_client_gameplay::game::Clie
         game.persist
             .removals
             .push(sunrise_gameplay_common::game::commands_common::Target::Boat(71));
-        let clone = game.boats[0].clone();
+        let clone = game.entities.boats[0].clone();
         assert!(!game.store_boat_back(0, clone));
         assert_eq!(index.lock().unwrap().snapshot(&key).len(), 1);
-        game.boats.clear();
-        assert!(game.boats.is_empty());
+        game.entities.boats.clear();
+        assert!(game.entities.boats.is_empty());
         assert!(index.lock().unwrap().snapshot(&key).is_empty());
         VALUE.set(&mut values, Holder::Entity(71), 30).unwrap();
         assert!(index.lock().unwrap().snapshot(&key).is_empty());

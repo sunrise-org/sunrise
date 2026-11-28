@@ -46,10 +46,10 @@ fn remote_player_use_animation_dispatches_once() {
                 sunrise_items::equipment::MAINHAND,
                 Some(sunrise_items::items::ItemStack::new("minecraft:bow", 1)),
             );
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             game.tick_remote_entities(false);
             assert_eq!(
-                game.mobs[0].extra.use_animation,
+                game.entities.mobs[0].extra.use_animation,
                 mod_api::UseAnimation::Drink
             );
             assert_eq!(calls.load(Ordering::Relaxed), 1);

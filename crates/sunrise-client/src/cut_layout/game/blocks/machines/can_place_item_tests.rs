@@ -268,7 +268,7 @@ fn dropper_skips_a_refused_slot() {
             game.world.block_entities.get(&ABOVE).unwrap().slots()[0],
             Some(ItemStack::new("minecraft:stone", 1))
         );
-        assert!(game.dropped.is_empty());
+        assert!(game.entities.dropped.is_empty());
     });
 }
 

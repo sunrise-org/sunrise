@@ -199,7 +199,7 @@ impl ServerGame<'_> {
             items: self.items(),
             registry: self.common.pack.assets.registry,
             brewing: Some(&self.stations().brewing),
-            mobs: &self.common.mobs,
+            mobs: &self.common.entities.mobs,
         }
     }
     pub(in crate::game) fn stored_container_signal(&self, pos: Pos) -> i32 {
@@ -771,7 +771,7 @@ impl ServerGame<'_> {
             return;
         }
         let entities = &mut self.common.world.block_entities;
-        for item in &self.common.dropped {
+        for item in &self.common.entities.dropped {
             wake_hoppers_reaching(entities, item.bounds());
         }
     }
@@ -784,7 +784,13 @@ impl ServerGame<'_> {
             return;
         }
         // `push_item_entity` just pushed it; a join listener runs later.
-        let Some(item) = self.common.dropped.last().filter(|item| item.id == id) else {
+        let Some(item) = self
+            .common
+            .entities
+            .dropped
+            .last()
+            .filter(|item| item.id == id)
+        else {
             return;
         };
         wake_hoppers_reaching(&mut self.common.world.block_entities, item.bounds());
@@ -795,10 +801,10 @@ impl ServerGame<'_> {
             return;
         }
         let entities = &mut self.common.world.block_entities;
-        for cart in &self.common.carts {
+        for cart in &self.common.entities.carts {
             wake_hoppers_reaching(entities, cart.bounds());
         }
-        for boat in &self.common.boats {
+        for boat in &self.common.entities.boats {
             wake_hoppers_reaching(entities, boat.bounds());
         }
     }
@@ -808,8 +814,8 @@ impl ServerGame<'_> {
     /// entity phase, before the hopper's own tick counts its cooldown down.
     pub(in crate::game::server_side) fn hoppers_catch_items(&mut self) {
         let mut i = 0;
-        while i < self.common.dropped.len() {
-            let item = &self.common.dropped[i];
+        while i < self.common.entities.dropped.len() {
+            let item = &self.common.entities.dropped[i];
             // `ItemEntity.tick` moves 1 of 4 ticks while resting;
             // `checkInsideBlocks` only follows a move.
             let moved = item.position != item.previous
@@ -886,7 +892,7 @@ impl ServerGame<'_> {
         }
         let mut taken = false;
         if !self.hopper_is_stacked(&view) {
-            let stack = self.common.dropped[i].stack.clone();
+            let stack = self.common.entities.dropped[i].stack.clone();
             let allowed = self.with_level(|_, level, _| {
                 level.allow_hopper_pickup_item(
                     BlockPos::new(pos.0, pos.1, pos.2),
@@ -904,7 +910,7 @@ impl ServerGame<'_> {
                     taken = true;
                     changed = true;
                 }
-                Some(rest) => self.common.dropped[i].stack = rest,
+                Some(rest) => self.common.entities.dropped[i].stack = rest,
             }
         }
         if changed {
@@ -1120,12 +1126,14 @@ impl ServerGame<'_> {
             let id = z as u32;
             let at = self
                 .common
+                .entities
                 .carts
                 .iter()
                 .find(|c| c.id == id)
                 .map(|c| c.position)
                 .or_else(|| {
                     self.common
+                        .entities
                         .boats
                         .iter()
                         .find(|b| b.id == id)
@@ -1207,7 +1215,7 @@ impl ServerGame<'_> {
         if blocked {
             return false;
         }
-        if self.common.dropped.is_empty() {
+        if self.common.entities.dropped.is_empty() {
             return false;
         }
         // Hopper.SUCK_AABB: the hopper bowl and the block above.
@@ -1224,7 +1232,7 @@ impl ServerGame<'_> {
             ],
         );
         if let Some(columns) = self.server.item_columns.as_mut()
-            && !columns.may_reach(&self.common.dropped, pos.0, pos.2)
+            && !columns.may_reach(&self.common.entities.dropped, pos.0, pos.2)
         {
             return false;
         }
@@ -1356,6 +1364,7 @@ impl ServerGame<'_> {
         };
         let mut found: Vec<u32> = self
             .common
+            .entities
             .carts
             .iter()
             .filter(|c| {
@@ -1368,6 +1377,7 @@ impl ServerGame<'_> {
             .collect();
         found.extend(
             self.common
+                .entities
                 .boats
                 .iter()
                 .filter(|b| b.chest && meets(b.bounds()))
@@ -1458,18 +1468,21 @@ impl ServerGame<'_> {
         id: u32,
         f: impl FnOnce(&mut Self, &View) -> R,
     ) -> Option<R> {
-        let mut items = if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
+        let mut items = if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id)
+        {
             self.unpack_loot(
                 sunrise_gameplay_common::game::container_loot_level::LootTarget::Cart(id),
                 None,
             );
             self.common
+                .entities
                 .carts
                 .update(i, |c| std::mem::take(&mut c.items))
         } else {
-            let i = self.common.boats.iter().position(|b| b.id == id)?;
+            let i = self.common.entities.boats.iter().position(|b| b.id == id)?;
             self.unpack_boat_loot(i, false);
             self.common
+                .entities
                 .boats
                 .update(i, |b| std::mem::take(&mut b.items))
         };
@@ -1477,10 +1490,10 @@ impl ServerGame<'_> {
         let (view, open) = self.lend_items(key, &mut items);
         let result = f(self, &view);
         self.reclaim_items(key, open, &mut items);
-        if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
-            self.common.carts.update(i, |c| c.items = items);
-        } else if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
-            self.common.boats.update(i, |b| b.items = items);
+        if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
+            self.common.entities.carts.update(i, |c| c.items = items);
+        } else if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
+            self.common.entities.boats.update(i, |b| b.items = items);
         }
         Some(result)
     }
@@ -1539,8 +1552,8 @@ impl ServerGame<'_> {
         max: [f64; 3],
     ) -> bool {
         let mut i = 0;
-        while i < self.common.dropped.len() {
-            let b = self.common.dropped[i].bounds();
+        while i < self.common.entities.dropped.len() {
+            let b = self.common.entities.dropped[i].bounds();
             let (lo, hi) = (b.min_position(), b.max_position());
             let inside = lo.x < max[0]
                 && hi.x > min[0]
@@ -1549,7 +1562,7 @@ impl ServerGame<'_> {
                 && lo.z < max[2]
                 && hi.z > min[2];
             if inside {
-                let stack = self.common.dropped[i].stack.clone();
+                let stack = self.common.entities.dropped[i].stack.clone();
                 let allowed = hopper_pos.is_none_or(|pos| {
                     self.with_level(|_, level, _| {
                         level.allow_hopper_pickup_item(
@@ -1568,7 +1581,7 @@ impl ServerGame<'_> {
                         self.remove_dropped(i);
                         return true;
                     }
-                    Some(rest) => self.common.dropped[i].stack = rest,
+                    Some(rest) => self.common.entities.dropped[i].stack = rest,
                 }
             }
             i += 1;
@@ -1591,7 +1604,7 @@ impl ServerGame<'_> {
             .pickup_columns
             .get_or_insert_with(Default::default)
             .may_reach_area(
-                &self.common.dropped,
+                &self.common.entities.dropped,
                 (min[0].floor() as i32, max[0].floor() as i32),
                 (min[2].floor() as i32, max[2].floor() as i32),
             )

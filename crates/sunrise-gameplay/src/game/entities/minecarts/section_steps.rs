@@ -6,13 +6,13 @@ pub(in crate::game) fn tick(
     i: usize,
     index: &mut CartIndex,
 ) -> (bool, Option<(Vec3, Vec3)>) {
-    let loot = game.carts.update(i, |c| c.loot.take());
-    let mut cart = game.carts[i].clone();
+    let loot = game.entities.carts.update(i, |c| c.loot.take());
+    let mut cart = game.entities.carts[i].clone();
     let from = cart.position;
     cart.loot = loot;
     let alive = game.tick_cart(&mut cart, [0.0; 2], i, index);
     game.hopper_cart_tick(&mut cart, alive);
-    let Some(i) = cart_at(&game.carts, id, i) else {
+    let Some(i) = cart_at(&game.entities.carts, id, i) else {
         return (false, None);
     };
     if !alive {
@@ -31,7 +31,7 @@ pub(in crate::game) fn tick_riding(
     i: usize,
     intent: [f64; 2],
 ) -> Option<(usize, bool, Option<(Vec3, Vec3)>, Option<(Vec3, Vec3)>)> {
-    let mut cart = game.carts[i].clone();
+    let mut cart = game.entities.carts[i].clone();
     let from = cart.position;
     let alive = game.tick_cart(&mut cart, intent, i, &mut CartIndex::default());
     // `MinecartHopper.tick`'s `tryConsumeItems` runs in the rider's turn too.
@@ -48,7 +48,7 @@ pub(in crate::game) fn tick_riding(
         player.fall_distance = 0.0;
         player_step = Some((player_from, player.position));
     }
-    let Some(i) = game.carts.iter().position(|x| x.id == cart.id) else {
+    let Some(i) = game.entities.carts.iter().position(|x| x.id == cart.id) else {
         if alive && game.riding == Some(id) && !game.persist.removed_vehicles.contains_key(&id) {
             game.riding = None;
         }

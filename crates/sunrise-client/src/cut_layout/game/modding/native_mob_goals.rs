@@ -22,7 +22,7 @@ mod tests {
         let t = game.res.mob_types().get(kind).unwrap().clone();
         let mut m = Mob::new(id, t, Vec3::new(3.5, 65.0, 3.5), 0.0);
         m.ground.on_ground = true;
-        game.mobs.push(m);
+        game.entities.mobs.push(m);
         let entity = game.entity(id).unwrap();
         game.mob(entity).unwrap()
     }
@@ -142,7 +142,7 @@ mod tests {
                     prefers_shallow: false,
                 },
             ] {
-                game.mobs[0].ai.nav.kind = nav;
+                game.entities.mobs[0].ai.nav.kind = nav;
                 assert!(!game.mob_add_goal(mob, 0, &goal));
                 assert!(!game.mob_add_target_goal(mob, 0, &goal));
             }
@@ -151,7 +151,7 @@ mod tests {
                 sunrise_sim::mobs::nav::NavKind::WallClimber,
                 sunrise_sim::mobs::nav::NavKind::Flying,
             ] {
-                game.mobs[0].ai.nav.kind = nav;
+                game.entities.mobs[0].ai.nav.kind = nav;
                 assert!(game.mob_add_goal(mob, 0, &goal));
                 assert!(game.mob_add_target_goal(mob, 0, &goal));
             }
@@ -183,7 +183,7 @@ mod tests {
         with_resident_game(|game| {
             let handle = mob_in_game(game, "minecraft:zombie", 99);
             mob_in_game(game, "minecraft:zombie", 100);
-            let mut mobs = game.mobs.lift();
+            let mut mobs = game.entities.mobs.lift();
             let snapshot: Vec<_> = mobs
                 .iter()
                 .map(|m| {
@@ -210,14 +210,15 @@ mod tests {
                 selector.tick(&mut mobs[0], &mut cx);
             }
             mobs[0].ai.goals = selector;
-            game.mobs
+            game.entities
+                .mobs
                 .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
             let mut expected = game.world.random.clone();
             let draw = expected.next_int_bound(1000).unwrap();
             let next = expected.next_int_bound(1000).unwrap();
             assert_eq!(handle.remove_goal(game, "StopProbe"), Some(1));
-            assert_eq!(game.mobs[0].extra.followers, 2);
-            assert_eq!(game.mobs[0].health, draw as f32);
+            assert_eq!(game.entities.mobs[0].extra.followers, 2);
+            assert_eq!(game.entities.mobs[0].health, draw as f32);
             assert_eq!(game.world.random.next_int_bound(1000).unwrap(), next);
         });
     }
@@ -233,7 +234,7 @@ mod tests {
         with_resident_game(|game| {
             let handle = mob_in_game(game, "minecraft:pillager", 99);
             mob_in_game(game, "minecraft:pillager", 100);
-            let mut mobs = game.mobs.lift();
+            let mut mobs = game.entities.mobs.lift();
             raider::state_mut(&mut mobs[0]).patrolling = true;
             mobs[0].ai.target = Some(Who::Player);
             let snapshot: Vec<_> = mobs
@@ -263,11 +264,12 @@ mod tests {
             }
             assert!(selector.is_running("HoldGroundAttack"));
             mobs[0].ai.goals = selector;
-            game.mobs
+            game.entities
+                .mobs
                 .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
             assert_eq!(handle.remove_goal(game, "HoldGroundAttack"), Some(1));
-            assert!(game.mobs[1].ai.aggressive);
-            assert_eq!(game.mobs[1].ai.target, Some(Who::Player));
+            assert!(game.entities.mobs[1].ai.aggressive);
+            assert_eq!(game.entities.mobs[1].ai.target, Some(Who::Player));
         });
     }
 
@@ -278,7 +280,7 @@ mod tests {
         with_resident_game(|game| {
             let follower = mob_in_game(game, "minecraft:cod", 99);
             let _leader = mob_in_game(game, "minecraft:cod", 100);
-            let mut mobs = game.mobs.lift();
+            let mut mobs = game.entities.mobs.lift();
             mobs[0].extra.leader = Some(100);
             mobs[1].extra.followers = 1;
             let snapshot: Vec<_> = mobs
@@ -306,15 +308,16 @@ mod tests {
                 "starting an established follower must not change the school"
             );
             mobs[0].ai.goals = selector;
-            game.mobs
+            game.entities
+                .mobs
                 .restore(mobs, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
             assert_eq!(follower.remove_goal(game, "FollowFlockLeaderGoal"), Some(1));
             assert_eq!(
-                game.mobs[0].extra.leader, None,
+                game.entities.mobs[0].extra.leader, None,
                 "the actual stop method must run"
             );
             assert_eq!(
-                game.mobs[1].extra.followers, 0,
+                game.entities.mobs[1].extra.followers, 0,
                 "stopping a follower must decrement its leader"
             );
         });
@@ -429,10 +432,11 @@ mod tests {
                 let stale = MobRef::new(EntityRef::new(WorldEpoch::new(999), 99));
                 assert!(!stale.add_goal(game, 1, &GoalSpec::Float));
                 assert!(stale.goals(game).is_none());
-                let taken = game.mobs.lift();
+                let taken = game.entities.mobs.lift();
                 assert!(zombie.goals(game).is_none());
                 assert_eq!(zombie.remove_goal(game, "panic"), None);
-                game.mobs
+                game.entities
+                    .mobs
                     .restore(taken, sunrise_sim::join_seq::RestoreOrder::SurvivorsFirst);
             },
         );

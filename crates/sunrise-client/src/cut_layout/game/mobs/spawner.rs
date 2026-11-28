@@ -170,7 +170,7 @@ pub(crate) mod tests {
                     before.next_long(),
                     "no draw at delay {expected}"
                 );
-                assert!(game.mobs.is_empty());
+                assert!(game.entities.mobs.is_empty());
             }
             let mut before = game.world.random.clone();
             game.tick_spawner(key).unwrap();

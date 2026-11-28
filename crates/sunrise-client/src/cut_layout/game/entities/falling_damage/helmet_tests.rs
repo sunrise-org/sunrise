@@ -49,7 +49,7 @@ pub(crate) fn run_falling_impacts_wear_the_helmet_before_normal_armor_and_reduct
     // Equipment breaks are server notifications, with no local visual RNG.
     game.server.lan_acting = Some(1);
     let position = Vec3::new(4.5, 100.0, 4.5);
-    game.common.falling.push(FallingBlock {
+    game.common.entities.falling.push(FallingBlock {
         size_answer: None,
         id: 71,
         state: game
@@ -79,7 +79,7 @@ pub(crate) fn run_falling_impacts_wear_the_helmet_before_normal_armor_and_reduct
         damage: Default::default(),
         saved: None,
     });
-    let entity = game.falling[0].id;
+    let entity = game.entities.falling[0].id;
     let cases: serde_json::Value = serde_json::from_str(include_str!(concat!(
         env!("CARGO_MANIFEST_DIR"),
         "/../../tests/fixtures/helmet_damage.json"

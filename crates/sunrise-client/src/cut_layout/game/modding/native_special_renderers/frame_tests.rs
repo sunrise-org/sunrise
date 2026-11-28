@@ -69,14 +69,14 @@ fn a_special_dropped_item_outlines_only_its_committed_world_vertices() {
                 stick
                     .data_mut()
                     .set_other("minecraft:enchantment_glint_override", Some(Tag::Byte(1)));
-                game.dropped.push(ItemEntity::new(
+                game.entities.dropped.push(ItemEntity::new(
                     ID,
                     stick,
                     Vec3::new(0.5, 64.875, 0.5),
                     Vec3::ZERO,
                     0.0,
                 ));
-                let last = game.dropped.len() - 1;
+                let last = game.entities.dropped.len() - 1;
 
                 // Pre-existing geometry is not part of the glowing item's silhouette.
                 let prefix = Vertex {
@@ -278,7 +278,7 @@ fn a_special_renderer_is_never_asked_inside_a_lifted_pass_isolated() {
                     COUNT,
                 )),
             );
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
             if !game.world.chunks.contains_key(&(0, 0)) {
                 game.world
                     .chunks
@@ -288,7 +288,7 @@ fn a_special_renderer_is_never_asked_inside_a_lifted_pass_isolated() {
                 game.tick_creature_entities().unwrap();
             });
             assert!(balance.drain_balanced() > 0, "the tick lifted no mob pass");
-            let zombie = game.mobs.iter().find(|m| m.id == ZOMBIE).unwrap();
+            let zombie = game.entities.mobs.iter().find(|m| m.id == ZOMBIE).unwrap();
             assert_eq!(zombie.age, 1, "the zombie didn't tick");
             assert_eq!(
                 ASKED_IN_PASS.lock().unwrap().take(),
@@ -300,7 +300,7 @@ fn a_special_renderer_is_never_asked_inside_a_lifted_pass_isolated() {
                 asked_by_the_frame,
                 "the renderer was asked in the tick"
             );
-            game.mobs.clear();
+            game.entities.mobs.clear();
         },
     );
 }

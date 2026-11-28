@@ -25,15 +25,15 @@ fn live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown() 
     with_game(|game| {
         setup_live_damage_world(game);
         assert!(game.run_command("summon warden 4.5 64 4.5 {UUID:[I;84,0,0,1],NoGravity:1b}"));
-        let warden_id = game.mobs.last().unwrap().id;
+        let warden_id = game.entities.mobs.last().unwrap().id;
         assert!(
             game.run_command("summon pig 14.5 64 4.5 {UUID:[I;84,0,0,2],NoAI:1b,NoGravity:1b}")
         );
-        let pig_id = game.mobs.last().unwrap().id;
+        let pig_id = game.entities.mobs.last().unwrap().id;
         assert!(
             game.run_command("summon armor_stand 14.5 64 4.5 {UUID:[I;84,0,0,3],NoGravity:1b}")
         );
-        let stand_id = game.armor_stands.last().unwrap().id;
+        let stand_id = game.entities.armor_stands.last().unwrap().id;
         let _arrow_id = spawn_test_projectile(
             game,
             ProjectileKind::Arrow {
@@ -47,7 +47,12 @@ fn live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown() 
         );
 
         let reset_warden = |game: &mut sunrise_gameplay::game::ServerGame<'_>| {
-            let w = game.mobs.iter_mut().find(|m| m.id == warden_id).unwrap();
+            let w = game
+                .entities
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == warden_id)
+                .unwrap();
             w.invulnerable = 0;
             w.last_hurt = 0.0;
             w.health = 500.0;
@@ -56,6 +61,7 @@ fn live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown() 
         };
         let warden_state = |game: &sunrise_gameplay::game::ServerGame<'_>| {
             let st = game
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == warden_id)
@@ -110,7 +116,8 @@ fn live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown() 
         assert_eq!(warden_state(game), (None, 0));
 
         // Moving Pig within 5 blocks lets the same indirect hit set attack_target.
-        game.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == pig_id)
             .unwrap()
@@ -128,12 +135,23 @@ fn live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown() 
         assert!(
             game.run_command("damage 00000054-0000-0000-0000-000000000001 5 minecraft:generic")
         );
-        let health_after_first = game.mobs.iter().find(|m| m.id == warden_id).unwrap().health;
+        let health_after_first = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == warden_id)
+            .unwrap()
+            .health;
         assert!(!game.run_command(
             "damage 00000054-0000-0000-0000-000000000001 1 minecraft:generic by 00000054-0000-0000-0000-000000000002"
         ));
         assert_eq!(
-            game.mobs.iter().find(|m| m.id == warden_id).unwrap().health,
+            game.entities
+                .mobs
+                .iter()
+                .find(|m| m.id == warden_id)
+                .unwrap()
+                .health,
             health_after_first
         );
         let (target, anger) = warden_state(game);
@@ -145,15 +163,21 @@ fn live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown() 
         assert!(
             game.run_command("damage 00000054-0000-0000-0000-000000000001 5 minecraft:generic")
         );
-        let index = game.mobs.iter().position(|m| m.id == warden_id).unwrap();
-        let health_after_first = game.mobs[index].health;
+        let index = game
+            .entities
+            .mobs
+            .iter()
+            .position(|m| m.id == warden_id)
+            .unwrap();
+        let health_after_first = game.entities.mobs[index].health;
         let from = game.target_position(Target::Player).unwrap();
         assert!(!game.hurt_by_player(index, 1.0, Damage::player(from)).0);
-        assert_eq!(game.mobs[index].health, health_after_first);
+        assert_eq!(game.entities.mobs[index].health, health_after_first);
         assert_eq!(warden_state(game), (Some(Who::Player), 100));
 
         // Live blasts: direct mob blast at 10 blocks targets the mob; unowned TNT stays sourceless.
-        game.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|m| m.id == pig_id)
             .unwrap()
@@ -174,7 +198,7 @@ fn live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown() 
 
         reset_warden(game);
         game.add_primed_tnt(BlockPos::new(4, 64, 4), 0.0, 80, None, None);
-        let tnt_id = game.tnts.last().unwrap().id;
+        let tnt_id = game.entities.tnts.last().unwrap().id;
         game.native_explode(
             Some((tnt_id, Target::Tnt(tnt_id))),
             [4.5, 64.0, 4.5],
@@ -282,7 +306,8 @@ fn live_damage_and_blast_warden_reactions_follow_source_entities_and_cooldown() 
         let pig = game.living(game.entity(pig_id).unwrap()).unwrap();
         reset_warden(game);
         assert!(hurt(game, 1.0, Some(Target::Mob(pig_id))));
-        game.mobs
+        game.entities
+            .mobs
             .iter_mut()
             .find(|mob| mob.id == pig_id)
             .unwrap()
@@ -341,7 +366,7 @@ pub(crate) fn spawn_test_projectile(
     let mut shot = Projectile::new(kind, at, owner);
     shot.id = id;
     shot.previous = at;
-    game.creatures.projectiles.push(shot);
+    game.entities.projectiles.push(shot);
     game.persist.uuids.insert(id, uuid);
     id
 }

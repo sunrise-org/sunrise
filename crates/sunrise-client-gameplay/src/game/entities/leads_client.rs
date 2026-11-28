@@ -83,7 +83,7 @@ impl ClientGame<'_> {
                 .to_radians()
         };
         let mut ropes: Vec<Rope> = Vec::new();
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if let Some(holder) = m.extra.leash {
                 // A mob a mod's pre hook canceled draws no lead (it is part of the mob's own
                 // render), but the fence knot it hangs from is an entity of its own.
@@ -105,7 +105,7 @@ impl ClientGame<'_> {
                 });
             }
         }
-        for b in &self.common.boats {
+        for b in &self.common.entities.boats {
             if let Some(holder) = b.leash {
                 if self.hides_as_camera(b.id) {
                     if let Holder::Knot(p) = holder
@@ -141,6 +141,7 @@ impl ClientGame<'_> {
             let quad = match (holder, quad) {
                 (Holder::Mob(id), Some(offsets)) => self
                     .common
+                    .entities
                     .mobs
                     .iter()
                     .find(|o| o.id == id)
@@ -170,14 +171,14 @@ impl ClientGame<'_> {
                         )
                     }
                     Holder::Mob(id) => {
-                        let Some(o) = self.common.mobs.iter().find(|o| o.id == id) else {
+                        let Some(o) = self.common.entities.mobs.iter().find(|o| o.id == id) else {
                             continue;
                         };
                         lerp3(o.previous, o.position)
                             + glam::DVec3::new(0.0, o.eye_height() * 0.7, 0.0)
                     }
                     Holder::Boat(id) => {
-                        let Some(o) = self.common.boats.iter().find(|o| o.id == id) else {
+                        let Some(o) = self.common.entities.boats.iter().find(|o| o.id == id) else {
                             continue;
                         };
                         lerp3(o.previous, o.position) + boat_hold()

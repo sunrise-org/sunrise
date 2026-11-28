@@ -272,26 +272,26 @@ pub(crate) fn clear_arena(game: &mut sunrise_gameplay::game::ServerGame<'_>, bac
     if game.riding.is_some() {
         game.stop_riding();
     }
-    game.mobs.clear();
-    game.dropped.clear();
-    game.boats.clear();
-    game.carts.clear();
-    game.armor_stands.clear();
-    game.tnts.clear();
-    game.falling.clear();
-    game.orbs.clear();
-    game.bolts.clear();
-    game.creatures.projectiles.clear();
-    game.rockets.clear();
-    game.tridents.clear();
-    game.item_frames.clear();
-    game.paintings.clear();
-    game.cushions.clear();
-    game.crystals.clear();
+    game.entities.mobs.clear();
+    game.entities.dropped.clear();
+    game.entities.boats.clear();
+    game.entities.carts.clear();
+    game.entities.armor_stands.clear();
+    game.entities.tnts.clear();
+    game.entities.falling.clear();
+    game.entities.orbs.clear();
+    game.entities.bolts.clear();
+    game.entities.projectiles.clear();
+    game.entities.rockets.clear();
+    game.entities.tridents.clear();
+    game.entities.item_frames.clear();
+    game.entities.paintings.clear();
+    game.entities.cushions.clear();
+    game.entities.crystals.clear();
     crate::game::server_side::creatures_server::projectiles_120_124_tests::clear_others(game);
     game.server.knot_state.knot_ids.clear();
     game.server.knot_state.broken_knots.clear();
-    game.resident_entities.knots.clear();
+    game.entities.knots.clear();
     game.reset_entity_residency();
     game.bind_local_player_residency();
     let max_x = 14.max(backstop_x + 2);
@@ -430,16 +430,16 @@ pub(crate) fn run_witness_spectator_player_120() {
         assert!(game.run_command(cmd), "{cmd}");
         let is_trident = case.projectile == "trident";
         let id = if is_trident {
-            let idx = game.tridents.len() - 1;
-            let id = game.tridents[idx].id;
-            game.tridents.update(idx, |t| {
+            let idx = game.entities.tridents.len() - 1;
+            let id = game.entities.tridents[idx].id;
+            game.entities.tridents.update(idx, |t| {
                 t.random = LegacyRandom::new(witness.proj_seed);
             });
             id
         } else {
-            let idx = game.creatures.projectiles.len() - 1;
-            let id = game.creatures.projectiles[idx].id;
-            game.creatures.projectiles.update(idx, |p| {
+            let idx = game.entities.projectiles.len() - 1;
+            let id = game.entities.projectiles[idx].id;
+            game.entities.projectiles.update(idx, |p| {
                 p.entity_random().set_seed(witness.proj_seed);
             });
             id
@@ -456,12 +456,12 @@ pub(crate) fn run_witness_spectator_player_120() {
                 break;
             }
             let (alive, pos, vel, ig) = if is_trident {
-                match game.tridents.iter().find(|t| t.id == id) {
+                match game.entities.tridents.iter().find(|t| t.id == id) {
                     Some(t) => (true, Some(t.position), Some(t.velocity), t.in_ground),
                     None => (false, None, None, false),
                 }
             } else {
-                match game.creatures.projectiles.iter().find(|p| p.id == id) {
+                match game.entities.projectiles.iter().find(|p| p.id == id) {
                     Some(p) => (
                         true,
                         Some(p.position),
@@ -532,10 +532,10 @@ pub(crate) fn run_witness_wind_charge_end_crystal_121() {
         game.world.random.set_seed(witness.level_seed);
 
         assert!(game.run_command("summon minecraft:end_crystal 4.25 64.0 4.5 {}"));
-        let crystal_id = game.crystals.last().unwrap().id;
+        let crystal_id = game.entities.crystals.last().unwrap().id;
         let pig_id = if case.case == "wind_charge_crystal_then_pig" {
             assert!(game.run_command("summon minecraft:pig 7.5 64.0 4.5 {NoAI:1b,Silent:1b}"));
-            Some(game.mobs.last().unwrap().id)
+            Some(game.entities.mobs.last().unwrap().id)
         } else {
             None
         };
@@ -552,15 +552,15 @@ pub(crate) fn run_witness_wind_charge_end_crystal_121() {
             other => panic!("unexpected case {other}"),
         };
         assert!(game.run_command(cmd), "{cmd}");
-        let idx = game.creatures.projectiles.len() - 1;
-        let proj_id = game.creatures.projectiles[idx].id;
-        game.creatures.projectiles.update(idx, |p| {
+        let idx = game.entities.projectiles.len() - 1;
+        let proj_id = game.entities.projectiles[idx].id;
+        game.entities.projectiles.update(idx, |p| {
             p.entity_random().set_seed(witness.proj_seed);
         });
 
         for exp in &case.ticks {
             game.tick_server(false).unwrap();
-            let crystal_alive = game.crystals.iter().any(|c| c.id == crystal_id);
+            let crystal_alive = game.entities.crystals.iter().any(|c| c.id == crystal_id);
             if crystal_alive != exp.crystal_alive {
                 failures.push(format!(
                     "{label} t={}: crystal_alive expected {} got {crystal_alive}",
@@ -570,6 +570,7 @@ pub(crate) fn run_witness_wind_charge_end_crystal_121() {
             }
             if let Some(pid) = pig_id {
                 let hp = game
+                    .entities
                     .mobs
                     .iter()
                     .find(|m| m.id == pid)
@@ -582,7 +583,7 @@ pub(crate) fn run_witness_wind_charge_end_crystal_121() {
                     break;
                 }
             }
-            let live = game.creatures.projectiles.iter().find(|p| p.id == proj_id);
+            let live = game.entities.projectiles.iter().find(|p| p.id == proj_id);
             if live.is_some() != exp.proj_alive {
                 failures.push(format!(
                     "{label} t={}: proj_alive expected {} got {}",
@@ -645,29 +646,30 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
                 assert!(game.run_command(
                     r#"summon minecraft:oak_boat 3.5 64.0 4.5 {Passengers:[{id:"minecraft:enderman",NoAI:1b,Silent:1b}]}"#
                 ));
-                game.mobs.last().unwrap().id
+                game.entities.mobs.last().unwrap().id
             }
             "trident_invulnerable_pig" => {
                 assert!(game.run_command(
                     "summon minecraft:pig 3.5 64.0 4.5 {NoAI:1b,Silent:1b,Invulnerable:1b}"
                 ));
-                game.mobs.last().unwrap().id
+                game.entities.mobs.last().unwrap().id
             }
             _ => {
                 assert!(
                     game.run_command("summon minecraft:enderman 3.5 64.0 4.5 {NoAI:1b,Silent:1b}")
                 );
-                game.mobs.last().unwrap().id
+                game.entities.mobs.last().unwrap().id
             }
         };
         let target_pos0 = game
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == target_id)
             .unwrap()
             .position;
         assert!(game.run_command("summon minecraft:pig 6.5 64.0 4.5 {NoAI:1b,Silent:1b}"));
-        let behind_id = game.mobs.last().unwrap().id;
+        let behind_id = game.entities.mobs.last().unwrap().id;
 
         let cmd = if case.case == "trident_owned_enderman" {
             format!(
@@ -678,15 +680,15 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
             "summon minecraft:trident 1.5 65.0 4.5 {Motion:[1.0d,0.0d,0.0d]}".to_owned()
         };
         assert!(game.run_command(&cmd), "{cmd}");
-        let idx = game.tridents.len() - 1;
-        let tr_id = game.tridents[idx].id;
-        game.tridents.update(idx, |t| {
+        let idx = game.entities.tridents.len() - 1;
+        let tr_id = game.entities.tridents[idx].id;
+        game.entities.tridents.update(idx, |t| {
             t.random = LegacyRandom::new(witness.proj_seed);
         });
 
         for exp in &case.ticks {
             let (events, sounds) = step_recording(&mut game);
-            let t = game.tridents.iter().find(|t| t.id == tr_id);
+            let t = game.entities.tridents.iter().find(|t| t.id == tr_id);
             if t.is_some() != exp.proj_alive {
                 failures.push(format!(
                     "{label} t={}: alive expected {} got {}",
@@ -735,7 +737,12 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
                     break;
                 }
             }
-            let target = game.mobs.iter().find(|m| m.id == target_id).unwrap();
+            let target = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == target_id)
+                .unwrap();
             if target.health.to_bits() != exp.target_health.to_bits() {
                 failures.push(format!(
                     "{label} t={}: target_health expected {} got {}",
@@ -761,6 +768,7 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
                 break;
             }
             let behind_hp = game
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == behind_id)
@@ -804,28 +812,25 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
     clear_arena(&mut game, 10);
     game.world.random.set_seed(witness.level_seed);
     assert!(game.run_command("summon minecraft:enderman 3.5 64.0 4.5 {NoAI:1b,Silent:1b}"));
-    let enderman_id = game.mobs.last().unwrap().id;
+    let enderman_id = game.entities.mobs.last().unwrap().id;
     let enderman_pos0 = game
+        .entities
         .mobs
         .iter()
         .find(|m| m.id == enderman_id)
         .unwrap()
         .position;
     assert!(game.run_command("summon minecraft:pig 6.5 64.0 4.5 {NoAI:1b,Silent:1b}"));
-    let behind_id = game.mobs.last().unwrap().id;
+    let behind_id = game.entities.mobs.last().unwrap().id;
     let mut proj = Projectile::new(ProjectileKind::Trident, Vec3::new(1.5, 65.0, 4.5), None);
     proj.id = game.take_entity_id();
     proj.velocity = Vec3::new(1.0, 0.0, 0.0);
     proj.entity_random().set_seed(witness.proj_seed);
     let mob_tr_id = proj.id;
-    game.creatures.projectiles.push(proj);
+    game.entities.projectiles.push(proj);
     for exp in &unowned.ticks {
         let (events, sounds) = step_recording(&mut game);
-        let p = game
-            .creatures
-            .projectiles
-            .iter()
-            .find(|p| p.id == mob_tr_id);
+        let p = game.entities.projectiles.iter().find(|p| p.id == mob_tr_id);
         let Some(p) = p else {
             failures.push(format!("122 mob_trident t={}: disappeared", exp.tick));
             break;
@@ -854,8 +859,14 @@ pub(crate) fn run_witness_trident_enderman_dodge_122() {
             ));
             break;
         }
-        let em = game.mobs.iter().find(|m| m.id == enderman_id).unwrap();
+        let em = game
+            .entities
+            .mobs
+            .iter()
+            .find(|m| m.id == enderman_id)
+            .unwrap();
         let behind_hp = game
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == behind_id)
@@ -928,21 +939,21 @@ pub(crate) fn run_witness_piercing_arrow_multihit_123() {
                 assert!(game.run_command(
                     "summon minecraft:chicken 2.5 64.0 4.5 {NoAI:1b,Silent:1b,Health:1.0f}"
                 ));
-                tracked_mobs.push((true, game.mobs.last().unwrap().id));
+                tracked_mobs.push((true, game.entities.mobs.last().unwrap().id));
                 assert!(game.run_command(
                     "summon minecraft:pig 3.8 64.0 4.5 {NoAI:1b,Silent:1b,Health:1.0f}"
                 ));
-                tracked_mobs.push((true, game.mobs.last().unwrap().id));
+                tracked_mobs.push((true, game.entities.mobs.last().unwrap().id));
             }
             "pierce_two_phantoms_two_birds" => {
                 assert!(game.run_command(
                     "summon minecraft:phantom 2.5 64.3 4.5 {NoAI:1b,Silent:1b,Health:1.0f}"
                 ));
-                tracked_mobs.push((true, game.mobs.last().unwrap().id));
+                tracked_mobs.push((true, game.entities.mobs.last().unwrap().id));
                 assert!(game.run_command(
                     "summon minecraft:phantom 3.8 64.3 4.5 {NoAI:1b,Silent:1b,Health:1.0f}"
                 ));
-                tracked_mobs.push((true, game.mobs.last().unwrap().id));
+                tracked_mobs.push((true, game.entities.mobs.last().unwrap().id));
             }
             "pierce_five_unique_arbalistic" => {
                 for (kind, x) in [
@@ -956,7 +967,7 @@ pub(crate) fn run_witness_piercing_arrow_multihit_123() {
                         "summon minecraft:{kind} {x} 64.0 4.5 {{NoAI:1b,Silent:1b,Health:1.0f}}"
                     );
                     assert!(game.run_command(&cmd), "{cmd}");
-                    tracked_mobs.push((true, game.mobs.last().unwrap().id));
+                    tracked_mobs.push((true, game.entities.mobs.last().unwrap().id));
                 }
             }
             "pierce_limit_stops_at_pierce_plus_one" => {
@@ -965,34 +976,34 @@ pub(crate) fn run_witness_piercing_arrow_multihit_123() {
                         "summon minecraft:pig {x} 64.0 4.5 {{NoAI:1b,Silent:1b,Health:1.0f}}"
                     );
                     assert!(game.run_command(&cmd), "{cmd}");
-                    tracked_mobs.push((true, game.mobs.last().unwrap().id));
+                    tracked_mobs.push((true, game.entities.mobs.last().unwrap().id));
                 }
             }
             "pierce_through_mob_into_wall_same_tick" => {
                 assert!(game.run_command(
                     "summon minecraft:pig 2.5 64.0 4.5 {NoAI:1b,Silent:1b,Health:1.0f}"
                 ));
-                tracked_mobs.push((true, game.mobs.last().unwrap().id));
+                tracked_mobs.push((true, game.entities.mobs.last().unwrap().id));
             }
             "pierce_hits_falling_block_deflects" => {
                 assert!(game.run_command(
                     r#"summon minecraft:falling_block 2.5 65.0 4.5 {BlockState:"minecraft:sand",Time:1,Motion:[0.0d,0.0d,0.0d]}"#
                 ));
-                tracked_mobs.push((false, game.falling.last().unwrap().id));
+                tracked_mobs.push((false, game.entities.falling.last().unwrap().id));
                 assert!(game.run_command(
                     "summon minecraft:zombie 3.8 64.0 4.5 {NoAI:1b,Silent:1b,Health:1.0f}"
                 ));
-                tracked_mobs.push((true, game.mobs.last().unwrap().id));
+                tracked_mobs.push((true, game.entities.mobs.last().unwrap().id));
             }
             "pierce_hits_breeze_deflects" => {
                 assert!(
                     game.run_command("summon minecraft:breeze 2.5 64.0 4.5 {NoAI:1b,Silent:1b}")
                 );
-                tracked_mobs.push((true, game.mobs.last().unwrap().id));
+                tracked_mobs.push((true, game.entities.mobs.last().unwrap().id));
                 assert!(game.run_command(
                     "summon minecraft:pig 3.8 64.0 4.5 {NoAI:1b,Silent:1b,Health:1.0f}"
                 ));
-                tracked_mobs.push((true, game.mobs.last().unwrap().id));
+                tracked_mobs.push((true, game.entities.mobs.last().unwrap().id));
             }
             other => panic!("unexpected case {other}"),
         }
@@ -1017,15 +1028,15 @@ pub(crate) fn run_witness_piercing_arrow_multihit_123() {
             other => panic!("unexpected case {other}"),
         };
         assert!(game.run_command(&arrow_cmd), "{arrow_cmd}");
-        let idx = game.creatures.projectiles.len() - 1;
-        let arrow_id = game.creatures.projectiles[idx].id;
-        game.creatures.projectiles.update(idx, |p| {
+        let idx = game.entities.projectiles.len() - 1;
+        let arrow_id = game.entities.projectiles[idx].id;
+        game.entities.projectiles.update(idx, |p| {
             p.entity_random().set_seed(witness.proj_seed);
         });
 
         for exp in &case.ticks {
             let (events, sounds) = step_recording(&mut game);
-            let live = game.creatures.projectiles.iter().find(|p| p.id == arrow_id);
+            let live = game.entities.projectiles.iter().find(|p| p.id == arrow_id);
             if live.is_some() != exp.proj_alive {
                 failures.push(format!(
                     "{label} t={}: proj_alive expected {} got {}",
@@ -1078,12 +1089,12 @@ pub(crate) fn run_witness_piercing_arrow_multihit_123() {
             let mut target_err = false;
             for (k, ((is_mob, tid), exp_t)) in tracked_mobs.iter().zip(&exp.targets).enumerate() {
                 let (alive, hp) = if *is_mob {
-                    match game.mobs.iter().find(|m| m.id == *tid) {
+                    match game.entities.mobs.iter().find(|m| m.id == *tid) {
                         Some(m) => (m.alive(), m.health),
                         None => (false, 0.0),
                     }
                 } else {
-                    (game.falling.iter().any(|f| f.id == *tid), -1.0)
+                    (game.entities.falling.iter().any(|f| f.id == *tid), -1.0)
                 };
                 if alive != exp_t.alive || hp.to_bits() != exp_t.health.to_bits() {
                     failures.push(format!(
@@ -1186,9 +1197,9 @@ pub(crate) fn summon_mob_seeded(
     seed: i64,
 ) -> u32 {
     assert!(game.run_command(cmd), "{cmd}");
-    let idx = game.mobs.len() - 1;
-    let id = game.mobs[idx].id;
-    game.mobs[idx].random.set_seed(seed);
+    let idx = game.entities.mobs.len() - 1;
+    let id = game.entities.mobs[idx].id;
+    game.entities.mobs[idx].random.set_seed(seed);
     id
 }
 
@@ -1198,9 +1209,9 @@ pub(crate) fn summon_proj_seeded(
     seed: i64,
 ) -> u32 {
     assert!(game.run_command(cmd), "{cmd}");
-    let idx = game.creatures.projectiles.len() - 1;
-    let id = game.creatures.projectiles[idx].id;
-    game.creatures.projectiles.update(idx, |p| {
+    let idx = game.entities.projectiles.len() - 1;
+    let id = game.entities.projectiles[idx].id;
+    game.entities.projectiles.update(idx, |p| {
         p.entity_random().set_seed(seed);
     });
     id
@@ -1212,9 +1223,9 @@ pub(crate) fn summon_trident_seeded(
     seed: i64,
 ) -> u32 {
     assert!(game.run_command(cmd), "{cmd}");
-    let idx = game.tridents.len() - 1;
-    let id = game.tridents[idx].id;
-    game.tridents.update(idx, |t| {
+    let idx = game.entities.tridents.len() - 1;
+    let id = game.entities.tridents[idx].id;
+    game.entities.tridents.update(idx, |t| {
         t.random = LegacyRandom::new(seed);
     });
     id
@@ -1226,9 +1237,9 @@ pub(crate) fn summon_rocket_seeded(
     seed: i64,
 ) -> u32 {
     assert!(game.run_command(cmd), "{cmd}");
-    let idx = game.rockets.len() - 1;
-    let id = game.rockets[idx].id;
-    game.rockets.update(idx, |r| {
+    let idx = game.entities.rockets.len() - 1;
+    let id = game.entities.rockets[idx].id;
+    game.entities.rockets.update(idx, |r| {
         r.random = LegacyRandom::new(seed);
     });
     id
@@ -1274,7 +1285,7 @@ pub(crate) fn check_review_entity(
     };
     match tracked {
         ReviewTracked::Mob(id) => {
-            let live = game.mobs.iter().find(|m| m.id == id && !m.removed);
+            let live = game.entities.mobs.iter().find(|m| m.id == id && !m.removed);
             let present = live.is_some();
             let alive = live.is_some_and(|m| m.alive());
             if present != exp.present || alive != exp.alive {
@@ -1351,7 +1362,7 @@ pub(crate) fn check_review_entity(
             }
         }
         ReviewTracked::Stand(id) => {
-            let live = game.armor_stands.iter().find(|a| a.id == id);
+            let live = game.entities.armor_stands.iter().find(|a| a.id == id);
             if live.is_some() != exp.present {
                 failures.push(format!(
                     "{label} t={tick} {key}: stand present expected {} got {}",
@@ -1390,7 +1401,7 @@ pub(crate) fn check_review_entity(
             }
         }
         ReviewTracked::Frame(id) => {
-            let live = game.item_frames.iter().find(|f| f.id == id);
+            let live = game.entities.item_frames.iter().find(|f| f.id == id);
             if live.is_some() != exp.present {
                 failures.push(format!(
                     "{label} t={tick} {key}: frame present expected {} got {}",
@@ -1411,7 +1422,7 @@ pub(crate) fn check_review_entity(
             }
         }
         ReviewTracked::Crystal(id) => {
-            let present = game.crystals.iter().any(|c| c.id == id);
+            let present = game.entities.crystals.iter().any(|c| c.id == id);
             if present != exp.present {
                 failures.push(format!(
                     "{label} t={tick} {key}: crystal present expected {} got {present}",
@@ -1421,7 +1432,7 @@ pub(crate) fn check_review_entity(
             }
         }
         ReviewTracked::Boat(id) => {
-            let present = game.boats.iter().any(|b| b.id == id);
+            let present = game.entities.boats.iter().any(|b| b.id == id);
             if present != exp.present {
                 failures.push(format!(
                     "{label} t={tick} {key}: boat present expected {} got {present}",
@@ -1431,7 +1442,7 @@ pub(crate) fn check_review_entity(
             }
         }
         ReviewTracked::Falling(id) => {
-            let live = game.falling.iter().find(|f| f.id == id);
+            let live = game.entities.falling.iter().find(|f| f.id == id);
             if live.is_some() != exp.present {
                 failures.push(format!(
                     "{label} t={tick} {key}: falling present expected {} got {}",
@@ -1447,7 +1458,7 @@ pub(crate) fn check_review_entity(
             }
         }
         ReviewTracked::Proj(id) => {
-            let live = game.creatures.projectiles.iter().find(|p| p.id == id);
+            let live = game.entities.projectiles.iter().find(|p| p.id == id);
             if live.is_some() != exp.present {
                 failures.push(format!(
                     "{label} t={tick} {key}: proj present expected {} got {}",
@@ -1472,7 +1483,7 @@ pub(crate) fn check_review_entity(
             }
         }
         ReviewTracked::Trident(id) => {
-            let live = game.tridents.iter().find(|t| t.id == id);
+            let live = game.entities.tridents.iter().find(|t| t.id == id);
             if live.is_some() != exp.present {
                 failures.push(format!(
                     "{label} t={tick} {key}: trident present expected {} got {}",
@@ -1488,7 +1499,7 @@ pub(crate) fn check_review_entity(
             }
         }
         ReviewTracked::Rocket(id) => {
-            let live = game.rockets.iter().find(|r| r.id == id);
+            let live = game.entities.rockets.iter().find(|r| r.id == id);
             if live.is_some() != exp.present {
                 failures.push(format!(
                     "{label} t={tick} {key}: rocket present expected {} got {}",
@@ -1573,7 +1584,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 ));
                 tracked.insert(
                     "frame".into(),
-                    ReviewTracked::Frame(game.item_frames.last().unwrap().id),
+                    ReviewTracked::Frame(game.entities.item_frames.last().unwrap().id),
                 );
                 tracked.insert(
                     "potion".into(),
@@ -1591,7 +1602,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 ));
                 tracked.insert(
                     "frame".into(),
-                    ReviewTracked::Frame(game.item_frames.last().unwrap().id),
+                    ReviewTracked::Frame(game.entities.item_frames.last().unwrap().id),
                 );
                 tracked.insert(
                     "pig".into(),
@@ -1622,7 +1633,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 assert!(game.run_command("summon minecraft:armor_stand 4.5 64.0 4.5 {}"));
                 tracked.insert(
                     "stand".into(),
-                    ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                    ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
                 tracked.insert(
                     "pig".into(),
@@ -1655,7 +1666,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 assert!(game.run_command("summon minecraft:end_crystal 3.5 64.0 4.5 {}"));
                 tracked.insert(
                     "crystal1".into(),
-                    ReviewTracked::Crystal(game.crystals.last().unwrap().id),
+                    ReviewTracked::Crystal(game.entities.crystals.last().unwrap().id),
                 );
                 assert!(
                     game.run_command(
@@ -1664,7 +1675,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 );
                 tracked.insert(
                     "crystal2".into(),
-                    ReviewTracked::Crystal(game.crystals.last().unwrap().id),
+                    ReviewTracked::Crystal(game.entities.crystals.last().unwrap().id),
                 );
                 tracked.insert(
                     "arrow".into(),
@@ -1680,7 +1691,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                     assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 4.5 {}"));
                     tracked.insert(
                         "stand".into(),
-                        ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                        ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                     );
                     tracked.insert(
                         "parrot".into(),
@@ -1702,7 +1713,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                     assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 4.5 {}"));
                     tracked.insert(
                         "stand".into(),
-                        ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                        ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                     );
                 }
                 tracked.insert(
@@ -1719,14 +1730,14 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 assert!(game.run_command("summon minecraft:armor_stand 3.74 64.0 4.5 {}"));
                 tracked.insert(
                     "stand".into(),
-                    ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                    ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
                 assert!(game.run_command(
                     r#"summon minecraft:item_frame 3.5 64.5 4.5 {block_pos:[I;3,64,4],Facing:4b,Item:{id:"minecraft:diamond",count:1}}"#
                 ));
                 tracked.insert(
                     "frame".into(),
-                    ReviewTracked::Frame(game.item_frames.last().unwrap().id),
+                    ReviewTracked::Frame(game.entities.item_frames.last().unwrap().id),
                 );
                 tracked.insert(
                     "arrow".into(),
@@ -1795,7 +1806,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
             }
             "r06_arrow_skips_boat_copassenger" => {
                 assert!(game.run_command("summon minecraft:oak_boat 2.5 64.0 4.5 {}"));
-                let boat_id = game.boats.last().unwrap().id;
+                let boat_id = game.entities.boats.last().unwrap().id;
                 let copass_id = summon_mob_seeded(
                     &mut game,
                     "summon minecraft:pig 2.5 64.0 4.5 {NoAI:1b,Silent:1b,Health:10.0f}",
@@ -1833,7 +1844,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 ));
                 tracked.insert(
                     "stand".into(),
-                    ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                    ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
                 tracked.insert(
                     "rocket".into(),
@@ -1853,7 +1864,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 );
                 tracked.insert(
                     "stand".into(),
-                    ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                    ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
                 tracked.insert(
                     "trident".into(),
@@ -1870,7 +1881,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 ));
                 tracked.insert(
                     "falling".into(),
-                    ReviewTracked::Falling(game.falling.last().unwrap().id),
+                    ReviewTracked::Falling(game.entities.falling.last().unwrap().id),
                 );
                 tracked.insert(
                     "zombie".into(),
@@ -2047,7 +2058,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 assert!(game.run_command("summon minecraft:end_crystal 4.2 64.0 4.5 {}"));
                 tracked.insert(
                     "crystal".into(),
-                    ReviewTracked::Crystal(game.crystals.last().unwrap().id),
+                    ReviewTracked::Crystal(game.entities.crystals.last().unwrap().id),
                 );
                 tracked.insert(
                     "trident".into(),
@@ -2066,7 +2077,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 4.5 {}"));
                 tracked.insert(
                     "stand".into(),
-                    ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                    ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
                 tracked.insert(
                     "trident".into(),
@@ -2083,9 +2094,12 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 assert!(game.run_command(
                     r#"summon minecraft:oak_boat 3.5 64.0 4.5 {Passengers:[{id:"minecraft:enderman",NoAI:1b,Silent:1b,Invulnerable:1b}]}"#
                 ));
-                let em_idx = game.mobs.len() - 1;
-                game.mobs[em_idx].random.set_seed(seed);
-                tracked.insert("enderman".into(), ReviewTracked::Mob(game.mobs[em_idx].id));
+                let em_idx = game.entities.mobs.len() - 1;
+                game.entities.mobs[em_idx].random.set_seed(seed);
+                tracked.insert(
+                    "enderman".into(),
+                    ReviewTracked::Mob(game.entities.mobs[em_idx].id),
+                );
                 tracked.insert(
                     "arrow".into(),
                     ReviewTracked::Proj(summon_proj_seeded(
@@ -2124,7 +2138,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 assert!(game.run_command("summon minecraft:end_crystal 4.25 64.0 4.5 {}"));
                 tracked.insert(
                     "crystal".into(),
-                    ReviewTracked::Crystal(game.crystals.last().unwrap().id),
+                    ReviewTracked::Crystal(game.entities.crystals.last().unwrap().id),
                 );
                 tracked.insert(
                     "spit".into(),
@@ -2146,7 +2160,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 assert!(game.run_command("summon minecraft:end_crystal 4.25 64.0 4.5 {}"));
                 tracked.insert(
                     "crystal".into(),
-                    ReviewTracked::Crystal(game.crystals.last().unwrap().id),
+                    ReviewTracked::Crystal(game.entities.crystals.last().unwrap().id),
                 );
                 tracked.insert(
                     "spit".into(),
@@ -2163,7 +2177,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 assert!(game.run_command("summon minecraft:end_crystal 4.25 64.0 4.5 {}"));
                 tracked.insert(
                     "crystal".into(),
-                    ReviewTracked::Crystal(game.crystals.last().unwrap().id),
+                    ReviewTracked::Crystal(game.entities.crystals.last().unwrap().id),
                 );
                 tracked.insert(
                     "bullet".into(),
@@ -2180,7 +2194,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 ));
                 tracked.insert(
                     "stand".into(),
-                    ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                    ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
                 tracked.insert(
                     "arrow".into(),
@@ -2199,7 +2213,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 ));
                 tracked.insert(
                     "stand".into(),
-                    ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                    ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
                 tracked.insert(
                     "fireball".into(),
@@ -2218,7 +2232,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 ));
                 tracked.insert(
                     "stand".into(),
-                    ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                    ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
                 tracked.insert(
                     "arrow".into(),
@@ -2234,7 +2248,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 assert!(game.run_command("summon minecraft:armor_stand 3.5 64.0 4.5 {Fire:-2s}"));
                 tracked.insert(
                     "stand".into(),
-                    ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                    ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                 );
             }
             "r23_replacement_knot_drops_old_lead" => {
@@ -2264,7 +2278,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 assert!(game.run_command("summon minecraft:oak_boat 3.5 64.0 4.5 {}"));
                 tracked.insert(
                     "boat".into(),
-                    ReviewTracked::Boat(game.boats.last().unwrap().id),
+                    ReviewTracked::Boat(game.entities.boats.last().unwrap().id),
                 );
                 tracked.insert(
                     "rocket".into(),
@@ -2295,7 +2309,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                     assert!(game.run_command("summon minecraft:armor_stand 5.5 64.0 4.5 {}"));
                     tracked.insert(
                         "stand".into(),
-                        ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                        ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                     );
                     tracked.insert(
                         "pig".into(),
@@ -2317,7 +2331,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                     assert!(game.run_command("summon minecraft:armor_stand 5.5 64.0 4.5 {}"));
                     tracked.insert(
                         "stand".into(),
-                        ReviewTracked::Stand(game.armor_stands.last().unwrap().id),
+                        ReviewTracked::Stand(game.entities.armor_stands.last().unwrap().id),
                     );
                 }
                 tracked.insert(
@@ -2450,21 +2464,21 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 ));
                 break;
             }
-            if game.bolts.len() != exp.lightning_count {
+            if game.entities.bolts.len() != exp.lightning_count {
                 failures.push(format!(
                     "{label} t={}: lightning_count expected {} got {}",
                     exp.tick,
                     exp.lightning_count,
-                    game.bolts.len()
+                    game.entities.bolts.len()
                 ));
                 break;
             }
-            if (exp.xp_orb_count > 0) != (!game.orbs.is_empty()) {
+            if (exp.xp_orb_count > 0) != (!game.entities.orbs.is_empty()) {
                 failures.push(format!(
                     "{label} t={}: xp_orb presence expected {} got {}",
                     exp.tick,
                     exp.xp_orb_count,
-                    game.orbs.len()
+                    game.entities.orbs.len()
                 ));
                 break;
             }
@@ -2563,6 +2577,7 @@ pub(crate) fn run_witness_review_round1_regressions() {
                 }
             }
             let mut got_drops: Vec<String> = game
+                .entities
                 .dropped
                 .iter()
                 .map(|d| d.stack.item.to_string())
@@ -2623,13 +2638,13 @@ pub(crate) fn run_witness_review_round1_regressions() {
         witness.proj_seed,
     );
     assert!(game.run_command("summon minecraft:end_crystal 4.2 64.0 4.5 {}"));
-    let crystal_id = game.crystals.last().unwrap().id;
+    let crystal_id = game.entities.crystals.last().unwrap().id;
     let mut proj = Projectile::new(ProjectileKind::Trident, Vec3::new(1.5, 65.0, 4.5), None);
     proj.id = game.take_entity_id();
     proj.velocity = Vec3::new(3.0, 0.0, 0.0);
     proj.entity_random().set_seed(witness.proj_seed);
     let mob_tr_id = proj.id;
-    game.creatures.projectiles.push(proj);
+    game.entities.projectiles.push(proj);
     for exp in &r15.ticks {
         let (events, _) = step_recording(&mut game);
         if let Err(msg) = land_positions_match(&events, &exp.game_events) {

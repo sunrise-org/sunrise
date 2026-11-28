@@ -104,7 +104,7 @@ fn a_spectator_sees_the_invisible_body() {
     let kind = Arc::new(types.types["minecraft:pig"].clone());
     let mut pig = Mob::new(1, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
     pig.invisible = true;
-    game.mobs.push(pig);
+    game.entities.mobs.push(pig);
     let camera = glam::DVec3::new(6.5, 65.0, 6.5);
 
     // Anyone but a spectator sees no body at all.

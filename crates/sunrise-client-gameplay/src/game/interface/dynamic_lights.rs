@@ -73,6 +73,7 @@ impl ClientGame<'_> {
                 });
             let mobs = self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .filter(|m| !m.removed)
@@ -94,24 +95,29 @@ impl ClientGame<'_> {
                         item,
                     ))
                 });
-            let dropped = self.common.dropped.iter().filter_map(move |dropped| {
-                let (level, item) = brighter(
-                    lum,
-                    [Some(&*dropped.stack.item), None],
-                    dropped.fire_ticks > 0,
-                );
-                if level == 0 {
-                    return None;
-                }
-                let at = dropped.previous.lerp(dropped.position, alpha);
-                Some((
-                    Source {
-                        at: DVec3::new(at.x, at.y + 0.25, at.z),
-                        level,
-                    },
-                    item,
-                ))
-            });
+            let dropped = self
+                .common
+                .entities
+                .dropped
+                .iter()
+                .filter_map(move |dropped| {
+                    let (level, item) = brighter(
+                        lum,
+                        [Some(&*dropped.stack.item), None],
+                        dropped.fire_ticks > 0,
+                    );
+                    if level == 0 {
+                        return None;
+                    }
+                    let at = dropped.previous.lerp(dropped.position, alpha);
+                    Some((
+                        Source {
+                            at: DVec3::new(at.x, at.y + 0.25, at.z),
+                            level,
+                        },
+                        item,
+                    ))
+                });
             player.into_iter().chain(mobs).chain(dropped)
         })
     }

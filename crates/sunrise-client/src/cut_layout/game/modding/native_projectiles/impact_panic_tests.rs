@@ -103,7 +103,7 @@ fn shoot_listener_panic_after_admission_preserves_owned_rows() {
                     dimension: game.dim.key(),
                     kind: Kind::Projectile,
                 };
-                game.creatures
+                game.entities
                     .projectiles
                     .bind_residency(&journal, owner, |p| (p.id, p.join));
                 for i in 0..3 {
@@ -122,10 +122,10 @@ fn shoot_listener_panic_after_admission_preserves_owned_rows() {
                     let mut p = Projectile::new(kind, Vec3::new(x, 64.5, 0.5), None);
                     p.id = 71 + i;
                     p.velocity = Vec3::new(3.0, 0.0, 0.0);
-                    game.creatures.projectiles.push(p);
+                    game.entities.projectiles.push(p);
                 }
                 let before: Vec<_> = game
-                    .creatures
+                    .entities
                     .projectiles
                     .iter()
                     .map(|p| (p.id, p.join))
@@ -135,7 +135,7 @@ fn shoot_listener_panic_after_admission_preserves_owned_rows() {
                     mod_api::__private::poisoned_listeners(mod_api::HookId::VanillaGameEvent),
                     1
                 );
-                assert!(game.creatures.projectiles[..2].iter().all(|p| p.stuck));
+                assert!(game.entities.projectiles[..2].iter().all(|p| p.stuck));
                 assert!(admitted.load(Ordering::SeqCst));
                 assert!(
                     panicked.load(Ordering::SeqCst),
@@ -162,7 +162,7 @@ fn shoot_listener_panic_after_admission_preserves_owned_rows() {
                     .end_tick()
                     .expect("listener panic abandoned the lifted pass");
                 let restored: Vec<_> = game
-                    .creatures
+                    .entities
                     .projectiles
                     .iter()
                     .map(|p| (p.id, p.join))
@@ -173,7 +173,7 @@ fn shoot_listener_panic_after_admission_preserves_owned_rows() {
                 let mut table = game.resident_entities.table.borrow_mut();
                 for expected in restored {
                     let found = table.entity_lookup(&owner.dimension, expected.0, |at| {
-                        let list = &game.creatures.projectiles;
+                        let list = &game.entities.projectiles;
                         let entity = &list[list.locate(at.join)?];
                         Some(SourceEntity {
                             id: entity.id,
@@ -206,7 +206,7 @@ fn normal_dispatch_returns_the_owned_pass_for_explicit_restore() {
                 dimension: game.dim.key(),
                 kind: Kind::Projectile,
             };
-            game.creatures
+            game.entities
                 .projectiles
                 .bind_residency(&journal, owner, |p| (p.id, p.join));
             let mut original = Projectile::new(
@@ -215,17 +215,17 @@ fn normal_dispatch_returns_the_owned_pass_for_explicit_restore() {
                 None,
             );
             original.id = 7;
-            game.creatures.projectiles.push(original);
-            let identity = (7, game.creatures.projectiles[0].join);
-            let mut pass = game.creatures.projectiles.lift();
+            game.entities.projectiles.push(original);
+            let identity = (7, game.entities.projectiles[0].join);
+            let mut pass = game.entities.projectiles.lift();
             let mut child = pass[0].clone();
             child.id = 8;
             child.join = sunrise_sim::join_seq::JoinSeq::UNJOINED;
-            game.creatures.projectiles.push(child);
-            let child_identity = (8, game.creatures.projectiles[0].join);
+            game.entities.projectiles.push(child);
+            let child_identity = (8, game.entities.projectiles[0].join);
             game.with_projectile_dispatch(&mut pass, |game| {
                 assert_eq!(
-                    game.creatures
+                    game.entities
                         .projectiles
                         .iter()
                         .map(|p| (p.id, p.join))
@@ -238,15 +238,15 @@ fn normal_dispatch_returns_the_owned_pass_for_explicit_restore() {
                 [identity]
             );
             assert_eq!(
-                game.creatures.projectiles.len(),
+                game.entities.projectiles.len(),
                 1,
                 "normal dispatch must not auto-restore"
             );
-            game.creatures
+            game.entities
                 .projectiles
                 .restore(pass, sunrise_sim::join_seq::RestoreOrder::SpawnsFirst);
             assert_eq!(
-                game.creatures
+                game.entities
                     .projectiles
                     .iter()
                     .map(|p| (p.id, p.join))
@@ -255,7 +255,7 @@ fn normal_dispatch_returns_the_owned_pass_for_explicit_restore() {
             );
             // An unwind leaving the dispatch itself (rather than a contained listener
             // panic) still has to restore its owning pass before it propagates.
-            let mut pass = game.creatures.projectiles.lift();
+            let mut pass = game.entities.projectiles.lift();
             let unwind = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
                 game.with_projectile_dispatch(&mut pass, |_| panic!("dispatch unwind"));
             }))
@@ -263,7 +263,7 @@ fn normal_dispatch_returns_the_owned_pass_for_explicit_restore() {
             assert_eq!(unwind.downcast_ref::<&str>(), Some(&"dispatch unwind"));
             assert!(pass.is_empty());
             assert_eq!(
-                game.creatures
+                game.entities
                     .projectiles
                     .iter()
                     .map(|p| (p.id, p.join))

@@ -117,14 +117,15 @@ pub(crate) mod on_entity_item_update_tests {
                 game.world.set(x, 63, z, stone).unwrap();
             }
         }
-        game.dropped.clear();
+        game.entities.dropped.clear();
     }
 
     #[allow(unused_imports)]
 pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::on_entity_item_update::on_entity_item_update_tests::rest;
 
     pub(crate) fn counts(game: &sunrise_gameplay::game::ServerGame<'_>, ids: &[u32]) -> Vec<u32> {
-        game.dropped
+        game.entities
+            .dropped
             .iter()
             .filter(|item| ids.contains(&item.id))
             .map(|item| item.stack.count)
@@ -216,16 +217,31 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::on_enti
                     );
                 }
                 for id in irons {
-                    let held = game.dropped.iter().find(|item| item.id == id).unwrap();
+                    let held = game
+                        .entities
+                        .dropped
+                        .iter()
+                        .find(|item| item.id == id)
+                        .unwrap();
                     // Nothing of the entity's own tick ran: not its age, nor its delay's
                     // countdown; only the part's write is there.
                     assert_eq!((held.age, held.ticks, held.pickup_delay), (0, 0, 7));
                 }
                 for id in diamonds {
-                    let ticked = game.dropped.iter().find(|item| item.id == id).unwrap();
+                    let ticked = game
+                        .entities
+                        .dropped
+                        .iter()
+                        .find(|item| item.id == id)
+                        .unwrap();
                     assert_eq!((ticked.age, ticked.pickup_delay), (1, 19));
                 }
-                let gold_item = game.dropped.iter().find(|item| item.id == gold_id).unwrap();
+                let gold_item = game
+                    .entities
+                    .dropped
+                    .iter()
+                    .find(|item| item.id == gold_id)
+                    .unwrap();
                 // The part wrote 7, and then the item's own tick counted down.
                 assert_eq!((gold_item.age, gold_item.pickup_delay), (1, 6));
 
@@ -237,7 +253,8 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::on_enti
                 assert_eq!(counts(game, &irons), [1, 1]);
                 assert_eq!(counts(game, &diamonds), [2]);
                 assert!(
-                    game.dropped
+                    game.entities
+                        .dropped
                         .iter()
                         .filter(|item| irons.contains(&item.id))
                         .all(|item| item.age == 0)
@@ -263,7 +280,7 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::on_enti
                 );
                 assert!(game.entity(removed).is_none());
                 game.native_removals_flush();
-                assert!(!game.dropped.iter().any(|item| item.id == removed));
+                assert!(!game.entities.dropped.iter().any(|item| item.id == removed));
                 let pair = [
                     rest(game, "minecraft:copper_ingot", 8.5, 8.5),
                     rest(game, "minecraft:copper_ingot", 8.7, 8.5),
@@ -345,14 +362,14 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::on_enti
                                 .then_some(())
                                 .ok_or(mod_api::TransactionError::Aborted(()))
                         );
-                        let item = &game.dropped[0];
+                        let item = &game.entities.dropped[0];
                         assert_eq!(
                             (
                                 item.stack.count,
                                 item.pickup_delay,
                                 item.target,
                                 item.velocity.components(),
-                                game.dropped[1].stack.count
+                                game.entities.dropped[1].stack.count
                             ),
                             if commit {
                                 (3, 7, Some([0, 0, 0, 8]), [9.0; 3], 4)
@@ -399,11 +416,11 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::on_enti
                     );
                     assert!(subject.entity().discard(scope.host()));
                     assert!(scope.with_view(|_| ()).is_none());
-                    assert_eq!(access.game.dropped[0].pickup_delay, 7);
+                    assert_eq!(access.game.entities.dropped[0].pickup_delay, 7);
                     assert_eq!(
                         (
-                            access.game.dropped[1].id,
-                            access.game.dropped[1].pickup_delay
+                            access.game.entities.dropped[1].id,
+                            access.game.entities.dropped[1].pickup_delay
                         ),
                         (behind, 20)
                     );
@@ -426,7 +443,8 @@ pub(crate) use sunrise_gameplay::game::server_side::native_hooks_server::on_enti
             game.tick_items();
             assert_eq!(STACK_PROJECTIONS.get(), 0);
             assert!(
-                game.dropped
+                game.entities
+                    .dropped
                     .iter()
                     .all(|item| (item.age, item.pickup_delay) == (1, 19))
             );

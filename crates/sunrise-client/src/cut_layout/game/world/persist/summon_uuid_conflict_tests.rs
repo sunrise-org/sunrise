@@ -43,7 +43,8 @@ fn constructed_and_saved_mob_uuids_survive_repeated_reconstruction() {
             let uuid = saved_uuid.unwrap_or(CONSTRUCTOR_UUID);
             assert_eq!(game.persist.uuid_of(id), Some(uuid));
             assert_eq!(
-                game.mobs
+                game.entities
+                    .mobs
                     .iter()
                     .find(|mob| mob.id == id)
                     .unwrap()
@@ -56,12 +57,13 @@ fn constructed_and_saved_mob_uuids_survive_repeated_reconstruction() {
                 let tag = game.command_target_nbt(Target::Mob(id)).unwrap();
                 assert_eq!(sunrise_sim::entity_nbt::uuid(&tag), Some(uuid));
                 game.forget_entity(id);
-                game.mobs.retain(|mob| mob.id != id);
+                game.entities.mobs.retain(|mob| mob.id != id);
                 sunrise_level::random_source::set_thread_uniquifier(12345).unwrap();
                 id = game.load_mob(tag, None).unwrap();
                 assert_eq!(game.persist.uuid_of(id), Some(uuid));
                 assert_eq!(
-                    game.mobs
+                    game.entities
+                        .mobs
                         .iter()
                         .find(|mob| mob.id == id)
                         .unwrap()
@@ -122,9 +124,9 @@ fn cloud_fangs_and_kept_entities_keep_their_constructor_uuid() {
                 } else {
                     game.load_unlisted((0, 0), kind, saved, tag).unwrap();
                     if kind == "minecraft:evoker_fangs" {
-                        game.fangs.list.last().unwrap().id
+                        game.entities.fangs.list.last().unwrap().id
                     } else {
-                        game.breath_clouds.last().unwrap().id
+                        game.entities.breath_clouds.last().unwrap().id
                     }
                 };
                 let expected = saved.unwrap_or(CONSTRUCTOR_UUID);
@@ -176,14 +178,21 @@ fn live(game: &sunrise_gameplay::game::ServerGame<'_>, n: i32) -> Vec<u32> {
     ids
 }
 fn mob_tagged(game: &sunrise_gameplay::game::ServerGame<'_>, tag: &str) -> Vec<u32> {
-    game.mobs
+    game.entities
+        .mobs
         .iter()
         .filter(|m| game.tags_of(Target::Mob(m.id)).iter().any(|t| t == tag))
         .map(|m| m.id)
         .collect()
 }
 fn mount(game: &sunrise_gameplay::game::ServerGame<'_>, id: u32) -> Option<u32> {
-    game.mobs.iter().find(|m| m.id == id).unwrap().extra.mount
+    game.entities
+        .mobs
+        .iter()
+        .find(|m| m.id == id)
+        .unwrap()
+        .extra
+        .mount
 }
 /// The first tag and the UUID of each saved passenger of mob `id`, in order.
 fn saved_riders(
@@ -251,7 +260,7 @@ fn pruning_keeps_graph_owned_objects_without_aliasing_duplicate_owners() {
         assert_eq!(game.vehicle_by_uuid([160, 0, 0, 177]), Some(root));
 
         game.dismount_mob(parent);
-        game.mobs.retain(|mob| mob.id != root);
+        game.entities.mobs.retain(|mob| mob.id != root);
         game.prune_entity_memory();
         assert!(game.persist.off_level.contains_key(&parent));
         assert_eq!(game.persist.uuids.get(&parent), Some(&[160, 0, 0, 177]));
@@ -306,7 +315,7 @@ fn rejected_passenger_does_not_destroy_its_resident_duplicates_scores() {
                 root,
                 sunrise_gameplay_common::game::entity_memory::OffLevel::Mob(removed),
             );
-            game.mobs.retain(|mob| mob.id != root);
+            game.entities.mobs.retain(|mob| mob.id != root);
             game.prune_entity_memory();
             assert!(game.score.board.score(&holder, "retained_uuid").is_none());
             assert!(game.score.board.players_team(&holder).is_none());
@@ -431,6 +440,7 @@ fn summon_refuses_a_tree_holding_a_live_uuid() {
     with_game(|game, existing| {
         let stand = live(game, 150);
         let existing_at = game
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == existing)
@@ -469,17 +479,17 @@ fn summon_refuses_a_tree_holding_a_live_uuid() {
             ),
         ];
         for (tag, n, children, fresh) in conflicts {
-            let mobs = game.mobs.len();
+            let mobs = game.entities.mobs.len();
             let next = game.server.next_entity;
             let hooks = (game.persist.joins_canceled, game.persist.joined_seq);
             let draw = game.world.random.clone().next_long();
             if summon(game, tag, n, &children) {
                 failures.push(format!("{tag}: summon succeeded"));
             }
-            if game.mobs.len() != mobs {
+            if game.entities.mobs.len() != mobs {
                 failures.push(format!(
                     "{tag}: mob count {} expected {mobs}",
-                    game.mobs.len()
+                    game.entities.mobs.len()
                 ));
             }
             if game.server.next_entity != next {
@@ -533,6 +543,7 @@ fn summon_refuses_a_tree_holding_a_live_uuid() {
         }
 
         let after = game
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == existing)
@@ -591,7 +602,7 @@ fn a_resident_below_an_offlevel_passenger_round_trips_and_resumes_after_dismount
         // The real chunk write/read path must reconstruct resident descendants
         // without accidentally admitting their rejected parent.
         let chunks = game.entity_chunks(&HashSet::from([(0, 0)]), true);
-        assert!(game.mobs.is_empty());
+        assert!(game.entities.mobs.is_empty());
         for (key, tags) in chunks {
             game.world.queue_entity_nbt(key, tags);
         }
@@ -784,7 +795,7 @@ fn dimension_travel_admits_the_duplicate_child_before_the_copied_root() {
 fn summon_skips_a_uuid_taken_earlier_in_the_same_tree() {
     with_game(|game, _| {
         let mut failures = Vec::new();
-        let pigs = game.mobs.len();
+        let pigs = game.entities.mobs.len();
         if !summon(
             game,
             "h160_same_uuid",
@@ -854,10 +865,10 @@ fn summon_skips_a_uuid_taken_earlier_in_the_same_tree() {
                 saved_riders(game, child[0])
             ));
         }
-        if game.mobs.len() != pigs + 5 {
+        if game.entities.mobs.len() != pigs + 5 {
             failures.push(format!(
                 "internal: mob count {} expected {}",
-                game.mobs.len(),
+                game.entities.mobs.len(),
                 pigs + 5
             ));
         }
@@ -944,7 +955,7 @@ fn vehicle_root_travel(expected: &RootTravel, dismount: Option<&str>) {
         assert!(mob_tagged(game, "root_travel_rejected").is_empty());
         assert_eq!(mob_tagged(game, "root_travel_grandchild").len(), 1);
 
-        let source_root = match (game.boats.first(), game.carts.first()) {
+        let source_root = match (game.entities.boats.first(), game.entities.carts.first()) {
             (Some(boat), _) => Target::Boat(boat.id),
             (_, Some(cart)) => Target::Cart(cart.id),
             _ => panic!("the summoned root is resident in the source"),
@@ -977,8 +988,8 @@ fn vehicle_root_travel(expected: &RootTravel, dismount: Option<&str>) {
         assert_eq!(mount(game, grandchild), Some(rejected));
         let root = mount(game, rejected).expect("the copied root stays the pig's vehicle");
         assert!(game.level_entity(root as i32).is_none());
-        assert!(game.boats.iter().all(|b| b.id != root));
-        assert!(game.carts.iter().all(|c| c.id != root));
+        assert!(game.entities.boats.iter().all(|b| b.id != root));
+        assert!(game.entities.carts.iter().all(|c| c.id != root));
         assert!(game.boat_object(root).is_some() || game.cart_object(root).is_some());
         let y = |game: &sunrise_gameplay::game::ServerGame<'_>, id: u32| {
             game.mob_object(id).unwrap().position.y

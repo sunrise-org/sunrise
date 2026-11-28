@@ -69,7 +69,7 @@ fn end_game<'a>(
 
 /// The level's dragon fireballs: its projectiles of that kind.
 fn dragon_fireballs<'a>(game: &'a ServerGame<'_>) -> Vec<&'a sunrise_sim::projectiles::Projectile> {
-    game.creatures
+    game.entities
         .projectiles
         .iter()
         .filter(|p| p.kind == sunrise_sim::projectiles::ProjectileKind::DragonFireball)
@@ -124,7 +124,7 @@ fn the_dragons_fireball_first_world_tick() {
     eprintln!(
         "H127 after one End tick: fireballs {}, breath clouds {}, dim end {}",
         dragon_fireballs(&game).len(),
-        game.breath_clouds.len(),
+        game.entities.breath_clouds.len(),
         game.dimension_type().has_ender_dragon_fight
     );
     let v = Vec3::new(0.06, 0.0, 0.08);

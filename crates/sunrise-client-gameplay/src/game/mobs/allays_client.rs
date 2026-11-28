@@ -32,7 +32,7 @@ impl crate::game::ClientGame<'_> {
                 .is_some_and(|tag| tag.contains(&*s.item))
         });
         allay::interaction::predict(
-            &mut self.common.mobs[index].clone(),
+            &mut self.common.entities.mobs[index].clone(),
             offered.as_ref(),
             hand == Hand::Main,
             duplicates,
@@ -56,7 +56,7 @@ impl crate::game::ClientGame<'_> {
         });
         let actor = self.client_acting_uuid();
         let Some(result) = predict(
-            &mut self.common.mobs[index],
+            &mut self.common.entities.mobs[index],
             offered.as_ref(),
             hand == Hand::Main,
             duplicates,
@@ -64,7 +64,7 @@ impl crate::game::ClientGame<'_> {
         ) else {
             return false;
         };
-        let mob = &self.common.mobs[index];
+        let mob = &self.common.entities.mobs[index];
         if !mob.silent {
             let mut sound = LevelSound::new(
                 result.sound(),

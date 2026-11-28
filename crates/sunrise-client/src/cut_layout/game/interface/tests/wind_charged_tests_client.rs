@@ -80,7 +80,7 @@ fn a_silent_wind_charge_bursts_without_a_sound() {
                 gusts(&near, gust_id),
                 boat_speed(game, boat) > 0.0,
             ));
-            game.boats.clear();
+            game.entities.boats.clear();
         }
         game.server.lan = None;
         outcome
@@ -128,7 +128,7 @@ fn a_wind_charged_mob_bursts_with_the_breezes_sound_unless_it_is_silent() {
                 gusts(&near, gust_id),
                 boat_speed(game, boat) > 0.0,
             ));
-            game.boats.clear();
+            game.entities.boats.clear();
         }
         game.server.lan = None;
         outcome

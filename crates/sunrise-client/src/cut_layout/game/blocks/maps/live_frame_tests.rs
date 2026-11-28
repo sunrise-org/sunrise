@@ -82,12 +82,13 @@ fn frame_adoption(glow_first: bool) {
         ]);
         game.load_item_frame(tag, Some([317, 1, 0, n]));
     }
-    let mut ids: Vec<_> = game.item_frames.iter().map(|f| f.id).collect();
+    let mut ids: Vec<_> = game.entities.item_frames.iter().map(|f| f.id).collect();
     if glow_first {
         ids.reverse();
     }
     for &id in &ids {
         let frame = game
+            .entities
             .item_frames
             .iter()
             .find(|f| f.id == id)
@@ -110,6 +111,7 @@ fn frame_adoption(glow_first: bool) {
     for &id in &ids {
         for change in ["rotation", "unchanged", "components", "count", "empty"] {
             let frame = game
+                .entities
                 .item_frames
                 .iter()
                 .find(|f| f.id == id)
@@ -148,7 +150,12 @@ fn frame_adoption(glow_first: bool) {
                 _ => {}
             }
             game.apply_entity_nbt(Target::Frame(id), tag).unwrap();
-            let adopted = game.item_frames.iter().find(|f| f.id == id).unwrap();
+            let adopted = game
+                .entities
+                .item_frames
+                .iter()
+                .find(|f| f.id == id)
+                .unwrap();
             assert_eq!(
                 adopted.kind(),
                 frame.kind(),
@@ -176,7 +183,12 @@ fn frame_adoption(glow_first: bool) {
             let other = ids.iter().copied().find(|&other| other != id).unwrap();
             assert!(map.frames.iter().any(|f| f.entity_id == other as i32));
             // Re-establish the actual production map association for the next independent write.
-            let frame = game.item_frames.iter_mut().find(|f| f.id == id).unwrap();
+            let frame = game
+                .entities
+                .item_frames
+                .iter_mut()
+                .find(|f| f.id == id)
+                .unwrap();
             frame.item = Some(stack.clone());
             let f = Framed {
                 pos: frame.pos,

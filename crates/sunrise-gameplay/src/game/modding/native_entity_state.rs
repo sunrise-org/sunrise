@@ -77,9 +77,9 @@ impl crate::game::ServerGame<'_> {
         let left = match target {
             Target::Player => return self.guest_main_arm(self.server.lan_acting?),
             Target::Guest(conn) => return self.guest_main_arm(conn),
-            Target::Mob(_) => {
-                self.common.mobs[self.common.mobs.locate(location?.join)?].main_arm_left()
-            }
+            Target::Mob(_) => self.common.entities.mobs
+                [self.common.entities.mobs.locate(location?.join)?]
+            .main_arm_left(),
             Target::Stand(_) | Target::Dragon(_) => false,
             _ => return None,
         };
@@ -158,6 +158,7 @@ impl crate::game::ServerGame<'_> {
                 .is_some(),
             Some(Target::Mob(id)) => self
                 .common
+                .entities
                 .mobs
                 .iter_mut()
                 .find(|m| m.id == id)
@@ -174,14 +175,9 @@ impl crate::game::ServerGame<'_> {
         match self.native_target_body(self.native_entity_read_target(entity)?)? {
             Body::Player(p) => Some(p.is_in_lava()),
             Body::Mob(m) => Some(m.fluids.in_lava),
-            Body::Other(Target::General(id)) => Some(
-                self.common
-                    .resident_entities
-                    .general
-                    .row(id)?
-                    .fluids
-                    .in_lava,
-            ),
+            Body::Other(Target::General(id)) => {
+                Some(self.common.entities.general.row(id)?.fluids.in_lava)
+            }
             Body::Other(_) => None,
         }
     }
@@ -201,6 +197,7 @@ impl crate::game::ServerGame<'_> {
             Target::Mob(id) => {
                 let Some(mob) = self
                     .common
+                    .entities
                     .mobs
                     .iter_mut()
                     .find(|m| m.id == id && !m.removed)
@@ -211,7 +208,13 @@ impl crate::game::ServerGame<'_> {
                 (&mut mob.mod_fire_immune, &mut mob.fire_ticks)
             }
             Target::Stand(id) => {
-                let Some(stand) = self.common.armor_stands.iter_mut().find(|s| s.id == id) else {
+                let Some(stand) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter_mut()
+                    .find(|s| s.id == id)
+                else {
                     return false;
                 };
                 (&mut stand.mod_fire_immune, &mut stand.fire_ticks)
@@ -252,6 +255,7 @@ impl crate::game::ServerGame<'_> {
             Target::Falling(id) => {
                 return Some(
                     self.common
+                        .entities
                         .falling
                         .iter()
                         .find(|f| f.id == id)?
@@ -262,7 +266,7 @@ impl crate::game::ServerGame<'_> {
             Target::Projectile(id) => {
                 let p = self
                     .common
-                    .creatures
+                    .entities
                     .projectiles
                     .iter()
                     .find(|p| p.id == id)?;
@@ -318,12 +322,7 @@ impl crate::game::ServerGame<'_> {
         }
         match self.native_entity_target(entity) {
             Some(Target::Projectile(id)) => {
-                let Some(projectile) = self
-                    .common
-                    .creatures
-                    .projectiles
-                    .iter()
-                    .find(|p| p.id == id)
+                let Some(projectile) = self.common.entities.projectiles.iter().find(|p| p.id == id)
                 else {
                     return false;
                 };
@@ -402,7 +401,13 @@ impl crate::game::ServerGame<'_> {
                 }
                 None => false,
             },
-            Some(Target::Mob(id)) => match self.common.mobs.iter_mut().find(|mob| mob.id == id) {
+            Some(Target::Mob(id)) => match self
+                .common
+                .entities
+                .mobs
+                .iter_mut()
+                .find(|mob| mob.id == id)
+            {
                 Some(mob) => {
                     mob.air = air;
                     mob.needs_sync = true;
@@ -436,11 +441,12 @@ impl crate::game::ServerGame<'_> {
                     .is_some(),
             ),
             Target::Mob(id) => {
-                let m = self.common.mobs.iter().find(|m| m.id == id)?;
+                let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
                 Some(m.is_invisible())
             }
             Target::Stand(id) => Some(
                 self.common
+                    .entities
                     .armor_stands
                     .iter()
                     .find(|s| s.id == id)?
@@ -448,6 +454,7 @@ impl crate::game::ServerGame<'_> {
             ),
             Target::Frame(id) => Some(
                 self.common
+                    .entities
                     .item_frames
                     .iter()
                     .find(|f| f.id == id)?
@@ -478,6 +485,7 @@ impl crate::game::ServerGame<'_> {
                 }),
             Some(Target::Mob(id)) => self
                 .common
+                .entities
                 .mobs
                 .iter_mut()
                 .find(|m| m.id == id)
@@ -519,6 +527,7 @@ impl crate::game::ServerGame<'_> {
         match self.native_entity_target(entity) {
             Some(Target::Mob(id)) => self
                 .common
+                .entities
                 .mobs
                 .iter_mut()
                 .find(|m| m.id == id)
@@ -529,6 +538,7 @@ impl crate::game::ServerGame<'_> {
                 }),
             Some(Target::Stand(id)) => self
                 .common
+                .entities
                 .armor_stands
                 .iter_mut()
                 .find(|s| s.id == id)
@@ -538,7 +548,13 @@ impl crate::game::ServerGame<'_> {
                 }),
             // `ItemFrame` saves the flag with its chunk.
             Some(Target::Frame(id)) => {
-                let Some(frame) = self.common.item_frames.iter_mut().find(|f| f.id == id) else {
+                let Some(frame) = self
+                    .common
+                    .entities
+                    .item_frames
+                    .iter_mut()
+                    .find(|f| f.id == id)
+                else {
                     return false;
                 };
                 frame.invisible = invisible;
@@ -658,29 +674,29 @@ pub mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(42, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(42, kind, Vec3::ZERO, 0.0));
             let entity = game.entity(42).unwrap();
             assert!(entity.set_air_supply(game, -7));
-            assert_eq!(game.mobs[0].air, -7);
+            assert_eq!(game.entities.mobs[0].air, -7);
             assert!(entity.set_remaining_fire_ticks(game, 37));
-            assert_eq!(game.mobs[0].fire_ticks, 37);
+            assert_eq!(game.entities.mobs[0].fire_ticks, 37);
             assert!(entity.clear_fire(game));
-            assert_eq!(game.mobs[0].fire_ticks, 0);
+            assert_eq!(game.entities.mobs[0].fire_ticks, 0);
             assert!(game.entity_set_remaining_fire_ticks(entity, -12));
             assert!(game.entity_clear_fire(entity));
-            assert_eq!(game.mobs[0].fire_ticks, -12);
+            assert_eq!(game.entities.mobs[0].fire_ticks, -12);
             assert!(entity.set_ticks_frozen(game, 31));
-            assert_eq!(game.mobs[0].ticks_frozen, 31);
+            assert_eq!(game.entities.mobs[0].ticks_frozen, 31);
             assert!(entity.set_invisible(game, true));
-            assert!(game.mobs[0].invisible);
-            game.mobs[0].add_effect("minecraft:invisibility", 100, 0);
+            assert!(game.entities.mobs[0].invisible);
+            game.entities.mobs[0].add_effect("minecraft:invisibility", 100, 0);
             assert!(entity.set_invisible(game, false));
             assert_eq!(entity.is_invisible(game), Some(false));
             assert!(entity.set_glowing(game, true));
-            assert!(game.mobs[0].glowing);
+            assert!(game.entities.mobs[0].glowing);
             assert!(entity.set_no_gravity(game, true));
-            assert!(game.mobs[0].no_gravity);
-            assert!(game.mobs[0].needs_sync);
+            assert!(game.entities.mobs[0].no_gravity);
+            assert!(game.entities.mobs[0].needs_sync);
         });
     }
 
@@ -710,16 +726,18 @@ pub mod tests {
                 [0.0; 3],
                 0,
             );
-            let item = game.entity(game.dropped[0].id).unwrap();
+            let item = game.entity(game.entities.dropped[0].id).unwrap();
             assert_eq!(item.no_gravity(game), Some(false));
 
             assert!(item.set_no_gravity(game, true));
-            assert!(game.dropped[0].no_gravity);
-            assert!(game.dropped[0].needs_sync);
+            assert!(game.entities.dropped[0].no_gravity);
+            assert!(game.entities.dropped[0].needs_sync);
             assert_eq!(item.no_gravity(game), Some(true));
 
             // Every kind keeps the flag (#5082): a stand too.
-            game.armor_stands.push(ArmorStand::new(43, Vec3::ZERO, 0.0));
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(43, Vec3::ZERO, 0.0));
             let stand = game.entity(43).unwrap();
             assert_eq!(stand.no_gravity(game), Some(false));
             assert!(stand.set_no_gravity(game, true));
@@ -827,13 +845,15 @@ pub mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(42, kind, Vec3::ZERO, 0.0));
-            game.mobs[0].fire_ticks = 37;
+            game.entities.mobs.push(Mob::new(42, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs[0].fire_ticks = 37;
             let mob = game.entity(42).unwrap();
             assert_eq!(mob.fire_ticks(game), Some(37));
 
-            game.armor_stands.push(ArmorStand::new(43, Vec3::ZERO, 0.0));
-            game.armor_stands[0].fire_ticks = 23;
+            game.entities
+                .armor_stands
+                .push(ArmorStand::new(43, Vec3::ZERO, 0.0));
+            game.entities.armor_stands[0].fire_ticks = 23;
             let stand = game.entity(43).unwrap();
             assert_eq!(stand.fire_ticks(game), Some(23));
 
@@ -848,8 +868,8 @@ pub mod tests {
                 [0.0; 3],
                 0,
             );
-            game.dropped[0].fire_ticks = 19;
-            let item = game.entity(game.dropped[0].id).unwrap();
+            game.entities.dropped[0].fire_ticks = 19;
+            let item = game.entity(game.entities.dropped[0].id).unwrap();
             assert_eq!(item.fire_ticks(game), Some(19));
 
             let mut snowball = sunrise_sim::projectiles::Projectile::new(
@@ -859,7 +879,7 @@ pub mod tests {
             );
             snowball.id = 45;
             snowball.fire_ticks = 159;
-            game.creatures.projectiles.push(snowball);
+            game.entities.projectiles.push(snowball);
             let proj = game.entity(45).unwrap();
             assert_eq!(proj.fire_ticks(game), Some(159));
             assert_eq!(proj.is_on_fire(game), Some(true));
@@ -877,19 +897,21 @@ pub mod tests {
             );
             arrow.id = 46;
             arrow.arrow.as_mut().unwrap().fire_ticks = 80;
-            game.creatures.projectiles.push(arrow);
+            game.entities.projectiles.push(arrow);
             let arrow_ref = game.entity(46).unwrap();
             assert_eq!(arrow_ref.fire_ticks(game), Some(80));
             assert_eq!(arrow_ref.is_on_fire(game), Some(true));
             assert!(arrow_ref.clear_fire(game));
             assert_eq!(arrow_ref.fire_ticks(game), Some(0));
 
-            game.boats.push(super::super::boats_common::Boat::new(
-                44,
-                "oak".into(),
-                Vec3::ZERO,
-                0.0,
-            ));
+            game.entities
+                .boats
+                .push(super::super::boats_common::Boat::new(
+                    44,
+                    "oak".into(),
+                    Vec3::ZERO,
+                    0.0,
+                ));
             let boat = game.entity(44).unwrap();
             // A boat keeps the base state every `Entity` has (#5082).
             assert_eq!(boat.fire_ticks(game), Some(0));
@@ -931,7 +953,8 @@ pub mod tests {
             }
             game.world.set(0, 64, 8, portal).unwrap();
             game.world.set(0, 65, 8, portal).unwrap();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(40, zombie, Vec3::new(0.5, 64.0, 8.5), 0.0));
             use sunrise_gameplay_common::game::GameGameExt1 as _;
             game.load_ticking_neighbourhood(0, 0);
@@ -949,7 +972,7 @@ pub mod tests {
             game.find_entity_portals();
             game.handle_entity_portals();
             assert!(
-                game.mobs.iter().any(|m| m.id == 40),
+                game.entities.mobs.iter().any(|m| m.id == 40),
                 "the mob stays in its portal"
             );
             let held = mob.portal_cooldown(game).unwrap();
@@ -960,8 +983,12 @@ pub mod tests {
             );
 
             // Out of the portal, the value counts down one per tick.
-            game.mobs.iter_mut().find(|m| m.id == 40).unwrap().position =
-                Vec3::new(0.5, 64.0, 12.5);
+            game.entities
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == 40)
+                .unwrap()
+                .position = Vec3::new(0.5, 64.0, 12.5);
             game.handle_entity_portals();
             assert_eq!(mob.portal_cooldown(game), Some(held - 1));
 
@@ -970,13 +997,18 @@ pub mod tests {
             assert_eq!(mob.portal_cooldown(game), Some(held - 1));
 
             // 0 lets it enter on the next tick.
-            game.mobs.iter_mut().find(|m| m.id == 40).unwrap().position = Vec3::new(0.5, 64.0, 8.5);
+            game.entities
+                .mobs
+                .iter_mut()
+                .find(|m| m.id == 40)
+                .unwrap()
+                .position = Vec3::new(0.5, 64.0, 8.5);
             assert!(mob.set_portal_cooldown(game, 0));
             assert_eq!(mob.portal_cooldown(game), Some(0));
             game.find_entity_portals();
             game.handle_entity_portals();
             assert!(
-                !game.mobs.iter().any(|m| m.id == 40),
+                !game.entities.mobs.iter().any(|m| m.id == 40),
                 "0 lets the mob through"
             );
         });
@@ -1012,7 +1044,7 @@ pub mod tests {
                 .unwrap();
             game.server.next_entity += 1;
             let id = game.server.next_entity;
-            game.falling.push(FallingBlock {
+            game.entities.falling.push(FallingBlock {
                 size_answer: None,
                 ground: Default::default(),
                 fire_ticks: 0,
@@ -1042,7 +1074,8 @@ pub mod tests {
             let falling = game.entity(id).unwrap();
             assert!(!falling.set_portal_cooldown(game, 40));
             assert_eq!(
-                game.falling
+                game.entities
+                    .falling
                     .iter()
                     .find(|f| f.id == id)
                     .unwrap()
@@ -1076,7 +1109,7 @@ pub mod tests {
                 [0.0; 3],
                 0,
             );
-            let item = game.entity(game.dropped[0].id).unwrap();
+            let item = game.entity(game.entities.dropped[0].id).unwrap();
             assert!(item.set_portal_cooldown(game, 40));
             assert_eq!(item.portal_cooldown(game), Some(40));
         });
@@ -1100,7 +1133,7 @@ pub mod tests {
                 Vec3::ZERO,
                 None,
             ));
-            let arrow = game.entity(game.creatures.projectiles[0].id).unwrap();
+            let arrow = game.entity(game.entities.projectiles[0].id).unwrap();
             assert!(arrow.set_portal_cooldown(game, 40));
             assert_eq!(arrow.portal_cooldown(game), Some(40));
         });
@@ -1120,7 +1153,7 @@ pub mod tests {
                 Vec3::ZERO,
                 None,
             ));
-            let charge = game.entity(game.creatures.projectiles[0].id).unwrap();
+            let charge = game.entity(game.entities.projectiles[0].id).unwrap();
             assert!(!charge.set_portal_cooldown(game, 40));
             assert_eq!(charge.portal_cooldown(game), None);
         });

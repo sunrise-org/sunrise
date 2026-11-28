@@ -118,7 +118,7 @@ fn with_mob_world(
     drive: impl FnOnce(&mut Mob, &MobWorld<'_>, &mut DamageLevel<'_>),
 ) {
     game.options.dedicated = Some(Vec::new());
-    let mut mobs = game.mobs.lift();
+    let mut mobs = game.entities.mobs.lift();
     let snapshot: Vec<_> = mobs
         .iter()
         .map(|m| creatures::seen(m, game.level.player_uuid, game.items()))
@@ -128,7 +128,9 @@ fn with_mob_world(
     let mut test_level = sunrise_sim::health::TestLevel::new(0);
     let mut level = test_level.level();
     drive(&mut mobs[0], &w, &mut level);
-    game.mobs.restore(mobs, RestoreOrder::SurvivorsFirst);
+    game.entities
+        .mobs
+        .restore(mobs, RestoreOrder::SurvivorsFirst);
 }
 
 /// The level random's state, for the draw assertions.
@@ -395,8 +397,8 @@ fn villager(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, at: [f64
         .clone();
     let mut m = Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0);
     m.ground.on_ground = true;
-    game.mobs.push(m);
-    let join = game.mobs.last().unwrap().join;
+    game.entities.mobs.push(m);
+    let join = game.entities.mobs.last().unwrap().join;
     game.flush_resident_mob_parts(id, join);
 }
 
@@ -415,7 +417,7 @@ fn with_villager_tick(
     game.options.dedicated = Some(Vec::new());
     game.world.game_time = game_time;
     game.world.day_time = day_time;
-    let mut mobs = game.mobs.lift();
+    let mut mobs = game.entities.mobs.lift();
     let snapshot: Vec<_> = mobs
         .iter()
         .map(|m| creatures::seen(m, game.level.player_uuid, game.items()))
@@ -426,7 +428,9 @@ fn with_villager_tick(
     let index = mobs.iter().position(|m| m.id == id).unwrap();
     f(&mut mobs[index], &w, level, &mut events);
     let join = mobs[index].join;
-    game.mobs.restore(mobs, RestoreOrder::SurvivorsFirst);
+    game.entities
+        .mobs
+        .restore(mobs, RestoreOrder::SurvivorsFirst);
     game.flush_resident_mob_parts(id, join);
 }
 
@@ -438,7 +442,7 @@ fn villager_tick(
     day_time: i64,
     level: &mut DamageLevel<'_>,
 ) {
-    if let Some(m) = game.mobs.iter_mut().find(|m| m.id == id) {
+    if let Some(m) = game.entities.mobs.iter_mut().find(|m| m.id == id) {
         mobs::villager_brain::ensure_brain(m, game_time, day_time);
         let join = m.join;
         game.flush_resident_mob_parts(id, join);
@@ -462,10 +466,12 @@ fn random_states(
     id: u32,
     level: &mut DamageLevel<'_>,
 ) -> ((u64, Option<f64>), (u64, Option<f64>)) {
-    let mobs = game.mobs.lift();
+    let mobs = game.entities.mobs.lift();
     let mob = mobs.iter().find(|m| m.id == id).unwrap();
     let mob_state = (&mob.random).into();
-    game.mobs.restore(mobs, RestoreOrder::SurvivorsFirst);
+    game.entities
+        .mobs
+        .restore(mobs, RestoreOrder::SurvivorsFirst);
     (mob_state, (&*level.random()).into())
 }
 
@@ -488,8 +494,10 @@ fn behaviors_join_after_vanilla_of_their_priority_and_activity() {
         let mut test_level = sunrise_sim::health::TestLevel::new(0);
         let mut level = test_level.level();
         villager_tick(game, 8, 100, 3000, &mut level);
-        let keys = mobs::villager_brain::entry_keys(game.mobs.iter().find(|m| m.id == 8).unwrap())
-            .unwrap();
+        let keys = mobs::villager_brain::entry_keys(
+            game.entities.mobs.iter().find(|m| m.id == 8).unwrap(),
+        )
+        .unwrap();
         let mods: Vec<_> = keys.iter().enumerate().filter(|(_, k)| k.2).collect();
         assert_eq!(mods.len(), 2, "both behaviors joined");
         for (i, key) in &mods {
@@ -707,7 +715,7 @@ fn a_villager_without_mod_behaviors_draws_what_a_parts_free_one_does() {
             villager_tick(game, 8, 100 + i, 3000, &mut level);
         }
         let states = random_states(game, 8, &mut level);
-        game.mobs.clear();
+        game.entities.mobs.clear();
         states
     }
     // Phase A: no parts at all (each game resolves whatever is installed as
@@ -739,8 +747,8 @@ fn mob_of(game: &mut sunrise_gameplay::game::ServerGame<'_>, kind: &str, id: u32
     let kind = game.res.mob_types().get(kind).unwrap().clone();
     let mut m = Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0);
     m.ground.on_ground = true;
-    game.mobs.push(m);
-    let join = game.mobs.last().unwrap().join;
+    game.entities.mobs.push(m);
+    let join = game.entities.mobs.last().unwrap().join;
     game.flush_resident_mob_parts(id, join);
 }
 
@@ -752,7 +760,7 @@ fn animal_tick(
     day_time: i64,
     level: &mut DamageLevel<'_>,
 ) {
-    if let Some(m) = game.mobs.iter_mut().find(|m| m.id == id) {
+    if let Some(m) = game.entities.mobs.iter_mut().find(|m| m.id == id) {
         mobs::animal_brain::ensure_brain(m);
         let join = m.join;
         game.flush_resident_mob_parts(id, join);
@@ -824,8 +832,10 @@ fn animal_behaviors_join_after_vanilla_of_their_priority() {
             let mut level = test_level.level();
             animal_tick(game, 8, 100, 3000, &mut level);
             bare = Some(
-                mobs::animal_brain::entry_keys(game.mobs.iter().find(|m| m.id == 8).unwrap())
-                    .unwrap(),
+                mobs::animal_brain::entry_keys(
+                    game.entities.mobs.iter().find(|m| m.id == 8).unwrap(),
+                )
+                .unwrap(),
             );
         });
         bare.unwrap()
@@ -837,7 +847,8 @@ fn animal_behaviors_join_after_vanilla_of_their_priority() {
         let mut level = test_level.level();
         animal_tick(game, 8, 100, 3000, &mut level);
         let joined =
-            mobs::animal_brain::entry_keys(game.mobs.iter().find(|m| m.id == 8).unwrap()).unwrap();
+            mobs::animal_brain::entry_keys(game.entities.mobs.iter().find(|m| m.id == 8).unwrap())
+                .unwrap();
         let vanilla: Vec<_> = joined.iter().filter(|k| !k.2).cloned().collect();
         assert_eq!(vanilla, bare, "vanilla's order stands");
         let core_mod = joined
@@ -881,9 +892,11 @@ fn grown_up_stops_a_running_ghastling_behavior() {
     with_game(|game| {
         mob_of(game, "minecraft:happy_ghast", 8, [3.5, 70.0, 3.5]);
         {
-            let mut mobs = game.mobs.lift();
+            let mut mobs = game.entities.mobs.lift();
             mobs::finalize::set_baby(&mut mobs[0], true);
-            game.mobs.restore(mobs, RestoreOrder::SurvivorsFirst);
+            game.entities
+                .mobs
+                .restore(mobs, RestoreOrder::SurvivorsFirst);
         }
         let mut test_level = sunrise_sim::health::TestLevel::new(0);
         let mut level = test_level.level();
@@ -931,7 +944,7 @@ fn monster_tick(
     day_time: i64,
     level: &mut DamageLevel<'_>,
 ) {
-    if let Some(m) = game.mobs.iter_mut().find(|m| m.id == id) {
+    if let Some(m) = game.entities.mobs.iter_mut().find(|m| m.id == id) {
         mobs::monster_brain::ensure_brain(m);
         let join = m.join;
         game.flush_resident_mob_parts(id, join);
@@ -956,7 +969,7 @@ fn warden_tick(
     day_time: i64,
     level: &mut DamageLevel<'_>,
 ) {
-    if let Some(m) = game.mobs.iter().find(|m| m.id == id) {
+    if let Some(m) = game.entities.mobs.iter().find(|m| m.id == id) {
         let join = m.join;
         game.flush_resident_mob_parts(id, join);
     }
@@ -1019,16 +1032,20 @@ fn warden_behaviors_join_after_vanilla_of_their_priority() {
         with_game(|game| {
             mob_of(game, "minecraft:warden", 8, [3.5, 65.0, 3.5]);
             {
-                let mut mobs = game.mobs.lift();
+                let mut mobs = game.entities.mobs.lift();
                 mobs::warden::register(&mut mobs[0]);
-                game.mobs.restore(mobs, RestoreOrder::SurvivorsFirst);
+                game.entities
+                    .mobs
+                    .restore(mobs, RestoreOrder::SurvivorsFirst);
             }
             let mut test_level = sunrise_sim::health::TestLevel::new(0);
             let mut level = test_level.level();
             warden_tick(game, 8, 100, 3000, &mut level);
             bare = Some(
-                mobs::warden_brain::entry_keys(game.mobs.iter().find(|m| m.id == 8).unwrap())
-                    .unwrap(),
+                mobs::warden_brain::entry_keys(
+                    game.entities.mobs.iter().find(|m| m.id == 8).unwrap(),
+                )
+                .unwrap(),
             );
         });
         bare.unwrap()
@@ -1038,15 +1055,18 @@ fn warden_behaviors_join_after_vanilla_of_their_priority() {
     with_game(|game| {
         mob_of(game, "minecraft:warden", 8, [3.5, 65.0, 3.5]);
         {
-            let mut mobs = game.mobs.lift();
+            let mut mobs = game.entities.mobs.lift();
             mobs::warden::register(&mut mobs[0]);
-            game.mobs.restore(mobs, RestoreOrder::SurvivorsFirst);
+            game.entities
+                .mobs
+                .restore(mobs, RestoreOrder::SurvivorsFirst);
         }
         let mut test_level = sunrise_sim::health::TestLevel::new(0);
         let mut level = test_level.level();
         warden_tick(game, 8, 100, 3000, &mut level);
         let joined =
-            mobs::warden_brain::entry_keys(game.mobs.iter().find(|m| m.id == 8).unwrap()).unwrap();
+            mobs::warden_brain::entry_keys(game.entities.mobs.iter().find(|m| m.id == 8).unwrap())
+                .unwrap();
         let vanilla: Vec<_> = joined.iter().filter(|k| !k.2).cloned().collect();
         assert_eq!(vanilla, bare, "vanilla's order stands");
         let (i, key) = joined

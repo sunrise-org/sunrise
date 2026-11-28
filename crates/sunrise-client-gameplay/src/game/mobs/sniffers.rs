@@ -19,7 +19,7 @@ impl ClientGame<'_> {
         {
             players.push(p.position);
         }
-        for m in &self.common.mobs {
+        for m in &self.common.entities.mobs {
             if &*m.kind.id == "minecraft:player" && m.alive() && !m.removed {
                 players.push(m.position);
             }
@@ -27,8 +27,8 @@ impl ClientGame<'_> {
         if players.is_empty() {
             return;
         }
-        for i in 0..self.common.mobs.len() {
-            let m = &self.common.mobs[i];
+        for i in 0..self.common.entities.mobs.len() {
+            let m = &self.common.entities.mobs[i];
             if m.species() != Species::Sniffer
                 || !m.alive()
                 || !players
@@ -51,7 +51,7 @@ impl ClientGame<'_> {
                 && ms > 1700
                 && ms < 6000
             {
-                let head = sniffer::head_block(&self.common.mobs[i]);
+                let head = sniffer::head_block(&self.common.entities.mobs[i]);
                 let ground = [head[0], head[1] - 1, head[2]];
                 let below = self.common.world.block(ground[0], ground[1], ground[2]);
                 if self.common.res.facts().get(below).render_shape
@@ -74,7 +74,7 @@ impl ClientGame<'_> {
                         );
                     }
                     if age.is_multiple_of(10) {
-                        let sniffer = Some((id, self.common.mobs[i].kind.id.as_str()));
+                        let sniffer = Some((id, self.common.entities.mobs[i].kind.id.as_str()));
                         let hit = self
                             .selected_block_sound(
                                 ground,

@@ -44,7 +44,7 @@ impl ClientGame<'_> {
     /// `Mob.handleEntityEvent` 20 (`spawnAnim` on a client): the poof about
     /// mob `id`.
     pub(in crate::game) fn poof_particles(&mut self, id: u32) {
-        let Some(m) = self.common.mobs.iter().find(|m| m.id == id) else {
+        let Some(m) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
             return;
         };
         let (at, w, h) = (m.position, f64::from(m.width()), f64::from(m.height()));

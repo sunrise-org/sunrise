@@ -69,7 +69,7 @@ fn a_merge_reloads_an_arrows_own_save_data() {
 
     let uuid = [5007, 1, 2, 3];
     game.load_arrow(stuck("minecraft:arrow", uuid), Some(uuid), None);
-    let id = game.creatures.projectiles.last().unwrap().id;
+    let id = game.entities.projectiles.last().unwrap().id;
     merge(
         &mut game,
         Target::Projectile(id),
@@ -81,7 +81,7 @@ fn a_merge_reloads_an_arrows_own_save_data() {
             ("damage", Tag::Double(5.0_f64.to_bits())),
         ]),
     );
-    let p = game.creatures.projectiles.last().unwrap();
+    let p = game.entities.projectiles.last().unwrap();
     assert_eq!(p.id, id);
     let a = p.arrow.as_ref().unwrap();
     // The merged keys are read...
@@ -103,14 +103,14 @@ fn a_merge_reloads_an_arrows_own_save_data() {
     // A spectral arrow stays one: `/data`'s compound has no `id` to read it from.
     let uuid = [5007, 4, 5, 6];
     game.load_arrow(stuck("minecraft:spectral_arrow", uuid), Some(uuid), None);
-    let id = game.creatures.projectiles.last().unwrap().id;
+    let id = game.entities.projectiles.last().unwrap().id;
     merge(
         &mut game,
         Target::Projectile(id),
         Tag::compound([("life", Tag::Short(5))]),
     );
     let a = game
-        .creatures
+        .entities
         .projectiles
         .last()
         .unwrap()
@@ -125,13 +125,13 @@ fn a_merge_reloads_an_arrows_own_save_data() {
     // A thrown trident's despawn counter resets the same way.
     let uuid = [5007, 7, 8, 9];
     game.load_trident(stuck("minecraft:trident", uuid), Some(uuid));
-    let id = game.tridents.iter().last().unwrap().id;
+    let id = game.entities.tridents.iter().last().unwrap().id;
     merge(
         &mut game,
         Target::Trident(id),
         Tag::compound([("life", Tag::Short(0))]),
     );
-    let t = game.tridents.iter().find(|t| t.id == id).unwrap();
+    let t = game.entities.tridents.iter().find(|t| t.id == id).unwrap();
     assert_eq!(t.life, 0);
     assert!(t.in_ground);
 }

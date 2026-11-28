@@ -323,7 +323,7 @@ fn spawn_tree(
         record_at("mymod:robot", root, at, riders),
     )
     .unwrap();
-    game.resident_entities
+    game.entities
         .general
         .rows
         .iter()
@@ -334,7 +334,7 @@ fn spawn_tree(
 
 /// The rows' ids in storage order.
 fn row_ids(game: &sunrise_gameplay::game::ServerGame<'_>) -> Vec<u32> {
-    game.resident_entities
+    game.entities
         .general
         .rows
         .iter()
@@ -466,13 +466,13 @@ fn a_removed_last_rider_leaves_no_stale_index_link() {
         l.trace.lock().unwrap().clear();
         // The sweep took the last-joined rider out of the list.
         let gone = game
-            .resident_entities
+            .entities
             .general
             .rows
             .iter()
             .position(|row| row.id == ids[2])
             .unwrap();
-        game.resident_entities.general.rows.remove(gone);
+        game.entities.general.rows.remove(gone);
         tick(game);
         assert_eq!(*l.trace.lock().unwrap(), [root, ids[1]]);
     });
@@ -491,13 +491,13 @@ fn a_removed_only_rider_leaves_no_stale_index_link() {
         assert_eq!(*l.trace.lock().unwrap(), [root, ids[1]]);
         l.trace.lock().unwrap().clear();
         let gone = game
-            .resident_entities
+            .entities
             .general
             .rows
             .iter()
             .position(|row| row.id == ids[1])
             .unwrap();
-        game.resident_entities.general.rows.remove(gone);
+        game.entities.general.rows.remove(gone);
         tick(game);
         assert_eq!(*l.trace.lock().unwrap(), [root]);
     });
@@ -517,7 +517,7 @@ fn a_listener_discarded_row_gets_no_callback() {
         tick(game);
         assert_eq!(*l.trace.lock().unwrap(), [first]);
         // Still in the list — no sweep has run — but its removal is queued.
-        assert_eq!(game.resident_entities.general.rows.len(), 2);
+        assert_eq!(game.entities.general.rows.len(), 2);
         assert!(
             game.persist
                 .removals
@@ -591,7 +591,7 @@ fn a_listener_dismounted_rider_walks_as_a_root_after() {
         tick(game);
         assert_eq!(*l.trace.lock().unwrap(), [root, ids[2], ids[1]]);
         assert_eq!(
-            game.resident_entities.general.rows[1].mount, None,
+            game.entities.general.rows[1].mount, None,
             "the rider got off"
         );
     });
@@ -636,7 +636,7 @@ fn a_reloaded_row_reenters_ticking_behind_later_joins() {
         // It loads back into a fresh join, behind the row that never left.
         game.load_listed("mymod:robot", None, None, records.remove(0))
             .unwrap();
-        let rows = &game.resident_entities.general.rows;
+        let rows = &game.entities.general.rows;
         let reloaded = rows.iter().find(|row| row.uuid == [1, 2, 3, 4]).unwrap();
         let (early_id, early_join) = (reloaded.id, reloaded.join);
         let late_join = rows
@@ -665,7 +665,7 @@ fn a_reloaded_row_resumes_the_counter_and_refuses_its_old_handle() {
         let (_, mut records) = chunks.remove(0);
         game.load_listed("mymod:robot", None, None, records.remove(0))
             .unwrap();
-        let rows = &game.resident_entities.general.rows;
+        let rows = &game.entities.general.rows;
         let fresh = rows[0].id;
         assert_ne!(fresh, old);
         assert_eq!(counter(game, fresh), 41);
@@ -737,7 +737,7 @@ fn a_panicking_row_rolls_back_and_the_next_tick_proceeds() {
                     "the panic rolled the Host write back"
                 );
                 assert_eq!(
-                    game.resident_entities.general.row(first).unwrap().velocity,
+                    game.entities.general.row(first).unwrap().velocity,
                     sunrise_core::geometry::Vec3::ZERO,
                     "the panic rolled the scoped subject write back"
                 );
@@ -965,20 +965,20 @@ fn five_hundred_part_free_trees_walk_each_edge_once_and_allocate_nothing() {
             )
             .unwrap();
         }
-        assert_eq!(game.resident_entities.general.rows.len(), 1000);
+        assert_eq!(game.entities.general.rows.len(), 1000);
         tick(game);
         assert!(l.trace.lock().unwrap().is_empty());
         // The second pass over unchanged rows reuses the index buffers:
         // their capacity does not grow, which is the allocation the walk
         // itself would have to make.
-        let capacity = game.resident_entities.general.riders.first_child.capacity();
+        let capacity = game.entities.general.riders.first_child.capacity();
         tick(game);
         assert_eq!(
-            game.resident_entities.general.riders.first_child.capacity(),
+            game.entities.general.riders.first_child.capacity(),
             capacity,
             "a stable pass allocates nothing"
         );
-        assert_eq!(game.resident_entities.general.rows.len(), 1000);
+        assert_eq!(game.entities.general.rows.len(), 1000);
     });
 }
 
@@ -1014,7 +1014,7 @@ fn quarantine_then_reinstall_restores_the_counter() {
     // With the mod again: the row returns as itself, counter and all.
     with_counter(|game, l| {
         game.load_listed("mymod:robot", None, None, saved).unwrap();
-        let rows = &game.resident_entities.general.rows;
+        let rows = &game.entities.general.rows;
         let id = rows[0].id;
         assert_eq!(rows[0].uuid, [1, 2, 3, 4]);
         assert_eq!(counter(game, id), 42);
@@ -1039,7 +1039,7 @@ fn summon_answers_a_target_with_a_network_id() {
             map.insert("id".into(), Tag::String("mymod:robot".into()));
         }
         let target = game.spawn_entity_from_nbt(tag).unwrap();
-        let rows = &game.resident_entities.general.rows;
+        let rows = &game.entities.general.rows;
         assert_eq!(rows.len(), 1);
         let id = rows[0].id;
         assert_eq!(
@@ -1094,7 +1094,7 @@ fn spawn_entity_returns_its_own_row_when_a_join_spawns_another() {
         assert!(heard.contains(&(missile.id(), "join")));
         assert!(!heard.iter().any(|&(_, what)| what == "load"), "{heard:?}");
         let row = |id: u32| {
-            game.resident_entities
+            game.entities
                 .general
                 .rows
                 .iter()
@@ -1130,13 +1130,13 @@ fn spawn_entity_inserts_a_general_row_with_its_owner() {
         spawn.velocity = [0.5, 0.125, -0.25];
         spawn.rotation = Some([90.0, -15.0]);
         spawn.owner = Some(turret);
-        let projectiles = game.creatures.projectiles.len();
+        let projectiles = game.entities.projectiles.len();
         let missile = game
             .level_spawn_entity(level, "mymod:robot", [2.5, 65.5, 2.5], &spawn)
             .unwrap();
-        assert_eq!(game.creatures.projectiles.len(), projectiles);
+        assert_eq!(game.entities.projectiles.len(), projectiles);
         let owner_uuid = sunrise_sim::lan::playerdata::uuid_ints(game.entity_uuid(turret).unwrap());
-        let rows = &game.resident_entities.general.rows;
+        let rows = &game.entities.general.rows;
         assert_eq!(rows.len(), 1);
         let row = &rows[0];
         assert_eq!(row.id, missile.id());
@@ -1165,8 +1165,8 @@ fn spawn_entity_inserts_a_general_row_with_its_owner() {
         let record = game.general_row_record(alone.id(), false).unwrap();
         assert_eq!(record.to_tag().get("Owner"), None);
         // Bodies of another family, and a general body for a mob, refuse.
-        let rows = game.resident_entities.general.rows.len();
-        let mobs = game.mobs.len();
+        let rows = game.entities.general.rows.len();
+        let mobs = game.entities.mobs.len();
         let general = EntitySpawn::new(SpawnBody::General);
         assert_eq!(
             game.level_spawn_entity(level, "minecraft:cow", [4.5, 64.0, 2.5], &general),
@@ -1180,8 +1180,8 @@ fn spawn_entity_inserts_a_general_row_with_its_owner() {
             game.level_spawn_entity(level, "mymod:missing", [4.5, 64.0, 2.5], &general),
             None
         );
-        assert_eq!(game.resident_entities.general.rows.len(), rows);
-        assert_eq!(game.mobs.len(), mobs);
+        assert_eq!(game.entities.general.rows.len(), rows);
+        assert_eq!(game.entities.mobs.len(), mobs);
     });
 }
 

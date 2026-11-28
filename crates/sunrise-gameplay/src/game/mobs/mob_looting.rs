@@ -39,7 +39,7 @@ impl LootingLevel for ServerGame<'_> {
         crate::game::ServerGame::mob_equip_event(self, id, at, equip);
     }
     fn stack_facts(&self, index: usize, stack: &ItemStack, slot: Slot) -> Facts {
-        crate::game::ServerGame::stack_facts(self, &self.common.mobs[index], stack, slot)
+        crate::game::ServerGame::stack_facts(self, &self.common.entities.mobs[index], stack, slot)
     }
 }
 
@@ -110,7 +110,7 @@ impl crate::game::ServerGame<'_> {
             return;
         };
         let stack = e.stack.clone();
-        let target = self.mob_entity(&self.common.mobs[index]);
+        let target = self.mob_entity(&self.common.entities.mobs[index]);
         self.for_each_player(|g| {
             if g.acting_uuid() == owner {
                 g.trigger_item_entity("minecraft:thrown_item_picked_up_by_entity", &stack, &target);

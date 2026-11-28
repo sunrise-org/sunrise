@@ -84,9 +84,10 @@ fn brainless_villager_wakes_before_damage_listeners() {
                 .get("minecraft:villager")
                 .unwrap()
                 .clone();
-            game.mobs
+            game.entities
+                .mobs
                 .push(Mob::new(id, kind, Vec3::new(3.5, 100.0, 4.5), 0.0));
-            let mob = game.mobs.last_mut().unwrap();
+            let mob = game.entities.mobs.last_mut().unwrap();
             let job = [2, 100, 4];
             let meeting = [3, 100, 4];
             mob.extra.bed = Some(SLEEPING_BED);
@@ -105,7 +106,7 @@ fn brainless_villager_wakes_before_damage_listeners() {
                 "damage @e[type=villager,limit=1] 2 minecraft:generic at 2.5 100 4.5"
             ));
             assert_eq!(&*heard.lock().unwrap(), &["pre", "post"]);
-            let mob = game.mobs.last_mut().unwrap();
+            let mob = game.entities.mobs.last_mut().unwrap();
             assert_eq!(mob.health, 18.0);
             assert!(!villager::sleeping(mob));
             assert!(villager::ext(mob).unwrap().brain.is_none());
@@ -349,9 +350,9 @@ fn a_hit_on_the_dragon_fires_pre_and_post() {
     let heard = heard(|game| {
         let mut dragon = Dragon::new(Vec3::ZERO, 0.0, 0);
         dragon.id = 225009;
-        game.dragon.replace(dragon);
+        game.entities.dragon.replace(dragon);
         let _ = game.hit_special(SPECIAL, 6.0, true, DamageKind::Generic, None);
-        assert_eq!(game.dragon.as_ref().unwrap().health, 194.0);
+        assert_eq!(game.entities.dragon.as_ref().unwrap().health, 194.0);
     });
     assert_eq!(heard.pre, [(225009, 6.0, 6.0, 0.0)]);
     assert_eq!(heard.post, [(225009, 6.0)]);
@@ -382,11 +383,11 @@ fn mob_and_dragon_post_records_fresh_hit_decision() {
         assert_eq!(pig.health, 6.0);
         let mut dragon = Dragon::new(Vec3::ZERO, 0.0, 0);
         dragon.id = 225015;
-        game.dragon.replace(dragon);
+        game.entities.dragon.replace(dragon);
         for amount in [2.0, 4.0, 3.0] {
             let _ = game.hit_special(SPECIAL, amount, true, DamageKind::Generic, None);
         }
-        assert_eq!(game.dragon.as_ref().unwrap().health, 196.0);
+        assert_eq!(game.entities.dragon.as_ref().unwrap().health, 196.0);
     });
     assert_eq!(
         heard.post,
@@ -495,13 +496,13 @@ fn post_fires_once_for_a_killing_blow_on_a_mob() {
                 .chunks
                 .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
             let pig = mob(game, 225016, "minecraft:pig");
-            game.mobs.push(pig);
+            game.entities.mobs.push(pig);
             let victim = game.entity(225016).unwrap();
             assert_eq!(
                 victim.hurt(game, "minecraft:generic", 100.0, None, None),
                 Some(true),
             );
-            assert_eq!(game.mobs[0].health, 0.0);
+            assert_eq!(game.entities.mobs[0].health, 0.0);
             assert_eq!(log.lock().unwrap().post, [(225016, 100.0)]);
             game.tick_creature_entities().unwrap();
             assert_eq!(log.lock().unwrap().post, [(225016, 100.0)]);
@@ -624,7 +625,7 @@ fn killing_blow(cancel: bool) -> (Vec<(&'static str, i64)>, f32) {
                 .chunks
                 .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
             let pig = mob(game, 225017, "minecraft:pig");
-            game.mobs.push(pig);
+            game.entities.mobs.push(pig);
             let victim = game.entity(225017).unwrap();
             assert_eq!(
                 victim.hurt(game, "minecraft:magic", 100.0, None, None),
@@ -632,7 +633,13 @@ fn killing_blow(cancel: bool) -> (Vec<(&'static str, i64)>, f32) {
             );
             game.tick_creature_entities().unwrap();
             game.tick_creature_entities().unwrap();
-            health = game.mobs.iter().find(|m| m.id == 225017).unwrap().health;
+            health = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == 225017)
+                .unwrap()
+                .health;
         });
     });
     let heard = std::mem::take(&mut *probe.heard.lock().unwrap());
@@ -774,8 +781,8 @@ fn a_sweep_finishes_its_lethal_hit_before_the_next_hit() {
             let mut first = mob(game, 225031, "minecraft:pig");
             first.health = 0.5;
             let second = mob(game, 225032, "minecraft:pig");
-            game.mobs.push(first);
-            game.mobs.push(second);
+            game.entities.mobs.push(first);
+            game.entities.mobs.push(second);
             let area = sunrise_core::geometry::Aabb::new(
                 Vec3::new(-1.0, -1.0, -1.0),
                 Vec3::new(1.0, 2.0, 2.0),
@@ -836,10 +843,10 @@ fn projectile_killing_hit_posts_before_its_follow_up() {
             let mut target = mob(game, direct, "minecraft:pig");
             target.position = center;
             target.health = 0.5;
-            game.mobs.push(target);
+            game.entities.mobs.push(target);
             let mut bystander = mob(game, blast, "minecraft:pig");
             bystander.position = center.add_vector(Vec3::new(1.5, 0.0, 0.0));
-            game.mobs.push(bystander);
+            game.entities.mobs.push(bystander);
             let mut shot =
                 Projectile::new(ProjectileKind::LargeFireball { power: 1 }, center, None);
             shot.id = 225036;
@@ -897,7 +904,7 @@ fn mounted_fall_posts_before_the_next_rider() {
     mod_platform::testing::with_mods(mods, || {
         with_game(|game| {
             let (horse, _packets) = guest_horse_at_start_of_fall(game);
-            game.mobs[0].health = 0.5;
+            game.entities.mobs[0].health = 0.5;
             let rider = game.server.lan.as_mut().unwrap().hub.guests.update(0, |g| {
                 g.health = 0.5;
                 g.entity_id
@@ -935,8 +942,8 @@ fn mounted_fall_posts_before_the_next_rider() {
                 "the horse settles its own hurt before calling causeFallDamage on its rider",
             );
             assert_eq!(game.server.lan.as_ref().unwrap().hub.guests[0].health, 5.0);
-            assert_eq!(game.mobs[0].health, 5.0);
-            assert_eq!(game.mobs[0].fall_distance, 0.0);
+            assert_eq!(game.entities.mobs[0].health, 5.0);
+            assert_eq!(game.entities.mobs[0].fall_distance, 0.0);
         });
     });
 }
@@ -959,8 +966,8 @@ fn splash_water_finishes_a_lethal_hit_before_the_next_target() {
             let mut first = mob(game, 225041, "minecraft:blaze");
             first.health = 0.5;
             let second = mob(game, 225042, "minecraft:blaze");
-            game.mobs.push(first);
-            game.mobs.push(second);
+            game.entities.mobs.push(first);
+            game.entities.mobs.push(second);
             let water = ItemStack::new("minecraft:splash_potion", 1).with_potion("minecraft:water");
             game.affect_entities_around(&water, Vec3::ZERO, false);
             assert_eq!(
@@ -997,7 +1004,7 @@ fn squid_finishes_the_lethal_hit_its_subclass_reports_false() {
                 .insert((0, 0), Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)));
             let mut squid = mob(game, 225045, "minecraft:squid");
             squid.health = 0.5;
-            game.mobs.push(squid);
+            game.entities.mobs.push(squid);
             assert!(!game.mob_hits_mob(225045, 1.0, Damage::of(DamageKind::Magic)));
             assert_eq!(
                 *trace.heard.lock().unwrap(),
@@ -1060,8 +1067,8 @@ fn a_death_listener_without_post_runs_before_the_next_hurt() {
             let mut squid = mob(game, 225046, "minecraft:squid");
             squid.health = 0.5;
             let pig = mob(game, 225047, "minecraft:pig");
-            game.mobs.push(squid);
-            game.mobs.push(pig);
+            game.entities.mobs.push(squid);
+            game.entities.mobs.push(pig);
             let source = Damage::of(DamageKind::Magic);
             // The squid can return false after its superclass accepted the hit.
             assert!(!game.mob_hits_mob(225046, 1.0, source));
@@ -1100,8 +1107,8 @@ fn a_falling_block_finishes_each_hit_before_the_next_victim() {
             first.position = at;
             let mut second = mob(game, 225049, "minecraft:pig");
             second.position = at;
-            game.mobs.push(first);
-            game.mobs.push(second);
+            game.entities.mobs.push(first);
+            game.entities.mobs.push(second);
             let mut anvil = sunrise_gameplay_common::game::FallingBlock {
                 size_answer: None,
                 attachment_lifetime: Default::default(),
@@ -1279,7 +1286,7 @@ fn borrowed_pufferfish_posts_before_poison_and_the_next_sting() {
             puffer.no_ai = true;
             puffer.no_gravity = true;
             let age = puffer.age;
-            game.mobs.push(puffer);
+            game.entities.mobs.push(puffer);
             for (id, x) in [(first, 1.25), (second, 1.75)] {
                 let mut pig = mob(game, id, "minecraft:pig");
                 pig.position = Vec3::new(x, 80.0, 1.5);
@@ -1288,7 +1295,7 @@ fn borrowed_pufferfish_posts_before_poison_and_the_next_sting() {
                 if id == first {
                     pig.health = 0.5;
                 }
-                game.mobs.push(pig);
+                game.entities.mobs.push(pig);
             }
 
             game.tick_creature_entities().unwrap();
@@ -1305,9 +1312,9 @@ fn borrowed_pufferfish_posts_before_poison_and_the_next_sting() {
                     FishTickPost(vec![(120, 0)])
                 ]
             );
-            let revived = game.mobs.iter().find(|m| m.id == first).unwrap();
+            let revived = game.entities.mobs.iter().find(|m| m.id == first).unwrap();
             assert!(revived.alive(), "the death veto revived the first victim");
-            let puffer = game.mobs.iter().find(|m| m.id == fish).unwrap();
+            let puffer = game.entities.mobs.iter().find(|m| m.id == fish).unwrap();
             assert_eq!(
                 puffer.age,
                 age + 1,
@@ -1456,12 +1463,12 @@ fn borrowed_bee_posts_at_both_server_ai_hurts() {
                 bee.anger_end = game.world.game_time + 100;
                 body.set_target(departed);
             }
-            game.mobs.push(body);
+            game.entities.mobs.push(body);
             game.entity_section_joined(id, [1.5, 80.0, 1.5]);
 
             game.tick_creature_entities().unwrap();
 
-            let body = game.mobs.iter().find(|m| m.id == id).unwrap();
+            let body = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
             let bee = bee::get(body).unwrap();
             use BeeAiMoment::*;
             if snapshot {
@@ -1558,8 +1565,8 @@ fn borrowed_base_tick_damage_settles_before_the_next_mob_tick() {
                     _ => first.air = -19,
                 }
                 second.air = -19;
-                game.mobs.push(first);
-                game.mobs.push(second);
+                game.entities.mobs.push(first);
+                game.entities.mobs.push(second);
                 game.tick_creature_entities().unwrap();
                 assert_eq!(
                     *trace.heard.lock().unwrap(),
@@ -1577,7 +1584,7 @@ fn borrowed_base_tick_damage_settles_before_the_next_mob_tick() {
                 );
                 if hazard == "dolphin dry-out" {
                     assert_eq!(*trace.dry_out_velocity.lock().unwrap(), Some([0.0; 3]));
-                    let dolphin = game.mobs.iter().find(|m| m.id == 225043).unwrap();
+                    let dolphin = game.entities.mobs.iter().find(|m| m.id == 225043).unwrap();
                     assert_eq!(dolphin.velocity.y, 0.5, "one hop after death and Post");
                     assert!(!dolphin.ground.on_ground);
                     assert_eq!(dolphin.extra.counter, 0, "dry-out ran only once");
@@ -1623,7 +1630,7 @@ fn borrowed_mod_effect_posts_before_the_next_action() {
         pig.health = 0.5;
         let effect = sunrise_level::brewing::effect("test:effect").unwrap().id;
         pig.add_effect(effect, 10, 4);
-        game.mobs.push(pig);
+        game.entities.mobs.push(pig);
 
         game.tick_creature_entities().unwrap();
 
@@ -1640,7 +1647,7 @@ fn borrowed_mod_effect_posts_before_the_next_action() {
             ]
         );
         assert_eq!(applied.load(Relaxed), 1);
-        let pig = game.mobs.iter().find(|m| m.id == 225046).unwrap();
+        let pig = game.entities.mobs.iter().find(|m| m.id == 225046).unwrap();
         assert_eq!(pig.health, 4.0, "revived to 5, lost 2, healed once for 1");
         assert_eq!(
             sunrise_gameplay_common::game::creatures::source_damage_type(
@@ -1910,12 +1917,12 @@ fn borrowed_mob_landing_posts_before_the_travel_tail() {
             pig.health = 0.5;
             pig.ai.goals = Default::default();
             pig.ai.targets = Default::default();
-            game.mobs.push(pig);
+            game.entities.mobs.push(pig);
             game.entity_section_joined(id, [1.5, 64.125, 1.5]);
             let mut drying = mob(game, next_hit, "minecraft:axolotl");
             drying.position = Vec3::new(3.5, 64.125, 1.5);
             drying.air = -19;
-            game.mobs.push(drying);
+            game.entities.mobs.push(drying);
 
             game.tick_creature_entities().unwrap();
 
@@ -1939,7 +1946,7 @@ fn borrowed_mob_landing_posts_before_the_travel_tail() {
                 MobLandingMoment::NextHit,
             ]);
             assert_eq!(*trace.lock().unwrap(), expected);
-            let pig = &game.mobs[0];
+            let pig = &game.entities.mobs[0];
             assert_eq!(pig.position.y, 64.0);
             assert_eq!(
                 pig.velocity.y,
@@ -2085,7 +2092,7 @@ fn a_dolphin_goal_move_posts_before_the_next_goal() {
                 );
                 boat.velocity.x = 0.2;
                 game.riding = Some(boat.id);
-                game.boats.push(boat);
+                game.entities.boats.push(boat);
                 game.player = Some(PlayerMotion::new(game.motion, at));
             }
 
@@ -2119,12 +2126,12 @@ fn a_dolphin_goal_move_posts_before_the_next_goal() {
                     target: false,
                 },
             );
-            game.mobs.push(mover);
+            game.entities.mobs.push(mover);
             game.entity_section_joined(id, [1.5, 80.0, 1.5]);
             if target {
                 let handle = game.mob(game.entity(id).unwrap()).unwrap();
                 assert!(handle.add_target_goal(game, 0, &mod_api::GoalSpec::BreathAir));
-                game.mobs[0].ai.targets.add(
+                game.entities.mobs[0].ai.targets.add(
                     1,
                     FollowingGoal {
                         trace: Arc::clone(&trace),
@@ -2461,7 +2468,7 @@ fn player_melee_hit_preserves_the_attackers_position_and_direct_entity() {
         game.set_game_mode(GameMode::Survival);
         let mut zombie = mob(game, 42, "minecraft:zombie");
         zombie.position = Vec3::new(0.0, 0.0, -2.0);
-        game.mobs.push(zombie);
+        game.entities.mobs.push(zombie);
         assert!(game.hurt_player_from(
             8.0,
             Some([0.0, 0.0, -2.0]),
@@ -2516,18 +2523,24 @@ fn arrow_hits_name_the_projectile_on_players_mobs_and_the_dragon() {
             player.entity_id = 7;
             game.player = Some(player);
             game.set_game_mode(GameMode::Survival);
-            game.common.mobs.push(mob(game, 42, "minecraft:skeleton"));
-            game.mobs[0]
+            game.common
+                .entities
+                .mobs
+                .push(mob(game, 42, "minecraft:skeleton"));
+            game.entities.mobs[0]
                 .extra
                 .set_main_hand_stack(Some(ItemStack::new("minecraft:stone_sword", 1)));
             *game.held_mut() = Some(ItemStack::new("minecraft:stone_sword", 1));
             game.offhand = Some(ItemStack::new("minecraft:crossbow", 1));
-            game.common.mobs.push(mob(game, 43, "minecraft:pig"));
+            game.common
+                .entities
+                .mobs
+                .push(mob(game, 43, "minecraft:pig"));
             let mut dragon = Dragon::new(Vec3::ZERO, 0.0, 0);
             // Hover is a sitting phase and correctly shrugs off arrows.
             dragon.set_native_phase(mod_api::DragonPhase::HoldingPattern);
             dragon.id = 44;
-            game.dragon.replace(dragon);
+            game.entities.dragon.replace(dragon);
             let mut arrow = Projectile::new(
                 ProjectileKind::Arrow {
                     base_damage: 2.0,
@@ -2543,11 +2556,11 @@ fn arrow_hits_name_the_projectile_on_players_mobs_and_the_dragon() {
             arrow.velocity = Vec3::new(0.0, 0.0, -2.0);
             // Equipment changes after launch: only the saved crossbow belongs to the arrow.
             *game.held_mut() = Some(ItemStack::new("minecraft:iron_sword", 1));
-            game.mobs[0]
+            game.entities.mobs[0]
                 .extra
                 .set_main_hand_stack(Some(ItemStack::new("minecraft:iron_sword", 1)));
             if gone {
-                game.mobs.retain(|m| m.id != 42);
+                game.entities.mobs.retain(|m| m.id != 42);
             }
             game.projectile_hit(
                 &arrow,
@@ -2568,12 +2581,28 @@ fn arrow_hits_name_the_projectile_on_players_mobs_and_the_dragon() {
                         assert!(health < 19.0, "ownerless arrows do not use the weapon rule");
                     }
                 }
-                Who::Mob(SPECIAL) => assert!(game.dragon.as_ref().unwrap().health < 200.0),
+                Who::Mob(SPECIAL) => assert!(game.entities.dragon.as_ref().unwrap().health < 200.0),
                 Who::Mob(_) => {
                     if owner.is_some() && !gone {
-                        assert_eq!(game.mobs.iter().find(|m| m.id == 43).unwrap().health, 9.0);
+                        assert_eq!(
+                            game.entities
+                                .mobs
+                                .iter()
+                                .find(|m| m.id == 43)
+                                .unwrap()
+                                .health,
+                            9.0
+                        );
                     } else {
-                        assert!(game.mobs.iter().find(|m| m.id == 43).unwrap().health < 9.0);
+                        assert!(
+                            game.entities
+                                .mobs
+                                .iter()
+                                .find(|m| m.id == 43)
+                                .unwrap()
+                                .health
+                                < 9.0
+                        );
                     }
                 }
             }
@@ -2634,7 +2663,10 @@ fn guest_projectile_uses_current_main_hand_or_none_after_departure() {
                         guest.inventory[3] = Some(ItemStack::new("minecraft:stone_sword", 1));
                     })
                     .unwrap();
-                game.common.mobs.push(mob(game, 43, "minecraft:pig"));
+                game.common
+                    .entities
+                    .mobs
+                    .push(mob(game, 43, "minecraft:pig"));
                 let mut arrow = Projectile::new(
                     ProjectileKind::Arrow {
                         base_damage: 2.0,
@@ -2676,7 +2708,13 @@ fn guest_projectile_uses_current_main_hand_or_none_after_departure() {
                     },
                 )
                 .unwrap();
-                let health = game.mobs.iter().find(|m| m.id == 43).unwrap().health;
+                let health = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == 43)
+                    .unwrap()
+                    .health;
                 if gone {
                     assert!(health < 9.0);
                 } else {
@@ -2740,7 +2778,8 @@ fn a_player_blast_names_its_direct_entity_and_centre() {
             .get("minecraft:creeper")
             .unwrap()
             .clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(42, kind, Vec3::new(10.0, 0.0, 0.0), 0.0));
         game.server.combat.0.explosion_source = Some(42);
         let blast = sunrise_gameplay::game::server_side::explosion::ExplosionSource::default()
@@ -2784,10 +2823,12 @@ fn a_mob_blast_keeps_its_direct_entity_and_centre() {
             .get("minecraft:creeper")
             .unwrap()
             .clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(42, kind, Vec3::new(10.0, 0.0, 0.0), 0.0));
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(43, kind, Vec3::new(0.0, 0.0, 0.0), 0.0));
         game.server.combat.0.explosion_source = Some(42);
         let blast = sunrise_gameplay::game::server_side::explosion::ExplosionSource::default()
@@ -2798,7 +2839,12 @@ fn a_mob_blast_keeps_its_direct_entity_and_centre() {
             );
         game.explode(Some(42), [0.0, 0.0, 0.0], 3.0, blast).unwrap();
         game.server.combat.0.explosion_source = None;
-        assert!(game.mobs.iter().any(|m| m.id == 43 && m.health < 10.0));
+        assert!(
+            game.entities
+                .mobs
+                .iter()
+                .any(|m| m.id == 43 && m.health < 10.0)
+        );
     });
     assert_eq!(
         heard.sources,
@@ -2826,7 +2872,7 @@ fn lingering_and_splash_potions_name_themselves_as_the_direct_entity() {
     let cloud = heard(|game| {
         game.player = None;
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-        game.mobs.push(Mob::new(43, kind, Vec3::ZERO, 0.0));
+        game.entities.mobs.push(Mob::new(43, kind, Vec3::ZERO, 0.0));
         game.cloud_affect(
             Victim::Mob(43),
             &[("instant_damage", 1, 0)],
@@ -2885,7 +2931,7 @@ fn lingering_and_splash_potions_name_themselves_as_the_direct_entity() {
     let splash = heard(|game| {
         game.player = None;
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-        game.mobs.push(Mob::new(43, kind, Vec3::ZERO, 0.0));
+        game.entities.mobs.push(Mob::new(43, kind, Vec3::ZERO, 0.0));
         let mut potion = ItemStack::new("minecraft:splash_potion", 1);
         potion.data_mut().potion = Some("minecraft:harming".into());
         let owner = game.potion_owner(Some(sunrise_sim::mobs::Who::Mob(50)));
@@ -2965,7 +3011,7 @@ fn damage_by_a_non_mob_cause_keeps_the_causing_entity() {
         game.set_game_mode(GameMode::Survival);
         let mut dragon = Dragon::new(Vec3::ZERO, 0.0, 0);
         dragon.id = 44;
-        game.dragon.replace(dragon);
+        game.entities.dragon.replace(dragon);
         assert!(game.hurt_target(
             Target::Player,
             2.0,

@@ -151,6 +151,7 @@ impl crate::game::ServerGame<'_> {
                     .or_else(|| {
                         source.cart.and_then(|id| {
                             self.common
+                                .entities
                                 .carts
                                 .iter()
                                 .find(|cart| cart.id == id)

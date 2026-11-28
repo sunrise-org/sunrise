@@ -179,7 +179,7 @@ fn collect_projectile_uuids(
     game: &sunrise_gameplay::game::ServerGame<'_>,
 ) -> HashMap<String, (usize, u32)> {
     let mut by_uuid = HashMap::new();
-    for (idx, p) in game.creatures.projectiles.iter().enumerate() {
+    for (idx, p) in game.entities.projectiles.iter().enumerate() {
         let ints = game
             .persist
             .uuid_of(p.id)
@@ -280,7 +280,7 @@ pub(crate) fn run_a_moved_thrown_item_projectile_saves_its_loaded_item() {
         game.remove_unloading_entities(&keys);
         game.server.save.0.flush().unwrap();
         assert!(
-            game.creatures.projectiles.is_empty(),
+            game.entities.projectiles.is_empty(),
             "chunk unload failed to remove resident projectiles"
         );
         for case in &cases {

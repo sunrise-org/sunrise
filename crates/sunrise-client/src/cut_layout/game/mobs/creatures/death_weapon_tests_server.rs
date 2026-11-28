@@ -21,7 +21,7 @@ fn a_player_credited_death_drops_experience_without_a_loot_snapshot() {
         game.build_registries();
         game.server.next_entity = 1000;
         game.server.server_loot.0.set(None);
-        game.orbs.clear();
+        game.entities.orbs.clear();
         let pos = [2.0, 64.0, 0.0];
         let mut mob = Mob::new(
             70,
@@ -34,7 +34,7 @@ fn a_player_credited_death_drops_experience_without_a_loot_snapshot() {
             0.0,
         );
         mob.health = 0.0;
-        game.mobs.push(mob.clone());
+        game.entities.mobs.push(mob.clone());
         game.drop_death_loot(
             &mut mob,
             None,
@@ -45,6 +45,7 @@ fn a_player_credited_death_drops_experience_without_a_loot_snapshot() {
             None,
         );
         let total: i64 = game
+            .entities
             .orbs
             .iter()
             .map(|orb| i64::from(orb.value) * i64::from(orb.count))
@@ -179,7 +180,7 @@ pub(crate) fn weapon_case(item: &str, enchantment: &str, level: u32, projectile:
             let attacker_type = game.res.mob_types().get(attacker_kind).unwrap().clone();
             let mut attacker = Mob::new(41, attacker_type, Vec3::ZERO, 0.0);
             attacker.extra.set_main_hand_stack(Some(weapon.clone()));
-            game.mobs.push(attacker);
+            game.entities.mobs.push(attacker);
             let mut victim = Mob::new(70, ty, Vec3::new(2.0, 64.0, 0.0), 0.0);
             let mut damage = Damage::of(if projectile {
                 DamageKind::Arrow
@@ -208,7 +209,8 @@ pub(crate) fn weapon_case(item: &str, enchantment: &str, level: u32, projectile:
                 } else {
                     arrow.fired_from_weapon = Some(weapon);
                 }
-                game.mobs
+                game.entities
+                    .mobs
                     .iter_mut()
                     .find(|m| m.id == 41)
                     .unwrap()
@@ -217,7 +219,7 @@ pub(crate) fn weapon_case(item: &str, enchantment: &str, level: u32, projectile:
                 // Commit through the same accepted-damage path as real projectile impacts.
                 victim.health = 20.0;
                 victim.last_damage = None;
-                game.mobs.push(victim);
+                game.entities.mobs.push(victim);
                 damage.kind = game.projectile_damage_kind(&shot);
                 assert!(game.damage_projectile_with_weapon(&shot, 70, 100.0, damage, None));
             } else {

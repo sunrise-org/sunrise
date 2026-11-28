@@ -70,19 +70,21 @@ mod tests {
                 .get("minecraft:zombie")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
             let zombie = game.living(game.entity(12).unwrap()).unwrap();
-            let mob = game.mobs.len() - 1;
-            game.mobs[mob].extra.set_slot_stack(OFFHAND, Some(shield));
+            let mob = game.entities.mobs.len() - 1;
+            game.entities.mobs[mob]
+                .extra
+                .set_slot_stack(OFFHAND, Some(shield));
             assert_eq!(game.living_is_blocking(zombie), Some(false));
             assert!(game.living_start_using_item(zombie, Hand::Off));
-            game.mobs[mob].extra.using_item = 5;
+            game.entities.mobs[mob].extra.using_item = 5;
             assert_eq!(
                 game.living_is_blocking(zombie),
                 Some(false),
                 "4 ticks of use"
             );
-            game.mobs[mob].extra.using_item = 6;
+            game.entities.mobs[mob].extra.using_item = 6;
             assert_eq!(
                 game.living_is_blocking(zombie),
                 Some(true),

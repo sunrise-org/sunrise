@@ -6,6 +6,7 @@ impl crate::game::ServerGame<'_> {
     /// plus 4 of its box (`Player.isWithinEntityInteractionRange(mount, 4.0)`).
     pub fn lan_mount_valid(&self, g: &sunrise_sim::lan::guest::Guest, mob: u32) -> bool {
         self.common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == mob)

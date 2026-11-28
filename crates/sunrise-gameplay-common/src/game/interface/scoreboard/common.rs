@@ -135,7 +135,8 @@ pub trait CommonGameExt1<'__sg>: crate::game::SideGame<'__sg> {
             let Target::Mob(pet) = self.target_by_uuid(ints_uuid(uuid))? else {
                 return None;
             };
-            self.mobs
+            self.entities
+                .mobs
                 .iter()
                 .find(|m| m.id == pet && m.extra.tame)?
                 .extra

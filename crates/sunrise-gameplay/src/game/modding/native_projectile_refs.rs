@@ -15,7 +15,7 @@ use sunrise_sim::{
 /// Where a projectile handle's entity lives.
 #[derive(Clone, Copy)]
 enum Backing {
-    /// `creatures.projectiles`.
+    /// `entities.projectiles`.
     List(usize),
     /// `tridents`: a trident a player threw.
     Trident(usize),
@@ -26,13 +26,13 @@ enum Backing {
 impl crate::game::ServerGame<'_> {
     fn native_projectile_backing(&self, projectile: ProjectileRef) -> Option<Backing> {
         match self.native_entity_target(projectile.entity())? {
-            Target::Projectile(id) => (self.common.creatures.projectiles.iter())
+            Target::Projectile(id) => (self.common.entities.projectiles.iter())
                 .position(|p| p.id == id)
                 .map(Backing::List),
-            Target::Trident(id) => (self.common.tridents.iter())
+            Target::Trident(id) => (self.common.entities.tridents.iter())
                 .position(|t| t.id == id)
                 .map(Backing::Trident),
-            Target::Rocket(id) => (self.common.rockets.iter())
+            Target::Rocket(id) => (self.common.entities.rockets.iter())
                 .position(|r| r.id == id)
                 .map(Backing::Rocket),
             _ => None,
@@ -50,7 +50,7 @@ impl crate::game::ServerGame<'_> {
 
     fn native_projectile(&self, projectile: ProjectileRef) -> Option<&Projectile> {
         self.common
-            .creatures
+            .entities
             .projectiles
             .get(self.native_projectile_index(projectile)?)
     }
@@ -88,21 +88,21 @@ impl crate::game::ServerGame<'_> {
             let Target::General(id) = self.native_entity_target(entity)? else {
                 return None;
             };
-            let rows = &self.common.resident_entities.general.rows;
+            let rows = &self.common.entities.general.rows;
             let owner = rows.iter().find(|row| row.id == id)?.owner?;
             return self.native_owner_entity(self.target_by_uuid(ints_uuid(owner))?);
         };
         let target = match backing {
             Backing::List(i) => {
-                let uuid = self.common.creatures.projectiles[i].owner_uuid?;
+                let uuid = self.common.entities.projectiles[i].owner_uuid?;
                 self.target_by_uuid(ints_uuid(uuid))?
             }
             // A trident belongs to the guest who threw it, else the host.
-            Backing::Trident(i) => self.common.tridents[i]
+            Backing::Trident(i) => self.common.entities.tridents[i]
                 .guest
                 .map_or(Target::Player, Target::Guest),
             Backing::Rocket(i) => {
-                let r = &self.common.rockets[i];
+                let r = &self.common.entities.rockets[i];
                 match r.owner {
                     Some(Who::Player) => r.guest.map_or(Target::Player, Target::Guest),
                     Some(Who::Mob(id)) => Target::Mob(id),
@@ -149,7 +149,7 @@ impl crate::game::ServerGame<'_> {
         let (who, uuid, guest) = fields;
         match backing {
             Backing::List(i) => {
-                self.common.creatures.projectiles.update(i, |p| {
+                self.common.entities.projectiles.update(i, |p| {
                     (p.owner, p.owner_uuid, p.guest) = fields;
                     p.owner_vehicle = vehicle;
                     // `AbstractArrow.setOwner(Entity)`: a player's arrow may be picked up.
@@ -162,10 +162,10 @@ impl crate::game::ServerGame<'_> {
                 if who != Some(Who::Player) {
                     return false;
                 }
-                self.common.tridents[i].guest = guest;
+                self.common.entities.tridents[i].guest = guest;
             }
             Backing::Rocket(i) => {
-                self.common.rockets[i].set_owner(who, uuid, guest);
+                self.common.entities.rockets[i].set_owner(who, uuid, guest);
             }
         }
         true
@@ -237,7 +237,7 @@ impl crate::game::ServerGame<'_> {
         match backing {
             // `deflect` takes the `EntityReference` overload of `setOwner`: an
             // arrow's pickup does not change, unlike `set_owner`.
-            Backing::List(i) => self.common.creatures.projectiles.update(i, |p| {
+            Backing::List(i) => self.common.entities.projectiles.update(i, |p| {
                 let applied = p.deflect(turn, power, owner, by_attack);
                 if applied {
                     p.owner_vehicle = vehicle;
@@ -248,7 +248,7 @@ impl crate::game::ServerGame<'_> {
                 if owner.0 != Some(Who::Player) {
                     return false;
                 }
-                let t = &mut self.common.tridents[i];
+                let t = &mut self.common.entities.tridents[i];
                 if let Some((velocity, rotation)) = turn.apply(t.velocity, power, &mut t.random) {
                     t.velocity = velocity;
                     t.yaw += rotation;
@@ -257,7 +257,7 @@ impl crate::game::ServerGame<'_> {
                 true
             }
             Backing::Rocket(i) => {
-                let r = &mut self.common.rockets[i];
+                let r = &mut self.common.entities.rockets[i];
                 if let Some((velocity, _)) = turn.apply(r.velocity, power, &mut r.random) {
                     r.velocity = velocity;
                 }
@@ -291,7 +291,7 @@ impl crate::game::ServerGame<'_> {
         let Some(index) = self.native_projectile_index(projectile) else {
             return false;
         };
-        self.common.creatures.projectiles.update(index, |p| {
+        self.common.entities.projectiles.update(index, |p| {
             let Some(arrow) = p.arrow.as_mut() else {
                 return false;
             };
@@ -313,7 +313,7 @@ impl crate::game::ServerGame<'_> {
             .native_projectile_backing(projectile)
             .ok_or(PierceLevelError::Stale)?;
         match backing {
-            Backing::List(index) if self.common.creatures.projectiles[index].arrow.is_some() => {
+            Backing::List(index) if self.common.entities.projectiles[index].arrow.is_some() => {
                 Ok(index)
             }
             _ => Err(PierceLevelError::NotArrow),
@@ -326,7 +326,7 @@ impl crate::game::ServerGame<'_> {
         projectile: ProjectileRef,
     ) -> Result<i8, PierceLevelError> {
         let index = self.native_arrow_index(projectile)?;
-        Ok(self.common.creatures.projectiles[index]
+        Ok(self.common.entities.projectiles[index]
             .arrow
             .as_ref()
             .unwrap()
@@ -341,7 +341,7 @@ impl crate::game::ServerGame<'_> {
     ) -> Result<(), PierceLevelError> {
         let index = self.native_arrow_index(projectile)?;
         self.common
-            .creatures
+            .entities
             .projectiles
             .update(index, |p| p.arrow.as_mut().unwrap().pierce = level as u8);
         Ok(())
@@ -365,7 +365,7 @@ impl crate::game::ServerGame<'_> {
         let Some(index) = self.native_projectile_index(projectile) else {
             return false;
         };
-        self.common.creatures.projectiles.update(index, |p| {
+        self.common.entities.projectiles.update(index, |p| {
             let ProjectileKind::Arrow { base_damage, .. } = &mut p.kind else {
                 return false;
             };
@@ -390,7 +390,7 @@ impl crate::game::ServerGame<'_> {
         let Some(index) = self.native_projectile_index(projectile) else {
             return false;
         };
-        self.common.creatures.projectiles.update(index, |p| {
+        self.common.entities.projectiles.update(index, |p| {
             if !matches!(p.kind, ProjectileKind::Arrow { .. }) {
                 return false;
             }

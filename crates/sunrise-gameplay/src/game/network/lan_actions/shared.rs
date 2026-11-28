@@ -1258,9 +1258,9 @@ pub(in crate::game) mod pickup_xp_tests {
             g.loaded = true;
             g.position = [0.5, 70.0, 0.5];
             game.server.lan.as_mut().unwrap().hub.guests.push(g);
-            game.orbs.push(make_orb(7, 1));
+            game.entities.orbs.push(make_orb(7, 1));
             game.guest_orbs(0);
-            let left = game.orbs.iter().any(|o| o.id == 40);
+            let left = game.entities.orbs.iter().any(|o| o.id == 40);
             out = (
                 left,
                 game.server.lan.as_ref().unwrap().hub.guests[0].xp_total,
@@ -1284,9 +1284,11 @@ pub(in crate::game) mod pickup_xp_tests {
                 g.position = [0.5, 70.0, 0.5];
                 g.xp_total = initial_xp;
                 game.server.lan.as_mut().unwrap().hub.guests.push(g);
-                game.orbs.push(make_orb(initial_value, initial_count));
+                game.entities
+                    .orbs
+                    .push(make_orb(initial_value, initial_count));
                 game.guest_orbs(0);
-                let surviving = game.orbs.iter().find(|o| o.id == 40);
+                let surviving = game.entities.orbs.iter().find(|o| o.id == 40);
                 let saved = surviving.map(|o| orb_to_nbt(o, [0; 4]));
                 let state = surviving.map(|o| (o.value, o.count));
                 let host = game.server.lan.as_ref().unwrap();
@@ -1511,7 +1513,7 @@ pub(in crate::game) mod pickup_xp_tests {
                 g.loaded = true;
                 g.position = [0.5, 70.0, 0.5];
                 game.server.lan.as_mut().unwrap().hub.guests.push(g);
-                game.orbs.push(make_orb(7, 2));
+                game.entities.orbs.push(make_orb(7, 2));
 
                 game.guest_orbs(0);
                 assert_eq!(calls.load(Ordering::Relaxed), 1);
@@ -1529,7 +1531,7 @@ pub(in crate::game) mod pickup_xp_tests {
                 assert_eq!(calls.load(Ordering::Relaxed), 2);
                 assert_eq!(game.server.lan.as_ref().unwrap().hub.guests[0].xp_total, 14);
                 assert_eq!(game.server.lan.as_ref().unwrap().play[&1].xp_delay, 2);
-                assert!(game.orbs.is_empty());
+                assert!(game.entities.orbs.is_empty());
             });
         });
 
@@ -1578,9 +1580,11 @@ pub(in crate::game) mod pickup_xp_tests {
                 crate::game::native_entity_refs::tests::bind_local_player(game, 20, 123);
                 game.server.xp_delay = 0;
                 game.experience = Default::default();
-                game.orbs.push(make_orb(initial_value, initial_count));
+                game.entities
+                    .orbs
+                    .push(make_orb(initial_value, initial_count));
                 game.tick_experience();
-                let surviving = game.orbs.iter().find(|o| o.id == 40);
+                let surviving = game.entities.orbs.iter().find(|o| o.id == 40);
                 out = (
                     surviving.map(|o| (o.value, o.count)),
                     game.experience.total,

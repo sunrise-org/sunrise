@@ -64,7 +64,8 @@ fn fixture(game: &mut sunrise_gameplay::game::ServerGame<'_>) -> Fixture {
         .update(1, |g| g.sender = PlayerSender::new(tx13, Arc::default()));
     hub.set_sound_seeds(LegacyRandom::new(STREAM_SEED));
     let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-    game.mobs
+    game.entities
+        .mobs
         .push(Mob::new(40, kind, Vec3::new(3.0, 64.0, 4.0), 0.0));
     Fixture {
         rx12,

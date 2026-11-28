@@ -31,14 +31,14 @@ const SEATS: [(&str, f64, f64); 8] = [
 fn mob_at(game: &mut sunrise_gameplay::game::ServerGame<'_>, kind: &str, id: u32, at: [f64; 3]) {
     let kind = game.res.mob_types().get(kind).unwrap().clone();
     let m = sunrise_sim::mobs::Mob::new(id, kind, Vec3::new(at[0], at[1], at[2]), 0.0);
-    game.mobs.clear();
-    game.mobs.push(m);
+    game.entities.mobs.clear();
+    game.entities.mobs.push(m);
 }
 
 /// A rideable minecart with id `id` at `at`.
 fn cart_at(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, at: [f64; 3]) {
-    game.carts.clear();
-    game.carts.push(Minecart::new(
+    game.entities.carts.clear();
+    game.entities.carts.push(Minecart::new(
         id,
         CartKind::Rideable,
         Vec3::new(at[0], at[1], at[2]),
@@ -97,12 +97,12 @@ fn a_mob_rides_a_minecart() {
         game.ride_mount(Target::Mob(1), Target::Cart(7))
             .expect("a minecart takes a mob as its passenger");
         assert_eq!(
-            game.mobs[0].extra.mount,
+            game.entities.mobs[0].extra.mount,
             Some(7),
             "the zombie rides the cart"
         );
         game.sync_riders();
-        let p = game.mobs[0].position;
+        let p = game.entities.mobs[0].position;
         let want = at[1] + 0.1875 - f64::from(0.7_f32);
         assert_eq!(
             p.y, want,

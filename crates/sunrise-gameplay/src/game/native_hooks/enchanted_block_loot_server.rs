@@ -95,10 +95,10 @@ pub(in crate::game) mod tests {
                 assert_eq!(break_gravel(game, gravel, None).0, ROLLS);
                 reads.lock().unwrap().clear();
 
-                game.dropped.clear();
+                game.entities.dropped.clear();
                 let at = BlockPos::new(POS[0], POS[1], POS[2]);
                 game.with_level(|_, level, _| level.drop_resources_now(at, gravel));
-                assert_eq!(&*game.dropped[0].stack.item, "minecraft:flint");
+                assert_eq!(&*game.entities.dropped[0].stack.item, "minecraft:flint");
                 let level_side = reads.lock().unwrap().swap_remove(0);
                 assert_eq!(level_side.entity, None);
                 reads.lock().unwrap().clear();

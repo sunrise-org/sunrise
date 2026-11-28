@@ -128,7 +128,7 @@ impl crate::game::ServerGame<'_> {
     ) -> Option<ItemStack> {
         use sunrise_items::equipment::{MAINHAND, OFFHAND};
         let slot = if off_hand { OFFHAND } else { MAINHAND };
-        let mob = self.common.mobs.iter().find(|m| m.id == id)?;
+        let mob = self.common.entities.mobs.iter().find(|m| m.id == id)?;
         mob.extra.slot_stack(slot).cloned()
     }
     /// `ItemStack.causeUseVibration` for `stack` used by mob `id`.
@@ -143,6 +143,7 @@ impl crate::game::ServerGame<'_> {
         }
         let Some(p) = self
             .common
+            .entities
             .mobs
             .iter()
             .find(|m| m.id == id)
@@ -166,7 +167,13 @@ impl crate::game::ServerGame<'_> {
         let free = |m: &sunrise_sim::mobs::Mob| {
             !spear_use::is_using_item(m) && !spear_use::counts_own_timer(m)
         };
-        if !self.common.mobs.iter().any(|m| m.id == id && free(m)) {
+        if !self
+            .common
+            .entities
+            .mobs
+            .iter()
+            .any(|m| m.id == id && free(m))
+        {
             return false;
         }
         let Some(stack) = self.mob_hand_stack(id, off_hand) else {
@@ -188,6 +195,7 @@ impl crate::game::ServerGame<'_> {
         // The hook may have changed the mob: the same checks again.
         let started = self
             .common
+            .entities
             .mobs
             .iter_mut()
             .find(|m| m.id == id)
@@ -201,7 +209,7 @@ impl crate::game::ServerGame<'_> {
     /// less the ticks its counter has run, 0 when it uses nothing (an admiring
     /// piglin and a drinking witch use none). None for a mob that is gone.
     pub(in crate::game::server_side) fn mob_item_use_remaining(&self, id: u32) -> Option<i32> {
-        let mob = self.common.mobs.iter().find(|m| m.id == id)?;
+        let mob = self.common.entities.mobs.iter().find(|m| m.id == id)?;
         if !spear_use::is_using_item(mob) {
             return Some(0);
         }
@@ -221,7 +229,7 @@ impl crate::game::ServerGame<'_> {
         id: u32,
         remaining: i32,
     ) -> bool {
-        let Some(mob) = self.common.mobs.iter().find(|m| m.id == id) else {
+        let Some(mob) = self.common.entities.mobs.iter().find(|m| m.id == id) else {
             return false;
         };
         if !spear_use::is_using_item(mob) {
@@ -231,7 +239,7 @@ impl crate::game::ServerGame<'_> {
             return false;
         };
         let counter = use_counter_leaving(self.use_duration(&stack), remaining);
-        if let Some(mob) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+        if let Some(mob) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
             mob.extra.using_item = counter;
         }
         true
@@ -241,7 +249,7 @@ impl crate::game::ServerGame<'_> {
     /// and a trident's own release ask for a player, and a use cooldown too
     /// (`UseCooldown.apply`). False when no use runs.
     pub(in crate::game::server_side) fn release_mob_using_item(&mut self, id: u32) -> bool {
-        let Some(mob) = self.common.mobs.iter_mut().find(|m| m.id == id) else {
+        let Some(mob) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) else {
             return false;
         };
         if !spear_use::is_using_item(mob) {

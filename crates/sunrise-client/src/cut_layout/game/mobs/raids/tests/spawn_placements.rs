@@ -367,7 +367,8 @@ fn patrols_and_sieges_bypass_registered_predicates_and_placement_listeners() {
                 game.world.set(37, 63, -42, stone).unwrap();
                 game.tick_patrol_spawner();
                 assert!(
-                    game.mobs
+                    game.entities
+                        .mobs
                         .iter()
                         .any(|mob| mob.species() == Species::Pillager
                             && mob.position == Vec3::new(37.0, 64.0, -42.0)),
@@ -389,7 +390,8 @@ fn patrols_and_sieges_bypass_registered_predicates_and_placement_listeners() {
                         SpawnSite::Plain,
                     )
                     .unwrap();
-                game.mobs
+                game.entities
+                    .mobs
                     .iter_mut()
                     .find(|mob| mob.id == id)
                     .unwrap()
@@ -405,8 +407,11 @@ fn patrols_and_sieges_bypass_registered_predicates_and_placement_listeners() {
                 };
                 game.tick_village_siege();
                 assert!(
-                    game.mobs.iter().any(|mob| mob.species() == Species::Zombie
-                        && mob.position == Vec3::new(11.5, 64.0, 10.5)),
+                    game.entities
+                        .mobs
+                        .iter()
+                        .any(|mob| mob.species() == Species::Zombie
+                            && mob.position == Vec3::new(11.5, 64.0, 10.5)),
                     "the siege zombie passes its direct vanilla predicate"
                 );
                 assert!(

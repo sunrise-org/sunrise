@@ -70,7 +70,7 @@ fn boat_tick_refuses_a_write_from_a_leash_drop_hook() {
     with_observer(|game, state| {
         let mut boat = Boat::new(100, "oak".into(), Vec3::new(0.5, 64.0, 0.5), 0.0);
         boat.leash = Some(Holder::Knot([0, 64, 0]));
-        game.boats.push(boat);
+        game.entities.boats.push(boat);
         let handle = game.entity(100).unwrap();
         state.lock().unwrap().handles.push(handle);
         game.tick_boats();
@@ -93,7 +93,7 @@ fn statue_conversion_refuses_a_write_from_an_item_spawn_hook() {
             .clone();
         let mut golem = Mob::new(101, kind, Vec3::new(0.5, 64.0, 0.5), 0.0);
         transport_items::set_held(&mut golem, Some(ItemStack::new("minecraft:diamond", 1)));
-        game.mobs.push(golem);
+        game.entities.mobs.push(golem);
         let handle = game.entity(101).unwrap();
         state.lock().unwrap().handles.push(handle);
         assert!(handle.set_velocity(game, [2.0, 0.0, 0.0]));
@@ -111,9 +111,10 @@ fn cart_tick_refuses_a_write_from_a_mount_hook() {
         game.options.dedicated = Some(Vec::new());
         let mut cart = Minecart::new(102, CartKind::Rideable, Vec3::new(0.5, 64.0, 0.5));
         cart.velocity = Vec3::new(0.5, 0.0, 0.0);
-        game.carts.push(cart);
+        game.entities.carts.push(cart);
         let kind = game.res.mob_types().get("minecraft:pig").unwrap().clone();
-        game.mobs
+        game.entities
+            .mobs
             .push(Mob::new(103, kind, Vec3::new(0.7, 64.0, 0.5), 0.0));
         let handle = game.entity(102).unwrap();
         state.lock().unwrap().handles.push(handle);
@@ -131,7 +132,7 @@ fn leash_interaction_keeps_the_stored_boat_writable() {
     with_observer(|game, state| {
         let mut boat = Boat::new(106, "oak".into(), Vec3::new(0.5, 64.0, 0.5), 0.0);
         boat.leash = Some(Holder::Knot([0, 64, 0]));
-        game.boats.push(boat);
+        game.entities.boats.push(boat);
         let handle = game.entity(106).unwrap();
         state.lock().unwrap().handles.push(handle);
         game.drop_boat_leashes(&[0]);
@@ -144,14 +145,14 @@ fn leash_interaction_keeps_the_stored_boat_writable() {
 #[ignore = "daily"]
 fn nested_held_out_entities_both_refuse() {
     with_observer(|game, state| {
-        game.carts.push(Minecart::new(
+        game.entities.carts.push(Minecart::new(
             104,
             CartKind::Rideable,
             Vec3::new(0.5, 64.0, 0.5),
         ));
         let mut boat = Boat::new(105, "oak".into(), Vec3::new(0.5, 64.0, 0.5), 0.0);
         boat.leash = Some(Holder::Knot([0, 64, 0]));
-        game.boats.push(boat);
+        game.entities.boats.push(boat);
         let handles = [game.entity(104).unwrap(), game.entity(105).unwrap()];
         state.lock().unwrap().handles.extend(handles);
         game.with_entity_held_out(104, |game| {

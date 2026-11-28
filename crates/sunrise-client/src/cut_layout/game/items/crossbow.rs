@@ -43,7 +43,7 @@ pub(crate) mod tests {
             *game.held_mut() = Some(crossbow.clone());
             game.shoot_crossbow();
             assert_eq!(game.held(), Some(&crossbow));
-            assert!(game.creatures.projectiles.is_empty());
+            assert!(game.entities.projectiles.is_empty());
         });
     }
 
@@ -67,9 +67,9 @@ pub(crate) mod tests {
             }
             crossbow.data_mut().charged = vec![ItemStack::new(ARROW, 1); shots];
             *game.held_mut() = Some(crossbow);
-            let before = game.creatures.projectiles.len();
+            let before = game.entities.projectiles.len();
             game.shoot_crossbow();
-            game.creatures.projectiles[before..]
+            game.entities.projectiles[before..]
                 .iter()
                 .map(|p| p.arrow.as_ref().expect("an arrow").fire_ticks)
                 .collect()

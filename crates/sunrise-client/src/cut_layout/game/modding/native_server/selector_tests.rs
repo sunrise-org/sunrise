@@ -146,7 +146,7 @@ fn entity_selection_has_no_additional_count_cap() {
                                 &mut game.world,
                                 ((x >> 4) as i32, 0),
                             );
-                            game.mobs.push(Mob::new(
+                            game.entities.mobs.push(Mob::new(
                                 id,
                                 cow.clone(),
                                 Vec3::new(f64::from(x), 64.0, 5.0),

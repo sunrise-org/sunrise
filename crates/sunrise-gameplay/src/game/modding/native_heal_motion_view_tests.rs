@@ -372,7 +372,7 @@ fn motion_values() {
         add(game, zombie, "minecraft:weakness", 200, 0);
         let jump = {
             let w = game.mob_world_base(&[]);
-            let m = game.mobs.iter().find(|m| m.id == zombie).unwrap();
+            let m = game.entities.mobs.iter().find(|m| m.id == zombie).unwrap();
             m.jump_power(&w)
         };
         assert_eq!(jump, 0.26);

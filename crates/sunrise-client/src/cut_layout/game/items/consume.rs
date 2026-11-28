@@ -316,14 +316,18 @@ pub(crate) mod fox_consumption_hook_tests {
                     for _ in 0..3 {
                         expected_random.next_double();
                     }
-                    game.mobs.push(actor);
+                    game.entities.mobs.push(actor);
                     let applied = game.apply_fox_consumption(&decision);
                     assert_eq!(applied, action <= 1);
                     assert_eq!(
                         heard.lock().unwrap().last(),
                         Some(&(id, test_snapshot(&stack)))
                     );
-                    let actor = game.mobs.iter_mut().find(|m| m.id == id && !m.removed);
+                    let actor = game
+                        .entities
+                        .mobs
+                        .iter_mut()
+                        .find(|m| m.id == id && !m.removed);
                     match action {
                         0 => {
                             let m = actor.unwrap();
@@ -418,7 +422,7 @@ pub(crate) mod fox_consumption_hook_tests {
                     if id == 200 {
                         actor.velocity = Vec3::new(0.2, 0.0, 0.0);
                     }
-                    game.mobs.push(actor);
+                    game.entities.mobs.push(actor);
                 }
                 game.tick_creature_entities().unwrap();
                 let heard = heard.lock().unwrap();
@@ -427,7 +431,7 @@ pub(crate) mod fox_consumption_hook_tests {
                     [200, 204]
                 );
                 assert!(heard.iter().all(|(_, stack)| stack.count() == 7));
-                let first = game.mobs.iter().find(|m| m.id == 200).unwrap();
+                let first = game.entities.mobs.iter().find(|m| m.id == 200).unwrap();
                 assert_eq!(first.age, 1, "base tick must not repeat after the callback");
                 assert_eq!(
                     first.previous,
@@ -439,20 +443,25 @@ pub(crate) mod fox_consumption_hook_tests {
                     first.position.x < 6.0,
                     "movement resumes at the redirected landing"
                 );
-                let next = game.mobs.iter().find(|m| m.id == 201).unwrap();
+                let next = game.entities.mobs.iter().find(|m| m.id == 201).unwrap();
                 assert_eq!(next.age, 1);
                 assert_eq!(
                     &*next.extra.main_hand_stack().unwrap().item,
                     "minecraft:stone"
                 );
                 assert_eq!(next.previous, Vec3::new(12.5, 64.0, 8.5));
-                assert!(!game.mobs.iter().any(|m| m.id == 202));
-                let last = game.mobs.iter().find(|m| m.id == 204).unwrap();
+                assert!(!game.entities.mobs.iter().any(|m| m.id == 202));
+                let last = game.entities.mobs.iter().find(|m| m.id == 204).unwrap();
                 assert_eq!(last.age, 1);
                 assert_eq!(last.extra.main_hand_stack().unwrap().count, 6);
                 let spawned = spawned.lock().unwrap();
                 assert_eq!(spawned.len(), 1);
-                let cow = game.mobs.iter().find(|m| m.id == spawned[0]).unwrap();
+                let cow = game
+                    .entities
+                    .mobs
+                    .iter()
+                    .find(|m| m.id == spawned[0])
+                    .unwrap();
                 assert_eq!(
                     cow.age, 0,
                     "a listener's new entity waits until the next batch"

@@ -270,7 +270,8 @@ impl ServerGame<'_> {
     /// `ChestBlock.isChestBlockedAt`: a redstone conductor above the chest or
     /// a cat sitting on it.
     pub(in crate::game::server_side) fn chest_blocked_at(&self, key: (i32, i32, i32)) -> bool {
-        self.conductor_above(key) || super::machines::cat_sitting_above(&self.common.mobs, key)
+        self.conductor_above(key)
+            || super::machines::cat_sitting_above(&self.common.entities.mobs, key)
     }
 
     /// `ChestBlock.getMenuProvider` (`combine(.., false)`) and

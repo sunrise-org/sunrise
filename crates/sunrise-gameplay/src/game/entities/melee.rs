@@ -76,11 +76,18 @@ impl crate::game::ServerGame<'_> {
             return false;
         }
         if let Some(hit) = self.server_crosshair_entity_hit() {
-            if self.common.falling.iter().any(|f| f.id as i32 == hit.id) {
+            if self
+                .common
+                .entities
+                .falling
+                .iter()
+                .any(|f| f.id as i32 == hit.id)
+            {
                 return false;
             }
             if let Some(tnt_id) = self
                 .common
+                .entities
                 .tnts
                 .iter()
                 .find(|t| t.id as i32 == hit.id)
@@ -96,9 +103,10 @@ impl crate::game::ServerGame<'_> {
             && self.before_block(d)
         {
             // `BlockAttachedEntity.hurtServer` refuses first through `isInvulnerableToBase`.
-            if self
-                .native_player_hit_invulnerable(self.common.paintings[i].id, "minecraft:painting")
-            {
+            if self.native_player_hit_invulnerable(
+                self.common.entities.paintings[i].id,
+                "minecraft:painting",
+            ) {
                 self.server.attack_ticks = 0;
             } else {
                 self.break_painting(i, true);
@@ -141,7 +149,7 @@ impl crate::game::ServerGame<'_> {
         let catalog = sunrise_gameplay_common::game::general::general_type_catalog();
         let Some((id, kind, distance)) = self
             .common
-            .resident_entities
+            .entities
             .general
             .rows
             .iter()
@@ -192,10 +200,13 @@ impl crate::game::ServerGame<'_> {
     /// sounds.
     pub fn attack_mob(&mut self, index: usize) {
         let attack = self.attack_of(self.common.player.as_ref().map_or(0, |p| p.entity_id));
-        let target_kind = self.common.mobs[index].kind.id.clone();
+        let target_kind = self.common.entities.mobs[index].kind.id.clone();
         let target_kind = format!("minecraft:{}", target_kind.trim_start_matches("minecraft:"));
-        let ((amount, scale, crit, magic), admitted) =
-            self.melee_damage_with_admission(&target_kind, true, Some(self.common.mobs[index].id));
+        let ((amount, scale, crit, magic), admitted) = self.melee_damage_with_admission(
+            &target_kind,
+            true,
+            Some(self.common.entities.mobs[index].id),
+        );
         // Player.onAttack: the hit starts the attack strength again, hurt or not.
         self.server.attack_ticks = 0;
         if !admitted {
@@ -212,18 +223,23 @@ impl crate::game::ServerGame<'_> {
         if knockback_attack && let Some(at) = from {
             self.server_play_sound("minecraft:entity.player.attack.knockback", at, 1.0, 1.0);
         }
-        let old_health = self.common.mobs[index].health;
+        let old_health = self.common.entities.mobs[index].health;
         let source = match from {
             Some(f) => self.attack_source(f),
             None => sunrise_sim::mobs::Damage::of(sunrise_sim::mobs::DamageKind::Generic),
         };
-        let (id, join) = (self.common.mobs[index].id, self.common.mobs[index].join);
+        let (id, join) = (
+            self.common.entities.mobs[index].id,
+            self.common.entities.mobs[index].join,
+        );
         let (landed, _) = self.hurt_by_player(index, amount, source);
         let Some(index) = self
             .common
             .mob_index
-            .find(&self.common.mobs, id)
-            .filter(|&i| self.common.mobs[i].join == join && !self.common.mobs[i].removed)
+            .find(&self.common.entities.mobs, id)
+            .filter(|&i| {
+                self.common.entities.mobs[i].join == join && !self.common.entities.mobs[i].removed
+            })
         else {
             if landed {
                 self.remember_player_target(Some(id));
@@ -231,7 +247,7 @@ impl crate::game::ServerGame<'_> {
             return;
         };
         if landed {
-            let victim = self.mob_entity(&self.common.mobs[index]);
+            let victim = self.mob_entity(&self.common.entities.mobs[index]);
             self.player_hit(
                 &victim,
                 sunrise_gameplay_common::game::creatures::damage_type(source.kind, true),
@@ -246,13 +262,13 @@ impl crate::game::ServerGame<'_> {
             p.attack_log.push(sunrise_sim::health::AttackRecord {
                 game_time: p.health.game_time(),
                 target: target_kind.clone(),
-                id: self.common.mobs[index].id,
-                killed: landed && !self.common.mobs[index].alive(),
+                id: self.common.entities.mobs[index].id,
+                killed: landed && !self.common.entities.mobs[index].alive(),
                 amount,
                 scale,
                 crit,
                 landed,
-                dealt: old_health - self.common.mobs[index].health,
+                dealt: old_health - self.common.entities.mobs[index].health,
             });
         }
         if landed {
@@ -260,17 +276,20 @@ impl crate::game::ServerGame<'_> {
             if knockback > 0.0 {
                 let (xd, zd) = self.extra_knockback_direction();
                 let aim = self.attacker_aim(source.attacker);
-                let plan =
-                    self.prepare_knockback_credit(self.common.mobs[index].id as i32, None, &attack);
+                let plan = self.prepare_knockback_credit(
+                    self.common.entities.mobs[index].id as i32,
+                    None,
+                    &attack,
+                );
                 let mut credit = plan.lend(&mut self.server.last_hurt_by_player);
-                self.common.mobs[index].attacker_aim = aim;
+                self.common.entities.mobs[index].attacker_aim = aim;
                 let level = crate::game::server_side::entity_server::damage_level_of!(
                     self,
                     &attack,
                     &mut credit,
                     None
                 );
-                self.common.mobs[index].knockback_full(
+                self.common.entities.mobs[index].knockback_full(
                     level,
                     f64::from(knockback),
                     xd,
@@ -279,10 +298,10 @@ impl crate::game::ServerGame<'_> {
                     amount,
                     true,
                 );
-                self.common.mobs[index].attacker_aim = None;
+                self.common.entities.mobs[index].attacker_aim = None;
                 self.common.stop_sprint_after_extra_knockback();
             }
-            let mob = &self.common.mobs[index];
+            let mob = &self.common.entities.mobs[index];
             let actual = old_health - mob.health; // Player.damageStatsAndHearts
             // Player.attack: crit emitter and damage indicator hearts.
             let (feet, width, height) = (
@@ -294,7 +313,7 @@ impl crate::game::ServerGame<'_> {
             if crit {
                 self.critical_hit(
                     self.server.lan_acting,
-                    self.common.mobs[index].id as i32,
+                    self.common.entities.mobs[index].id as i32,
                     feet,
                     width,
                     height,
@@ -305,7 +324,7 @@ impl crate::game::ServerGame<'_> {
             if magic {
                 self.critical_hit(
                     self.server.lan_acting,
-                    self.common.mobs[index].id as i32,
+                    self.common.entities.mobs[index].id as i32,
                     feet,
                     width,
                     height,
@@ -340,8 +359,8 @@ impl crate::game::ServerGame<'_> {
             // let sweep has both sounds (attackVisualEffects).
             if let Some(at) = sweep {
                 let target = (
-                    self.common.mobs[index].bounds(),
-                    mace::Spared::Mob(self.common.mobs[index].id),
+                    self.common.entities.mobs[index].bounds(),
+                    mace::Spared::Mob(self.common.entities.mobs[index].id),
                 );
                 self.sweep_attack(at, from, Some(target), scale);
             }
@@ -357,12 +376,15 @@ impl crate::game::ServerGame<'_> {
             let Some(index) = self
                 .common
                 .mob_index
-                .find(&self.common.mobs, id)
-                .filter(|&i| self.common.mobs[i].join == join && !self.common.mobs[i].removed)
+                .find(&self.common.entities.mobs, id)
+                .filter(|&i| {
+                    self.common.entities.mobs[i].join == join
+                        && !self.common.entities.mobs[i].removed
+                })
             else {
                 return;
             };
-            let queued = std::mem::take(&mut self.common.mobs[index].outbox);
+            let queued = std::mem::take(&mut self.common.entities.mobs[index].outbox);
             let mut infested = Vec::new();
             for event in queued {
                 match event {
@@ -374,16 +396,16 @@ impl crate::game::ServerGame<'_> {
                     }
                     other => {
                         // Left for the end of the tick.
-                        self.common.mobs[index].outbox.push(other);
+                        self.common.entities.mobs[index].outbox.push(other);
                     }
                 }
             }
             for (at, velocities) in infested {
                 self.spawn_infested(at, velocities);
             }
-            if let Some(i) = self.common.mob_index.find(&self.common.mobs, id)
-                && self.common.mobs[i].join == join
-                && !self.common.mobs[i].removed
+            if let Some(i) = self.common.mob_index.find(&self.common.entities.mobs, id)
+                && self.common.entities.mobs[i].join == join
+                && !self.common.entities.mobs[i].removed
             {
                 self.weapon_hit(i, source);
             }

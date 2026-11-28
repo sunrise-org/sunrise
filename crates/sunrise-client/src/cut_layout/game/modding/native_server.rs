@@ -59,8 +59,8 @@ pub(crate) mod tests {
             no_gravity: true,
             following: None,
         };
-        game.orbs.push(mk_orb(40));
-        game.orbs.push(mk_orb(41));
+        game.entities.orbs.push(mk_orb(40));
+        game.entities.orbs.push(mk_orb(41));
         let overworld = game.level(game.dim.id()).expect("active overworld handle");
         let visit_ids =
             |game: &sunrise_gameplay::game::ServerGame<'_>, level: LevelRef, min, max| {
@@ -233,7 +233,7 @@ pub(crate) mod tests {
                 Vec3::new(1.0, 64.0, 1.0),
             );
             cart.command.command = "origin".into();
-            game.carts.push(cart);
+            game.entities.carts.push(cart);
             test(game);
         });
     }
@@ -637,7 +637,7 @@ pub(crate) mod fake_action_tests {
                 game.player_perform_action(player, interact),
                 Ok(ActionOutcome::Consumed)
             );
-            let mob = game.mobs.iter().find(|m| m.id == id).unwrap();
+            let mob = game.entities.mobs.iter().find(|m| m.id == id).unwrap();
             // With no offers the menu never opens, and this test would say nothing.
             let offers = mob.extra.trade.as_ref().map_or(0, |t| t.offers.len());
             assert!(offers > 0, "a wandering trader has offers");
@@ -665,13 +665,13 @@ pub(crate) mod fake_action_tests {
                 let mut cart = Minecart::new(id, kind, at);
                 cart.items[3] = diamonds.clone();
                 vehicles.push((id, false));
-                game.carts.push(cart);
+                game.entities.carts.push(cart);
             }
             let mut boat = Boat::new(6102, "oak".into(), at, 0.0).with_chest();
             boat.items[3] = diamonds.clone();
             // ChestBoat.interact opens the chest for a sneaking player.
             vehicles.push((6102, true));
-            game.boats.push(boat);
+            game.entities.boats.push(boat);
 
             for (id, sneaking) in vehicles {
                 let target = mod_api::EntityRef::new(game.native_lifecycle.epoch().unwrap(), id);
@@ -700,11 +700,18 @@ pub(crate) mod fake_action_tests {
                     );
                     assert!(game.container.is_none());
                     let items = game
+                        .entities
                         .carts
                         .iter()
                         .find(|c| c.id == id)
                         .map(|c| &c.items)
-                        .or_else(|| game.boats.iter().find(|b| b.id == id).map(|b| &b.items))
+                        .or_else(|| {
+                            game.entities
+                                .boats
+                                .iter()
+                                .find(|b| b.id == id)
+                                .map(|b| &b.items)
+                        })
                         .unwrap();
                     assert_eq!(items[3], diamonds, "vehicle {id} lost its items");
                 }
@@ -729,7 +736,7 @@ pub(crate) mod fake_action_tests {
             let at = sunrise_core::geometry::Vec3::new(2.5, 64.0, 0.5);
             let mut cart = Minecart::new(6110, CartKind::Chest, at);
             cart.items[3] = Some(ItemStack::new("minecraft:diamond", 5));
-            game.carts.push(cart);
+            game.entities.carts.push(cart);
             let gi = game
                 .server
                 .lan
@@ -799,7 +806,13 @@ pub(crate) mod fake_action_tests {
             assert_eq!(items[4], emerald, "the staging kept the viewer's edit");
             game.guest_close_all(real_conn);
             assert!(!game.world.block_entities.contains_key(&key));
-            let items = &game.carts.iter().find(|c| c.id == 6110).unwrap().items;
+            let items = &game
+                .entities
+                .carts
+                .iter()
+                .find(|c| c.id == 6110)
+                .unwrap()
+                .items;
             assert_eq!(
                 items[3],
                 Some(ItemStack::new("minecraft:diamond", 5)),
@@ -851,7 +864,7 @@ pub(crate) mod fake_action_tests {
                 .cooldowns
                 .add("minecraft:bucket".into(), 100);
             let kind = game.res.mob_types().get("minecraft:cow").unwrap().clone();
-            game.mobs.push(sunrise_sim::mobs::Mob::new(
+            game.entities.mobs.push(sunrise_sim::mobs::Mob::new(
                 5000,
                 kind,
                 sunrise_core::geometry::Vec3::new(2.0, 64.0, 0.5),
@@ -925,7 +938,7 @@ pub(crate) mod fake_action_tests {
                 0.0,
             );
             stand.equipment[0] = Some(ItemStack::new("test:missing", 1));
-            game.armor_stands.push(stand);
+            game.entities.armor_stands.push(stand);
             let target = game.entity(5001).unwrap();
             let setup = PlayerActionSetup::new(
                 None,
@@ -939,14 +952,17 @@ pub(crate) mod fake_action_tests {
                 target,
                 location: [0.0, 1.5, 0.0],
             };
-            let dropped = game.dropped.len();
+            let dropped = game.entities.dropped.len();
             let result = player.perform_action_scoped(game, action, setup).unwrap();
             assert_eq!(result.outcome, ActionOutcome::Consumed);
             assert_eq!((result.held, result.other.len()), (None, 0));
             assert_eq!(result.unrepresentable, 1);
-            assert_eq!(game.armor_stands.last().unwrap().equipment[0], None);
-            assert_eq!(game.dropped.len(), dropped + 1);
-            let item = game.dropped.last().unwrap();
+            assert_eq!(
+                game.entities.armor_stands.last().unwrap().equipment[0],
+                None
+            );
+            assert_eq!(game.entities.dropped.len(), dropped + 1);
+            let item = game.entities.dropped.last().unwrap();
             assert_eq!(item.stack, ItemStack::new("test:missing", 1));
             assert_eq!(item.pickup_delay, 10);
             assert_eq!((item.position.x, item.position.z), (0.5, 0.5));
@@ -987,7 +1003,7 @@ pub(crate) mod fake_action_tests {
                     0.0,
                 );
                 stand.equipment[0] = Some(ItemStack::new("test:missing", 1));
-                game.armor_stands.push(stand);
+                game.entities.armor_stands.push(stand);
                 let target = game.entity(5001).unwrap();
                 let setup = PlayerActionSetup::new(
                     None,
@@ -1001,13 +1017,20 @@ pub(crate) mod fake_action_tests {
                     target,
                     location: [0.0, 1.5, 0.0],
                 };
-                let dropped = game.dropped.len();
+                let dropped = game.entities.dropped.len();
                 let result = player.perform_action_scoped(game, action, setup).unwrap();
                 assert_eq!(result.outcome, ActionOutcome::Consumed);
                 assert_eq!((result.held, result.other.len()), (None, 0));
                 assert_eq!(result.unrepresentable, 0, "the vetoed stack is not counted");
-                assert_eq!(game.armor_stands.last().unwrap().equipment[0], None);
-                assert_eq!(game.dropped.len(), dropped, "no item entity is left");
+                assert_eq!(
+                    game.entities.armor_stands.last().unwrap().equipment[0],
+                    None
+                );
+                assert_eq!(
+                    game.entities.dropped.len(),
+                    dropped,
+                    "no item entity is left"
+                );
             });
         });
     }
@@ -1077,7 +1100,7 @@ pub(crate) mod fake_action_tests {
                 held(game, 2),
                 Some(ItemStack::new("minecraft:ender_pearl", 1))
             );
-            assert!(game.creatures.projectiles.is_empty());
+            assert!(game.entities.projectiles.is_empty());
             assert_eq!(
                 game.player_perform_action(player, interact(far)),
                 Err(ActionRefused::OutOfReach)
@@ -1202,7 +1225,7 @@ pub(crate) mod fake_action_tests {
                     let start = std::time::Instant::now();
                     for _ in 0..ticks {
                         // The zombie never dies, and each break has a stone to break.
-                        game.mobs[0].health = 20.0;
+                        game.entities.mobs[0].health = 20.0;
                         for &player in &players {
                             if let Kind::BreakBlock = kind {
                                 game.world.set(1, 63, 0, stone).unwrap();

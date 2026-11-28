@@ -24,9 +24,10 @@ const TABLE: &str = r#"{"pools":[
 
 /// The item entities a real death spawns, by item id.
 fn death_drops(game: &mut ServerGame<'_>, victim: &Mob) -> Vec<String> {
-    game.common.dropped.clear();
+    game.common.entities.dropped.clear();
     game.mob_die(victim);
     game.common
+        .entities
         .dropped
         .iter()
         .map(|item| item.stack.item.to_string())
@@ -76,14 +77,16 @@ fn a_boat_mount_reaches_the_death_loot_vehicle_predicate() {
             .server_loot
             .0
             .set(Some(std::sync::Arc::new(loot)));
-        game.boats
+        game.entities
+            .boats
             .push(Boat::new(70, "oak".into(), Vec3::ZERO, 0.0));
-        game.boats
+        game.entities
+            .boats
             .push(Boat::new(72, "birch".into(), Vec3::ZERO, 0.0));
         let mut victim = Mob::new(71, zombie, Vec3::ZERO, 0.0);
         victim.extra.mount = Some(70);
         victim.last_damage = Some((sunrise_sim::mobs::Damage::fall(), 0));
-        game.mobs.push(victim.clone());
+        game.entities.mobs.push(victim.clone());
 
         let projected = game.target_loot_entity(crate::game::commands::Target::Mob(71));
         let vehicle = projected.vehicle.as_deref().expect("the boat mount");
@@ -92,7 +95,7 @@ fn a_boat_mount_reaches_the_death_loot_vehicle_predicate() {
         assert!(!vehicle.on_fire);
         assert_eq!(death_drops(game, &victim), ["minecraft:diamond"]);
 
-        game.boats.update(0, |boat| boat.fire_ticks = 1);
+        game.entities.boats.update(0, |boat| boat.fire_ticks = 1);
         let projected = game.target_loot_entity(crate::game::commands::Target::Mob(71));
         assert!(projected.vehicle.as_deref().unwrap().on_fire);
         assert_eq!(
@@ -102,7 +105,9 @@ fn a_boat_mount_reaches_the_death_loot_vehicle_predicate() {
         );
 
         victim.extra.mount = Some(72);
-        game.mobs.update(0, |mob| mob.extra.mount = Some(72));
+        game.entities
+            .mobs
+            .update(0, |mob| mob.extra.mount = Some(72));
         let projected = game.target_loot_entity(crate::game::commands::Target::Mob(71));
         assert_eq!(
             projected.vehicle.as_deref().unwrap().kind,
@@ -147,11 +152,12 @@ fn the_target_projection_is_the_entity_the_roll_reads() {
             .get("minecraft:zombie")
             .unwrap()
             .clone();
-        game.boats
+        game.entities
+            .boats
             .push(Boat::new(70, "oak".into(), Vec3::ZERO, 0.0));
         let mut victim = Mob::new(71, zombie, Vec3::ZERO, 0.0);
         victim.extra.mount = Some(70);
-        game.mobs.push(victim);
+        game.entities.mobs.push(victim);
 
         let this = game.target_loot_entity(crate::game::commands::Target::Mob(71));
         let params = EntityLootParams {

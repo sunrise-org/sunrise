@@ -87,7 +87,7 @@ impl ClientGame<'_> {
                 (p.position, f64::from(p.dimensions.eye_height))
             }
             Collector::Mob(id) => {
-                let m = self.common.mobs.iter().find(|m| m.id == id)?;
+                let m = self.common.entities.mobs.iter().find(|m| m.id == id)?;
                 (m.position, m.eye_height())
             }
         };

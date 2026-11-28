@@ -96,13 +96,13 @@ fn block_name(game: &sunrise_gameplay::game::ServerGame<'_>, pos: [i32; 3]) -> S
 fn add_sheep(game: &mut sunrise_gameplay::game::ServerGame<'_>, x: f64) -> usize {
     let kind = game.res.mob_types().get("minecraft:sheep").unwrap().clone();
     game.server.next_entity += 1;
-    game.common.mobs.push(Mob::new(
+    game.common.entities.mobs.push(Mob::new(
         game.server.next_entity,
         kind,
         Vec3::new(x, 64.0, 0.5),
         0.0,
     ));
-    game.mobs.len() - 1
+    game.entities.mobs.len() - 1
 }
 
 /// Right click on the sheep at `index` holding `stack`.
@@ -112,7 +112,7 @@ fn click_sheep(
     stack: &ItemStack,
 ) -> bool {
     game.common.inventory[game.common.selected] = Some(stack.clone());
-    let id = game.mobs[index].id as i32;
+    let id = game.entities.mobs[index].id as i32;
     game.interact_mob(Some(sunrise_gameplay_common::game::InteractTarget {
         id,
         location: [0.0; 3],
@@ -224,11 +224,11 @@ fn parts_grant_and_deny_the_abilities_vanilla_asks_of_an_item_isolated() {
             let rod = ItemStack::new("minecraft:blaze_rod", 1);
             let sheep = add_sheep(game, 8.5);
             assert!(!click_sheep(game, sheep, &shears));
-            assert!(!game.mobs[sheep].extra.sheared);
+            assert!(!game.entities.mobs[sheep].extra.sheared);
             assert!(!click_sheep(game, sheep, &rod));
-            assert!(!game.mobs[sheep].extra.sheared);
+            assert!(!game.entities.mobs[sheep].extra.sheared);
             assert!(click_sheep(game, sheep, &stick));
-            assert!(game.mobs[sheep].extra.sheared);
+            assert!(game.entities.mobs[sheep].extra.sheared);
 
             // A dispenser at (7, 64, 0) facing a sheep at (8, 64, 0): the denied shears and the
             // rod are dropped instead of shearing it, the stick shears it.
@@ -237,12 +237,12 @@ fn parts_grant_and_deny_the_abilities_vanilla_asks_of_an_item_isolated() {
                 let _ = game
                     .dispense_item((7, 64, 0), Direction::East, held.clone())
                     .unwrap();
-                assert!(!game.mobs[sheep].extra.sheared);
+                assert!(!game.entities.mobs[sheep].extra.sheared);
             }
             let _ = game
                 .dispense_item((7, 64, 0), Direction::East, stick.clone())
                 .unwrap();
-            assert!(game.mobs[sheep].extra.sheared);
+            assert!(game.entities.mobs[sheep].extra.sheared);
         });
     });
 }
@@ -278,18 +278,18 @@ fn without_parts_the_vanilla_item_checks_stand() {
 
         let sheep = add_sheep(game, 8.5);
         assert!(!click_sheep(game, sheep, &stick));
-        assert!(!game.mobs[sheep].extra.sheared);
+        assert!(!game.entities.mobs[sheep].extra.sheared);
         assert!(click_sheep(game, sheep, &shears));
-        assert!(game.mobs[sheep].extra.sheared);
+        assert!(game.entities.mobs[sheep].extra.sheared);
         let sheep = add_sheep(game, 8.5);
         let _ = game
             .dispense_item((7, 64, 0), Direction::East, stick)
             .unwrap();
-        assert!(!game.mobs[sheep].extra.sheared);
+        assert!(!game.entities.mobs[sheep].extra.sheared);
         let _ = game
             .dispense_item((7, 64, 0), Direction::East, shears)
             .unwrap();
-        assert!(game.mobs[sheep].extra.sheared);
+        assert!(game.entities.mobs[sheep].extra.sheared);
     });
 }
 

@@ -51,7 +51,8 @@ fn at(game: &sunrise_gameplay::game::ServerGame<'_>) -> BlockStateId {
 }
 
 fn dropped(game: &sunrise_gameplay::game::ServerGame<'_>, item: &str) -> u32 {
-    game.dropped
+    game.entities
+        .dropped
         .iter()
         .filter(|dropped| &*dropped.stack.item == item)
         .map(|dropped| dropped.stack.count)
@@ -80,7 +81,7 @@ fn a_block_part_decides_whether_a_player_breaking_a_block_destroyed_it() {
         // Three layers, broken by a bare hand: each break takes a layer, drops its snowball and
         // leaves the block; the last layer is vanilla's removal.
         game.world.set(POS[0], POS[1], POS[2], snow(3)).unwrap();
-        game.dropped.clear();
+        game.entities.dropped.clear();
         for (layers, snowballs) in [(2, 1), (1, 2)] {
             game.break_block(POS).unwrap();
             assert_eq!(at(game), snow(layers), "{layers} layers are left");
@@ -108,7 +109,7 @@ fn a_block_part_decides_whether_a_player_breaking_a_block_destroyed_it() {
 
         // No part: vanilla's removal and drops.
         place(game, "minecraft:dirt");
-        game.dropped.clear();
+        game.entities.dropped.clear();
         game.break_block(POS).unwrap();
         assert_eq!(at(game), air);
         assert_eq!(dropped(game, "minecraft:dirt"), 1);
@@ -144,7 +145,7 @@ fn a_part_keeping_the_block_replaces_player_will_destroy_in_creative() {
             game.world
                 .block_entities
                 .insert(key, BlockEntity::Chest(slots));
-            game.dropped.clear();
+            game.entities.dropped.clear();
             game.break_block(POS).unwrap();
             assert_eq!(at(game), if kept { state } else { air }, "{block}");
             assert_eq!(dropped(game, block), 1, "{block}: dropped");
@@ -226,7 +227,7 @@ fn the_mods_harvest_answer_is_read_once_after_the_removal() {
         for (tool, harvests) in [(None, false), (Some("minecraft:iron_pickaxe"), true)] {
             place(game, "minecraft:stone");
             *game.held_mut() = tool.map(|tool| ItemStack::new(tool, 1));
-            game.dropped.clear();
+            game.entities.dropped.clear();
             game.break_block(POS).unwrap();
             assert_eq!(at(game), air, "{tool:?}: vanilla's removal");
             assert_eq!(

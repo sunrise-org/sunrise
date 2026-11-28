@@ -12,7 +12,7 @@ const STAND: i32 = 21;
 fn set_up(game: &mut sunrise_gameplay::game::ServerGame<'_>) {
     let mut stand = ArmorStand::new(STAND as u32, Vec3::new(0.5, 64.0, 0.5), 0.0);
     stand.show_arms = true;
-    game.armor_stands.push(stand);
+    game.entities.armor_stands.push(stand);
     game.server.lan_acting_uuid = Some(7);
     game.server.lan_acting_name = Some("Alex".into());
     let selected = game.selected;
@@ -41,7 +41,7 @@ fn a_stand_the_listener_removed_spends_the_click() {
             gate.arm();
             assert!(game.interact_armor_stand(click()));
             assert!(gate.fired());
-            assert!(game.armor_stands.is_empty());
+            assert!(game.entities.armor_stands.is_empty());
             assert_eq!(
                 game.held().map(|h| &*h.item),
                 Some("minecraft:iron_helmet"),
@@ -65,7 +65,7 @@ fn a_slot_the_listener_filled_spends_the_click() {
             gate.arm();
             assert!(game.interact_armor_stand(click()));
             assert!(gate.fired());
-            let worn = game.armor_stands[0].equipment[5].as_ref();
+            let worn = game.entities.armor_stands[0].equipment[5].as_ref();
             assert_eq!(worn.map(|w| &*w.item), Some("minecraft:diamond_helmet"));
             assert_eq!(
                 game.held().map(|h| &*h.item),

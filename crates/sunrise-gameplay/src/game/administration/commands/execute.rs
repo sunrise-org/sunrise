@@ -138,13 +138,20 @@ impl crate::game::ServerGame<'_> {
             Target::Guest(conn) => self.command_guest(conn).map_or(1.62, |g| g.eye_height()),
             Target::Mob(id) => self
                 .common
+                .entities
                 .mobs
                 .iter()
                 .find(|m| m.id == id)
                 .map_or(0.0, |m| m.eye_y() - m.position.y),
             // ArmorStand.getDefaultDimensions: a marker's are empty, a small
             // stand's are BABY_DIMENSIONS, whose eye height is 0.9875F.
-            Target::Stand(id) => match self.common.armor_stands.iter().find(|a| a.id == id) {
+            Target::Stand(id) => match self
+                .common
+                .entities
+                .armor_stands
+                .iter()
+                .find(|a| a.id == id)
+            {
                 Some(a) if a.marker => 0.0,
                 Some(a) if a.small => f64::from(0.9875f32),
                 _ => self.common.type_eye_height(&self.target_type(t)),

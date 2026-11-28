@@ -18,7 +18,7 @@ use {
 
 fn add_mob(game: &mut sunrise_gameplay::game::ServerGame<'_>, id: u32, name: &str) -> EntityRef {
     let kind = game.res.mob_types().get(name).unwrap().clone();
-    game.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
+    game.entities.mobs.push(Mob::new(id, kind, Vec3::ZERO, 0.0));
     game.entity(id).unwrap()
 }
 
@@ -87,7 +87,7 @@ fn a_player_vehicle_is_refused_by_name_forced_or_not_before_entity_mount() {
                 Err(StartRidingRefusal::PlayerVehicle)
             );
         }
-        assert_eq!(game.mobs[0].extra.mount, None);
+        assert_eq!(game.entities.mobs[0].extra.mount, None);
         assert_eq!(*heard.lock().unwrap(), 0, "refused before the hook");
     });
 }
@@ -106,7 +106,7 @@ fn a_cycle_is_refused_by_name() {
             try_both(game, Target::Mob(31), Target::Mob(30), true),
             Err(StartRidingRefusal::Cycle)
         );
-        assert_eq!(game.mobs[1].extra.mount, None);
+        assert_eq!(game.entities.mobs[1].extra.mount, None);
     });
 }
 
@@ -116,7 +116,7 @@ fn a_removed_vehicle_is_refused_as_no_entity() {
     with_resident_game(|game| {
         let rider = add_mob(game, 50, "minecraft:zombie");
         let vehicle = add_mob(game, 51, "minecraft:pig");
-        game.mobs.retain(|m| m.id != 51);
+        game.entities.mobs.retain(|m| m.id != 51);
         game.detach_entity(51);
         assert_eq!(
             game.entity_start_riding(rider, vehicle, true),
@@ -126,7 +126,7 @@ fn a_removed_vehicle_is_refused_as_no_entity() {
             try_both(game, Target::Mob(50), Target::Mob(51), true),
             Err(StartRidingRefusal::NoEntity)
         );
-        assert_eq!(game.mobs[0].extra.mount, None);
+        assert_eq!(game.entities.mobs[0].extra.mount, None);
     });
 }
 
@@ -168,7 +168,7 @@ fn a_full_vehicle_is_refused_by_name_unless_forced() {
             try_both(game, Target::Mob(72), Target::Mob(71), false),
             Err(StartRidingRefusal::Full)
         );
-        assert_eq!(game.mobs[2].extra.mount, None);
+        assert_eq!(game.entities.mobs[2].extra.mount, None);
         assert_eq!(
             game.try_start_riding_target(Target::Mob(72), Target::Mob(71), true),
             Ok(())
@@ -203,7 +203,7 @@ fn a_boarding_cooldown_is_refused_as_cannot_ride_unless_forced() {
     with_resident_game(|game| {
         add_mob(game, 90, "minecraft:zombie");
         add_mob(game, 91, "minecraft:pig");
-        game.mobs[0].extra.boarding_cooldown = 10;
+        game.entities.mobs[0].extra.boarding_cooldown = 10;
         assert_eq!(
             try_both(game, Target::Mob(90), Target::Mob(91), false),
             Err(StartRidingRefusal::CannotRide)
@@ -226,7 +226,7 @@ fn a_canceled_entity_mount_is_refused_as_canceled_after_the_checks() {
             Err(StartRidingRefusal::Canceled)
         );
         assert_eq!(*heard.lock().unwrap(), 1);
-        assert_eq!(game.mobs[0].extra.mount, None);
+        assert_eq!(game.entities.mobs[0].extra.mount, None);
     });
 }
 

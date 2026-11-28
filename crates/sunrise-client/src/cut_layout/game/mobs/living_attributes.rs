@@ -33,7 +33,7 @@ pub(crate) mod tests {
         };
         assert_eq!(
             sunrise_sim::mobs::finalize::detect_equipment_updates(
-                &mut game.common.mobs[0],
+                &mut game.common.entities.mobs[0],
                 game.common.motion.attributes(),
                 items,
                 || false,
@@ -66,7 +66,7 @@ pub(crate) mod tests {
             let zombie = living(game, 12);
             let attack = |game: &sunrise_gameplay::game::ServerGame<'_>| {
                 gear::attack_damage(
-                    game.mobs.iter().find(|m| m.id == 12).unwrap(),
+                    game.entities.mobs.iter().find(|m| m.id == 12).unwrap(),
                     Some(game.res.items()),
                 )
             };
@@ -125,7 +125,7 @@ pub(crate) mod tests {
             // A finalize write, whose rebuild keeps the equipment's rows.
             assert!(zombie.set_attribute_base(game, "minecraft:max_health", 25.0));
             let mut synced = Vec::new();
-            let mob = game.mobs[0].clone();
+            let mob = game.entities.mobs[0].clone();
             game.mob_attributes(
                 &mob,
                 &mut sunrise_gameplay::game::server_side::lan_attributes::SpeedByType::default(),
@@ -174,9 +174,9 @@ pub(crate) mod tests {
                 .get("minecraft:shulker")
                 .unwrap()
                 .clone();
-            game.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
+            game.entities.mobs.push(Mob::new(12, kind, Vec3::ZERO, 0.0));
             let catalog = game.motion.attributes().clone();
-            let m = &mut game.mobs[0];
+            let m = &mut game.entities.mobs[0];
             // The permanent row installed by Shulker.setRawPeekAmount(0).
             m.extra
                 .live
@@ -195,7 +195,7 @@ pub(crate) mod tests {
                 )
                 .unwrap();
             let saved = sunrise_sim::entity_nbt::mob_to_nbt(
-                &game.mobs[0],
+                &game.entities.mobs[0],
                 [0; 4],
                 None,
                 None,
@@ -203,16 +203,27 @@ pub(crate) mod tests {
                 &Default::default(),
             );
             let loaded_id = game.load_mob(saved.clone(), None).unwrap();
-            let loaded = game.mobs.iter().find(|m| m.id == loaded_id).unwrap();
+            let loaded = game
+                .entities
+                .mobs
+                .iter()
+                .find(|m| m.id == loaded_id)
+                .unwrap();
             assert_eq!(sunrise_sim::mobs::armor::values(loaded), (20.0, 0.0));
             game.apply_entity_nbt(Target::Mob(12), saved).unwrap();
-            assert_eq!(sunrise_sim::mobs::armor::values(&game.mobs[0]), (20.0, 0.0));
+            assert_eq!(
+                sunrise_sim::mobs::armor::values(&game.entities.mobs[0]),
+                (20.0, 0.0)
+            );
             let shulker = living(game, 12);
             assert!(shulker.set_attribute_base(game, "minecraft:max_health", 40.0));
             // No handle read in between: damage must not need a read to restore the map.
-            assert_eq!(sunrise_sim::mobs::armor::values(&game.mobs[0]), (20.0, 0.0));
+            assert_eq!(
+                sunrise_sim::mobs::armor::values(&game.entities.mobs[0]),
+                (20.0, 0.0)
+            );
             let mut synced = Vec::new();
-            let m = game.mobs[0].clone();
+            let m = game.entities.mobs[0].clone();
             game.mob_attributes(
                 &m,
                 &mut sunrise_gameplay::game::server_side::lan_attributes::SpeedByType::default(),
@@ -248,7 +259,7 @@ pub(crate) mod tests {
         with_game(|game| {
             spawn(game);
             let values = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-                armor::values(game.mobs.iter().find(|m| m.id == 12).unwrap())
+                armor::values(game.entities.mobs.iter().find(|m| m.id == 12).unwrap())
             };
             let zombie = living(game, 12);
             // The zombie's own armor is 2, the diamond chestplate's 8 and 2
@@ -293,7 +304,7 @@ pub(crate) mod tests {
                 no_push,
                 None
             );
-            let m = game.mobs.iter_mut().find(|m| m.id == 12).unwrap();
+            let m = game.entities.mobs.iter_mut().find(|m| m.id == 12).unwrap();
             m.health = 20.0;
             assert!(m.damage(level, 4.0, Damage::of(DamageKind::Cactus)));
             // CombatRules.getDamageAfterAbsorb: (8 - 4/2) of 25 absorbs.
@@ -303,23 +314,25 @@ pub(crate) mod tests {
             // load; the first read builds the loaded map again, as a world
             // load's first tick or read does.
             let mut list = Vec::new();
-            game.mobs[0].extra.live.save_into(&mut list);
+            game.entities.mobs[0].extra.live.save_into(&mut list);
             let mut fresh = sunrise_sim::living_attributes::LivingAttributes::default();
             fresh.load(Some(&Tag::List(list)), |_| true);
-            game.mobs[0].extra.live = fresh;
+            game.entities.mobs[0].extra.live = fresh;
             read(game, 12, "minecraft:armor");
             assert_eq!(values(game), (8.0, 0.0));
             // A horse's body piece armors it by its stack's rows.
             let horse_kind = game.res.mob_types().get("minecraft:horse").unwrap().clone();
             // The fixture dragon owns IDs 14 through 22, including its parts.
-            game.mobs.push(Mob::new(40, horse_kind, Vec3::ZERO, 0.0));
+            game.entities
+                .mobs
+                .push(Mob::new(40, horse_kind, Vec3::ZERO, 0.0));
             let horse = living(game, 40);
             assert!(game.living_set_equipment(
                 horse,
                 EquipmentSlot::Body,
                 stack("minecraft:diamond_horse_armor")
             ));
-            let armored = armor::values(game.mobs.iter().find(|m| m.id == 40).unwrap());
+            let armored = armor::values(game.entities.mobs.iter().find(|m| m.id == 40).unwrap());
             assert!(
                 armored.0 >= 1.0,
                 "the body piece armors the horse: {armored:?}"
@@ -352,16 +365,16 @@ pub(crate) mod tests {
         with_game(|game| {
             fixture_resident_column(&mut game.world, (0, 0));
             spawn(game);
-            assert!(game.mobs[0].extra.live.built().is_none());
+            assert!(game.entities.mobs[0].extra.live.built().is_none());
             read(game, 12, "minecraft:max_health");
-            let first: *const _ = game.mobs[0].extra.live.built().unwrap();
+            let first: *const _ = game.entities.mobs[0].extra.live.built().unwrap();
             read(game, 12, "minecraft:attack_damage");
             read(game, 12, "minecraft:max_health");
-            let again: *const _ = game.mobs[0].extra.live.built().unwrap();
+            let again: *const _ = game.entities.mobs[0].extra.live.built().unwrap();
             assert!(std::ptr::eq(first, again));
             // A changed base drops it; the next read builds it from the new base.
-            game.mobs[0].extra.live.invalidate();
-            assert!(game.mobs[0].extra.live.built().is_none());
+            game.entities.mobs[0].extra.live.invalidate();
+            assert!(game.entities.mobs[0].extra.live.built().is_none());
             assert_eq!(
                 read(game, 12, "minecraft:max_health"),
                 (Some(20.0), Some(20.0))
@@ -375,7 +388,7 @@ pub(crate) mod tests {
             fixture_resident_column(&mut game.world, (0, 0));
             spawn(game);
             let damage = "minecraft:attack_damage";
-            game.mobs[0].set_equipment_stack(MAINHAND, stack("minecraft:diamond_sword"));
+            game.entities.mobs[0].set_equipment_stack(MAINHAND, stack("minecraft:diamond_sword"));
             detect_test_mob_equipment(game);
             // +6 from the sword's `base_attack_damage` modifier; the base stays.
             assert_eq!(read(game, 12, damage), (Some(9.0), Some(3.0)));
@@ -383,14 +396,14 @@ pub(crate) mod tests {
             detect_test_mob_equipment(game);
             assert_eq!(read(game, 12, damage), (Some(9.0), Some(3.0)));
             // Another sword takes the first one's modifier off before its own.
-            game.mobs[0].set_equipment_stack(MAINHAND, stack("minecraft:netherite_sword"));
+            game.entities.mobs[0].set_equipment_stack(MAINHAND, stack("minecraft:netherite_sword"));
             detect_test_mob_equipment(game);
             assert_eq!(read(game, 12, damage), (Some(10.0), Some(3.0)));
-            game.mobs[0].set_equipment_stack(MAINHAND, None);
+            game.entities.mobs[0].set_equipment_stack(MAINHAND, None);
             detect_test_mob_equipment(game);
             assert_eq!(read(game, 12, damage), (Some(3.0), Some(3.0)));
             // A sword on the head is in no slot its modifiers name.
-            game.mobs[0].set_equipment_stack(HEAD, stack("minecraft:diamond_sword"));
+            game.entities.mobs[0].set_equipment_stack(HEAD, stack("minecraft:diamond_sword"));
             detect_test_mob_equipment(game);
             assert_eq!(read(game, 12, damage), (Some(3.0), Some(3.0)));
         });
@@ -402,10 +415,11 @@ pub(crate) mod tests {
             fixture_resident_column(&mut game.world, (0, 0));
             spawn(game);
             let armor = "minecraft:armor";
-            game.armor_stands[0]
+            game.entities.armor_stands[0]
                 .equipment
                 .set(HEAD, stack("minecraft:diamond_helmet"));
-            game.dragon
+            game.entities
+                .dragon
                 .as_mut()
                 .unwrap()
                 .equipment
@@ -413,7 +427,7 @@ pub(crate) mod tests {
             game.refresh_stand_and_dragon_equipment_attributes();
             assert_eq!(read(game, 13, armor), (Some(3.0), Some(0.0)));
             assert_eq!(read(game, 14, armor), (Some(8.0), Some(0.0)));
-            game.armor_stands[0].equipment.set(HEAD, None);
+            game.entities.armor_stands[0].equipment.set(HEAD, None);
             game.refresh_stand_and_dragon_equipment_attributes();
             assert_eq!(read(game, 13, armor), (Some(0.0), Some(0.0)));
             assert_eq!(read(game, 14, armor), (Some(8.0), Some(0.0)));
@@ -430,7 +444,7 @@ pub(crate) mod tests {
                 living.attribute_value(game, "minecraft:max_health"),
                 Some(20.0)
             );
-            game.mobs.clear();
+            game.entities.mobs.clear();
             assert_eq!(living.attribute_value(game, "minecraft:max_health"), None);
             assert_eq!(living.attribute_base(game, "minecraft:max_health"), None);
         });
@@ -454,13 +468,15 @@ pub(crate) mod tests {
                     ])]),
                 ),
             ])]);
-            game.armor_stands[0].live.load(Some(&saved), |_| true);
+            game.entities.armor_stands[0]
+                .live
+                .load(Some(&saved), |_| true);
             assert_eq!(
                 read(game, 13, "minecraft:max_health"),
                 (Some(60.0), Some(40.0))
             );
             let mut list = Vec::new();
-            game.armor_stands[0].live.save_into(&mut list);
+            game.entities.armor_stands[0].live.save_into(&mut list);
             assert_eq!(Tag::List(list), saved);
         });
     }
@@ -485,11 +501,11 @@ pub(crate) mod tests {
                     ("slot", Tag::String("mainhand".into())),
                 ])])),
             );
-            game.mobs[0].set_equipment_stack(MAINHAND, Some(own));
+            game.entities.mobs[0].set_equipment_stack(MAINHAND, Some(own));
             detect_test_mob_equipment(game);
             // +1 from its own list, not the sword's +6.
             assert_eq!(read(game, 12, damage), (Some(4.0), Some(3.0)));
-            game.mobs[0].set_equipment_stack(MAINHAND, stack("minecraft:diamond_sword"));
+            game.entities.mobs[0].set_equipment_stack(MAINHAND, stack("minecraft:diamond_sword"));
             detect_test_mob_equipment(game);
             assert_eq!(read(game, 12, damage), (Some(9.0), Some(3.0)));
         });
@@ -504,7 +520,7 @@ pub(crate) mod tests {
         with_game(|game| {
             spawn(game);
             let read_at = |game: &sunrise_gameplay::game::ServerGame<'_>| {
-                let m = &game.mobs[0];
+                let m = &game.entities.mobs[0];
                 let gear = m.extra.gear_knockback.as_deref();
                 (
                     gear.map(std::ptr::from_ref),
@@ -512,7 +528,8 @@ pub(crate) mod tests {
                 )
             };
             let close = |value: Option<f64>, to: f64| value.is_some_and(|v| (v - to).abs() < 1e-6);
-            game.mobs[0].set_equipment_stack(CHEST, stack("minecraft:netherite_chestplate"));
+            game.entities.mobs[0]
+                .set_equipment_stack(CHEST, stack("minecraft:netherite_chestplate"));
             game.refresh_gear_knockback_resistance();
             let (first, value) = read_at(game);
             assert!(first.is_some() && close(value, 0.1), "{value:?}");
@@ -529,11 +546,11 @@ pub(crate) mod tests {
                     ("slot", Tag::String("chest".into())),
                 ])])),
             );
-            game.mobs[0].set_equipment_stack(CHEST, Some(own));
+            game.entities.mobs[0].set_equipment_stack(CHEST, Some(own));
             game.refresh_gear_knockback_resistance();
             let (second, value) = read_at(game);
             assert!(second != first && close(value, 0.5), "{value:?}");
-            game.mobs[0].set_equipment_stack(CHEST, None);
+            game.entities.mobs[0].set_equipment_stack(CHEST, None);
             game.refresh_gear_knockback_resistance();
             assert_eq!(read_at(game), (None, None));
         });
@@ -574,8 +591,8 @@ pub(crate) mod tests {
             ));
             let value = base * 2.0 * 1.5;
             assert_eq!(read(game, 12, speed), (Some(value), Some(base)));
-            assert_eq!(game.mobs[0].attrs.speed, value);
-            let saved = sunrise_sim::entity_nbt::attribute_entries(&game.mobs[0]);
+            assert_eq!(game.entities.mobs[0].attrs.speed, value);
+            let saved = sunrise_sim::entity_nbt::attribute_entries(&game.entities.mobs[0]);
             assert_eq!(saved_ids(saved.iter().map(|(_, e)| e)), ["test:fast"]);
             // Replacing takes the new lifetime: no longer saved.
             assert!(zombie.replace_attribute_modifier(
@@ -584,7 +601,7 @@ pub(crate) mod tests {
                 modifier("test:fast", 1.0, AddMultipliedBase),
                 Transient
             ));
-            let saved = sunrise_sim::entity_nbt::attribute_entries(&game.mobs[0]);
+            let saved = sunrise_sim::entity_nbt::attribute_entries(&game.entities.mobs[0]);
             assert!(saved_ids(saved.iter().map(|(_, e)| e)).is_empty());
             assert_eq!(read(game, 12, speed), (Some(value), Some(base)));
             let boost = Identifier::parse("test:boost").unwrap();
@@ -593,7 +610,7 @@ pub(crate) mod tests {
             assert_eq!(read(game, 12, speed), (Some(base * 2.0), Some(base)));
             assert!(zombie.set_attribute_base(game, speed, 0.5));
             assert_eq!(read(game, 12, speed), (Some(1.0), Some(0.5)));
-            assert_eq!(game.mobs[0].attrs.speed, 1.0);
+            assert_eq!(game.entities.mobs[0].attrs.speed, 1.0);
         });
     }
     /// An attribute only the live map keeps keeps a mod's writes when the map
@@ -623,18 +640,18 @@ pub(crate) mod tests {
             ));
             let both = Some((0.1 - 0.05) * 2.0);
             assert_eq!(read(game, 12, gravity), (both, Some(0.1)));
-            game.mobs[0].extra.live.invalidate();
+            game.entities.mobs[0].extra.live.invalidate();
             assert_eq!(read(game, 12, gravity), (both, Some(0.1)));
             let mut list = Vec::new();
-            game.mobs[0].extra.live.save_into(&mut list);
+            game.entities.mobs[0].extra.live.save_into(&mut list);
             assert_eq!(saved_ids(&list), ["test:heavy"]);
             let float = Identifier::parse("test:float").unwrap();
             assert!(zombie.remove_attribute_modifier(game, gravity, &float));
-            game.mobs[0].extra.live.invalidate();
+            game.entities.mobs[0].extra.live.invalidate();
             assert_eq!(read(game, 12, gravity), (Some(0.2), Some(0.1)));
             // A change to `finalize`'s store rebuilds the map without losing them.
             sunrise_sim::mobs::finalize::set_base(
-                &mut game.mobs[0],
+                &mut game.entities.mobs[0],
                 sunrise_sim::mobs::finalize::Attr::MaxHealth,
                 30.0,
             );
@@ -644,7 +661,7 @@ pub(crate) mod tests {
             let map = game.generic_attributes(Target::Mob(12)).unwrap();
             assert_eq!(map.value(key).unwrap(), 0.2);
             let mut synced = Vec::new();
-            let zombie_mob = game.mobs[0].clone();
+            let zombie_mob = game.entities.mobs[0].clone();
             game.mob_attributes(
                 &zombie_mob,
                 &mut sunrise_gameplay::game::server_side::lan_attributes::SpeedByType::default(),
@@ -662,7 +679,10 @@ pub(crate) mod tests {
             );
             // A mob's armor goes to its armor map, which its damage reads.
             assert!(zombie.set_attribute_base(game, "minecraft:armor", 10.0));
-            assert_eq!(sunrise_sim::mobs::armor::values(&game.mobs[0]).0, 10.0);
+            assert_eq!(
+                sunrise_sim::mobs::armor::values(&game.entities.mobs[0]).0,
+                10.0
+            );
             assert_eq!(read(game, 12, "minecraft:armor").1, Some(10.0));
         });
     }
@@ -720,7 +740,7 @@ pub(crate) mod tests {
             assert_eq!(read(game, 100, health), (Some(20.0), Some(20.0)));
             // A stale handle writes nothing.
             let zombie = living(game, 12);
-            game.mobs.clear();
+            game.entities.mobs.clear();
             assert!(!zombie.set_attribute_base(game, "minecraft:gravity", 1.0));
         });
     }
@@ -770,11 +790,11 @@ pub(crate) mod tests {
                 fixture_resident_column(&mut game.world, (0, 0));
                 spawn(game);
                 let chestplate = stack("minecraft:netherite_chestplate");
-                game.mobs[0].set_equipment_stack(CHEST, chestplate);
+                game.entities.mobs[0].set_equipment_stack(CHEST, chestplate);
                 game.refresh_gear_knockback_resistance();
                 detect_test_mob_equipment(game);
                 // Netherite's own 0.1, and the mod's 0.4.
-                let resistance = game.mobs[0].knockback_resistance();
+                let resistance = game.entities.mobs[0].knockback_resistance();
                 assert!((resistance - 0.5).abs() < 1e-6, "{resistance}");
                 let toughness = read(game, 12, "minecraft:armor_toughness");
                 assert_eq!(toughness, (Some(0.0), Some(0.0)));

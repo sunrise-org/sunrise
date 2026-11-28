@@ -65,13 +65,13 @@ impl TrialSpawnerLevel for GameLevel<'_, '_> {
     }
     fn entity_block(&self, uuid: Uuid) -> Option<[i32; 3]> {
         let (id, _) = self.game.persist.uuids.iter().find(|(_, u)| **u == uuid)?;
-        let m = self.game.mobs.iter().find(|m| m.id == *id)?;
+        let m = self.game.entities.mobs.iter().find(|m| m.id == *id)?;
         (!m.removed && m.alive())
             .then(|| [m.position.x, m.position.y, m.position.z].map(|v| v.floor() as i32))
     }
     fn entity_box(&self, uuid: Uuid) -> Option<([f64; 3], f32)> {
         let (id, _) = self.game.persist.uuids.iter().find(|(_, u)| **u == uuid)?;
-        let m = self.game.mobs.iter().find(|m| m.id == *id)?;
+        let m = self.game.entities.mobs.iter().find(|m| m.id == *id)?;
         let b = m.bounds();
         (!m.removed && m.alive()).then(|| {
             (
@@ -291,6 +291,7 @@ impl crate::game::ServerGame<'_> {
                         self.common.persist.uuids.iter().find(|(_, u)| **u == uuid)
                         && let Some(m) = self
                             .common
+                            .entities
                             .mobs
                             .iter_mut()
                             .find(|m| m.id == id && !m.removed)
@@ -476,12 +477,15 @@ mod omen_tests {
                 [(None, [-1.5, 2.5, 0.5]), (Some(&previous), [2.5, 2.5, 0.5])]
             {
                 let mut spawner = TrialSpawner::load(&data, previous);
-                let count = game.ominous_spawners.len();
+                let count = game.entities.ominous_spawners.len();
                 game.world.random = LevelRandom::for_level(LegacyRandom::new(13));
                 game.server_tick_trial_spawner((0, 0, 0), &mut spawner, TrialState::Active, true)
                     .unwrap();
-                assert_eq!(game.ominous_spawners.len(), count + 1);
-                assert_eq!(game.ominous_spawners.last().unwrap().position, expected);
+                assert_eq!(game.entities.ominous_spawners.len(), count + 1);
+                assert_eq!(
+                    game.entities.ominous_spawners.last().unwrap().position,
+                    expected
+                );
             }
         });
     }

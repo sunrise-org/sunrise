@@ -400,7 +400,7 @@ impl ServerGame<'_> {
             // these kinds but a mob a server seats on a primed TNT.
             if source == destination
                 || game.lone_traveller_box(id).is_none()
-                || game.mobs.iter().any(|m| m.extra.mount == Some(id))
+                || game.entities.mobs.iter().any(|m| m.extra.mount == Some(id))
             {
                 return Ok(Some(false));
             }
@@ -493,6 +493,7 @@ impl ServerGame<'_> {
                 );
             }
             if game
+                .entities
                 .mobs
                 .iter()
                 .any(|m| m.id == root && m.extra.mount.is_some())
@@ -519,7 +520,7 @@ impl ServerGame<'_> {
                     rotation.filter(|_| turn_riders),
                 );
                 let row = game
-                    .resident_entities
+                    .entities
                     .general
                     .rows
                     .iter_mut()
@@ -653,12 +654,24 @@ impl ServerGame<'_> {
         let pos = [v.x.floor() as i32, v.y.floor() as i32, v.z.floor() as i32];
         match t {
             Target::Frame(id) => {
-                if let Some(f) = self.common.item_frames.iter_mut().find(|f| f.id == id) {
+                if let Some(f) = self
+                    .common
+                    .entities
+                    .item_frames
+                    .iter_mut()
+                    .find(|f| f.id == id)
+                {
                     f.pos = pos;
                 }
             }
             Target::Painting(id) => {
-                if let Some(p) = self.common.paintings.iter_mut().find(|p| p.id == id) {
+                if let Some(p) = self
+                    .common
+                    .entities
+                    .paintings
+                    .iter_mut()
+                    .find(|p| p.id == id)
+                {
                     p.pos = pos;
                 }
             }
@@ -740,7 +753,7 @@ impl ServerGame<'_> {
         }
         let row = self
             .common
-            .resident_entities
+            .entities
             .general
             .rows
             .iter()
@@ -769,7 +782,7 @@ impl ServerGame<'_> {
             }
         } else if let Some(row) = self
             .common
-            .resident_entities
+            .entities
             .general
             .rows
             .iter_mut()
@@ -937,7 +950,7 @@ impl ServerGame<'_> {
                 self.server.rotation_forced = self.server.lan_acting.is_some();
             }
             Target::Mob(id) => {
-                if let Some(m) = self.common.mobs.iter_mut().find(|m| m.id == id) {
+                if let Some(m) = self.common.entities.mobs.iter_mut().find(|m| m.id == id) {
                     if yaw.is_finite() {
                         m.yaw = yaw;
                         m.body_yaw = yaw;
@@ -963,13 +976,19 @@ impl ServerGame<'_> {
                 }
             }
             Target::Stand(id) => {
-                if let Some(a) = self.common.armor_stands.iter_mut().find(|a| a.id == id) {
+                if let Some(a) = self
+                    .common
+                    .entities
+                    .armor_stands
+                    .iter_mut()
+                    .find(|a| a.id == id)
+                {
                     a.set_rotation([yaw, pitch.unwrap_or(a.pitch)]);
                 }
             }
             Target::Boat(id) if yaw.is_finite() => {
-                if let Some(i) = self.common.boats.iter().position(|b| b.id == id) {
-                    self.common.boats.update(i, |b| {
+                if let Some(i) = self.common.entities.boats.iter().position(|b| b.id == id) {
+                    self.common.entities.boats.update(i, |b| {
                         b.yaw = yaw;
                         if let Some(pitch) = pitch {
                             b.pitch = pitch;
@@ -980,8 +999,8 @@ impl ServerGame<'_> {
                 }
             }
             Target::Cart(id) if yaw.is_finite() => {
-                if let Some(i) = self.common.carts.iter().position(|c| c.id == id) {
-                    self.common.carts.update(i, |c| {
+                if let Some(i) = self.common.entities.carts.iter().position(|c| c.id == id) {
+                    self.common.entities.carts.update(i, |c| {
                         c.yaw = yaw;
                         if let Some(pitch) = pitch {
                             c.pitch = pitch;
@@ -993,15 +1012,22 @@ impl ServerGame<'_> {
                 }
             }
             Target::Fangs(id) if yaw.is_finite() => {
-                if let Some(i) = self.common.fangs.list.iter().position(|e| e.id == id) {
-                    self.common.fangs.list.update(i, |f| {
+                if let Some(i) = self
+                    .common
+                    .entities
+                    .fangs
+                    .list
+                    .iter()
+                    .position(|e| e.id == id)
+                {
+                    self.common.entities.fangs.list.update(i, |f| {
                         f.yaw = yaw;
                     });
                 }
             }
             Target::Bolt(id) => {
-                if let Some(i) = self.common.bolts.iter().position(|e| e.id == id) {
-                    self.common.bolts.update(i, |b| {
+                if let Some(i) = self.common.entities.bolts.iter().position(|e| e.id == id) {
+                    self.common.entities.bolts.update(i, |b| {
                         if yaw.is_finite() {
                             b.rotation[0] = yaw;
                         }

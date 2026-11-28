@@ -78,11 +78,11 @@ fn registered_angles_reach_local_remote_and_humanoid_before_species_animation() 
             mob.extra.left_handed = false;
             mob.extra
                 .set_slot_stack(MAINHAND, Some(ItemStack::new("minecraft:stick", 1)));
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
         }
         let baseline: Vec<_> = {
             let models = game.client_res().client_mob_models();
-            game.mobs.iter().map(|m| arms(m, models)).collect()
+            game.entities.mobs.iter().map(|m| arms(m, models)).collect()
         };
         mod_platform::testing::with_mods(
             vec![ModEntry::new("skillet", Box::new(Skillet(OnceLock::new())))].into(),
@@ -92,8 +92,8 @@ fn registered_angles_reach_local_remote_and_humanoid_before_species_animation() 
                 let models = game.client_res().client_mob_models();
                 for mob in [
                     game.client.player_model.as_ref().unwrap(),
-                    &game.mobs[0],
-                    &game.mobs[1],
+                    &game.entities.mobs[0],
+                    &game.entities.mobs[1],
                 ] {
                     let posed = arms(mob, models);
                     let age = anim::state(mob, 0.0).age;
@@ -114,13 +114,14 @@ fn registered_angles_reach_local_remote_and_humanoid_before_species_animation() 
                     assert!((posed[0][5] - (0.63 + bob_z)).abs() < 0.000005);
                 }
                 // Zombie animation is later than the base pose and overrides its arms.
-                assert_eq!(arms(&game.mobs[2], models), baseline[2]);
+                assert_eq!(arms(&game.entities.mobs[2], models), baseline[2]);
             },
         );
         game.extract_remote_arm_poses();
         let models = game.client_res().client_mob_models();
         assert_eq!(
-            game.mobs
+            game.entities
+                .mobs
                 .iter()
                 .map(|m| arms(m, models))
                 .collect::<Vec<_>>(),
@@ -249,7 +250,7 @@ fn held_arm_pose_reads_the_active_swing_on_every_draw() {
                 mob.extra
                     .set_slot_stack(slot, Some(ItemStack::new("minecraft:stick", 1)));
             }
-            game.mobs.push(mob);
+            game.entities.mobs.push(mob);
         }
         let own = game.own_entity_id() as u32;
         let seen = Arc::new(Mutex::new(Vec::new()));
@@ -273,11 +274,11 @@ fn held_arm_pose_reads_the_active_swing_on_every_draw() {
                 // A swing started between ticks is already seen by the next draw's extraction.
                 game.swing_hand(SwingHand::Main, SwingAnimation::DEFAULT);
                 game.tick_player_model();
-                game.mobs[0].swing_hand(false, 6);
-                game.mobs[1].swing_hand(true, 6);
+                game.entities.mobs[0].swing_hand(false, 6);
+                game.entities.mobs[1].swing_hand(true, 6);
                 game.extract_arm_poses();
                 swings(true);
-                for mob in &mut game.mobs {
+                for mob in &mut game.entities.mobs {
                     mob.ai.swinging = false;
                     mob.extra.swing_right_arm = None;
                 }

@@ -24,7 +24,7 @@ fn command_stops_navigation_and_dismounts() {
         mob.extra.passenger = true;
         mob.velocity = Vec3::new(1.0, -2.0, 3.0);
         mob.fall_distance = 7.0;
-        game.mobs.push(mob);
+        game.entities.mobs.push(mob);
         let kind = game
             .res
             .mob_types()
@@ -33,10 +33,10 @@ fn command_stops_navigation_and_dismounts() {
             .clone();
         let mut vehicle = Mob::new(42, kind, Vec3::new(0.0, 64.0, 0.0), 0.0);
         vehicle.extra.rider = Some(12);
-        game.mobs.push(vehicle);
+        game.entities.mobs.push(vehicle);
         game.ui.registries.permission = 4;
         assert!(game.run_command("tp @e[type=minecraft:zombie] 10 70 10"));
-        let mob = &game.mobs[0];
+        let mob = &game.entities.mobs[0];
         assert_eq!(mob.position, Vec3::new(10.5, 70.0, 10.5));
         assert!(mob.ai.nav.path.is_none());
         assert!(mob.extra.mount.is_none());
@@ -44,30 +44,30 @@ fn command_stops_navigation_and_dismounts() {
         assert_eq!(mob.fall_distance, 7.0);
         assert_eq!(mob.velocity, Vec3::ZERO);
         assert!(mob.ground.on_ground);
-        assert!(game.mobs[1].extra.rider.is_none());
-        let mob = &mut game.mobs[0];
+        assert!(game.entities.mobs[1].extra.rider.is_none());
+        let mob = &mut game.entities.mobs[0];
         mob.extra.fall_flying = true;
         mob.velocity = Vec3::new(1.0, -3.0, 2.0);
         mob.ground.on_ground = false;
         assert!(game.run_command("tp @e[type=minecraft:zombie] ~ 70 ~"));
-        let mob = &game.mobs[0];
+        let mob = &game.entities.mobs[0];
         assert_eq!(mob.velocity, Vec3::new(1.0, 0.0, 2.0));
         assert!(!mob.ground.on_ground);
-        game.mobs[0].velocity = Vec3::new(1.0, -3.0, 2.0);
+        game.entities.mobs[0].velocity = Vec3::new(1.0, -3.0, 2.0);
         assert!(game.run_command("tp @e[type=minecraft:zombie] 12 ~ 12"));
-        assert_eq!(game.mobs[0].velocity, Vec3::new(0.0, -3.0, 0.0));
-        game.mobs[0].extra.fall_flying = false;
+        assert_eq!(game.entities.mobs[0].velocity, Vec3::new(0.0, -3.0, 0.0));
+        game.entities.mobs[0].extra.fall_flying = false;
         assert!(game.run_command("tp @e[type=minecraft:zombie] ~ ~ ~"));
-        assert_eq!(game.mobs[0].velocity.y, 0.0);
-        assert!(game.mobs[0].ground.on_ground);
+        assert_eq!(game.entities.mobs[0].velocity.y, 0.0);
+        assert!(game.entities.mobs[0].ground.on_ground);
         assert!(
             game.run_command("tp @e[type=minecraft:zombie] -30000000.0 -20000000.0 -30000000.0")
         );
         assert_eq!(
-            game.mobs[0].position,
+            game.entities.mobs[0].position,
             Vec3::new(-30_000_000.0, -20_000_000.0, -30_000_000.0)
         );
         game.run_command("tp @e[type=minecraft:zombie] 30000000.0 70 0");
-        assert_eq!(game.mobs[0].position.x, -30_000_000.0);
+        assert_eq!(game.entities.mobs[0].position.x, -30_000_000.0);
     });
 }

@@ -11,6 +11,7 @@ impl ClientGame<'_> {
         let mut sneezes = Vec::new();
         for m in self
             .common
+            .entities
             .mobs
             .iter_mut()
             .filter(|m| m.species() == Species::Panda)

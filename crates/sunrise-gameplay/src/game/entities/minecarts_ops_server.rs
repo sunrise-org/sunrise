@@ -13,12 +13,12 @@ impl ServerGame<'_> {
     /// `getDismountLocationForPassenger`: beside the cart's motion direction,
     /// else on top.
     pub(in crate::game) fn dismount_cart(&mut self, i: usize) {
-        let id = self.common.carts[i].id;
+        let id = self.common.entities.carts[i].id;
         if self.common.riding == Some(id) && !self.native_may_leave(id) {
             return;
         }
         self.common.riding = None;
-        if self.dismount_in_portal(self.common.carts[i].position) {
+        if self.dismount_in_portal(self.common.entities.carts[i].position) {
             return;
         }
         let target = self.cart_player_dismount_target(i);
@@ -39,7 +39,7 @@ impl ServerGame<'_> {
         id: u32,
         edit: impl FnOnce(&mut Vec<Option<ItemStack>>) -> R,
     ) -> Option<R> {
-        let i = self.common.carts.iter().position(|c| c.id == id)?;
+        let i = self.common.entities.carts.iter().position(|c| c.id == id)?;
         self.unpack_loot(
             sunrise_gameplay_common::game::container_loot_level::LootTarget::Cart(id),
             None,
@@ -51,7 +51,7 @@ impl ServerGame<'_> {
             .get_mut(&(i32::MAX - 15, CART_KEY_Y, id as i32))
         {
             Some(BlockEntity::Chest(open)) => Some(edit(open)),
-            _ => Some(self.common.carts.update(i, |c| edit(&mut c.items))),
+            _ => Some(self.common.entities.carts.update(i, |c| edit(&mut c.items))),
         }
     }
 
@@ -149,8 +149,8 @@ impl ServerGame<'_> {
         fire: bool,
         hit: CartHit,
     ) -> bool {
-        let id = self.common.carts[i].id;
-        let join = self.common.carts[i].join;
+        let id = self.common.entities.carts[i].id;
+        let join = self.common.entities.carts[i].join;
         let target = crate::game::commands::Target::Cart(id);
         if self.common.persist.destroying_vehicles.contains(&target)
             || self
@@ -161,13 +161,13 @@ impl ServerGame<'_> {
         {
             return false;
         }
-        let kind = self.common.carts[i].kind.id();
+        let kind = self.common.entities.carts[i].kind.id();
         let mut cancel = false;
         self.native_vehicle_damage(kind, &mut damage, &mut cancel);
         if cancel {
             return false;
         }
-        let Some(i) = self.common.carts.iter().position(|c| {
+        let Some(i) = self.common.entities.carts.iter().position(|c| {
             c.id == id
                 && c.join == join
                 && !self
@@ -178,7 +178,7 @@ impl ServerGame<'_> {
         }) else {
             return true;
         };
-        let destroyed = self.common.carts.update(i, |c| {
+        let destroyed = self.common.entities.carts.update(i, |c| {
             c.hurt_dir = -c.hurt_dir;
             c.hurt_time = 10;
             c.damage += damage * 10.0;
@@ -187,19 +187,22 @@ impl ServerGame<'_> {
             cart_is_destroyed(creative, c.damage, fire && c.kind == CartKind::Tnt)
         });
         // VehicleEntity.hurtServer: `gameEvent(ENTITY_DAMAGE, source.getEntity())`.
-        let hurt_at = self.common.carts[i].position.components();
+        let hurt_at = self.common.entities.carts[i].position.components();
         self.entity_event_by("minecraft:entity_damage", hurt_at, hit.by);
         if destroyed {
-            let speed = self.common.carts[i].velocity.x * self.common.carts[i].velocity.x
-                + self.common.carts[i].velocity.z * self.common.carts[i].velocity.z;
-            let tnt_prime =
-                self.common.carts[i].kind == CartKind::Tnt && (fire || speed >= f64::from(0.01f32));
+            let speed = self.common.entities.carts[i].velocity.x
+                * self.common.entities.carts[i].velocity.x
+                + self.common.entities.carts[i].velocity.z
+                    * self.common.entities.carts[i].velocity.z;
+            let tnt_prime = self.common.entities.carts[i].kind == CartKind::Tnt
+                && (fire || speed >= f64::from(0.01f32));
             if tnt_prime {
                 let _save_lease = sunrise_sim::join_seq::visibility::PassLease::enter();
                 let mut c = self
                     .common
+                    .entities
                     .carts
-                    .extract(self.common.carts[i].join)
+                    .extract(self.common.entities.carts[i].join)
                     .unwrap();
                 // MinecartTNT.destroy: prime instead of breaking.
                 if c.fuse < 0 {
@@ -207,18 +210,19 @@ impl ServerGame<'_> {
                     c.fuse = c.random.next_int_bound(20).unwrap_or(0)
                         + c.random.next_int_bound(20).unwrap_or(0);
                 }
-                self.common.carts.put_back(i, c);
+                self.common.entities.carts.put_back(i, c);
             } else {
-                let join = self.common.carts[i].join;
-                let at = self.common.carts[i].position.components();
-                self.native_vehicle_destroy(self.common.carts[i].kind.id(), at);
-                if !self.common.carts.iter().any(|c| {
+                let join = self.common.entities.carts[i].join;
+                let at = self.common.entities.carts[i].position.components();
+                self.native_vehicle_destroy(self.common.entities.carts[i].kind.id(), at);
+                if !self.common.entities.carts.iter().any(|c| {
                     c.id == id && c.join == join && !self.common.persist.removals.contains(&target)
                 }) {
                     return true;
                 }
                 let Some(cart) = self
                     .common
+                    .entities
                     .carts
                     .iter()
                     .find(|c| c.id == id && c.join == join)

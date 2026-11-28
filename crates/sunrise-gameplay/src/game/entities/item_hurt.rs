@@ -16,10 +16,16 @@ impl crate::game::ServerGame<'_> {
         causing: Option<Target>,
         position: Option<[f64; 3]>,
     ) -> bool {
-        let Some(index) = self.common.dropped.iter().position(|item| item.id == id) else {
+        let Some(index) = self
+            .common
+            .entities
+            .dropped
+            .iter()
+            .position(|item| item.id == id)
+        else {
             return false;
         };
-        let mut items = self.common.dropped.lift();
+        let mut items = self.common.entities.dropped.lift();
         let hurt = self.hurt_lent_item_entity(
             &mut items[index],
             amount,
@@ -37,14 +43,25 @@ impl crate::game::ServerGame<'_> {
                 .map(|(_, ty)| ty);
             if let Some(ty) = deferred {
                 self.common.put_back_dropped(items);
-                let contents =
-                    if let Some(k) = self.common.dropped.iter().position(|item| item.id == id) {
-                        self.destroy_item_entity_drops(k, &ty)
-                    } else {
-                        Vec::new()
-                    };
-                if let Some(k) = self.common.dropped.iter().position(|item| item.id == id) {
-                    self.common.dropped.remove(k);
+                let contents = if let Some(k) = self
+                    .common
+                    .entities
+                    .dropped
+                    .iter()
+                    .position(|item| item.id == id)
+                {
+                    self.destroy_item_entity_drops(k, &ty)
+                } else {
+                    Vec::new()
+                };
+                if let Some(k) = self
+                    .common
+                    .entities
+                    .dropped
+                    .iter()
+                    .position(|item| item.id == id)
+                {
+                    self.common.entities.dropped.remove(k);
                 }
                 self.spawn_destroyed_contents(
                     contents.into_iter().map(|stack| (stack, at)).collect(),
