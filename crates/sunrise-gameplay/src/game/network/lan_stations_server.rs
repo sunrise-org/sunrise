@@ -15,7 +15,11 @@ impl ServerGame<'_> {
         matches!(
             self.world.block_entities.get(&key),
             Some(BlockEntity::Lectern(l)) if l.book.is_some()
-        ) && g.within_interaction_range(&self.loop_context, [key.0, key.1, key.2], 4.0)
+        ) && self.live_guest_view(g).within_interaction_range(
+            &self.loop_context,
+            [key.0, key.1, key.2],
+            4.0,
+        )
     }
     /// How many slots of its own the guest's open station menu has before the
     /// player's inventory (`slot_count - 36`), if one is open.
@@ -41,6 +45,10 @@ impl ServerGame<'_> {
             .get(self.common.world.block(x, y, z))
             .name;
         StationKind::from_block(name) == Some(gs.kind)
-            && g.within_interaction_range(&self.common.loop_context, gs.pos, 4.0)
+            && self.live_guest_view(g).within_interaction_range(
+                &self.common.loop_context,
+                gs.pos,
+                4.0,
+            )
     }
 }

@@ -595,6 +595,75 @@ pub struct Guest {
     pub recipes_unlocked: Vec<String>,
 }
 
+/// The guest's body and hands for validation, borrowed from their current owner.
+/// The server lends these fields from the game during the guest's own turn.
+pub struct LiveGuestView<'a> {
+    pub uuid: u128,
+    pub position: [f64; 3],
+    pub eye_height: f64,
+    pub creative: bool,
+    pub spectator: bool,
+    pub motion: Option<&'a PlayerMotion>,
+    pub inventory: &'a [Option<ItemStack>],
+    pub selected: usize,
+    pub offhand: Option<&'a ItemStack>,
+}
+
+impl<'a> LiveGuestView<'a> {
+    /// Read a guest whose body and inventory are not on loan.
+    pub fn from_guest(guest: &'a Guest) -> Self {
+        let motion = guest.motion.as_deref();
+        Self {
+            uuid: guest.uuid,
+            position: guest.position,
+            eye_height: motion.map_or_else(
+                || guest.eye_height(),
+                |m| f64::from(m.dimensions.eye_height),
+            ),
+            creative: guest.creative(),
+            spectator: guest.spectator(),
+            motion,
+            inventory: &guest.inventory,
+            selected: guest.selected,
+            offhand: guest.offhand.as_ref(),
+        }
+    }
+
+    pub fn eye(&self) -> [f64; 3] {
+        let [x, y, z] = self.position;
+        [x, y + self.eye_height, z]
+    }
+
+    /// `Player.isWithinBlockInteractionRange(pos, buffer)` with the body's live attribute.
+    pub fn within_block_range(&self, pos: [i32; 3], buffer: f64) -> bool {
+        let range = self
+            .motion
+            .and_then(|m| m.attribute("minecraft:block_interaction_range").ok())
+            .unwrap_or(if self.creative { 5.0 } else { 4.5 });
+        within_block_range(self.eye(), range + buffer, pos)
+    }
+
+    /// The body's block reach, then a mod's `block_interaction_range` answer.
+    pub fn within_interaction_range(
+        &self,
+        context: &LoopContext,
+        pos: [i32; 3],
+        buffer: f64,
+    ) -> bool {
+        let mut within = self.within_block_range(pos, buffer);
+        native_block_interaction_range(context, self.uuid, block_pos(pos), buffer, &mut within);
+        within
+    }
+
+    pub fn main_hand(&self) -> Option<&'a ItemStack> {
+        self.inventory.get(self.selected).and_then(Option::as_ref)
+    }
+
+    pub fn off_hand(&self) -> Option<&'a ItemStack> {
+        self.offhand
+    }
+}
+
 impl Guest {
     /// The client's socket address, including the port.
     pub fn address(&self) -> SocketAddr {
@@ -1296,17 +1365,7 @@ impl Guest {
     /// `Player.isWithinBlockInteractionRange(pos, buffer)` for the guest, using
     /// its body's eye height and current `block_interaction_range` attribute.
     pub fn within_block_range(&self, pos: [i32; 3], buffer: f64) -> bool {
-        let motion = self.motion.as_deref();
-        let eye = motion.map_or_else(|| self.eye_height(), |m| f64::from(m.dimensions.eye_height));
-        let fallback = if self.creative() { 5.0 } else { 4.5 };
-        let range = motion
-            .and_then(|m| m.attribute("minecraft:block_interaction_range").ok())
-            .unwrap_or(fallback);
-        within_block_range(
-            [self.position[0], self.position[1] + eye, self.position[2]],
-            range + buffer,
-            pos,
-        )
+        LiveGuestView::from_guest(self).within_block_range(pos, buffer)
     }
     /// [`Self::within_block_range`], then a mod's `block_interaction_range` answer.
     /// Menu validity and sign editing use a `buffer` of 4.0; block use and break
@@ -1317,9 +1376,7 @@ impl Guest {
         pos: [i32; 3],
         buffer: f64,
     ) -> bool {
-        let mut within = self.within_block_range(pos, buffer);
-        native_block_interaction_range(context, self.uuid, block_pos(pos), buffer, &mut within);
-        within
+        LiveGuestView::from_guest(self).within_interaction_range(context, pos, buffer)
     }
     /// Where the guest's eyes are: its feet raised by its pose's eye height.
     pub fn eye(&self) -> [f64; 3] {

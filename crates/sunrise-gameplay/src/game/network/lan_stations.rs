@@ -813,6 +813,7 @@ impl ServerGame<'_> {
             if !mod_api::__private::menu_listens(mod_api::HookId::MenuButton, &menu.registry_id) {
                 return None;
             }
+            let live = self.live_guest_view(g);
             Some((
                 menu.registry_id.clone(),
                 g.menu_generation,
@@ -820,7 +821,8 @@ impl ServerGame<'_> {
                     sunrise_sim::lan::menu::Slots::Block(pos) => Some(pos),
                     _ => None,
                 },
-                !g.spectator() && menu.still_valid(&host.hub.loop_context, &self.common.world, g),
+                !live.spectator
+                    && menu.still_valid_for(&host.hub.loop_context, &self.common.world, &live),
                 g.carried.clone(),
                 g.uuid,
                 g.entity_id,

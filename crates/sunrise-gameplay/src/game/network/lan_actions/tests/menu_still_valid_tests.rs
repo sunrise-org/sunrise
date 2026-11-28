@@ -410,3 +410,148 @@ fn a_blockless_mod_menu_closes_when_its_part_answers_false() {
         );
     });
 }
+
+#[test]
+#[ignore = "daily"]
+fn acting_guest_container_validity_uses_the_loaned_block_reach() {
+    super::super::native_guest_turn_tests::with_guests(|game| {
+        // The guest stands at x=3: both chests distinguish the live reach + 4
+        // from the default survival reach + 4, in opposite directions.
+        for (pos, reach, valid) in [((9, 65, 5), 1.0, false), ((15, 65, 5), 12.0, true)] {
+            game.world
+                .block_entities
+                .insert(pos, BlockEntity::Chest(vec![None; 27]));
+            game.server
+                .lan
+                .as_mut()
+                .unwrap()
+                .hub
+                .open_menu_window(
+                    12,
+                    "minecraft:generic_9x3",
+                    sunrise_core::nbt::Tag::String("test".into()),
+                    Some(pos),
+                    Slots::Block(pos),
+                    vec![None; 27],
+                    None,
+                )
+                .unwrap();
+            game.as_guest(12, |game| {
+                let body = game.common.player.as_mut().unwrap();
+                let key = body
+                    .attributes
+                    .key("minecraft:block_interaction_range")
+                    .unwrap();
+                let attr = body.attributes.get_instance(Some(key)).unwrap().unwrap();
+                body.attributes
+                    .edit(&attr, |a, observer| a.set_base_value(reach, observer))
+                    .unwrap();
+
+                let guest = game.server.lan.as_ref().unwrap().hub.guest(12).unwrap();
+                assert!(guest.motion.is_none());
+                assert_eq!(game.container_menu_valid(guest), valid, "reach {reach}");
+            })
+            .expect("guest turn entered");
+        }
+    });
+}
+
+#[test]
+#[ignore = "daily"]
+fn acting_guest_mod_menu_validity_uses_the_live_opening_hand_and_eye() {
+    use mod_api::Hand;
+    use sunrise_core::geometry::Vec3;
+    use sunrise_sim::{items::ItemStack, pose::Pose};
+
+    const MENU: &str = "minecraft:generic_9x2";
+    struct OpeningHand;
+    #[mod_api::sunrise_part]
+    impl MenuPart for OpeningHand {
+        fn menu_still_valid(
+            &self,
+            _: &dyn mod_api::LoopContext,
+            event: &mut MenuStillValidEvent<'_>,
+        ) {
+            assert_eq!(event.player, 12);
+            assert_eq!(event.eye, [4.0, 65.0 + f64::from(1.27_f32), 6.0]);
+            event.valid = event.opening_item.unwrap().stack_matches;
+        }
+    }
+
+    struct HandMenuMod;
+    #[mod_api::__subscriptions]
+    impl Hooks for HandMenuMod {
+        fn register(&self, r: &mut dyn Registrar, _: &mod_api::RegistrationContext) {
+            r.menu_part(MENU, OpeningHand);
+        }
+    }
+
+    let mods: Mods = vec![ModEntry::new("hand_menu", Box::new(HandMenuMod))].into();
+    mod_platform::testing::with_mods(mods.clone(), || {
+        sunrise_gameplay_common::game::api_values::install_parts(&mods).unwrap();
+        let _callbacks = scoped_dispatch();
+        sunrise_level::containers::with_mod_menu_types(
+            [(
+                MENU.into(),
+                "test".into(),
+                18,
+                0,
+                Vec::new(),
+                Vec::new(),
+                None,
+                None,
+                true,
+                None,
+            )],
+            || {
+                super::super::native_guest_turn_tests::with_guests(|game| {
+                    let opener = ItemStack::new("minecraft:stone", 1);
+                    let outer = ItemStack::new("minecraft:dirt", 1);
+                    game.common.inventory[0] = Some(outer.clone());
+                    game.common.offhand = Some(outer.clone());
+                    for hand in [Hand::Main, Hand::Off] {
+                        let hub = &mut game.server.lan.as_mut().unwrap().hub;
+                        hub.open_menu_window(
+                            12,
+                            MENU,
+                            sunrise_core::nbt::Tag::String("test".into()),
+                            None,
+                            Slots::Native,
+                            vec![None; 18],
+                            None,
+                        )
+                        .unwrap();
+                        hub.guests.update(0, |g| {
+                            g.menu.as_mut().unwrap().opening_item =
+                                Some((hand, Some(opener.clone())));
+                        });
+                        game.as_guest(12, |game| {
+                            let body = game.common.player.as_mut().unwrap();
+                            body.position = Vec3::new(4.0, 65.0, 6.0);
+                            body.set_pose(Pose::Crouching).unwrap();
+                            game.common.selected = 5;
+                            game.common.inventory[5] = Some(opener.clone());
+                            game.common.offhand = Some(opener.clone());
+
+                            let guest = game.server.lan.as_ref().unwrap().hub.guest(12).unwrap();
+                            assert!(guest.motion.is_none());
+                            assert_eq!(guest.inventory[0].as_ref(), Some(&outer));
+                            assert_eq!(guest.offhand.as_ref(), Some(&outer));
+                            assert!(
+                                game.container_menu_valid(guest),
+                                "{hand:?} holds the opener"
+                            );
+                            match hand {
+                                Hand::Main => game.common.inventory[5] = None,
+                                Hand::Off => game.common.offhand = None,
+                            }
+                            let guest = game.server.lan.as_ref().unwrap().hub.guest(12).unwrap();
+                            assert!(!game.container_menu_valid(guest), "{hand:?} is now empty");
+                        })
+                        .expect("guest turn entered");
+                    }
+                })
+            },
+        );
+    });
+}
