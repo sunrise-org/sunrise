@@ -1024,7 +1024,9 @@ mod tests {
             ")".repeat(depth),
         );
         let fsh = "#version 430\nvoid main() {\n    gl_FragData[0] = vec4(1.0);\n}\n";
-        let errors = fold(vsh, &gsh, fsh).unwrap_err();
+        let errors = fold(vsh, &gsh, fsh)
+            .err()
+            .expect("deeply nested geometry stage must be refused");
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].file, "shaders/shadow.gsh");
         assert_eq!(errors[0].line, 5);

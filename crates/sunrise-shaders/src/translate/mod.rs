@@ -4939,7 +4939,8 @@ in VertexData {{ {member} }} vIn;
             &[("composite.vsh", VSH_120), ("composite.fsh", &fragment)],
             Target::Window,
         )
-        .unwrap_err();
+        .err()
+        .expect("deeply nested fragment stage must be refused");
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].file, "shaders/composite.fsh");
         assert_eq!(errors[0].line, 3);
@@ -4987,7 +4988,8 @@ in VertexData {{ {member} }} vIn;
         let pack =
             Pack::from_zip_bytes("nest.zip", zip(&[("shaders/composite.csh", &compute)])).unwrap();
         let errors = translate_compute(&preprocess(&pack, "composite.csh", &Macros::standard()))
-            .unwrap_err();
+            .err()
+            .expect("deeply nested compute stage must be refused");
         assert_eq!(errors.len(), 1);
         assert_eq!(errors[0].file, "shaders/composite.csh");
         assert_eq!(errors[0].line, 4);
