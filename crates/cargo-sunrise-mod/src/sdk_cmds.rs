@@ -725,6 +725,20 @@ pub(crate) fn check_mod(
     check_mod_with_fetch(entry, root, show_uses, with, release, &fetch_pinned)
 }
 
+fn resolve_prepared_resources(
+    explicit: Option<std::path::PathBuf>,
+    fallback: Option<std::path::PathBuf>,
+) -> Result<Option<std::path::PathBuf>, std::path::PathBuf> {
+    if let Some(path) = explicit {
+        return if path.is_dir() {
+            Ok(Some(path))
+        } else {
+            Err(path)
+        };
+    }
+    Ok(fallback.filter(|p| p.is_dir()))
+}
+
 fn check_mod_with_fetch(
     entry: ChildEntry,
     root: &Path,
@@ -735,10 +749,16 @@ fn check_mod_with_fetch(
 ) -> Result<(), String> {
     let package = Package::read(root)?;
     let files = package.directory_files(root)?;
-    let prepared_resources = std::env::var_os("SUNRISE_RESOURCES")
-        .or_else(|| std::env::var_os("SUNRISE_TEST_RESOURCES"))
-        .map(std::path::PathBuf::from)
-        .filter(|p| p.is_dir());
+    let prepared_resources = resolve_prepared_resources(
+        std::env::var_os("SUNRISE_RESOURCES").map(std::path::PathBuf::from),
+        std::env::var_os("SUNRISE_TEST_RESOURCES").map(std::path::PathBuf::from),
+    )
+    .map_err(|path| {
+        format!(
+            "SUNRISE_RESOURCES does not point to a directory: {}",
+            path.display()
+        )
+    })?;
     let (pipelines, refused) =
         crate::check::pipeline_shaders(&files, prepared_resources.as_deref());
     if !refused.is_empty() {
@@ -1430,5 +1450,31 @@ mod tests {
         let error = hooks_args(&argv("block -- break")).unwrap_err();
         let refused = error.lines().next().unwrap().split(' ').next_back();
         assert_eq!(refused, Some("--"), "{error}");
+    }
+
+    #[test]
+    fn explicit_prepared_resources_must_be_a_directory() {
+        let dir = tempfile::tempdir().unwrap();
+        let valid = dir.path().join("prepared");
+        std::fs::create_dir(&valid).unwrap();
+        let file = dir.path().join("not-a-dir");
+        std::fs::write(&file, "").unwrap();
+        let missing = dir.path().join("missing");
+
+        for bad in [&missing, &file] {
+            assert_eq!(
+                resolve_prepared_resources(Some(bad.clone()), Some(valid.clone())),
+                Err(bad.clone())
+            );
+        }
+        assert_eq!(
+            resolve_prepared_resources(Some(valid.clone()), None),
+            Ok(Some(valid.clone()))
+        );
+        assert_eq!(resolve_prepared_resources(None, Some(missing)), Ok(None));
+        assert_eq!(
+            resolve_prepared_resources(None, Some(valid.clone())),
+            Ok(Some(valid))
+        );
     }
 }

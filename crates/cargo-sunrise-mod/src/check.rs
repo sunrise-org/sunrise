@@ -365,8 +365,9 @@ const OIT_INCLUDE: &str = "minecraft:shaders/include/oit.glsl";
 /// (the same code the game uses), returning how many programs were checked and each refusal as
 /// `<file>[:<line>:<column>]: <message>`.
 ///
-/// Includes resolve from the mod's own `files`, then from `resources` (prepared vanilla 26.3
-/// resources, when available), and finally from Sunrise's interface-only stubs for `minecraft:*`
+/// Includes resolve from the mod's own `files`, then either from `resources` (prepared vanilla
+/// 26.3 resources, when provided, without falling back to stubs so missing includes are reported)
+/// or from Sunrise's interface-only stubs for `minecraft:*` when `resources` is `None`
 /// (§6 & §13 Q3: nothing from Mojang's files is shipped in the SDK). When a `.fsh` has no
 /// matching `.vsh` beside it in `files`, `minecraft:shaders/core/position_tex_color.vsh` is used
 /// as the default vertex stage (matching the common `.vertex_shader("minecraft:core/position_tex_color")`
@@ -455,7 +456,8 @@ fn pair_programs(files: &BTreeMap<String, Vec<u8>>) -> Vec<Program> {
 }
 
 /// Where a program's files and includes come from: the mod's own `files`, then prepared vanilla
-/// `resources`, and finally Sunrise's interface-only stubs for `minecraft:*`.
+/// `resources` when provided (without falling back to stubs), or Sunrise's interface-only stubs
+/// for `minecraft:*` when `resources` is `None`.
 struct Assets<'a> {
     files: &'a BTreeMap<String, Vec<u8>>,
     resources: Option<&'a Path>,
@@ -470,11 +472,11 @@ impl Assets<'_> {
         }
         if let Some(dir) = self.resources {
             let path = dir.join(asset);
-            match std::fs::read_to_string(&path) {
-                Ok(text) => return Ok(Some(text)),
-                Err(e) if e.kind() == std::io::ErrorKind::NotFound => {}
-                Err(e) => return Err(format!("{}: {e}", path.display())),
-            }
+            return match std::fs::read_to_string(&path) {
+                Ok(text) => Ok(Some(text)),
+                Err(e) if e.kind() == std::io::ErrorKind::NotFound => Ok(None),
+                Err(e) => Err(format!("{}: {e}", path.display())),
+            };
         }
         if let Some(rest) = asset.strip_prefix("assets/")
             && let Some((ns, path)) = rest.split_once('/')
@@ -1202,6 +1204,97 @@ void main() {
                 .iter()
                 .any(|r| r.contains("bad_oit.fsh") && r.contains("OIT depth_bounds")),
             "expected bad OIT shader refusal at depth_bounds, got: {refused:?}"
+        );
+    }
+
+    fn write_resource(root: &Path, asset: &str, body: &str) {
+        let path = root.join(asset);
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(path, body).unwrap();
+    }
+
+    #[test]
+    fn pipeline_shaders_uses_given_resources_and_does_not_fall_back_to_stubs() {
+        let dir = tempfile::tempdir().unwrap();
+        for (asset, stub_id) in [
+            (
+                "assets/minecraft/shaders/include/dynamictransforms.glsl",
+                "minecraft:shaders/include/dynamictransforms.glsl",
+            ),
+            (
+                "assets/minecraft/shaders/include/projection.glsl",
+                "minecraft:shaders/include/projection.glsl",
+            ),
+            (
+                "assets/minecraft/shaders/core/position_tex_color.vsh",
+                "minecraft:shaders/core/position_tex_color.vsh",
+            ),
+        ] {
+            write_resource(
+                dir.path(),
+                asset,
+                sunrise_mod_pipeline::stubs::read(stub_id).unwrap(),
+            );
+        }
+        // A game-provided include that has no Sunrise stub: resolves only when resources are given.
+        write_resource(
+            dir.path(),
+            "assets/minecraft/shaders/include/game_only.glsl",
+            "vec4 game_only_tint(vec4 c) { return c; }\n",
+        );
+
+        let mut uses_game_only = BTreeMap::new();
+        uses_game_only.insert(
+            "assets/example/shaders/core/game_only.fsh".to_owned(),
+            b"\
+#version 330
+#include <minecraft:dynamictransforms.glsl>
+#include <minecraft:game_only.glsl>
+in vec4 vertexColor;
+out vec4 fragColor;
+void main() { fragColor = game_only_tint(vertexColor * ColorModulator); }
+"
+            .to_vec(),
+        );
+        let (count, refused) = pipeline_shaders(&uses_game_only, Some(dir.path()));
+        assert_eq!(count, 1);
+        assert!(
+            refused.is_empty(),
+            "expected resource-backed include to translate: {refused:?}"
+        );
+        let (_, stub_refused) = pipeline_shaders(&uses_game_only, None);
+        assert!(
+            !stub_refused.is_empty(),
+            "expected missing game-only include to fail without resources"
+        );
+
+        // `fog.glsl` exists in `stubs::read`, but is intentionally absent from `dir`:
+        // when explicit resources are provided, `check` must refuse it rather than silently
+        // falling back to Sunrise's stub.
+        let mut uses_missing_fog = BTreeMap::new();
+        uses_missing_fog.insert(
+            "assets/example/shaders/core/missing_fog.fsh".to_owned(),
+            b"\
+#version 330
+#include <minecraft:fog.glsl>
+in vec4 vertexColor;
+out vec4 fragColor;
+void main() { fragColor = vertexColor * FogColor; }
+"
+            .to_vec(),
+        );
+        let (count, refused) = pipeline_shaders(&uses_missing_fog, Some(dir.path()));
+        assert_eq!(count, 1);
+        assert!(
+            refused
+                .iter()
+                .any(|r| r.contains("missing_fog.fsh") && r.contains("fog.glsl")),
+            "expected missing include refusal when resources are provided, got: {refused:?}"
+        );
+        let (_, stub_refused) = pipeline_shaders(&uses_missing_fog, None);
+        assert!(
+            stub_refused.is_empty(),
+            "expected stub fallback only when resources are absent: {stub_refused:?}"
         );
     }
 }
