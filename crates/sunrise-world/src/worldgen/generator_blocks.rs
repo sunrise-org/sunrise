@@ -109,17 +109,39 @@ pub(super) fn double_plant_blocks(behaviours: &Value) -> Result<BTreeSet<String>
         .map(|block| block.name)
         .collect())
 }
+/// Collect `DoublePlant` block names from an already-loaded [`crate::level::Behaviours`]
+/// table instead of re-parsing `block-behaviours.json`.
+pub(super) fn double_plant_blocks_from_behaviours(
+    behaviours: &crate::level::Behaviours,
+) -> BTreeSet<String> {
+    use crate::level::{BlockId, classes::Class};
+    (0..behaviours.table.block_count())
+        .map(|i| BlockId(i as u16))
+        .filter(|&id| behaviours.block_data(id).is(Class::DoublePlant))
+        .map(|id| behaviours.table.info(id).name.to_string())
+        .collect()
+}
 impl BlockBehavior {
     /// Files: `block-properties.nbt`, `cached-collision.nbt`,
     /// `cached-support.nbt`, `survival-rules.json`,
     /// `survival-extra-definitions.json` and `placement-definitions.json`.
-    /// The resolved resource root above `worldgen/blocks` supplies
-    /// `block-behaviours.json`, including registered mod blocks.
     pub(super) fn load(
         dir: &Path,
         registry: &'static BlockRegistry,
         tags: &BTreeMap<String, Vec<String>>,
         fluid_tags: &BTreeMap<String, Vec<String>>,
+    ) -> Result<Option<Self>, GeneratorError> {
+        Self::load_with_behaviours(dir, registry, tags, fluid_tags, None)
+    }
+
+    /// Like [`Self::load`]; when `preloaded_behaviours` is supplied, `DoublePlant`
+    /// block classes are read from it instead of re-parsing `block-behaviours.json`.
+    pub(super) fn load_with_behaviours(
+        dir: &Path,
+        registry: &'static BlockRegistry,
+        tags: &BTreeMap<String, Vec<String>>,
+        fluid_tags: &BTreeMap<String, Vec<String>>,
+        preloaded_behaviours: Option<&crate::level::Behaviours>,
     ) -> Result<Option<Self>, GeneratorError> {
         if !dir.join("block-properties.nbt").exists() {
             return Ok(None);
@@ -179,21 +201,58 @@ impl BlockBehavior {
             fluid_tags,
         )?;
         let placement = json("placement-definitions.json")?;
-        // `dir` is <resolved resources>/worldgen/blocks. Class chains live
-        // at that resolved root, where mod registration merges its blocks.
-        let root = dir
-            .parent()
-            .and_then(Path::parent)
-            .ok_or_else(|| resource("missing worldgen resource root"))?;
-        let behaviours: Value =
-            serde_json::from_str(&fs::read_to_string(root.join("block-behaviours.json"))?)?;
+        let double_plants = if let Some(behaviours) = preloaded_behaviours {
+            double_plant_blocks_from_behaviours(behaviours)
+        } else {
+            // `dir` is <resolved resources>/worldgen/blocks. Class chains live
+            // at that resolved root, where mod registration merges its blocks.
+            let root = dir
+                .parent()
+                .and_then(Path::parent)
+                .ok_or_else(|| resource("missing worldgen resource root"))?;
+            let behaviours: Value =
+                serde_json::from_str(&fs::read_to_string(root.join("block-behaviours.json"))?)?;
+            double_plant_blocks(&behaviours)?
+        };
         Ok(Some(Self {
-            double_plants: double_plant_blocks(&behaviours)?,
+            double_plants,
             mossy_carpets: serde_json::from_value(placement["mossy_carpets"].clone())?,
             properties,
             support,
             collision,
             survival,
         }))
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn double_plant_blocks_from_behaviours_matches_json() {
+        use crate::level::classes::Class;
+
+        let mut behaviours = crate::level::data::inert_support_fixture();
+        let plant = behaviours.table.block_by_name("test:plant").unwrap();
+        let soil = behaviours.table.block_by_name("test:soil").unwrap();
+        // Direct DoublePlant class and inherited DoublePlant subclass (e.g. TallFlowerBlock).
+        behaviours.block_data_mut(plant).class = Class::DoublePlant;
+        behaviours
+            .block_data_mut(soil)
+            .classes
+            .insert(Class::DoublePlant);
+
+        let json = serde_json::json!({
+            "blocks": [
+                {"name": "minecraft:stone", "class": ["Block"]},
+                {"name": "test:plant", "class": ["DoublePlantBlock", "VegetationBlock"]},
+                {"name": "test:soil", "class": ["TallFlowerBlock", "DoublePlantBlock"]}
+            ]
+        });
+        assert_eq!(
+            double_plant_blocks_from_behaviours(&behaviours),
+            double_plant_blocks(&json).unwrap()
+        );
     }
 }

@@ -517,6 +517,16 @@ impl GeneratorData {
         registry: &'static BlockRegistry,
         ov: &WorldgenOverrides,
     ) -> Result<Arc<Self>, GeneratorError> {
+        Self::load_with_behaviours(dir, registry, ov, None)
+    }
+    /// Like [`Self::load_with`]; when `preloaded_behaviours` is supplied, worldgen
+    /// reuses it instead of re-reading `block-behaviours.json` twice.
+    pub fn load_with_behaviours(
+        dir: &Path,
+        registry: &'static BlockRegistry,
+        ov: &WorldgenOverrides,
+        preloaded_behaviours: Option<Arc<crate::level::Behaviours>>,
+    ) -> Result<Arc<Self>, GeneratorError> {
         let mut warnings = Vec::new();
         let (biomes, biome_tags, presets, source_catalog) =
             load_biome_sources(dir, ov, true, &mut warnings)?;
@@ -534,28 +544,43 @@ impl GeneratorData {
         }
         let block_tags = load_block_tags(dir, ov, true, &mut warnings, registry)?;
         let fluid_tags = load_fluid_tags(dir, ov, &mut warnings)?;
-        // The three biggest reads (the block tables, the structure templates
-        // and the block behaviours) need only the tags: they run on threads of
-        // their own while this one reads the rest. A new world's first chunks
-        // wait for all of it, with the chunk workers idle.
+        // The biggest reads (the block tables, the structure templates and, when
+        // not preloaded, the block behaviours) need only the tags: they run on
+        // threads of their own while this one reads the rest. A new world's first
+        // chunks wait for all of it, with the chunk workers idle.
         let blocks = loading({
-            let (dir, tags, fluids) = (dir.join("blocks"), block_tags.clone(), fluid_tags.clone());
+            let (dir, tags, fluids, behaviours) = (
+                dir.join("blocks"),
+                block_tags.clone(),
+                fluid_tags.clone(),
+                preloaded_behaviours.clone(),
+            );
             move || {
-                super::super::generator_blocks::BlockBehavior::load(&dir, registry, &tags, &fluids)
+                super::super::generator_blocks::BlockBehavior::load_with_behaviours(
+                    &dir,
+                    registry,
+                    &tags,
+                    &fluids,
+                    behaviours.as_deref(),
+                )
             }
         })?;
         let structures = loading({
             let (dir, tags, ov) = (dir.to_owned(), block_tags.clone(), ov.clone());
             move || load_structure_resources(&dir, registry, &tags, &ov)
         })?;
-        let behaviours = loading({
-            let root = dir.parent().map(Path::to_owned);
-            move || {
-                root.filter(|root| root.join("block-behaviours.json").exists())
-                    .and_then(|root| crate::level::Behaviours::load(registry, &root).ok())
-                    .map(Arc::new)
-            }
-        })?;
+        let behaviours = if preloaded_behaviours.is_some() {
+            None
+        } else {
+            Some(loading({
+                let root = dir.parent().map(Path::to_owned);
+                move || {
+                    root.filter(|root| root.join("block-behaviours.json").exists())
+                        .and_then(|root| crate::level::Behaviours::load(registry, &root).ok())
+                        .map(Arc::new)
+                }
+            })?)
+        };
         let tag_set = |name: &str| -> BTreeSet<&str> {
             block_tags
                 .get(name)
@@ -655,7 +680,7 @@ impl GeneratorData {
             }),
             _ => None,
         };
-        let behaviours = joined(behaviours);
+        let behaviours = preloaded_behaviours.or_else(|| behaviours.and_then(joined));
         Ok(Arc::new(Self {
             behaviours,
             structure_resources,

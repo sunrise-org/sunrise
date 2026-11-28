@@ -1604,6 +1604,10 @@ impl Behaviours {
     pub fn block_data(&self, block: BlockId) -> &BlockData {
         &self.blocks[block.0 as usize]
     }
+    #[cfg(test)]
+    pub(crate) fn block_data_mut(&mut self, block: BlockId) -> &mut BlockData {
+        &mut self.blocks[block.0 as usize]
+    }
     pub fn data(&self, state: BlockStateId) -> &BlockData {
         self.block_data(self.table.block(state))
     }

@@ -1313,6 +1313,14 @@ pub struct WorldRest {
     pub test_instances: Arc<HashMap<String, crate::test_instances::TestDef>>,
 }
 
+impl Drop for WorldRest {
+    fn drop(&mut self) {
+        // Clear any installed `LiveFeatures` so sharing `behaviours` with
+        // `GeneratorData` cannot keep a reference cycle alive past `WorldRest`.
+        self.behaviours.clear_live_features();
+    }
+}
+
 /// The content tables a world's data packs change, loaded when the world
 /// opens and on `/reload`: `ReloadableServerResources` loads a server's
 /// recipes, loot tables and tags from the world's pack stack, over the

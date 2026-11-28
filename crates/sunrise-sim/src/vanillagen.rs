@@ -1043,6 +1043,37 @@ static SHARED_BIOME_DATA: std::sync::Mutex<Vec<SharedBiomeEntry>> =
 const SHARED_WITH_PACKS: usize = 2;
 /// Plain bundles kept across distinct registry lifetimes so test registries stay bounded.
 const SHARED_PLAIN: usize = 2;
+/// The already-loaded [`sunrise_world::level::Behaviours`] for a prepared resource
+/// root and registry, held weakly so worldgen can reuse it instead of re-parsing
+/// `block-behaviours.json` without keeping the table alive past its resource owner.
+static SHARED_BEHAVIOURS: std::sync::Mutex<
+    Option<(
+        std::path::PathBuf,
+        &'static BlockRegistry,
+        std::sync::Weak<sunrise_world::level::Behaviours>,
+    )>,
+> = std::sync::Mutex::new(None);
+/// Register an already-loaded `Behaviours` table for `(root, registry)` so subsequent
+/// `GeneratorData` loads under `root/worldgen` reuse it instead of re-reading
+/// `block-behaviours.json`.
+pub fn set_shared_behaviours(
+    root: &Path,
+    registry: &'static BlockRegistry,
+    behaviours: Arc<sunrise_world::level::Behaviours>,
+) {
+    *SHARED_BEHAVIOURS.lock().unwrap_or_else(|e| e.into_inner()) =
+        Some((root.to_owned(), registry, Arc::downgrade(&behaviours)));
+}
+fn shared_behaviours_for(
+    dir: &Path,
+    registry: &'static BlockRegistry,
+) -> Option<Arc<sunrise_world::level::Behaviours>> {
+    let root = dir.parent()?;
+    let slot = SHARED_BEHAVIOURS.lock().unwrap_or_else(|e| e.into_inner());
+    slot.as_ref()
+        .filter(|(saved_root, reg, _)| saved_root == root && std::ptr::eq(*reg, registry))
+        .and_then(|(_, _, weak)| weak.upgrade())
+}
 /// Let go of the bundles `shared_data` loaded: for a preload no world used
 /// (game/world/world_loading.rs). A generator that holds one keeps it.
 pub fn forget_shared_data() {
@@ -1054,6 +1085,7 @@ pub fn forget_shared_data() {
         .lock()
         .unwrap_or_else(|e| e.into_inner())
         .clear();
+    *SHARED_BEHAVIOURS.lock().unwrap_or_else(|e| e.into_inner()) = None;
 }
 /// The biome, biome-tag and preset tables at `dir` with `overrides`, loaded once without
 /// terrain-stage inputs (`settings.json`, `noises.json`, `block_flags.json`, ...).
@@ -1152,7 +1184,12 @@ pub fn shared_data_with(
     } else {
         biome_modifiers_over_packs(dir, overrides)?
     };
-    let data = GeneratorData::load_with(dir, registry, modified.as_ref().unwrap_or(overrides))?;
+    let data = GeneratorData::load_with_behaviours(
+        dir,
+        registry,
+        modified.as_ref().unwrap_or(overrides),
+        shared_behaviours_for(dir, registry),
+    )?;
     log::info!("Sunrise: worldgen data loaded in {:?}", started.elapsed());
     for warning in data.warnings() {
         log::warn!("Sunrise: data pack worldgen: {warning}");

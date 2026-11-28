@@ -1278,7 +1278,7 @@ fn instrument_index(name: &str) -> u8 {
 
 /// Minimal in-memory behaviour tables for an unsupported plant carried by a piston.
 #[cfg(test)]
-pub(super) fn inert_support_fixture() -> Behaviours {
+pub(crate) fn inert_support_fixture() -> Behaviours {
     use serde_json::{Map, json};
 
     let mut states = Vec::new();
