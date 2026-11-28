@@ -348,6 +348,37 @@ impl ItemResource {
     ) -> Option<f32> {
         backend_of(host)?.item_resource_attack_damage_bonus(&self.0, attacker, target, base_damage)
     }
+    /// `EnchantmentHelper.modifyKnockback(level, stack, victim, source, base)`: the knockback
+    /// `base` after this stack's `minecraft:knockback` enchantment effects, as the stack's
+    /// Knockback enchantment adds to an attack on `victim`. The damage source is built the way
+    /// [`EntityRef::hurt`] builds one from a type id and its two entities: `damage_type` is a
+    /// registered id, `direct` dealt the hit and `causing` is responsible for it (a stale handle
+    /// counts as absent, and `causing` falls back to `direct`). As in vanilla, an effect's
+    /// requirements are checked on the level's random and its value is applied on the victim's
+    /// own (`victim.getRandom()`); the read runs on a copy of each, so neither stream moves
+    /// and a later attack draws what the read drew. The victim's, the attacker's and the
+    /// direct entity's fall distance and flying state are read as the attack path reads them.
+    /// The stack is never equipped. Server only: None on a client, for an unknown item, a
+    /// stale victim, an unregistered damage type, and for a victim, `direct` or `causing`
+    /// that is in another level than the one in place.
+    pub fn modify_knockback(
+        &self,
+        host: &dyn Host,
+        victim: crate::EntityRef,
+        damage_type: &str,
+        direct: Option<crate::EntityRef>,
+        causing: Option<crate::EntityRef>,
+        base: f32,
+    ) -> Option<f32> {
+        backend_of(host)?.item_resource_modify_knockback(
+            &self.0,
+            victim,
+            damage_type,
+            direct,
+            causing,
+            base,
+        )
+    }
     /// `ItemStack.getTooltipLines` with the client's current viewer context and explicit
     /// advanced and creative flags. Includes item parts, component appenders and edits from
     /// `item_tooltip`, just as inventory tooltips do. A request during item tooltip line

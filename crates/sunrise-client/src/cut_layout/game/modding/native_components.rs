@@ -668,6 +668,268 @@ pub(crate) mod combat_query_tests {
         }
     }
 
+    /// A zombie `id` in the level in place, and its handle.
+    fn knockback_zombie(
+        game: &mut sunrise_gameplay::game::ServerGame<'_>,
+        id: u32,
+    ) -> mod_api::EntityRef {
+        let kind = game
+            .res
+            .mob_types()
+            .get("minecraft:zombie")
+            .unwrap()
+            .clone();
+        game.world.chunks.insert(
+            (0, 0),
+            std::sync::Arc::new(sunrise_level::chunk::Chunk::empty(0, 0)),
+        );
+        game.mobs
+            .push(sunrise_sim::mobs::Mob::new(id, kind, Vec3::ZERO, 0.0));
+        game.entity(id).unwrap()
+    }
+
+    fn knockback_mob<'a>(
+        game: &'a mut sunrise_gameplay::game::ServerGame<'_>,
+        id: u32,
+    ) -> &'a mut sunrise_sim::mobs::Mob {
+        game.mobs.iter_mut().find(|m| m.id == id).unwrap()
+    }
+
+    /// Pack enchantments whose `minecraft:knockback` effects have requirements on the damage
+    /// type's tag, the attacker, the direct attacker and `is_direct`, on the fall distance of
+    /// the three entities, and on the level's random with a random-value effect, staged as
+    /// `mending_pick_tests` stages its table.
+    fn with_knockback_table(test: impl FnOnce(&mut sunrise_gameplay::game::ServerGame<'_>)) {
+        use serde_json::json;
+        // `with_mods` needs the platform before `with_game` installs it.
+        mod_platform::__private::test_platform::install();
+        mod_platform::testing::with_mods(Default::default(), || {
+            with_game(|game| {
+                let definition = |entries: serde_json::Value| {
+                    json!({
+                        "description": "Knockback", "supported_items": "minecraft:stick",
+                        "weight": 1, "max_level": 1, "anvil_cost": 1,
+                        "min_cost": {"base": 1, "per_level_above_first": 0},
+                        "max_cost": {"base": 1, "per_level_above_first": 0},
+                        "slots": ["mainhand"], "effects": {"minecraft:knockback": entries}
+                    })
+                };
+                let source = |attacker: &str, direct: &str, is_direct: bool| {
+                    json!({"condition": "minecraft:damage_source_properties",
+                    "predicate": {
+                        "tags": [{"id": "#minecraft:is_projectile", "expected": false}],
+                        "source_entity": {"type": attacker},
+                        "direct_entity": {"type": direct},
+                        "is_direct": is_direct
+                    }})
+                };
+                let fall = |role: &str| {
+                    json!({"condition": "minecraft:entity_properties", "entity": role,
+                        "predicate": {"minecraft:movement": {"fall_distance": {"min": 5.0}}}})
+                };
+                let add = json!({"type": "minecraft:add", "value": 10.0});
+                let split = definition(json!([{
+                    "requirements": source("minecraft:player", "minecraft:zombie", false),
+                    "effect": add
+                }]));
+                let same = definition(json!([{
+                    "requirements": source("minecraft:zombie", "minecraft:zombie", true),
+                    "effect": add
+                }]));
+                let falling = definition(json!([{
+                    "requirements": {"condition": "minecraft:all_of", "terms": [
+                        fall("this"), fall("attacker"), fall("direct_attacker")
+                    ]},
+                    "effect": add
+                }]));
+                // The requirement draws from the level's random, the value from the victim's.
+                let random = definition(json!([{
+                    "requirements": {"condition": "minecraft:random_chance", "chance": 1.0},
+                    "effect": {"type": "minecraft:remove_binomial", "chance": 0.5}
+                }]));
+                stage_knockback_table(
+                    game,
+                    [
+                        ("test:split", &split),
+                        ("test:same", &same),
+                        ("test:falling", &falling),
+                        ("test:random", &random),
+                    ],
+                );
+                test(game);
+            });
+        });
+    }
+
+    /// Put `entries` into the world's enchantment table through a data pack, as the mending
+    /// tests do, so the server's `item_enchantments` answers them.
+    fn stage_knockback_table<'a>(
+        game: &mut sunrise_gameplay::game::ServerGame<'_>,
+        entries: impl IntoIterator<Item = (&'a str, &'a serde_json::Value)>,
+    ) {
+        use sunrise_gameplay_common::game::tables::GameItems as _;
+        let table = game
+            .stations()
+            .enchantments
+            .with_entries(entries)
+            .unwrap()
+            .unwrap();
+        let root = tempfile::tempdir().unwrap();
+        let pack = root.path().join("datapacks/knockback");
+        std::fs::create_dir_all(&pack).unwrap();
+        std::fs::write(
+            pack.join("pack.mcmeta"),
+            r#"{"pack":{"description":"Knockback fixture"}}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            root.path().join("datapacks.json"),
+            r#"{"enabled":["file/knockback"],"disabled":[]}"#,
+        )
+        .unwrap();
+        game.server.world_root = root.path().to_path_buf();
+        let packs = game.reload_datapacks(false, &[]).unwrap();
+        let resources = game.options.resources.clone();
+        game.server.world_tables.0 = game
+            .stage_world_tables(&packs, false, &resources)
+            .unwrap()
+            .tables;
+        game.server
+            .world_tables
+            .0
+            .as_mut()
+            .unwrap()
+            .stations
+            .enchantments = std::sync::Arc::new(table);
+    }
+    /// `modify_knockback` builds the damage source from a type with its direct and causing
+    /// entities (`causing` falls back to `direct`, a stale handle is absent) and reads the
+    /// three entities' fall distance as an attack does.
+    #[test]
+    #[ignore = "daily"]
+    fn modify_knockback_follows_the_damage_source_and_motion() {
+        sunrise_gameplay_common::game::in_own_process(
+            "cut_layout::game::native_components::combat_query_tests::modify_knockback_follows_the_damage_source_and_motion",
+            || {
+                with_knockback_table(|game| {
+                    let player = actor(game).entity();
+                    let victim = knockback_zombie(game, 5000);
+                    let other = knockback_zombie(game, 5001);
+                    let stale = mod_api::EntityRef::new(mod_api::WorldEpoch::new(999), 5002);
+                    let with = |enchantment: &str| {
+                        let mut stack = ItemStack::new("minecraft:stick", 1);
+                        stack.enchant(enchantment, 1);
+                        resource(&stack)
+                    };
+                    let (split, same, falling) =
+                        (with("test:split"), with("test:same"), with("test:falling"));
+                    let hit = "minecraft:player_attack";
+                    let (p, o, s) = (Some(player), Some(other), Some(stale));
+                    let read =
+                        |game: &mut sunrise_gameplay::game::ServerGame<'_>,
+                         stack: &mod_api::ItemResource,
+                         damage_type: &str,
+                         direct: Option<mod_api::EntityRef>,
+                         causing: Option<mod_api::EntityRef>| {
+                            stack.modify_knockback(game, victim, damage_type, direct, causing, 1.0)
+                        };
+                    // `direct != causing`: the player's hit through a zombie matches; a
+                    // projectile damage type, the player as the direct entity, an absent or a
+                    // stale direct entity do not.
+                    assert_eq!(read(game, &split, hit, o, p), Some(11.0));
+                    assert_eq!(read(game, &split, "minecraft:arrow", o, p), Some(1.0));
+                    assert_eq!(read(game, &split, hit, p, p), Some(1.0));
+                    assert_eq!(read(game, &split, hit, None, p), Some(1.0));
+                    assert_eq!(read(game, &split, hit, s, p), Some(1.0));
+                    // `causing` falls back to `direct`, also when `causing` is stale.
+                    assert_eq!(read(game, &split, hit, o, None), Some(1.0));
+                    assert_eq!(read(game, &same, hit, o, None), Some(11.0));
+                    assert_eq!(read(game, &same, hit, o, s), Some(11.0));
+                    assert_eq!(read(game, &same, hit, o, p), Some(1.0));
+                    // The victim's, the attacker's and the direct entity's fall distance.
+                    let fall = |game: &mut sunrise_gameplay::game::ServerGame<'_>,
+                                this: f64,
+                                attacker: f64,
+                                direct: f64| {
+                        knockback_mob(game, 5000).fall_distance = this;
+                        game.player.as_mut().unwrap().fall_distance = attacker;
+                        knockback_mob(game, 5001).fall_distance = direct;
+                        read(game, &falling, hit, o, p)
+                    };
+                    assert_eq!(fall(game, 6.0, 6.0, 6.0), Some(11.0));
+                    assert_eq!(fall(game, 0.0, 6.0, 6.0), Some(1.0));
+                    assert_eq!(fall(game, 6.0, 0.0, 6.0), Some(1.0));
+                    assert_eq!(fall(game, 6.0, 6.0, 0.0), Some(1.0));
+                    // A stale victim and an unregistered damage type answer None.
+                    assert_eq!(split.modify_knockback(game, stale, hit, o, p, 1.0), None);
+                    assert_eq!(read(game, &split, "test:unknown", o, p), None);
+                });
+            },
+        );
+    }
+
+    /// Requirements draw from the level's random and the value from the victim's own, each on
+    /// a copy: neither stream moves, a repeat reads the same, and the value is what the
+    /// victim's stream gives whatever the level's holds. An entity in another level than the
+    /// one in place refuses the read.
+    #[test]
+    #[ignore = "daily"]
+    fn modify_knockback_draws_from_both_streams_on_copies_and_refuses_other_levels() {
+        use sunrise_core::random::LegacyRandom;
+        sunrise_gameplay_common::game::in_own_process(
+            "cut_layout::game::native_components::combat_query_tests::modify_knockback_draws_from_both_streams_on_copies_and_refuses_other_levels",
+            || {
+                with_knockback_table(|game| {
+                    let player = actor(game).entity();
+                    let victim = knockback_zombie(game, 5000);
+                    let other = knockback_zombie(game, 5001);
+                    let mut stack = ItemStack::new("minecraft:stick", 1);
+                    stack.enchant("test:random", 1);
+                    let random = resource(&stack);
+                    let hit = "minecraft:player_attack";
+                    let (p, o) = (Some(player), Some(other));
+                    for seed in 0..16 {
+                        knockback_mob(game, 5000).random = LegacyRandom::new(seed);
+                        // Three removals out of the three the base holds, each a draw of the
+                        // victim's stream below 0.5.
+                        let mut expected = LegacyRandom::new(seed);
+                        let removed = (0..3).filter(|_| expected.next_float() < 0.5).count();
+                        let mut victim_before = knockback_mob(game, 5000).random.clone();
+                        let mut level_before = game.world.random.clone();
+                        let first = random.modify_knockback(game, victim, hit, o, p, 3.0);
+                        assert_eq!(first, Some(3.0 - removed as f32), "seed {seed}");
+                        assert_eq!(
+                            random.modify_knockback(game, victim, hit, o, p, 3.0),
+                            first,
+                            "a repeat reads the same"
+                        );
+                        assert_eq!(game.world.random.next_float(), level_before.next_float());
+                        let mut victim_after = knockback_mob(game, 5000).random.clone();
+                        assert_eq!(victim_after.next_long(), victim_before.next_long());
+                    }
+                    let nether = sunrise_gameplay_common::game::Dim::Nether;
+                    assert!(game.enter_command_level(nether).is_some());
+                    let here = knockback_zombie(game, 5003);
+                    let read =
+                        |game: &mut sunrise_gameplay::game::ServerGame<'_>,
+                         victim: mod_api::EntityRef,
+                         direct: Option<mod_api::EntityRef>,
+                         causing: Option<mod_api::EntityRef>| {
+                            random.modify_knockback(game, victim, hit, direct, causing, 3.0)
+                        };
+                    assert_eq!(read(game, victim, o, p), None, "a victim in another level");
+                    assert_eq!(read(game, here, o, None), None, "a direct entity elsewhere");
+                    assert_eq!(
+                        read(game, here, None, o),
+                        None,
+                        "a causing entity elsewhere"
+                    );
+                    assert!(read(game, here, None, None).is_some());
+                });
+            },
+        );
+    }
+
     #[test]
     #[ignore = "daily"]
     fn stack_combat_queries_match_attacks_and_preserve_equipment_and_rng() {

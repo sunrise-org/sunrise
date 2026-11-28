@@ -228,6 +228,18 @@ pub trait ItemsBackend {
         target: EntityRef,
         base_damage: f32,
     ) -> Option<f32>;
+    /// Side: server. `EnchantmentHelper.modifyKnockback` of the stack against `victim`, on copies
+    /// of the level's random and of the victim's own, without equipping the stack. None on a
+    /// client, which keeps no victim random.
+    fn item_resource_modify_knockback(
+        &self,
+        stack: &ItemStack,
+        victim: EntityRef,
+        damage_type: &str,
+        direct: Option<EntityRef>,
+        causing: Option<EntityRef>,
+        base: f32,
+    ) -> Option<f32>;
     /// Side: client. Inventory tooltip lines including mod edits, before drawing.
     /// A request during item tooltip line construction returns base lines without dispatching
     /// line callbacks again. No request gathers images or draws.

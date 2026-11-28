@@ -82,6 +82,83 @@ impl ServerGame<'_> {
         Ok(worn)
     }
 
+    /// `EnchantmentHelper.modifyKnockback` for a stack nobody wears, behind
+    /// `ItemResource::modify_knockback`. As in vanilla, an effect's requirements are checked on
+    /// the level's random and its value applied on the victim's own (`victim.getRandom()`), here
+    /// each on a copy, so neither stream moves. The context carries the three entities' kinds
+    /// and their fall distance and flying state, from the same place an attack reads them. A
+    /// stale handle is an absent entity (`causing` falls back to `direct`, as in
+    /// `EntityRef::hurt`); an entity in another level than the one in place refuses the read.
+    pub(in crate::game) fn item_resource_modify_knockback(
+        &self,
+        stack: &ItemStack,
+        victim: mod_api::EntityRef,
+        damage_type: &str,
+        direct: Option<mod_api::EntityRef>,
+        causing: Option<mod_api::EntityRef>,
+        base: f32,
+    ) -> Option<f32> {
+        if !self.common.is_logical_server() {
+            return None;
+        }
+        let items = server_world_items!(self);
+        items.get(&stack.item)?;
+        let in_place = |entity: mod_api::EntityRef| -> Option<bool> {
+            Some(self.entity_level(entity)?.dimension() == self.common.dim.key())
+        };
+        if !in_place(victim)? {
+            return None;
+        }
+        self.common.health_resources.damage.id(damage_type)?;
+        let resolve = |entity: Option<mod_api::EntityRef>| match entity {
+            None => Some(None),
+            Some(entity) => match in_place(entity) {
+                None => Some(None),
+                Some(true) => Some(Some(entity)),
+                Some(false) => None,
+            },
+        };
+        let direct = resolve(direct)?;
+        let causing = resolve(causing)?.or(direct);
+        // `DamageSource.isDirect`: the direct entity is the causing one.
+        let is_direct = direct.map(|e| e.id()) == causing.map(|e| e.id());
+        let this = self.entity_kind(victim)?.id(self)?;
+        let kind =
+            |entity: Option<mod_api::EntityRef>| entity.and_then(|e| self.entity_kind(e)?.id(self));
+        let direct_kind = kind(direct);
+        let causing_kind = kind(causing);
+        let motion = |entity: Option<mod_api::EntityRef>| {
+            let id = i32::try_from(entity?.id()).ok()?;
+            self.enchantment_actor(id)?.motion
+        };
+        let ctx = sunrise_items::enchant::EffectContext {
+            this: Some(this.as_str()),
+            attacker: causing_kind.as_deref(),
+            direct_attacker: direct_kind.as_deref(),
+            is_direct,
+            damage_type: Some(damage_type),
+            items: Some(items),
+            this_motion: motion(Some(victim)),
+            attacker_motion: motion(causing),
+            direct_motion: motion(direct),
+            ..Default::default()
+        };
+        let effective = self.common.item_combat_stack(stack);
+        let levels = effective.all_enchantments();
+        let mut level_random = (*self.common.world.random).clone();
+        let mut victim_random = self
+            .damage_victim_random_copy(victim.id())
+            .unwrap_or_else(|| level_random.clone());
+        Some(self.item_enchantments().modify_entity_value(
+            &levels,
+            "minecraft:knockback",
+            &ctx,
+            &mut level_random,
+            &mut victim_random,
+            base,
+        ))
+    }
+
     /// Roll through the game's enchantment registry and the active level's random source.
     pub(in crate::game) fn item_resource_enchant_randomly(
         &mut self,
@@ -128,6 +205,8 @@ impl ServerGame<'_> {
         )
     }
 }
+
+use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt1 as _;
 
 use sunrise_gameplay_common::game::native_entity_refs_common::NativeEntityRefsCommonGameExt5 as _;
 

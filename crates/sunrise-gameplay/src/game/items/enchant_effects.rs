@@ -446,6 +446,37 @@ impl ServerGame<'_> {
                 .update(index, |cart| effect(&mut cart.random)),
         )
     }
+    /// A copy of `Entity.getRandom` for the body that the damage effect is about, its own
+    /// stream left where it is: what [`Self::with_damage_victim_random`] would draw from.
+    pub(in crate::game) fn damage_victim_random_copy(&self, id: u32) -> Option<LegacyRandom> {
+        fn copy(random: &LegacyRandom) -> LegacyRandom {
+            random.clone()
+        }
+        match self.combat_player(id) {
+            Some(CombatPlayer::InPlace) => {
+                return self.common.player.as_ref().map(|p| copy(&p.random));
+            }
+            Some(CombatPlayer::Displaced(_, body)) => return Some(copy(&body.random)),
+            Some(CombatPlayer::Parked(guest)) => {
+                return guest.motion.as_deref().map(|p| copy(&p.random));
+            }
+            None => {}
+        }
+        if let Some(index) = self.common.mob_index.find_ref(&self.common.mobs, id) {
+            return Some(copy(&self.common.mobs[index].random));
+        }
+        if let Some(dragon) = self.common.dragon.as_ref().filter(|dragon| dragon.id == id) {
+            return Some(copy(&dragon.random));
+        }
+        if let Some(stand) = self.common.armor_stands.iter().find(|stand| stand.id == id) {
+            return Some(copy(&stand.random));
+        }
+        if let Some(boat) = self.common.boats.iter().find(|boat| boat.id == id) {
+            return Some(copy(&boat.random));
+        }
+        let cart = self.common.carts.iter().find(|cart| cart.id == id)?;
+        Some(copy(&cart.random))
+    }
     /// `Player.attack`'s extra knockback: `getKnockback` (the ATTACK_KNOCKBACK
     /// attribute, plus the weapon's knockback enchantment, halved) plus 0.5 for a
     /// sprinting full-strength hit, and whether the hit is that knockback attack.

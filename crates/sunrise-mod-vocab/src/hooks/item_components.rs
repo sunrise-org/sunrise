@@ -48,6 +48,14 @@ including damage-resistant component overrides, removals and damage type tags. I
 calculate the wearer's protection.
 `attack_damage_bonus(host, attacker, target, base_damage)` previews enchantment and item bonuses
 with a cloned RNG snapshot. A read never consumes world RNG; a later attack may roll differently.
+`modify_knockback(host, victim, damage_type, direct, causing, base)` is
+`EnchantmentHelper.modifyKnockback`: `base` after the stack's `minecraft:knockback` effects, with
+the damage source built as `EntityRef::hurt` builds it from a type id and its two entities. As in
+vanilla, requirements are checked on the level's random and values applied on the victim's own;
+the read runs on a copy of each, so neither stream moves, and it never equips the stack. The
+victim's, attacker's and direct entity's fall distance and flying state are read as an attack
+reads them. It is server only: a client, a stale victim, an unknown item, an unregistered damage
+type, or a victim, `direct` or `causing` in another level than the one in place returns `None`.
 `hurt_and_break` remains the durability write."#]
     fn item_components_note4();
 }
