@@ -1149,7 +1149,7 @@ impl crate::game::ClientGame<'_> {
     }
     /// A connection's screen is over the world: connecting, reconfiguring, or
     /// the level loading screen, a portal's included (`remote_overlay`).
-    pub(in crate::game::client_side) fn remote_screen_up(&self) -> bool {
+    pub(in crate::game) fn remote_screen_up(&self) -> bool {
         self.client
             .remote
             .as_ref()
